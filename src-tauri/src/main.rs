@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
+use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::ShellExt;
 
 /// Resolve a bundled resource by trying the common Tauri layout candidates
 /// (resources next to the exe, or in a `resources` subfolder). Avoids depending
@@ -85,7 +87,7 @@ fn main() {
             // Forward sidecar stderr to the host console for diagnostics.
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    if let tauri_plugin_shell::ShellEvent::Stderr(line) = event {
+                    if let CommandEvent::Stderr(line) = event {
                         eprintln!("[bun] {}", String::from_utf8_lossy(&line));
                     }
                 }
