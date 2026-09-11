@@ -14,5 +14,8 @@
     "core:window:allow-set-title",
     "opener:default",
     "opener:allow-open-path"
-  ]
+  ],
+  "remote": {
+    "urls": ["http://localhost:3000", "http://127.0.0.1:3000"]
+  }
 }
