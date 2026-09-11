@@ -30,6 +30,7 @@ import { DiffViewer } from "../components/diff-viewer";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import { PaseoComposer } from "./PaseoComposer";
+import { useSettingsStore } from "../stores";
 
 export function ChatWindow() {
   return (
@@ -109,18 +110,39 @@ const groupedBy = groupPartByType({
 function AssistantMessage() {
   const timing = useMessageTiming();
   const createdAt = useAuiState((s) => s.message.createdAt);
+  // Live-stream detection must ALSO require a running thread: restored
+  // messages carry no timing data (it is never persisted), so timing-only
+  // detection sticks every reloaded message in "streaming" forever (ticking
+  // timer, hidden provenance footer). Gating on thread.isRunning keeps live
+  // streams live while letting settled history settle.
+  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
   const custom = useAuiState(
     (s) =>
       (s.message.role === "assistant"
         ? (s.message.metadata?.custom as
-            | { usage?: { totalTokens?: number }; modelId?: string }
+             | {
+              usage?: { totalTokens?: number };
+              modelId?: string;
+              providerId?: string;
+              reasoningLevel?: string;
+            }
             | undefined)
         : undefined) ?? undefined,
   );
+  // Provider display names for the provenance chips (server stores ids).
+  const providers = useSettingsStore((s) => s.providers);
 
   const total = custom?.usage?.totalTokens;
   const modelId = custom?.modelId;
-  const isStreaming = timing?.totalStreamTime == null;
+  const providerName = custom?.providerId
+    ? (providers.find((p) => p.id === custom.providerId)?.name ??
+      custom.providerId)
+    : undefined;
+  const thinking =
+    custom?.reasoningLevel && custom.reasoningLevel !== "off"
+      ? custom.reasoningLevel
+      : undefined;
+  const isStreaming = timing?.totalStreamTime == null && threadIsRunning;
   const durationSec = !isStreaming && timing?.totalStreamTime != null
     ? (timing.totalStreamTime / 1000).toFixed(1)
     : undefined;
@@ -146,10 +168,12 @@ function AssistantMessage() {
   const primaryLabel = liveDuration || durationSec || timeStr;
   const displayLabel = showTimestamp && timeStr ? timeStr : (primaryLabel ?? "");
 
-  const hasMetadata = total != null || modelId != null;
+  const hasMetadata = total != null || modelId != null || providerName != null;
   const metadataChips = [];
   if (total != null) metadataChips.push(`${total}t`);
+  if (providerName) metadataChips.push(providerName);
   if (modelId) metadataChips.push(modelId);
+  if (thinking) metadataChips.push(`thinking:${thinking}`);
 
   return (
     <MessagePrimitive.Root className="flex animate-in flex-col items-start fade-in-0 slide-in-from-bottom-1 duration-200">

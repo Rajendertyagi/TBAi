@@ -44,6 +44,56 @@ interface TimerEntry {
 
 const timers = new Map<string, TimerEntry>();
 
+/** In-flight run abort controllers, keyed by run id (cancel-run support). */
+const runControllers = new Map<string, AbortController>();
+
+/**
+ * Create and register an abort controller for a run. The controller is
+ * removed when the run settles. Used by fire paths; cancelRun aborts it.
+ */
+function controllerForRun(runId: string): AbortSignal {
+  const controller = new AbortController();
+  runControllers.set(runId, controller);
+  return controller.signal;
+}
+
+function releaseRun(runId: string): void {
+  runControllers.delete(runId);
+}
+
+/**
+ * Cancel a running run: aborts its AI execution; executeJobRun records the
+ * run as cancelled. Returns ok:false with an error when there is nothing
+ * cancellable (unknown run, wrong job, or not running).
+ */
+export function cancelRun(
+  jobId: string,
+  runId: string,
+  database: Database = db,
+): { ok: true } | { ok: false; error: string } {
+  const run = schedulerStore.getRun(runId, database);
+  if (!run || run.jobId !== jobId) {
+    return { ok: false, error: "Run not found" };
+  }
+  if (run.status !== "running") {
+    return { ok: false, error: `Run is ${run.status}, nothing to cancel` };
+  }
+  const controller = runControllers.get(runId);
+  if (!controller) {
+    return {
+      ok: false,
+      error: "Run is not executing in this process (restarted?)",
+    };
+  }
+  controller.abort();
+  logger.info("scheduler", "scheduler.run_cancel_requested", {
+    jobId,
+    runId,
+    occurrenceId: run.occurrenceId,
+  });
+  return { ok: true };
+}
+
 function clearTimer(jobId: string): void {
   const entry = timers.get(jobId);
   if (!entry) return;
@@ -94,27 +144,10 @@ export async function fireJob(
     occurrenceId,
   });
 
-  // Overlap policy (V1 default: skip_if_running).
-  if (
-    job.overlapPolicy === "skip_if_running" &&
-    schedulerStore.hasRunningRun(job.id, database)
-  ) {
-    schedulerStore.recordTerminalRun(
-      job,
-      `${occurrenceId}-skip-${Date.now().toString(36)}`,
-      "skipped",
-      "Skipped: previous execution still running (overlap policy skip_if_running)",
-      requestId,
-      database,
-    );
-    logger.info("scheduler", "scheduler.run_skipped", {
-      requestId,
-      jobId,
-      occurrenceId,
-    });
-    return;
-  }
-
+  // Bun.cron guarantees no-overlap: the next fire is scheduled only after the
+  // handler Promise settles, so invocations never stack. The overlap guard
+  // below remains for manual "Run now" (runJobNow) where two rapid clicks can
+  // bypass Bun's guarantee.
   const run = schedulerStore.claimRun(job, occurrenceId, requestId, database);
   if (!run) {
     logger.info("scheduler", "scheduler.run_skipped", {
@@ -132,8 +165,14 @@ export async function fireJob(
     runId: run.id,
   });
 
+  // Resolve the conversation used for this execution and persist it on the run.
+  // This captures the exact conversation at claim time, so later job edits
+  // do not alter historical run records.
+  let resolvedConversationId: string | undefined;
   try {
-    await ensureJobConversation(job);
+    const conv = await ensureJobConversation(job);
+    resolvedConversationId = conv.conversationId;
+    schedulerStore.updateRun(run.id, { conversationId: conv.conversationId }, database);
   } catch (err) {
     logger.warn("scheduler", "scheduler.run_failed", {
       requestId,
@@ -144,7 +183,17 @@ export async function fireJob(
     });
   }
 
-  const result = await executeJobRun(job, run);
+  let result;
+  try {
+    result = await executeJobRun(
+      job,
+      run,
+      resolvedConversationId ?? "",
+      controllerForRun(run.id),
+    );
+  } finally {
+    releaseRun(run.id);
+  }
 
   // One-time jobs reach a terminal state after the terminal attempt.
   if (job.scheduleType === "once" && !occurrenceId.startsWith("manual-")) {
@@ -190,7 +239,7 @@ function scheduleRecurring(job: SchedulerJob): void {
     () => {
       void fireJob(jobId, slotOccurrenceId());
     },
-    { timezone },
+    { tz: job.timezone },
   );
   try {
     handle.unref?.();
@@ -321,12 +370,18 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
     occurrenceId,
     runId: run.id,
   });
-  void executeJobRun(job, run);
+  const conv = await ensureJobConversation(job);
+  schedulerStore.updateRun(run.id, { conversationId: conv.conversationId });
+  const signal = controllerForRun(run.id);
+  void executeJobRun(job, run, conv.conversationId, signal).finally(() =>
+    releaseRun(run.id),
+  );
   return { runId: run.id };
 }
 
 export interface RecoveryReport {
   interrupted: number;
+  prunedRuns: number;
   rebuiltRecurring: number;
   rebuiltOnce: number;
   missed: number;
@@ -338,12 +393,14 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
   logger.info("scheduler", "scheduler.recovery_started", {});
   const report: RecoveryReport = {
     interrupted: 0,
+    prunedRuns: 0,
     rebuiltRecurring: 0,
     rebuiltOnce: 0,
     missed: 0,
     ranFromGrace: 0,
   };
   report.interrupted = schedulerStore.markInterrupted(database);
+  report.prunedRuns = schedulerStore.pruneOldRuns(undefined, database);
 
   const jobs = schedulerStore.listEnabled(database);
   for (const job of jobs) {

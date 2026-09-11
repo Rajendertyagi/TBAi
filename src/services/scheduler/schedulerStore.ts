@@ -54,6 +54,7 @@ interface RunRow {
   provider_id: string;
   model_id: string;
   workspace_path: string;
+  conversation_id: string | null;
   attempt: number;
   duration_ms: number | null;
   created_at: number;
@@ -104,6 +105,7 @@ function mapRun(row: RunRow): SchedulerRun {
     providerId: row.provider_id,
     modelId: row.model_id,
     workspacePath: row.workspace_path,
+    conversationId: row.conversation_id,
     attempt: row.attempt,
     durationMs: row.duration_ms,
     createdAt: row.created_at,
@@ -123,7 +125,8 @@ export interface JobCreate {
   thinkingLevel?: "off" | "low" | "medium" | "high" | null;
   workspacePath: string;
   prompt: string;
-  conversationPolicy?: "dedicated_thread";
+  conversationPolicy?: "dedicated_thread" | "existing_thread";
+  conversationId?: string | null;
   overlapPolicy?: "skip_if_running";
   maxRetries?: number;
   retryDelaySeconds?: number;
@@ -143,6 +146,10 @@ const JOB_COLUMNS = `id, name, description, enabled, schedule_type, cron_express
   conversation_policy, conversation_id, overlap_policy, max_retries,
   retry_delay_seconds, timeout_seconds, missed_grace_seconds, next_run_at,
   last_run_at, status, created_at, updated_at`;
+
+const RUN_COLUMNS = `id, job_id, occurrence_id, request_id, started_at, completed_at, status,
+  error, output_excerpt, provider_id, model_id, workspace_path, conversation_id, attempt,
+  duration_ms, created_at`;
 
 export const schedulerStore = {
   create(input: JobCreate, database: Database = db): SchedulerJob {
@@ -166,7 +173,7 @@ export const schedulerStore = {
         input.workspacePath,
         input.prompt,
         input.conversationPolicy ?? "dedicated_thread",
-        null,
+        input.conversationId ?? null,
         input.overlapPolicy ?? "skip_if_running",
         input.maxRetries ?? 0,
         input.retryDelaySeconds ?? 60,
@@ -196,7 +203,7 @@ export const schedulerStore = {
   list(database: Database = db): SchedulerJob[] {
     const rows = database
       .query<JobRow, SQLQueryBindings[]>(
-        `SELECT ${JOB_COLUMNS} FROM scheduler_jobs ORDER BY created_at DESC`,
+        `SELECT ${JOB_COLUMNS} FROM scheduler_jobs WHERE status != 'deleted' ORDER BY created_at DESC`,
       )
       .all();
     return rows.map(mapJob);
@@ -259,6 +266,18 @@ export const schedulerStore = {
   },
 
   /**
+   * Soft-delete: hide the job and stop scheduling, but retain its run
+   * history (codeg parity). Use remove() only for test cleanup.
+   */
+  softDelete(id: string, database: Database = db): void {
+    const now = Date.now();
+    database.run(
+      "UPDATE scheduler_jobs SET status = 'deleted', enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ?",
+      [now, id],
+    );
+  },
+
+  /**
    * Atomically claim an occurrence. Returns the new run, or null when the
    * (job_id, occurrence_id) pair was already claimed (duplicate fire).
    */
@@ -274,9 +293,9 @@ export const schedulerStore = {
       database.run(
         `INSERT INTO scheduler_runs
           (id, job_id, occurrence_id, request_id, started_at, completed_at, status,
-           error, output_excerpt, provider_id, model_id, workspace_path, attempt,
+           error, output_excerpt, provider_id, model_id, workspace_path, conversation_id, attempt,
            duration_ms, created_at)
-         VALUES (?, ?, ?, ?, ?, NULL, 'running', NULL, NULL, ?, ?, ?, 0, NULL, ?)`,
+          VALUES (?, ?, ?, ?, ?, NULL, 'running', NULL, NULL, ?, ?, ?, ?, 0, NULL, ?)`,
         [
           id,
           job.id,
@@ -286,6 +305,7 @@ export const schedulerStore = {
           job.providerId,
           job.modelId,
           job.workspacePath,
+          job.conversationId ?? null,
           now,
         ],
       );
@@ -316,9 +336,9 @@ export const schedulerStore = {
       database.run(
         `INSERT INTO scheduler_runs
           (id, job_id, occurrence_id, request_id, started_at, completed_at, status,
-           error, output_excerpt, provider_id, model_id, workspace_path, attempt,
+           error, output_excerpt, provider_id, model_id, workspace_path, conversation_id, attempt,
            duration_ms, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, 0, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, ?)`,
         [
           id,
           job.id,
@@ -331,6 +351,7 @@ export const schedulerStore = {
           job.providerId,
           job.modelId,
           job.workspacePath,
+          job.conversationId ?? null,
           now,
         ],
       );
@@ -349,7 +370,7 @@ export const schedulerStore = {
     id: string,
     patch: Partial<Pick<
       SchedulerRun,
-      "status" | "error" | "outputExcerpt" | "attempt" | "completedAt" | "durationMs"
+      "status" | "error" | "outputExcerpt" | "attempt" | "completedAt" | "durationMs" | "conversationId"
     >>,
     database: Database = db,
   ): void {
@@ -379,6 +400,10 @@ export const schedulerStore = {
       sets.push("duration_ms = ?");
       values.push(patch.durationMs);
     }
+    if (patch.conversationId !== undefined) {
+      sets.push("conversation_id = ?");
+      values.push(patch.conversationId);
+    }
     if (sets.length === 0) return;
     values.push(id);
     database.run(
@@ -390,7 +415,7 @@ export const schedulerStore = {
   getRun(id: string, database: Database = db): SchedulerRun | null {
     const row = database
       .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs WHERE id = ?",
+        `SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`,
       )
       .get(id);
     return row ? mapRun(row) : null;
@@ -404,7 +429,7 @@ export const schedulerStore = {
   ): { runs: SchedulerRun[]; total: number } {
     const rows = database
       .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs WHERE job_id = ? ORDER BY started_at DESC LIMIT ? OFFSET ?",
+        `SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE job_id = ? ORDER BY started_at DESC LIMIT ? OFFSET ?`,
       )
       .all(jobId, limit, offset);
     const totalRow = database
@@ -425,7 +450,7 @@ export const schedulerStore = {
   ): { runs: SchedulerRun[]; total: number } {
     const rows = database
       .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs ORDER BY started_at DESC LIMIT ? OFFSET ?",
+        `SELECT ${RUN_COLUMNS} FROM scheduler_runs ORDER BY started_at DESC LIMIT ? OFFSET ?`,
       )
       .all(limit, offset);
     const totalRow = database
@@ -462,5 +487,88 @@ export const schedulerStore = {
       )
       .get();
     return row?.c ?? 0;
+  },
+
+  /**
+   * Delete terminal runs older than `olderThanMs` (default 30 days, codeg
+   * parity). Running/scheduled rows are never touched. Returns deleted count.
+   */
+  pruneOldRuns(
+    olderThanMs: number = 30 * 24 * 3600_000,
+    database: Database = db,
+  ): number {
+    const cutoff = Date.now() - olderThanMs;
+    const before =
+      database
+        .query<{ c: number }, SQLQueryBindings[]>(
+          "SELECT COUNT(*) as c FROM scheduler_runs WHERE completed_at IS NOT NULL AND completed_at < ? AND status IN ('completed','failed','skipped','missed','cancelled','interrupted')",
+        )
+        .get(cutoff)?.c ?? 0;
+    if (before === 0) return 0;
+    database.run(
+      "DELETE FROM scheduler_runs WHERE completed_at IS NOT NULL AND completed_at < ? AND status IN ('completed','failed','skipped','missed','cancelled','interrupted')",
+      [cutoff],
+    );
+    return before;
+  },
+
+  /**
+   * Recent problem runs (failed/interrupted/missed) for the attention
+   * badge, newest first, capped. Codeg parity: unseen-failures signal.
+   */
+  listProblemRuns(
+    sinceMs: number,
+    limit = 50,
+    database: Database = db,
+  ): Array<
+    SchedulerRun & {
+      jobName: string | null;
+    }
+  > {
+    const rows = database
+      .query<
+        RunRow & { job_name: string | null },
+        SQLQueryBindings[]
+      >(
+        `SELECT r.*, j.name as job_name FROM scheduler_runs r
+         LEFT JOIN scheduler_jobs j ON j.id = r.job_id
+         WHERE r.started_at >= ? AND r.status IN ('failed','interrupted','missed')
+         ORDER BY r.started_at DESC LIMIT ?`,
+      )
+      .all(sinceMs, limit);
+    return rows.map((row) => ({ ...mapRun(row), jobName: row.job_name }));
+  },
+
+  /** Currently-running runs with job names (live status polling). */
+  listRunning(database: Database = db): Array<{
+    jobId: string;
+    jobName: string | null;
+    runId: string;
+    occurrenceId: string;
+    startedAt: number;
+  }> {
+    const rows = database
+      .query<
+        {
+          job_id: string;
+          job_name: string | null;
+          id: string;
+          occurrence_id: string;
+          started_at: number;
+        },
+        SQLQueryBindings[]
+      >(
+        `SELECT r.job_id, j.name as job_name, r.id, r.occurrence_id, r.started_at
+         FROM scheduler_runs r LEFT JOIN scheduler_jobs j ON j.id = r.job_id
+         WHERE r.status = 'running' ORDER BY r.started_at DESC`,
+      )
+      .all();
+    return rows.map((r) => ({
+      jobId: r.job_id,
+      jobName: r.job_name,
+      runId: r.id,
+      occurrenceId: r.occurrence_id,
+      startedAt: r.started_at,
+    }));
   },
 };

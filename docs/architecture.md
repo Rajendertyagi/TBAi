@@ -111,12 +111,15 @@ ai-chat-app/
 ## Data flow (send a message)
 
 1. User types in the assistant-ui `Composer`.
-2. `AssistantChatTransport` POSTs to `/api/chat` with the `UIMessage[]` and the
-   selected `providerId` (the API key is **never** sent to the browser).
-3. The Hono route validates the body with Zod, resolves the provider metadata from the
-   registry, and (for keyed providers) fetches the encrypted credential from
-   `CredentialStore`, decrypts it **in memory only**, and builds the model via
-   `getModel(config)`.
+2. `AssistantChatTransport` POSTs to `/api/chat` with the `UIMessage[]`, the
+   conversation's persisted default (`threadListItem.custom`), and any one-shot
+   picker override (the API key is **never** sent to the browser).
+3. The Hono route validates the body with Zod and resolves the effective
+   model + reasoning level via `src/routes/chat-model.ts`
+   (one-shot → conversation default → active provider), then resolves the
+   provider metadata from the registry, and (for keyed providers) fetches the
+   encrypted credential from `CredentialStore`, decrypts it **in memory only**,
+   and builds the model via `getModel(config)`.
 4. `streamText({ messages: convertToModelMessages(uiMessages), providerOptions })`
    runs on the backend; the key is decrypted server-side and is never placed in a
    response body.
@@ -127,7 +130,7 @@ ai-chat-app/
 
 Hash routing (`react-router` v8 `createHashRouter` — the hash never reaches
 the server, so it works under vite dev, the Bun SPA fallback, and the
-ElectroBun desktop bundle). The router owns **pages only**:
+Tauri desktop shell). The router owns **pages only**:
 
 | Owner | Owns | Lives in |
 |---|---|---|
@@ -192,27 +195,72 @@ The result: a new thread is created on first send, messages stream and persist a
 reloading the page restores the thread list, and opening a thread restores its messages —
 all without any application-owned message state.
 
-## Type-checking notes (Bun / ElectroBun / AI SDK)
+## Conversation AI config (per-conversation model persistence)
+
+Each conversation **owns** its provider / model / reasoning-level default, with
+SQLite as the source of truth:
+
+- **Storage:** `conversations.provider_id` / `model_id` / `reasoning_level`
+  (`src/db/index.ts`, added idempotently). On create, omitted fields default to the
+  active provider's `model` / `thinking` (`src/routes/conversations.ts`).
+- **Projection:** `remoteThreadListAdapter.toMetadata` projects the row to
+  `threadListItem.custom.{providerId, modelId, reasoningLevel}`; `updateCustom`
+  PATCHes composer chip selections back to SQLite. The browser sends only these
+  three ids/levels — never secrets or protocol.
+- **Resolution** (`src/routes/chat-model.ts`, single point the chat route calls;
+  mirrored in `web/src/runtime.ts` + `PaseoComposer.tsx`):
+  `one-shot picker override → conversation persisted default (custom) → global
+  active provider default`. An absent request field falls back to the
+  conversation row so a missing header never silently drops the user's config.
+  The wire field is `reasoningLevel` (not `thinkingLevel`).
+- **One-shots:** `selectedProviderId` / `selectedModelId` /
+  `selectedReasoningLevel` (Zustand) are next-send-only overrides, cleared via
+  `revertChatTarget` after the transport consumes them. They layer on top of the
+  conversation default and are never the source of truth.
+- **Provenance:** the server attaches `{providerId, modelId, reasoningLevel}` via
+  `messageMetadata` so each response footer shows the config that actually produced
+  it (one-shot picks vary per message).
+
+See `state-management.md` (three-tier config) and ADR-019 in `decisions.md`.
+
+## Type-checking notes (Bun / Tauri / AI SDK)
 
 These are the deliberate, non-suppression fixes required to get a clean `bun run typecheck`.
 They are documented so future changes don't regress them.
 
-### ElectroBun type resolution
+### Tauri desktop shell (portable, Windows x64)
 
-`electrobun` and `electrobun/main` are resolved by the **Hutch bundler at build time**, not by
-the TypeScript module resolver, so `tsc` cannot find them through normal node resolution. Two
-small shims bridge this:
+The desktop app is a **Tauri 2** shell wrapping the existing web app — no second frontend, no
+transport abstraction, no new backend event architecture. The flow is:
 
-- `src/types/electrobun.d.ts` — an ambient `declare module "electrobun/main"` declaring the
-  minimal `BrowserWindow` / `PATHS` surface the app uses (`src/bun/index.ts`, `src/bun/env.ts`).
-  The full devkit SDK source is intentionally *not* imported here: pulling it into `tsc` would
-  also drag in native FFI / WebGPU modules that only mean something inside the Hutch build.
-- `src/types/electrobun-config.ts` — re-exports the real `ElectrobunConfig` type from the
-  Hutch devkit (`.hutch/devkit/api/config/ElectrobunConfig`) so `electrobun.config.ts` stays
-  type-checked against the actual build-tool contract. It is wired into `tsconfig.json` `paths`
-  (`"electrobun": ["./src/types/electrobun-config.ts"]`).
+```
+Tauri 2 window (no native title bar, decorations:false)
+  └─ loads http://localhost:3000
+       └─ Bun sidecar (src-tauri/binaries/bun-*.exe, spawned in src-tauri/src/main.rs)
+            └─ runs the bundled backend (dist/index.js = `bun build src/index.ts`)
+                 └─ Hono server serves /api/* AND the SPA (web/dist) on :3000
+```
 
-Do **not** add `@ts-ignore`/`@ts-expect-error` or exclude these files; the shims are the fix.
+- **Same React app, two shells.** The browser opens `localhost:3000` directly; the Tauri
+  webview loads the same URL. The backend is plain HTTP in both cases, so the assistant-ui
+  `AssistantChatTransport` (fetch `/api/chat`) is unchanged — there is **no Transport
+  abstraction** (unlike codeg, whose desktop backend is Rust IPC). `web/src/runtime.ts` is
+  untouched.
+- **Tauri-only code is isolated and dynamically imported.** All `@tauri-apps/*` access goes
+  through `web/src/lib/platform.ts`, which uses dynamic `import("@tauri-apps/...")` only.
+  The desktop chrome (`web/src/components/DesktopChrome.tsx` and friends) is loaded via a
+  `React.lazy(() => import(...))` gate in `AppShell` behind `isTauri()` (`"__TAURI_INTERNALS__"
+  in window`), so none of it reaches the browser bundle. `isTauri()` returns false in a plain
+  browser, so the chrome components render nothing and the layout is byte-for-byte the web app.
+- **Build is GitHub-only.** The Rust/Tauri toolchain is never installed locally. The portable
+  `.zip` (no installer) is produced by `.github/workflows/tauri-build.yml`, which downloads the
+  portable Bun, generates icons (`tauri icon`), and runs `tauri build --bundles zip`. Local dev
+  uses `bun run dev` (backend) + `bun run build:web` exactly as the web build.
+- **Capabilities** (`src-tauri/capabilities/default.json`) grant only window drag/resize/close
+  and `opener:open-path`; the Bun sidecar is spawned from Rust (not the JS API), so no shell
+  execute permission is needed in the frontend.
+
+### bun:sqlite (`bun-types`) binding + query typings
 
 ### bun:sqlite (`bun-types`) binding + query typings
 

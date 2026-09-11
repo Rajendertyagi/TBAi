@@ -1,7 +1,7 @@
 /**
  * Scheduler execution adapter.
  *
- * Reuses the canonical AI stack (`getModel` + AI SDK `generateText`) and the
+ * Reuses the canonical AI stack (`getModel` + AI SDK `streamText`) and the
  * sandboxed native tools (`services/tools.ts`). It does NOT duplicate the
  * chat route's streaming pipeline — scheduled runs are non-interactive.
  *
@@ -10,7 +10,7 @@
  * "user approval required" error — approval gates can never be silently
  * bypassed. MCP tools are excluded in V1 (documented limitation).
  */
-import { generateText, stepCountIs, tool } from "ai";
+import { streamText, stepCountIs, tool, type UIMessage } from "ai";
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
@@ -34,9 +34,10 @@ import {
   toolStatSchema,
 } from "../../lib/validation";
 import { logger, normalizeError, newRequestId } from "../../lib/logger";
+import { generateId } from "../../lib/utils";
 import type { SchedulerJob, SchedulerRun } from "./schedulerTypes";
 import { schedulerStore } from "./schedulerStore";
-import { conversationService } from "../storage";
+import { conversationService, messageService } from "../storage";
 
 const APPROVAL_REFUSAL =
   "Refused: this tool requires interactive user approval, which is unavailable during unattended scheduled execution. The run continues without this action.";
@@ -224,18 +225,44 @@ export function resolveJobModel(job: SchedulerJob): {
   return { providerType: provider.type, model, providerOptions };
 }
 
-/** Ensure the job's dedicated scheduler conversation exists; returns its id. */
-export async function ensureJobConversation(job: SchedulerJob): Promise<string> {
+/** Resolve the conversation ID for a job, handling both conversation modes. */
+export async function ensureJobConversation(
+  job: SchedulerJob,
+): Promise<{ conversationId: string; created: boolean; safeToDelete: boolean }> {
+  if (job.conversationPolicy === "existing_thread") {
+    if (!job.conversationId) {
+      throw new ToolError(
+        `Job "${job.name}" uses existing-thread mode but has no conversationId. ` +
+        `Select a conversation when creating or editing the job.`,
+      );
+    }
+    const conv = await conversationService.get(job.conversationId);
+    if (!conv) {
+      throw new ToolError(
+        `Conversation "${job.conversationId}" not found (deleted or archived). ` +
+        `Update the job to select a valid conversation.`,
+      );
+    }
+    if (conv.status === "archived") {
+      throw new ToolError(
+        `Conversation "${job.conversationId}" is archived. Update the job to select a valid conversation.`,
+      );
+    }
+    return { conversationId: conv.id, created: false, safeToDelete: false };
+  }
+
+  // dedicated_thread mode (default / backwards-compatible)
   if (job.conversationId) {
     const existing = await conversationService.get(job.conversationId);
-    if (existing) return existing.id;
+    if (existing) return { conversationId: existing.id, created: false, safeToDelete: true };
+    // ID stored but no longer exists — treat as fresh dedicated thread
   }
   const created = await conversationService.create({
     title: `[Scheduler] ${job.name}`,
     providerId: job.providerId,
   });
   schedulerStore.update(job.id, { conversationId: created.id });
-  return created.id;
+  return { conversationId: created.id, created: true, safeToDelete: true };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -245,6 +272,8 @@ function sleep(ms: number): Promise<void> {
 export async function executeJobRun(
   job: SchedulerJob,
   run: SchedulerRun,
+  conversationId: string,
+  parentSignal?: AbortSignal,
 ): Promise<ExecutionResult> {
   const requestId = run.requestId ?? newRequestId();
   const log = logger.child({
@@ -266,17 +295,48 @@ export async function executeJobRun(
   while (attempt < maxAttempts) {
     schedulerStore.updateRun(run.id, { attempt, status: "running" });
     const controller = new AbortController();
+    // A parent abort means user cancellation (the timeout aborts below for
+    // time limits). Tracked separately so the run records "cancelled".
+    let cancelledByParent = parentSignal?.aborted ?? false;
+    const onParentAbort = (): void => {
+      cancelledByParent = true;
+      controller.abort();
+    };
+    if (!cancelledByParent) parentSignal?.addEventListener("abort", onParentAbort);
     const timeoutMs = Math.max(5, job.timeoutSeconds) * 1000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const workspaceAbs = verifyJobWorkspace(job.workspacePath);
       const { model, providerOptions, providerType } = resolveJobModel(job);
       const rel = path.relative(getWorkspaceDir(), workspaceAbs) || ".";
+      const workspaceLabel = rel === "." ? "workspace root" : rel;
+      // Split sent-vs-shown (codeg prompt_blocks vs display_text): the model
+      // needs the workspace/approval context, but the thread shows exactly
+      // what the user wrote — no scaffolding, no header stamp. Run metadata
+      // (job, time) lives in run history, not in chat.
+      const displayPrompt = job.prompt;
       const fullPrompt =
-        `[Scheduled run of job "${job.name}". Workspace: ${rel} ` +
+        `[Scheduled run of job "${job.name}". Workspace: ${workspaceLabel} ` +
         `(all file paths are relative to the workspace root). ` +
         `Destructive tools are unavailable without interactive approval.]\n\n${job.prompt}`;
-      const result = await generateText({
+      // Persist the user prompt so the thread history shows what was asked.
+      // Chained onto the thread tip: every scheduler message used parent_id
+      // null, which built a forest of disconnected roots the thread view
+      // could not render (prompts invisible despite being stored).
+      let tip: string | null = null;
+      try {
+        tip = await messageService.getThreadTip(conversationId);
+      } catch {
+        /* tip is best-effort; a null parent still stores the message */
+      }
+      const userMsgId = generateId();
+      await messageService.upsertStored(conversationId, {
+        id: userMsgId,
+        parent_id: tip,
+        format: "ai-sdk/v6",
+        content: { id: userMsgId, role: "user", parts: [{ type: "text", text: displayPrompt, state: "done" as const }] },
+      });
+      const result = streamText({
         model,
         messages: [{ role: "user", content: fullPrompt }],
         tools: buildSchedulerTools(),
@@ -284,8 +344,17 @@ export async function executeJobRun(
         abortSignal: controller.signal,
         ...(Object.keys(providerOptions).length ? { providerOptions } : {}),
       });
+      const text = await result.text;
       clearTimeout(timer);
-      const text = result.text ?? "";
+      parentSignal?.removeEventListener("abort", onParentAbort);
+      // Persist the assistant response to the thread.
+      const assistantMsgId = generateId();
+      await messageService.upsertStored(conversationId, {
+        id: assistantMsgId,
+        parent_id: userMsgId,
+        format: "ai-sdk/v6",
+        content: { id: assistantMsgId, role: "assistant", parts: [{ type: "text", text, state: "done" as const }] },
+      });
       const excerpt = text.slice(0, 2000);
       const durationMs = Date.now() - started;
       schedulerStore.updateRun(run.id, {
@@ -304,6 +373,23 @@ export async function executeJobRun(
       return { ok: true, text, error: null, retryable: false };
     } catch (err) {
       clearTimeout(timer);
+      parentSignal?.removeEventListener("abort", onParentAbort);
+      if (cancelledByParent) {
+        const durationMs = Date.now() - started;
+        schedulerStore.updateRun(run.id, {
+          status: "cancelled",
+          error: "Cancelled by user",
+          completedAt: Date.now(),
+          durationMs,
+        });
+        schedulerStore.update(job.id, { lastRunAt: Date.now() });
+        log.info("scheduler", "scheduler.run_cancelled", {
+          provider: job.providerId,
+          model: job.modelId,
+          durationMs,
+        });
+        return { ok: false, text: "", error: "Cancelled by user", retryable: false };
+      }
       const norm = normalizeError(err);
       const aborted =
         controller.signal.aborted ||
@@ -312,6 +398,20 @@ export async function executeJobRun(
         ? `Run timed out after ${job.timeoutSeconds}s`
         : norm.message.slice(0, 1000);
       lastError = message;
+      // Best-effort: persist an error message so the thread shows why it failed.
+      if (conversationId) {
+        try {
+          const errId = generateId();
+          await messageService.upsertStored(conversationId, {
+            id: errId,
+            parent_id: null,
+            format: "ai-sdk/v6",
+            content: { id: errId, role: "assistant", parts: [{ type: "text", text: `Error: ${message}`, state: "done" as const }] },
+          });
+        } catch {
+          /* persistence error must not mask the real error */
+        }
+      }
       const retryable = !aborted ? isRetryableError(err) : true;
       log.warn("scheduler", "scheduler.run_failed", {
         ...norm,

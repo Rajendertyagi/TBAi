@@ -7,7 +7,7 @@
 
 export type ScheduleType = "once" | "cron";
 export type OverlapPolicy = "skip_if_running";
-export type ConversationPolicy = "dedicated_thread";
+export type ConversationPolicy = "dedicated_thread" | "existing_thread";
 export type ThinkingLevel = "off" | "low" | "medium" | "high";
 
 export type JobStatus =
@@ -17,7 +17,8 @@ export type JobStatus =
   | "missed"
   | "expired"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "deleted";
 
 export type RunStatus =
   | "scheduled"
@@ -70,6 +71,7 @@ export interface SchedulerRun {
   providerId: string;
   modelId: string;
   workspacePath: string;
+  conversationId: string | null;
   attempt: number;
   durationMs: number | null;
   createdAt: number;
@@ -83,6 +85,7 @@ export const TERMINAL_JOB_STATUSES: JobStatus[] = [
   "missed",
   "expired",
   "cancelled",
+  "deleted",
 ];
 
 export function isTerminalJobStatus(status: JobStatus): boolean {

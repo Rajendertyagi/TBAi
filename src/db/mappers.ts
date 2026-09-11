@@ -19,6 +19,8 @@ export function mapConversation(row: any): Conversation {
     id: row.id,
     title: row.title,
     providerId: row.provider_id,
+    modelId: row.model_id ?? null,
+    reasoningLevel: row.reasoning_level ?? null,
     systemPrompt: row.system_prompt,
     status: (row.status as "regular" | "archived") ?? "regular",
     createdAt: new Date(row.created_at),

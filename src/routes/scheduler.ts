@@ -13,7 +13,9 @@ import {
 } from "../lib/validation";
 import { schedulerStore } from "../services/scheduler/schedulerStore";
 import type { JobCreate } from "../services/scheduler/schedulerStore";
+import { conversationService } from "../services/storage";
 import {
+  cancelRun,
   runJobNow,
   scheduleJob,
   unscheduleJob,
@@ -21,10 +23,16 @@ import {
 import {
   assertValidTimezone,
   computeNextRuns,
+  countUpcoming,
   describeCron,
   isValidCron,
 } from "../services/scheduler/cron";
-import { isTerminalJobStatus } from "../services/scheduler/schedulerTypes";
+import {
+  checkExistingThread,
+  checkProvider,
+  checkScheduleFields,
+  normalizeCron,
+} from "../services/scheduler/schedulerValidation";
 import type { SchedulerJob } from "../services/scheduler/schedulerTypes";
 
 const app = new Hono();
@@ -41,52 +49,6 @@ function toJobPublic(job: SchedulerJob) {
 
 function fullJobPublic(job: SchedulerJob) {
   return { ...job };
-}
-
-function checkScheduleFields(value: {
-  scheduleType?: string;
-  cronExpression?: string | null;
-  execAt?: number | null;
-  timezone?: string;
-}): string | null {
-  if (value.timezone !== undefined) {
-    try {
-      assertValidTimezone(value.timezone);
-    } catch {
-      return `Invalid IANA timezone: "${value.timezone}"`;
-    }
-  }
-  if (value.scheduleType === "cron") {
-    if (!value.cronExpression || !isValidCron(value.cronExpression)) {
-      return "A valid 5-field cron expression is required for recurring jobs";
-    }
-    if (value.execAt != null) {
-      return "One-time execAt must not be set on a recurring job";
-    }
-  }
-  if (value.scheduleType === "once") {
-    if (typeof value.execAt !== "number" || value.execAt <= 0) {
-      return "An absolute execAt timestamp is required for one-time jobs";
-    }
-    if (value.cronExpression != null) {
-      return "A cron expression must not be set on a one-time job";
-    }
-  }
-  return null;
-}
-
-function checkProvider(value: {
-  providerId?: string;
-  modelId?: string;
-}): string | null {
-  if (value.providerId === undefined) return null;
-  if (!registry.get(value.providerId)) {
-    return `Provider "${value.providerId}" does not exist`;
-  }
-  if (value.modelId !== undefined && value.modelId.length === 0) {
-    return "modelId must not be empty";
-  }
-  return null;
 }
 
 // ---- Jobs ----
@@ -119,6 +81,21 @@ app.post("/jobs", async (c) => {
     modelId: v.modelId,
   });
   if (providerErr) return c.json({ error: providerErr }, 400);
+  // Fail fast when targeting an existing thread: a thread id that does not
+  // resolve would otherwise fail silently at fire time (retargets used to
+  // be stripped by validation and never saved at all).
+  if (
+    (v.conversationPolicy ?? "dedicated_thread") === "existing_thread" &&
+    v.conversationId
+  ) {
+    const target = await conversationService.get(v.conversationId);
+    if (!target) {
+      return c.json(
+        { error: "Target conversation not found. Pick an existing thread." },
+        400,
+      );
+    }
+  }
 
   const created = schedulerStore.create(
     {
@@ -126,7 +103,12 @@ app.post("/jobs", async (c) => {
       description: v.description ?? null,
       enabled: v.enabled ?? true,
       scheduleType: v.scheduleType,
-      cronExpression: v.cronExpression ?? null,
+      // Macros are normalized to canonical 5-field form so timers,
+      // previews, and stored values always agree.
+      cronExpression:
+        v.scheduleType === "cron" && v.cronExpression
+          ? normalizeCron(v.cronExpression)
+          : null,
       execAt: v.execAt ?? null,
       timezone: v.timezone,
       providerId: v.providerId,
@@ -135,6 +117,7 @@ app.post("/jobs", async (c) => {
       workspacePath: v.workspacePath,
       prompt: v.prompt,
       conversationPolicy: v.conversationPolicy ?? "dedicated_thread",
+      conversationId: v.conversationId ?? null,
       overlapPolicy: v.overlapPolicy ?? "skip_if_running",
       maxRetries: v.maxRetries ?? 0,
       retryDelaySeconds: v.retryDelaySeconds ?? 60,
@@ -201,9 +184,25 @@ app.patch("/jobs/:id", async (c) => {
     });
     if (providerErr) return c.json({ error: providerErr }, 400);
   }
+  const mergedPolicy =
+    v.conversationPolicy ?? existing.conversationPolicy;
+  const mergedConversationId =
+    v.conversationId !== undefined ? v.conversationId : existing.conversationId;
+  if (mergedPolicy === "existing_thread" && mergedConversationId) {
+    const target = await conversationService.get(mergedConversationId);
+    if (!target) {
+      return c.json(
+        { error: "Target conversation not found. Pick an existing thread." },
+        400,
+      );
+    }
+  }
   // Switching schedule type clears the other type's field; editing a
   // terminal one-time job back to a live state requires a future exec_at.
   const patch: Record<string, unknown> = { ...v };
+  if (typeof patch.cronExpression === "string") {
+    patch.cronExpression = normalizeCron(patch.cronExpression);
+  }
   if (
     v.scheduleType !== undefined &&
     v.scheduleType !== existing.scheduleType
@@ -243,7 +242,7 @@ app.delete("/jobs/:id", (c) => {
   const existing = schedulerStore.get(id, db);
   if (!existing) return c.json({ error: "Job not found" }, 404);
   unscheduleJob(id);
-  schedulerStore.remove(id, db);
+  schedulerStore.softDelete(id, db);
   logger.info("scheduler", "scheduler.job_deleted", {
     jobId: id,
     message: existing.name,
@@ -255,9 +254,24 @@ app.post("/jobs/:id/enable", (c) => {
   const id = c.req.param("id");
   const existing = schedulerStore.get(id, db);
   if (!existing) return c.json({ error: "Job not found" }, 404);
-  if (isTerminalJobStatus(existing.status)) {
+  // A spent one-time date cannot be revived: enabling it would only flip
+  // straight to missed. Tell the user the real options instead.
+  // Deleted jobs stay deleted (their history is retained, the job is gone).
+  if (existing.status === "deleted") {
     return c.json(
-      { error: `Job is ${existing.status} and cannot be re-enabled` },
+      { error: "This job was deleted. Duplicate it to run again." },
+      400,
+    );
+  }
+  if (
+    existing.scheduleType === "once" &&
+    (existing.execAt ?? 0) <= Date.now()
+  ) {
+    return c.json(
+      {
+        error:
+          "This one-time run already passed. Duplicate the job with a new date, or edit it to pick a new date first.",
+      },
       400,
     );
   }
@@ -302,7 +316,44 @@ app.post("/jobs/:id/run", async (c) => {
   return c.json({ runId: result.runId }, 202);
 });
 
+app.post("/jobs/:id/runs/:runId/cancel", (c) => {
+  const id = c.req.param("id");
+  const runId = c.req.param("runId");
+  const result = cancelRun(id, runId, db);
+  if (result.ok === false) {
+    const status = result.error === "Run not found" ? 404 : 409;
+    return c.json({ error: result.error }, status as 404 | 409);
+  }
+  return c.json({ cancelled: true });
+});
+
 // ---- Runs ----
+
+app.get("/summary", (c) => {
+  const days = Math.min(
+    Math.max(Number(c.req.query("days") ?? 7), 1),
+    30,
+  );
+  const problems = schedulerStore.listProblemRuns(
+    Date.now() - days * 24 * 3600_000,
+    50,
+    db,
+  );
+  const jobs = schedulerStore.list(db);
+  return c.json({
+    problemRuns: problems.map((r) => ({
+      id: r.id,
+      jobId: r.jobId,
+      jobName: r.jobName,
+      status: r.status,
+      startedAt: r.startedAt,
+      error: r.error ? r.error.slice(0, 200) : null,
+    })),
+    jobCount: jobs.length,
+    enabledCount: jobs.filter((j) => j.enabled).length,
+    running: schedulerStore.listRunning(db),
+  });
+});
 
 app.get("/jobs/:id/runs", (c) => {
   const id = c.req.param("id");
@@ -366,6 +417,7 @@ app.post("/preview", async (c) => {
         description: describeCron(v.cronExpression),
         timezone: v.timezone,
         nextRuns,
+        runsNext24h: countUpcoming(v.cronExpression, v.timezone),
       });
     }
     if (typeof v.execAt !== "number" || v.execAt <= 0) {

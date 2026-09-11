@@ -1,0 +1,58 @@
+name: Tauri Build (Windows x64, portable zip)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+# Build the Tauri 2 desktop shell. The Rust/Tauri toolchain is NOT installed
+# locally — this workflow is the only place the desktop bundle is produced.
+# Output: a portable .zip (no installer) containing the TBAi.exe + bundled Bun
+# sidecar + web/dist + backend bundle.
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend + workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download portable Bun sidecar
+        shell: pwsh
+        run: |
+          $url = "https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile bun-windows-x64.zip
+          Expand-Archive -Path bun-windows-x64.zip -DestinationPath bun-extract -Force
+          $binDir = "src-tauri/binaries"
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          Copy-Item -Path "bun-extract/bun.exe" -Destination "$binDir/bun-x86_64-pc-windows-msvc.exe" -Force
+          Remove-Item -Recurse -Force bun-extract, bun-windows-x64.zip
+
+      - name: Generate icon set from source PNG
+        run: bunx tauri icon src-tauri/app-icon.png
+
+      - name: Build Tauri bundle (zip only)
+        run: bunx tauri build --bundles zip --target x86_64-pc-windows-msvc
+
+      - name: Upload portable zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tbai-windows-x64-portable
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/zip/*.zip
+          if-no-files-found: error

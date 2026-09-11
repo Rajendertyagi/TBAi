@@ -28,6 +28,22 @@ runtime already manages. This is the minimum-custom-code choice — the library 
 chat message state; the app only provides thin HTTP adapters. See `architecture.md`
 (Conversation persistence) and `decisions.md`.
 
+### Per-conversation AI config (three tiers — do not blur)
+
+The conversation's AI config (provider / model / reasoning level) lives in exactly
+three places, each with one job:
+
+| Tier | Where | Role |
+|---|---|---|
+| **Source of truth** | SQLite `conversations.provider_id` / `model_id` / `reasoning_level` | The persisted conversation default. Owns the config across reloads; the only durable copy. |
+| **Runtime projection** | `threadListItem.custom` (via `remoteThreadListAdapter`) | A live read of the SQLite row projected into the assistant-ui runtime; written back through `updateCustom` (PATCH). It is a mirror, not a store — it must never diverge from SQLite. |
+| **One-shot overrides** | Zustand `selectedProviderId` / `selectedModelId` / `selectedReasoningLevel` | The composer picker's choice for the **next send only**. Cleared via `revertChatTarget` after the transport consumes them. Never the source of truth, never persisted. |
+
+Effective resolution (`src/routes/chat-model.ts`, mirrored in `web/src/runtime.ts`):
+`one-shot override → threadListItem.custom (conversation default) → global active
+provider default`. Zustand holds the overrides only; the conversation default is
+always read from SQLite.
+
 ## 3. Component-local state — React `useState`
 
 Anything used by a single component (input text, open/closed flags, local loading)

@@ -5,10 +5,15 @@ export interface ModelOption {
   contextWindow?: number;
 }
 
+export type ApiProtocol = "responses" | "chat-completions";
+
 export interface ProviderConfig {
   id: string;
   name: string;
   type: "openai" | "anthropic" | "google" | "ollama" | "custom";
+  // AI API wire protocol for OpenAI-compatible providers. Resolved server-side;
+  // never sent per message. google/anthropic ignore it.
+  apiProtocol?: ApiProtocol;
   endpoint?: string;
   model: string;
   models?: ModelOption[];
@@ -216,7 +221,7 @@ export interface SchedulerJob {
   thinkingLevel: "off" | "low" | "medium" | "high" | null;
   workspacePath: string;
   prompt: string;
-  conversationPolicy: "dedicated_thread";
+  conversationPolicy: "dedicated_thread" | "existing_thread";
   conversationId: string | null;
   overlapPolicy: "skip_if_running";
   maxRetries: number;
@@ -249,6 +254,7 @@ export interface SchedulerRun {
   providerId: string;
   modelId: string;
   workspacePath: string;
+  conversationId: string | null;
   attempt: number;
   durationMs: number | null;
   createdAt: number;
@@ -268,6 +274,8 @@ export interface SchedulerJobDraft {
   thinkingLevel: "off" | "low" | "medium" | "high";
   workspacePath: string;
   prompt: string;
+  conversationPolicy: "dedicated_thread" | "existing_thread";
+  conversationId: string | null;
   maxRetries: number;
   retryDelaySeconds: number;
   timeoutSeconds: number;

@@ -12,6 +12,9 @@ interface ConvDTO {
   id: string;
   title: string;
   status: string;
+  providerId?: string | null;
+  modelId?: string | null;
+  reasoningLevel?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -22,7 +25,12 @@ type ThreadMetadata = {
   status: "regular" | "archived";
   title?: string;
   lastMessageAt?: Date;
-  custom?: Record<string, unknown>;
+  // Conversation-owned AI config (SQLite source of truth, projected here).
+  custom?: {
+    providerId?: string | null;
+    modelId?: string | null;
+    reasoningLevel?: string | null;
+  };
 };
 
 function toMetadata(c: ConvDTO): ThreadMetadata {
@@ -31,6 +39,11 @@ function toMetadata(c: ConvDTO): ThreadMetadata {
     status: c.status === "archived" ? "archived" : "regular",
     title: c.title,
     lastMessageAt: c.updatedAt ? new Date(c.updatedAt) : undefined,
+    custom: {
+      providerId: c.providerId ?? null,
+      modelId: c.modelId ?? null,
+      reasoningLevel: c.reasoningLevel ?? null,
+    },
   };
 }
 
@@ -112,6 +125,21 @@ export function createRemoteThreadListAdapter(
       });
       const conv = await res.json();
       return { remoteId: conv.id };
+    },
+
+    // Persists a conversation's AI config back to SQLite. Called by the runtime
+    // when the user picks a model/reasoning level in the composer — the browser
+    // only sends providerId/modelId/reasoningLevel, never secrets or protocol.
+    async updateCustom(remoteId: string, custom: Record<string, unknown>) {
+      await fetch(`/api/conversations/${remoteId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          providerId: custom.providerId ?? undefined,
+          modelId: custom.modelId ?? undefined,
+          reasoningLevel: custom.reasoningLevel ?? undefined,
+        }),
+      });
     },
 
     async rename(remoteId, newTitle) {

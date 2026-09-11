@@ -25,3 +25,9 @@ probe-abort.js
 start.bat
 web/vite.config.*
 workspace/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+src-tauri/icons/
+dev.out
+dev.err

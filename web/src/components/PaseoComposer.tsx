@@ -5,6 +5,8 @@ import {
   AuiIf,
   ComposerPrimitive,
   unstable_useComposerInput,
+  useAui,
+  useAuiState,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
 import {
@@ -50,23 +52,71 @@ function useTextareaAutoGrow(textareaRef: React.RefObject<HTMLTextAreaElement | 
   }, [textareaRef]);
 }
 
+type ConversationCustom = {
+  providerId?: string | null;
+  modelId?: string | null;
+  reasoningLevel?: string | null;
+};
+
 function ModelChip() {
-  const { providers, activeProviderId, selectedModelId, setSelectedModel } = useSettingsStore();
+  const {
+    providers,
+    activeProviderId,
+    selectedProviderId,
+    selectedModelId,
+    selectChatTarget,
+  } = useSettingsStore();
+  const aui = useAui();
+  const custom = useAuiState((s) => s.threadListItem.custom) as
+    | ConversationCustom
+    | undefined;
   const [open, setOpen] = useState(false);
 
-  const activeProvider = providers.find((p) => p.id === activeProviderId);
-  const enabledModels = activeProvider?.models?.length
-    ? activeProvider.models
-    : activeProvider?.model
-      ? [{ id: activeProvider.model, provider: activeProvider.type, label: activeProvider.model }]
-      : [];
+  // Every provider's models, grouped under its name (not just the active
+  // provider's). A provider with no explicit list contributes its default.
+  const groups = providers.map((p) => ({
+    provider: p,
+    models: p.models?.length
+      ? p.models
+      : p.model
+        ? [{ id: p.model, provider: p.type, label: p.model }]
+        : [],
+  }));
 
-  const currentModelId = selectedModelId ?? activeProvider?.model ?? "";
-  const currentModel = enabledModels.find((m) => m.id === currentModelId);
+  // Effective selection: one-shot picker override wins, else the conversation
+  // default (custom), else the global active provider's model.
+  let currentProviderId =
+    selectedProviderId ?? custom?.providerId ?? activeProviderId;
+  let currentModelId: string | undefined;
+  if (selectedModelId) {
+    for (const g of groups) {
+      if (g.models.some((m) => m.id === selectedModelId)) {
+        currentProviderId = g.provider.id;
+        currentModelId = selectedModelId;
+        break;
+      }
+    }
+  }
+  currentModelId ??= custom?.modelId ?? undefined;
+  const currentProvider = providers.find((p) => p.id === currentProviderId);
+  currentModelId ??= currentProvider?.model ?? "";
+  const currentModel =
+    groups
+      .flatMap((g) => g.models)
+      .find((m) => m.id === currentModelId) ?? undefined;
   const label = currentModel?.label ?? currentModelId ?? "Select model";
 
-  const handleSelect = (modelId: string) => {
-    setSelectedModel(modelId);
+  const handleSelect = (providerId: string, modelId: string) => {
+    // Set the one-shot override for the NEXT message, AND persist it as this
+    // conversation's default (SQLite source of truth) so it survives reloads
+    // and is the baseline for subsequent messages.
+    selectChatTarget(providerId, modelId);
+    const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
+    aui.threadListItem.updateCustom({
+      ...base,
+      providerId,
+      modelId,
+    });
     setOpen(false);
   };
 
@@ -87,31 +137,46 @@ function ModelChip() {
           <ChevronDown className="size-3 shrink-0 opacity-50" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="min-w-[180px]">
-        {enabledModels.length === 0 ? (
+      <DropdownMenuContent side="top" align="start" className="min-w-[220px] max-h-[320px] overflow-y-auto">
+        {groups.length === 0 || groups.every((g) => g.models.length === 0) ? (
           <DropdownMenuItem disabled>
             <span className="text-muted-foreground">No models configured</span>
           </DropdownMenuItem>
         ) : (
-          enabledModels.map((m) => (
-            <DropdownMenuItem
-              key={m.id}
-              className={cn(
-                "justify-between",
-                m.id === currentModelId && "bg-accent text-accent-foreground",
-              )}
-              onSelect={() => handleSelect(m.id)}
-            >
-              <span className="truncate">{m.label ?? m.id}</span>
-              {m.id === currentModelId && <span className="ml-auto text-[10px]">✓</span>}
-            </DropdownMenuItem>
-          ))
+          groups.map((g) =>
+            g.models.length === 0 ? null : (
+              <div key={g.provider.id}>
+                <div className="px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
+                  {g.provider.name}
+                  {g.provider.id === activeProviderId && " · default"}
+                </div>
+                {g.models.map((m) => (
+                  <DropdownMenuItem
+                    key={`${g.provider.id}:${m.id}`}
+                    className={cn(
+                      "justify-between",
+                      m.id === currentModelId &&
+                        g.provider.id === currentProviderId &&
+                        "bg-accent text-accent-foreground",
+                    )}
+                    onSelect={() => handleSelect(g.provider.id, m.id)}
+                  >
+                    <span className="truncate">{m.label ?? m.id}</span>
+                    {m.id === currentModelId &&
+                      g.provider.id === currentProviderId && (
+                        <span className="ml-auto text-[10px]">✓</span>
+                      )}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            ),
+          )
         )}
-        {activeProvider && (
+        {currentProvider && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-xs text-muted-foreground cursor-default">
-              {activeProvider.name}
+              Next message: {currentProvider.name} · {currentModelId || "default"}
             </DropdownMenuItem>
           </>
         )}
@@ -120,14 +185,31 @@ function ModelChip() {
   );
 }
 
-function ThinkingChip({ onSelect }: { onSelect?: (id: string) => void }) {
+function ThinkingChip() {
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState("default");
+  const aui = useAui();
+  const custom = useAuiState((s) => s.threadListItem.custom) as
+    | ConversationCustom
+    | undefined;
+  // Display follows: one-shot override > conversation default > provider default.
+  const stored = useSettingsStore((s) => s.selectedReasoningLevel);
+  const providerDefault = useSettingsStore((s) => {
+    const pid = s.selectedProviderId ?? custom?.providerId ?? s.activeProviderId;
+    return s.providers.find((p) => p.id === pid)?.thinking ?? "off";
+  });
+  const effective = stored ?? custom?.reasoningLevel ?? providerDefault;
+  const selected = effective === "off" ? "default" : effective;
 
   const handleSelect = (id: string) => {
-    setSelected(id);
     setOpen(false);
-    onSelect?.(id);
+    // "default" means the provider's saved level; persist that concrete value.
+    const level = id === "default" ? null : (id as "low" | "medium" | "high");
+    useSettingsStore.getState().setSelectedReasoningLevel(level);
+    const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
+    aui.threadListItem.updateCustom({
+      ...base,
+      reasoningLevel: level ?? providerDefault,
+    });
   };
 
   return (
@@ -268,7 +350,9 @@ function PaseoComposer() {
         <div className="flex items-center gap-1">
           {/* Model chip */}
           <ModelChip />
-          {/* Thinking chip */}
+          {/* Thinking chip: persists to the conversation default ("Default" =
+              the provider's saved level); also sets a one-shot override for the
+              immediate next message. */}
           <ThinkingChip />
           {/* Voice — always visible, disabled (no DictationAdapter) */}
           <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">

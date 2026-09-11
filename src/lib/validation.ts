@@ -19,6 +19,7 @@ export const chatRequestSchema = z
   .object({
     providerId: z.string().optional(),
     model: z.string().optional(),
+    reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional(),
     messages: z.array(uiMessageSchema).min(1, "messages are required"),
   })
   .passthrough();
@@ -31,6 +32,7 @@ export const providerCreateSchema = z.object({
   model: z.string().min(1).max(200),
   models: z.array(modelOptionSchema).optional(),
   thinking: z.enum(["off", "low", "medium", "high"]).optional(),
+  apiProtocol: z.enum(["responses", "chat-completions"]).optional(),
 });
 
 export const providerUpdateSchema = providerCreateSchema.partial();
@@ -60,13 +62,19 @@ export type ProviderTest = z.infer<typeof providerTestSchema>;
 export const conversationCreateSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   providerId: z.string().optional(),
+  modelId: z.string().max(200).optional().nullable(),
+  reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
   systemPrompt: z.string().optional(),
 });
 
 export const conversationUpdateSchema = z.object({
   title: z.string().min(1).max(200).optional(),
+  providerId: z.string().optional(),
+  modelId: z.string().max(200).optional().nullable(),
+  reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
   status: z.enum(["regular", "archived"]).optional(),
   systemPrompt: z.string().optional(),
+  titleSource: z.enum(["auto", "user"]).optional(),
 });
 
 // A persisted message entry in the runtime's storage format (produced by the
@@ -203,7 +211,8 @@ export const schedulerJobCreateSchema = z.object({
   thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
   workspacePath: z.string().min(1).max(4096),
   prompt: z.string().min(1).max(100000),
-  conversationPolicy: z.enum(["dedicated_thread"]).optional(),
+  conversationPolicy: z.enum(["dedicated_thread", "existing_thread"]).optional(),
+  conversationId: z.string().min(1).max(200).optional().nullable(),
   overlapPolicy: z.enum(["skip_if_running"]).optional(),
   maxRetries: z.number().int().min(0).max(10).optional(),
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
@@ -221,8 +230,16 @@ export const schedulerPreviewSchema = z.object({
   count: z.number().int().min(1).max(10).optional(),
 });
 
+// ---- Scheduler AI-tool input schemas (mirror the REST job schemas) ----
+export const schedulerToolIdSchema = z.object({
+  id: z.string().min(1).max(200),
+});
+export const schedulerToolRunSchema = z.object({});
+export const schedulerToolListSchema = z.object({});
+
 export type SchedulerJobCreate = z.infer<typeof schedulerJobCreateSchema>;
 export type SchedulerJobUpdate = z.infer<typeof schedulerJobUpdateSchema>;
+export type SchedulerToolId = z.infer<typeof schedulerToolIdSchema>;
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 export type ProviderCreate = z.infer<typeof providerCreateSchema>;
 export type ProviderUpdate = z.infer<typeof providerUpdateSchema>;

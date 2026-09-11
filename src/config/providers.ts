@@ -9,6 +9,7 @@ interface ProviderConfigRow {
   model: string;
   models: string | null;
   thinking: string | null;
+  api_protocol: string | null;
   is_active: number;
   created_at: number;
   updated_at: number;
@@ -46,6 +47,7 @@ export class ProviderRegistry {
         model: row.model,
         models,
         thinking: (row.thinking as ProviderConfig["thinking"]) || "off",
+        apiProtocol: (row.api_protocol as ProviderConfig["apiProtocol"]) || undefined,
         isActive: row.is_active === 1,
         createdAt: new Date(row.created_at),
         updatedAt: new Date(row.updated_at),

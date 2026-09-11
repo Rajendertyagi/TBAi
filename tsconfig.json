@@ -7,9 +7,8 @@
     "types": ["bun"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
-      "electrobun": ["./src/types/electrobun-config.ts"]
+      "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "electrobun.config.ts", "hutch.config.ts", "scripts"]
+  "include": ["src", "scripts"]
 }

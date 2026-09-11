@@ -94,6 +94,38 @@ export interface ParsedCron {
 
 /** Validate + parse a 5-field cron expression. Throws on invalid input. */
 export function parseCron(expression: string): ParsedCron {
+  return parseCronFields(expandMacro(expression));
+}
+
+/** @-macro shorthands → canonical 5-field expressions (codeg has none of
+ * these; they are a TBAi convenience, normalized server-side so timers,
+ * previews, and stored values always agree on the canonical form). */
+const CRON_MACROS: Record<string, string> = {
+  "@yearly": "0 0 1 1 *",
+  "@annually": "0 0 1 1 *",
+  "@monthly": "0 0 1 * *",
+  "@weekly": "0 0 * * 0",
+  "@daily": "0 0 * * *",
+  "@midnight": "0 0 * * *",
+  "@hourly": "0 * * * *",
+};
+
+export function expandMacro(expression: string): string {
+  const key = expression.trim().toLowerCase();
+  return CRON_MACROS[key] ?? expression;
+}
+
+/** True when `expression` is a valid 5-field cron or @-macro. */
+export function isValidCron(expression: string): boolean {
+  try {
+    parseCron(expression);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseCronFields(expression: string): ParsedCron {
   const fields = expression.trim().split(/\s+/);
   if (fields.length !== 5) {
     throw new Error(
@@ -107,16 +139,6 @@ export function parseCron(expression: string): ParsedCron {
     month: parseField(fields[3]!, 3, MONTH_NAMES),
     dow: parseField(fields[4]!, 4, DOW_NAMES),
   };
-}
-
-/** True when `expression` is a valid 5-field cron. */
-export function isValidCron(expression: string): boolean {
-  try {
-    parseCron(expression);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function validateTimezone(tz: string): void {
@@ -385,9 +407,23 @@ function assertHourMinute(hour: number, minute: number): void {
 
 /** Short human-readable description for common cron shapes. */
 export function describeCron(expression: string): string {
+  const macro = expression.trim().toLowerCase();
+  if (macro in CRON_MACROS) {
+    const labels: Record<string, string> = {
+      "@yearly": "Yearly on Jan 1 at 00:00",
+      "@annually": "Yearly on Jan 1 at 00:00",
+      "@monthly": "Monthly on day 1 at 00:00",
+      "@weekly": "Weekly on Sunday at 00:00",
+      "@daily": "Daily at 00:00",
+      "@midnight": "Daily at 00:00",
+      "@hourly": "Hourly",
+    };
+    return labels[macro] ?? `Custom: ${expression}`;
+  }
+  const canonical = expandMacro(expression);
   let cron: ParsedCron;
   try {
-    cron = parseCron(expression);
+    cron = parseCron(canonical);
   } catch {
     return "Invalid schedule";
   }
@@ -446,4 +482,36 @@ export function describeCron(expression: string): string {
   }
   if (minutes.length === 60 && hours.length === 24) return "Every minute";
   return `Custom: ${expression}`;
+}
+
+/**
+ * Count occurrences inside `[fromMs, fromMs + windowMs)`. Powers the
+ * gallery's runs-per-day figures. Capped so pathological schedules can't
+ * spin (minute-cadence over 24h = 1440 iterations max).
+ */
+export function countUpcoming(
+  expression: string,
+  timezone: string,
+  fromMs: number = Date.now(),
+  windowMs: number = 24 * 3600_000,
+  cap = 1500,
+): number {
+  const end = fromMs + windowMs;
+  // Seed one minute back so a slot landing exactly on fromMs counts: this
+  // is a display count ("runs in the next 24h"), not timer bookkeeping
+  // (which must stay strictly-after to avoid immediate refires).
+  let cursor = fromMs - 60000;
+  let count = 0;
+  while (count < cap) {
+    let next: number;
+    try {
+      next = computeNextRun(expression, timezone, cursor);
+    } catch {
+      break;
+    }
+    if (next >= end) break;
+    count += 1;
+    cursor = next;
+  }
+  return count;
 }

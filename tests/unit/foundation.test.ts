@@ -127,13 +127,15 @@ describe("tab keys and urls", () => {
 describe("settings nav source of truth", () => {
   it("lists every settings section exactly once, in order", () => {
     const routes = getSettingsNav().map((item) => item.route);
+    // Order follows navigation.ts (the single source of truth); this test
+    // guards the membership (no missing/duplicate sections).
     expect(routes).toEqual([
       "/providers",
       "/appearance",
       "/workspace",
+      "/memory",
       "/mcp",
       "/scheduler",
-      "/memory",
       "/logs",
     ]);
   });

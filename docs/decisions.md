@@ -352,10 +352,10 @@ Everything else is verbatim official registry code.
 - **Router: `react-router` v8 `createHashRouter`, Data Mode, no loaders
   initially.** v7 is security-maintenance-only, so v8 (`8.3.1` installed,
   exports verified under Bun 1.4.2) — not the v7 originally sketched.
-  Hash routing picked over BrowserRouter: identical Data-Mode API, zero
-  server rewrites, works from `file://` (ElectroBun desktop). Framework
-  Mode explicitly rejected (no SSR/file-routes needed). One new
-  dependency; recorded here per dependency discipline.
+   Hash routing picked over BrowserRouter: identical Data-Mode API, zero
+   server rewrites, works from `file://` and under the Tauri desktop shell
+   (portable zip). Framework Mode explicitly rejected (no SSR/file-routes
+   needed). One new dependency; recorded here per dependency discipline.
 - **Tabs without duplicate runtimes:** open tabs = Zustand id list +
   `groupId` (`"main"`; split-screen later adds groups, no rewrite). ONE
   shared `useRemoteThreadListRuntime`; tab switch = `threadId` prop
@@ -384,6 +384,23 @@ Everything else is verbatim official registry code.
   Chat, Chat, conversations, one Settings row); settings sub-sidebar added
   (`SettingsLayout`, entries from `navigation.ts`); Memory/MCP/Scheduler/
   Logs converted onto the shared settings grammar without logic changes.
+  Page tabs later removed (codeg tabs are conversations-only); close-last
+  opens a draft; URL sync chat-scoped.
+- **Follow-up: scheduler hardening + codeg parity (same session).**
+  Reconciled a half-landed migration (cancel plumbing + thread persistence
+  without a matching signature — tree didn't compile; fixed by adding the
+  `conversationId` parameter properly). Then: @-macros normalized
+  server-side, cancel-run with real abort + route, 30-day run prune,
+  prompt-on-edit fetch fix, once defaults (now) + quick picks, thread
+  jump column, trigger gallery with runs/24h, template gallery (templates
+  now set the repeat mode too — previously silently overwritten),
+  When-section rewrite (mode chips, auto live sentence, custom
+  collapsible), duplicate/use-again + honest enable guard (dead
+  `cancelled` rule removed, tests rewritten), sent-vs-shown prompt split,
+  run-now disabled while running + auto-refresh, trigger icons, sidebar
+  failure badge + auto-clear, relative next-run, soft-delete retaining
+  runs. Verified: in-process Bun.cron is exempt from the Windows
+  48-trigger cap (docs table), so odd steps work as-is.
 - **Not done here:** split-screen UI (model ready), MCP/scheduler/memory
   logic (untouched), shadcn CLI primitives (adopt incrementally).
 
@@ -525,3 +542,75 @@ future agents don't re-litigate:
 - **Data contract:** Each progress update is a `data-tbai-progress` data part (id: `"progress"`) with shape `{ kind: "tbai-progress", version: 1, stages: [{ id, label, status: "pending"|"active"|"completed"|"failed" }] }`. Partial updates are transient (live UI only); the final snapshot is non-transient and persists in the message history.
 - **Client:** `TodoList` component registered as the `tbai-progress` data renderer via `makeAssistantDataUI` in `App.tsx`. Renders inside the assistant message via assistant-ui's data-part flow.
 - **Rationale:** No model involvement means stages are always accurate. Hybrid persistence avoids bloating stored messages with intermediate snapshots. One renderer per app — no per-thread config needed.
+
+## ADR-019 — Per-conversation AI config ownership + provenance metadata
+
+- **Status:** Accepted
+- **Date:** 2026-09-11
+- **Context:** The composer picker listed only the active provider's models, its choice was sticky, the thinking chip was unwired UI, set-active flipped local state without checking the server, and no per-response provenance existed. Verified against installed `ai` 7.0.93 + `@assistant-ui/ai-sdk` 0.0.4 typings and the official docs patterns.
+- **Decision:** Each conversation **owns** its AI config (provider + model + reasoning level), with SQLite as the source of truth:
+  - `conversations.model_id` / `conversations.reasoning_level` (added idempotently in `src/db/index.ts`) hold the conversation's persisted default.
+  - **Create** (`src/routes/conversations.ts`): when a field is omitted, it defaults to the active provider's `model` / `thinking` (or `"off"`), so every conversation owns a concrete config from creation.
+  - **Update** (`PATCH /api/conversations/:id`): `providerId` / `modelId` / `reasoningLevel` patch without clobbering other fields; a literal `null` is normalized to "absent" so a partial `updateCustom` never wipes a persisted value.
+  - **Client projection** (`remoteThreadListAdapter.tsx`): `toMetadata` projects the row to `threadListItem.custom.{providerId, modelId, reasoningLevel}`; `updateCustom` PATCHes it back. The browser only ever sends these three ids/levels — never secrets or protocol.
+  - **Effective config resolution** (three layers, most specific first — `src/routes/chat-model.ts` on the server, mirrored in `web/src/runtime.ts` + `PaseoComposer.tsx`): `one-shot picker override` → `threadListItem.custom (conversation default)` → `global active provider default`. The wire field is **`reasoningLevel`** (Zod `off|low|medium|high`), not `thinkingLevel`.
+  - **One-shot picks** (provider + model + reasoning from the composer chips) apply to the NEXT send only and are cleared via `revertChatTarget` after the transport consumes them; they layer on top of the conversation default and never write back. The transport snapshots the effective config per thread + last-user-message so tool/approval continuations keep the picked model mid-run; history is immutable, so previous messages are never re-resolved.
+  - **Provenance:** the server attaches `{providerId, modelId, reasoningLevel}` via `toUIMessageStream({messageMetadata: () => ({custom})})`, persisted through the existing `withFormat` path and rendered as footer chips (which provider/model/thinking actually produced THIS response — one-shot picks vary per message). Set-active checks the response, reloads from the server, and shows errors. Footer streaming detection additionally requires `thread.isRunning` (message timing is never persisted, so timing-only detection stuck every reloaded message in "streaming").
+- **Removed:** a dead second `streamText()` call in the chat route whose result was never consumed (double provider invocation risk); replaced by nothing — the inner call already carried the full config.
+- **Ledger:** backend (`src/routes/chat-model.ts` seam —    single resolution point the chat route calls; validation field `reasoningLevel`; conversations create/update defaults; metadata), `stores` (`selectedProviderId` / `selectedModelId` / `selectedReasoningLevel` one-shots + `selectChatTarget` / `revertChatTarget`), `runtime.ts` (send-key snapshots + three-layer resolution), `PaseoComposer` (grouped picker + wired thinking chips that persist to `custom`), `ChatWindow` (provider/reasoning footer chips), `ProvidersPage` (honest set-active). Zero new dependencies. Wire contract uses `reasoningLevel`; the one-shot body fields are `providerId` / `model` / `reasoningLevel` / `id`.
+
+## ADR-020 — Desktop shell: Tauri 2 + bundled Bun sidecar (replaces ElectroBun)
+
+- **Status:** Accepted
+- **Date:** 2026-09-12
+- **Context:** TBAi shipped on **ElectroBun** (Hutch devkit) as a portable Windows app. We studied
+  `D:\Temp\codeg` (the reference desktop app) and confirmed its key property: **two shells, one
+  router** — a Rust Tauri backend serving a plain HTTP API + static SPA, and a React frontend that
+  talks to that API over fetch. Because TBAi's backend is already a plain Hono/Bun HTTP server, the
+  same `web/src/runtime.ts` fetch transport works in both the browser and a Tauri webview with **no
+  Transport abstraction** (codeg needed one only because its desktop backend is Rust IPC vs HTTP in
+  web; TBAi's fetch transport already works in both).
+- **Decision:** Replace ElectroBun with **Tauri 2** wrapping the existing web app. Architecture is a
+  strict stack: `Tauri 2 → Bun sidecar → existing Hono API → existing React/assistant-ui app`.
+  - **Bundled Bun sidecar** (`src-tauri/binaries/bun-*.exe`, portable download, spawned in
+    `src-tauri/src/main.rs`) runs the bundled backend (`bun build src/index.ts --target bun
+    --outdir dist` → `dist/index.js`). Env `PORT=3000`, `WEB_DIST_DIR=<resources>/web`,
+    `DATA_DIR=<app>/data` are injected by Rust before spawn. The window loads `http://localhost:3000`.
+  - **Full desktop-tab treatment, now:** custom title bar (drag region) + native window controls
+    (`WindowControls`), a draggable **tab strip** (`TabStrip`) built on the **existing
+    `chatTabs` Zustand store** with `@dnd-kit/sortable` reorder (writes through the store's
+    `reorder` action — **no second tab-state system**), left/right **edge chrome** for native
+    resize, and a **keyboard shortcut controller** (`ChromeShortcuts`: Ctrl/Cmd+T/W/Tab/1-9).
+  - **Isolation:** every Tauri capability is reached through `web/src/lib/platform.ts` via dynamic
+    `import("@tauri-apps/...")`; the chrome components are loaded by `AppShell` through
+    `React.lazy(() => import("../../components/DesktopChrome"))` gated on `isTauri()`
+    (`"__TAURI_INTERNALS__" in window`). Therefore the **browser bundle never pulls in
+    `@tauri-apps/*`** — verified: Tauri runtime lives in separate lazy chunks
+    (`DesktopChrome-*.js`, `window-*.js`); the main bundle only holds the dynamic-import
+    specifier string. In a plain browser `isTauri()` is false, the chrome renders nothing, and the
+    layout is unchanged (browser-mode parity preserved).
+  - **No changes to existing AI streaming:** `web/src/runtime.ts`, the chat route, and assistant-ui
+    remain exactly as in the web build.
+- **Build constraint (deliberate):** the Rust/Tauri toolchain is **never installed locally**; the
+  portable `.zip` (no installer) is produced **only** by `.github/workflows/tauri-build.yml`
+  (Windows runner: setup Bun + Rust, download portable Bun sidecar, `tauri icon`, `tauri build
+  --bundles zip --target x86_64-pc-windows-msvc`, upload artifact). `bundle.targets: ["zip"]`
+  (not NSIS) — portable only. All other steps (typecheck, web build, `bun test`) run locally as
+  before.
+- **Removed:** `src/bun/*` (ElectroBun main process + portable-path env shim),
+  `src/types/electrobun*.ts`, `electrobun.config.ts`, `hutch.config.ts`, `scripts/post-package.ts`;
+  the `electrobun` tsconfig path alias and the `electrobun:*` npm scripts. `.gitignore` now covers
+  `src-tauri/{target,gen,binaries,icons}`.
+- **Capabilities** (`src-tauri/capabilities/default.json`): `core:default` + window
+  drag/resize/close/set-title + `opener:open-path`. The Bun sidecar is spawned from Rust, so the
+  frontend needs no shell-execute permission.
+- **Ledger:** `src-tauri/` (Cargo.toml, build.rs, tauri.conf.json, src/main.rs, capabilities,
+  app-icon source), `web/src/lib/platform.ts` (~70), `web/src/components/{WindowControls,
+  DesktopTitleBar, TabStrip, LeftEdgeChrome, RightEdgeChrome, ChromeShortcuts, DesktopChrome}.tsx`
+  (~430 total), `AppShell` lazy-mount (~10), `chatTabs.reorder` (+12), `package.json` scripts +
+  `@tauri-apps/*`/`@dnd-kit/*` deps, `scripts/gen-icon.ts`, `.github/workflows/tauri-build.yml`.
+  Zero new backend dependencies.
+- **Verification done locally:** `bun run typecheck` (0 errors), `bun run build` (backend + web),
+  `bun test` (188 pass, 0 fail), and a browser smoke test (`bun run dev` serves `localhost:3000`
+  SPA + `/api/conversations` 200 — no regression). Tauri desktop build is verified by the GitHub
+  workflow artifact (cannot run `tauri build` locally by design).

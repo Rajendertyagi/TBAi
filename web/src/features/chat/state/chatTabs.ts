@@ -26,6 +26,8 @@ export interface ChatTabsState {
   openPage: (route: string) => void;
   close: (key: string) => void;
   setActive: (key: string) => void;
+  /** Reorder an open tab (drag-and-drop in the desktop tab strip). */
+  reorder: (from: number, to: number) => void;
   /** Replace a draft/old thread id with the real one (first send, reload). */
   attachRealId: (oldId: string, realId: string) => void;
 }
@@ -166,6 +168,23 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
     }),
   setActive: (key) =>
     set((state) => withActive(state.tabs, key)),
+  reorder: (from, to) =>
+    set((state) => {
+      if (
+        from < 0 ||
+        to < 0 ||
+        from >= state.tabs.length ||
+        to >= state.tabs.length ||
+        from === to
+      ) {
+        return state;
+      }
+      const tabs = state.tabs.slice();
+      const [moved] = tabs.splice(from, 1);
+      tabs.splice(to, 0, moved);
+      persist(tabs, state.activeKey);
+      return { tabs };
+    }),
   attachRealId: (oldId, realId) =>
     set((state) => {
       if (oldId === realId) return state;

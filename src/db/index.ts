@@ -106,6 +106,10 @@ addColumnIfNotExists("messages", "order_seq", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfNotExists("messages", "status", "TEXT");
 addColumnIfNotExists("messages", "format", "TEXT");
 addColumnIfNotExists("messages", "updated_at", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfNotExists("conversations", "title_source", "TEXT CHECK(title_source IN ('auto', 'user'))");
+// Per-conversation AI configuration (conversation default, SQLite source of truth).
+addColumnIfNotExists("conversations", "model_id", "TEXT");
+addColumnIfNotExists("conversations", "reasoning_level", "TEXT");
 
 // The original messages table had `role TEXT NOT NULL` and stored a plain-text
 // content format incompatible with the assistant-ui storage format we now
@@ -133,6 +137,7 @@ addColumnIfNotExists("provider_configs", "encrypted_api_key", "TEXT");
 addColumnIfNotExists("provider_configs", "credential_version", "INTEGER");
 addColumnIfNotExists("provider_configs", "models", "TEXT");
 addColumnIfNotExists("provider_configs", "thinking", "TEXT");
+addColumnIfNotExists("provider_configs", "api_protocol", "TEXT");
 
 sqlite.run(`
   CREATE TABLE IF NOT EXISTS memories (
@@ -271,6 +276,7 @@ sqlite.run(`
     provider_id TEXT NOT NULL,
     model_id TEXT NOT NULL,
     workspace_path TEXT NOT NULL,
+    conversation_id TEXT,
     attempt INTEGER NOT NULL DEFAULT 0,
     duration_ms INTEGER,
     created_at INTEGER NOT NULL,
@@ -278,8 +284,44 @@ sqlite.run(`
   )
 `);
 
+// Additive migration: add conversation_id to scheduler_runs if this column was
+// introduced after the table was first created.
+try {
+  sqlite.run("ALTER TABLE scheduler_runs ADD COLUMN conversation_id TEXT");
+} catch {
+  /* column already exists; ignore */
+}
+
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job ON scheduler_runs(job_id, started_at DESC)");
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_status ON scheduler_runs(status)");
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next ON scheduler_jobs(enabled, next_run_at)");
+
+// One-time repair: scheduler runs used to persist every message with
+// parent_id NULL, building a forest of disconnected roots the thread view
+// could not render (messages stored but invisible). Chain orphan rows after
+// the first chronological message within scheduler-job threads only.
+// Content is untouched; user-typed messages (already chained) are untouched;
+// re-running is a no-op since repaired rows are no longer NULL.
+export function repairSchedulerThreadChains(database: Database = sqlite): void {
+  database.run(
+    `
+  UPDATE messages SET parent_id = (
+    SELECT m2.id FROM messages m2
+    WHERE m2.conversation_id = messages.conversation_id
+      AND m2.order_seq < messages.order_seq
+    ORDER BY m2.order_seq DESC LIMIT 1
+  )
+  WHERE parent_id IS NULL
+    AND conversation_id IN (SELECT conversation_id FROM scheduler_jobs WHERE conversation_id IS NOT NULL)
+    AND EXISTS (
+      SELECT 1 FROM messages m0
+      WHERE m0.conversation_id = messages.conversation_id
+        AND m0.order_seq < messages.order_seq
+    )
+  `,
+  );
+}
+
+repairSchedulerThreadChains();
 
 export const db = sqlite;

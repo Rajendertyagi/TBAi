@@ -26,10 +26,19 @@ app.post("/api/conversations", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = conversationCreateSchema.parse(body);
     const activeProvider = registry.getActive();
+    const provider =
+      (parsed.providerId && registry.get(parsed.providerId)) || activeProvider;
+    // New chats default non-null to the active provider's model + reasoning
+    // level so every conversation owns a concrete config from creation.
+    const modelId = parsed.modelId ?? provider?.model ?? null;
+    const reasoningLevel =
+      parsed.reasoningLevel ?? provider?.thinking ?? "off";
 
     const conversation = await conversationService.create({
       title: parsed.title || "New Conversation",
-      providerId: parsed.providerId || activeProvider?.id || "",
+      providerId: provider?.id || activeProvider?.id || "",
+      modelId,
+      reasoningLevel,
       systemPrompt: parsed.systemPrompt,
     });
 
@@ -106,7 +115,14 @@ app.patch("/api/conversations/:id", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
     const parsed = conversationUpdateSchema.parse(body);
-    const conversation = await conversationService.update(id, parsed);
+    const conversation = await conversationService.update(id, {
+      ...parsed,
+      // Normalize "unset" sentinels to undefined so they don't overwrite an
+      // existing persisted value with null on a partial PATCH.
+      modelId: parsed.modelId === null ? undefined : parsed.modelId,
+      reasoningLevel:
+        parsed.reasoningLevel === null ? undefined : parsed.reasoningLevel,
+    });
     return c.json(conversation);
   } catch (e) {
     return storageError(c, e);

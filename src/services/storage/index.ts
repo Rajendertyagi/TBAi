@@ -7,8 +7,11 @@ interface ConversationRow {
   id: string;
   title: string;
   provider_id: string | null;
+  model_id: string | null;
+  reasoning_level: string | null;
   system_prompt: string | null;
   status: string;
+  title_source: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -49,8 +52,11 @@ function mapConversation(row: ConversationRow): Conversation {
     id: row.id,
     title: row.title,
     providerId: row.provider_id,
+    modelId: row.model_id ?? null,
+    reasoningLevel: row.reasoning_level ?? null,
     systemPrompt: row.system_prompt,
     status: row.status as "regular" | "archived",
+    titleSource: row.title_source as "auto" | "user" | undefined,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -58,13 +64,22 @@ function mapConversation(row: ConversationRow): Conversation {
 
 export const conversationService = {
   async create(
-    data: Pick<Conversation, "title" | "providerId" | "systemPrompt">,
+    data: Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt">,
   ): Promise<Conversation> {
     const now = Date.now();
     const id = generateId();
     db.run(
-      "INSERT INTO conversations (id, title, provider_id, system_prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'regular', ?, ?)",
-      [id, data.title, data.providerId || null, data.systemPrompt || null, now, now],
+      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?)",
+      [
+        id,
+        data.title,
+        data.providerId || null,
+        data.modelId ?? null,
+        data.reasoningLevel ?? null,
+        data.systemPrompt || null,
+        now,
+        now,
+      ],
     );
     const created = await this.get(id);
     if (!created) throw new Error("Failed to create conversation");
@@ -112,7 +127,7 @@ export const conversationService = {
 
   async update(
     id: string,
-    data: Partial<Pick<Conversation, "title" | "systemPrompt" | "status">>,
+    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource">>,
   ): Promise<Conversation> {
     const updates: string[] = [];
     const values: SQLQueryBindings[] = [];
@@ -121,6 +136,18 @@ export const conversationService = {
       updates.push("title = ?");
       values.push(data.title);
     }
+    if (data.providerId !== undefined) {
+      updates.push("provider_id = ?");
+      values.push(data.providerId);
+    }
+    if (data.modelId !== undefined) {
+      updates.push("model_id = ?");
+      values.push(data.modelId);
+    }
+    if (data.reasoningLevel !== undefined) {
+      updates.push("reasoning_level = ?");
+      values.push(data.reasoningLevel);
+    }
     if (data.systemPrompt !== undefined) {
       updates.push("system_prompt = ?");
       values.push(data.systemPrompt);
@@ -128,6 +155,10 @@ export const conversationService = {
     if (data.status !== undefined) {
       updates.push("status = ?");
       values.push(data.status);
+    }
+    if (data.titleSource !== undefined) {
+      updates.push("title_source = ?");
+      values.push(data.titleSource);
     }
 
     updates.push("updated_at = ?");
@@ -165,6 +196,20 @@ function threadMessageText(message: unknown): string {
 }
 
 export const messageService = {
+  /**
+   * Id of the thread tip (latest message by order) or null when empty.
+   * Scheduler runs chain onto the tip so appended messages join the
+   * visible tree instead of forming invisible disconnected roots.
+   */
+  async getThreadTip(conversationId: string): Promise<string | null> {
+    const row = db
+      .query<{ id: string }, SQLQueryBindings[]>(
+        "SELECT id FROM messages WHERE conversation_id = ? ORDER BY order_seq DESC LIMIT 1",
+      )
+      .get(conversationId);
+    return row?.id ?? null;
+  },
+
   /**
    * Upserts a single stored message entry (keyed by message id). Called by the
    * ThreadHistoryAdapter's `withFormat` adapter on every append/update during a
@@ -212,12 +257,16 @@ export const messageService = {
     );
 
     // Auto-title: name the conversation from the first user message text.
+    // Only fires when title_source is NULL (new thread) or explicitly 'auto';
+    // user-assigned titles are never overwritten by scheduler or chat runs.
     const userText = threadMessageText(entry.content);
     if (userText) {
       const conv = db
-        .query<{ title: string }, SQLQueryBindings[]>("SELECT title FROM conversations WHERE id = ?")
+        .query<{ title: string; title_source: string | null }, SQLQueryBindings[]>(
+          "SELECT title, title_source FROM conversations WHERE id = ?",
+        )
         .get(conversationId);
-      if (conv && conv.title === "New Conversation") {
+      if (conv && (conv.title === "New Conversation" || conv.title_source === "auto")) {
         const title = userText.length > 50 ? userText.slice(0, 50) + "…" : userText;
         db.run("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?", [
           title,

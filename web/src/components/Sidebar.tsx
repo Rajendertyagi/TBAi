@@ -61,6 +61,29 @@ export function Sidebar() {
   );
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  // Unseen scheduler failures (codeg parity: attention badge). One small
+  // fetch per navigation; the Scheduler page itself owns details + clearing.
+  const [schedUnseen, setSchedUnseen] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/scheduler/summary")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        let seen = 0;
+        try {
+          seen = Number(window.localStorage.getItem("tbai:schedSeenTs") ?? 0) || 0;
+        } catch {
+          /* ignore */
+        }
+        const problems = (data.problemRuns ?? []) as Array<{ startedAt: number }>;
+        setSchedUnseen(problems.filter((p) => p.startedAt > seen).length);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
   const aui = useAui();
 
   // Debounced server-side search: pushes the query into the adapter and asks
@@ -144,6 +167,14 @@ export function Sidebar() {
         >
           <SettingsIcon className="w-4 h-4" />
           Settings
+          {schedUnseen > 0 && (
+            <span
+              className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-[10px] font-medium leading-none text-destructive"
+              title={`${schedUnseen} unseen scheduler failure(s)`}
+            >
+              {schedUnseen}
+            </span>
+          )}
         </button>
       </div>
 

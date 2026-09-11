@@ -5,7 +5,7 @@ import { Button, Input } from "../../components/ui";
 import { Plus, Trash2, Check, Pencil, X } from "lucide-react";
 import { SettingsPage, SettingsSection } from "../../components/shared/settings";
 import { cn } from "../../lib/utils";
-import type { ModelOption } from "../../types";
+import type { ApiProtocol, ModelOption } from "../../types";
 
 interface EditState {
   id: string | null;
@@ -16,12 +16,20 @@ interface EditState {
   model: string;
   models: ModelOption[];
   thinking: "off" | "low" | "medium" | "high";
+  apiProtocol: ApiProtocol;
 }
 
 function defaultModelId(models: ModelOption[]): string {
   if (!models.length) return "";
   const latest = models.find((m) => /latest/i.test(m.id));
   return latest?.id ?? models[0].id;
+}
+
+/** Protocol default per provider type (matches server-side resolution). */
+function defaultApiProtocol(type: EditState["type"]): ApiProtocol {
+  if (type === "openai") return "responses";
+  if (type === "custom" || type === "ollama") return "chat-completions";
+  return "responses";
 }
 
 /**
@@ -31,7 +39,7 @@ function defaultModelId(models: ModelOption[]): string {
  * application-foundation refactor; behavior unchanged.
  */
 export function ProvidersPage() {
-  const { providers, setActiveProvider, loadProviders } = useSettingsStore();
+  const { providers, loadProviders } = useSettingsStore();
   const [isAdding, setIsAdding] = useState(false);
   const [editState, setEditState] = useState<EditState>({
     id: null,
@@ -42,6 +50,7 @@ export function ProvidersPage() {
     model: "",
     models: [],
     thinking: "off",
+    apiProtocol: defaultApiProtocol("openai"),
   });
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -50,6 +59,9 @@ export function ProvidersPage() {
   const [discovering, setDiscovering] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [manualModel, setManualModel] = useState("");
+  // List-level action errors (set-active/delete): shown inline, since these
+  // buttons used to fail silently.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const startEdit = (provider: any) => {
     setTestResult(null);
@@ -65,6 +77,7 @@ export function ProvidersPage() {
       model: provider.model,
       models: provider.models ?? [],
       thinking: provider.thinking || "off",
+      apiProtocol: provider.apiProtocol ?? defaultApiProtocol(provider.type),
     });
   };
 
@@ -73,13 +86,41 @@ export function ProvidersPage() {
     setDiscovered([]);
     setPicked(new Set());
     setDiscoverError(null);
-    setEditState({ id: null, name: "", type: "openai", endpoint: "", apiKey: "", model: "", models: [], thinking: "off" });
+    setEditState({ id: null, name: "", type: "openai", endpoint: "", apiKey: "", model: "", models: [], thinking: "off", apiProtocol: defaultApiProtocol("openai") });
+  };
+
+  /** Models actually being saved: stored list plus anything still staged —
+      ticked discovery picks and even unconfirmed manual text (both used to
+      be silently dropped on Save). */
+  const effectiveModels = () => {
+    const merged = [...editState.models];
+    for (const m of discovered.filter((d) => picked.has(d.id))) {
+      if (!merged.some((x) => x.id === m.id)) merged.push(m);
+    }
+    const manualId = manualModel.trim();
+    if (manualId && !merged.some((x) => x.id === manualId)) {
+      merged.push({ id: manualId, provider: editState.type });
+    }
+    return merged;
   };
 
   const handleSaveEdit = async () => {
-    if (!editState.id || !editState.name || (!editState.model && editState.models.length === 0)) return;
+    if (!editState.id) return;
+    if (!editState.name.trim()) {
+      setTestResult({ ok: false, message: "Give the provider a name." });
+      return;
+    }
+    const models = effectiveModels();
+    if (!editState.model && models.length === 0) {
+      setTestResult({ ok: false, message: "Add at least one model (Find models, or type one below)." });
+      return;
+    }
+    if (editState.type === "custom" && !editState.endpoint.trim()) {
+      setTestResult({ ok: false, message: "Custom providers need an endpoint (OpenAI-compatible base URL)." });
+      return;
+    }
 
-    await fetch(`/api/providers/${editState.id}`, {
+    const res = await fetch(`/api/providers/${editState.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -87,11 +128,17 @@ export function ProvidersPage() {
         type: editState.type,
         endpoint: editState.endpoint || "",
         apiKey: editState.apiKey ? editState.apiKey : undefined,
-        model: editState.model,
-        models: editState.models,
+        model: editState.model || defaultModelId(models),
+        models,
         thinking: editState.thinking,
+        apiProtocol: editState.apiProtocol,
       }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      setTestResult({ ok: false, message: data.error || `Save failed (${res.status}).` });
+      return;
+    }
 
     await loadProviders();
     setTestResult(null);
@@ -99,9 +146,21 @@ export function ProvidersPage() {
   };
 
   const handleAddProvider = async () => {
-    if (!editState.name || (!editState.model && editState.models.length === 0)) return;
+    if (!editState.name.trim()) {
+      setTestResult({ ok: false, message: "Give the provider a name." });
+      return;
+    }
+    const models = effectiveModels();
+    if (!editState.model && models.length === 0) {
+      setTestResult({ ok: false, message: "Add at least one model (Find models, or type one below)." });
+      return;
+    }
+    if (editState.type === "custom" && !editState.endpoint.trim()) {
+      setTestResult({ ok: false, message: "Custom providers need an endpoint (OpenAI-compatible base URL)." });
+      return;
+    }
 
-    await fetch("/api/providers", {
+    const res = await fetch("/api/providers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -109,11 +168,17 @@ export function ProvidersPage() {
         type: editState.type,
         endpoint: editState.endpoint || "",
         apiKey: editState.apiKey ? editState.apiKey : undefined,
-        model: editState.model,
-        models: editState.models,
+        model: editState.model || defaultModelId(models),
+        models,
         thinking: editState.thinking,
+        apiProtocol: editState.apiProtocol,
       }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      setTestResult({ ok: false, message: data.error || `Save failed (${res.status}).` });
+      return;
+    }
 
     await loadProviders();
     setIsAdding(false);
@@ -162,8 +227,20 @@ export function ProvidersPage() {
   };
 
   const handleSetActive = async (id: string) => {
-    await fetch(`/api/providers/${id}/set-active`, { method: "POST" });
-    setActiveProvider(id);
+    // Server is the source of truth: only flip local state after it
+    // confirms, then reload (isActive flags live on the rows themselves).
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/providers/${id}/set-active`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setActionError(data.error || `Could not activate (HTTP ${res.status}).`);
+        return;
+      }
+      await loadProviders();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Could not activate.");
+    }
   };
 
   const handleDeleteProvider = async (id: string) => {
@@ -255,8 +332,9 @@ export function ProvidersPage() {
         </Button>
       }
     >
-      {/* Add/Edit Form */}
-      {(isAdding || editState.id !== null) && (
+      {/* Single visible block: the form replaces the list while adding or
+          editing, so one provider never renders as two stacked cards. */}
+      {(isAdding || editState.id !== null) ? (
         <SettingsSection title={editState.id ? "Edit provider" : "Add provider"} icon={Server}>
             <Input
               placeholder="Provider name"
@@ -265,7 +343,10 @@ export function ProvidersPage() {
             />
             <select
               value={editState.type}
-              onChange={(e) => setEditState({ ...editState, type: e.target.value as any })}
+              onChange={(e) => {
+                const type = e.target.value as EditState["type"];
+                setEditState({ ...editState, type, apiProtocol: defaultApiProtocol(type) });
+              }}
               className="w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
             >
               <option value="openai">OpenAI</option>
@@ -274,11 +355,29 @@ export function ProvidersPage() {
               <option value="ollama">Ollama</option>
               <option value="custom">Custom (OpenAI-compatible)</option>
             </select>
+            {editState.type !== "google" && editState.type !== "anthropic" && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-20 shrink-0">API protocol</span>
+                <select
+                  value={editState.apiProtocol}
+                  onChange={(e) => setEditState({ ...editState, apiProtocol: e.target.value as ApiProtocol })}
+                  className="flex-1 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                >
+                  <option value="chat-completions">Chat Completions</option>
+                  <option value="responses">Responses API</option>
+                </select>
+              </div>
+            )}
             <Input
-              placeholder="Endpoint (optional)"
+              placeholder={editState.type === "custom" ? "Endpoint (required, e.g. http://localhost:1234/v1)" : "Endpoint (optional)"}
               value={editState.endpoint}
               onChange={(e) => setEditState({ ...editState, endpoint: e.target.value })}
             />
+            {editState.type === "custom" && (
+              <p className="text-xs text-muted-foreground">
+                OpenAI-compatible base URL. Used for chat, connection testing, and model discovery.
+              </p>
+            )}
             <Input
               placeholder="API Key (leave blank to keep existing)"
               type="password"
@@ -402,16 +501,18 @@ export function ProvidersPage() {
               </p>
             )}
         </SettingsSection>
-      )}
-
+      ) : (
       <SettingsSection title="Configured providers" icon={Server}>
-        <div className="space-y-2">
+        {actionError && (
+          <p className="mb-2 text-xs text-destructive">{actionError}</p>
+        )}
+        <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-muted/40">
           {providers.map((provider) => (
             <div
               key={provider.id}
               className={cn(
-                "flex items-center justify-between p-3 rounded-md border",
-                provider.isActive ? "border-foreground/20 bg-foreground/5" : "border-border"
+                "flex items-center justify-between p-3",
+                provider.isActive && "bg-foreground/5"
               )}
             >
               <div className="flex-1 min-w-0">
@@ -449,12 +550,13 @@ export function ProvidersPage() {
             </div>
           ))}
           {providers.length === 0 && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground p-3">
               No providers yet. Add one to start chatting.
             </p>
           )}
         </div>
       </SettingsSection>
+      )}
     </SettingsPage>
   );
 }

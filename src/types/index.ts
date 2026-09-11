@@ -5,10 +5,17 @@ export interface ModelOption {
   contextWindow?: number;
 }
 
+export type ApiProtocol = "responses" | "chat-completions";
+
 export interface ProviderConfig {
   id: string;
   name: string;
   type: "openai" | "anthropic" | "google" | "ollama" | "custom";
+  // AI API wire protocol for OpenAI-compatible providers. "responses" targets
+  // the OpenAI Responses API (POST /responses); "chat-completions" targets the
+  // Chat Completions API (POST /chat/completions). Resolved server-side from the
+  // provider config — never sent per message. google/anthropic ignore it.
+  apiProtocol?: ApiProtocol;
   apiKey?: string;
   endpoint?: string;
   model: string;
@@ -27,8 +34,11 @@ export interface Conversation {
   id: string;
   title: string;
   providerId: string | null;
+  modelId?: string | null;
+  reasoningLevel?: string | null;
   systemPrompt?: string | null;
   status: "regular" | "archived";
+  titleSource?: "auto" | "user";
   createdAt: Date;
   updatedAt: Date;
 }

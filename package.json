@@ -10,12 +10,12 @@
     "build": "bun run build:backend && bun run build:web",
     "build:backend": "bun build src/index.ts --target bun --outdir dist",
     "build:web": "cd web && bun run build",
-    "electrobun:dev": "hutch electrobun dev --watch",
-    "electrobun:build": "hutch electrobun build --env=stable",
-    "typecheck": "tsc --noEmit -p tsconfig.json && cd web && tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.json && cd web && tsc --noEmit",
+    "gen:icon": "bun run scripts/gen-icon.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/server": "2.0.0",
+    "@tauri-apps/cli": "^2.0.0",
     "@types/bun": "^1.4.2",
     "typescript": "^5.7.2"
   },
@@ -23,6 +23,7 @@
     "@ai-sdk/anthropic": "^4.0.49",
     "@ai-sdk/google": "^4.0.64",
     "@ai-sdk/openai": "^4.0.60",
+    "@assistant-ui/ai-sdk": "^0.0.4",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/core": "2.0.0",
     "@noble/ciphers": "^2.4.0",

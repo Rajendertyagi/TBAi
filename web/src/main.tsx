@@ -3,6 +3,7 @@ import App from './App'
 import './styles/globals.css'
 import { installGlobalLogHooks } from './lib/logger'
 import { ThemeProvider } from './components/theme-provider'
+import { Toaster } from 'sonner'
 
 // DEV ONLY compatibility shim for the assistant-ui DevTools chain.
 //
@@ -23,6 +24,7 @@ if (import.meta.env.DEV) {
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider>
     <App />
+    <Toaster />
   </ThemeProvider>
 )
 

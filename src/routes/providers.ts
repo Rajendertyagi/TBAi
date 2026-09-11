@@ -9,6 +9,14 @@ import { logger } from "../lib/logger";
 import { discoverModels } from "../services/modelDiscovery";
 import { providerCreateSchema, providerUpdateSchema, providerTestSchema, providerDiscoverSchema } from "../lib/validation";
 import { storageError } from "./shared";
+import type { ProviderConfig } from "../types";
+
+/** Protocol default per provider type (mirrors services/ai.ts DEFAULT_PROTOCOL). */
+function defaultApiProtocol(type: ProviderConfig["type"]): ProviderConfig["apiProtocol"] {
+  if (type === "openai") return "responses";
+  if (type === "custom" || type === "ollama") return "chat-completions";
+  return undefined;
+}
 
 const app = new Hono<{ Variables: { requestId: string } }>();
 
@@ -33,11 +41,12 @@ app.post("/api/providers", async (c) => {
   const now = Date.now();
   const activeCount = (db.query("SELECT COUNT(*) as c FROM provider_configs WHERE is_active = 1").get() as { c: number }).c;
   const isActive = activeCount === 0 ? 1 : 0;
+  const apiProtocol = body.apiProtocol ?? defaultApiProtocol(body.type);
 
   db.run(
-    `INSERT INTO provider_configs (id, name, type, endpoint, model, models, thinking, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, body.name, body.type, body.endpoint || null, body.model, JSON.stringify(body.models ?? []), body.thinking ?? "off", isActive, now, now],
+    `INSERT INTO provider_configs (id, name, type, endpoint, model, models, thinking, api_protocol, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, body.name, body.type, body.endpoint || null, body.model, JSON.stringify(body.models ?? []), body.thinking ?? "off", apiProtocol ?? null, isActive, now, now],
   );
 
   let credentialConfigured = false;
@@ -71,6 +80,7 @@ app.put("/api/providers/:id", async (c) => {
   if (body.model !== undefined) { sets.push("model = ?"); values.push(body.model); }
   if (body.models !== undefined) { sets.push("models = ?"); values.push(JSON.stringify(body.models)); }
   if (body.thinking !== undefined) { sets.push("thinking = ?"); values.push(body.thinking); }
+  if (body.apiProtocol !== undefined) { sets.push("api_protocol = ?"); values.push(body.apiProtocol); }
   sets.push("updated_at = ?");
   values.push(now, id);
 

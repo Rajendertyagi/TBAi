@@ -30,8 +30,10 @@ Timers are an execution cache only. Restart rebuilds everything from SQLite.
   non-retryable failure → `failed`; retryable failure leaves it `active`
   for an operator/manual retry (the fired timer is gone).
 - **cron**: 5-field expression (minute hour day month weekday, no seconds —
-  this is Bun.cron's surface) + IANA timezone. `next_run_at` (UTC ms) is
-  bookkeeping/preview; the Bun.cron timer is what fires.
+  this is Bun.cron's surface) + IANA timezone, plus @-macros
+  (@daily/@weekly/@monthly/@yearly/@hourly, normalized server-side to
+  canonical form). `next_run_at` (UTC ms) is bookkeeping/preview; the
+  Bun.cron timer is what fires.
 
 ## Timezones & DST
 
@@ -130,7 +132,11 @@ PATCH  /api/scheduler/jobs/:id
 DELETE /api/scheduler/jobs/:id
 POST   /api/scheduler/jobs/:id/enable
 POST   /api/scheduler/jobs/:id/disable
-POST   /api/scheduler/jobs/:id/run        (manual occurrence, 202 + runId)
+POST   /api/scheduler/jobs/:id/run        (manual occurrence, 202 + runId;
+works on any non-deleted job — missed/completed/paused included — without
+touching the stored schedule)
+POST   /api/scheduler/jobs/:id/runs/:runId/cancel  (abort a running run)
+GET    /api/scheduler/summary            (job counts + recent failed/interrupted/missed runs)
 GET    /api/scheduler/jobs/:id/runs?limit&offset
 GET    /api/scheduler/runs?limit&offset
 GET    /api/scheduler/runs/:id
@@ -158,7 +164,7 @@ error/output excerpt).
 
 `scheduler.job_created|job_updated|job_deleted|job_enabled|job_disabled|`
 `job_due|run_claimed|run_started|run_completed|run_failed|run_skipped|`
-`run_interrupted|run_missed|run_retried|recovery_started|recovery_completed`
+`run_interrupted|run_missed|run_retried|run_cancel_requested|run_cancelled|recovery_started|recovery_completed`
 — every execution carries jobId + occurrenceId + runId + requestId. No
 secrets, no full prompts.
 
@@ -167,10 +173,13 @@ secrets, no full prompts.
 - Minute granularity (Bun.cron: 5 fields, no seconds).
 - Overlap: `skip_if_running` only (no queue/parallel).
 - No MCP tools in scheduled runs.
-- No full message mirroring into the scheduler thread (excerpt on run row).
+- Run output is excerpted on the run row; full thread messages are mirrored
+  (prompt/response/error) so the dedicated thread reads naturally.
 - Retries share one run row (attempt counter), not per-attempt rows.
-- In-memory timers: a hard kill between claim and finish leaves an
-  `interrupted` run for the operator (never auto-retried).
+- Terminal runs older than 30 days are pruned on recovery.
+- In-memory timers + abort controllers: a hard kill between claim and finish
+  leaves an `interrupted` run for the operator (never auto-retried); cancel
+  only works while the run executes in the current process.
 
 ## Live E2E checklist (another agent runs this)
 
@@ -183,3 +192,22 @@ secrets, no full prompts.
 6. Failure/retry: transient retries, auth failure does not retry.
 7. Destructive tool attempt → refused with approval message, no side effect.
 8. Logs contain jobId/occurrenceId/runId/requestId; no console errors.
+
+## Execution model notes (verified)
+
+- **In-process timers are exempt from OS trigger limits.** The 48-trigger
+  Windows cap (and Repetition-vs-expansion rules) apply only to OS-level
+  `Bun.cron(path, ...)` jobs. TBAi uses in-process `Bun.cron(schedule,
+  handler)`, which the official docs confirm has no Windows expression
+  limits � `*/7`, `*/13`, `0,30 * 15 * FRI` all work. Gallery counts are
+  real occurrence counts, not trigger-element estimates.
+- **Sent vs shown prompt (codeg prompt_blocks vs display_text).** The model
+  receives workspace/approval context; the thread stores the user`s own
+  words under a one-line run header � scaffolding never shows in chat.
+- **Spent jobs are never revived.** Enabling a one-time job whose date
+  passed is refused with the real options (duplicate with a new date, or
+  edit first). Delete hides the job but retains run history; terminal runs
+  older than 30 days are pruned on recovery.
+- **Live UI: the schedule sentence auto-updates** on every When-field
+  change (no preview button); Run-now disables while a run is in flight
+  and the job`s history refreshes when it settles.

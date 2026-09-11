@@ -4,11 +4,22 @@ import type { ProviderConfig, Memory } from "../types";
 interface SettingsState {
   providers: ProviderConfig[];
   activeProviderId: string | null;
-  // Session chat-model choice; null means "use the provider's saved default".
+  // One-shot session overrides for the NEXT outgoing message only (picker).
+  // These layer ON TOP of the conversation's persisted default (threadListItem
+  // custom) and the global provider default. The transport consumes (clears)
+  // them on send, so one pick never leaks into later messages. A null value
+  // means "fall back to the conversation default / global default".
+  selectedProviderId: string | null;
   selectedModelId: string | null;
+  selectedReasoningLevel: "low" | "medium" | "high" | null;
   setProviders: (providers: ProviderConfig[]) => void;
   setActiveProvider: (id: string) => void;
   setSelectedModel: (id: string | null) => void;
+  setSelectedReasoningLevel: (level: "low" | "medium" | "high" | null) => void;
+  /** Point the next message at another provider's model (session-only). */
+  selectChatTarget: (providerId: string, modelId: string) => void;
+  /** Revert a one-shot pick: back to saved defaults (transport calls this). */
+  revertChatTarget: () => void;
   addProvider: (provider: ProviderConfig) => void;
   updateProvider: (id: string, updates: Partial<ProviderConfig>) => void;
   removeProvider: (id: string) => void;
@@ -27,16 +38,21 @@ interface MemoryState {
 export const useSettingsStore = create<SettingsState>((set) => ({
   providers: [],
   activeProviderId: null,
+  selectedProviderId: null,
   selectedModelId: null,
+  selectedReasoningLevel: null,
   setProviders: (providers) => {
     const active = providers.find((p) => p.isActive) || providers[0];
-    set({ providers, activeProviderId: active?.id || null, selectedModelId: active?.model || null });
+    set({
+      providers,
+      activeProviderId: active?.id || null,
+      selectedProviderId: null,
+      selectedModelId: null,
+      selectedReasoningLevel: null,
+    });
   },
   setActiveProvider: (id) =>
-    set((state) => {
-      const provider = state.providers.find((p) => p.id === id);
-      return { activeProviderId: id, selectedModelId: provider?.model || null };
-    }),
+    set({ activeProviderId: id, selectedProviderId: null, selectedModelId: null }),
   addProvider: (provider) =>
     set((state) => ({
       providers: [...state.providers, provider],
@@ -55,14 +71,23 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         state.activeProviderId === id
           ? nextProviders.find((p) => p.id !== id)?.id || null
           : state.activeProviderId;
-      const nextProvider = nextProviders.find((p) => p.id === nextActive);
       return {
         providers: nextProviders,
         activeProviderId: nextActive,
-        selectedModelId: nextProvider?.model || null,
+        selectedProviderId: null,
+        selectedModelId: null,
       };
     }),
   setSelectedModel: (id) => set({ selectedModelId: id }),
+  setSelectedReasoningLevel: (level) => set({ selectedReasoningLevel: level }),
+  selectChatTarget: (providerId, modelId) =>
+    set({ selectedProviderId: providerId, selectedModelId: modelId }),
+  revertChatTarget: () =>
+    set({
+      selectedProviderId: null,
+      selectedModelId: null,
+      selectedReasoningLevel: null,
+    }),
   loadProviders: async () => {
     const response = await fetch("/api/providers");
     const providers = (await response.json()) as ProviderConfig[];

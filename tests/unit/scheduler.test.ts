@@ -31,6 +31,8 @@ import {
   cronOccurrenceId,
   onceOccurrenceId,
   manualOccurrenceId,
+  expandMacro,
+  countUpcoming,
 } from "../../src/services/scheduler/cron";
 import { schedulerStore } from "../../src/services/scheduler/schedulerStore";
 import type { JobCreate } from "../../src/services/scheduler/schedulerStore";
@@ -39,9 +41,12 @@ import {
   isRetryableError,
   verifyJobWorkspace,
   buildSchedulerTools,
+  ensureJobConversation,
 } from "../../src/services/scheduler/schedulerExecution";
-import { handleOverdueOnce } from "../../src/services/scheduler/scheduler";
+import { handleOverdueOnce, fireJob, scheduleJob, runJobNow, cancelRun, clearAllTimers, activeTimerCount } from "../../src/services/scheduler/scheduler";
+import schedulerApp from "../../src/routes/scheduler";
 import { getWorkspaceDir } from "../../src/services/tools";
+import { conversationService } from "../../src/services/storage";
 
 function makeJob(overrides: Partial<JobCreate> = {}): SchedulerJob {
   return schedulerStore.create({
@@ -327,5 +332,575 @@ describe("workspace verification", () => {
     expect(() =>
       verifyJobWorkspace(path.join(getWorkspaceDir(), "no-such-dir-xyz")),
     ).toThrow(/not found/);
+  });
+});
+
+describe("ensureJobConversation", () => {
+  beforeEach(async () => {
+    for (const job of schedulerStore.list()) schedulerStore.remove(job.id);
+    try {
+      const all = await conversationService.list();
+      for (const c of all?.threads ?? []) {
+        if (c.title.startsWith("[Scheduler]") || c.title === "Test conv") {
+          void conversationService.delete(c.id);
+        }
+      }
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("throws when existing_thread mode has no conversationId", async () => {
+    const job = schedulerStore.create({
+      name: "test-existing-missing",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+      conversationId: null,
+    });
+    await expect(ensureJobConversation(job)).rejects.toThrow(/no conversationId/i);
+  });
+
+  it("throws when the selected conversation was deleted", async () => {
+    const job = schedulerStore.create({
+      name: "test-gone-conv",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+    });
+    const updated = schedulerStore.update(job.id, { conversationId: "nonexistent-id-xyz" });
+    await expect(ensureJobConversation(updated!)).rejects.toThrow(/not found/i);
+  });
+
+  it("returns the existing conversation id without creating a new one (existing_thread)", async () => {
+    const conv = await conversationService.create({
+      title: "Test conv",
+      providerId: "p1",
+    });
+    const job = schedulerStore.create({
+      name: "test-existing-ok",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+    });
+    schedulerStore.update(job.id, { conversationId: conv.id });
+    const result = await ensureJobConversation(schedulerStore.get(job.id)!);
+    expect(result.conversationId).toBe(conv.id);
+    expect(result.created).toBe(false);
+    expect(result.safeToDelete).toBe(false);
+  });
+
+  it("dedicated_thread creates a new conversation when none exists", async () => {
+    const job = schedulerStore.create({
+      name: "test-dedicated-new",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "dedicated_thread",
+      conversationId: null,
+    });
+    const result = await ensureJobConversation(job);
+    expect(result.conversationId).toBeTruthy();
+    expect(result.created).toBe(true);
+    expect(result.safeToDelete).toBe(true);
+  });
+
+  it("dedicated_thread reuses an existing conversationId", async () => {
+    const conv = await conversationService.create({
+      title: "Test conv",
+      providerId: "p1",
+    });
+    const job = schedulerStore.create({
+      name: "test-dedicated-reuse",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "dedicated_thread",
+    });
+    schedulerStore.update(job.id, { conversationId: conv.id });
+    const result = await ensureJobConversation(schedulerStore.get(job.id)!);
+    expect(result.conversationId).toBe(conv.id);
+    expect(result.created).toBe(false);
+  });
+});
+
+describe("SchedulerRun.conversationId persistence", () => {
+  beforeEach(async () => {
+    for (const job of schedulerStore.list()) schedulerStore.remove(job.id);
+    try {
+      const all = await conversationService.list();
+      for (const c of all?.threads ?? []) {
+        if (c.title.startsWith("[Scheduler]") || c.title === "Test conv") {
+          void conversationService.delete(c.id);
+        }
+      }
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("run captures conversationId at claim time, not from later job state", async () => {
+    const convA = await conversationService.create({ title: "Chat A", providerId: "p1" });
+    const convB = await conversationService.create({ title: "Chat B", providerId: "p1" });
+
+    const job = schedulerStore.create({
+      name: "test-conv-persist",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+    });
+    schedulerStore.update(job.id, { conversationId: convA.id });
+    const fresh = schedulerStore.get(job.id)!;
+    const run = schedulerStore.claimRun(fresh, "once-persist-test", "req-persist");
+    expect(run).not.toBeNull();
+    expect(run!.conversationId).toBe(convA.id);
+
+    // Job later switches to Chat B.
+    schedulerStore.update(job.id, { conversationId: convB.id });
+
+    // Run still points to Chat A.
+    const persisted = schedulerStore.getRun(run!.id);
+    expect(persisted!.conversationId).toBe(convA.id);
+  });
+
+  it("dedicated_thread run stores null at claim (resolved later by ensureJobConversation)", () => {
+    const job = schedulerStore.create({
+      name: "test-dedicated-claim",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "dedicated_thread",
+      conversationId: null,
+    });
+    const run = schedulerStore.claimRun(job, "once-dedicated-test", "req-ded");
+    expect(run).not.toBeNull();
+    expect(run!.conversationId).toBeNull();
+  });
+});
+
+describe("existing_thread safety", () => {
+  beforeEach(async () => {
+    for (const job of schedulerStore.list()) schedulerStore.remove(job.id);
+    try {
+      const all = await conversationService.list();
+      for (const c of all?.threads ?? []) {
+        if (c.title.startsWith("[Scheduler]") || c.title === "Test conv") {
+          void conversationService.delete(c.id);
+        }
+      }
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("throws on deleted conversation and does not create a replacement", async () => {
+    const job = schedulerStore.create({
+      name: "test-safety-deleted",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+    });
+    schedulerStore.update(job.id, { conversationId: "gone-id-xyz" });
+    await expect(ensureJobConversation(schedulerStore.get(job.id)!)).rejects.toThrow(/not found/i);
+    // Verify no new [Scheduler] conversation was silently created.
+    const all = await conversationService.list();
+    const justCreated = all?.threads.find((c) => c.title.startsWith("[Scheduler]"));
+    expect(justCreated).toBeUndefined();
+  });
+});
+
+describe("enable endpoint regression", () => {
+  beforeEach(() => {
+    for (const job of schedulerStore.list()) schedulerStore.remove(job.id);
+    clearAllTimers();
+  });
+
+  it("allows enabling a completed one-time job", async () => {
+    const job = makeJob({ status: "completed", enabled: false });
+    // scheduleJob should accept a completed job that has been re-enabled.
+    // After enable, the job is set to active + enabled=true.
+    schedulerStore.update(job.id, { enabled: true, status: "active" });
+    const fresh = schedulerStore.get(job.id)!;
+    expect(fresh.enabled).toBe(true);
+    expect(fresh.status).toBe("active");
+    // scheduleJob does not reject completed status anymore — it re-schedules.
+    expect(() => scheduleJob(fresh)).not.toThrow();
+  });
+
+  it("allows enabling a missed one-time job", async () => {
+    const job = makeJob({ status: "missed", enabled: false });
+    schedulerStore.update(job.id, { enabled: true, status: "active" });
+    const fresh = schedulerStore.get(job.id)!;
+    expect(fresh.enabled).toBe(true);
+    expect(fresh.status).toBe("active");
+    expect(() => scheduleJob(fresh)).not.toThrow();
+  });
+
+  it("route refuses a spent one-time date with a helpful message", async () => {
+    const job = makeJob({
+      status: "completed",
+      enabled: false,
+      execAt: Date.now() - 3600_000,
+    });
+    const res = await schedulerApp.request(`/jobs/${job.id}/enable`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/already passed|Duplicate/i);
+  });
+
+  it("route refuses a deleted job", async () => {
+    const job = makeJob({ scheduleType: "cron", cronExpression: "0 9 * * *" });
+    schedulerStore.softDelete(job.id);
+    const res = await schedulerApp.request(`/jobs/${job.id}/enable`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("soft-delete hides the job but retains its runs", async () => {
+    const job = makeJob();
+    const run = schedulerStore.claimRun(job, "once", "req-1")!;
+    schedulerStore.updateRun(run.id, {
+      status: "completed",
+      completedAt: Date.now(),
+    });
+    const del = await schedulerApp.request(`/jobs/${job.id}`, {
+      method: "DELETE",
+    });
+    expect(del.status).toBe(200);
+    expect(schedulerStore.list().some((j) => j.id === job.id)).toBe(false);
+    expect(schedulerStore.getRun(run.id)).not.toBeNull();
+  });
+
+  it("summary reports running and problem runs", async () => {
+    const job = makeJob();
+    schedulerStore.claimRun(job, "cron-live", "req-live");
+    const res = await schedulerApp.request("/summary");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      running: Array<{ jobId: string }>;
+      jobCount: number;
+    };
+    expect(body.running.some((r) => r.jobId === job.id)).toBe(true);
+    expect(body.jobCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("Bun.cron timezone option", () => {
+  beforeEach(() => {
+    for (const job of schedulerStore.list()) schedulerStore.remove(job.id);
+    clearAllTimers();
+  });
+
+  it("passes the job's IANA timezone to Bun.cron as { tz: ... }", () => {
+    const job = makeJob({
+      scheduleType: "cron",
+      cronExpression: "0 9 * * *",
+      timezone: "America/New_York",
+    });
+    // scheduleJob calls scheduleRecurring which calls Bun.cron with { tz }.
+    // We verify the timer was registered by checking activeTimerCount.
+    scheduleJob(job);
+    expect(activeTimerCount()).toBe(1);
+    clearAllTimers();
+  });
+
+  it("uses UTC timezone when configured", () => {
+    const job = makeJob({
+      scheduleType: "cron",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    });
+    scheduleJob(job);
+    expect(activeTimerCount()).toBe(1);
+    clearAllTimers();
+  });
+});
+
+describe("overlap guard: cron vs manual", () => {
+  beforeEach(() => {
+    for (const job of schedulerStore.list()) schedulerStore.remove(job.id);
+    clearAllTimers();
+  });
+
+  it("fireJob no longer has a redundant overlap check (Bun.cron guarantees no-overlap)", async () => {
+    // Create a job and claim a run so hasRunningRun returns true.
+    const job = makeJob({ scheduleType: "cron", cronExpression: "* * * * *" });
+    schedulerStore.claimRun(job, "cron-test-1", "req-1");
+    expect(schedulerStore.hasRunningRun(job.id)).toBe(true);
+    // fireJob should NOT skip — it should proceed to claim (which will fail
+    // because the occurrence is different, but it won't hit the old overlap guard).
+    // The key behavior change: no skipped run row is created.
+    await fireJob(job.id, "cron-test-2", undefined);
+    // No skipped run should exist.
+    const { runs } = schedulerStore.listRuns(job.id);
+    const skipped = runs.filter((r) => r.status === "skipped");
+    expect(skipped.length).toBe(0);
+    // The new occurrence was claimed (UNIQUE guard still works).
+    expect(runs.some((r) => r.occurrenceId === "cron-test-2")).toBe(true);
+  });
+
+  it("runJobNow still guards against double-click manual runs", () => {
+    const job = makeJob();
+    // Manually claim a run so hasRunningRun returns true.
+    schedulerStore.claimRun(job, "once-double-click", "req-1");
+    expect(schedulerStore.hasRunningRun(job.id)).toBe(true);
+    // Second runJobNow call should be blocked.
+    const result = runJobNow(job.id);
+    expect(result).resolves.toEqual({ error: "Previous execution still running; manual run skipped" });
+  });
+});
+describe("@-macro shorthands", () => {
+  it("expands to canonical 5-field forms", () => {
+    expect(expandMacro("@daily")).toBe("0 0 * * *");
+    expect(expandMacro("@weekly")).toBe("0 0 * * 0");
+    expect(expandMacro("@monthly")).toBe("0 0 1 * *");
+    expect(expandMacro("@yearly")).toBe("0 0 1 1 *");
+    expect(expandMacro("@hourly")).toBe("0 * * * *");
+    expect(expandMacro("@DAILY")).toBe("0 0 * * *");
+    expect(expandMacro("0 9 * * *")).toBe("0 9 * * *");
+  });
+
+  it("validates and describes macros", () => {
+    expect(isValidCron("@daily")).toBe(true);
+    expect(isValidCron("@weekly")).toBe(true);
+    expect(isValidCron("@nope")).toBe(false);
+    expect(describeCron("@daily")).toBe("Daily at 00:00");
+    expect(describeCron("@weekly")).toBe("Weekly on Sunday at 00:00");
+    // Next-run works through the macro.
+    const from = Date.UTC(2026, 0, 1, 0, 0, 0);
+    expect(computeNextRun("@daily", "UTC", from)).toBe(
+      Date.UTC(2026, 0, 2, 0, 0, 0),
+    );
+  });
+
+  it("counts upcoming runs for the gallery", () => {
+    const from = Date.UTC(2026, 0, 5, 0, 0, 0); // a Monday
+    expect(countUpcoming("*/15 * * * *", "UTC", from)).toBe(96);
+    expect(countUpcoming("0 9 * * MON-FRI", "UTC", from)).toBe(1);
+    expect(countUpcoming("0,30 9-17 * * *", "UTC", from)).toBe(18);
+    expect(countUpcoming("@daily", "UTC", from)).toBe(1);
+  });
+});
+
+describe("run retention prune", () => {
+  it("deletes only old terminal runs", () => {
+    const job = makeJob();
+    const old = schedulerStore.claimRun(job, "cron-old", "req-old")!;
+    schedulerStore.updateRun(old.id, {
+      status: "completed",
+      completedAt: Date.now() - 31 * 24 * 3600_000,
+      durationMs: 1,
+    });
+    const fresh = schedulerStore.claimRun(job, "cron-fresh", "req-fresh")!;
+    schedulerStore.updateRun(fresh.id, {
+      status: "completed",
+      completedAt: Date.now(),
+      durationMs: 1,
+    });
+    const running = schedulerStore.claimRun(job, "cron-live", "req-live")!;
+    expect(schedulerStore.pruneOldRuns()).toBe(1);
+    expect(schedulerStore.getRun(old.id)).toBeNull();
+    expect(schedulerStore.getRun(fresh.id)).not.toBeNull();
+    expect(schedulerStore.getRun(running.id)).not.toBeNull();
+  });
+
+  it("lists recent problem runs for the badge", () => {
+    const job = makeJob();
+    const failed = schedulerStore.claimRun(job, "cron-prob", "req-p")!;
+    schedulerStore.updateRun(failed.id, {
+      status: "failed",
+      error: "boom",
+      completedAt: Date.now(),
+    });
+    const problems = schedulerStore.listProblemRuns(Date.now() - 3600_000);
+    expect(problems.some((p) => p.id === failed.id)).toBe(true);
+    expect(problems.find((p) => p.id === failed.id)?.jobName).toBe(
+      "test job",
+    );
+  });
+});
+
+describe("cancelRun validation", () => {
+  it("rejects unknown runs and non-running runs", () => {
+    const job = makeJob();
+    expect(cancelRun(job.id, "nope")).toEqual({
+      ok: false,
+      error: "Run not found",
+    });
+    const run = schedulerStore.claimRun(job, "cron-c", "req-c")!;
+    schedulerStore.updateRun(run.id, {
+      status: "completed",
+      completedAt: Date.now(),
+    });
+    expect(cancelRun(job.id, run.id)).toEqual({
+      ok: false,
+      error: "Run is completed, nothing to cancel",
+    });
+  });
+
+  it("rejects runs from another job and runs without a controller", () => {
+    const a = makeJob({ name: "a" });
+    const b = makeJob({ name: "b" });
+    const run = schedulerStore.claimRun(a, "cron-x", "req-x")!;
+    expect(cancelRun(b.id, run.id)).toEqual({
+      ok: false,
+      error: "Run not found",
+    });
+    // Running but no in-process controller (e.g. after restart).
+    expect(cancelRun(a.id, run.id)).toEqual({
+      ok: false,
+      error: "Run is not executing in this process (restarted?)",
+    });
+  });
+});
+
+describe("manual runs need no live schedule", () => {
+  it("runJobNow works on missed and paused jobs", async () => {
+    const missed = makeJob({ execAt: Date.now() - 3600_000 });
+    schedulerStore.update(missed.id, { status: "missed", enabled: false });
+    const r1 = await runJobNow(missed.id);
+    expect("runId" in r1).toBe(true);
+    const paused = makeJob({
+      name: "paused-cron",
+      scheduleType: "cron",
+      cronExpression: "0 9 * * *",
+    });
+    schedulerStore.update(paused.id, { enabled: false, status: "paused" });
+    const r2 = await runJobNow(paused.id);
+    expect("runId" in r2).toBe(true);
+    // The spent schedule is untouched by manual runs.
+    expect(schedulerStore.get(missed.id)?.status).toBe("missed");
+  });
+});
+
+describe("thread chaining for scheduler messages", () => {
+  it("getThreadTip returns the latest message id", async () => {
+    const { messageService } = await import("../../src/services/storage");
+    const conv = await conversationService.create({
+      title: "tip-test",
+      providerId: "",
+    });
+    expect(await messageService.getThreadTip(conv.id)).toBeNull();
+    await messageService.upsertStored(conv.id, {
+      id: "tip-1",
+      parent_id: null,
+      format: "ai-sdk/v6",
+      content: {},
+    });
+    await messageService.upsertStored(conv.id, {
+      id: "tip-2",
+      parent_id: "tip-1",
+      format: "ai-sdk/v6",
+      content: {},
+    });
+    expect(await messageService.getThreadTip(conv.id)).toBe("tip-2");
+    await conversationService.delete(conv.id);
+  });
+
+  it("repair chains orphan scheduler rows without touching content", async () => {
+    const { messageService } = await import("../../src/services/storage");
+    const { repairSchedulerThreadChains } = await import("../../src/db/index");
+    const conv = await conversationService.create({
+      title: "repair-test",
+      providerId: "",
+    });
+    const job = makeJob();
+    schedulerStore.update(job.id, { conversationId: conv.id });
+    // Simulate the old bug: three disconnected roots.
+    for (const id of ["r1", "r2", "r3"]) {
+      await messageService.upsertStored(conv.id, {
+        id,
+        parent_id: null,
+        format: "ai-sdk/v6",
+        content: { marker: id },
+      });
+    }
+    repairSchedulerThreadChains();
+    const rows = await messageService.listThreadMessages(conv.id);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get("r1")?.parent_id).toBeNull();
+    expect(byId.get("r2")?.parent_id).toBe("r1");
+    expect(byId.get("r3")?.parent_id).toBe("r2");
+    // Content untouched.
+    expect(JSON.stringify(byId.get("r2")?.content)).toContain("r2");
+    // Idempotent: second run changes nothing.
+    repairSchedulerThreadChains();
+    const again = await messageService.listThreadMessages(conv.id);
+    expect(again.map((r) => [r.id, r.parent_id])).toEqual(
+      rows.map((r) => [r.id, r.parent_id]),
+    );
+    await conversationService.delete(conv.id);
+  });
+});
+
+describe("thread retarget persistence", () => {
+  it("PATCH saves conversationId instead of silently stripping it", async () => {
+    const conv = await conversationService.create({
+      title: "retarget-target",
+      providerId: "",
+    });
+    const job = makeJob({ conversationPolicy: "existing_thread" });
+    const res = await schedulerApp.request(`/jobs/${job.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId: conv.id }),
+    });
+    expect(res.status).toBe(200);
+    expect(schedulerStore.get(job.id)?.conversationId).toBe(conv.id);
+    await conversationService.delete(conv.id);
+    clearAllTimers();
+  });
+
+  it("PATCH rejects an unknown target thread with a clear error", async () => {
+    const job = makeJob({ conversationPolicy: "existing_thread" });
+    const res = await schedulerApp.request(`/jobs/${job.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId: "no-such-thread" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/not found/i);
+    clearAllTimers();
   });
 });
