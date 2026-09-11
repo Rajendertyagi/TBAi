@@ -61,7 +61,11 @@ jobs:
         shell: pwsh
         run: |
           $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
-          if (-not (Test-Path "$rel/TBAi.exe")) { throw "TBAi.exe not found at $rel" }
+          # The compiled binary is named after the Cargo package (tbai-desktop.exe);
+          # brand it as TBAi.exe in the portable folder.
+          $exe = Get-ChildItem -Path $rel -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "No application .exe found in $rel" }
+          Copy-Item -Path $exe.FullName -Destination "$rel/TBAi.exe" -Force
           # Portable Bun sidecar next to the executable (Tauri resolves externalBin here).
           Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun-x86_64-pc-windows-msvc.exe" -Force
           # Backend bundle + web SPA (consumed by the Bun sidecar at runtime).
