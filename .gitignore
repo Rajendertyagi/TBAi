@@ -24,7 +24,7 @@ hutch.config.ts
 probe-abort.js
 start.bat
 web/vite.config.*
-workspace/
+/workspace/
 src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/
