@@ -41,7 +41,9 @@ jobs:
           Expand-Archive -Path bun-windows-x64.zip -DestinationPath bun-extract -Force
           $binDir = "src-tauri/binaries"
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-          Copy-Item -Path "bun-extract/bun.exe" -Destination "$binDir/bun-x86_64-pc-windows-msvc.exe" -Force
+          $bunExe = Get-ChildItem -Path bun-extract -Recurse -Filter bun.exe | Select-Object -First 1
+          if (-not $bunExe) { throw "bun.exe not found in downloaded archive" }
+          Copy-Item -Path $bunExe.FullName -Destination "$binDir/bun-x86_64-pc-windows-msvc.exe" -Force
           Remove-Item -Recurse -Force bun-extract, bun-windows-x64.zip
 
       - name: Generate icon set from source PNG
