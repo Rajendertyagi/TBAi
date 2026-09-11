@@ -10,6 +10,7 @@ import { MemoryPanel } from "../components/MemoryPanel";
 import { McpPanel } from "../components/McpPanel";
 import { LogsPanel } from "../components/LogsPanel";
 import { SchedulerPanel } from "../components/SchedulerPanel";
+import { DesktopSettings } from "../features/desktop/DesktopSettings";
 
 /**
  * Application surfaces (hash routing: works under vite dev, the Bun SPA
@@ -33,6 +34,7 @@ export const router = createHashRouter([
           { path: "logs", Component: LogsPanel },
           { path: "providers", Component: ProvidersPage },
           { path: "appearance", Component: AppearancePage },
+          { path: "desktop", Component: DesktopSettings },
           { path: "workspace", Component: WorkspacePage },
         ],
       },

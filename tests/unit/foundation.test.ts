@@ -133,6 +133,7 @@ describe("settings nav source of truth", () => {
       "/providers",
       "/appearance",
       "/workspace",
+      "/desktop",
       "/memory",
       "/mcp",
       "/scheduler",

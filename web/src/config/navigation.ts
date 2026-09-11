@@ -1,4 +1,4 @@
-import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, Palette, FolderCog, Server, type LucideIcon } from "lucide-react";
+import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, Palette, FolderCog, Server, Monitor, type LucideIcon } from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -21,7 +21,8 @@ export type ViewId =
   | "scheduler"
   | "workspace"
   | "providers"
-  | "appearance";
+  | "appearance"
+  | "desktop";
 
 export interface NavItem {
   id: string;
@@ -112,6 +113,16 @@ export const appConfig: AppConfig = {
       order: 4,
     },
     {
+      id: "desktop",
+      label: "Desktop",
+      icon: Monitor,
+      view: "desktop",
+      route: "/desktop",
+      description: "Window layout and desktop options",
+      visible: true,
+      order: 5,
+    },
+    {
       id: "memories",
       label: "Memory",
       icon: Circle,
@@ -175,6 +186,7 @@ const SETTINGS_VIEWS: ViewId[] = [
   "providers",
   "appearance",
   "workspace",
+  "desktop",
   "mcp",
   "scheduler",
   "memories",

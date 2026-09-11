@@ -58,8 +58,10 @@ function SortableTab({
       {...listeners}
       onClick={onSelect}
       className={cn(
-        "group flex max-w-[200px] cursor-pointer items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs",
-        active ? "bg-background text-foreground" : "text-muted-foreground hover:bg-muted/50",
+        "group flex max-w-[200px] cursor-pointer items-center gap-1.5 border-r border-border border-t-2 px-3 py-1.5 text-xs",
+        active
+          ? "border-t-primary bg-background text-foreground"
+          : "border-t-transparent text-muted-foreground hover:bg-muted/50",
       )}
     >
       <span className="truncate">{title}</span>
@@ -112,7 +114,7 @@ export function TabStrip() {
   };
 
   return (
-    <div className="flex h-8 shrink-0 items-stretch border-b border-border bg-muted/20">
+    <div className="flex h-8 shrink-0 items-stretch border-b border-border bg-muted/40">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={tabs.map((t) => t.key)} strategy={horizontalListSortingStrategy}>
           {tabs.map((tab) => (
