@@ -68,7 +68,11 @@ jobs:
           $app = "$rel/tbai-desktop.exe"
           if (-not (Test-Path $app)) { throw "tbai-desktop.exe not found at $rel" }
           Copy-Item -Path $app -Destination "$rel/TBAi.exe" -Force
-          # Portable Bun sidecar next to the executable (Tauri resolves externalBin here).
+          # Portable Bun sidecar next to the executable. Tauri's `sidecar("bun")`
+          # resolves the runtime binary as `bun.exe` (target triple stripped), so it
+          # MUST be shipped under that name. Also keep the triple-qualified name as a
+          # fallback in case a future Tauri version resolves the full name.
+          Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun.exe" -Force
           Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun-x86_64-pc-windows-msvc.exe" -Force
           # Backend bundle + web SPA (consumed by the Bun sidecar at runtime).
           New-Item -ItemType Directory -Force -Path "$rel/backend","$rel/web" | Out-Null
@@ -85,6 +89,7 @@ jobs:
           $stage = "app-staging"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -Path "$rel/TBAi.exe" -Destination "$stage/" -Force
+          Copy-Item -Path "$rel/bun.exe" -Destination "$stage/" -Force
           Copy-Item -Path "$rel/bun-x86_64-pc-windows-msvc.exe" -Destination "$stage/" -Force
           Copy-Item -Path "$rel/backend" -Destination "$stage/backend" -Recurse -Force
           Copy-Item -Path "$rel/web" -Destination "$stage/web" -Recurse -Force
