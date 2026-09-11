@@ -23,8 +23,9 @@ electrobun.config.ts
 hutch.config.ts
 probe-abort.js
 start.bat
-web/vite.config.*
 /workspace/
+web/vite.config.js
+web/vite.config.d.ts
 src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/
