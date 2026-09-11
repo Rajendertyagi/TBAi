@@ -61,11 +61,13 @@ jobs:
         shell: pwsh
         run: |
           $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
-          # The compiled binary is named after the Cargo package (tbai-desktop.exe);
-          # brand it as TBAi.exe in the portable folder.
-          $exe = Get-ChildItem -Path $rel -Filter *.exe | Select-Object -First 1
-          if (-not $exe) { throw "No application .exe found in $rel" }
-          Copy-Item -Path $exe.FullName -Destination "$rel/TBAi.exe" -Force
+          # The Tauri binary is named after the Cargo package (tbai-desktop.exe).
+          # IMPORTANT: do NOT glob for "*.exe" here — Tauri also drops the Bun
+          # sidecar (bun*.exe, ~82 MB) into this dir, so the first match would be
+          # the wrong file. Copy the app binary explicitly by its package name.
+          $app = "$rel/tbai-desktop.exe"
+          if (-not (Test-Path $app)) { throw "tbai-desktop.exe not found at $rel" }
+          Copy-Item -Path $app -Destination "$rel/TBAi.exe" -Force
           # Portable Bun sidecar next to the executable (Tauri resolves externalBin here).
           Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun-x86_64-pc-windows-msvc.exe" -Force
           # Backend bundle + web SPA (consumed by the Bun sidecar at runtime).
@@ -77,9 +79,18 @@ jobs:
         shell: pwsh
         run: |
           $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
-          Compress-Archive -Path "$rel/*" -DestinationPath "TBAi-windows-x64-portable.zip" -Force
+          # Stage ONLY the runtime files. The release dir also contains Cargo
+          # build artifacts (build/, deps/, fingerprint/, *.pdb, etc.) which must
+          # not ship in the portable zip.
+          $stage = "app-staging"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path "$rel/TBAi.exe" -Destination "$stage/" -Force
+          Copy-Item -Path "$rel/bun-x86_64-pc-windows-msvc.exe" -Destination "$stage/" -Force
+          Copy-Item -Path "$rel/backend" -Destination "$stage/backend" -Recurse -Force
+          Copy-Item -Path "$rel/web" -Destination "$stage/web" -Recurse -Force
+          Compress-Archive -Path "$stage/*" -DestinationPath "TBAi-windows-x64-portable.zip" -Force
           Write-Host "zip size: $((Get-Item TBAi-windows-x64-portable.zip).Length) bytes"
-          Get-ChildItem "$rel" | Select-Object Name, Length | Format-Table -AutoSize
+          Get-ChildItem "$stage" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Upload portable zip artifact
         uses: actions/upload-artifact@v4
