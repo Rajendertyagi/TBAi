@@ -1,0 +1,350 @@
+/**
+ * Scheduler execution adapter.
+ *
+ * Reuses the canonical AI stack (`getModel` + AI SDK `generateText`) and the
+ * sandboxed native tools (`services/tools.ts`). It does NOT duplicate the
+ * chat route's streaming pipeline — scheduled runs are non-interactive.
+ *
+ * Unattended safety: destructive native tools (write/edit/delete/run/kill)
+ * are offered with an execute function that always refuses with a clear
+ * "user approval required" error — approval gates can never be silently
+ * bypassed. MCP tools are excluded in V1 (documented limitation).
+ */
+import { generateText, stepCountIs, tool } from "ai";
+import { z } from "zod";
+import fs from "fs";
+import path from "path";
+import { getModel } from "../ai";
+import { registry } from "../../config/providers";
+import { credentialStore } from "../credentials";
+import {
+  runRead,
+  runList,
+  runSearch,
+  runStat,
+  runProcesses,
+  runSysinfo,
+  getWorkspaceDir,
+  ToolError,
+} from "../tools";
+import {
+  toolReadSchema,
+  toolListSchema,
+  toolSearchSchema,
+  toolStatSchema,
+} from "../../lib/validation";
+import { logger, normalizeError, newRequestId } from "../../lib/logger";
+import type { SchedulerJob, SchedulerRun } from "./schedulerTypes";
+import { schedulerStore } from "./schedulerStore";
+import { conversationService } from "../storage";
+
+const APPROVAL_REFUSAL =
+  "Refused: this tool requires interactive user approval, which is unavailable during unattended scheduled execution. The run continues without this action.";
+
+function refusalTool(description: string) {
+  return tool({
+    description: `${description} UNAVAILABLE in scheduled runs — always refuses (user approval required).`,
+    inputSchema: z.object({}).passthrough(),
+    outputSchema: z.unknown(),
+    execute: async () => {
+      throw new ToolError(APPROVAL_REFUSAL);
+    },
+  });
+}
+
+/** Tool set for scheduled runs: read-only tools execute, destructive tools refuse. */
+export function buildSchedulerTools() {
+  return {
+    read_file: tool({
+      description:
+        "Read a text file from the workspace. Returns the file content.",
+      inputSchema: toolReadSchema,
+      outputSchema: z.unknown(),
+      execute: async (args) => runRead(args),
+    }),
+    list_dir: tool({
+      description: "List files and folders inside the workspace.",
+      inputSchema: toolListSchema,
+      outputSchema: z.unknown(),
+      execute: async (args) => runList(args),
+    }),
+    search_files: tool({
+      description:
+        "Search file contents inside the workspace (case-insensitive).",
+      inputSchema: toolSearchSchema,
+      outputSchema: z.unknown(),
+      execute: async (args) => runSearch(args),
+    }),
+    file_info: tool({
+      description: "Show size, type and timestamps for a workspace path.",
+      inputSchema: toolStatSchema,
+      outputSchema: z.unknown(),
+      execute: async (args) => runStat(args),
+    }),
+    process_list: tool({
+      description:
+        "List running processes on this computer (pid, name, CPU, memory).",
+      inputSchema: z.object({}),
+      outputSchema: z.unknown(),
+      execute: async () => runProcesses(),
+    }),
+    system_info: tool({
+      description: "Show computer info: OS, CPU, memory and uptime.",
+      inputSchema: z.object({}),
+      outputSchema: z.unknown(),
+      execute: async () => runSysinfo(),
+    }),
+    write_file: refusalTool("Write or create a text file in the workspace."),
+    edit_file: refusalTool("Replace text in a workspace file."),
+    delete_file: refusalTool("Delete a file or folder inside the workspace."),
+    run_command: refusalTool("Run a shell command inside the workspace."),
+    process_kill: refusalTool("Stop a running process by pid."),
+  };
+}
+
+export function isRetryableError(err: unknown): boolean {
+  const norm = normalizeError(err, false);
+  const text = `${norm.errorType} ${norm.message} ${norm.code ?? ""}`.toLowerCase();
+  // Never retry configuration / auth / safety failures.
+  if (
+    /unauthorized|forbidden|invalid api key|invalid_api_key|incorrect api key|authentication|credential|api key.*missing|no api key|invalid model|model.*not found|not found.*model|invalid.*provider|workspace|outside the workspace|approval|refused|permission denied|invalid.*cron|user approval required/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (typeof norm.status === "number") {
+    if (norm.status === 408 || norm.status === 429) return true;
+    if (norm.status >= 500) return true;
+    return false;
+  }
+  // Retry timeouts, aborts, network hiccups, overloaded signals.
+  if (
+    /timeout|timed out|abort|econn|enotfound|eai_again|socket|network|fetch failed|overloaded|temporarily|try again|rate limit|429|5\d\d/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export interface ExecutionResult {
+  ok: boolean;
+  text: string;
+  error: string | null;
+  retryable: boolean;
+}
+
+/**
+ * Verify the job's workspace: must exist and must resolve inside the
+ * permitted workspace root (same sandbox policy as interactive tools).
+ * Throws a non-retryable ToolError otherwise.
+ */
+export function verifyJobWorkspace(workspacePath: string): string {
+  const root = getWorkspaceDir();
+  const abs = path.resolve(workspacePath);
+  if (abs !== root && !abs.startsWith(root + path.sep)) {
+    throw new ToolError(
+      `Workspace "${workspacePath}" is outside the permitted workspace root`,
+    );
+  }
+  let probe = abs;
+  while (true) {
+    if (fs.existsSync(probe)) {
+      const real = fs.realpathSync(probe);
+      if (real !== root && !real.startsWith(root + path.sep)) {
+        throw new ToolError(
+          `Workspace symlink target for "${workspacePath}" escapes the workspace root`,
+        );
+      }
+      break;
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  if (!fs.existsSync(abs)) {
+    throw new ToolError(`Workspace not found: "${workspacePath}"`);
+  }
+  return abs;
+}
+
+/** Resolve provider + credential + model for a job. Throws non-retryable on misconfig. */
+export function resolveJobModel(job: SchedulerJob): {
+  providerType: string;
+  model: ReturnType<typeof getModel>;
+  // Mirrors the chat route: provider-specific thinking controls keyed by
+  // provider id (Record<string, any> matches the AI SDK provider-options type).
+  providerOptions: Record<string, any>;
+} {
+  const provider = registry.get(job.providerId);
+  if (!provider) {
+    throw new ToolError(
+      `Provider "${job.providerId}" is missing or deleted; refusing to substitute another model`,
+    );
+  }
+  const needsKey = provider.type !== "ollama";
+  let apiKey: string | undefined;
+  if (needsKey) {
+    if (!credentialStore.has(provider.id)) {
+      throw new ToolError(
+        `No credential configured for provider "${provider.name}"; refusing to run`,
+      );
+    }
+    apiKey = credentialStore.get(provider.id);
+  }
+  const model = getModel({
+    id: provider.id,
+    name: provider.name,
+    type: provider.type,
+    endpoint: provider.endpoint ?? undefined,
+    model: job.modelId,
+    apiKey,
+  });
+  const thinking = job.thinkingLevel ?? "off";
+  const isLite = /lite|nano/i.test(job.modelId || "");
+  const providerOptions: Record<string, any> = {};
+  if (!isLite && thinking !== "off") {
+    if (provider.type === "google") {
+      const budget = { low: 1024, medium: 4096, high: 8192 }[thinking] ?? 4096;
+      providerOptions.google = {
+        thinkingConfig: { thinkingBudget: budget },
+      };
+    } else if (provider.type === "anthropic") {
+      const budget = { low: 1024, medium: 4096, high: 8192 }[thinking] ?? 4096;
+      providerOptions.anthropic = {
+        thinking: { type: "enabled", budgetTokens: budget },
+      };
+    } else if (provider.type === "openai" || provider.type === "custom") {
+      const effort = { low: "low", medium: "medium", high: "high" }[thinking] ?? "medium";
+      providerOptions.openai = { reasoningEffort: effort };
+    }
+  }
+  return { providerType: provider.type, model, providerOptions };
+}
+
+/** Ensure the job's dedicated scheduler conversation exists; returns its id. */
+export async function ensureJobConversation(job: SchedulerJob): Promise<string> {
+  if (job.conversationId) {
+    const existing = await conversationService.get(job.conversationId);
+    if (existing) return existing.id;
+  }
+  const created = await conversationService.create({
+    title: `[Scheduler] ${job.name}`,
+    providerId: job.providerId,
+  });
+  schedulerStore.update(job.id, { conversationId: created.id });
+  return created.id;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function executeJobRun(
+  job: SchedulerJob,
+  run: SchedulerRun,
+): Promise<ExecutionResult> {
+  const requestId = run.requestId ?? newRequestId();
+  const log = logger.child({
+    requestId,
+    jobId: job.id,
+    occurrenceId: run.occurrenceId,
+    runId: run.id,
+  });
+  const started = Date.now();
+  log.info("scheduler", "scheduler.run_started", {
+    provider: job.providerId,
+    model: job.modelId,
+  });
+
+  const maxAttempts = 1 + Math.max(0, job.maxRetries);
+  let attempt = 0;
+  let lastError: string | null = null;
+
+  while (attempt < maxAttempts) {
+    schedulerStore.updateRun(run.id, { attempt, status: "running" });
+    const controller = new AbortController();
+    const timeoutMs = Math.max(5, job.timeoutSeconds) * 1000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const workspaceAbs = verifyJobWorkspace(job.workspacePath);
+      const { model, providerOptions, providerType } = resolveJobModel(job);
+      const rel = path.relative(getWorkspaceDir(), workspaceAbs) || ".";
+      const fullPrompt =
+        `[Scheduled run of job "${job.name}". Workspace: ${rel} ` +
+        `(all file paths are relative to the workspace root). ` +
+        `Destructive tools are unavailable without interactive approval.]\n\n${job.prompt}`;
+      const result = await generateText({
+        model,
+        messages: [{ role: "user", content: fullPrompt }],
+        tools: buildSchedulerTools(),
+        stopWhen: stepCountIs(10),
+        abortSignal: controller.signal,
+        ...(Object.keys(providerOptions).length ? { providerOptions } : {}),
+      });
+      clearTimeout(timer);
+      const text = result.text ?? "";
+      const excerpt = text.slice(0, 2000);
+      const durationMs = Date.now() - started;
+      schedulerStore.updateRun(run.id, {
+        status: "completed",
+        error: null,
+        outputExcerpt: excerpt,
+        completedAt: Date.now(),
+        durationMs,
+      });
+      schedulerStore.update(job.id, { lastRunAt: Date.now() });
+      log.info("scheduler", "scheduler.run_completed", {
+        provider: providerType,
+        model: job.modelId,
+        durationMs,
+      });
+      return { ok: true, text, error: null, retryable: false };
+    } catch (err) {
+      clearTimeout(timer);
+      const norm = normalizeError(err);
+      const aborted =
+        controller.signal.aborted ||
+        /abort|aborted|timeout|timed out/i.test(norm.message);
+      const message = aborted
+        ? `Run timed out after ${job.timeoutSeconds}s`
+        : norm.message.slice(0, 1000);
+      lastError = message;
+      const retryable = !aborted ? isRetryableError(err) : true;
+      log.warn("scheduler", "scheduler.run_failed", {
+        ...norm,
+        message,
+        attempt,
+        retryable,
+      });
+      attempt += 1;
+      schedulerStore.updateRun(run.id, { attempt, error: message });
+      if (attempt >= maxAttempts || !retryable) {
+        const durationMs = Date.now() - started;
+        schedulerStore.updateRun(run.id, {
+          status: "failed",
+          error: message,
+          completedAt: Date.now(),
+          durationMs,
+        });
+        schedulerStore.update(job.id, { lastRunAt: Date.now() });
+        return { ok: false, text: "", error: message, retryable };
+      }
+      log.info("scheduler", "scheduler.run_retried", {
+        attempt,
+        delaySeconds: job.retryDelaySeconds,
+      });
+      await sleep(Math.max(0, job.retryDelaySeconds) * 1000);
+    }
+  }
+  const durationMs = Date.now() - started;
+  schedulerStore.updateRun(run.id, {
+    status: "failed",
+    error: lastError,
+    completedAt: Date.now(),
+    durationMs,
+  });
+  return { ok: false, text: "", error: lastError, retryable: false };
+}

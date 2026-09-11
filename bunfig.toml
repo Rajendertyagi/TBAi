@@ -1,0 +1,8 @@
+[install]
+respectGitIgnore = false
+
+[run]
+loader = ".ts,.tsx,.js,.jsx"
+
+[test]
+preload = ["./tests/setup.ts"]

@@ -1,0 +1,305 @@
+import { useEffect, useState } from "react";
+import {
+  ActionBarPrimitive,
+  AuiIf,
+  ErrorPrimitive,
+  groupPartByType,
+  MessagePrimitive,
+  ThreadPrimitive,
+  useAuiState,
+  useMessageTiming,
+} from "@assistant-ui/react";
+import { cn } from "@/lib/utils";
+import { ArrowDown, Check, Copy, RefreshCw, Loader2 } from "lucide-react";
+import { MarkdownText } from "./assistant-ui/elements/markdown-text";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningRoot,
+  ReasoningText,
+  ReasoningTrigger,
+} from "./assistant-ui/elements/reasoning.aui";
+import { ToolFallback } from "./assistant-ui/elements/tool-fallback";
+import {
+  ToolGroupContent,
+  ToolGroupRoot,
+  ToolGroupTrigger,
+} from "./assistant-ui/elements/tool-group";
+import { SyntaxHighlighter } from "./assistant-ui/elements/shiki-highlighter.aui";
+import { DiffViewer } from "../components/diff-viewer";
+import { prettyToolName } from "./assistant-ui/rendering-glue";
+import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
+import { PaseoComposer } from "./PaseoComposer";
+
+export function ChatWindow() {
+  return (
+    <ThreadPrimitive.Root className="relative flex h-full min-h-0 flex-col">
+      <ThreadPrimitive.Viewport className="flex-1 space-y-4 overflow-y-auto px-4 py-6 pb-4">
+        <AuiIf condition={(s) => s.thread.isEmpty}>
+          <div className="flex h-full items-center justify-center">
+            <p className="text-sm text-muted-foreground">
+              Start a conversation…
+            </p>
+          </div>
+        </AuiIf>
+
+        <ThreadPrimitive.Messages>
+          {({ message }) =>
+            message.role === "user" ? <UserMessage /> : <AssistantMessage />
+          }
+        </ThreadPrimitive.Messages>
+      </ThreadPrimitive.Viewport>
+
+      <ThreadPrimitive.ScrollToBottom asChild>
+        <TooltipIconButton
+          tooltip="Scroll to bottom"
+          side="top"
+          className="absolute bottom-24 right-6 rounded-full border border-border bg-background shadow-md"
+        >
+          <ArrowDown />
+        </TooltipIconButton>
+      </ThreadPrimitive.ScrollToBottom>
+
+      <div className="px-4 pb-4">
+        <PaseoComposer />
+      </div>
+    </ThreadPrimitive.Root>
+  );
+}
+
+function TurnCopyButton() {
+  const isCopied = useAuiState((s) => s.message.isCopied);
+  return (
+    <ActionBarPrimitive.Copy asChild>
+      <TooltipIconButton tooltip={isCopied ? "Copied!" : "Copy message"} side="bottom">
+        {isCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      </TooltipIconButton>
+    </ActionBarPrimitive.Copy>
+  );
+}
+
+function UserMessage() {
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const timeStr =
+    createdAt instanceof Date
+      ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : undefined;
+
+  return (
+    <MessagePrimitive.Root className="flex animate-in flex-col items-end fade-in-0 slide-in-from-bottom-1 duration-200">
+      <div className="max-w-[85%] whitespace-pre-wrap rounded-xl border-t border-r border-border/40 bg-foreground px-3.5 py-2.5 text-sm text-background">
+        <MessagePrimitive.Parts />
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
+        {timeStr && (
+          <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>
+        )}
+        <TurnCopyButton />
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+const groupedBy = groupPartByType({
+  reasoning: ["group-chainOfThought", "group-reasoning"],
+  "tool-call": ["group-chainOfThought", "group-tool"],
+  "standalone-tool-call": [],
+});
+
+function AssistantMessage() {
+  const timing = useMessageTiming();
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const custom = useAuiState(
+    (s) =>
+      (s.message.role === "assistant"
+        ? (s.message.metadata?.custom as
+            | { usage?: { totalTokens?: number }; modelId?: string }
+            | undefined)
+        : undefined) ?? undefined,
+  );
+
+  const total = custom?.usage?.totalTokens;
+  const modelId = custom?.modelId;
+  const isStreaming = timing?.totalStreamTime == null;
+  const durationSec = !isStreaming && timing?.totalStreamTime != null
+    ? (timing.totalStreamTime / 1000).toFixed(1)
+    : undefined;
+  const timeStr =
+    createdAt instanceof Date
+      ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : undefined;
+
+  const [liveMs, setLiveMs] = useState(0);
+  useEffect(() => {
+    if (!isStreaming) { setLiveMs(0); return; }
+    const interval = setInterval(() => setLiveMs((m) => m + 1000), 1000);
+    return () => clearInterval(interval);
+  }, [isStreaming]);
+  const liveDuration = isStreaming && liveMs > 0 ? `${(liveMs / 1000).toFixed(1)}s` : undefined;
+
+  const [hovered, setHovered] = useState(false);
+  const showTimestamp = hovered && !!timeStr;
+
+  const handleMouseEnter = () => setHovered(true);
+  const handleMouseLeave = () => setHovered(false);
+
+  const primaryLabel = liveDuration || durationSec || timeStr;
+  const displayLabel = showTimestamp && timeStr ? timeStr : (primaryLabel ?? "");
+
+  const hasMetadata = total != null || modelId != null;
+  const metadataChips = [];
+  if (total != null) metadataChips.push(`${total}t`);
+  if (modelId) metadataChips.push(modelId);
+
+  return (
+    <MessagePrimitive.Root className="flex animate-in flex-col items-start fade-in-0 slide-in-from-bottom-1 duration-200">
+      <div className="max-w-[85%] space-y-2 rounded-xl bg-muted px-3.5 py-2.5 text-sm text-foreground">
+        <MessagePrimitive.GroupedParts groupBy={groupedBy}>
+          {({ part, children }) => {
+            switch (part.type) {
+              case "group-chainOfThought":
+                return <div className="my-2">{children}</div>;
+              case "group-reasoning": {
+                const running = part.status.type === "running";
+                return (
+                  <ReasoningRoot streaming={running}>
+                    <ReasoningTrigger active={running} />
+                    <ReasoningContent aria-busy={running}>
+                      <ReasoningText>{children}</ReasoningText>
+                    </ReasoningContent>
+                  </ReasoningRoot>
+                );
+              }
+              case "group-tool": {
+                const running = part.status.type === "running";
+                return (
+                  <AutoOpenToolGroup active={running} count={part.indices.length}>
+                    {children}
+                  </AutoOpenToolGroup>
+                );
+              }
+              case "text":
+                return (
+                  <MarkdownText
+                    components={{
+                      SyntaxHighlighter: HighlightingSyntax,
+                      a: ({ className, ...props }) => (
+                        <a {...props} className={className} target="_blank" rel="noreferrer" />
+                      ),
+                    }}
+                  />
+                );
+              case "reasoning":
+                return <Reasoning {...part} />;
+              case "tool-call":
+                return (
+                  part.toolUI ?? (
+                    <ToolFallback
+                      {...part}
+                      toolName={prettyToolName(part.toolName)}
+                    />
+                  )
+                );
+              default:
+                return null;
+            }
+          }}
+        </MessagePrimitive.GroupedParts>
+        <AssistantError />
+      </div>
+
+      <div
+        className={cn(
+          "mt-1.5 flex items-center gap-1.5 min-h-6",
+          isStreaming ? "opacity-100" : "opacity-80 hover:opacity-100",
+        )}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        <div className="flex items-center gap-0.5">
+          <TurnCopyButton />
+          <ActionBarPrimitive.Reload asChild>
+            <TooltipIconButton tooltip="Regenerate response" side="bottom">
+              <RefreshCw className="size-3.5" />
+            </TooltipIconButton>
+          </ActionBarPrimitive.Reload>
+        </div>
+
+        {isStreaming && (
+          <div className="flex items-center gap-1.5 ml-1">
+            <Loader2 className="size-3 animate-spin text-muted-foreground" />
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              {liveDuration || "0.0s"}
+            </span>
+          </div>
+        )}
+
+        {!isStreaming && hasMetadata && (
+          <div className="ml-auto flex items-center gap-1">
+            <span
+              className={cn(
+                "text-[11px] tabular-nums text-muted-foreground transition-opacity hover:text-foreground",
+                showTimestamp && "text-foreground",
+              )}
+              title={displayLabel}
+            >
+              {displayLabel}
+            </span>
+            {metadataChips.map((chip, i) => (
+              <span
+                key={i}
+                className="text-[10px] tabular-nums text-muted-foreground/70"
+                title={chip}
+              >
+                {chip}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+function AutoOpenToolGroup({
+  active,
+  count,
+  children,
+}: {
+  active: boolean;
+  count: number;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(active);
+  useEffect(() => {
+    if (active) setOpen(true);
+  }, [active]);
+  return (
+    <ToolGroupRoot open={open} onOpenChange={setOpen}>
+      <ToolGroupTrigger count={count} active={active} />
+      <ToolGroupContent>{children}</ToolGroupContent>
+    </ToolGroupRoot>
+  );
+}
+
+function HighlightingSyntax(props: {
+  code: string;
+  language: string;
+  node?: unknown;
+  components?: unknown;
+}) {
+  if (props.language === "diff") {
+    return <DiffViewer patch={props.code} showLineNumbers={false} className="w-full" />;
+  }
+  return <SyntaxHighlighter code={props.code} language={props.language} />;
+}
+
+function AssistantError() {
+  return (
+    <MessagePrimitive.Error>
+      <ErrorPrimitive.Root className="mt-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+        <ErrorPrimitive.Message />
+      </ErrorPrimitive.Root>
+    </MessagePrimitive.Error>
+  );
+}
