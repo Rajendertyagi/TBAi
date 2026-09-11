@@ -8,8 +8,11 @@ on:
 
 # Build the Tauri 2 desktop shell. The Rust/Tauri toolchain is NOT installed
 # locally — this workflow is the only place the desktop bundle is produced.
-# Output: a portable .zip (no installer) containing the TBAi.exe + bundled Bun
-# sidecar + web/dist + backend bundle.
+#
+# Tauri v2 has no "zip" bundle target (only deb/rpm/appimage/msi/nsis/app/dmg),
+# so we compile with bundling disabled (bundle.active:false) and assemble the
+# portable .zip ourselves from the compiled executable + bundled resources +
+# the portable Bun sidecar. Output: a portable .zip (no installer).
 
 jobs:
   build:
@@ -49,12 +52,34 @@ jobs:
       - name: Generate icon set from source PNG
         run: bunx tauri icon src-tauri/app-icon.png
 
-      - name: Build Tauri bundle (zip only)
-        run: bunx tauri build --bundles zip --target x86_64-pc-windows-msvc
+      # bundle.active:false -> compiles the executable only (no msi/nsis). The
+      # beforeBuildCommand builds dist/ (backend) and web/dist/ (frontend).
+      - name: Build Tauri (compile, no bundle)
+        run: bunx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Assemble portable app folder
+        shell: pwsh
+        run: |
+          $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          if (-not (Test-Path "$rel/TBAi.exe")) { throw "TBAi.exe not found at $rel" }
+          # Portable Bun sidecar next to the executable (Tauri resolves externalBin here).
+          Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun-x86_64-pc-windows-msvc.exe" -Force
+          # Backend bundle + web SPA (consumed by the Bun sidecar at runtime).
+          New-Item -ItemType Directory -Force -Path "$rel/backend","$rel/web" | Out-Null
+          Copy-Item -Path "dist/*" -Destination "$rel/backend/" -Recurse -Force
+          Copy-Item -Path "web/dist/*" -Destination "$rel/web/" -Recurse -Force
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          Compress-Archive -Path "$rel/*" -DestinationPath "TBAi-windows-x64-portable.zip" -Force
+          Write-Host "zip size: $((Get-Item TBAi-windows-x64-portable.zip).Length) bytes"
+          Get-ChildItem "$rel" | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Upload portable zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: tbai-windows-x64-portable
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/zip/*.zip
+          path: TBAi-windows-x64-portable.zip
           if-no-files-found: error

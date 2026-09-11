@@ -29,8 +29,7 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": "zip",
+    "active": false,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,8 +40,6 @@
       "../dist/*": "backend/",
       "../web/dist/*": "web/"
     },
-    "externalBin": ["binaries/bun"],
-    "shortcuts": null,
-    "createUpdaterArtifacts": false
+    "externalBin": ["binaries/bun"]
   }
 }
