@@ -11,8 +11,9 @@ on:
 #
 # Tauri v2 has no "zip" bundle target (only deb/rpm/appimage/msi/nsis/app/dmg),
 # so we compile with bundling disabled (bundle.active:false) and assemble the
-# portable .zip ourselves from the compiled executable + bundled resources +
-# the portable Bun sidecar. Output: a portable .zip (no installer).
+# portable folder ourselves from the compiled executable + bundled resources +
+# the portable Bun sidecar. Output: a portable folder (zipped by the artifact
+# upload step — single level, no nested archive).
 
 jobs:
   build:
@@ -32,6 +33,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Install frontend + workspace dependencies
         run: bun install --frozen-lockfile
@@ -62,44 +78,36 @@ jobs:
         run: |
           $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
           # The Tauri binary is named after the Cargo package (tbai-desktop.exe).
-          # IMPORTANT: do NOT glob for "*.exe" here — Tauri also drops the Bun
-          # sidecar (bun*.exe, ~82 MB) into this dir, so the first match would be
-          # the wrong file. Copy the app binary explicitly by its package name.
+          # Copy the app binary explicitly by its package name (never glob "*.exe"
+          # — Tauri also drops the ~82 MB Bun sidecar here, so the first match
+          # would be the wrong file).
           $app = "$rel/tbai-desktop.exe"
           if (-not (Test-Path $app)) { throw "tbai-desktop.exe not found at $rel" }
           Copy-Item -Path $app -Destination "$rel/TBAi.exe" -Force
-          # Portable Bun sidecar next to the executable. Tauri's `sidecar("bun")`
-          # resolves the runtime binary as `bun.exe` (target triple stripped), so it
-          # MUST be shipped under that name. Also keep the triple-qualified name as a
-          # fallback in case a future Tauri version resolves the full name.
+          # Runtime Bun sidecar. Tauri's `sidecar("bun")` resolves the binary as
+          # `bun.exe` (target triple stripped), so ship ONLY bun.exe. The build-time
+          # triple-qualified copy in src-tauri/binaries is not needed at runtime.
           Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun.exe" -Force
-          Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun-x86_64-pc-windows-msvc.exe" -Force
           # Backend bundle + web SPA (consumed by the Bun sidecar at runtime).
           New-Item -ItemType Directory -Force -Path "$rel/backend","$rel/web" | Out-Null
           Copy-Item -Path "dist/*" -Destination "$rel/backend/" -Recurse -Force
           Copy-Item -Path "web/dist/*" -Destination "$rel/web/" -Recurse -Force
 
-      - name: Package portable zip
-        shell: pwsh
-        run: |
-          $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
-          # Stage ONLY the runtime files. The release dir also contains Cargo
-          # build artifacts (build/, deps/, fingerprint/, *.pdb, etc.) which must
-          # not ship in the portable zip.
-          $stage = "app-staging"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item -Path "$rel/TBAi.exe" -Destination "$stage/" -Force
-          Copy-Item -Path "$rel/bun.exe" -Destination "$stage/" -Force
-          Copy-Item -Path "$rel/bun-x86_64-pc-windows-msvc.exe" -Destination "$stage/" -Force
-          Copy-Item -Path "$rel/backend" -Destination "$stage/backend" -Recurse -Force
-          Copy-Item -Path "$rel/web" -Destination "$stage/web" -Recurse -Force
-          Compress-Archive -Path "$stage/*" -DestinationPath "TBAi-windows-x64-portable.zip" -Force
-          Write-Host "zip size: $((Get-Item TBAi-windows-x64-portable.zip).Length) bytes"
-          Get-ChildItem "$stage" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+          # Stage ONLY the runtime files into one clean app folder. The release dir
+          # also contains Cargo build artifacts (build/, deps/, fingerprint/, *.pdb)
+          # which must not ship.
+          $out = "TBAi-windows-x64-portable"
+          if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Path "$rel/TBAi.exe" -Destination "$out/" -Force
+          Copy-Item -Path "$rel/bun.exe" -Destination "$out/" -Force
+          Copy-Item -Path "$rel/backend" -Destination "$out/backend" -Recurse -Force
+          Copy-Item -Path "$rel/web" -Destination "$out/web" -Recurse -Force
+          Get-ChildItem "$out" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
-      - name: Upload portable zip artifact
+      - name: Upload portable app artifact
         uses: actions/upload-artifact@v4
         with:
           name: tbai-windows-x64-portable
-          path: TBAi-windows-x64-portable.zip
+          path: TBAi-windows-x64-portable
           if-no-files-found: error
