@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router";
 import { useAuiState } from "@assistant-ui/react";
 import {
@@ -32,9 +33,19 @@ import {
 
 function useTabTitle(ref: string): string {
   return useAuiState((s) => {
-    if (ref === "new") return "New chat";
+    if (ref === "new") return tabStripConfig.copy.newChat;
     const item = s.threads.threadItems.find((t) => t.remoteId === ref);
-    return (item?.title as string | undefined) ?? "Untitled";
+    return (item?.title as string | undefined) ?? tabStripConfig.copy.untitled;
+  });
+}
+
+/** Whether the thread behind this tab currently has a run in progress. */
+function useTabRunning(ref: string): boolean {
+  return useAuiState((s) => {
+    if (ref === "new") return false;
+    return (
+      s.threads.threadItems.find((t) => t.remoteId === ref)?.isRunning ?? false
+    );
   });
 }
 
@@ -52,38 +63,91 @@ function SortableTab({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: tab.key });
   const title = useTabTitle(tab.ref);
+  const running = useTabRunning(tab.ref);
+  const nodeRef = useRef<HTMLDivElement | null>(null);
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.6 : 1,
   };
+
+  const setRefs = (el: HTMLDivElement | null) => {
+    setNodeRef(el);
+    nodeRef.current = el;
+  };
+
+  // Keep the active tab visible inside the overflow strip on switch.
+  useEffect(() => {
+    if (active) {
+      nodeRef.current?.scrollIntoView({
+        inline: "nearest",
+        block: "nearest",
+      });
+    }
+  }, [active]);
+
   return (
     <ContextMenuTrigger asChild>
       <div
-        ref={setNodeRef}
+        ref={setRefs}
         style={style}
         {...attributes}
         {...listeners}
         onClick={onSelect}
+        onMouseDown={(e) => {
+          // Middle-click closes (browser parity); the dnd-kit sensor only
+          // activates on the primary button, so no drag conflict.
+          if (e.button === 1) {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        role="tab"
+        aria-selected={active}
+        title={title}
+        data-active={active || undefined}
         className={cn(
-          "group flex max-w-50 cursor-pointer items-center gap-1.5 border-r border-border border-t-2 px-3 py-1.5 text-xs",
-          active
-            ? "border-t-primary bg-background text-foreground"
-            : "border-t-transparent text-muted-foreground hover:bg-muted/50",
+          "min-w-0 grow-0 shrink basis-48 cursor-pointer select-none",
+          active && "z-10",
+          isDragging && "z-50",
         )}
       >
-        <span className="truncate">{title}</span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
-          className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-          title={tabStripConfig.copy.closeTab}
+        <div
+          className={cn(
+            "group/tab relative flex h-full w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-t-lg px-2 text-xs transition-colors",
+            active
+              ? "bg-background text-foreground"
+              : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+          )}
         >
-          <X className="h-3 w-3" />
-        </button>
+          {running && (
+            <span
+              aria-label={tabStripConfig.copy.running}
+              title={tabStripConfig.copy.running}
+              className="size-1.5 shrink-0 animate-pulse rounded-full bg-success"
+            />
+          )}
+          <span className="tab-title-fade min-w-0 flex-1 whitespace-nowrap">
+            {title}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className={cn(
+              "absolute right-1 top-0 bottom-0 my-auto flex h-4 w-4 shrink-0 items-center justify-center rounded hover:bg-foreground/10",
+              active
+                ? "opacity-100"
+                : "pointer-events-none opacity-0 group-hover/tab:pointer-events-auto group-hover/tab:opacity-100",
+            )}
+            title={tabStripConfig.copy.closeTab}
+            aria-label={tabStripConfig.copy.closeTab}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
       </div>
     </ContextMenuTrigger>
   );
@@ -91,10 +155,11 @@ function SortableTab({
 
 /**
  * Single source of truth for the chat tab strip. Rendered once, in the content-
- * area `h-10` strip of `AppShell` (codeg parity: tabs live at the top of the
- * conversation column, not a full-width band). Each tab opens a Radix right-click
- * context menu (Close / Close Others / Close to the Right / Copy Link) — DOM-
- * based, so it is identical in the browser and the Tauri desktop.
+ * area title band of `AppShell` (codeg parity: equal-width browser tabs at the
+ * top of the conversation column, not a full-width band). Each tab opens a
+ * Radix right-click context menu (Close / Close Others / Close to the Right /
+ * Copy Link / Close All) — DOM-based, so it is identical in the browser and
+ * the Windows desktop.
  */
 export function TabStrip() {
   const navigate = useNavigate();
@@ -133,12 +198,23 @@ export function TabStrip() {
     current.slice(idx + 1).forEach((t) => close(t.key));
   };
 
+  const closeAll = () => {
+    // Composed from `close`: the store's never-zero-tabs rule leaves a fresh
+    // draft behind, so the workbench always has a conversation to type in.
+    const current = useChatTabsStore.getState().tabs;
+    current.forEach((t) => close(t.key));
+  };
+
   const copyLink = (tab: Tab) => {
     void navigator.clipboard?.writeText(urlForTab(tab));
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto">
+    <div
+      role="tablist"
+      aria-label="Chat tabs"
+      className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto"
+    >
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -169,6 +245,10 @@ export function TabStrip() {
                 <ContextMenuSeparator className="my-1 h-px bg-border" />
                 <ContextMenuItem onSelect={() => copyLink(tab)}>
                   {tabStripConfig.copy.copyLink}
+                </ContextMenuItem>
+                <ContextMenuSeparator className="my-1 h-px bg-border" />
+                <ContextMenuItem onSelect={() => closeAll()}>
+                  {tabStripConfig.copy.closeAll}
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>

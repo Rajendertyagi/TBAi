@@ -10,6 +10,7 @@ import toolsApp from "./tools";
 import providersApp from "./providers";
 import conversationsApp from "./conversations";
 import memoriesApp from "./memories";
+import workspaceApp from "./workspace";
 
 /**
  * Application composition root: middleware + sub-app mounts.
@@ -47,6 +48,7 @@ app.route("/", toolsApp);
 app.route("/", providersApp);
 app.route("/", conversationsApp);
 app.route("/", memoriesApp);
+app.route("/", workspaceApp);
 
 // MCP client management API (generic MCP servers: STDIO / Streamable HTTP / SSE).
 app.route("/api/mcp", mcpApp);

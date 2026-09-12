@@ -137,6 +137,13 @@
   }
 }
 
+/* Browser-tab title fade: overflowing titles dissolve toward the close
+   button instead of a hard ellipsis, so narrow tabs use their full width. */
+.tab-title-fade {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent 100%);
+}
+
 /* Assistant UI overrides */
 .ai-chat {
   @apply flex flex-col h-full;

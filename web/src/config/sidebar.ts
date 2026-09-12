@@ -133,3 +133,28 @@ export function sectionLabel(id: SidebarSectionId): string {
       return sidebarConfig.copy.archived;
   }
 }
+
+/**
+ * Copy for the conversation breadcrumb header (`ChatHeader`, rendered above
+ * the transcript on chat routes). Separate block — not sidebar list copy.
+ */
+export const chatHeaderConfig = {
+  copy: {
+    workspaceFallback: "Workspace",
+    newChatTitle: "New chat",
+    untitled: "Untitled",
+    moreActions: "More actions",
+    newConversation: "New chat",
+    rename: "Rename",
+    renameTitle: "Rename conversation",
+    archive: "Archive",
+    unarchive: "Unarchive",
+    copyId: "Copy ID",
+    delete: "Delete",
+    deleteTitle: "Delete conversation?",
+    deleteDescription: (title: string) =>
+      `“${title}” will be permanently deleted. This cannot be undone.`,
+    cancel: "Cancel",
+    save: "Save",
+  },
+};

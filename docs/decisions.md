@@ -677,3 +677,39 @@ future agents don't re-litigate:
   `AppShell`/`ActivityBar`/`SidebarHeader`/`WindowControls` are gone.
 - **Verification:** typecheck 0, full build green, unit suites pass, backend smoke
   (health/SPA/conversations+order 200). Desktop geometry via CI artifact only.
+
+## Batch 2 — Top bars (tab strip, breadcrumb header, status bar)
+
+- **Tab strip (codeg embedded geometry):** equal-width `basis-48 grow-0 shrink
+  min-w-0` tabs with fade-mask titles (new `.tab-title-fade` in globals.css),
+  active tab `bg-background` raised, inactive hover fill (top-border indicator
+  retired). Active tab auto-scrolls into view; middle-click closes; running
+  threads show a pulse dot from runtime `isRunning` (display-only, no new
+  store fields). `role=tablist/tab`, `aria-selected`, full-title tooltips.
+  Right-click gains **Close All** (composed from `close()`; never-zero-tabs
+  draft rule holds). dnd-kit stays — no new dependency. Double-click stays a
+  no-op (no pin field; out of "functions we have now").
+- **Breadcrumb header (new `ChatHeader`, chat routes only):** `h-10`
+  transparent bar — workspace root crumb (› `/workspace`) + truncated chat
+  title + overflow menu (New / Rename-dialog / Archive-Unarchive / Copy ID /
+  Delete-via-confirm). Narrow primitive subscriptions (title/status strings)
+  so streaming never re-renders it; dialog targets snapshotted at open;
+  draft guards (actions disabled until first send persists). Rename needs no
+  new dep; delete-confirm uses new canonical `ui/alert-dialog.tsx`.
+- **New backend endpoint:** `GET /api/workspace` (`routes/workspace.ts`,
+  registered in composition root) returns `{ name, path }` of `WORKSPACE_DIR`
+  — the only surface exposing the absolute root (tools stay relative).
+  Header falls back to `"Workspace"` when unreachable.
+- **New shadcn files:** `ui/dialog.tsx` + `ui/alert-dialog.tsx` (radix-ui meta
+  package already installed); `DropdownMenuItem` gains the `variant`
+  ("default" | "destructive") prop mirroring `ContextMenuItem`.
+- **Status bar (codeg geometry):** `h-8` muted band; left = quick-actions
+  launcher (new `StatusBarQuickActions`: New Chat, all `getSettingsNav()`
+  areas with their own icons/labels, both toggles — the always-on fallback)
+  + connection dot + provider; right = model + desktop gear. Copy in new
+  `config/statusBar.ts`; visibility gated once (AppShell), internal check
+  removed; inverted `bg-primary` retired.
+- **Verification:** typecheck 0, full build green, 28 unit tests pass, backend
+  smoke on a FRESH server (stale-port lesson: kill + count processes first) —
+  health/workspace/conversations+order/scheduler/SPA all 200, and
+  `/api/workspace` returns the real root name. Desktop visuals via CI only.

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import { ChatWindow } from "../../../components/ChatWindow";
+import { ChatHeader } from "./ChatHeader";
 import {
   NEW_DRAFT_TAB_ID,
   useChatTabsStore,
@@ -42,6 +43,7 @@ export function ChatView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <ChatHeader threadId={target} />
       <div className="min-h-0 flex-1">
         <ChatWindow />
       </div>

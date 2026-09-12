@@ -7,8 +7,11 @@ export const tabStripConfig = {
     close: "Close",
     closeOthers: "Close Others",
     closeToRight: "Close to the Right",
+    closeAll: "Close All",
     copyLink: "Copy Link",
     newChat: "New chat",
     closeTab: "Close tab",
+    untitled: "Untitled",
+    running: "Run in progress",
   },
 };
