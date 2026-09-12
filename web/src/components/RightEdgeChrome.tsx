@@ -1,5 +1,6 @@
 import { PanelBottom, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
+import { appConfig } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { cn } from "../lib/utils";
 
@@ -33,7 +34,7 @@ export function RightEdgeChrome() {
       </button>
       <button
         type="button"
-        onClick={() => navigate("/settings")}
+        onClick={() => navigate(appConfig.settingsIndexRoute)}
         title="Settings"
         className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >

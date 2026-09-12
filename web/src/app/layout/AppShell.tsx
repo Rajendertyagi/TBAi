@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Outlet } from "react-router";
 import { Sidebar } from "../../components/Sidebar";
 import { StatusBar } from "../../components/StatusBar";
@@ -8,8 +9,10 @@ import { RightEdgeChrome } from "../../components/RightEdgeChrome";
 import { WindowControls } from "../../components/WindowControls";
 import { WindowResizeHandles } from "../../components/WindowResizeHandles";
 import { ChromeShortcuts } from "../../components/ChromeShortcuts";
+import { PageContextMenu } from "../../components/PageContextMenu";
 import { TabUrlSync } from "../TabUrlSync";
-import { isTauri } from "../../lib/platform";
+import { isTauri, isMac } from "../../lib/platform";
+import { syncChromeVars } from "../../lib/chrome-vars";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 
 /**
@@ -24,10 +27,30 @@ import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
  *
  * The shell must render inside AssistantRuntimeProvider (the sidebar thread list,
  * tab titles, and all views consume the ambient runtime).
+ *
+ * Chrome geometry (sidebar width, overlay reserves) is published as CSS
+ * variables by `syncChromeVars` and consumed via `var(--…)` classes — components
+ * never carry inline `style=` reserves.
+ *
+ * The shell only *composes* chrome. Feature menus (e.g. the page-level context
+ * menu) live in their own chrome components so this file stays a thin layout.
  */
 export function AppShell() {
   const sidebarVisible = useDesktopLayout((s) => s.sidebarVisible);
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
+  const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
+  const searchOpen = useDesktopLayout((s) => s.searchOpen);
+
+  // Column reservations that clear the fixed corner overlays. `isTauri()` covers
+  // every desktop target because our WindowControls render on all platforms.
+  const macInset = isTauri() && isMac();
+  const winLinuxCaption = isTauri();
+
+  // Publish chrome geometry as CSS variables (single source of truth = the
+  // token layer in `lib/window-chrome.ts` via `syncChromeVars`).
+  useEffect(() => {
+    syncChromeVars({ sidebarWidth, searchOpen, macInset, winLinuxCaption });
+  }, [sidebarWidth, searchOpen, macInset, winLinuxCaption]);
 
   return (
     <div className="relative flex h-screen flex-col bg-background text-foreground">
@@ -38,20 +61,24 @@ export function AppShell() {
           {/* codeg-style content-area tab strip (top of the conversation column) */}
           <div className="relative flex h-10 shrink-0 items-stretch border-b border-border bg-muted/40">
             {!sidebarVisible && (
-              <div data-tauri-drag-region className="h-full w-20 shrink-0" />
+              <div
+                data-tauri-drag-region
+                className="h-full w-[var(--left-chrome-width)] shrink-0"
+              />
             )}
             <TabStrip />
-            {/* Reserve the right overlay cluster (always) + caption buttons (Tauri) */}
+            {/* Reserve the right overlay cluster + caption buttons (Tauri). */}
             <div
               data-tauri-drag-region
-              className={
-                isTauri()
-                  ? "h-full w-[218px] shrink-0"
-                  : "h-full w-20 shrink-0"
-              }
+              className="h-full w-[var(--right-chrome-reserve)] shrink-0"
             />
           </div>
-          <Outlet />
+
+          {/* Page-level context menu is its own chrome component; the shell only
+              composes it around the routed content. */}
+          <PageContextMenu>
+            <Outlet />
+          </PageContextMenu>
         </main>
       </div>
 
@@ -59,13 +86,10 @@ export function AppShell() {
 
       {/* Corner overlays — rendered in BOTH web + desktop (codeg pattern). Only
           the OS window controls self-null in the browser. */}
-      <div className="absolute left-12 top-0 z-50 h-10 w-20">
+      <div className="absolute left-12 top-0 z-50 h-10 w-[var(--left-chrome-width)]">
         <LeftEdgeChrome />
       </div>
-      <div
-        className="absolute top-0 z-50 h-10"
-        style={{ right: isTauri() ? 138 : 0 }}
-      >
+      <div className="absolute top-0 z-50 h-10 right-[var(--right-chrome-reserve)]">
         <RightEdgeChrome />
       </div>
       <div className="absolute right-0 top-0 z-50 h-10">

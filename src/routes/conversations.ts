@@ -12,9 +12,11 @@ app.get("/api/conversations", async (c) => {
     const statusQuery = c.req.query("status");
     const status = statusQuery === "archived" || statusQuery === "regular" ? statusQuery : undefined;
     const search = c.req.query("search") || undefined;
+    const orderQuery = c.req.query("order");
+    const order = orderQuery === "created" ? "created" : "updated";
     const limit = Number(c.req.query("limit") ?? 200);
     const offset = Number(c.req.query("offset") ?? 0);
-    const result = await conversationService.list({ status, search, limit, offset });
+    const result = await conversationService.list({ status, search, limit, offset, order });
     return c.json(result);
   } catch (e) {
     return storageError(c, e);

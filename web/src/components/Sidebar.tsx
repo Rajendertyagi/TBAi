@@ -1,511 +1,377 @@
-import { useState, useRef, useEffect, Fragment, useCallback, type MutableRefObject } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useNavigate } from "react-router";
 import {
   ThreadListPrimitive,
-  ThreadListItemPrimitive,
-  ThreadListItemMorePrimitive,
-  useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import {
-  FolderPlus,
-  Search,
-  MoreVertical,
-  Pencil,
-  Archive,
-  ArchiveRestore,
-  Trash2,
-  ChevronDown,
-  Copy,
-  ExternalLink,
-} from "lucide-react";
-import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
-import { cn } from "../lib/utils";
-import { appConfig } from "../config/navigation";
+import { SquarePen } from "lucide-react";
+import { sidebarConfig, type SidebarSectionId } from "../config/sidebar";
 import { historyConfig } from "../config/history";
-import { setThreadListSearchQuery } from "../adapters/remoteThreadListAdapter";
-import { useChatTabsStore } from "../features/chat/state/chatTabs";
+import { dateGroupLabel } from "../lib/sidebar-sections";
+import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
+import { useThreadListQuerySync } from "../features/sidebar/hooks/useThreadListQuerySync";
+import { SidebarHeader } from "../features/sidebar/components/SidebarHeader";
+import { SidebarNavButton } from "../features/sidebar/components/SidebarNavButton";
+import { SidebarSection } from "../features/sidebar/components/SidebarSection";
+import {
+  SidebarArchivedRow,
+  SidebarThreadRow,
+} from "../features/sidebar/components/SidebarThreadRow";
 
-const ctxMenuItemClass =
-  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted data-[disabled]:opacity-50";
-
-type ThreadItem = {
+interface RowData {
   remoteId: string;
   title?: string;
   status?: string;
   lastMessageAt?: Date;
-};
-
-function dateGroupLabel(date?: Date): string {
-  if (!date) return "Older";
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const diff = startOfToday - new Date(date).getTime();
-  const day = 86400000;
-  if (diff < 0) return "Today";
-  if (diff < day) return "Yesterday";
-  if (diff < 7 * day) return "Previous 7 days";
-  return "Older";
 }
 
+/**
+ * Conversation sidebar (codeg `layout/sidebar` parity): fixed `h-10` header
+ * (locate / expand-all / view-options), one fixed `New Chat` pill, then the
+ * persisted `Chats / Recent / Archived` sections. Search lives in the
+ * top-left chrome overlay (`LeftEdgeChrome`), never here — the sidebar
+ * unmounts on collapse. Thread data stays runtime-owned (`Items` render
+ * props); the store owns only view preferences (sort/order/collapse/query).
+ */
 export function Sidebar() {
+  const copy = sidebarConfig.copy;
   const navigate = useNavigate();
-  // Thread switching itself is done by the ThreadListItemPrimitive.Trigger;
-  // this only moves the URL (ChatView opens the matching tab, the runtime
-  // switches threads, onThreadIdChange confirms the tab store).
+  // Thread switching itself is done by the row trigger; this only moves the
+  // URL (ChatView opens the matching tab, the runtime switches threads,
+  // onThreadIdChange confirms the tab store).
   const openThread = useCallback(
     (remoteId: string) => navigate(`/chat/${remoteId}`),
     [navigate],
   );
-  const [search, setSearch] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
-  const aui = useAui();
+  useThreadListQuerySync();
 
-  // Debounced server-side search: pushes the query into the adapter and asks
-  // the runtime to reload page 1. Client title filter below stays as fallback.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setThreadListSearchQuery(search);
-      try {
-        const client = aui as unknown as Record<
-          string,
-          { getState?: () => { reload?: () => unknown } } | undefined
-        >;
-        client.threads?.getState?.()?.reload?.();
-      } catch {
-        /* runtime reload unavailable; client filter still applies */
-      }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [search, aui]);
+  const order = useDesktopLayout((s) => s.sectionOrder);
+  const sectionCollapsed = useDesktopLayout((s) => s.sectionCollapsed);
+  const setSectionCollapsed = useDesktopLayout((s) => s.setSectionCollapsed);
+  const setAllSectionsCollapsed = useDesktopLayout(
+    (s) => s.setAllSectionsCollapsed,
+  );
+  const showRecent = useDesktopLayout((s) => s.showRecent);
+  const archivedExpanded = useDesktopLayout((s) => s.archivedExpanded);
+  const setArchivedExpanded = useDesktopLayout((s) => s.setArchivedExpanded);
+  const searchQuery = useDesktopLayout((s) => s.searchQuery);
+  const setSearchQuery = useDesktopLayout((s) => s.setSearchQuery);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
-  // Used to insert date-group headers while iterating the list (reset each render).
-  const lastGroup = useRef<string | null>(null);
+  const isVisible = (id: SidebarSectionId): boolean => {
+    if (id === "recent") return showRecent;
+    if (id === "archived") return historyConfig.archiveEnabled;
+    return true;
+  };
+  const isExpanded = (id: SidebarSectionId): boolean => {
+    if (id === "archived") return archivedExpanded;
+    return !sectionCollapsed[id];
+  };
+  const visibleSections = order.filter(isVisible);
+  const allExpanded = visibleSections.every(isExpanded);
 
   return (
-    <div className="w-56 flex flex-col border-r border-border bg-muted/30">
-      {/* New Chat */}
-      <div className="px-2 pt-2">
+    <div className="relative flex w-[var(--sidebar-width,224px)] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground select-none">
+      <SidebarHeader
+        listRef={listRef}
+        allExpanded={allExpanded}
+        onToggleExpandAll={() => setAllSectionsCollapsed(allExpanded)}
+      />
+
+      {/* Fixed actions above the scrollable list — never scroll away. */}
+      <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
         <ThreadListPrimitive.New asChild>
-          <button
-            onClick={() => navigate("/chat/new")}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm hover:bg-muted transition-colors"
-          >
-            <FolderPlus className="w-4 h-4" />
-            {appConfig.branding.newWorkspaceLabel}
-          </button>
+          <SidebarNavButton onClick={() => navigate("/chat/new")}>
+            <SquarePen
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+            <span className="truncate">{copy.newChat}</span>
+          </SidebarNavButton>
         </ThreadListPrimitive.New>
       </div>
 
-      {/* Search */}
-      {historyConfig.searchEnabled && (
-        <div className="px-2 pb-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search conversations…"
-              className="w-full rounded-md border border-border bg-transparent pl-8 pr-2 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Conversations */}
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
-        <div className="text-xs font-medium text-muted-foreground px-3 py-2">
-          {appConfig.branding.historyLabel}
-        </div>
-
-        <ThreadListPrimitive.Root className="space-y-0.5">
-          <ConversationList
-            search={search}
-            dateGrouping={historyConfig.dateGrouping}
-            lastGroup={lastGroup}
-            onOpenThread={openThread}
-            onOpenArchive={() => setShowArchived(true)}
-          />
-        </ThreadListPrimitive.Root>
-
-        {/* Archived section */}
-        {historyConfig.archiveEnabled && (
-          <div className="mt-4">
-            <button
-              onClick={() => setShowArchived((v) => !v)}
-              className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <span>Archived</span>
-              <ChevronDown
-                className={cn("w-3.5 h-3.5 transition-transform", showArchived && "rotate-180")}
-              />
-            </button>
-            {showArchived && (
-              <ThreadListPrimitive.Items archived>
-                {({ threadListItem }) =>
-                  threadListItem.remoteId ? (
-                    <ArchivedItem
-                      key={threadListItem.remoteId}
-                      remoteId={threadListItem.remoteId}
-                      onOpenThread={openThread}
-                    />
-                  ) : null
+      <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
+        <ThreadListPrimitive.Root className="flex flex-col gap-2">
+          {order.map((id) => {
+            if (!isVisible(id)) return null;
+            const expanded = isExpanded(id);
+            const setExpanded = (v: boolean) => {
+              if (id === "archived") setArchivedExpanded(v);
+              else setSectionCollapsed(id, !v);
+            };
+            return (
+              <SidebarSection
+                key={id}
+                id={id}
+                label={
+                  id === "chats"
+                    ? copy.chats
+                    : id === "recent"
+                      ? copy.recent
+                      : copy.archived
                 }
-              </ThreadListPrimitive.Items>
-            )}
-          </div>
-        )}
+                expanded={expanded}
+                onExpandedChange={setExpanded}
+              >
+                {id === "chats" && (
+                  <ChatsItems
+                    search={searchQuery}
+                    onOpenThread={openThread}
+                    onOpenArchive={() => setArchivedExpanded(true)}
+                    onClearSearch={() => setSearchQuery("")}
+                  />
+                )}
+                {id === "recent" && (
+                  <RecentItems search={searchQuery} onOpenThread={openThread} />
+                )}
+                {id === "archived" && expanded && (
+                  <ArchivedItems onOpenThread={openThread} />
+                )}
+              </SidebarSection>
+            );
+          })}
+        </ThreadListPrimitive.Root>
       </div>
 
+      <SidebarResizeHandle />
     </div>
   );
 }
 
-function ConversationList({
+function SidebarResizeHandle() {
+  const setSidebarWidth = useDesktopLayout((s) => s.setSidebarWidth);
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = useDesktopLayout.getState().sidebarWidth;
+    const onMove = (ev: PointerEvent) => {
+      setSidebarWidth(startW + (ev.clientX - startX));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      onPointerDown={onPointerDown}
+      className="absolute right-0 top-0 z-20 h-full w-1 cursor-col-resize select-none hover:bg-primary/30"
+    />
+  );
+}
+
+function toRowData(value: {
+  remoteId?: string;
+  title?: string;
+  status?: string;
+  lastMessageAt?: Date;
+}): RowData | null {
+  if (!value.remoteId) return null;
+  return {
+    remoteId: value.remoteId,
+    title: value.title,
+    status: value.status,
+    lastMessageAt: value.lastMessageAt,
+  };
+}
+
+/** Date-grouped regular threads with session paging + empty/error states. */
+function ChatsItems({
   search,
-  dateGrouping,
-  lastGroup,
   onOpenThread,
   onOpenArchive,
+  onClearSearch,
 }: {
   search: string;
-  dateGrouping: boolean;
-  lastGroup: MutableRefObject<string | null>;
   onOpenThread: (remoteId: string) => void;
   onOpenArchive: () => void;
+  onClearSearch: () => void;
 }) {
+  const copy = sidebarConfig.copy;
   const isLoading = useAuiState((s) => s.threads.isLoading);
   const count = useAuiState((s) => s.threads.threadIds.length);
-  lastGroup.current = null;
-  // Anti-flood: only the first N regular threads render; "Show more" reveals
-  // the next page. Old chats stay discoverable through search (server-side)
-  // instead of an enormous permanent list. Session-only (resets on reload).
-  const [recentLimit, setRecentLimit] = useState(5);
+  // Store-level match count for the no-matches state (exact on every render;
+  // the render-prop counter below only limits output, it can't drive UI).
+  // Anti-flood: only the first pages render; old chats stay discoverable
+  // through search (server-side) instead of an enormous permanent list.
+  // Session-only (resets on reload).
+  const [page, setPage] = useState(0);
   const shownCount = useRef(0);
   shownCount.current = 0;
+  const lastGroup = useRef<string | null>(null);
+  lastGroup.current = null;
   // Reset the page when the filter changes so matches aren't hidden.
   const [lastQuery, setLastQuery] = useState(search);
   if (lastQuery !== search) {
     setLastQuery(search);
-    setRecentLimit(5);
+    setPage(0);
   }
+  const limit = (page + 1) * sidebarConfig.chatsPageSize;
+  const query = search.trim().toLowerCase();
+  const matchCount = useAuiState((s) =>
+    query
+      ? s.threads.threadItems.filter(
+          (t) =>
+            t.status === "regular" &&
+            (t.title ?? "").toLowerCase().includes(query),
+        ).length
+      : -1,
+  );
 
   return (
     <>
       <ThreadListPrimitive.Items>
         {({ threadListItem }) => {
-          const item = threadListItem as unknown as ThreadItem;
-          if (
-            search.trim() &&
-            !((item.title ?? "").toLowerCase().includes(search.toLowerCase()))
-          ) {
+          const item = toRowData(threadListItem);
+          if (!item) return null;
+          if (query && !(item.title ?? "").toLowerCase().includes(query)) {
             return null;
           }
-          if (shownCount.current >= recentLimit) return null;
+          if (shownCount.current >= limit) return null;
           shownCount.current += 1;
+          const group = historyConfig.dateGrouping
+            ? dateGroupLabel(item.lastMessageAt)
+            : null;
+          const showHeader = group !== null && group !== lastGroup.current;
+          if (showHeader) lastGroup.current = group;
           return (
-            <ConversationItem
-              key={item.remoteId}
-              item={item}
-              dateGrouping={dateGrouping}
-              lastGroup={lastGroup}
-              onOpenThread={onOpenThread}
-            />
+            <div key={item.remoteId}>
+              {showHeader && (
+                <div className="px-3 pt-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {group}
+                </div>
+              )}
+              <SidebarThreadRow item={item} onOpenThread={onOpenThread} />
+            </div>
           );
         }}
       </ThreadListPrimitive.Items>
 
-      {count > recentLimit && (
+      {count > limit && (
         <button
-          onClick={() => setRecentLimit((n) => n + 5)}
-          className="mt-1 w-full rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          type="button"
+          onClick={() => setPage((n) => n + 1)}
+          className="mt-1 w-full rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          Show more ({count - recentLimit} more)
+          {copy.showMore(count - limit)}
         </button>
       )}
 
       {isLoading && count === 0 && (
-        <div className="space-y-2 px-1 py-2">
+        <div className="space-y-2 px-1 py-2" aria-label="Loading conversations">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="h-8 rounded-md bg-muted animate-pulse" />
+            <div key={i} className="h-8 rounded-full bg-muted animate-pulse" />
           ))}
         </div>
       )}
 
-      {!isLoading && count === 0 && (
+      {!isLoading && count === 0 && !query && (
         <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-          No conversations yet.
+          {copy.noConversations}
+          {historyConfig.archiveEnabled && (
+            <button
+              type="button"
+              onClick={onOpenArchive}
+              className="mx-auto mt-1 block text-foreground underline"
+            >
+              {copy.browseArchived}
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isLoading && query && matchCount === 0 && (
+        <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+          {copy.noMatches}
           <button
-            onClick={onOpenArchive}
-            className="block mx-auto mt-1 text-foreground underline"
+            type="button"
+            onClick={onClearSearch}
+            className="mx-auto mt-1 block text-foreground underline"
           >
-            Browse archived
+            {copy.clearSearch}
           </button>
         </div>
       )}
 
       {/* Official pagination: renders only when another page exists. */}
       <ThreadListPrimitive.LoadMore asChild>
-        <button className="mt-1 w-full rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-          Load more
+        <button
+          type="button"
+          className="mt-1 w-full rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {copy.loadMore}
         </button>
       </ThreadListPrimitive.LoadMore>
     </>
   );
 }
 
-function ConversationItem({
-  item,
-  dateGrouping,
-  lastGroup,
+/**
+ * Flat newest-first regular threads, capped at `recentSectionLimit`. The
+ * runtime serves newest-first (server `?order=`), so the first N items are
+ * the recent ones — no client reorder needed.
+ */
+function RecentItems({
+  search,
   onOpenThread,
 }: {
-  item: ThreadItem;
-  dateGrouping: boolean;
-  lastGroup: MutableRefObject<string | null>;
+  search: string;
   onOpenThread: (remoteId: string) => void;
 }) {
-  const group = dateGrouping ? dateGroupLabel(item.lastMessageAt) : null;
-  const showHeader = group && group !== lastGroup.current;
-  if (showHeader) lastGroup.current = group;
+  const shownCount = useRef(0);
+  shownCount.current = 0;
+  const query = search.trim().toLowerCase();
 
   return (
-    <Fragment key={item.remoteId}>
-      {showHeader && (
-        <div className="px-3 pt-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {group}
-        </div>
-      )}
-      <ThreadListItem item={item} onOpenThread={onOpenThread} />
-    </Fragment>
+    <ThreadListPrimitive.Items>
+      {({ threadListItem }) => {
+        const item = toRowData(threadListItem);
+        if (!item) return null;
+        if (query && !(item.title ?? "").toLowerCase().includes(query)) {
+          return null;
+        }
+        if (shownCount.current >= sidebarConfig.recentSectionLimit) return null;
+        shownCount.current += 1;
+        return (
+          <SidebarThreadRow
+            key={item.remoteId}
+            item={item}
+            onOpenThread={onOpenThread}
+          />
+        );
+      }}
+    </ThreadListPrimitive.Items>
   );
 }
 
-function ThreadListItem({
-  item,
+function ArchivedItems({
   onOpenThread,
 }: {
-  item: ThreadItem;
-  onOpenThread: (remoteId: string) => void;
-}) {
-  const aui = useAui();
-  const openChat = useChatTabsStore((s) => s.openChat);
-  const title = item.title ?? "Untitled";
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const [saving, setSaving] = useState(false);
-  const submittedRef = useRef(false);
-
-  const startRename = () => {
-    submittedRef.current = false;
-    setDraft(title);
-    setRenaming(true);
-  };
-
-  const cancelRename = () => {
-    submittedRef.current = true;
-    setRenaming(false);
-  };
-
-  const commitRename = async () => {
-    if (submittedRef.current || !renaming) return;
-    submittedRef.current = true;
-    const next = draft.trim();
-    if (!next || next === title) {
-      setRenaming(false);
-      return;
-    }
-    // Through the runtime (never a raw fetch): the adapter persists AND the
-    // store updates, so <ThreadListItemPrimitive.Title /> re-renders instantly.
-    // The store id is resolved from state (never assumed === remoteId).
-    setSaving(true);
-    try {
-      const items = aui.threads.getState().threadItems;
-      const match =
-        items.find((t) => t.remoteId === item.remoteId) ??
-        items.find((t) => t.id === item.remoteId);
-      await aui.threads.item({ id: match?.id ?? item.remoteId }).rename(next);
-    } finally {
-      setSaving(false);
-      setRenaming(false);
-    }
-  };
-
-  return (
-    <ContextMenuPrimitive.Root>
-      <ContextMenuPrimitive.Trigger asChild>
-        <ThreadListItemPrimitive.Root className="group relative flex items-center gap-1 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted data-[active]:bg-muted before:absolute before:left-1 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-transparent before:content-[''] data-[active]:before:bg-foreground">
-          {renaming ? (
-            <input
-              autoFocus
-              value={draft}
-              disabled={saving}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void commitRename();
-                if (e.key === "Escape") cancelRename();
-              }}
-              onBlur={() => void commitRename()}
-              onFocus={(e) => e.target.select()}
-              aria-label="Rename conversation"
-              className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-0.5 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          ) : (
-            <ThreadListItemPrimitive.Trigger
-              className="flex-1 min-w-0 truncate text-left"
-              onClick={() => onOpenThread(item.remoteId)}
-            >
-              <ThreadListItemPrimitive.Title />
-            </ThreadListItemPrimitive.Trigger>
-          )}
-
-          <ThreadListItemMorePrimitive.Root>
-            <ThreadListItemMorePrimitive.Trigger
-              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-background transition-opacity"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreVertical className="w-4 h-4" />
-            </ThreadListItemMorePrimitive.Trigger>
-            <ThreadListItemMorePrimitive.Content className="z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
-              {historyConfig.renameEnabled && (
-                <ThreadListItemMorePrimitive.Item
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
-                  onSelect={() => startRename()}
-                >
-                  <Pencil className="w-4 h-4" /> Rename
-                </ThreadListItemMorePrimitive.Item>
-              )}
-              {historyConfig.archiveEnabled && item.status === "regular" && (
-                <ThreadListItemPrimitive.Archive asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                    <Archive className="w-4 h-4" /> Archive
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Archive>
-              )}
-              {historyConfig.deleteEnabled && (
-                <ThreadListItemPrimitive.Delete asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                    <Trash2 className="w-4 h-4" /> Delete
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Delete>
-              )}
-            </ThreadListItemMorePrimitive.Content>
-          </ThreadListItemMorePrimitive.Root>
-        </ThreadListItemPrimitive.Root>
-      </ContextMenuPrimitive.Trigger>
-      <ContextMenuPrimitive.Portal>
-        <ContextMenuPrimitive.Content className="z-50 min-w-[180px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
-          <ContextMenuPrimitive.Item
-            className={ctxMenuItemClass}
-            onSelect={() => openChat(item.remoteId)}
-          >
-            <ExternalLink className="w-4 h-4" /> Open in New Tab
-          </ContextMenuPrimitive.Item>
-          {historyConfig.renameEnabled && (
-            <ContextMenuPrimitive.Item
-              className={ctxMenuItemClass}
-              onSelect={() => startRename()}
-            >
-              <Pencil className="w-4 h-4" /> Rename
-            </ContextMenuPrimitive.Item>
-          )}
-          {historyConfig.archiveEnabled && item.status === "regular" && (
-            <ThreadListItemPrimitive.Archive asChild>
-              <ContextMenuPrimitive.Item className={ctxMenuItemClass}>
-                <Archive className="w-4 h-4" /> Archive
-              </ContextMenuPrimitive.Item>
-            </ThreadListItemPrimitive.Archive>
-          )}
-          <ContextMenuPrimitive.Item
-            className={ctxMenuItemClass}
-            onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}
-          >
-            <Copy className="w-4 h-4" /> Copy ID
-          </ContextMenuPrimitive.Item>
-          {historyConfig.deleteEnabled && (
-            <ThreadListItemPrimitive.Delete asChild>
-              <ContextMenuPrimitive.Item
-                className={cn(ctxMenuItemClass, "text-destructive")}
-              >
-                <Trash2 className="w-4 h-4" /> Delete
-              </ContextMenuPrimitive.Item>
-            </ThreadListItemPrimitive.Delete>
-          )}
-        </ContextMenuPrimitive.Content>
-      </ContextMenuPrimitive.Portal>
-    </ContextMenuPrimitive.Root>
-  );
-}
-
-function ArchivedItem({
-  remoteId,
-  onOpenThread,
-}: {
-  remoteId: string;
   onOpenThread: (remoteId: string) => void;
 }) {
   return (
-    <ContextMenuPrimitive.Root>
-      <ContextMenuPrimitive.Trigger asChild>
-        <ThreadListItemPrimitive.Root className="group relative flex items-center gap-1 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted data-[active]:bg-muted">
-          <ThreadListItemPrimitive.Trigger
-            className="flex-1 min-w-0 truncate text-left"
-            onClick={() => onOpenThread(remoteId)}
-          >
-            <ThreadListItemPrimitive.Title />
-          </ThreadListItemPrimitive.Trigger>
-          <ThreadListItemMorePrimitive.Root>
-            <ThreadListItemMorePrimitive.Trigger
-              className="shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 hover:bg-background transition-opacity"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreVertical className="w-4 h-4" />
-            </ThreadListItemMorePrimitive.Trigger>
-            <ThreadListItemMorePrimitive.Content className="z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
-              {historyConfig.archiveEnabled && (
-                <ThreadListItemPrimitive.Unarchive asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                    <ArchiveRestore className="w-4 h-4" /> Unarchive
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Unarchive>
-              )}
-              {historyConfig.deleteEnabled && (
-                <ThreadListItemPrimitive.Delete asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                    <Trash2 className="w-4 h-4" /> Delete
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Delete>
-              )}
-            </ThreadListItemMorePrimitive.Content>
-          </ThreadListItemMorePrimitive.Root>
-        </ThreadListItemPrimitive.Root>
-      </ContextMenuPrimitive.Trigger>
-      <ContextMenuPrimitive.Portal>
-        <ContextMenuPrimitive.Content className="z-50 min-w-[180px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
-          {historyConfig.archiveEnabled && (
-            <ThreadListItemPrimitive.Unarchive asChild>
-              <ContextMenuPrimitive.Item className={ctxMenuItemClass}>
-                <ArchiveRestore className="w-4 h-4" /> Unarchive
-              </ContextMenuPrimitive.Item>
-            </ThreadListItemPrimitive.Unarchive>
-          )}
-          <ContextMenuPrimitive.Item
-            className={ctxMenuItemClass}
-            onSelect={() => void navigator.clipboard?.writeText(remoteId)}
-          >
-            <Copy className="w-4 h-4" /> Copy ID
-          </ContextMenuPrimitive.Item>
-          {historyConfig.deleteEnabled && (
-            <ThreadListItemPrimitive.Delete asChild>
-              <ContextMenuPrimitive.Item
-                className={cn(ctxMenuItemClass, "text-destructive")}
-              >
-                <Trash2 className="w-4 h-4" /> Delete
-              </ContextMenuPrimitive.Item>
-            </ThreadListItemPrimitive.Delete>
-          )}
-        </ContextMenuPrimitive.Content>
-      </ContextMenuPrimitive.Portal>
-    </ContextMenuPrimitive.Root>
+    <ThreadListPrimitive.Items archived>
+      {({ threadListItem }) =>
+        threadListItem.remoteId ? (
+          <SidebarArchivedRow
+            key={threadListItem.remoteId}
+            remoteId={threadListItem.remoteId}
+            onOpenThread={onOpenThread}
+          />
+        ) : null
+      }
+    </ThreadListPrimitive.Items>
   );
 }

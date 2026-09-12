@@ -330,15 +330,6 @@ function PaseoComposer() {
         </ComposerPrimitive.Input>
       </div>
 
-      {/* Focus hint — shown when empty and not focused */}
-      <AuiIf
-        condition={(s) => s.composer.isEmpty}
-      >
-        <div className="absolute right-3 top-3 text-[11px] text-muted-foreground/50 pointer-events-none">
-          ⌘K to focus
-        </div>
-      </AuiIf>
-
       {/* Button row: attach on left, model/thinking/voice/cancel/send on right */}
       <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
         {/* Left: attach */}

@@ -40,6 +40,8 @@ export interface ConversationListOptions {
   search?: string;
   limit?: number;
   offset?: number;
+  /** Newest-first key. Defaults to `updated` (last activity). */
+  order?: "updated" | "created";
 }
 
 export interface ConversationListResult {
@@ -87,7 +89,7 @@ export const conversationService = {
   },
 
   async list(options: ConversationListOptions = {}): Promise<ConversationListResult> {
-    const { status, search, limit = 50, offset = 0 } = options;
+    const { status, search, limit = 50, offset = 0, order = "updated" } = options;
     const clauses: string[] = [];
     const params: SQLQueryBindings[] = [];
     if (status) {
@@ -106,9 +108,13 @@ export const conversationService = {
       params.push(`%${search}%`, `%${search}%`, `"${q}"*`);
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    // Whitelisted column branch (never interpolated input) — `created` is
+    // newest-first by creation, `updated` (default) by last activity.
+    const orderBy =
+      order === "created" ? "c.created_at DESC" : "c.updated_at DESC";
     const rows = db
       .query<ConversationRow, SQLQueryBindings[]>(
-        `SELECT c.* FROM conversations c ${where} ORDER BY c.updated_at DESC LIMIT ? OFFSET ?`,
+        `SELECT c.* FROM conversations c ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset);
     const totalRow = db

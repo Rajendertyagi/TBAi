@@ -14,9 +14,16 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from "./ui/context-menu";
 import { X, Plus } from "lucide-react";
 import { cn } from "../lib/utils";
+import { tabStripConfig } from "../config/tabStrip";
 import {
   type Tab,
   urlForTab,
@@ -30,9 +37,6 @@ function useTabTitle(ref: string): string {
     return (item?.title as string | undefined) ?? "Untitled";
   });
 }
-
-const menuItemClass =
-  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted data-[disabled]:opacity-50";
 
 function SortableTab({
   tab,
@@ -54,7 +58,7 @@ function SortableTab({
     opacity: isDragging ? 0.6 : 1,
   };
   return (
-    <ContextMenuPrimitive.Trigger asChild>
+    <ContextMenuTrigger asChild>
       <div
         ref={setNodeRef}
         style={style}
@@ -62,7 +66,7 @@ function SortableTab({
         {...listeners}
         onClick={onSelect}
         className={cn(
-          "group flex max-w-[200px] cursor-pointer items-center gap-1.5 border-r border-border border-t-2 px-3 py-1.5 text-xs",
+          "group flex max-w-50 cursor-pointer items-center gap-1.5 border-r border-border border-t-2 px-3 py-1.5 text-xs",
           active
             ? "border-t-primary bg-background text-foreground"
             : "border-t-transparent text-muted-foreground hover:bg-muted/50",
@@ -76,12 +80,12 @@ function SortableTab({
             onClose();
           }}
           className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-          title="Close tab"
+          title={tabStripConfig.copy.closeTab}
         >
           <X className="h-3 w-3" />
         </button>
       </div>
-    </ContextMenuPrimitive.Trigger>
+    </ContextMenuTrigger>
   );
 }
 
@@ -145,43 +149,29 @@ export function TabStrip() {
           strategy={horizontalListSortingStrategy}
         >
           {tabs.map((tab) => (
-            <ContextMenuPrimitive.Root key={tab.key}>
+            <ContextMenu key={tab.key}>
               <SortableTab
                 tab={tab}
                 active={tab.key === activeKey}
                 onSelect={() => select(tab)}
                 onClose={() => close(tab.key)}
               />
-              <ContextMenuPrimitive.Portal>
-                <ContextMenuPrimitive.Content className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
-                  <ContextMenuPrimitive.Item
-                    className={menuItemClass}
-                    onSelect={() => close(tab.key)}
-                  >
-                    Close
-                  </ContextMenuPrimitive.Item>
-                  <ContextMenuPrimitive.Item
-                    className={menuItemClass}
-                    onSelect={() => closeOthers(tab.key)}
-                  >
-                    Close Others
-                  </ContextMenuPrimitive.Item>
-                  <ContextMenuPrimitive.Item
-                    className={menuItemClass}
-                    onSelect={() => closeToRight(tab.key)}
-                  >
-                    Close to the Right
-                  </ContextMenuPrimitive.Item>
-                  <ContextMenuPrimitive.Separator className="my-1 h-px bg-border" />
-                  <ContextMenuPrimitive.Item
-                    className={menuItemClass}
-                    onSelect={() => copyLink(tab)}
-                  >
-                    Copy Link
-                  </ContextMenuPrimitive.Item>
-                </ContextMenuPrimitive.Content>
-              </ContextMenuPrimitive.Portal>
-            </ContextMenuPrimitive.Root>
+              <ContextMenuContent className="min-w-44">
+                <ContextMenuItem onSelect={() => close(tab.key)}>
+                  {tabStripConfig.copy.close}
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => closeOthers(tab.key)}>
+                  {tabStripConfig.copy.closeOthers}
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => closeToRight(tab.key)}>
+                  {tabStripConfig.copy.closeToRight}
+                </ContextMenuItem>
+                <ContextMenuSeparator className="my-1 h-px bg-border" />
+                <ContextMenuItem onSelect={() => copyLink(tab)}>
+                  {tabStripConfig.copy.copyLink}
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           ))}
         </SortableContext>
       </DndContext>
@@ -192,10 +182,14 @@ export function TabStrip() {
           navigate("/chat/new");
         }}
         className="flex items-center px-2 text-muted-foreground transition-colors hover:bg-muted/50"
-        title="New chat"
+        title={tabStripConfig.copy.newChat}
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
+      {/* Guaranteed window-drag region to the right of the new-chat button: even
+          when many tabs overflow and squeeze the row, a grabbable gap always
+          remains so the strip stays draggable (mirrors codeg's tab-strip tail). */}
+      <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
     </div>
   );
 }

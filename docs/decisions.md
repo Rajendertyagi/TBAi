@@ -614,3 +614,47 @@ future agents don't re-litigate:
   `bun test` (188 pass, 0 fail), and a browser smoke test (`bun run dev` serves `localhost:3000`
   SPA + `/api/conversations` 200 â€” no regression). Tauri desktop build is verified by the GitHub
   workflow artifact (cannot run `tauri build` locally by design).
+
+## Sidebar rework: codeg-parity left sidebar (shadcn, zero hardcodes)
+
+- **Scope:** `Sidebar.tsx` rebuilt on codeg `layout/sidebar` geometry — fixed `h-10`
+  header (locate-active / expand-collapse-all / eye view-menu), one fixed `New Chat`
+  pill, persisted `Chats / Recent / Archived` sections. The `ActivityBar` icon rail
+  is untouched. No MCP/Scheduler/Logs rows in the sidebar (rail owns all routes);
+  no folders/worktrees/pinned (no backend model for them).
+- **Search moved to the chrome (codeg rule):** the sidebar search box is deleted;
+  search is a toggle+search cluster in the never-unmounting `LeftEdgeChrome`
+  overlay (works collapsed) with global `Ctrl/CMD+K`, `Escape` closes+clears, query
+  in the store, debounced server `?search=` + reload. Opening search opens the
+  sidebar so results are visible. The composer's dead `"CMD+K to focus"` hint is
+  removed (no handler ever existed; `CMD+K` now owns conversation search).
+- **State (Option B):** `desktopLayout` Zustand store extended, versioned (`v1` +
+  field-by-field `migrate`, `partialize` excludes transient search UI): `sidebarSort`,
+  `sectionOrder` (always a full permutation via `normalizeSectionOrder`),
+  `sectionCollapsed`, `showRecent`, `archivedExpanded`. Pure list logic in
+  `lib/sidebar-sections.ts` (tested: `tests/unit/sidebar-sections.test.ts`, 12 pass).
+  Config in `config/sidebar.ts` (limits, debounce, defaults, copy — no literals in
+  components). New files under `features/sidebar/` (header/nav-button/section/rows/
+  view-menu/order-control + `useThreadListQuerySync` hook); `Sidebar.tsx` composes.
+- **Real sort:** backend `GET /api/conversations` gains whitelisted `?order=created`
+  (`ORDER BY created_at DESC`; default `updated_at DESC`; same allowlist pattern as
+  `status`), adapter passes it through + projects `createdAt` via `custom` (open bag,
+  never secrets; `updateCustom` stays selective so it never hits PATCH).
+- **shadcn refinement (from current docs):** `ui/dropdown-menu.tsx` completed to the
+  canonical grammar (Group/Label/Checkbox/Radio/Sub/Shortcut, lucide indicators —
+  no new dep); sidebar theme tokens added (`--sidebar*` light/dark + `@theme`
+  mappings); rows use `TooltipIconButton`/`Button`/`Input`/`Collapsible` atoms.
+- **No inline styles:** `lib/chrome-vars.ts` publishes `--sidebar-width`,
+  `--left-chrome-width`, `--right-chrome-reserve` from `window-chrome.ts` tokens;
+  `AppShell` consumes only `var(--…)` classes (the `w-20` overlay + all
+  `style={{width/right}}` reserves are gone). `w-[var(--sidebar-width,224px)]`
+  keeps its defensive fallback (mirrors `SIDEBAR_DEFAULT_WIDTH`).
+- **Known approximation:** Recent = first N runtime items (server newest-first, no
+  client reorder — `Items` fixes iteration order and item primitives bind by index,
+  so sections share the runtime order); Chats and Recent mount separate `Items`
+  (bounded duplication = `recentSectionLimit`). `navigation.ts` drops dead
+  `newWorkspaceLabel`/`historyLabel` branding (sections own their labels now).
+- **Verification done locally:** `bun run typecheck` (0), `bun run build`
+  (backend+web), new unit tests (12 pass), existing suites pass, backend smoke
+  (`/api/conversations?order=created|updated` 200, SPA + scheduler summary 200).
+  Desktop bundle verified only via the GitHub Tauri workflow (no local toolchain).

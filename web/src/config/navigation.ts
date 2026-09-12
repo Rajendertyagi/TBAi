@@ -48,9 +48,13 @@ export interface AppConfig {
   branding: {
     appName: string;
     logoText: string;
-    newWorkspaceLabel: string;
-    historyLabel: string;
   };
+  /**
+   * Fallback route for generic "Settings" entry points (corner chrome,
+   * page menu). There is no settings-index page; this picks the settings
+   * area that opens instead. Change here only.
+   */
+  settingsIndexRoute: string;
   features: {
     /** When false, the Search navigation item is hidden. */
     search: boolean;
@@ -67,9 +71,8 @@ export const appConfig: AppConfig = {
   branding: {
     appName: "TBAi",
     logoText: "T",
-    newWorkspaceLabel: "New Workspace",
-    historyLabel: "History",
   },
+  settingsIndexRoute: "/providers",
   features,
   nav: [
     {

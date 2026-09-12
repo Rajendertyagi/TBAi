@@ -30,6 +30,8 @@ type ThreadMetadata = {
     providerId?: string | null;
     modelId?: string | null;
     reasoningLevel?: string | null;
+    /** Creation ISO passthrough for client-side created-sort (never a secret). */
+    createdAt?: string;
   };
 };
 
@@ -43,6 +45,9 @@ function toMetadata(c: ConvDTO): ThreadMetadata {
       providerId: c.providerId ?? null,
       modelId: c.modelId ?? null,
       reasoningLevel: c.reasoningLevel ?? null,
+      // Creation time passthrough for client-side created-sort. Kept in
+      // `custom` (the adapter contract's open bag) — never a secret.
+      createdAt: c.createdAt,
     },
   };
 }
@@ -57,6 +62,14 @@ let threadListSearchQuery = "";
 
 export function setThreadListSearchQuery(q: string): void {
   threadListSearchQuery = q;
+}
+
+// Server-side newest-first key shared with the Sidebar's sort control.
+// Same module-var pattern as the search query; list() appends it as ?order=.
+let threadListSortOrder: "updated" | "created" = "updated";
+
+export function setThreadListSortOrder(order: "updated" | "created"): void {
+  threadListSortOrder = order;
 }
 
 /**
@@ -106,7 +119,7 @@ export function createRemoteThreadListAdapter(
       // each thread's `status` field. Includes server-side ?search= when set.
       const q = threadListSearchQuery.trim();
       const url =
-        `/api/conversations?status=all&limit=${pageSize}&offset=${offset}` +
+        `/api/conversations?status=all&limit=${pageSize}&offset=${offset}&order=${threadListSortOrder}` +
         (q ? `&search=${encodeURIComponent(q)}` : "");
       const res = await fetch(url);
       if (!res.ok) return { threads: [] };
