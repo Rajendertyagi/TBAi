@@ -757,3 +757,22 @@ future agents don't re-litigate:
   providers/SPA 200) on a fresh server. Rust compiles on CI only (no local
   toolchain) — `main.rs` follows codeg`s command shape exactly; needs the
   workflow artifact as proof.
+
+## Web settings second tab (codeg openAppWindow parity)
+
+- **Named tab, not in-app:** web entry points (gear, page menu, quick-actions
+  areas) open `#/settings-window/<section>` via `window.open(path,
+  "tbai-settings")` — one reused tab, focused on repeat opens (new
+  `lib/settings-window.ts`). Called synchronously in the click stack (no
+  pre-await), so popup blockers stay quiet — codeg`s reservation dance is
+  unnecessary here since we need no round trip first.
+- **Never a dead click:** blocked popup ? toast + in-app fallback; failed
+  Tauri invoke ? toast + in-app fallback (the old fire-and-forget `void`
+  calls are gone from all three entry points). Blocked/invoke copy lives in
+  `chromeConfig.copy`.
+- **Cramp solved on web too:** the chromeless settings shell carries no rail,
+  sidebar, tabs, or status bar — settings get the full tab width. In-app
+  routes stay as the fallback + direct-URL surface (no auto-collapse hack).
+- **Verification:** typecheck 0, build green, route + tab name present in the
+  bundle, 22 unit tests pass, fresh-server smoke 200. Click-level proof needs
+  a real browser (automation host has no localhost).

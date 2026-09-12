@@ -8,10 +8,13 @@ import {
   ContextMenuSeparator,
 } from "./ui/context-menu";
 import { appConfig } from "../config/navigation";
+import { chromeConfig } from "../config/chrome";
 import { sidebarConfig } from "../config/sidebar";
+import { openSettingsTab } from "../lib/settings-window";
 import { isTauri, openSettingsWindow } from "../lib/platform";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useChatTabsStore } from "../features/chat/state/chatTabs";
+import { toast } from "sonner";
 
 /**
  * Page-level (right-click on the content area) context menu. A desktop-chrome
@@ -36,10 +39,14 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   };
 
   const handleOpenSettings = () => {
-    // Dedicated settings window on desktop; in-app route on the web.
+    // Dedicated surface: native window on desktop, named second tab on web
+    // (in-app route only when the popup is blocked — never a dead click).
     if (isTauri()) {
-      void openSettingsWindow();
-    } else {
+      openSettingsWindow().catch(() => {
+        toast.error(chromeConfig.copy.settingsOpenFailed);
+        navigate(appConfig.settingsIndexRoute);
+      });
+    } else if (!openSettingsTab()) {
       navigate(appConfig.settingsIndexRoute);
     }
   };

@@ -1,6 +1,9 @@
 import { PanelBottom, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
 import { appConfig } from "../config/navigation";
+import { chromeConfig } from "../config/chrome";
+import { openSettingsTab } from "../lib/settings-window";
 import { isTauri, openSettingsWindow } from "../lib/platform";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { cn } from "../lib/utils";
@@ -18,10 +21,14 @@ export function RightEdgeChrome() {
   const toggleStatusBar = useDesktopLayout((s) => s.toggleStatusBar);
 
   const openSettings = () => {
-    // Dedicated settings window on desktop; in-app route on the web.
+    // Dedicated surface: native window on desktop, named second tab on web
+    // (in-app route only when the popup is blocked — never a dead click).
     if (isTauri()) {
-      void openSettingsWindow();
-    } else {
+      openSettingsWindow().catch(() => {
+        toast.error(chromeConfig.copy.settingsOpenFailed);
+        navigate(appConfig.settingsIndexRoute);
+      });
+    } else if (!openSettingsTab()) {
       navigate(appConfig.settingsIndexRoute);
     }
   };
