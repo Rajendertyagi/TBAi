@@ -16,7 +16,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { X, Plus } from "lucide-react";
 import { cn } from "../lib/utils";
-import { isTauri } from "../lib/platform";
 import {
   type Tab,
   urlForTab,
@@ -81,11 +80,19 @@ function SortableTab({
 }
 
 /**
- * Desktop tab strip built directly on the existing chatTabs Zustand store
- * (no second tab-state system). Reordering uses @dnd-kit/sortable and writes
- * back through the store's `reorder` action. Browser-only build: returns null.
+ * Single source of truth for the chat tab strip. Rendered exactly once per
+ * surface (callers decide placement, so there is never a duplicate strip):
+ * - `variant="band"`       → inside the Tauri top band (TopBand); fills the band
+ *   and its trailing spacer is a window-drag region.
+ * - `variant="standalone"` → inside the chat view (browser, which has no band);
+ *   a self-contained bar with its own bottom border.
+ * Keeps drag-to-reorder and shows every open tab kind (chat + settings).
  */
-export function TabStrip() {
+export function TabStrip({
+  variant = "band",
+}: {
+  variant?: "band" | "standalone";
+}) {
   const navigate = useNavigate();
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeKey = useChatTabsStore((s) => s.activeKey);
@@ -97,8 +104,6 @@ export function TabStrip() {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
-
-  if (!isTauri()) return null;
 
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
@@ -113,8 +118,13 @@ export function TabStrip() {
     navigate(urlForTab(tab));
   };
 
+  const containerClass =
+    variant === "band"
+      ? "flex h-full min-w-0 flex-1 items-stretch overflow-x-auto"
+      : "flex shrink-0 items-stretch gap-0 overflow-x-auto border-b border-border bg-muted/40 px-2";
+
   return (
-    <div className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto">
+    <div className={containerClass}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={tabs.map((t) => t.key)} strategy={horizontalListSortingStrategy}>
           {tabs.map((tab) => (
@@ -139,7 +149,11 @@ export function TabStrip() {
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
-      <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
+      {variant === "band" ? (
+        <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
+      ) : (
+        <div className="h-full min-w-10 flex-1" />
+      )}
     </div>
   );
 }

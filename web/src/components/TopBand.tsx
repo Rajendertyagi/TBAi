@@ -49,7 +49,7 @@ export function TopBand() {
       </div>
 
       <div className="relative flex min-w-0 flex-1 items-stretch">
-        <TabStrip />
+        <TabStrip variant="band" />
         {/* Reserve exactly the window-controls width so tabs never render
             underneath them; also a window-drag region (codeg right-reserve). */}
         <div data-tauri-drag-region className="h-full w-[138px] shrink-0" />

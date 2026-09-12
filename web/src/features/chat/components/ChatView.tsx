@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import { ChatWindow } from "../../../components/ChatWindow";
-import { TabStrip } from "./TabStrip";
+import { TabStrip } from "../../../components/TabStrip";
+import { isTauri } from "../../../lib/platform";
 import {
   NEW_DRAFT_TAB_ID,
   useChatTabsStore,
@@ -43,7 +44,9 @@ export function ChatView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TabStrip />
+      {/* In the desktop shell the tab strip lives in the top band (TopBand);
+          only the browser (no band) renders it in-content to avoid a duplicate. */}
+      {!isTauri() && <TabStrip variant="standalone" />}
       <div className="min-h-0 flex-1">
         <ChatWindow />
       </div>
