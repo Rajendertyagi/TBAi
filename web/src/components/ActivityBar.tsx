@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { appConfig, getVisibleNav } from "../config/navigation";
-import { isTauri } from "../lib/platform";
 import { cn } from "../lib/utils";
 
 /**
@@ -14,7 +13,6 @@ import { cn } from "../lib/utils";
 export function ActivityBar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  if (!isTauri()) return null;
 
   const items = getVisibleNav();
   const [schedUnseen, setSchedUnseen] = useState(0);

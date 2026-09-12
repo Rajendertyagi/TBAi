@@ -2,6 +2,7 @@ import { PanelLeft, PanelBottom } from "lucide-react";
 import { WindowControls } from "./WindowControls";
 import { TabStrip } from "./TabStrip";
 import { cn } from "../lib/utils";
+import { isTauri } from "../lib/platform";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 
 /**
@@ -49,10 +50,14 @@ export function TopBand() {
       </div>
 
       <div className="relative flex min-w-0 flex-1 items-stretch">
-        <TabStrip variant="band" />
+        <TabStrip />
         {/* Reserve exactly the window-controls width so tabs never render
-            underneath them; also a window-drag region (codeg right-reserve). */}
-        <div data-tauri-drag-region className="h-full w-[138px] shrink-0" />
+            underneath them; also a window-drag region (codeg right-reserve).
+            Tauri-only: in the browser there are no window controls, so the band
+            uses the full width and carries no inert drag attribute. */}
+        {isTauri() && (
+          <div data-tauri-drag-region className="h-full w-[138px] shrink-0" />
+        )}
       </div>
 
       <div className="absolute inset-y-0 right-0 z-30 flex items-stretch">

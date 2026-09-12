@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, Fragment, useCallback, type MutableRefObject } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import {
   ThreadListPrimitive,
   ThreadListItemPrimitive,
@@ -9,9 +9,7 @@ import {
 } from "@assistant-ui/react";
 import {
   FolderPlus,
-  MessageSquare,
   Search,
-  Settings as SettingsIcon,
   MoreVertical,
   Pencil,
   Archive,
@@ -20,12 +18,9 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { cn } from "../lib/utils";
-import { isTauri } from "../lib/platform";
-import { appConfig, getSettingsNav } from "../config/navigation";
+import { appConfig } from "../config/navigation";
 import { historyConfig } from "../config/history";
 import { setThreadListSearchQuery } from "../adapters/remoteThreadListAdapter";
-import { lastSettingsRoute } from "../app/layout/SettingsLayout";
-import { urlForTab, useChatTabsStore } from "../features/chat/state/chatTabs";
 
 type ThreadItem = {
   remoteId: string;
@@ -48,12 +43,6 @@ function dateGroupLabel(date?: Date): string {
 
 export function Sidebar() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const tauri = isTauri();
-  const chatActive = pathname.startsWith("/chat");
-  const settingsActive = getSettingsNav().some(
-    (item) => pathname === item.route || pathname.startsWith(`${item.route}/`),
-  );
   // Thread switching itself is done by the ThreadListItemPrimitive.Trigger;
   // this only moves the URL (ChatView opens the matching tab, the runtime
   // switches threads, onThreadIdChange confirms the tab store).
@@ -63,29 +52,6 @@ export function Sidebar() {
   );
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
-  // Unseen scheduler failures (codeg parity: attention badge). One small
-  // fetch per navigation; the Scheduler page itself owns details + clearing.
-  const [schedUnseen, setSchedUnseen] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/scheduler/summary")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return;
-        let seen = 0;
-        try {
-          seen = Number(window.localStorage.getItem("tbai:schedSeenTs") ?? 0) || 0;
-        } catch {
-          /* ignore */
-        }
-        const problems = (data.problemRuns ?? []) as Array<{ startedAt: number }>;
-        setSchedUnseen(problems.filter((p) => p.startedAt > seen).length);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [pathname]);
   const aui = useAui();
 
   // Debounced server-side search: pushes the query into the adapter and asks
@@ -111,18 +77,6 @@ export function Sidebar() {
 
   return (
     <div className="w-56 flex flex-col border-r border-border bg-muted/30">
-      {/* Logo (browser only — the desktop activity bar carries the app mark) */}
-      {!tauri && (
-        <div className="h-12 flex items-center px-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-foreground flex items-center justify-center">
-              <span className="text-background text-xs font-bold">{appConfig.branding.logoText}</span>
-            </div>
-            <span className="font-semibold text-sm">{appConfig.branding.appName}</span>
-          </div>
-        </div>
-      )}
-
       {/* New Chat */}
       <div className="px-2 pt-2">
         <ThreadListPrimitive.New asChild>
@@ -135,55 +89,6 @@ export function Sidebar() {
           </button>
         </ThreadListPrimitive.New>
       </div>
-
-      {/* Main rows: full-width, codeg-style. Browser only — the desktop
-          activity bar provides this navigation. No icon grid: page links are
-          rows, and settings lives behind a single entry (its own area has
-          the sub-sidebar). */}
-      {!tauri && (
-        <div className="px-2 pt-1 pb-2 space-y-0.5">
-          <button
-            onClick={() => {
-              const state = useChatTabsStore.getState();
-              const tab = [...state.tabs]
-                .reverse()
-                .find((t) => t.kind === "chat");
-              navigate(tab ? urlForTab(tab) : "/chat/new");
-            }}
-            aria-current={chatActive ? "page" : undefined}
-            className={cn(
-              "w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
-              chatActive
-                ? "bg-muted text-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted",
-            )}
-          >
-            <MessageSquare className="w-4 h-4" />
-            Chat
-          </button>
-          <button
-            onClick={() => navigate(lastSettingsRoute())}
-            aria-current={settingsActive ? "page" : undefined}
-            className={cn(
-              "w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
-              settingsActive
-                ? "bg-muted text-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted",
-            )}
-          >
-            <SettingsIcon className="w-4 h-4" />
-            Settings
-            {schedUnseen > 0 && (
-              <span
-                className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-[10px] font-medium leading-none text-destructive"
-                title={`${schedUnseen} unseen scheduler failure(s)`}
-              >
-                {schedUnseen}
-              </span>
-            )}
-          </button>
-        </div>
-      )}
 
       {/* Search */}
       {historyConfig.searchEnabled && (

@@ -1,20 +1,20 @@
 import { Circle, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
-import { isTauri } from "../lib/platform";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useSettingsStore } from "../stores/index";
 
 /**
  * VS Code–style bottom status bar. Shows the active provider + model and a
  * local-connection indicator. Items are clickable (provider → provider
- * settings, gear → desktop settings). Rendered only in the Tauri shell and only
- * when the user hasn't hidden it (Desktop settings). In the browser it returns
- * null, so no desktop-only code reaches the web bundle.
+ * settings, gear → desktop settings). Rendered in both the web and desktop
+ * shells when the user hasn't hidden it (Desktop settings); the Tauri-only
+ * window controls live elsewhere (TopBand), so this component is identical in
+ * both surfaces.
  */
 export function StatusBar() {
   const visible = useDesktopLayout((s) => s.statusBarVisible);
   const navigate = useNavigate();
-  if (!isTauri() || !visible) return null;
+  if (!visible) return null;
 
   const providers = useSettingsStore((s) => s.providers);
   const activeProviderId = useSettingsStore((s) => s.activeProviderId);

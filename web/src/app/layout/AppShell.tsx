@@ -1,10 +1,9 @@
-import { lazy, Suspense, useState, type ComponentType } from "react";
+import { lazy, Suspense, type ComponentType } from "react";
 import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "../../components/Sidebar";
 import { StatusBar } from "../../components/StatusBar";
 import { ActivityBar } from "../../components/ActivityBar";
 import { TabUrlSync } from "../TabUrlSync";
-import { isTauri } from "../../lib/platform";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 
 // Desktop chrome is code-split and only fetched inside the Tauri shell, keeping
@@ -26,10 +25,8 @@ const DesktopChrome = lazy(
  */
 export function AppShell() {
   const { pathname } = useLocation();
-  const [tauri] = useState(() => isTauri());
   const sidebarVisible = useDesktopLayout((s) => s.sidebarVisible);
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
-  const showSidebar = tauri ? sidebarVisible : true;
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -37,22 +34,20 @@ export function AppShell() {
         key={pathname}
         className="flex min-w-0 flex-1 animate-in fade-in-0 flex-row overflow-hidden duration-150"
       >
-        {tauri && <ActivityBar />}
+        <ActivityBar />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {tauri && (
-            <Suspense fallback={null}>
-              <DesktopChrome />
-            </Suspense>
-          )}
+          <Suspense fallback={null}>
+            <DesktopChrome />
+          </Suspense>
           <div className="flex min-w-0 flex-1 flex-row overflow-hidden">
-            {showSidebar && <Sidebar />}
+            {sidebarVisible && <Sidebar />}
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
               <Outlet />
             </div>
           </div>
         </div>
       </div>
-      {tauri && statusBarVisible && <StatusBar />}
+      {statusBarVisible && <StatusBar />}
       <TabUrlSync />
     </div>
   );
