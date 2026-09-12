@@ -815,3 +815,16 @@ future agents don't re-litigate:
   (never persisted); a manual toggle meanwhile always wins over the restore.
 - **Verification:** typecheck 0, build green, 29 unit tests pass,
   fresh-server smoke 200.
+
+## Settings title strip; sidebar stays visible (revert auto-collapse)
+
+- **Shared `PageTitleStrip`** (codeg `WorkbenchPageTitle` geometry): back-to-
+  chats › title, transparent `h-10` bar. `SchedulerTitleStrip` reuses it;
+  `SettingsLayout` renders it above the sub-sidebar with the active section
+  label (fallback `"Settings"`).
+- **Auto-collapse removed:** the conversation sidebar now stays visible on
+  settings routes, exactly as on the Scheduler page. Deleted the `settingsStash`
+  transient, the `AppShell` route effect, and the now-unused
+  `isSettingsRoute()` helper.
+- **Verification:** typecheck 0, build green, 29 unit tests pass,
+  fresh-server smoke 200.

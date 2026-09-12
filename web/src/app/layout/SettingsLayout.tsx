@@ -3,7 +3,8 @@ import { useEffect, useState, type ComponentType } from "react";
 import { Outlet, useLocation } from "react-router";
 import { ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { rememberSettingsRoute } from "../../config/navigation";
+import { rememberSettingsRoute, getSettingsNav } from "../../config/navigation";
+import { PageTitleStrip } from "../../components/PageTitleStrip";
 import { SettingsNav } from "./SettingsNav";
 
 /**
@@ -22,11 +23,19 @@ export function SettingsLayout() {
     rememberSettingsRoute(pathname);
   }, [pathname]);
 
+  // Strip title follows the active section (falls back to plain Settings).
+  const active = getSettingsNav().find(
+    (item) => pathname === item.route || pathname.startsWith(`${item.route}/`),
+  );
+
   return (
-    <div className="flex h-full min-h-0">
-      <SettingsNav />
-      <div className="min-w-0 flex-1">
-        <Outlet />
+    <div className="flex h-full min-h-0 flex-col">
+      <PageTitleStrip title={active?.label ?? "Settings"} />
+      <div className="flex min-h-0 flex-1">
+        <SettingsNav />
+        <div className="min-w-0 flex-1">
+          <Outlet />
+        </div>
       </div>
     </div>
   );

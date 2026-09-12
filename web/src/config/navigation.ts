@@ -259,10 +259,3 @@ export function rememberSettingsRoute(pathname: string): void {
     /* ignore */
   }
 }
-
-/** True when the pathname is a settings-area route (sub-sidebar source). */
-export function isSettingsRoute(pathname: string): boolean {
-  return getSettingsNav().some(
-    (item) => pathname === item.route || pathname.startsWith(`${item.route}/`),
-  );
-}
