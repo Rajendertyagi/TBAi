@@ -54,32 +54,34 @@ function SortableTab({
     opacity: isDragging ? 0.6 : 1,
   };
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-      onClick={onSelect}
-      className={cn(
-        "group flex max-w-[200px] cursor-pointer items-center gap-1.5 border-r border-border border-t-2 px-3 py-1.5 text-xs",
-        active
-          ? "border-t-primary bg-background text-foreground"
-          : "border-t-transparent text-muted-foreground hover:bg-muted/50",
-      )}
-    >
-      <span className="truncate">{title}</span>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-        title="Close tab"
+    <ContextMenuPrimitive.Trigger asChild>
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...attributes}
+        {...listeners}
+        onClick={onSelect}
+        className={cn(
+          "group flex max-w-[200px] cursor-pointer items-center gap-1.5 border-r border-border border-t-2 px-3 py-1.5 text-xs",
+          active
+            ? "border-t-primary bg-background text-foreground"
+            : "border-t-transparent text-muted-foreground hover:bg-muted/50",
+        )}
       >
-        <X className="h-3 w-3" />
-      </button>
-    </div>
+        <span className="truncate">{title}</span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+          title="Close tab"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+    </ContextMenuPrimitive.Trigger>
   );
 }
 
@@ -144,14 +146,12 @@ export function TabStrip() {
         >
           {tabs.map((tab) => (
             <ContextMenuPrimitive.Root key={tab.key}>
-              <ContextMenuPrimitive.Trigger asChild>
-                <SortableTab
-                  tab={tab}
-                  active={tab.key === activeKey}
-                  onSelect={() => select(tab)}
-                  onClose={() => close(tab.key)}
-                />
-              </ContextMenuPrimitive.Trigger>
+              <SortableTab
+                tab={tab}
+                active={tab.key === activeKey}
+                onSelect={() => select(tab)}
+                onClose={() => close(tab.key)}
+              />
               <ContextMenuPrimitive.Portal>
                 <ContextMenuPrimitive.Content className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
                   <ContextMenuPrimitive.Item
