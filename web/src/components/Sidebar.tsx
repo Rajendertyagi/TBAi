@@ -16,11 +16,18 @@ import {
   ArchiveRestore,
   Trash2,
   ChevronDown,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
+import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { cn } from "../lib/utils";
 import { appConfig } from "../config/navigation";
 import { historyConfig } from "../config/history";
 import { setThreadListSearchQuery } from "../adapters/remoteThreadListAdapter";
+import { useChatTabsStore } from "../features/chat/state/chatTabs";
+
+const ctxMenuItemClass =
+  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted data-[disabled]:opacity-50";
 
 type ThreadItem = {
   remoteId: string;
@@ -282,6 +289,7 @@ function ThreadListItem({
   onOpenThread: (remoteId: string) => void;
 }) {
   const aui = useAui();
+  const openChat = useChatTabsStore((s) => s.openChat);
   const title = item.title ?? "Untitled";
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(title);
@@ -324,64 +332,108 @@ function ThreadListItem({
   };
 
   return (
-    <ThreadListItemPrimitive.Root className="group relative flex items-center gap-1 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted data-[active]:bg-muted before:absolute before:left-1 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-transparent before:content-[''] data-[active]:before:bg-foreground">
-      {renaming ? (
-        <input
-          autoFocus
-          value={draft}
-          disabled={saving}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void commitRename();
-            if (e.key === "Escape") cancelRename();
-          }}
-          onBlur={() => void commitRename()}
-          onFocus={(e) => e.target.select()}
-          aria-label="Rename conversation"
-          className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-0.5 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      ) : (
-        <ThreadListItemPrimitive.Trigger
-          className="flex-1 min-w-0 truncate text-left"
-          onClick={() => onOpenThread(item.remoteId)}
-        >
-          <ThreadListItemPrimitive.Title />
-        </ThreadListItemPrimitive.Trigger>
-      )}
+    <ContextMenuPrimitive.Root>
+      <ContextMenuPrimitive.Trigger asChild>
+        <ThreadListItemPrimitive.Root className="group relative flex items-center gap-1 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted data-[active]:bg-muted before:absolute before:left-1 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-transparent before:content-[''] data-[active]:before:bg-foreground">
+          {renaming ? (
+            <input
+              autoFocus
+              value={draft}
+              disabled={saving}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void commitRename();
+                if (e.key === "Escape") cancelRename();
+              }}
+              onBlur={() => void commitRename()}
+              onFocus={(e) => e.target.select()}
+              aria-label="Rename conversation"
+              className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-0.5 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          ) : (
+            <ThreadListItemPrimitive.Trigger
+              className="flex-1 min-w-0 truncate text-left"
+              onClick={() => onOpenThread(item.remoteId)}
+            >
+              <ThreadListItemPrimitive.Title />
+            </ThreadListItemPrimitive.Trigger>
+          )}
 
-      <ThreadListItemMorePrimitive.Root>
-        <ThreadListItemMorePrimitive.Trigger
-          className="shrink-0 rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-background transition-opacity"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreVertical className="w-4 h-4" />
-        </ThreadListItemMorePrimitive.Trigger>
-        <ThreadListItemMorePrimitive.Content className="z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+          <ThreadListItemMorePrimitive.Root>
+            <ThreadListItemMorePrimitive.Trigger
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-background transition-opacity"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreVertical className="w-4 h-4" />
+            </ThreadListItemMorePrimitive.Trigger>
+            <ThreadListItemMorePrimitive.Content className="z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+              {historyConfig.renameEnabled && (
+                <ThreadListItemMorePrimitive.Item
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
+                  onSelect={() => startRename()}
+                >
+                  <Pencil className="w-4 h-4" /> Rename
+                </ThreadListItemMorePrimitive.Item>
+              )}
+              {historyConfig.archiveEnabled && item.status === "regular" && (
+                <ThreadListItemPrimitive.Archive asChild>
+                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
+                    <Archive className="w-4 h-4" /> Archive
+                  </ThreadListItemMorePrimitive.Item>
+                </ThreadListItemPrimitive.Archive>
+              )}
+              {historyConfig.deleteEnabled && (
+                <ThreadListItemPrimitive.Delete asChild>
+                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
+                    <Trash2 className="w-4 h-4" /> Delete
+                  </ThreadListItemMorePrimitive.Item>
+                </ThreadListItemPrimitive.Delete>
+              )}
+            </ThreadListItemMorePrimitive.Content>
+          </ThreadListItemMorePrimitive.Root>
+        </ThreadListItemPrimitive.Root>
+      </ContextMenuPrimitive.Trigger>
+      <ContextMenuPrimitive.Portal>
+        <ContextMenuPrimitive.Content className="z-50 min-w-[180px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+          <ContextMenuPrimitive.Item
+            className={ctxMenuItemClass}
+            onSelect={() => openChat(item.remoteId)}
+          >
+            <ExternalLink className="w-4 h-4" /> Open in New Tab
+          </ContextMenuPrimitive.Item>
           {historyConfig.renameEnabled && (
-            <ThreadListItemMorePrimitive.Item
-              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
+            <ContextMenuPrimitive.Item
+              className={ctxMenuItemClass}
               onSelect={() => startRename()}
             >
               <Pencil className="w-4 h-4" /> Rename
-            </ThreadListItemMorePrimitive.Item>
+            </ContextMenuPrimitive.Item>
           )}
           {historyConfig.archiveEnabled && item.status === "regular" && (
             <ThreadListItemPrimitive.Archive asChild>
-              <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
+              <ContextMenuPrimitive.Item className={ctxMenuItemClass}>
                 <Archive className="w-4 h-4" /> Archive
-              </ThreadListItemMorePrimitive.Item>
+              </ContextMenuPrimitive.Item>
             </ThreadListItemPrimitive.Archive>
           )}
+          <ContextMenuPrimitive.Item
+            className={ctxMenuItemClass}
+            onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}
+          >
+            <Copy className="w-4 h-4" /> Copy ID
+          </ContextMenuPrimitive.Item>
           {historyConfig.deleteEnabled && (
             <ThreadListItemPrimitive.Delete asChild>
-              <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
+              <ContextMenuPrimitive.Item
+                className={cn(ctxMenuItemClass, "text-destructive")}
+              >
                 <Trash2 className="w-4 h-4" /> Delete
-              </ThreadListItemMorePrimitive.Item>
+              </ContextMenuPrimitive.Item>
             </ThreadListItemPrimitive.Delete>
           )}
-        </ThreadListItemMorePrimitive.Content>
-      </ThreadListItemMorePrimitive.Root>
-    </ThreadListItemPrimitive.Root>
+        </ContextMenuPrimitive.Content>
+      </ContextMenuPrimitive.Portal>
+    </ContextMenuPrimitive.Root>
   );
 }
 
@@ -393,37 +445,67 @@ function ArchivedItem({
   onOpenThread: (remoteId: string) => void;
 }) {
   return (
-    <ThreadListItemPrimitive.Root className="group relative flex items-center gap-1 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted data-[active]:bg-muted">
-      <ThreadListItemPrimitive.Trigger
-        className="flex-1 min-w-0 truncate text-left"
-        onClick={() => onOpenThread(remoteId)}
-      >
-        <ThreadListItemPrimitive.Title />
-      </ThreadListItemPrimitive.Trigger>
-      <ThreadListItemMorePrimitive.Root>
-        <ThreadListItemMorePrimitive.Trigger
-          className="shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 hover:bg-background transition-opacity"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreVertical className="w-4 h-4" />
-        </ThreadListItemMorePrimitive.Trigger>
-        <ThreadListItemMorePrimitive.Content className="z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+    <ContextMenuPrimitive.Root>
+      <ContextMenuPrimitive.Trigger asChild>
+        <ThreadListItemPrimitive.Root className="group relative flex items-center gap-1 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted data-[active]:bg-muted">
+          <ThreadListItemPrimitive.Trigger
+            className="flex-1 min-w-0 truncate text-left"
+            onClick={() => onOpenThread(remoteId)}
+          >
+            <ThreadListItemPrimitive.Title />
+          </ThreadListItemPrimitive.Trigger>
+          <ThreadListItemMorePrimitive.Root>
+            <ThreadListItemMorePrimitive.Trigger
+              className="shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 hover:bg-background transition-opacity"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreVertical className="w-4 h-4" />
+            </ThreadListItemMorePrimitive.Trigger>
+            <ThreadListItemMorePrimitive.Content className="z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+              {historyConfig.archiveEnabled && (
+                <ThreadListItemPrimitive.Unarchive asChild>
+                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
+                    <ArchiveRestore className="w-4 h-4" /> Unarchive
+                  </ThreadListItemMorePrimitive.Item>
+                </ThreadListItemPrimitive.Unarchive>
+              )}
+              {historyConfig.deleteEnabled && (
+                <ThreadListItemPrimitive.Delete asChild>
+                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
+                    <Trash2 className="w-4 h-4" /> Delete
+                  </ThreadListItemMorePrimitive.Item>
+                </ThreadListItemPrimitive.Delete>
+              )}
+            </ThreadListItemMorePrimitive.Content>
+          </ThreadListItemMorePrimitive.Root>
+        </ThreadListItemPrimitive.Root>
+      </ContextMenuPrimitive.Trigger>
+      <ContextMenuPrimitive.Portal>
+        <ContextMenuPrimitive.Content className="z-50 min-w-[180px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
           {historyConfig.archiveEnabled && (
             <ThreadListItemPrimitive.Unarchive asChild>
-              <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
+              <ContextMenuPrimitive.Item className={ctxMenuItemClass}>
                 <ArchiveRestore className="w-4 h-4" /> Unarchive
-              </ThreadListItemMorePrimitive.Item>
+              </ContextMenuPrimitive.Item>
             </ThreadListItemPrimitive.Unarchive>
           )}
+          <ContextMenuPrimitive.Item
+            className={ctxMenuItemClass}
+            onSelect={() => void navigator.clipboard?.writeText(remoteId)}
+          >
+            <Copy className="w-4 h-4" /> Copy ID
+          </ContextMenuPrimitive.Item>
           {historyConfig.deleteEnabled && (
             <ThreadListItemPrimitive.Delete asChild>
-              <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
+              <ContextMenuPrimitive.Item
+                className={cn(ctxMenuItemClass, "text-destructive")}
+              >
                 <Trash2 className="w-4 h-4" /> Delete
-              </ThreadListItemMorePrimitive.Item>
+              </ContextMenuPrimitive.Item>
             </ThreadListItemPrimitive.Delete>
           )}
-        </ThreadListItemMorePrimitive.Content>
-      </ThreadListItemMorePrimitive.Root>
-    </ThreadListItemPrimitive.Root>
+        </ContextMenuPrimitive.Content>
+      </ContextMenuPrimitive.Portal>
+    </ContextMenuPrimitive.Root>
   );
 }

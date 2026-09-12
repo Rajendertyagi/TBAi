@@ -14,6 +14,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { X, Plus } from "lucide-react";
 import { cn } from "../lib/utils";
 import {
@@ -29,6 +30,9 @@ function useTabTitle(ref: string): string {
     return (item?.title as string | undefined) ?? "Untitled";
   });
 }
+
+const menuItemClass =
+  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted data-[disabled]:opacity-50";
 
 function SortableTab({
   tab,
@@ -80,19 +84,13 @@ function SortableTab({
 }
 
 /**
- * Single source of truth for the chat tab strip. Rendered exactly once per
- * surface (callers decide placement, so there is never a duplicate strip):
- * - `variant="band"`       → inside the Tauri top band (TopBand); fills the band
- *   and its trailing spacer is a window-drag region.
- * - `variant="standalone"` → inside the chat view (browser, which has no band);
- *   a self-contained bar with its own bottom border.
- * Keeps drag-to-reorder and shows every open tab kind (chat + settings).
+ * Single source of truth for the chat tab strip. Rendered once, in the content-
+ * area `h-10` strip of `AppShell` (codeg parity: tabs live at the top of the
+ * conversation column, not a full-width band). Each tab opens a Radix right-click
+ * context menu (Close / Close Others / Close to the Right / Copy Link) — DOM-
+ * based, so it is identical in the browser and the Tauri desktop.
  */
-export function TabStrip({
-  variant = "band",
-}: {
-  variant?: "band" | "standalone";
-}) {
+export function TabStrip() {
   const navigate = useNavigate();
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeKey = useChatTabsStore((s) => s.activeKey);
@@ -118,23 +116,72 @@ export function TabStrip({
     navigate(urlForTab(tab));
   };
 
-  const containerClass =
-    variant === "band"
-      ? "flex h-full min-w-0 flex-1 items-stretch overflow-x-auto"
-      : "flex shrink-0 items-stretch gap-0 overflow-x-auto border-b border-border bg-muted/40 px-2";
+  const closeOthers = (key: string) => {
+    const current = useChatTabsStore.getState().tabs;
+    current.filter((t) => t.key !== key).forEach((t) => close(t.key));
+  };
+
+  const closeToRight = (key: string) => {
+    const current = useChatTabsStore.getState().tabs;
+    const idx = current.findIndex((t) => t.key === key);
+    current.slice(idx + 1).forEach((t) => close(t.key));
+  };
+
+  const copyLink = (tab: Tab) => {
+    void navigator.clipboard?.writeText(urlForTab(tab));
+  };
 
   return (
-    <div className={containerClass}>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <SortableContext items={tabs.map((t) => t.key)} strategy={horizontalListSortingStrategy}>
+    <div className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+      >
+        <SortableContext
+          items={tabs.map((t) => t.key)}
+          strategy={horizontalListSortingStrategy}
+        >
           {tabs.map((tab) => (
-            <SortableTab
-              key={tab.key}
-              tab={tab}
-              active={tab.key === activeKey}
-              onSelect={() => select(tab)}
-              onClose={() => close(tab.key)}
-            />
+            <ContextMenuPrimitive.Root key={tab.key}>
+              <ContextMenuPrimitive.Trigger asChild>
+                <SortableTab
+                  tab={tab}
+                  active={tab.key === activeKey}
+                  onSelect={() => select(tab)}
+                  onClose={() => close(tab.key)}
+                />
+              </ContextMenuPrimitive.Trigger>
+              <ContextMenuPrimitive.Portal>
+                <ContextMenuPrimitive.Content className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+                  <ContextMenuPrimitive.Item
+                    className={menuItemClass}
+                    onSelect={() => close(tab.key)}
+                  >
+                    Close
+                  </ContextMenuPrimitive.Item>
+                  <ContextMenuPrimitive.Item
+                    className={menuItemClass}
+                    onSelect={() => closeOthers(tab.key)}
+                  >
+                    Close Others
+                  </ContextMenuPrimitive.Item>
+                  <ContextMenuPrimitive.Item
+                    className={menuItemClass}
+                    onSelect={() => closeToRight(tab.key)}
+                  >
+                    Close to the Right
+                  </ContextMenuPrimitive.Item>
+                  <ContextMenuPrimitive.Separator className="my-1 h-px bg-border" />
+                  <ContextMenuPrimitive.Item
+                    className={menuItemClass}
+                    onSelect={() => copyLink(tab)}
+                  >
+                    Copy Link
+                  </ContextMenuPrimitive.Item>
+                </ContextMenuPrimitive.Content>
+              </ContextMenuPrimitive.Portal>
+            </ContextMenuPrimitive.Root>
           ))}
         </SortableContext>
       </DndContext>
@@ -149,11 +196,6 @@ export function TabStrip({
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
-      {variant === "band" ? (
-        <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
-      ) : (
-        <div className="h-full min-w-10 flex-1" />
-      )}
     </div>
   );
 }

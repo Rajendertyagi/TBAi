@@ -7,8 +7,9 @@ import { cn } from "../lib/utils";
  * VS Code–style activity bar: a narrow icon rail on the far left that mirrors
  * the application navigation (single source of truth = navigation.ts). Clicking
  * an icon switches the editor view; the active item gets a left accent bar.
- * The scheduler item shows the unseen-failure badge (codeg parity). Desktop
- * only — returns null in the browser (the Sidebar provides navigation there).
+ * The scheduler item shows the unseen-failure badge (codeg parity). Rendered in
+ * BOTH the browser and the Tauri desktop (single unified shell); it is the far-
+ * left icon rail in both surfaces.
  */
 export function ActivityBar() {
   const navigate = useNavigate();
