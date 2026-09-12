@@ -50,25 +50,30 @@ function isTerminalPart(part: unknown, ownId: string): part is { data: TerminalD
  * message parts in stream order. Returns [] when the runtime cannot surface
  * them (history revisit, reload, MCP replay) — callers fall back to the
  * final tool result, which stays the durable source.
+ *
+ * The selector returns the store's parts array by reference (stable across
+ * renders); filtering happens in `useMemo` below. Filtering inside the
+ * selector would hand `useSyncExternalStore` a fresh array on every
+ * snapshot — an infinite re-render loop (React error #185).
  */
 function useLiveTerminalLines(ownId: string | undefined): string[] {
-  const parts = useAuiState((s) => {
+  const allParts = useAuiState((s) => {
     const message = s.message as { parts?: unknown } | undefined;
     const all = message?.parts;
-    if (typeof ownId !== "string" || !Array.isArray(all)) return EMPTY_PARTS;
-    const mine = all.filter((part) => isTerminalPart(part, ownId));
-    return mine.length > 0 ? mine : EMPTY_PARTS;
+    return Array.isArray(all) ? all : EMPTY_PARTS;
   });
   return useMemo(() => {
-    if (parts.length === 0) return EMPTY_LINES;
+    if (typeof ownId !== "string" || allParts.length === 0) return EMPTY_LINES;
     const buf = new TerminalBuffer(TERMINAL_MAX_LINES);
-    for (const part of parts) {
+    for (const part of allParts) {
+      if (!isTerminalPart(part, ownId)) continue;
       const data = (part as { data?: TerminalData }).data;
       const chunks = Array.isArray(data?.chunks) ? data.chunks : [];
       for (const chunk of chunks) buf.push(String(chunk ?? ""));
     }
-    return buf.lines;
-  }, [parts]);
+    const lines = buf.lines;
+    return lines.length > 0 ? lines : EMPTY_LINES;
+  }, [allParts, ownId]);
 }
 
 type RunResult = {
