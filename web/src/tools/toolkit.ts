@@ -12,9 +12,11 @@ import {
   ProcessListToolUI,
   ProcessKillToolUI,
   SystemInfoToolUI,
-  BashToolUI,
 } from "./computer/ui";
+import { RunCommandTerminalUI } from "./computer/terminal-ui";
 import { SchedulerToolUI } from "./scheduler/ui";
+import { TodoToolUI } from "./todo/ui";
+import { BrowserToolUI, BrowserActionToolUI } from "./browser/ui";
 
 /**
  * Canonical native toolkit (assistant-ui Toolkit architecture).
@@ -44,17 +46,17 @@ export const nativeToolkit = defineToolkit({
   write_file: { type: "backend", display: "standalone", render: WriteFileToolUI },
   edit_file: { type: "backend", display: "standalone", render: EditFileToolUI },
   delete_file: { type: "backend", display: "standalone", render: DeleteFileToolUI },
-  run_command: { type: "backend", display: "standalone", render: BashToolUI },
+  run_command: { type: "backend", display: "standalone", render: RunCommandTerminalUI },
   process_list: { type: "backend", render: ProcessListToolUI },
   process_kill: { type: "backend", display: "standalone", render: ProcessKillToolUI },
   system_info: { type: "backend", render: SystemInfoToolUI },
-  // Scheduler (AI-controlled): same backend pattern, executed server-side.
-  create_scheduled_job: { type: "backend", display: "standalone", render: SchedulerToolUI },
-  list_scheduled_jobs: { type: "backend", render: SchedulerToolUI },
-  get_scheduled_job: { type: "backend", render: SchedulerToolUI },
-  update_scheduled_job: { type: "backend", display: "standalone", render: SchedulerToolUI },
-  delete_scheduled_job: { type: "backend", display: "standalone", render: SchedulerToolUI },
-  run_scheduled_job_now: { type: "backend", display: "standalone", render: SchedulerToolUI },
+  // Scheduler (AI-controlled): one backend tool, action-dispatched.
+  scheduler: { type: "backend", display: "standalone", render: SchedulerToolUI },
+  // Todo (per-conversation notepad)
+  todo: { type: "backend", display: "standalone", render: TodoToolUI },
+  // Browser (native agent-browser CLI, no MCP)
+  browser: { type: "backend", display: "standalone", render: BrowserToolUI },
+  browser_action: { type: "backend", display: "standalone", render: BrowserActionToolUI },
 });
 
 export const NATIVE_TOOL_NAMES = Object.keys(nativeToolkit);

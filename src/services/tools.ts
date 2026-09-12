@@ -64,6 +64,17 @@ export type ReadArgs = { path: string; offset?: number; limit?: number };
 export type WriteArgs = { path: string; content: string };
 export type EditArgs = { path: string; oldText: string; newText: string; replaceAll?: boolean };
 export type BashArgs = { command: string; cwd?: string };
+
+/**
+ * Incremental terminal output event. Emitted per stream read while the
+ * process runs; `chunk` is raw text (ANSI/newlines intact — normalization
+ * is the presenter's job). Optional: without a listener, `runBash` behaves
+ * exactly as before (same return shape, same limits).
+ */
+export type BashOutputEvent = {
+  stream: "stdout" | "stderr";
+  chunk: string;
+};
 export type ListArgs = { path?: string };
 export type SearchArgs = { query: string; path?: string; maxResults?: number };
 export type StatArgs = { path: string };
@@ -121,7 +132,12 @@ export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditAr
   return { path: p, occurrences: count, diff };
 }
 
-export async function runBash({ command, cwd }: BashArgs) {  const workdir = cwd ? resolveSafe(cwd) : WORKSPACE_DIR;
+export async function runBash(
+  { command, cwd, onOutput }: BashArgs & {
+    onOutput?: (event: BashOutputEvent) => void;
+  },
+) {
+  const workdir = cwd ? resolveSafe(cwd) : WORKSPACE_DIR;
   const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", command], {
     cwd: workdir,
     stdout: "pipe",
@@ -135,12 +151,63 @@ export async function runBash({ command, cwd }: BashArgs) {  const workdir = cwd
     proc.kill("SIGKILL");
   }, BASH_TIMEOUT_MS);
 
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
+  // Incremental readers: emit raw chunks as they arrive (arrival order per
+  // stream; cross-stream order is OS delivery order) while accumulating the
+  // complete output for the durable result. Without onOutput nothing changes.
+  const pump = async (
+    stream: ReadableStream<Uint8Array> | null,
+    label: "stdout" | "stderr",
+    append: (text: string) => void,
+  ): Promise<void> => {
+    if (!stream) return;
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        if (!text) continue;
+        append(text);
+        try {
+          onOutput?.({ stream: label, chunk: text });
+        } catch {
+          /* listener errors must never break execution */
+        }
+      }
+      const tail = decoder.decode();
+      if (tail) {
+        append(tail);
+        try {
+          onOutput?.({ stream: label, chunk: tail });
+        } catch {
+          /* listener errors must never break execution */
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* already closed */
+      }
+    }
+  };
+
+  let stdout = "";
+  let stderr = "";
+  try {
+    await Promise.all([
+      pump(proc.stdout, "stdout", (t) => {
+        stdout += t;
+      }),
+      pump(proc.stderr, "stderr", (t) => {
+        stderr += t;
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
   const exitCode = await proc.exited;
-  clearTimeout(timer);
 
   return {
     command,

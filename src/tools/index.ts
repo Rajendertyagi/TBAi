@@ -27,8 +27,11 @@ import {
   runProcesses,
   runKill,
   runSysinfo,
+  type BashOutputEvent,
 } from "../services/tools";
-import { schedulerToolHandlers } from "../services/scheduler/schedulerTools";
+import { runScheduler } from "../services/scheduler/schedulerTools";
+import { runTodo } from "../services/todos";
+import { runBrowserRead, runBrowserAction } from "../services/browser";
 
 type ServerToolEntry = {
   type: "backend";
@@ -121,50 +124,84 @@ const entries: Record<string, ServerToolEntry> = {
     parameters: js(toolSchemas.system_info),
     execute: () => runSysinfo(),
   },
-  // ---- Scheduler (AI-controlled) ----
-  create_scheduled_job: {
+  // ---- Scheduler (AI-controlled, single action-dispatched tool) ----
+  scheduler: {
     type: "backend",
     description:
-      "Create a scheduled AI job that runs automatically (once at a timestamp or on a cron schedule). Required: name, scheduleType ('once'|'cron'), timezone (IANA), providerId, modelId, workspacePath, prompt. For 'once' also execAt (epoch ms); for 'cron' also cronExpression (5-field). Returns the created job summary.",
-    parameters: js(toolSchemas.create_scheduled_job),
-    execute: (a) => schedulerToolHandlers.create(a),
+      "Manage scheduled AI jobs via an `action` selector (create | list | get | update | delete | run_now). " +
+      "create requires: name, scheduleType ('once'|'cron'), timezone (IANA), providerId, modelId, workspacePath, prompt; " +
+      "for 'once' also execAt (epoch ms), for 'cron' also cronExpression (5-field). " +
+      "get / update / delete / run_now require jobId. list accepts an optional status filter (active|paused|failed|all).",
+    parameters: js(toolSchemas.scheduler),
+    execute: (a) => runScheduler(a),
   },
-  list_scheduled_jobs: {
+  // ---- Todo (per-conversation durable notepad) ----
+  todo: {
     type: "backend",
     description:
-      "List all scheduler jobs with their status and next run time. Returns a summary array (no full prompts).",
-    parameters: js(toolSchemas.list_scheduled_jobs),
-    execute: () => schedulerToolHandlers.list(),
+      "Manage a durable per-conversation to-do list. Actions: add, list, update, toggle, remove, clear. " +
+      "Every successful action returns the current list. Runs without approval.",
+    parameters: js(toolSchemas.todo),
+    // threadId is injected per request in `withThreadContext` (chat route); the
+    // static entry rejects when no thread context is available.
+    execute: (a) => runTodo(a as any),
   },
-  get_scheduled_job: {
+  // ---- Browser: read/navigation (agent-browser CLI, no MCP) ----
+  browser: {
     type: "backend",
     description:
-      "Get full details of one scheduler job by id, including its prompt.",
-    parameters: js(toolSchemas.get_scheduled_job),
-    execute: (a) => schedulerToolHandlers.get(a),
+      "Browser read/navigation via the agent-browser CLI (external persistent daemon). Actions: open a URL, snapshot the DOM, get page text, screenshot, or extract structured data with a prompt. Runs without approval.",
+    parameters: js(toolSchemas.browser),
+    execute: (a) => runBrowserRead(a as any),
   },
-  update_scheduled_job: {
+  // ---- Browser: interactive actions (agent-browser CLI, approval-gated) ----
+  browser_action: {
     type: "backend",
     description:
-      "Update an existing scheduler job by id. Any subset of fields may be provided. Re-validates schedule and reschedules the timer. Returns the updated summary.",
-    parameters: js(toolSchemas.update_scheduled_job),
-    execute: (a) => schedulerToolHandlers.update(a),
-  },
-  delete_scheduled_job: {
-    type: "backend",
-    description:
-      "Soft-delete a scheduler job by id: stops scheduling and hides it, retaining run history.",
-    parameters: js(toolSchemas.delete_scheduled_job),
-    execute: (a) => schedulerToolHandlers.delete(a),
-  },
-  run_scheduled_job_now: {
-    type: "backend",
-    description:
-      "Trigger an immediate manual run of a scheduler job by id (a fresh occurrence, independent of its schedule). Returns the run id.",
-    parameters: js(toolSchemas.run_scheduled_job_now),
-    execute: (a) => schedulerToolHandlers.runNow(a),
+      "Interactive browser actions via the agent-browser CLI requiring approval. Actions: click an element by ref, fill a field, press a key, or perform an AI-driven act. Requires user approval before executing.",
+    parameters: js(toolSchemas.browser_action),
+    execute: (a) => runBrowserAction(a as any),
   },
 };
+
+/**
+ * Bind request-scoped context into the native toolkit. `AISDKToolkit` strips
+ * AI SDK `runtimeContext` from the `execute` second argument, so thread
+ * identity is supplied here via a per-request closure over the freshly-built
+ * `ToolSet`. Only `todo` needs thread context today.
+ *
+ * `onTerminalOutput`, when provided, wires `run_command` incremental output
+ * into the caller (the chat route forwards it as `data-tbai-terminal` parts).
+ * The toolCallId comes from the standard AI SDK execute options — documented
+ * there as the hook for "sending tool-call related information with stream
+ * data" — so nearby command calls stay isolated without any extra plumbing.
+ */
+export function withThreadContext(
+  tools: any,
+  threadId: string | undefined,
+  onTerminalOutput?: (toolCallId: string, event: BashOutputEvent) => void,
+): any {
+  if (threadId && tools.todo) {
+    tools.todo = {
+      ...tools.todo,
+      execute: (args: unknown) => runTodo(args as any, { threadId }),
+    };
+  }
+  if (onTerminalOutput && tools.run_command) {
+    tools.run_command = {
+      ...tools.run_command,
+      execute: (args: unknown, opts?: { toolCallId?: string }) =>
+        runBash({
+          ...(args as { command: string; cwd?: string }),
+          onOutput: (event) => {
+            const id = opts?.toolCallId;
+            if (id) onTerminalOutput(id, event);
+          },
+        }),
+    };
+  }
+  return tools;
+}
 
 /**
  * The canonical server toolkit. Instantiated once at module scope so any MCP

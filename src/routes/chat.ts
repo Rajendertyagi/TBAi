@@ -8,7 +8,8 @@ import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../lib/ai-diagnostics
 import { prepareModelMessages } from "../lib/model-messages";
 import { streamText, convertToModelMessages, stepCountIs, type UIMessage, UI_MESSAGE_STREAM_HEADERS, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream } from "ai";
 import { mcpManager } from "../services/mcp/manager";
-import { aiToolkit } from "../tools";
+import { aiToolkit, withThreadContext } from "../tools";
+import { createTerminalBatcher } from "../lib/terminal-stream";
 import { resumableContext } from "../lib/resumable";
 import { createProgressTracker } from "../lib/progress-tracker";
 import type { ProgressData } from "../lib/progress-stages";
@@ -100,10 +101,19 @@ app.post("/api/chat", async (c) => {
   // render-only entries. Dangerous tools pause at the server-side toolApproval
   // gate (below) that the toolkit UI answers via respondToApproval(). MCP tools
   // are merged in from the manager (they are not part of the static toolkit).
-  const tools = {
-    ...(await aiToolkit.tools()),
-    ...mcpManager.getAiTools(c.req.raw.signal),
-  };
+  const tools = withThreadContext(
+    {
+      ...(await aiToolkit.tools()),
+      ...mcpManager.getAiTools(c.req.raw.signal),
+    },
+    threadId,
+    // Live terminal output: `runBash` stream reads fan out here and are
+    // re-emitted as throttled `data-tbai-terminal` parts (same mechanism as
+    // `data-tbai-progress`). The writer attaches below in execute(); events
+    // arriving first are buffered by the batcher. Final results stay the
+    // durable history source — these parts are presentation-only.
+    (toolCallId, event) => terminalBatcher.push(toolCallId, event),
+  );
   // Single production history path: lifecycle-aware pruning (approval
   // decisions preserved until the conversation moves past them; duplicates,
   // stale calls, and empty turns repaired) → convertToModelMessages. The
@@ -144,9 +154,14 @@ app.post("/api/chat", async (c) => {
   // (double cost, double tool execution) with its output discarded.
   const streamId = crypto.randomUUID();
   const progress = createProgressTracker();
+  // Writer attaches when execute() starts; the batcher buffers anything
+  // earlier (defensive — execution only begins post-approval, inside execute).
+  let streamWriter: { write: (part: any) => void } | null = null;
+  const terminalBatcher = createTerminalBatcher((part) => streamWriter?.write(part));
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
+      streamWriter = writer;
       // Emit initial empty progress snapshot so the UI has something to render.
       writer.write({
         type: "data-tbai-progress",
@@ -165,6 +180,7 @@ app.post("/api/chat", async (c) => {
           delete_file: "user-approval",
           run_command: "user-approval",
           process_kill: "user-approval",
+          browser_action: "user-approval",
         },
         abortSignal: c.req.raw.signal,
         onToolExecutionStart: ({ toolCall }) => {
@@ -182,6 +198,21 @@ app.post("/api/chat", async (c) => {
             id: "progress",
             data: progress.onFinish() as unknown as ProgressData,
           });
+          // Close any live terminal stream for this call. Only run_command
+          // emits parts (batcher ignores unknown ids), so this is a no-op
+          // for every other tool. Exit metadata rides along; the final tool
+          // result remains the durable record.
+          const id = (toolCall as { toolCallId?: string } | undefined)?.toolCallId;
+          const out = toolOutput as
+            | { exitCode?: number; timedOut?: boolean }
+            | undefined;
+          if (id) {
+            terminalBatcher.complete(
+              id,
+              typeof out?.exitCode === "number" ? out.exitCode : undefined,
+              out?.timedOut === true ? true : undefined,
+            );
+          }
         },
         onFinish: ({ finishReason, usage }) => {
           chatLog.info("chat", "stream_finished", {

@@ -981,3 +981,46 @@ future agents don't re-litigate:
   (untouched block).
 - **Note:** initial load served stale CSS (browser cache) — `reload` before
   measuring; build output verified to contain the new values first.
+
+## Terminal Block migration (official assistant-ui element, live output)
+
+- **Element (vendored, not forked):** `terminal-block.tsx` + `surfaces.tsx` +
+  `utils/range.ts` copied verbatim from assistant-ui registry
+  (packages/ui/.../elements/). Registry CLI cannot resolve in this repo
+  (`terminal-block` 404s under every flavor path; `npx` absent, bunx path
+  tried). The ONLY adaptation: `CheckIcon`/`Loader2Icon` aliased to
+  `Check`/`Loader` (installed lucide-react lacks the Icon-suffixed names).
+  No styling/behavior/API changes; file header documents this. `ink`
+  variant chosen for the dark UI (verified live).
+- **runBash stays UI-independent:** optional `onOutput({stream, chunk})`
+  only; without it the return shape is byte-identical. Pump uses one
+  TextDecoder per stream (no cross-stream split corruption), listener
+  errors swallowed, timeout/kill/workspace/limits untouched.
+- **Live streaming (existing transport only):** `withThreadContext` wires
+  `run_command.execute(args, opts)` — `toolCallId` comes from the standard
+  AI SDK `ToolExecutionOptions` (verified in provider-utils typings:
+  "use it e.g. when sending tool-call related information with stream
+  data"). `src/lib/terminal-stream.ts` batches into `data-tbai-terminal`
+  parts (150ms/4KB flush, 400-part cap, done part always lands, per-call
+  isolation). `chat.ts` emits via the existing writer + closes on
+  `onToolExecutionEnd` with exit metadata. No smoothing (`useSmooth` /
+  `smoothStream` explicitly out — terminal shows real timing).
+- **Read path (fallback-first):** `terminal-ui.tsx` renders the official
+  block from the final tool result always (complete on reload/history).
+  Live lines merge from message-scope `data-tbai-terminal` parts matched by
+  `toolCallId`. Critical fix found in verification: the assistant-ui
+  converter normalizes wire `{type:"data-tbai-terminal"}` to
+  `{type:"data", name:"tbai-terminal"}` (verified in
+  @assistant-ui/ai-sdk convertMessage.js) — the initial check missed this
+  and live lines silently returned []. Unregistered data parts render
+  nothing (no stray UI; progress parts use the same path).
+- **Exits:** official header hardcodes `exit 0` (no failure prop — do not
+  fork). TBAi chrome below the block shows red `exit N` / `timed out —
+  process killed`. Non-zero is never presented as success.
+- **Verification:** backend tsc 0, `bun test` 271 pass / 0 fail (incl. 16
+  terminal-lines + 7 batcher + 5 runBash tests), web build green. Live E2E
+  in real chat: multiline output, mid-run spinner+cursor, completion
+  checkmark, failing command red exit footer, approval?execute?result,
+  denial?zero execution. Live stderr/timeout-kill covered at unit level
+  only (same code paths). Transient provider "network error" seen twice
+  (also on tool-free sends) — external endpoint flake, unrelated.

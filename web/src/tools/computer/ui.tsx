@@ -9,9 +9,12 @@ type AnyResult = unknown;
 type AnyProps = ToolCallMessagePartProps<AnyArgs, AnyResult>;
 
 /**
- * Computer-tool renderers (processes / kill / sysinfo / shell).
- * UI-only, like the filesystem renderers: the server executes, privileged
- * actions pause at the approval gate answered via `respondToApproval()`.
+ * Computer-tool renderers (processes / kill / sysinfo).
+ *
+ * `run_command` moved to the official assistant-ui Terminal Block
+ * (`./terminal-ui.tsx`). UI-only, like the filesystem renderers: the server
+ * executes, privileged actions pause at the approval gate answered via
+ * `respondToApproval()`.
  */
 
 function processSummary(result: AnyResult) {
@@ -69,40 +72,5 @@ export const SystemInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     respondToApproval={p.respondToApproval}
     runningLabel="Reading system info…"
     summarize={(r) => <Json value={r} />}
-  />
-);
-
-function bashSummary(command: string) {
-  return (r: AnyResult) => {
-    const v = r as any;
-    return (
-      <div>
-        <div className="mb-1 truncate text-muted-foreground">$ {command}</div>
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
-          {v?.stdout ? String(v.stdout).slice(-4000) : ""}
-          {v?.stderr ? `\n--- stderr ---\n${String(v.stderr).slice(-2000)}` : ""}
-          {v?.exitCode != null && v.exitCode !== 0 ? `\n(exit ${v.exitCode})` : ""}
-        </pre>
-      </div>
-    );
-  };
-}
-
-export const BashToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
-  <BackendToolView
-    title="run_command"
-    args={p.args}
-    argPreview={
-      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-        {String(p.args.command ?? "")}
-        {p.args.cwd ? `\n\n(cwd: ${String(p.args.cwd)})` : ""}
-      </pre>
-    }
-    result={p.result}
-    status={p.status}
-    approval={p.approval}
-    respondToApproval={p.respondToApproval}
-    runningLabel="Running…"
-    summarize={bashSummary(String(p.args.command ?? ""))}
   />
 );

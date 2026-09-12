@@ -57,8 +57,11 @@ type ApprovalOption = {
  * If a future server ever attaches decision `options` or a `prompt`, they
  * render via the documented `optionId`/freeform response shapes (today's
  * server only emits plain boolean gates).
+ *
+ * Exported for the terminal adapter (run_command reuses the gate chrome
+ * around the official Terminal Block instead of duplicating it).
  */
-function ApprovalGate({
+export function ApprovalGate({
   title,
   details,
   approval,
@@ -172,7 +175,8 @@ function isDenied(result: AnyResult): string | null {
   return null;
 }
 
-function ClosedGateMessage({ resolution }: { resolution: string }) {
+/** Closed-gate notice (exported for the terminal adapter). */
+export function ClosedGateMessage({ resolution }: { resolution: string }) {
   return (
     <span className="text-muted-foreground">
       Approval {resolution} before a decision — run the request again if still needed.
