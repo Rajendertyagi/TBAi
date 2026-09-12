@@ -114,7 +114,7 @@ export function TabStrip() {
   };
 
   return (
-    <div className="flex h-8 shrink-0 items-stretch border-b border-border bg-muted/40">
+    <div className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={tabs.map((t) => t.key)} strategy={horizontalListSortingStrategy}>
           {tabs.map((tab) => (
@@ -139,6 +139,7 @@ export function TabStrip() {
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
+      <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
     </div>
   );
 }

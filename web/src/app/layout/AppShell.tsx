@@ -33,19 +33,23 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      {tauri && (
-        <Suspense fallback={null}>
-          <DesktopChrome />
-        </Suspense>
-      )}
       <div
         key={pathname}
         className="flex min-w-0 flex-1 animate-in fade-in-0 flex-row overflow-hidden duration-150"
       >
         {tauri && <ActivityBar />}
-        {showSidebar && <Sidebar />}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <Outlet />
+          {tauri && (
+            <Suspense fallback={null}>
+              <DesktopChrome />
+            </Suspense>
+          )}
+          <div className="flex min-w-0 flex-1 flex-row overflow-hidden">
+            {showSidebar && <Sidebar />}
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <Outlet />
+            </div>
+          </div>
         </div>
       </div>
       {tauri && statusBarVisible && <StatusBar />}
