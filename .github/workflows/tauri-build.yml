@@ -42,12 +42,13 @@ jobs:
       - name: Cache Bun dependencies
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          # Cache ONLY bun's global package cache, never node_modules — caching
+          # node_modules (which contains bun's .bun linker dir) restores with
+          # broken permissions on Windows and breaks `bun build` (EPERM).
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
-            bun-${{ runner.os }}-
+            bun-v2-${{ runner.os }}-
 
       - name: Install frontend + workspace dependencies
         run: bun install --frozen-lockfile
