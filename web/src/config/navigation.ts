@@ -1,4 +1,4 @@
-import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, Palette, FolderCog, Server, Monitor, type LucideIcon } from "lucide-react";
+import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, Palette, FolderCog, Server, Monitor, Settings, type LucideIcon } from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -38,6 +38,12 @@ export interface NavItem {
   description?: string;
   /** Whether the item is rendered. Gated by a feature flag where appropriate. */
   visible: boolean;
+  /**
+   * Whether the item renders on the icon rail. Settings areas live in the
+   * dedicated settings surface (single rail gear) — never as rail icons.
+   * Defaults to true; set false for settings-area items.
+   */
+  railVisible?: boolean;
   /** Sort order (ascending) within the navigation group. */
   order: number;
   /** Optional nested navigation items. */
@@ -67,12 +73,15 @@ const features = {
   search: false,
 };
 
+/** Fallback settings route (no settings-index page exists). */
+const SETTINGS_INDEX_ROUTE = "/providers";
+
 export const appConfig: AppConfig = {
   branding: {
     appName: "TBAi",
     logoText: "T",
   },
-  settingsIndexRoute: "/providers",
+  settingsIndexRoute: SETTINGS_INDEX_ROUTE,
   features,
   nav: [
     {
@@ -93,6 +102,7 @@ export const appConfig: AppConfig = {
       route: "/providers",
       description: "Models, endpoints, API keys",
       visible: true,
+      railVisible: false,
       order: 2,
     },
     {
@@ -103,6 +113,7 @@ export const appConfig: AppConfig = {
       route: "/appearance",
       description: "Theme and display",
       visible: true,
+      railVisible: false,
       order: 3,
     },
     {
@@ -113,6 +124,7 @@ export const appConfig: AppConfig = {
       route: "/workspace",
       description: "Working folder and tools",
       visible: true,
+      railVisible: false,
       order: 4,
     },
     {
@@ -123,6 +135,7 @@ export const appConfig: AppConfig = {
       route: "/desktop",
       description: "Window layout and desktop options",
       visible: true,
+      railVisible: false,
       order: 5,
     },
     {
@@ -133,6 +146,7 @@ export const appConfig: AppConfig = {
       route: "/memory",
       description: "Long-term memories",
       visible: true,
+      railVisible: false,
       order: 6,
     },
     {
@@ -152,6 +166,7 @@ export const appConfig: AppConfig = {
       route: "/mcp",
       description: "External model tools",
       visible: true,
+      railVisible: false,
       order: 8,
     },
     {
@@ -172,7 +187,18 @@ export const appConfig: AppConfig = {
       route: "/logs",
       description: "Application logs",
       visible: true,
+      railVisible: false,
       order: 10,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      icon: Settings,
+      view: "settings",
+      route: SETTINGS_INDEX_ROUTE,
+      description: "All settings in one place",
+      visible: true,
+      order: 11,
     },
   ],
 };
@@ -184,6 +210,11 @@ export function getVisibleNav(): NavItem[] {
     .sort((a, b) => a.order - b.order);
 }
 
+/** Rail icons: visible items not opted out (settings areas live behind the single gear). */
+export function getRailNav(): NavItem[] {
+  return getVisibleNav().filter((item) => item.railVisible !== false);
+}
+
 /** Views that belong to the settings area (sub-sidebar source of truth). */
 const SETTINGS_VIEWS: ViewId[] = [
   "providers",
@@ -191,7 +222,6 @@ const SETTINGS_VIEWS: ViewId[] = [
   "workspace",
   "desktop",
   "mcp",
-  "scheduler",
   "memories",
   "logs",
 ];
@@ -201,4 +231,9 @@ export function getSettingsNav(): NavItem[] {
   return appConfig.nav
     .filter((item) => item.visible && SETTINGS_VIEWS.includes(item.view))
     .sort((a, b) => a.order - b.order);
+}
+
+/** Nav item by id (labels/routes for strips and titles — never literals). */
+export function getNavItem(id: string): NavItem | undefined {
+  return appConfig.nav.find((item) => item.id === id);
 }

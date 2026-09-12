@@ -16,7 +16,7 @@ import {
   useChatTabsStore,
   type Tab,
 } from "../../web/src/features/chat/state/chatTabs";
-import { getSettingsNav } from "../../web/src/config/navigation";
+import { getRailNav, getSettingsNav } from "../../web/src/config/navigation";
 
 function resetStore(): void {
   useChatTabsStore.setState({ tabs: [], activeKey: undefined });
@@ -128,7 +128,8 @@ describe("settings nav source of truth", () => {
   it("lists every settings section exactly once, in order", () => {
     const routes = getSettingsNav().map((item) => item.route);
     // Order follows navigation.ts (the single source of truth); this test
-    // guards the membership (no missing/duplicate sections).
+    // guards the membership (no missing/duplicate sections). Scheduler is a
+    // top-level workbench route, not a settings section.
     expect(routes).toEqual([
       "/providers",
       "/appearance",
@@ -136,8 +137,14 @@ describe("settings nav source of truth", () => {
       "/desktop",
       "/memory",
       "/mcp",
-      "/scheduler",
       "/logs",
     ]);
+  });
+});
+
+describe("rail nav (single-gear rule)", () => {
+  it("shows chat, scheduler, and one settings gear — never area icons", () => {
+    const ids = getRailNav().map((item) => item.id);
+    expect(ids).toEqual(["chat", "scheduler", "settings"]);
   });
 });

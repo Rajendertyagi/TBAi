@@ -29,8 +29,8 @@ export const WINDOW_CAPTION_WIDTH = 138;
 /** Left cluster: sidebar toggle + search (two icon buttons + padding). */
 export const LEFT_CHROME_CLUSTER = 80;
 
-/** Right cluster: status + settings (two icon buttons + padding). */
-export const RIGHT_CHROME_CLUSTER = 80;
+/** Right cluster: status-bar toggle + padding (single button). */
+export const RIGHT_CHROME_CLUSTER = 48;
 
 /** Default / bounds for the conversation sidebar width (px). */
 export const SIDEBAR_DEFAULT_WIDTH = 224;

@@ -776,3 +776,25 @@ future agents don't re-litigate:
 - **Verification:** typecheck 0, build green, route + tab name present in the
   bundle, 22 unit tests pass, fresh-server smoke 200. Click-level proof needs
   a real browser (automation host has no localhost).
+
+## Scheduler promotion + single rail gear (codeg automations parity)
+
+- **Scheduler is a top-level page now:** removed from `SETTINGS_VIEWS`
+  (settings sub-sidebar, settings window, and quick-actions lose it by
+  derivation), routed as a direct `AppShell` child rendering new
+  `SchedulerPage` (breadcrumb strip + existing panel). New
+  `SchedulerTitleStrip` mirrors codeg `WorkbenchPageTitle` (back-to-chats ›
+  title, `h-10` transparent bar, label from `navigation.ts` via new
+  `getNavItem()`); panel drops its duplicate `h1`. Rail icon + failure
+  badge + `/scheduler` route unchanged.
+- **Single-gear rule:** rail renders new `getRailNav()` — chat, scheduler,
+  and ONE Settings gear (areas get `railVisible: false`; gear opens the
+  dedicated surface). Top-bar and status-bar gears deleted; right cluster
+  token shrinks 80 ? 48. Status-bar provider/model buttons join the surface
+  flow (hardcoded `/providers` ×3 + `/desktop` gone). Page-menu entry and
+  quick-actions already used the flow — all three now share one
+  `openSettingsSurface(navigate, section?)` helper (triplication removed).
+- **Tests:** settings-nav membership updated (scheduler out); new rail test
+  locks `["chat", "scheduler", "settings"]`.
+- **Verification:** typecheck 0, build green, 29 unit tests pass, fresh-server
+  smoke 200. Desktop visuals via CI.

@@ -13,6 +13,5 @@ export const statusBarConfig = {
     connectionTitle: "Local connection",
     noProvider: "No provider configured",
     openProviders: "Open provider settings",
-    desktopSettings: "Desktop settings",
   },
 };

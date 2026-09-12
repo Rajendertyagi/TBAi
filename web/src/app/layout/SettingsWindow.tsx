@@ -8,12 +8,10 @@ import { WorkspacePage } from "../../features/workspace/WorkspacePage";
 import { MemoryPanel } from "../../components/MemoryPanel";
 import { McpPanel } from "../../components/McpPanel";
 import { LogsPanel } from "../../components/LogsPanel";
-import { SchedulerPanel } from "../../components/SchedulerPanel";
 import { DesktopSettings } from "../../features/desktop/DesktopSettings";
 
-/** Section id (route segment) → page component. Same 8 as the in-app area. */
+/** Section id (route segment) → page component. Same 7 as the in-app area. */
 const SECTION_COMPONENTS: Record<string, ComponentType> = {
-  scheduler: SchedulerPanel,
   memory: MemoryPanel,
   mcp: McpPanel,
   logs: LogsPanel,

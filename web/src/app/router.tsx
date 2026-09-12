@@ -10,7 +10,7 @@ import { WorkspacePage } from "../features/workspace/WorkspacePage";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { McpPanel } from "../components/McpPanel";
 import { LogsPanel } from "../components/LogsPanel";
-import { SchedulerPanel } from "../components/SchedulerPanel";
+import { SchedulerPage } from "../features/scheduler/SchedulerPage";
 import { DesktopSettings } from "../features/desktop/DesktopSettings";
 
 /**
@@ -26,10 +26,12 @@ export const router = createHashRouter([
     children: [
       { index: true, Component: IndexRedirect },
       { path: "chat/:threadId?", Component: ChatView },
+      // Dedicated Scheduler page (top-level workbench route, never inside
+      // the settings sub-sidebar).
+      { path: "scheduler", Component: SchedulerPage },
       {
         Component: SettingsLayout,
         children: [
-          { path: "scheduler", Component: SchedulerPanel },
           { path: "memory", Component: MemoryPanel },
           { path: "mcp", Component: McpPanel },
           { path: "logs", Component: LogsPanel },

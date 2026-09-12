@@ -1,14 +1,16 @@
-import { Circle, Settings } from "lucide-react";
+import { Circle } from "lucide-react";
 import { useNavigate } from "react-router";
 import { statusBarConfig } from "../config/statusBar";
+import { openSettingsSurface } from "../lib/settings-window";
 import { useSettingsStore } from "../stores/index";
 import { StatusBarQuickActions } from "./StatusBarQuickActions";
 
 /**
  * Bottom status bar (codeg geometry): `h-8` muted band, quick-actions
- * launcher + connection on the left, provider/model + desktop settings on
- * the right. Visibility is gated once, by `AppShell` (`statusBarVisible`);
- * this component never self-nulls.
+ * launcher + connection on the left, provider/model on the right. Provider
+ * and model open the dedicated settings surface (single-gear rule — no
+ * settings buttons live here). Visibility is gated once, by `AppShell`
+ * (`statusBarVisible`); this component never self-nulls.
  */
 export function StatusBar() {
   const copy = statusBarConfig.copy;
@@ -29,13 +31,15 @@ export function StatusBar() {
     ? `${provider.name}${modelLabel ? ` · ${modelLabel}` : ""}`
     : copy.noProvider;
 
+  const openProviders = () => openSettingsSurface(navigate, "providers");
+
   return (
     <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-muted/40 pl-2 pr-4 text-xs text-muted-foreground">
       <div className="flex min-w-0 items-center gap-3">
         <StatusBarQuickActions />
         <button
           type="button"
-          onClick={() => navigate("/providers")}
+          onClick={openProviders}
           title={copy.connectionTitle}
           className="flex items-center gap-1.5 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
@@ -44,7 +48,7 @@ export function StatusBar() {
         </button>
         <button
           type="button"
-          onClick={() => navigate("/providers")}
+          onClick={openProviders}
           title={statusLabel}
           className="hidden min-w-0 truncate rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring sm:block"
         >
@@ -54,20 +58,11 @@ export function StatusBar() {
       <div className="flex min-w-0 items-center gap-3">
         <button
           type="button"
-          onClick={() => navigate("/providers")}
+          onClick={openProviders}
           title={copy.openProviders}
           className="hidden min-w-0 max-w-55 truncate rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring md:block"
         >
           {modelLabel ?? statusLabel}
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate("/desktop")}
-          title={copy.desktopSettings}
-          aria-label={copy.desktopSettings}
-          className="rounded p-0.5 outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <Settings aria-hidden="true" className="size-3.5" />
         </button>
       </div>
     </footer>

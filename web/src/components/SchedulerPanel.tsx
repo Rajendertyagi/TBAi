@@ -791,10 +791,9 @@ export function SchedulerPanel() {
 
   return (
     <div className="h-full space-y-4 overflow-y-auto p-4">
+      {/* Title lives in the breadcrumb strip above; this lead explains the
+          page. Keep it so the content still introduces itself. */}
       <div className="space-y-1">
-        <h1 className="flex items-center gap-2 text-base font-semibold">
-          <Clock className="h-5 w-5" /> Scheduler
-        </h1>
         <p className="text-xs leading-5 text-muted-foreground">
           One-time and recurring automated runs. Timers rebuild from the
           database on restart; destructive tools always require approval.

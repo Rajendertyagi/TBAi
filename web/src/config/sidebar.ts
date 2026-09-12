@@ -75,6 +75,7 @@ export interface SidebarConfig {
     clearSearch: string;
     showMore: (remaining: number) => string;
     loadMore: string;
+    backToChats: string;
     rename: string;
     archive: string;
     unarchive: string;
@@ -125,6 +126,7 @@ export const sidebarConfig: SidebarConfig = {
     clearSearch: "Clear search",
     showMore: (remaining: number) => `Show more (${remaining} more)`,
     loadMore: "Load more",
+    backToChats: "Back to conversations",
     rename: "Rename",
     archive: "Archive",
     unarchive: "Unarchive",

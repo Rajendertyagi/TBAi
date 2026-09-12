@@ -2,8 +2,7 @@ import { useNavigate } from "react-router";
 import { LayoutGrid, MessageSquare } from "lucide-react";
 import { getSettingsNav } from "@/config/navigation";
 import { statusBarConfig } from "@/config/statusBar";
-import { openSettingsTab } from "@/lib/settings-window";
-import { isTauri, openSettingsWindow } from "@/lib/platform";
+import { openSettingsSurface } from "@/lib/settings-window";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import {
@@ -37,16 +36,7 @@ export function StatusBarQuickActions() {
   };
 
   const handleOpenArea = (route: string) => {
-    // Dedicated surface, deep-linked: native window on desktop, named
-    // second tab on web (in-app route only when the popup is blocked).
-    const section = route.replace(/^\//, "");
-    if (isTauri()) {
-      openSettingsWindow(section).catch(() => {
-        navigate(route);
-      });
-    } else if (!openSettingsTab(section)) {
-      navigate(route);
-    }
+    openSettingsSurface(navigate, route.replace(/^\//, ""));
   };
 
   return (

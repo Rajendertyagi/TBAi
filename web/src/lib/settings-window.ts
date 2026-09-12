@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import { appConfig } from "../config/navigation";
 import { chromeConfig } from "../config/chrome";
+import { isTauri, openSettingsWindow } from "./platform";
 
 /**
  * Web fallback for the dedicated settings surface (codeg `openAppWindow`
@@ -30,4 +31,25 @@ export function openSettingsTab(section?: string): boolean {
   }
   win.focus();
   return true;
+}
+
+/**
+ * The ONE settings open-flow (single-gear rule): native settings window on
+ * desktop (deep-linked to `section`, a route without leading slash —
+ * omitted = default), named second tab on web, in-app route when the popup
+ * is blocked, toast + in-app fallback when the invoke fails. Every settings
+ * entry point funnels through here; `navigate` is react-router's.
+ */
+export function openSettingsSurface(
+  navigate: (route: string) => void,
+  section?: string,
+): void {
+  if (isTauri()) {
+    openSettingsWindow(section).catch(() => {
+      toast.error(chromeConfig.copy.settingsOpenFailed);
+      navigate(appConfig.settingsIndexRoute);
+    });
+  } else if (!openSettingsTab(section)) {
+    navigate(appConfig.settingsIndexRoute);
+  }
 }

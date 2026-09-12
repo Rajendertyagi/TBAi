@@ -1,21 +1,22 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { appConfig, getVisibleNav } from "../config/navigation";
+import { appConfig, getRailNav } from "../config/navigation";
+import { openSettingsSurface } from "../lib/settings-window";
 import { cn } from "../lib/utils";
 
 /**
- * VS Code–style activity bar: a narrow icon rail on the far left that mirrors
- * the application navigation (single source of truth = navigation.ts). Clicking
- * an icon switches the editor view; the active item gets a left accent bar.
- * The scheduler item shows the unseen-failure badge (codeg parity). Rendered in
- * BOTH the browser and the Tauri desktop (single unified shell); it is the far-
- * left icon rail in both surfaces.
+ * VS Code–style activity bar: a narrow icon rail on the far left. Chat,
+ * Scheduler, and the single Settings gear live here (settings areas are
+ * behind the gear, never rail icons). Clicking the gear opens the dedicated
+ * settings surface; the scheduler item shows the unseen-failure badge
+ * (codeg parity). Rendered in BOTH the browser and the Tauri desktop
+ * (single unified shell); it is the far-left icon rail in both surfaces.
  */
 export function ActivityBar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  const items = getVisibleNav();
+  const items = getRailNav();
   const [schedUnseen, setSchedUnseen] = useState(0);
 
   useEffect(() => {
@@ -42,6 +43,16 @@ export function ActivityBar() {
   const isActive = (route: string) =>
     pathname === route || pathname.startsWith(`${route}/`);
 
+  const handleClick = (id: string, route: string) => {
+    // The single gear opens the dedicated settings surface (native window
+    // on desktop, named second tab on web) — never in-app navigation.
+    if (id === "settings") {
+      openSettingsSurface(navigate);
+    } else {
+      navigate(route);
+    }
+  };
+
   return (
     <nav
       aria-label="Primary"
@@ -62,7 +73,7 @@ export function ActivityBar() {
           <button
             key={item.id}
             type="button"
-            onClick={() => navigate(item.route)}
+            onClick={() => handleClick(item.id, item.route)}
             title={item.label}
             aria-current={active ? "page" : undefined}
             className={cn(
