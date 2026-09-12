@@ -658,3 +658,22 @@ future agents don't re-litigate:
   (backend+web), new unit tests (12 pass), existing suites pass, backend smoke
   (`/api/conversations?order=created|updated` 200, SPA + scheduler summary 200).
   Desktop bundle verified only via the GitHub Tauri workflow (no local toolchain).
+
+## Batch 1 — Windows-x64-only application shell
+
+- **Platform lockdown:** `platform.ts` stripped to `isTauri` + window ops
+  (`minimize`/`toggleMaximize`/`isMaximized`/`onResized`/`close`); the UA-based
+  `Platform`/`getPlatform`/`isMac`/`isWindows`/`isLinux` fork, `ResizeDir`, and
+  `windowStartResizeDragging` are gone. `window-chrome.ts` drops the macOS
+  traffic-light inset, zoom params (no zoom UI exists), Linux grip tokens, and
+  dead exports; `winLinuxCaption` is renamed to `captionStrip` (`isTauri()`).
+- **Linux grips deleted:** `WindowResizeHandles.tsx` removed (Windows resizes via
+  Tauri`s WndProc hook; the component could never activate on this target).
+- **Caption buttons (frameless-correct):** `WindowControls` tracks maximized state
+  via `onResized` and swaps Maximize ? Restore glyph/labels (codeg pattern);
+  labels in new `config/chrome.ts`; button width from `--caption-button-width`.
+- **Tokenized bands:** `--title-bar-height` / `--activity-bar-width` published by
+  `chrome-vars.ts`; the `h-10`, `w-12`, `left-12`, `w-[46px]` literals in
+  `AppShell`/`ActivityBar`/`SidebarHeader`/`WindowControls` are gone.
+- **Verification:** typecheck 0, full build green, unit suites pass, backend smoke
+  (health/SPA/conversations+order 200). Desktop geometry via CI artifact only.

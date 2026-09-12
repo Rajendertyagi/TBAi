@@ -27,7 +27,7 @@ export function SidebarHeader({
   };
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-sidebar-border py-0 pl-[var(--left-chrome-width)] pr-2">
+    <div className="flex h-[var(--title-bar-height)] shrink-0 items-center gap-0.5 border-b border-sidebar-border py-0 pl-[var(--left-chrome-width)] pr-2">
       {/* Draggable filler — the header is the window's top edge here. */}
       <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
       <button

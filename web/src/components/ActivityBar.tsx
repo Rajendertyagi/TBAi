@@ -45,7 +45,7 @@ export function ActivityBar() {
   return (
     <nav
       aria-label="Primary"
-      className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-muted/40 py-2"
+      className="flex w-[var(--activity-bar-width)] shrink-0 flex-col items-center gap-1 border-r border-border bg-muted/40 py-2"
     >
       <button
         type="button"
