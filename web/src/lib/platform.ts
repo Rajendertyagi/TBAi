@@ -36,13 +36,3 @@ export async function windowClose(): Promise<void> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().close();
 }
-
-/**
- * Open (or focus) the dedicated Settings window, optionally at a section
- * (route path without the leading slash, e.g. `"providers"`). Tauri-only;
- * callers fall back to in-app navigation on the web.
- */
-export async function openSettingsWindow(section?: string): Promise<void> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("open_settings_window", { section: section ?? null });
-}

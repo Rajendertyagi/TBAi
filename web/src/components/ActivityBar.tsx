@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { appConfig, getRailNav } from "../config/navigation";
-import { openSettingsSurface } from "../lib/settings-window";
+import { appConfig, getRailNav, lastSettingsRoute } from "../config/navigation";
 import { cn } from "../lib/utils";
 
 /**
@@ -44,10 +43,10 @@ export function ActivityBar() {
     pathname === route || pathname.startsWith(`${route}/`);
 
   const handleClick = (id: string, route: string) => {
-    // The single gear opens the dedicated settings surface (native window
-    // on desktop, named second tab on web) — never in-app navigation.
+    // The single gear opens settings in the main window (same as Scheduler)
+    // — returning to the last-visited section.
     if (id === "settings") {
-      openSettingsSurface(navigate);
+      navigate(lastSettingsRoute());
     } else {
       navigate(route);
     }

@@ -8,7 +8,7 @@ import {
   ContextMenuSeparator,
 } from "./ui/context-menu";
 import { sidebarConfig } from "../config/sidebar";
-import { openSettingsSurface } from "../lib/settings-window";
+import { lastSettingsRoute } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useChatTabsStore } from "../features/chat/state/chatTabs";
 
@@ -35,7 +35,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   };
 
   const handleOpenSettings = () => {
-    openSettingsSurface(navigate);
+    navigate(lastSettingsRoute());
   };
 
   return (

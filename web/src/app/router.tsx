@@ -1,7 +1,6 @@
 import { createHashRouter, Navigate } from "react-router";
 import { AppShell } from "./layout/AppShell";
 import { SettingsLayout } from "./layout/SettingsLayout";
-import { SettingsWindow } from "./layout/SettingsWindow";
 import { IndexRedirect } from "./IndexRedirect";
 import { ChatView } from "../features/chat/components/ChatView";
 import { ProvidersPage } from "../features/providers/ProvidersPage";
@@ -43,12 +42,5 @@ export const router = createHashRouter([
       },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
-  },
-  {
-    // Dedicated settings window (decorated native window on desktop): the
-    // settings nav + section content with no app chrome. Outside AppShell
-    // on purpose — the window brings its own native frame.
-    path: "settings-window/:section?",
-    Component: SettingsWindow,
   },
 ]);

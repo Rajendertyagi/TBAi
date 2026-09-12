@@ -237,3 +237,32 @@ export function getSettingsNav(): NavItem[] {
 export function getNavItem(id: string): NavItem | undefined {
   return appConfig.nav.find((item) => item.id === id);
 }
+
+const LAST_SETTINGS_ROUTE_KEY = "tbai:settingsRoute";
+
+/** Last visited settings route (the rail gear returns here). */
+export function lastSettingsRoute(): string {
+  try {
+    const raw = window.localStorage.getItem(LAST_SETTINGS_ROUTE_KEY);
+    if (typeof raw === "string" && raw.startsWith("/")) return raw;
+  } catch {
+    /* ignore */
+  }
+  return appConfig.settingsIndexRoute;
+}
+
+/** Remember a settings route visit (called by the settings layout). */
+export function rememberSettingsRoute(pathname: string): void {
+  try {
+    window.localStorage.setItem(LAST_SETTINGS_ROUTE_KEY, pathname);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** True when the pathname is a settings-area route (sub-sidebar source). */
+export function isSettingsRoute(pathname: string): boolean {
+  return getSettingsNav().some(
+    (item) => pathname === item.route || pathname.startsWith(`${item.route}/`),
+  );
+}

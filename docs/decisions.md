@@ -798,3 +798,20 @@ future agents don't re-litigate:
   locks `["chat", "scheduler", "settings"]`.
 - **Verification:** typecheck 0, build green, 29 unit tests pass, fresh-server
   smoke 200. Desktop visuals via CI.
+
+## Settings back in the main window (revert of window/tab surface)
+
+- **No separate surface:** the gear opens settings in the main window again
+  (rail gear ? last-visited section; page menu, quick-actions, status bar ?
+  their sections, all in-app navigation). Removed as dead code: the Rust
+  `open_settings_window` command + `invoke_handler`, the `url` dep, the
+  `"settings"` capability entry, `SettingsWindow.tsx`, `lib/settings-window.ts`
+  (incl. the named-tab + toast flows). `SettingsNav` stays as the shared
+  sub-sidebar; `lastSettingsRoute`/`rememberSettingsRoute` moved to
+  `navigation.ts` (proper layering) with new `isSettingsRoute()`.
+- **Cramp fix (the actual complaint):** `AppShell` auto-collapses the
+  conversation sidebar on settings routes (frees ~224px beside the
+  sub-sidebar) and restores it on return — via transient `settingsStash`
+  (never persisted); a manual toggle meanwhile always wins over the restore.
+- **Verification:** typecheck 0, build green, 29 unit tests pass,
+  fresh-server smoke 200.

@@ -1,7 +1,7 @@
 import { Circle } from "lucide-react";
 import { useNavigate } from "react-router";
+import { appConfig, getNavItem } from "../config/navigation";
 import { statusBarConfig } from "../config/statusBar";
-import { openSettingsSurface } from "../lib/settings-window";
 import { useSettingsStore } from "../stores/index";
 import { StatusBarQuickActions } from "./StatusBarQuickActions";
 
@@ -31,7 +31,8 @@ export function StatusBar() {
     ? `${provider.name}${modelLabel ? ` · ${modelLabel}` : ""}`
     : copy.noProvider;
 
-  const openProviders = () => openSettingsSurface(navigate, "providers");
+  const openProviders = () =>
+    navigate(getNavItem("providers")?.route ?? appConfig.settingsIndexRoute);
 
   return (
     <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-muted/40 pl-2 pr-4 text-xs text-muted-foreground">

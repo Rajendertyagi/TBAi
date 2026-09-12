@@ -3,20 +3,8 @@ import { useEffect, useState, type ComponentType } from "react";
 import { Outlet, useLocation } from "react-router";
 import { ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { rememberSettingsRoute } from "../../config/navigation";
 import { SettingsNav } from "./SettingsNav";
-
-const LAST_SETTINGS_ROUTE_KEY = "tbai:settingsRoute";
-
-/** Last visited settings route (sidebar Settings row returns here). */
-export function lastSettingsRoute(): string {
-  try {
-    const raw = window.localStorage.getItem(LAST_SETTINGS_ROUTE_KEY);
-    if (typeof raw === "string" && raw.startsWith("/")) return raw;
-  } catch {
-    /* ignore */
-  }
-  return "/providers";
-}
 
 /**
  * Settings area shell (codeg-style): sub-sidebar with every settings
@@ -28,14 +16,10 @@ export function lastSettingsRoute(): string {
 export function SettingsLayout() {
   const { pathname } = useLocation();
 
-  // Remember where the sidebar Settings row should return to. Settings
+  // Remember where the rail gear should return to. Settings
   // views never open tabs (codeg parity) — navigation only switches views.
   useEffect(() => {
-    try {
-      window.localStorage.setItem(LAST_SETTINGS_ROUTE_KEY, pathname);
-    } catch {
-      /* ignore */
-    }
+    rememberSettingsRoute(pathname);
   }, [pathname]);
 
   return (

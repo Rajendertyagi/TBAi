@@ -2,7 +2,6 @@ import { useNavigate } from "react-router";
 import { LayoutGrid, MessageSquare } from "lucide-react";
 import { getSettingsNav } from "@/config/navigation";
 import { statusBarConfig } from "@/config/statusBar";
-import { openSettingsSurface } from "@/lib/settings-window";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import {
@@ -36,7 +35,7 @@ export function StatusBarQuickActions() {
   };
 
   const handleOpenArea = (route: string) => {
-    openSettingsSurface(navigate, route.replace(/^\//, ""));
+    navigate(route);
   };
 
   return (

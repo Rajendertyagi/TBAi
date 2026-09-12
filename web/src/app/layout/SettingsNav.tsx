@@ -3,15 +3,10 @@ import { cn } from "../../lib/utils";
 import { getSettingsNav } from "../../config/navigation";
 
 /**
- * Shared settings-area navigation (sub-sidebar). Used by both the in-app
- * `SettingsLayout` and the dedicated settings-window shell, so the two
- * surfaces can never drift apart. Entries come from `navigation.ts` —
- * never hardcoded here.
- *
- * `base` prefixes every link: `""` for the flat in-app routes (`/providers`),
- * `"/settings-window"` for the dedicated window (`/settings-window/mcp`).
+ * Shared settings-area navigation (sub-sidebar). Entries come from
+ * `navigation.ts` — never hardcoded here.
  */
-export function SettingsNav({ base = "" }: { base?: string }) {
+export function SettingsNav() {
   const { pathname } = useLocation();
   const items = getSettingsNav();
 
@@ -23,7 +18,7 @@ export function SettingsNav({ base = "" }: { base?: string }) {
       <nav className="space-y-1">
         {items.map((item) => {
           const Icon = item.icon;
-          const route = `${base}${item.route}`;
+          const route = item.route;
           const active =
             pathname === route || pathname.startsWith(`${route}/`);
           return (

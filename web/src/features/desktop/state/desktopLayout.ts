@@ -48,6 +48,12 @@ interface DesktopLayoutState {
   searchOpen: boolean;
   /** Bump to request focus of the chrome search input (transient). */
   searchFocusRequest: number;
+  /**
+   * Sidebar visibility stashed when auto-collapsing on settings routes
+   * (transient, never persisted). `null` = no stash (not on a settings
+   * route, or the user toggled manually since).
+   */
+  settingsStash: boolean | null;
   toggleSidebar: () => void;
   toggleStatusBar: () => void;
   setSidebar: (v: boolean) => void;
@@ -62,6 +68,7 @@ interface DesktopLayoutState {
   setSearchQuery: (q: string) => void;
   setSearchOpen: (open: boolean) => void;
   requestSearchFocus: () => void;
+  setSettingsStash: (v: boolean | null) => void;
 }
 
 /** The durable subset of the store (transient search UI excluded). */
@@ -98,7 +105,7 @@ function isSortMode(value: unknown): value is SidebarSortMode {
 /** Merge an unknown persisted payload over defaults, field by field. */
 function migratePersisted(persisted: unknown): DesktopLayoutState {
   const defaults = defaultPersisted();
-  const transient = { searchQuery: "", searchOpen: false, searchFocusRequest: 0 };
+  const transient = { searchQuery: "", searchOpen: false, searchFocusRequest: 0, settingsStash: null };
   if (typeof persisted !== "object" || persisted === null) {
     return { ...defaults, ...transient } as DesktopLayoutState;
   }
@@ -142,6 +149,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
       searchQuery: "",
       searchOpen: false,
       searchFocusRequest: 0,
+      settingsStash: null,
       toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
       toggleStatusBar: () =>
         set((s) => ({ statusBarVisible: !s.statusBarVisible })),
@@ -177,6 +185,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
       setSearchOpen: (open) => set({ searchOpen: open }),
       requestSearchFocus: () =>
         set((s) => ({ searchFocusRequest: s.searchFocusRequest + 1 })),
+      setSettingsStash: (v) => set({ settingsStash: v }),
     }),
     {
       name: "tbai:desktopLayout",

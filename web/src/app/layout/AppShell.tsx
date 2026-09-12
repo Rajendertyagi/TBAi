@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Outlet } from "react-router";
+import { useEffect, useRef } from "react";
+import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "../../components/Sidebar";
 import { StatusBar } from "../../components/StatusBar";
 import { ActivityBar } from "../../components/ActivityBar";
@@ -12,6 +12,7 @@ import { PageContextMenu } from "../../components/PageContextMenu";
 import { TabUrlSync } from "../TabUrlSync";
 import { isTauri } from "../../lib/platform";
 import { syncChromeVars } from "../../lib/chrome-vars";
+import { isSettingsRoute } from "../../config/navigation";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 
 /**
@@ -39,6 +40,28 @@ export function AppShell() {
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
   const searchOpen = useDesktopLayout((s) => s.searchOpen);
+  const { pathname } = useLocation();
+  const inSettings = isSettingsRoute(pathname);
+  const wasInSettings = useRef(inSettings);
+
+  // De-cramp settings pages: entering a settings route stashes the sidebar
+  // visibility and collapses it (freeing ~224px next to the sub-sidebar);
+  // leaving restores the stash — but only if the user didn't manually
+  // toggle the sidebar meanwhile (manual choice always wins).
+  useEffect(() => {
+    if (inSettings === wasInSettings.current) return;
+    wasInSettings.current = inSettings;
+    const state = useDesktopLayout.getState();
+    if (inSettings) {
+      state.setSettingsStash(state.sidebarVisible);
+      if (state.sidebarVisible) state.setSidebar(false);
+    } else {
+      if (state.settingsStash === true && !state.sidebarVisible) {
+        state.setSidebar(true);
+      }
+      state.setSettingsStash(null);
+    }
+  }, [inSettings]);
 
   // The frameless Windows caption strip exists only in the Tauri desktop;
   // the browser reserves just the button cluster.
