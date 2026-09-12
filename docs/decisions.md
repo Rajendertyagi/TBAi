@@ -887,3 +887,20 @@ future agents don't re-litigate:
 - **Verification:** typecheck 0, build green, 41 unit tests pass (12 new
   lib tests), fresh-server smoke 200. Click-level proof needs a real
   browser; desktop bundle via CI.
+
+## Scheduler border + cron-form alignment (codeg editor grammar)
+
+- **White-border root cause:** `.dark` never defined `--border`, so every
+  `border-border` fell back to the light `#e4e4e7` in dark mode. Added
+  `--border: #27272a` (the only missing dark token — full `:root`/`.dark`
+  diff done).
+- **Divider fix:** list column`s `border-r` deleted — one shell border plus
+  the muted/card tonal step only (codeg`s "no wedged divider" rule).
+- **Toolbar pill:** active filter `bg-foreground` ? `bg-accent` (muted family).
+- **Cron form (codeg trigger grammar):** Once/Repeat as a segmented group in
+  a bordered container (raised active segment); once-datetime and repeat
+  controls each fold into a schedule card; redundant inner Repeat label
+  dropped; advanced cron input is mono. All fields, validation, save, and
+  preview logic untouched.
+- **Verification:** typecheck 0, build green, 35 unit tests pass,
+  fresh-server smoke 200. Visual sign-off needs a real browser.

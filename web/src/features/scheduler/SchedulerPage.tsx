@@ -358,7 +358,7 @@ export function SchedulerPage() {
           />
           <div className="min-h-0 flex-1 px-4 pb-4 pt-2">
             <div className="flex h-full overflow-hidden rounded-2xl border border-border">
-              <div className="h-full w-[32%] min-w-52 shrink-0 border-r border-border bg-muted/50">
+              <div className="h-full w-[32%] min-w-52 shrink-0 bg-muted/50">
                 <div className="h-full overflow-y-auto">
                   {visibleJobs.length === 0 ? (
                     <p className="px-3 py-6 text-center text-xs text-muted-foreground">

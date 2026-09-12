@@ -46,7 +46,7 @@ export function SchedulerToolbar({
               "h-8 rounded-full px-3 text-xs font-medium outline-none transition-colors",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               statusFilter === p.id
-                ? "bg-foreground text-background"
+                ? "bg-accent text-accent-foreground"
                 : "bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >

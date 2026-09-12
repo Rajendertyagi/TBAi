@@ -23,6 +23,8 @@ import {
 
 const labelClass = "text-xs font-medium text-muted-foreground";
 const sectionClass = "text-sm font-semibold";
+const microLabelClass =
+  "text-xs font-medium uppercase tracking-wide text-muted-foreground";
 const selectClass =
   "w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm";
 
@@ -350,27 +352,37 @@ export function JobEditor({
         />
       </div>
 
-      {/* WHEN */}
-      <div className="space-y-2">
-        <div className={sectionClass}>{ec.when}</div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant={draft.scheduleType === "once" ? "default" : "ghost"}
-            onClick={() => setDraft({ ...draft, scheduleType: "once" })}
-          >
-            {ec.once}
-          </Button>
-          <Button
-            size="sm"
-            variant={draft.scheduleType === "cron" ? "default" : "ghost"}
-            onClick={() => setDraft({ ...draft, scheduleType: "cron" })}
-          >
-            {ec.repeat}
-          </Button>
+      {/* WHEN — segmented trigger group + schedule card (codeg trigger grammar) */}
+      <div className="flex flex-col gap-2">
+        <h3 className={microLabelClass}>{ec.when}</h3>
+        <div
+          role="group"
+          aria-label={ec.when}
+          className="inline-flex w-fit rounded-lg border border-border bg-card/40 p-0.5"
+        >
+          {(
+            [
+              { value: "once", label: ec.once },
+              { value: "cron", label: ec.repeat },
+            ] as Array<{ value: "once" | "cron"; label: string }>
+          ).map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              aria-pressed={draft.scheduleType === opt.value}
+              onClick={() => setDraft({ ...draft, scheduleType: opt.value })}
+              className={
+                draft.scheduleType === opt.value
+                  ? "rounded-md bg-background px-3 py-1 text-xs font-medium text-foreground shadow-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  : "rounded-md px-3 py-1 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
         {draft.scheduleType === "once" ? (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3">
             <div className="flex gap-2">
               <div className="flex-1 space-y-1">
                 <div className={labelClass}>{ec.date}</div>
@@ -431,21 +443,18 @@ export function JobEditor({
             </div>
           </div>
         ) : (
-          <div className="space-y-2">
-            <div className="space-y-1">
-              <div className={labelClass}>{ec.repeat}</div>
-              <div className="flex flex-wrap gap-1">
-                {repeatModes.map(([value, label]) => (
-                  <Button
-                    key={value}
-                    size="sm"
-                    variant={preset === value ? "default" : "ghost"}
-                    onClick={() => setPreset(value)}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </div>
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3">
+            <div className="flex flex-wrap gap-1">
+              {repeatModes.map(([value, label]) => (
+                <Button
+                  key={value}
+                  size="sm"
+                  variant={preset === value ? "default" : "ghost"}
+                  onClick={() => setPreset(value)}
+                >
+                  {label}
+                </Button>
+              ))}
             </div>
             {preset === "minutes" && (
               <div className="space-y-1">
@@ -548,6 +557,7 @@ export function JobEditor({
                   onChange={(e) =>
                     setDraft({ ...draft, cronExpression: e.target.value })
                   }
+                  className="font-mono"
                 />
               </div>
             )}
