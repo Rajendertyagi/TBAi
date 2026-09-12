@@ -950,3 +950,15 @@ future agents don't re-litigate:
   no thinking; reset to off on provider switch). Prompt rows 5 ? 3.
 - **Verification:** typecheck 0, build green, 35 unit tests pass,
   fresh-server smoke 200. Visual sign-off needs a real browser.
+
+## Scheduler pane separation (single-color wash fix)
+
+- **Cause:** dark `--muted` and `--card` are both `#171717`, so list
+  (`bg-muted/50`) and detail (`bg-card/50`) rendered identically — verified
+  against codeg, whose dark card (0.205) and muted (0.269) differ. Global
+  retoken was rejected (whole-app blast radius, no visual proof available).
+- **Fix (scoped):** detail + onboarding shells go solid `bg-card`; list stays
+  `bg-muted/50`. Dark: #171717 vs ~#0e0e0e; light: #ffffff vs ~#fafafa — same
+  direction as codeg (detail darker than list). Selected rows (`bg-accent`)
+  keep their contrast on both.
+- **Verification:** typecheck 0, build green. Visual sign-off needs eyeballs.
