@@ -51,6 +51,7 @@ export function SchedulerPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("detail");
   const [editorTarget, setEditorTarget] = useState<EditorTarget | null>(null);
+  const [scheduleStartCollapsed, setScheduleStartCollapsed] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -193,16 +194,19 @@ export function SchedulerPage() {
     setEditorTarget(null);
     setMode("detail");
   };
-  const openEditorSeed = (seed: TemplateSeed) => {
+  const openEditorSeed = (seed: TemplateSeed, collapsed: boolean) => {
     setEditorTarget({ kind: "seed", seed });
+    setScheduleStartCollapsed(collapsed);
     setEditorKey((k) => k + 1);
     setMode("editor");
   };
   const pickTemplate = (tpl: JobTemplate | null) => {
     if (!tpl) {
-      openEditorSeed(blankSeed(defaultProviderId, defaultModelId));
+      openEditorSeed(blankSeed(defaultProviderId, defaultModelId), false);
     } else {
-      openEditorSeed(seedDraftFromTemplate(tpl, defaultProviderId, defaultModelId));
+      // Seeded flows start schedule-collapsed (the template already decided
+      // it); blank starts expanded.
+      openEditorSeed(seedDraftFromTemplate(tpl, defaultProviderId, defaultModelId), true);
     }
   };
   const selectJob = (id: string) => {
@@ -252,6 +256,7 @@ export function SchedulerPage() {
       return;
     }
     setEditorTarget({ kind: "edit", job: res.data });
+    setScheduleStartCollapsed(false);
     setEditorKey((k) => k + 1);
     setMode("editor");
   };
@@ -262,7 +267,7 @@ export function SchedulerPage() {
       setError(res.error ?? "Failed to load job");
       return;
     }
-    openEditorSeed(duplicateSeed(res.data));
+    openEditorSeed(duplicateSeed(res.data), true);
   };
 
   const handleDelete = async (id: string) => {
@@ -322,6 +327,7 @@ export function SchedulerPage() {
         onBackToTemplates={
           editorTarget.kind === "seed" ? openGallery : undefined
         }
+        startScheduleCollapsed={scheduleStartCollapsed}
       />
     ) : null;
 

@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { X } from "lucide-react";
+import { X, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { schedulerViewConfig } from "@/config/scheduler";
 import { schedulerApi } from "@/stores/schedulerStore";
 import type { ProviderConfig } from "@/types";
@@ -15,6 +20,7 @@ import {
   systemTimezone,
   toDateTimeStrings,
 } from "@/features/scheduler/lib/scheduler-draft";
+import { formatTime } from "@/features/scheduler/lib/scheduler-format";
 import {
   presetToCron,
   type RepeatPreset,
@@ -22,7 +28,6 @@ import {
 } from "@/features/scheduler/lib/scheduler-templates";
 
 const labelClass = "text-xs font-medium text-muted-foreground";
-const sectionClass = "text-sm font-semibold";
 const microLabelClass =
   "text-xs font-medium uppercase tracking-wide text-muted-foreground";
 const selectClass =
@@ -33,6 +38,50 @@ function weekdayName(n: number): string {
   return new Date(2024, 0, 7 + n).toLocaleDateString(undefined, {
     weekday: "long",
   });
+}
+
+/** Compact inline HH:MM pair for the sentence-style schedule row. */
+function TimeFields({
+  hour,
+  minute,
+  hourLabel,
+  minuteLabel,
+  onHour,
+  onMinute,
+}: {
+  hour: number;
+  minute: number;
+  hourLabel: string;
+  minuteLabel: string;
+  onHour: (v: number) => void;
+  onMinute: (v: number) => void;
+}) {
+  const fieldClass = "h-8 w-14 px-1 text-center tabular-nums";
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Input
+        type="number"
+        min={0}
+        max={23}
+        className={fieldClass}
+        value={hour}
+        onChange={(e) => onHour(Number(e.target.value) || 0)}
+        aria-label={hourLabel}
+      />
+      <span aria-hidden="true" className="text-muted-foreground">
+        :
+      </span>
+      <Input
+        type="number"
+        min={0}
+        max={59}
+        className={fieldClass}
+        value={minute}
+        onChange={(e) => onMinute(Number(e.target.value) || 0)}
+        aria-label={minuteLabel}
+      />
+    </span>
+  );
 }
 
 interface JobPayload {
@@ -74,6 +123,7 @@ export function JobEditor({
   onError,
   onCancel,
   onBackToTemplates,
+  startScheduleCollapsed,
 }: {
   seed: TemplateSeed | null;
   editingJob: SchedulerJob | null;
@@ -85,6 +135,13 @@ export function JobEditor({
   onError: (message: string) => void;
   onCancel: () => void;
   onBackToTemplates?: () => void;
+  /**
+   * Start with the schedule section collapsed to a summary line (seeded
+   * flows: the template/duplicate already decided the schedule). Blank and
+   * edit flows start expanded. Parent remounts per target, so the initial
+   * value sticks.
+   */
+  startScheduleCollapsed?: boolean;
 }) {
   const ec = schedulerViewConfig.copy.editor;
   const copy = schedulerViewConfig.copy;
@@ -111,6 +168,41 @@ export function JobEditor({
   } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [scheduleCollapsed, setScheduleCollapsed] = useState(
+    !!startScheduleCollapsed,
+  );
+
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+  /** One-line schedule summary for the collapsed seeded state. */
+  const scheduleSummary = (): string => {
+    if (draft.scheduleType === "once") {
+      if (draft.execAtDate && draft.execAtTime) {
+        const ms = new Date(
+          `${draft.execAtDate}T${draft.execAtTime}:00`,
+        ).getTime();
+        if (Number.isFinite(ms)) return formatTime(ms);
+      }
+      return copy.repeatOnce;
+    }
+    const hm = `${pad2(presetHour)}:${pad2(presetMinute)}`;
+    switch (preset) {
+      case "minutes":
+        return `${copy.repeatMinutes} (${presetMinutes} ${ec.minutesUnit})`;
+      case "hourly":
+        return `${copy.repeatHourly} (:${pad2(presetMinute)})`;
+      case "daily":
+        return `${copy.repeatDaily} (${hm})`;
+      case "weekdays":
+        return `${copy.repeatWeekdays} (${hm})`;
+      case "weekly":
+        return `${copy.repeatWeekly} (${weekdayName(presetWeekday)}, ${hm})`;
+      case "monthly":
+        return `${copy.repeatMonthly} (${presetMonthDay}, ${hm})`;
+      case "advanced":
+        return `${copy.repeatAdvanced} (${draft.cronExpression || "—"})`;
+    }
+  };
 
   const providerModels = useMemo(() => {
     const p = providers.find((x) => x.id === draft.providerId);
@@ -120,6 +212,12 @@ export function JobEditor({
     for (const m of p.models ?? []) ids.add(m.id);
     return [...ids];
   }, [providers, draft.providerId]);
+
+  // Thinking is a per-provider capability (registry-driven): only offered
+  // where the provider declares a non-off level.
+  const thinkingOffered =
+    (providers.find((x) => x.id === draft.providerId)?.thinking ?? "off") !==
+    "off";
 
   function buildPayload(): JobPayload | { error: string } {
     if (!draft.name.trim()) return { error: ec.errName };
@@ -312,49 +410,66 @@ export function JobEditor({
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">
-          {editingId ? ec.editJobTitle : ec.newJobTitle}
-        </h2>
         <div className="flex items-center gap-1">
           {onBackToTemplates && (
             <Button size="sm" variant="ghost" onClick={onBackToTemplates}>
               {schedulerViewConfig.copy.backToTemplates}
             </Button>
           )}
+        </div>
+        <div className="flex items-center gap-1">
           <Button
-            size="sm"
+            size="icon-xs"
             variant="ghost"
             onClick={onCancel}
             aria-label={ec.closeForm}
+            title={ec.closeForm}
           >
             <X aria-hidden="true" className="size-4" />
           </Button>
         </div>
       </div>
 
-      {/* GENERAL */}
-      <div className="space-y-2">
-        <div className={sectionClass}>{ec.general}</div>
+      {/* Title + subtitle — one unit, no boxes or section label. */}
+      <div className="space-y-1">
         <Input
-          placeholder={ec.jobNamePlaceholder}
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          placeholder={ec.jobNamePlaceholder}
           aria-label={ec.jobNamePlaceholder}
+          className="h-auto border-0 bg-transparent px-0 text-lg font-semibold tracking-tight shadow-none outline-none placeholder:font-normal placeholder:text-muted-foreground/50 focus-visible:ring-0"
         />
         <Input
-          placeholder={ec.descriptionPlaceholder}
           value={draft.description}
           onChange={(e) =>
             setDraft({ ...draft, description: e.target.value })
           }
+          placeholder={ec.descriptionPlaceholder}
+          aria-label={ec.descriptionPlaceholder}
+          className="h-auto border-0 bg-transparent px-0 text-sm shadow-none outline-none placeholder:text-muted-foreground/50 focus-visible:ring-0"
         />
       </div>
 
-      {/* WHEN — segmented trigger group + schedule card (codeg trigger grammar) */}
+      {/* WHEN — segmented trigger group + schedule card (codeg trigger grammar).
+          Seeded flows start collapsed to a summary line (the template already
+          decided the schedule); expanding reveals the full controls. */}
       <div className="flex flex-col gap-2">
         <h3 className={microLabelClass}>{ec.when}</h3>
+        {scheduleCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setScheduleCollapsed(false)}
+            className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card/40 px-3 py-2 text-left outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          >
+            <span className="min-w-0 truncate text-sm">{scheduleSummary()}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {ec.change}
+            </span>
+          </button>
+        ) : (
+          <>
         <div
           role="group"
           aria-label={ec.when}
@@ -426,8 +541,8 @@ export function JobEditor({
               ).map(([label, make]) => (
                 <Button
                   key={label}
-                  size="sm"
-                  variant="ghost"
+                  size="xs"
+                  variant="outline"
                   onClick={() => {
                     const slot = toDateTimeStrings(make());
                     setDraft({
@@ -448,104 +563,118 @@ export function JobEditor({
               {repeatModes.map(([value, label]) => (
                 <Button
                   key={value}
-                  size="sm"
-                  variant={preset === value ? "default" : "ghost"}
+                  size="xs"
+                  variant={preset === value ? "default" : "outline"}
                   onClick={() => setPreset(value)}
                 >
                   {label}
                 </Button>
               ))}
             </div>
+            {/* Sentence-style schedule row: one dynamic line per mode with
+                only its inputs inline (labels would restate the mode chip). */}
             {preset === "minutes" && (
-              <div className="space-y-1">
-                <div className={labelClass}>{ec.everyNMinutes}</div>
-                <div className="flex flex-wrap items-center gap-1">
-                  {[1, 5, 15, 30].map((n) => (
-                    <Button
-                      key={n}
-                      size="sm"
-                      variant={presetMinutes === n ? "default" : "ghost"}
-                      onClick={() => setPresetMinutes(n)}
-                    >
-                      {n} {ec.minutesUnit}
-                    </Button>
-                  ))}
-                  <Input
-                    type="number"
-                    min={1}
-                    max={59}
-                    className="w-20"
-                    value={presetMinutes}
-                    onChange={(e) =>
-                      setPresetMinutes(Number(e.target.value) || 1)
-                    }
-                    aria-label={ec.everyNMinutes}
-                  />
-                </div>
+              <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">{ec.sentenceEvery}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={59}
+                  className="h-8 w-16"
+                  value={presetMinutes}
+                  onChange={(e) =>
+                    setPresetMinutes(Number(e.target.value) || 1)
+                  }
+                  aria-label={ec.everyNMinutes}
+                />
+                <span className="text-muted-foreground">{ec.minutesUnit}</span>
               </div>
             )}
-            {(preset === "hourly" ||
-              preset === "daily" ||
-              preset === "weekdays" ||
-              preset === "weekly" ||
-              preset === "monthly") && (
-              <div className="flex gap-2">
-                <div className="flex-1 space-y-1">
-                  <div className={labelClass}>{ec.hour}</div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={23}
-                    value={presetHour}
-                    onChange={(e) =>
-                      setPresetHour(Number(e.target.value) || 0)
-                    }
-                  />
-                </div>
-                <div className="flex-1 space-y-1">
-                  <div className={labelClass}>{ec.minute}</div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={59}
-                    value={presetMinute}
-                    onChange={(e) =>
-                      setPresetMinute(Number(e.target.value) || 0)
-                    }
-                  />
-                </div>
-                {preset === "weekly" && (
-                  <div className="flex-1 space-y-1">
-                    <div className={labelClass}>{ec.day}</div>
-                    <select
-                      className={selectClass}
-                      value={presetWeekday}
-                      onChange={(e) =>
-                        setPresetWeekday(Number(e.target.value))
-                      }
-                    >
-                      {[0, 1, 2, 3, 4, 5, 6].map((n) => (
-                        <option key={n} value={n}>
-                          {weekdayName(n)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+            {preset === "hourly" && (
+              <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">{ec.sentenceAt}</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={59}
+                  className="h-8 w-16"
+                  value={presetMinute}
+                  onChange={(e) =>
+                    setPresetMinute(Number(e.target.value) || 0)
+                  }
+                  aria-label={ec.minute}
+                />
+                <span className="text-muted-foreground">{ec.minutePast}</span>
+              </div>
+            )}
+            {(preset === "daily" || preset === "weekdays") && (
+              <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">{ec.sentenceAt}</span>
+                <TimeFields
+                  hour={presetHour}
+                  minute={presetMinute}
+                  hourLabel={ec.hour}
+                  minuteLabel={ec.minute}
+                  onHour={(v) => setPresetHour(v)}
+                  onMinute={(v) => setPresetMinute(v)}
+                />
+                {preset === "weekdays" && (
+                  <span className="text-xs text-muted-foreground">
+                    ({ec.weekdaysHint})
+                  </span>
                 )}
-                {preset === "monthly" && (
-                  <div className="flex-1 space-y-1">
-                    <div className={labelClass}>{ec.monthDay}</div>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={28}
-                      value={presetMonthDay}
-                      onChange={(e) =>
-                        setPresetMonthDay(Number(e.target.value) || 1)
-                      }
-                    />
-                  </div>
-                )}
+              </div>
+            )}
+            {preset === "weekly" && (
+              <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                <select
+                  className={selectClass}
+                  value={presetWeekday}
+                  onChange={(e) =>
+                    setPresetWeekday(Number(e.target.value))
+                  }
+                  aria-label={ec.day}
+                >
+                  {[0, 1, 2, 3, 4, 5, 6].map((n) => (
+                    <option key={n} value={n}>
+                      {weekdayName(n)}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-muted-foreground">{ec.sentenceAt}</span>
+                <TimeFields
+                  hour={presetHour}
+                  minute={presetMinute}
+                  hourLabel={ec.hour}
+                  minuteLabel={ec.minute}
+                  onHour={(v) => setPresetHour(v)}
+                  onMinute={(v) => setPresetMinute(v)}
+                />
+              </div>
+            )}
+            {preset === "monthly" && (
+              <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground">{ec.day}</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={28}
+                  className="h-8 w-16"
+                  value={presetMonthDay}
+                  onChange={(e) =>
+                    setPresetMonthDay(Number(e.target.value) || 1)
+                  }
+                  aria-label={ec.monthDay}
+                />
+                <span className="text-muted-foreground">{ec.sentenceAt}</span>
+                <TimeFields
+                  hour={presetHour}
+                  minute={presetMinute}
+                  hourLabel={ec.hour}
+                  minuteLabel={ec.minute}
+                  onHour={(v) => setPresetHour(v)}
+                  onMinute={(v) => setPresetMinute(v)}
+                />
               </div>
             )}
             {preset === "advanced" && (
@@ -561,26 +690,29 @@ export function JobEditor({
                 />
               </div>
             )}
-            <div className="space-y-1">
-              <div className={labelClass}>{ec.popularPatterns}</div>
-              <div className="flex flex-wrap gap-1">
-                {copy.patternList.map(([expr, label]) => (
-                  <Button
-                    key={expr}
-                    size="sm"
-                    variant="ghost"
-                    title={expr}
-                    onClick={() => {
-                      setPreset("advanced");
-                      setDraft({ ...draft, cronExpression: expr });
-                    }}
-                  >
-                    {label}
-                  </Button>
-                ))}
+            {preset === "advanced" && (
+              <div className="space-y-1">
+                <div className={labelClass}>{ec.popularPatterns}</div>
+                <div className="flex flex-wrap gap-1">
+                  {copy.patternList.map(([expr, label]) => (
+                    <Button
+                      key={expr}
+                      size="xs"
+                      variant="outline"
+                      title={expr}
+                      onClick={() => {
+                        setDraft({ ...draft, cronExpression: expr });
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
+        )}
+          </>
         )}
         <div className="space-y-1">
           <div className={labelClass}>{ec.timezone}</div>
@@ -620,7 +752,7 @@ export function JobEditor({
 
       {/* AI */}
       <div className="space-y-2">
-        <div className={sectionClass}>{ec.ai}</div>
+        <h3 className={microLabelClass}>{ec.ai}</h3>
         <div className="flex gap-2">
           <div className="flex-1 space-y-1">
             <div className={labelClass}>{ec.provider}</div>
@@ -633,6 +765,10 @@ export function JobEditor({
                   ...draft,
                   providerId: e.target.value,
                   modelId: p?.model ?? "",
+                  thinkingLevel:
+                    p?.thinking && p.thinking !== "off"
+                      ? draft.thinkingLevel
+                      : "off",
                 });
               }}
             >
@@ -661,6 +797,7 @@ export function JobEditor({
               ))}
             </select>
           </div>
+          {thinkingOffered && (
           <div className="flex-1 space-y-1">
             <div className={labelClass}>{ec.thinking}</div>
             <select
@@ -679,12 +816,13 @@ export function JobEditor({
               <option value="high">{ec.thinkingHigh}</option>
             </select>
           </div>
+          )}
         </div>
       </div>
 
       {/* WORKSPACE */}
       <div className="space-y-2">
-        <div className={sectionClass}>{ec.workspace}</div>
+        <h3 className={microLabelClass}>{ec.workspace}</h3>
         <Input
           placeholder={ec.workspacePlaceholder}
           value={draft.workspacePath}
@@ -696,10 +834,10 @@ export function JobEditor({
 
       {/* PROMPT */}
       <div className="space-y-2">
-        <div className={sectionClass}>{ec.prompt}</div>
+        <h3 className={microLabelClass}>{ec.prompt}</h3>
         <Textarea
           placeholder={ec.promptPlaceholder}
-          rows={5}
+          rows={3}
           value={draft.prompt}
           onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
         />
@@ -707,7 +845,7 @@ export function JobEditor({
 
       {/* CONVERSATION */}
       <div className="space-y-2">
-        <div className={sectionClass}>{ec.conversation}</div>
+        <h3 className={microLabelClass}>{ec.conversation}</h3>
         <div className="space-y-2">
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <input
@@ -766,9 +904,22 @@ export function JobEditor({
         </div>
       </div>
 
-      {/* EXECUTION */}
-      <div className="space-y-2">
-        <div className={sectionClass}>{ec.execution}</div>
+      {/* EXECUTION — rarely touched tuning behind a disclosure (values
+          still load, validate, and save; only the chrome collapses). */}
+      <Collapsible>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex w-full items-center gap-1.5 rounded-md outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring [&[data-state=open]>svg]:rotate-180"
+          >
+            <span className={microLabelClass}>{ec.advancedOptions}</span>
+            <ChevronDown
+              aria-hidden="true"
+              className="size-3.5 text-muted-foreground transition-transform duration-150"
+            />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="space-y-2 pt-2">
         <div className="flex gap-2">
           <div className="flex-1 space-y-1">
             <div className={labelClass}>{ec.maxRetries}</div>
@@ -829,7 +980,8 @@ export function JobEditor({
           </div>
         </div>
         <div className="text-xs text-muted-foreground">{ec.overlapNote}</div>
-      </div>
+        </CollapsibleContent>
+      </Collapsible>
 
       <div className="flex gap-2">
         <Button size="sm" onClick={handleSave} disabled={saving}>

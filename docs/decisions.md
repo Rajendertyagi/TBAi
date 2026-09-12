@@ -339,6 +339,33 @@ Everything else is verbatim official registry code.
   (~330), `SchedulerPanel.tsx` + store (~700), tests (~330). Zero new
   dependencies. Full detail: `docs/scheduler.md`.
 
+## ADR-017.1 â€” Consolidate scheduler AI tools into one action-dispatched tool
+
+- **Status:** Accepted
+- **Date:** 2026-09-12
+- **Context:** The native toolkit exposed six separate scheduler tools
+  (`create_scheduled_job`, `list_scheduled_jobs`, `get_scheduled_job`,
+  `update_scheduled_job`, `delete_scheduled_job`, `run_scheduled_job_now`). Six
+  near-identical `backend` entries and renderers add surface area with no
+  behavioral gain, and the model must learn six names for one capability.
+- **Decision:** Collapse to a single `scheduler` tool whose `action` enum selects
+  the operation (`create | list | get | update | delete | run_now`), mirroring a
+  CLI command with subcommands. Schema is a `z.discriminatedUnion("action", â€¦)`
+  in `lib/validation.ts`; read variants (`list/get/delete/run_now`) use `.strict()`
+  so stray write fields are rejected. A single `runScheduler(args)` dispatcher in
+  `schedulerTools.ts` reuses the existing `schedulerToolHandlers` (persistence +
+  timers) with no logic duplication; `jobId` from the tool schema is mapped to the
+  handlers' `id`. Results are returned as a uniform `{ ok, action, summary, â€¦ }`
+  envelope (no thrown errors surfaced to the model). `schedulerStore.list(status?)`
+  gained an optional status filter so list filtering stays server-side. The REST
+  API (`schedulerJobCreateSchema`/`schedulerJobUpdateSchema`) is untouched â€” only
+  the AI-tool re-export changed. Native toolkit count: 20 â†’ 15.
+- **Ledger:** `lib/validation.ts` (`schedulerSchema`), `schedulerStore.list`
+  status param, `schedulerTools.ts` (`runScheduler` + `SchedulerResult`/
+  `SchedulerJobView`), `tools/index.ts` + `tools/schemas.ts` (single entry),
+  `web/src/tools/toolkit.ts` + `web/src/tools/scheduler/ui.tsx` (single renderer),
+  `tests/unit/toolkit.test.ts` + `tests/unit/scheduler-ai-tools.test.ts`.
+
 ## ADR-018 â€” Application foundation (router, tabs, modules)
 
 - **Status:** Accepted
@@ -868,21 +895,21 @@ future agents don't re-litigate:
   detail (68%), fixed CSS split (no new dep). List panel muted, detail
   card-toned. Onboarding template gallery when empty.
 - **Rows:** `h-8` pills (status dot by last run, name, next/last relative
-  time, spinner while running, hover …). One action definition drives BOTH
-  the … dropdown and right-click (Run now / Enable-Disable / Edit /
+  time, spinner while running, hover ï¿½). One action definition drives BOTH
+  the ï¿½ dropdown and right-click (Run now / Enable-Disable / Edit /
   Duplicate / Delete-via-AlertDialog). Selection never shifts row height.
 - **Detail:** stat facts (Schedule, Next/Last run + chip, AI, Workspace,
   Conversation target with open-thread link), full run timeline (status-ring
   nodes, durations, error + output text, attempt #, thread links, cancel),
   actions. Blocks separated by rules, never nested cards.
 - **Gallery:** blank card + the 7 existing JOB_TEMPLATES (icon tiles,
-  human schedule chips — never raw cron) for empty state + New flow.
+  human schedule chips ï¿½ never raw cron) for empty state + New flow.
 - **Editor:** the existing form relocated verbatim into self-contained
   `JobEditor` (keyed remount per target, back-to-templates/back-to-list
   exits); template seeding via lib `seedDraftFromTemplate`/`blankSeed`/
   `duplicateSeed` (the setter-based `applyTemplate` is gone). Weekday names
   via Intl, all copy in `config/scheduler.ts` (incl. validation strings).
-- **Deleted:** `components/SchedulerPanel.tsx` (1760 lines) — nothing
+- **Deleted:** `components/SchedulerPanel.tsx` (1760 lines) ï¿½ nothing
   imported it besides the page. Store/API untouched.
 - **Verification:** typecheck 0, build green, 41 unit tests pass (12 new
   lib tests), fresh-server smoke 200. Click-level proof needs a real
@@ -892,9 +919,9 @@ future agents don't re-litigate:
 
 - **White-border root cause:** `.dark` never defined `--border`, so every
   `border-border` fell back to the light `#e4e4e7` in dark mode. Added
-  `--border: #27272a` (the only missing dark token — full `:root`/`.dark`
+  `--border: #27272a` (the only missing dark token ï¿½ full `:root`/`.dark`
   diff done).
-- **Divider fix:** list column`s `border-r` deleted — one shell border plus
+- **Divider fix:** list column`s `border-r` deleted ï¿½ one shell border plus
   the muted/card tonal step only (codeg`s "no wedged divider" rule).
 - **Toolbar pill:** active filter `bg-foreground` ? `bg-accent` (muted family).
 - **Cron form (codeg trigger grammar):** Once/Repeat as a segmented group in
@@ -902,5 +929,24 @@ future agents don't re-litigate:
   controls each fold into a schedule card; redundant inner Repeat label
   dropped; advanced cron input is mono. All fields, validation, save, and
   preview logic untouched.
+- **Verification:** typecheck 0, build green, 35 unit tests pass,
+  fresh-server smoke 200. Visual sign-off needs a real browser.
+
+## Scheduler editor alignment + simplification (codeg form grammar)
+
+- **Title unit:** borderless large name + plain subtitle description (the
+  heading row keeps only back/X). Section titles all share one micro-label.
+- **Buttons aligned:** chips are `xs`+outline (active `default`); icon-only
+  buttons are `icon-xs`. Rule: chips = xs+outline, icons = icon-xs,
+  actions = sm, primary CTA = default.
+- **Sentence schedule row:** one dynamic line per mode (Every [N] min,
+  At [H]:[M], weekday/month variants) with compact inline inputs — the
+  labeled input maze and quick-pick chips are gone. Patterns show in
+  Advanced mode only.
+- **Seeded summary:** template/duplicate seeds start the When section
+  collapsed to a one-line summary + Change; blank/edit start expanded.
+- **Execution ? collapsed disclosure** (values still load/validate/save);
+  **thinking capability-gated** (hidden where the provider registry offers
+  no thinking; reset to off on provider switch). Prompt rows 5 ? 3.
 - **Verification:** typecheck 0, build green, 35 unit tests pass,
   fresh-server smoke 200. Visual sign-off needs a real browser.
