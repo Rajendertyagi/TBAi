@@ -1,6 +1,7 @@
 import { PanelBottom, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
 import { appConfig } from "../config/navigation";
+import { isTauri, openSettingsWindow } from "../lib/platform";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { cn } from "../lib/utils";
 
@@ -15,6 +16,15 @@ export function RightEdgeChrome() {
   const navigate = useNavigate();
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const toggleStatusBar = useDesktopLayout((s) => s.toggleStatusBar);
+
+  const openSettings = () => {
+    // Dedicated settings window on desktop; in-app route on the web.
+    if (isTauri()) {
+      void openSettingsWindow();
+    } else {
+      navigate(appConfig.settingsIndexRoute);
+    }
+  };
 
   return (
     <div className="flex h-full items-center gap-1 pr-3">
@@ -34,7 +44,7 @@ export function RightEdgeChrome() {
       </button>
       <button
         type="button"
-        onClick={() => navigate(appConfig.settingsIndexRoute)}
+        onClick={openSettings}
         title="Settings"
         className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >

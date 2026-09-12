@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { useEffect, useState, type ComponentType } from "react";
-import { Link, Outlet, useLocation } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { getSettingsNav } from "../../config/navigation";
+import { SettingsNav } from "./SettingsNav";
 
 const LAST_SETTINGS_ROUTE_KEY = "tbai:settingsRoute";
 
@@ -27,7 +27,6 @@ export function lastSettingsRoute(): string {
  */
 export function SettingsLayout() {
   const { pathname } = useLocation();
-  const items = getSettingsNav();
 
   // Remember where the sidebar Settings row should return to. Settings
   // views never open tabs (codeg parity) — navigation only switches views.
@@ -41,34 +40,7 @@ export function SettingsLayout() {
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex w-56 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-muted/30 px-2 py-3">
-        <div className="px-2 text-xs font-medium text-muted-foreground">
-          Settings
-        </div>
-        <nav className="space-y-1">
-          {items.map((item) => {
-            const Icon = item.icon;
-            const active =
-              pathname === item.route || pathname.startsWith(`${item.route}/`);
-            return (
-              <Link
-                key={item.id}
-                to={item.route}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-                  active
-                    ? "bg-muted font-medium text-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <Icon className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-      </aside>
+      <SettingsNav />
       <div className="min-w-0 flex-1">
         <Outlet />
       </div>

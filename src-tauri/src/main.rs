@@ -57,10 +57,54 @@ fn wait_for_port(addr: &str, timeout: Duration) {
     }
 }
 
+/// Open (or focus) the dedicated Settings window: a decorated native window
+/// serving the SPA settings routes from the local Bun sidecar. Reuses the
+/// existing window when open, navigating it to the requested section instead
+/// of opening a duplicate. Independent top-level window (never a child), so
+/// it moves/minimizes separately from the main window.
+#[tauri::command]
+async fn open_settings_window(
+    app: tauri::AppHandle,
+    section: Option<String>,
+) -> Result<(), String> {
+    const LABEL: &str = "settings";
+    let route = section
+        .as_deref()
+        .map(|s| s.trim_start_matches('/'))
+        .filter(|s| !s.is_empty())
+        .unwrap_or("providers");
+    let target = format!("/#/{}", route);
+
+    if let Some(existing) = app.get_webview_window(LABEL) {
+        let script = format!(
+            "window.location.replace({});",
+            serde_json::to_string(&target).map_err(|e| e.toString())?
+        );
+        existing.eval(&script).map_err(|e| e.to_string())?;
+        let _ = existing.unminimize();
+        existing.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let url: url::Url = format!("http://localhost:3000{}", target)
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::External(url))
+        .title("TBAi Settings")
+        .inner_size(1080.0, 700.0)
+        .min_inner_size(1080.0, 600.0)
+        .center()
+        .decorations(true)
+        .build()
+        .map_err(|e| e.toString())?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![open_settings_window])
         .setup(|app| {
             let handle = app.handle().clone();
 

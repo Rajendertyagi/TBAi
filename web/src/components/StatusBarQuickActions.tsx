@@ -2,6 +2,7 @@ import { useNavigate } from "react-router";
 import { LayoutGrid, MessageSquare } from "lucide-react";
 import { getSettingsNav } from "@/config/navigation";
 import { statusBarConfig } from "@/config/statusBar";
+import { isTauri, openSettingsWindow } from "@/lib/platform";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import {
@@ -34,6 +35,16 @@ export function StatusBarQuickActions() {
     navigate("/chat/new");
   };
 
+  const handleOpenArea = (route: string) => {
+    // Dedicated settings window on desktop (deep-linked to the area);
+    // in-app navigation on the web.
+    if (isTauri()) {
+      void openSettingsWindow(route.replace(/^\//, ""));
+    } else {
+      navigate(route);
+    }
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -61,7 +72,7 @@ export function StatusBarQuickActions() {
             return (
               <DropdownMenuItem
                 key={item.id}
-                onSelect={() => navigate(item.route)}
+                onSelect={() => handleOpenArea(item.route)}
               >
                 <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
                 {item.label}

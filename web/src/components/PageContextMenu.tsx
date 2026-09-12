@@ -9,6 +9,7 @@ import {
 } from "./ui/context-menu";
 import { appConfig } from "../config/navigation";
 import { sidebarConfig } from "../config/sidebar";
+import { isTauri, openSettingsWindow } from "../lib/platform";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useChatTabsStore } from "../features/chat/state/chatTabs";
 
@@ -34,6 +35,15 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
     navigate("/chat/new");
   };
 
+  const handleOpenSettings = () => {
+    // Dedicated settings window on desktop; in-app route on the web.
+    if (isTauri()) {
+      void openSettingsWindow();
+    } else {
+      navigate(appConfig.settingsIndexRoute);
+    }
+  };
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -51,9 +61,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
           {copy.toggleStatusBar}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem
-          onSelect={() => navigate(appConfig.settingsIndexRoute)}
-        >
+        <ContextMenuItem onSelect={handleOpenSettings}>
           {copy.openSettings}
         </ContextMenuItem>
       </ContextMenuContent>

@@ -143,7 +143,7 @@ export function SidebarThreadRow({
               {historyConfig.deleteEnabled && (
                 <ThreadListItemPrimitive.Delete asChild>
                   <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                      <Trash2 className="size-4" /> {copy.delete}
+                    <Trash2 className="size-4" /> {copy.delete}
                   </ThreadListItemMorePrimitive.Item>
                 </ThreadListItemPrimitive.Delete>
               )}
@@ -224,7 +224,7 @@ export function SidebarArchivedRow({
               {historyConfig.deleteEnabled && (
                 <ThreadListItemPrimitive.Delete asChild>
                   <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                      <Trash2 className="size-4" /> {copy.delete}
+                    <Trash2 className="size-4" /> {copy.delete}
                   </ThreadListItemMorePrimitive.Item>
                 </ThreadListItemPrimitive.Delete>
               )}

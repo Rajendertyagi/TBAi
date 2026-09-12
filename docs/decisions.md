@@ -733,3 +733,27 @@ future agents don't re-litigate:
   (message timestamps, log view, badges) — separate typography pass, not menus.
 - **Verification:** typecheck 0, full build green, 28 unit tests pass, backend
   smoke on a fresh server (health/workspace/SPA 200). Desktop visuals via CI.
+
+## Dedicated settings window (codeg parity)
+
+- **Native window (Option A):** Rust `open_settings_window(section?)` command in
+  `main.rs` (+ `invoke_handler`, `url = "1"` dep for URL parsing) — label
+  `"settings"`, decorated 1080x700 (min 1080x600), centered, serving the SPA
+  settings routes from the Bun sidecar. Reuse-if-open: focuses + eval-navigates
+  to the section instead of duplicating. Independent top-level window (never a
+  child), mirroring codeg`s window discipline. Capability extended to
+  `["main", "settings"]`.
+- **Chromeless shell:** top-level `#/settings-window/:section?` route renders
+  `SettingsWindow` (nav + section content, native frame supplies the rest) —
+  no rail/tabs/status/overlays. Section?component map covers the same 8
+  pages; unknown sections fall back to the default (never redirect to chat).
+  `SettingsNav` extracted and shared with in-app `SettingsLayout`, so the two
+  surfaces cannot drift. `document.title` set for the window.
+- **Entry points (keep both):** gear, page-menu "Open Settings", and
+  quick-actions areas call `openSettingsWindow()` (new dynamic-invoke helper
+  in `platform.ts`, bundle contract preserved) on Tauri — areas deep-link to
+  their section; plain in-app navigation on web. In-app routes untouched.
+- **Verification:** typecheck 0, full build green, backend smoke (health/
+  providers/SPA 200) on a fresh server. Rust compiles on CI only (no local
+  toolchain) — `main.rs` follows codeg`s command shape exactly; needs the
+  workflow artifact as proof.
