@@ -617,7 +617,7 @@ future agents don't re-litigate:
 
 ## Sidebar rework: codeg-parity left sidebar (shadcn, zero hardcodes)
 
-- **Scope:** `Sidebar.tsx` rebuilt on codeg `layout/sidebar` geometry — fixed `h-10`
+- **Scope:** `Sidebar.tsx` rebuilt on codeg `layout/sidebar` geometry ï¿½ fixed `h-10`
   header (locate-active / expand-collapse-all / eye view-menu), one fixed `New Chat`
   pill, persisted `Chats / Recent / Archived` sections. The `ActivityBar` icon rail
   is untouched. No MCP/Scheduler/Logs rows in the sidebar (rail owns all routes);
@@ -633,7 +633,7 @@ future agents don't re-litigate:
   `sectionOrder` (always a full permutation via `normalizeSectionOrder`),
   `sectionCollapsed`, `showRecent`, `archivedExpanded`. Pure list logic in
   `lib/sidebar-sections.ts` (tested: `tests/unit/sidebar-sections.test.ts`, 12 pass).
-  Config in `config/sidebar.ts` (limits, debounce, defaults, copy — no literals in
+  Config in `config/sidebar.ts` (limits, debounce, defaults, copy ï¿½ no literals in
   components). New files under `features/sidebar/` (header/nav-button/section/rows/
   view-menu/order-control + `useThreadListQuerySync` hook); `Sidebar.tsx` composes.
 - **Real sort:** backend `GET /api/conversations` gains whitelisted `?order=created`
@@ -641,16 +641,16 @@ future agents don't re-litigate:
   `status`), adapter passes it through + projects `createdAt` via `custom` (open bag,
   never secrets; `updateCustom` stays selective so it never hits PATCH).
 - **shadcn refinement (from current docs):** `ui/dropdown-menu.tsx` completed to the
-  canonical grammar (Group/Label/Checkbox/Radio/Sub/Shortcut, lucide indicators —
+  canonical grammar (Group/Label/Checkbox/Radio/Sub/Shortcut, lucide indicators ï¿½
   no new dep); sidebar theme tokens added (`--sidebar*` light/dark + `@theme`
   mappings); rows use `TooltipIconButton`/`Button`/`Input`/`Collapsible` atoms.
 - **No inline styles:** `lib/chrome-vars.ts` publishes `--sidebar-width`,
   `--left-chrome-width`, `--right-chrome-reserve` from `window-chrome.ts` tokens;
-  `AppShell` consumes only `var(--…)` classes (the `w-20` overlay + all
+  `AppShell` consumes only `var(--ï¿½)` classes (the `w-20` overlay + all
   `style={{width/right}}` reserves are gone). `w-[var(--sidebar-width,224px)]`
   keeps its defensive fallback (mirrors `SIDEBAR_DEFAULT_WIDTH`).
 - **Known approximation:** Recent = first N runtime items (server newest-first, no
-  client reorder — `Items` fixes iteration order and item primitives bind by index,
+  client reorder ï¿½ `Items` fixes iteration order and item primitives bind by index,
   so sections share the runtime order); Chats and Recent mount separate `Items`
   (bounded duplication = `recentSectionLimit`). `navigation.ts` drops dead
   `newWorkspaceLabel`/`historyLabel` branding (sections own their labels now).
@@ -659,7 +659,7 @@ future agents don't re-litigate:
   (`/api/conversations?order=created|updated` 200, SPA + scheduler summary 200).
   Desktop bundle verified only via the GitHub Tauri workflow (no local toolchain).
 
-## Batch 1 — Windows-x64-only application shell
+## Batch 1 ï¿½ Windows-x64-only application shell
 
 - **Platform lockdown:** `platform.ts` stripped to `isTauri` + window ops
   (`minimize`/`toggleMaximize`/`isMaximized`/`onResized`/`close`); the UA-based
@@ -678,7 +678,7 @@ future agents don't re-litigate:
 - **Verification:** typecheck 0, full build green, unit suites pass, backend smoke
   (health/SPA/conversations+order 200). Desktop geometry via CI artifact only.
 
-## Batch 2 — Top bars (tab strip, breadcrumb header, status bar)
+## Batch 2 ï¿½ Top bars (tab strip, breadcrumb header, status bar)
 
 - **Tab strip (codeg embedded geometry):** equal-width `basis-48 grow-0 shrink
   min-w-0` tabs with fade-mask titles (new `.tab-title-fade` in globals.css),
@@ -687,10 +687,10 @@ future agents don't re-litigate:
   threads show a pulse dot from runtime `isRunning` (display-only, no new
   store fields). `role=tablist/tab`, `aria-selected`, full-title tooltips.
   Right-click gains **Close All** (composed from `close()`; never-zero-tabs
-  draft rule holds). dnd-kit stays — no new dependency. Double-click stays a
+  draft rule holds). dnd-kit stays ï¿½ no new dependency. Double-click stays a
   no-op (no pin field; out of "functions we have now").
 - **Breadcrumb header (new `ChatHeader`, chat routes only):** `h-10`
-  transparent bar — workspace root crumb (› `/workspace`) + truncated chat
+  transparent bar ï¿½ workspace root crumb (ï¿½ `/workspace`) + truncated chat
   title + overflow menu (New / Rename-dialog / Archive-Unarchive / Copy ID /
   Delete-via-confirm). Narrow primitive subscriptions (title/status strings)
   so streaming never re-renders it; dialog targets snapshotted at open;
@@ -698,26 +698,26 @@ future agents don't re-litigate:
   new dep; delete-confirm uses new canonical `ui/alert-dialog.tsx`.
 - **New backend endpoint:** `GET /api/workspace` (`routes/workspace.ts`,
   registered in composition root) returns `{ name, path }` of `WORKSPACE_DIR`
-  — the only surface exposing the absolute root (tools stay relative).
+  ï¿½ the only surface exposing the absolute root (tools stay relative).
   Header falls back to `"Workspace"` when unreachable.
 - **New shadcn files:** `ui/dialog.tsx` + `ui/alert-dialog.tsx` (radix-ui meta
   package already installed); `DropdownMenuItem` gains the `variant`
   ("default" | "destructive") prop mirroring `ContextMenuItem`.
 - **Status bar (codeg geometry):** `h-8` muted band; left = quick-actions
   launcher (new `StatusBarQuickActions`: New Chat, all `getSettingsNav()`
-  areas with their own icons/labels, both toggles — the always-on fallback)
+  areas with their own icons/labels, both toggles ï¿½ the always-on fallback)
   + connection dot + provider; right = model + desktop gear. Copy in new
   `config/statusBar.ts`; visibility gated once (AppShell), internal check
   removed; inverted `bg-primary` retired.
 - **Verification:** typecheck 0, full build green, 28 unit tests pass, backend
-  smoke on a FRESH server (stale-port lesson: kill + count processes first) —
+  smoke on a FRESH server (stale-port lesson: kill + count processes first) ï¿½
   health/workspace/conversations+order/scheduler/SPA all 200, and
   `/api/workspace` returns the real root name. Desktop visuals via CI only.
 
-## Batch 3 — Context-menu consistency pass
+## Batch 3 ï¿½ Context-menu consistency pass
 
 - **One grammar everywhere:** raw Radix menu markup now lives only in `ui/`
-  primers (the shadcn pattern — verified by grep); every feature menu goes
+  primers (the shadcn pattern ï¿½ verified by grep); every feature menu goes
   through `ui/context-menu` / `ui/dropdown-menu` (right-click vs trigger).
   Separators use the canonical default (TabStrip`s `bg-border` override
   removed); widths are scale classes (`min-w-44/56`, `min-w-30/55`,
@@ -727,51 +727,51 @@ future agents don't re-litigate:
   unarchive/delete/copy/open-in-tab) move to `sidebarConfig.copy`. Menu item
   icons kept (codeg parity: icons on menus, none on tab menu).
 - **Logger rule enforced:** `PaseoComposer` attach stubs used `console.log`
-  (banned for feature code) — now `logger.debug("composer",
-  "attach_not_wired", …)`.
+  (banned for feature code) ï¿½ now `logger.debug("composer",
+  "attach_not_wired", ï¿½)`.
 - **Left alone deliberately:** message/panel `text-[10px]/[11px]` outside menus
-  (message timestamps, log view, badges) — separate typography pass, not menus.
+  (message timestamps, log view, badges) ï¿½ separate typography pass, not menus.
 - **Verification:** typecheck 0, full build green, 28 unit tests pass, backend
   smoke on a fresh server (health/workspace/SPA 200). Desktop visuals via CI.
 
 ## Dedicated settings window (codeg parity)
 
 - **Native window (Option A):** Rust `open_settings_window(section?)` command in
-  `main.rs` (+ `invoke_handler`, `url = "1"` dep for URL parsing) — label
+  `main.rs` (+ `invoke_handler`, `url = "1"` dep for URL parsing) ï¿½ label
   `"settings"`, decorated 1080x700 (min 1080x600), centered, serving the SPA
   settings routes from the Bun sidecar. Reuse-if-open: focuses + eval-navigates
   to the section instead of duplicating. Independent top-level window (never a
   child), mirroring codeg`s window discipline. Capability extended to
   `["main", "settings"]`.
 - **Chromeless shell:** top-level `#/settings-window/:section?` route renders
-  `SettingsWindow` (nav + section content, native frame supplies the rest) —
+  `SettingsWindow` (nav + section content, native frame supplies the rest) ï¿½
   no rail/tabs/status/overlays. Section?component map covers the same 8
   pages; unknown sections fall back to the default (never redirect to chat).
   `SettingsNav` extracted and shared with in-app `SettingsLayout`, so the two
   surfaces cannot drift. `document.title` set for the window.
 - **Entry points (keep both):** gear, page-menu "Open Settings", and
   quick-actions areas call `openSettingsWindow()` (new dynamic-invoke helper
-  in `platform.ts`, bundle contract preserved) on Tauri — areas deep-link to
+  in `platform.ts`, bundle contract preserved) on Tauri ï¿½ areas deep-link to
   their section; plain in-app navigation on web. In-app routes untouched.
 - **Verification:** typecheck 0, full build green, backend smoke (health/
   providers/SPA 200) on a fresh server. Rust compiles on CI only (no local
-  toolchain) — `main.rs` follows codeg`s command shape exactly; needs the
+  toolchain) ï¿½ `main.rs` follows codeg`s command shape exactly; needs the
   workflow artifact as proof.
 
 ## Web settings second tab (codeg openAppWindow parity)
 
 - **Named tab, not in-app:** web entry points (gear, page menu, quick-actions
   areas) open `#/settings-window/<section>` via `window.open(path,
-  "tbai-settings")` — one reused tab, focused on repeat opens (new
+  "tbai-settings")` ï¿½ one reused tab, focused on repeat opens (new
   `lib/settings-window.ts`). Called synchronously in the click stack (no
-  pre-await), so popup blockers stay quiet — codeg`s reservation dance is
+  pre-await), so popup blockers stay quiet ï¿½ codeg`s reservation dance is
   unnecessary here since we need no round trip first.
 - **Never a dead click:** blocked popup ? toast + in-app fallback; failed
   Tauri invoke ? toast + in-app fallback (the old fire-and-forget `void`
   calls are gone from all three entry points). Blocked/invoke copy lives in
   `chromeConfig.copy`.
 - **Cramp solved on web too:** the chromeless settings shell carries no rail,
-  sidebar, tabs, or status bar — settings get the full tab width. In-app
+  sidebar, tabs, or status bar ï¿½ settings get the full tab width. In-app
   routes stay as the fallback + direct-URL surface (no auto-collapse hack).
 - **Verification:** typecheck 0, build green, route + tab name present in the
   bundle, 22 unit tests pass, fresh-server smoke 200. Click-level proof needs
@@ -783,16 +783,16 @@ future agents don't re-litigate:
   (settings sub-sidebar, settings window, and quick-actions lose it by
   derivation), routed as a direct `AppShell` child rendering new
   `SchedulerPage` (breadcrumb strip + existing panel). New
-  `SchedulerTitleStrip` mirrors codeg `WorkbenchPageTitle` (back-to-chats ›
+  `SchedulerTitleStrip` mirrors codeg `WorkbenchPageTitle` (back-to-chats ï¿½
   title, `h-10` transparent bar, label from `navigation.ts` via new
   `getNavItem()`); panel drops its duplicate `h1`. Rail icon + failure
   badge + `/scheduler` route unchanged.
-- **Single-gear rule:** rail renders new `getRailNav()` — chat, scheduler,
+- **Single-gear rule:** rail renders new `getRailNav()` ï¿½ chat, scheduler,
   and ONE Settings gear (areas get `railVisible: false`; gear opens the
   dedicated surface). Top-bar and status-bar gears deleted; right cluster
   token shrinks 80 ? 48. Status-bar provider/model buttons join the surface
-  flow (hardcoded `/providers` ×3 + `/desktop` gone). Page-menu entry and
-  quick-actions already used the flow — all three now share one
+  flow (hardcoded `/providers` ï¿½3 + `/desktop` gone). Page-menu entry and
+  quick-actions already used the flow ï¿½ all three now share one
   `openSettingsSurface(navigate, section?)` helper (triplication removed).
 - **Tests:** settings-nav membership updated (scheduler out); new rail test
   locks `["chat", "scheduler", "settings"]`.
@@ -811,7 +811,7 @@ future agents don't re-litigate:
   `navigation.ts` (proper layering) with new `isSettingsRoute()`.
 - **Cramp fix (the actual complaint):** `AppShell` auto-collapses the
   conversation sidebar on settings routes (frees ~224px beside the
-  sub-sidebar) and restores it on return — via transient `settingsStash`
+  sub-sidebar) and restores it on return ï¿½ via transient `settingsStash`
   (never persisted); a manual toggle meanwhile always wins over the restore.
 - **Verification:** typecheck 0, build green, 29 unit tests pass,
   fresh-server smoke 200.
@@ -819,7 +819,7 @@ future agents don't re-litigate:
 ## Settings title strip; sidebar stays visible (revert auto-collapse)
 
 - **Shared `PageTitleStrip`** (codeg `WorkbenchPageTitle` geometry): back-to-
-  chats › title, transparent `h-10` bar. `SchedulerTitleStrip` reuses it;
+  chats ï¿½ title, transparent `h-10` bar. `SchedulerTitleStrip` reuses it;
   `SettingsLayout` renders it above the sub-sidebar with the active section
   label (fallback `"Settings"`).
 - **Auto-collapse removed:** the conversation sidebar now stays visible on
@@ -828,3 +828,62 @@ future agents don't re-litigate:
   `isSettingsRoute()` helper.
 - **Verification:** typecheck 0, build green, 29 unit tests pass,
   fresh-server smoke 200.
+
+## Native todo + browser tools (agent-browser, no MCP)
+
+- **Single toolkit architecture:** both new capabilities are first-party native
+  tools built on the existing `AISDKToolkit` (server) + `defineToolkit` (client)
+  pattern â€” no `useAssistantToolUI`, no second registry, no MCP. `generativeTools`
+  is deprecated and intentionally not used.
+- **Todo:** a durable, per-conversation notepad. SQLite `todos` table keyed by
+  `thread_id` (FK `conversations` ON DELETE CASCADE). All CRUD lives in
+  `src/services/todos.ts` (service owns SQL; no SQL in tool definitions). Every
+  successful action returns the current list so the UI always reflects backend
+  state. No approval required (benign, user-scoped).
+- **Thread identity:** `AISDKToolkit` strips AI SDK `runtimeContext` from the
+  `execute` second argument, so `threadId` is injected via a per-request closure
+  (`withThreadContext` in `src/tools/index.ts`, applied in `src/routes/chat.ts`).
+  Missing thread context is rejected by the service.
+- **Browser:** uses the external **agent-browser** CLI (persistent Chromium daemon)
+  via `Bun.spawn` in `src/services/browser.ts`. No browser automation, no MCP, no
+  auto-install. Split into two tools: `browser` (read/navigation: open, snapshot,
+  get, screenshot, extract â€” no approval) and `browser_action` (click, fill, press,
+  act â€” gated by the existing `toolApproval: "user-approval"`). Command construction
+  is explicit and typed per action (no arbitrary action+args passthrough); results
+  are structured `{ action, ok, exitCode, stdout, stderr, path?, mimeType? }` with
+  screenshot `path`/`mimeType` preserved for future image rendering. Missing binary
+  returns a clear install instruction instead of throwing.
+- **Validation:** action-specific Zod schemas in `src/lib/validation.ts`
+  (`todoSchema`, `browserReadSchema`, `browserActionSchemaFull`) with `superRefine`
+  required-field rules, re-exported from `src/tools/schemas.ts` as the single source
+  of truth for both server and client.
+- **Verification:** typecheck 0 (server + web), `bun test` 224 pass (added
+  `src/services/todo.test.ts`, `src/services/browser.test.ts`; updated
+  `tests/unit/toolkit.test.ts` to 20 native tools), full `bun run build` green.
+
+## Scheduler page rebuilt on codeg automations (cards/list/detail)
+
+- **Layout:** borderless toolbar (All/Enabled/Disabled pills + pill New Job +
+  unseen-failures mark-seen) above ONE rounded shell: job list (32%) +
+  detail (68%), fixed CSS split (no new dep). List panel muted, detail
+  card-toned. Onboarding template gallery when empty.
+- **Rows:** `h-8` pills (status dot by last run, name, next/last relative
+  time, spinner while running, hover …). One action definition drives BOTH
+  the … dropdown and right-click (Run now / Enable-Disable / Edit /
+  Duplicate / Delete-via-AlertDialog). Selection never shifts row height.
+- **Detail:** stat facts (Schedule, Next/Last run + chip, AI, Workspace,
+  Conversation target with open-thread link), full run timeline (status-ring
+  nodes, durations, error + output text, attempt #, thread links, cancel),
+  actions. Blocks separated by rules, never nested cards.
+- **Gallery:** blank card + the 7 existing JOB_TEMPLATES (icon tiles,
+  human schedule chips — never raw cron) for empty state + New flow.
+- **Editor:** the existing form relocated verbatim into self-contained
+  `JobEditor` (keyed remount per target, back-to-templates/back-to-list
+  exits); template seeding via lib `seedDraftFromTemplate`/`blankSeed`/
+  `duplicateSeed` (the setter-based `applyTemplate` is gone). Weekday names
+  via Intl, all copy in `config/scheduler.ts` (incl. validation strings).
+- **Deleted:** `components/SchedulerPanel.tsx` (1760 lines) — nothing
+  imported it besides the page. Store/API untouched.
+- **Verification:** typecheck 0, build green, 41 unit tests pass (12 new
+  lib tests), fresh-server smoke 200. Click-level proof needs a real
+  browser; desktop bundle via CI.
