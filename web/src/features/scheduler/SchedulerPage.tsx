@@ -391,7 +391,7 @@ export function SchedulerPage() {
                   )}
                 </div>
               </div>
-              <div className="h-full min-w-0 flex-1 bg-card">
+              <div className="h-full min-w-0 flex-1 bg-card/50">
                 {mode === "editor" && editorTarget ? (
                   <div className="h-full overflow-y-auto">
                     <div className="mx-auto w-full max-w-2xl p-4">
@@ -440,7 +440,7 @@ export function SchedulerPage() {
         </>
       ) : (
         <div className="min-h-0 flex-1 p-4">
-          <div className="flex h-full overflow-hidden rounded-2xl border border-border bg-card">
+          <div className="flex h-full overflow-hidden rounded-2xl border border-border bg-card/50">
             <div className="min-w-0 flex-1 overflow-y-auto">
               {mode === "editor" && editorTarget ? (
                 <div className="mx-auto w-full max-w-2xl p-4">{editorPane}</div>

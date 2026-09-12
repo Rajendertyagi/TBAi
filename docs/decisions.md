@@ -962,3 +962,22 @@ future agents don't re-litigate:
   direction as codeg (detail darker than list). Selected rows (`bg-accent`)
   keep their contrast on both.
 - **Verification:** typecheck 0, build green. Visual sign-off needs eyeballs.
+
+## Durable dark theme: adopt codeg`s neutral-dark scale
+
+- **Stop patching, adopt the system:** `.dark` now uses codeg`s scale
+  verbatim (oklch) — card 0.205, muted/secondary 0.269, accent 0.371,
+  border/input translucent white, sidebar set to match, destructive
+  lightened for dark. Only `--background` stays ours (#0a0a0a identity).
+  Light theme untouched. This replaces the solid-vs-wash tricks: detail is
+  back to `bg-card/50`, toolbar pill to plain `bg-accent` — the scale
+  carries them correctly.
+- **Why it works:** panes/rows/chips/dialogs all inherit codeg`s measured
+  relationships (list lighter, detail darker; selected elements lift via
+  accent 0.371). Future components get it free — no per-surface compensation.
+- **Verified live (agent-browser, computed styles + screenshots):** scheduler
+  panes/step/rows/chips/gallery, chat + composer, providers settings cards,
+  sidebar/rail/status/tab strip. Dark first, light unchanged by construction
+  (untouched block).
+- **Note:** initial load served stale CSS (browser cache) — `reload` before
+  measuring; build output verified to contain the new values first.
