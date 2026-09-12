@@ -20,6 +20,7 @@ import {
   ContextMenuItem,
 } from "@/components/ui/context-menu";
 import { historyConfig } from "@/config/history";
+import { sidebarConfig } from "@/config/sidebar";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 
 export interface SidebarRowItem {
@@ -45,6 +46,7 @@ export function SidebarThreadRow({
   onOpenThread: (remoteId: string) => void;
 }) {
   const aui = useAui();
+  const copy = sidebarConfig.copy;
   const openChat = useChatTabsStore((s) => s.openChat);
   const title = item.title ?? "Untitled";
   const [renaming, setRenaming] = useState(false);
@@ -103,7 +105,7 @@ export function SidebarThreadRow({
               }}
               onBlur={() => void commitRename()}
               onFocus={(e) => e.target.select()}
-              aria-label="Rename conversation"
+              aria-label={copy.rename}
               className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-0.5 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
           ) : (
@@ -128,20 +130,20 @@ export function SidebarThreadRow({
                   className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
                   onSelect={() => startRename()}
                 >
-                  <Pencil className="size-4" /> Rename
+                  <Pencil className="size-4" /> {copy.rename}
                 </ThreadListItemMorePrimitive.Item>
               )}
               {historyConfig.archiveEnabled && item.status === "regular" && (
                 <ThreadListItemPrimitive.Archive asChild>
                   <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                    <Archive className="size-4" /> Archive
+                    <Archive className="size-4" /> {copy.archive}
                   </ThreadListItemMorePrimitive.Item>
                 </ThreadListItemPrimitive.Archive>
               )}
               {historyConfig.deleteEnabled && (
                 <ThreadListItemPrimitive.Delete asChild>
                   <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                    <Trash2 className="size-4" /> Delete
+                      <Trash2 className="size-4" /> {copy.delete}
                   </ThreadListItemMorePrimitive.Item>
                 </ThreadListItemPrimitive.Delete>
               )}
@@ -152,7 +154,7 @@ export function SidebarThreadRow({
 
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => openChat(item.remoteId)}>
-          <ExternalLink className="size-4" /> Open in New Tab
+          <ExternalLink className="size-4" /> {copy.openInNewTab}
         </ContextMenuItem>
         {historyConfig.renameEnabled && (
           <ContextMenuItem onSelect={() => startRename()}>
@@ -169,7 +171,7 @@ export function SidebarThreadRow({
         <ContextMenuItem
           onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}
         >
-          <Copy className="size-4" /> Copy ID
+          <Copy className="size-4" /> {copy.copyId}
         </ContextMenuItem>
         {historyConfig.deleteEnabled && (
           <ThreadListItemPrimitive.Delete asChild>
@@ -191,6 +193,7 @@ export function SidebarArchivedRow({
   remoteId: string;
   onOpenThread: (remoteId: string) => void;
 }) {
+  const copy = sidebarConfig.copy;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -214,14 +217,14 @@ export function SidebarArchivedRow({
               {historyConfig.archiveEnabled && (
                 <ThreadListItemPrimitive.Unarchive asChild>
                   <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                    <ArchiveRestore className="size-4" /> Unarchive
+                    <ArchiveRestore className="size-4" /> {copy.unarchive}
                   </ThreadListItemMorePrimitive.Item>
                 </ThreadListItemPrimitive.Unarchive>
               )}
               {historyConfig.deleteEnabled && (
                 <ThreadListItemPrimitive.Delete asChild>
                   <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                    <Trash2 className="size-4" /> Delete
+                      <Trash2 className="size-4" /> {copy.delete}
                   </ThreadListItemMorePrimitive.Item>
                 </ThreadListItemPrimitive.Delete>
               )}
@@ -234,19 +237,19 @@ export function SidebarArchivedRow({
         {historyConfig.archiveEnabled && (
           <ThreadListItemPrimitive.Unarchive asChild>
             <ContextMenuItem>
-              <ArchiveRestore className="size-4" /> Unarchive
+              <ArchiveRestore className="size-4" /> {copy.unarchive}
             </ContextMenuItem>
           </ThreadListItemPrimitive.Unarchive>
         )}
         <ContextMenuItem
           onSelect={() => void navigator.clipboard?.writeText(remoteId)}
         >
-          <Copy className="size-4" /> Copy ID
+          <Copy className="size-4" /> {copy.copyId}
         </ContextMenuItem>
         {historyConfig.deleteEnabled && (
           <ThreadListItemPrimitive.Delete asChild>
             <ContextMenuItem variant="destructive">
-              <Trash2 className="size-4" /> Delete
+              <Trash2 className="size-4" /> {copy.delete}
             </ContextMenuItem>
           </ThreadListItemPrimitive.Delete>
         )}

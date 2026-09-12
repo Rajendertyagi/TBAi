@@ -13,6 +13,7 @@ import {
   ArrowUp,
   Bot,
   Brain,
+  Check,
   ChevronDown,
   File,
   Image,
@@ -20,6 +21,8 @@ import {
   Paperclip,
   Square,
 } from "lucide-react";
+import { composerConfig } from "../config/composer";
+import { logger } from "../lib/logger";
 import { useSettingsStore } from "../stores";
 import { useMcpStore } from "../stores/mcpStore";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
@@ -32,10 +35,10 @@ import {
 } from "./ui/dropdown-menu";
 
 const THINKING_OPTIONS = [
-  { id: "default", label: "Default" },
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
+  { id: "default", label: composerConfig.copy.thinkingDefault },
+  { id: "low", label: composerConfig.copy.thinkingLow },
+  { id: "medium", label: composerConfig.copy.thinkingMedium },
+  { id: "high", label: composerConfig.copy.thinkingHigh },
 ];
 
 function useTextareaAutoGrow(textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
@@ -104,7 +107,7 @@ function ModelChip() {
     groups
       .flatMap((g) => g.models)
       .find((m) => m.id === currentModelId) ?? undefined;
-  const label = currentModel?.label ?? currentModelId ?? "Select model";
+  const label = currentModel?.label ?? currentModelId ?? composerConfig.copy.selectModel;
 
   const handleSelect = (providerId: string, modelId: string) => {
     // Set the one-shot override for the NEXT message, AND persist it as this
@@ -133,22 +136,22 @@ function ModelChip() {
           )}
         >
           <Bot className="size-3.5 shrink-0" />
-          <span className="max-w-[120px] truncate">{label}</span>
+          <span className="max-w-30 truncate">{label}</span>
           <ChevronDown className="size-3 shrink-0 opacity-50" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="min-w-[220px] max-h-[320px] overflow-y-auto">
+      <DropdownMenuContent side="top" align="start" className="min-w-55 max-h-80 overflow-y-auto">
         {groups.length === 0 || groups.every((g) => g.models.length === 0) ? (
           <DropdownMenuItem disabled>
-            <span className="text-muted-foreground">No models configured</span>
+            <span className="text-muted-foreground">{composerConfig.copy.noModels}</span>
           </DropdownMenuItem>
         ) : (
           groups.map((g) =>
             g.models.length === 0 ? null : (
               <div key={g.provider.id}>
-                <div className="px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
+                <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
                   {g.provider.name}
-                  {g.provider.id === activeProviderId && " · default"}
+                  {g.provider.id === activeProviderId && ` · ${composerConfig.copy.defaultSuffix}`}
                 </div>
                 {g.models.map((m) => (
                   <DropdownMenuItem
@@ -164,7 +167,7 @@ function ModelChip() {
                     <span className="truncate">{m.label ?? m.id}</span>
                     {m.id === currentModelId &&
                       g.provider.id === currentProviderId && (
-                        <span className="ml-auto text-[10px]">✓</span>
+                        <Check aria-hidden="true" className="ml-auto size-3.5 shrink-0" />
                       )}
                   </DropdownMenuItem>
                 ))}
@@ -175,8 +178,11 @@ function ModelChip() {
         {currentProvider && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-xs text-muted-foreground cursor-default">
-              Next message: {currentProvider.name} · {currentModelId || "default"}
+            <DropdownMenuItem className="cursor-default text-xs text-muted-foreground">
+              {composerConfig.copy.nextMessage(
+                currentProvider.name,
+                currentModelId || composerConfig.copy.defaultSuffix,
+              )}
             </DropdownMenuItem>
           </>
         )}
@@ -225,13 +231,13 @@ function ThinkingChip() {
           )}
         >
           <Brain className="size-3.5 shrink-0" />
-          <span className="max-w-[80px] truncate">
-            {THINKING_OPTIONS.find((o) => o.id === selected)?.label ?? "Thinking"}
+          <span className="max-w-20 truncate">
+            {THINKING_OPTIONS.find((o) => o.id === selected)?.label ?? composerConfig.copy.thinking}
           </span>
           <ChevronDown className="size-3 shrink-0 opacity-50" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="min-w-[120px]">
+      <DropdownMenuContent side="top" align="start" className="min-w-30">
         {THINKING_OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.id}
@@ -242,7 +248,9 @@ function ThinkingChip() {
             onSelect={() => handleSelect(opt.id)}
           >
             {opt.label}
-            {opt.id === selected && <span className="ml-auto text-[10px]">✓</span>}
+            {opt.id === selected && (
+              <Check aria-hidden="true" className="ml-auto size-3.5 shrink-0" />
+            )}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -252,34 +260,34 @@ function ThinkingChip() {
 
 function AttachDropdown() {
   const handlePickImage = async () => {
-    console.log("[composer] pick image — not yet wired");
+    logger.debug("composer", "attach_not_wired", { message: "pick image" });
   };
   const handlePickFile = async () => {
-    console.log("[composer] pick file — not yet wired");
+    logger.debug("composer", "attach_not_wired", { message: "pick file" });
   };
   const handlePickGithub = async () => {
-    console.log("[composer] pick github — not yet wired");
+    logger.debug("composer", "attach_not_wired", { message: "pick github" });
   };
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Attach" side="top">
+        <TooltipIconButton tooltip={composerConfig.copy.attach} side="top">
           <Paperclip className="size-3.5" />
         </TooltipIconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start">
         <DropdownMenuItem onSelect={handlePickImage}>
           <Image className="size-3.5" />
-          <span>Add Image</span>
+          <span>{composerConfig.copy.addImage}</span>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={handlePickFile}>
           <File className="size-3.5" />
-          <span>Add File</span>
+          <span>{composerConfig.copy.addFile}</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={handlePickGithub}>
-          <span>Add GitHub PR / Issue</span>
+          <span>{composerConfig.copy.addGithub}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

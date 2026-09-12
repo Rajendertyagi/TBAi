@@ -75,6 +75,12 @@ export interface SidebarConfig {
     clearSearch: string;
     showMore: (remaining: number) => string;
     loadMore: string;
+    rename: string;
+    archive: string;
+    unarchive: string;
+    delete: string;
+    copyId: string;
+    openInNewTab: string;
   };
 }
 
@@ -119,6 +125,12 @@ export const sidebarConfig: SidebarConfig = {
     clearSearch: "Clear search",
     showMore: (remaining: number) => `Show more (${remaining} more)`,
     loadMore: "Load more",
+    rename: "Rename",
+    archive: "Archive",
+    unarchive: "Unarchive",
+    delete: "Delete",
+    copyId: "Copy ID",
+    openInNewTab: "Open in New Tab",
   },
 };
 

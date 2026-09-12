@@ -713,3 +713,23 @@ future agents don't re-litigate:
   smoke on a FRESH server (stale-port lesson: kill + count processes first) —
   health/workspace/conversations+order/scheduler/SPA all 200, and
   `/api/workspace` returns the real root name. Desktop visuals via CI only.
+
+## Batch 3 — Context-menu consistency pass
+
+- **One grammar everywhere:** raw Radix menu markup now lives only in `ui/`
+  primers (the shadcn pattern — verified by grep); every feature menu goes
+  through `ui/context-menu` / `ui/dropdown-menu` (right-click vs trigger).
+  Separators use the canonical default (TabStrip`s `bg-border` override
+  removed); widths are scale classes (`min-w-44/56`, `min-w-30/55`,
+  `max-h-80`); check marks are lucide `Check` icons, not text glyphs.
+- **Copy centralization:** composer picker labels (model/thinking/attach) move
+  to new `config/composer.ts`; thread-row menu labels (rename/archive/
+  unarchive/delete/copy/open-in-tab) move to `sidebarConfig.copy`. Menu item
+  icons kept (codeg parity: icons on menus, none on tab menu).
+- **Logger rule enforced:** `PaseoComposer` attach stubs used `console.log`
+  (banned for feature code) — now `logger.debug("composer",
+  "attach_not_wired", …)`.
+- **Left alone deliberately:** message/panel `text-[10px]/[11px]` outside menus
+  (message timestamps, log view, badges) — separate typography pass, not menus.
+- **Verification:** typecheck 0, full build green, 28 unit tests pass, backend
+  smoke on a fresh server (health/workspace/SPA 200). Desktop visuals via CI.

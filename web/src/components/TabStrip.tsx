@@ -242,11 +242,11 @@ export function TabStrip() {
                 <ContextMenuItem onSelect={() => closeToRight(tab.key)}>
                   {tabStripConfig.copy.closeToRight}
                 </ContextMenuItem>
-                <ContextMenuSeparator className="my-1 h-px bg-border" />
+                <ContextMenuSeparator />
                 <ContextMenuItem onSelect={() => copyLink(tab)}>
                   {tabStripConfig.copy.copyLink}
                 </ContextMenuItem>
-                <ContextMenuSeparator className="my-1 h-px bg-border" />
+                <ContextMenuSeparator />
                 <ContextMenuItem onSelect={() => closeAll()}>
                   {tabStripConfig.copy.closeAll}
                 </ContextMenuItem>
