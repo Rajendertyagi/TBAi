@@ -162,3 +162,60 @@ export class TerminalBuffer {
     this.tailProgress = false;
   }
 }
+
+/** Message-part `name` for live terminal output (assistant-ui normalizes the
+ *  wire `data-tbai-terminal` into `{ type: "data", name: "tbai-terminal" }`). */
+export const TERMINAL_DATA_NAME = "tbai-terminal";
+
+/** Shape of a live terminal data part's `data` payload. */
+export interface TerminalStreamData {
+  toolCallId?: unknown;
+  chunks?: unknown;
+  done?: unknown;
+}
+
+/**
+ * Merge the live `data-tbai-terminal` parts of one message into a bounded line
+ * array for a single tool call. Pure + framework-free so it is unit-testable
+ * without an assistant-ui runtime. Mirrors the client buffer rules: chunks are
+ * pushed in stream order into a {@link TerminalBuffer} (ANSI-stripped, CR-folded,
+ * line-capped). Returns [] when no parts match `ownId`.
+ */
+export function mergeTerminalParts(
+  parts: readonly unknown[],
+  ownId: string,
+  maxLines: number = TERMINAL_MAX_LINES,
+): string[] {
+  if (!parts.length || !ownId) return [];
+  const buf = new TerminalBuffer(maxLines);
+  for (const part of parts) {
+    if (typeof part !== "object" || part === null) continue;
+    const t = part as { type?: unknown; name?: unknown; data?: unknown };
+    if (t.type !== "data" || t.name !== TERMINAL_DATA_NAME) continue;
+    const data = t.data as TerminalStreamData | undefined;
+    if (!data || data.toolCallId !== ownId) continue;
+    const chunks = Array.isArray(data.chunks) ? data.chunks : [];
+    for (const chunk of chunks) buf.push(String(chunk ?? ""));
+  }
+  return buf.lines;
+}
+
+/**
+ * Final-result lines for a completed run: stdout followed by stderr (matches the
+ * legacy display order). The durable tool result is the authoritative source
+ * once a run finishes; live parts are only a progressive preview.
+ */
+export function resultToLines(result: {
+  stdout?: unknown;
+  stderr?: unknown;
+}): string[] {
+  const out =
+    typeof result.stdout === "string" && result.stdout
+      ? splitTerminalLines(result.stdout)
+      : [];
+  const err =
+    typeof result.stderr === "string" && result.stderr
+      ? splitTerminalLines(result.stderr)
+      : [];
+  return [...out, ...err];
+}

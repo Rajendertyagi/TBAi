@@ -9,6 +9,8 @@ import {
   TerminalBuffer,
   splitTerminalLines,
   stripAnsi,
+  mergeTerminalParts,
+  resultToLines,
 } from "../../web/src/lib/terminal-lines";
 
 describe("stripAnsi", () => {
@@ -109,5 +111,74 @@ describe("TerminalBuffer", () => {
     buf.clear();
     expect(buf.lines).toEqual([]);
     expect(buf.length).toBe(0);
+  });
+});
+
+describe("mergeTerminalParts (live terminal adapter logic)", () => {
+  const part = (
+    toolCallId: string,
+    chunks: string[],
+    extra: Record<string, unknown> = {},
+  ) => ({ type: "data", name: "tbai-terminal", data: { toolCallId, chunks, ...extra } });
+
+  it("merges matching parts and ignores other tool calls", () => {
+    const parts = [
+      part("call-A", ["one\n", "two\n"]),
+      part("call-B", ["ignored\n"]),
+      part("call-A", ["three\n"]),
+    ];
+    expect(mergeTerminalParts(parts, "call-A")).toEqual(["one", "two", "three"]);
+  });
+
+  it("runs in stream order and folds CR progress", () => {
+    const parts = [
+      part("call-A", ["12%\r", "13%\r"]),
+      part("call-A", ["14%\r"]),
+      part("call-A", ["done\n"]),
+    ];
+    expect(mergeTerminalParts(parts, "call-A")).toEqual(["done"]);
+  });
+
+  it("strips ANSI embedded in live chunks", () => {
+    const parts = [part("call-A", ["\x1b[32mok\x1b[0m\n"])];
+    expect(mergeTerminalParts(parts, "call-A")).toEqual(["ok"]);
+  });
+
+  it("bounds live lines by maxLines", () => {
+    const parts = [part("call-A", ["a\n", "b\n", "c\n", "d\n", "e\n"])];
+    expect(mergeTerminalParts(parts, "call-A", 3)).toEqual(["c", "d", "e"]);
+  });
+
+  it("ignores non-terminal and malformed parts", () => {
+    const parts = [
+      { type: "data", name: "tbai-progress", data: { toolCallId: "call-A" } },
+      { type: "data", name: "tbai-terminal", data: { toolCallId: "call-A" } }, // no chunks
+      null,
+      42,
+      part("call-A", []),
+    ];
+    expect(mergeTerminalParts(parts, "call-A")).toEqual([]);
+  });
+
+  it("returns [] for empty parts or missing id", () => {
+    expect(mergeTerminalParts([], "call-A")).toEqual([]);
+    expect(mergeTerminalParts([part("call-A", ["x\n"])], "")).toEqual([]);
+  });
+});
+
+describe("resultToLines (completed-result adapter logic)", () => {
+  it("returns stdout lines then stderr lines", () => {
+    expect(
+      resultToLines({ stdout: "a\nb\n", stderr: "e1\ne2\n" }),
+    ).toEqual(["a", "b", "e1", "e2"]);
+  });
+
+  it("returns [] when output is absent", () => {
+    expect(resultToLines({})).toEqual([]);
+    expect(resultToLines({ stdout: "", stderr: undefined })).toEqual([]);
+  });
+
+  it("ignores non-string output", () => {
+    expect(resultToLines({ stdout: 42, stderr: null })).toEqual([]);
   });
 });

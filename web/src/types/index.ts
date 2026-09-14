@@ -24,11 +24,21 @@ export interface ProviderConfig {
   updatedAt: Date;
 }
 
+export type ConversationStatus = "regular" | "archived";
+
 export interface Conversation {
   id: string;
   title: string;
-  providerId: string;
-  systemPrompt?: string;
+  providerId: string | null;
+  modelId?: string | null;
+  reasoningLevel?: string | null;
+  systemPrompt?: string | null;
+  status: ConversationStatus;
+  titleSource?: "auto" | "user";
+  /** Workspace mode: 'simple' (disposable workspace) or 'project' (registered folder). */
+  workspaceMode: WorkspaceMode;
+  /** Registered folder ID for project chats; null for simple chats. */
+  workspaceFolderId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,6 +54,54 @@ export interface Message {
 export interface Memory {
   id: string;
   content: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Workspace mode for a conversation (codeg-aligned two-mode model). */
+export type WorkspaceMode = "simple" | "project";
+
+/**
+ * A registered project folder the user can attach a Project Chat to. The folder
+ * ID is the canonical identity; `path` is resolved server-side. Mirrors codeg's
+ * `folder` entity (subset justified by TBAi's UX).
+ */
+export interface Folder {
+  id: string;
+  name: string;
+  path: string;
+  alias?: string | null;
+  color: string;
+  groupId?: string | null;
+  isOpen: boolean;
+  sortOrder: number;
+  kind: "regular" | "chat";
+  lastOpenedAt?: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+  /** Count of conversations currently attached to this folder (UI hint). */
+  conversationCount?: number;
+}
+
+/**
+ * Authorization record for a linked/allowed path inside a registered folder.
+ * Phase 1: record only (no real filesystem symlinks); extensible later.
+ */
+export interface FolderLink {
+  id: string;
+  folderId: string;
+  name: string;
+  targetPath: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** User-named container organising the Folders list (sidebar grouping). */
+export interface FolderGroup {
+  id: string;
+  name: string;
+  color: string;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }

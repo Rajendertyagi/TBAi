@@ -6,12 +6,13 @@
  * literals, per the configuration-first rule.
  */
 
-export type SidebarSectionId = "chats" | "recent" | "archived";
+export type SidebarSectionId = "folders" | "chats" | "recent" | "archived";
 
 export type SidebarSortMode = "updated" | "created";
 
 /** All reorderable sections, in default top-to-bottom order. */
 export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
+  "folders",
   "chats",
   "recent",
   "archived",
@@ -45,6 +46,7 @@ export interface SidebarConfig {
   /** Copy (i18n-ready: no component literals). */
   copy: {
     newChat: string;
+    newProjectChat: string;
     toggleSidebar: string;
     toggleStatusBar: string;
     openSettings: string;
@@ -54,11 +56,13 @@ export interface SidebarConfig {
     searchLabel: string;
     searchShortcutHint: string;
     chats: string;
+    folders: string;
     recent: string;
     archived: string;
     viewOptions: string;
     listOptions: string;
     showRecent: string;
+    showCompleted: string;
     sortBy: string;
     sortByUpdated: string;
     sortByCreated: string;
@@ -82,6 +86,11 @@ export interface SidebarConfig {
     delete: string;
     copyId: string;
     openInNewTab: string;
+    deleteTitle: string;
+    deleteDescription: (title: string) => string;
+    cancel: string;
+    save: string;
+    threadRunning: string;
   };
 }
 
@@ -96,6 +105,7 @@ export const sidebarConfig: SidebarConfig = {
   searchMinLength: 1,
   copy: {
     newChat: "New Chat",
+    newProjectChat: "New Project Chat",
     toggleSidebar: "Toggle Sidebar",
     toggleStatusBar: "Toggle Status Bar",
     openSettings: "Open Settings",
@@ -105,11 +115,13 @@ export const sidebarConfig: SidebarConfig = {
     searchLabel: "Search conversations",
     searchShortcutHint: "Ctrl K",
     chats: "Chats",
+    folders: "Folders",
     recent: "Recent",
     archived: "Archived",
     viewOptions: "View options",
     listOptions: "List",
     showRecent: "Show Recent section",
+    showCompleted: "Show archived conversations",
     sortBy: "Sort by",
     sortByUpdated: "Last activity",
     sortByCreated: "Newest first",
@@ -133,12 +145,20 @@ export const sidebarConfig: SidebarConfig = {
     delete: "Delete",
     copyId: "Copy ID",
     openInNewTab: "Open in New Tab",
+    deleteTitle: "Delete conversation?",
+    deleteDescription: (title: string) =>
+      `"${title}" will be permanently deleted. This cannot be undone.`,
+    cancel: "Cancel",
+    save: "Save",
+    threadRunning: "Generating response",
   },
 };
 
 /** Section id → copy label. */
 export function sectionLabel(id: SidebarSectionId): string {
   switch (id) {
+    case "folders":
+      return sidebarConfig.copy.folders;
     case "chats":
       return sidebarConfig.copy.chats;
     case "recent":
@@ -155,6 +175,9 @@ export function sectionLabel(id: SidebarSectionId): string {
 export const chatHeaderConfig = {
   copy: {
     workspaceFallback: "Workspace",
+    temporaryWorkspace: "Temporary workspace",
+    newChat: "New Chat",
+    newProjectChat: "New Project Chat",
     newChatTitle: "New chat",
     untitled: "Untitled",
     moreActions: "More actions",
@@ -172,3 +195,4 @@ export const chatHeaderConfig = {
     save: "Save",
   },
 };
+

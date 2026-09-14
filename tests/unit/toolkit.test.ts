@@ -15,19 +15,19 @@ const EXPECTED = [
   "process_list",
   "process_kill",
   "system_info",
-  // Scheduler (AI-controlled)
-  "create_scheduled_job",
-  "list_scheduled_jobs",
-  "get_scheduled_job",
-  "update_scheduled_job",
-  "delete_scheduled_job",
-  "run_scheduled_job_now",
+  // Scheduler (AI-controlled, single action-dispatched tool)
+  "scheduler",
+  // Todo (per-conversation notepad)
+  "todo",
+  // Browser (native agent-browser CLI, no MCP)
+  "browser",
+  "browser_action",
 ];
 
 describe("native toolkit registration", () => {
-  it("registers exactly the 17 native tools, once each", () => {
+  it("registers exactly the 15 native tools, once each", () => {
     expect([...NATIVE_TOOL_NAMES].sort()).toEqual([...EXPECTED].sort());
-    expect(new Set(NATIVE_TOOL_NAMES).size).toBe(17);
+    expect(new Set(NATIVE_TOOL_NAMES).size).toBe(15);
   });
 
   it("every entry is a backend render-only definition", () => {

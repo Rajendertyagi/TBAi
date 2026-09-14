@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { logger, newRequestId, normalizeError } from "../lib/logger";
+import { newRequestId } from "../lib/logger";
 import { runRead, runWrite, runEdit, runBash, runList, runSearch, runStat, runDelete, runProcesses, runKill, runSysinfo, ToolError } from "../services/tools";
 import { toolReadSchema, toolWriteSchema, toolEditSchema, toolBashSchema, toolListSchema, toolSearchSchema, toolStatSchema, toolDeleteSchema, toolKillSchema } from "../lib/validation";
 
@@ -18,22 +18,11 @@ function toolHandler<T>(schema: z.ZodType<T>, fn: (args: T) => unknown | Promise
       if (!parsed.success) {
         return c.json({ error: "Invalid tool arguments", issues: parsed.error.issues, requestId }, 400);
       }
-      const started = Date.now();
       const out = await fn(parsed.data);
-      logger.debug("tools", "endpoint_completed", {
-        requestId,
-        message: c.req.path,
-        durationMs: Date.now() - started,
-      });
       return c.json(out);
     } catch (e) {
       if (e instanceof ToolError)
         return c.json({ error: e.message, requestId }, 400);
-      logger.warn("tools", "endpoint_failed", {
-        requestId,
-        message: c.req.path,
-        ...normalizeError(e),
-      });
       return c.json(
         { error: e instanceof Error ? e.message : "Tool failed", requestId },
         500,

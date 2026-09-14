@@ -126,7 +126,8 @@ app.post("/jobs", async (c) => {
     } satisfies JobCreate,
     db,
   );
-  logger.info("scheduler", "scheduler.job_created", {
+  logger.info("scheduler", "scheduler.admin", {
+    action: "created",
     jobId: created.id,
     message: created.name,
   });
@@ -216,7 +217,8 @@ app.patch("/jobs/:id", async (c) => {
     db,
   );
   if (!updated) return c.json({ error: "Job not found" }, 404);
-  logger.info("scheduler", "scheduler.job_updated", {
+  logger.info("scheduler", "scheduler.admin", {
+    action: "updated",
     jobId: id,
     message: updated.name,
   });
@@ -243,7 +245,8 @@ app.delete("/jobs/:id", (c) => {
   if (!existing) return c.json({ error: "Job not found" }, 404);
   unscheduleJob(id);
   schedulerStore.softDelete(id, db);
-  logger.info("scheduler", "scheduler.job_deleted", {
+  logger.info("scheduler", "scheduler.admin", {
+    action: "deleted",
     jobId: id,
     message: existing.name,
   });
@@ -280,7 +283,7 @@ app.post("/jobs/:id/enable", (c) => {
     { enabled: true, status: "active" },
     db,
   );
-  logger.info("scheduler", "scheduler.job_enabled", { jobId: id });
+  logger.info("scheduler", "scheduler.admin", { action: "enabled", jobId: id });
   if (updated) {
     try {
       scheduleJob(updated);
@@ -305,7 +308,7 @@ app.post("/jobs/:id/disable", (c) => {
     { enabled: false, status: "paused", nextRunAt: null },
     db,
   );
-  logger.info("scheduler", "scheduler.job_disabled", { jobId: id });
+  logger.info("scheduler", "scheduler.admin", { action: "disabled", jobId: id });
   return c.json(updated ? fullJobPublic(updated) : { success: true });
 });
 

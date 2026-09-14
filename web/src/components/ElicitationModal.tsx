@@ -31,7 +31,10 @@ export function ElicitationModal() {
         /* ignore polling errors */
       }
     };
-    const interval = setInterval(tick, 1500);
+    // Human-approval latency budget: a pending elicitation waits on a person,
+    // so 3s cadence is plenty (was 1.5s — the single hottest poll path in the
+    // log ring). See docs/logging.md volume budgets.
+    const interval = setInterval(tick, 3000);
     void tick();
     return () => {
       active = false;

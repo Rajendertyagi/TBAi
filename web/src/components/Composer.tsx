@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AuiIf,
   ComposerPrimitive,
@@ -27,6 +27,15 @@ import { useSettingsStore } from "../stores";
 import { useMcpStore } from "../stores/mcpStore";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "./ui/tooltip";
+import { ComposerContextMenu } from "./chat/ComposerContextMenu";
+import { ModelOptionList } from "./chat/ModelOptionList";
+import { buildModelGroups, resolveModelOwner } from "../lib/model-groups";
+import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
@@ -40,20 +49,6 @@ const THINKING_OPTIONS = [
   { id: "medium", label: composerConfig.copy.thinkingMedium },
   { id: "high", label: composerConfig.copy.thinkingHigh },
 ];
-
-function useTextareaAutoGrow(textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const adjust = () => {
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-    };
-    adjust();
-    el.addEventListener("input", adjust);
-    return () => el.removeEventListener("input", adjust);
-  }, [textareaRef]);
-}
 
 type ConversationCustom = {
   providerId?: string | null;
@@ -75,16 +70,9 @@ function ModelChip() {
     | undefined;
   const [open, setOpen] = useState(false);
 
-  // Every provider's models, grouped under its name (not just the active
-  // provider's). A provider with no explicit list contributes its default.
-  const groups = providers.map((p) => ({
-    provider: p,
-    models: p.models?.length
-      ? p.models
-      : p.model
-        ? [{ id: p.model, provider: p.type, label: p.model }]
-        : [],
-  }));
+  // Every provider's models, grouped under its name (single source in
+  // lib/model-groups — the picker list consumes the same groups).
+  const groups = buildModelGroups(providers, activeProviderId);
 
   // Effective selection: one-shot picker override wins, else the conversation
   // default (custom), else the global active provider's model.
@@ -92,12 +80,10 @@ function ModelChip() {
     selectedProviderId ?? custom?.providerId ?? activeProviderId;
   let currentModelId: string | undefined;
   if (selectedModelId) {
-    for (const g of groups) {
-      if (g.models.some((m) => m.id === selectedModelId)) {
-        currentProviderId = g.provider.id;
-        currentModelId = selectedModelId;
-        break;
-      }
+    const owner = resolveModelOwner(groups, selectedModelId);
+    if (owner) {
+      currentProviderId = owner.providerId;
+      currentModelId = owner.modelId;
     }
   }
   currentModelId ??= custom?.modelId ?? undefined;
@@ -140,50 +126,33 @@ function ModelChip() {
           <ChevronDown className="size-3 shrink-0 opacity-50" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="min-w-55 max-h-80 overflow-y-auto">
-        {groups.length === 0 || groups.every((g) => g.models.length === 0) ? (
-          <DropdownMenuItem disabled>
-            <span className="text-muted-foreground">{composerConfig.copy.noModels}</span>
-          </DropdownMenuItem>
+      <DropdownMenuContent side="top" align="start" className="min-w-55 p-0">
+        {groups.length === 0 ||
+        groups.every((g) => g.models.length === 0) ? (
+          <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+            {composerConfig.copy.noModels}
+          </div>
         ) : (
-          groups.map((g) =>
-            g.models.length === 0 ? null : (
-              <div key={g.provider.id}>
-                <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
-                  {g.provider.name}
-                  {g.provider.id === activeProviderId && ` · ${composerConfig.copy.defaultSuffix}`}
-                </div>
-                {g.models.map((m) => (
-                  <DropdownMenuItem
-                    key={`${g.provider.id}:${m.id}`}
-                    className={cn(
-                      "justify-between",
-                      m.id === currentModelId &&
-                        g.provider.id === currentProviderId &&
-                        "bg-accent text-accent-foreground",
-                    )}
-                    onSelect={() => handleSelect(g.provider.id, m.id)}
-                  >
-                    <span className="truncate">{m.label ?? m.id}</span>
-                    {m.id === currentModelId &&
-                      g.provider.id === currentProviderId && (
-                        <Check aria-hidden="true" className="ml-auto size-3.5 shrink-0" />
-                      )}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ),
-          )
+          <ModelOptionList
+            groups={groups}
+            currentProviderId={currentProviderId ?? undefined}
+            currentModelId={currentModelId}
+            onSelect={(providerId, modelId) => handleSelect(providerId, modelId)}
+            searchPlaceholder={composerConfig.copy.modelSearchPlaceholder}
+            searchAriaLabel={composerConfig.copy.modelSearchAria}
+            listAriaLabel={composerConfig.copy.modelListAria}
+            emptyLabel={composerConfig.copy.modelEmpty}
+          />
         )}
         {currentProvider && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="cursor-default text-xs text-muted-foreground">
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
               {composerConfig.copy.nextMessage(
                 currentProvider.name,
                 currentModelId || composerConfig.copy.defaultSuffix,
               )}
-            </DropdownMenuItem>
+            </div>
           </>
         )}
       </DropdownMenuContent>
@@ -294,8 +263,16 @@ function AttachDropdown() {
   );
 }
 
-function PaseoComposer() {
+/**
+ * The app's single composer instance (one definition, one live mount —
+ * ChatWindow owns the tag and injects it into the welcome/docked placement).
+ * The box is textarea + button row only, unconditionally identical
+ * everywhere; the folder scope chip renders as a separate row below it
+ * (deliberate divergence from Codeg's inside-the-box row — see decisions).
+ */
+function Composer() {
   const { setText } = unstable_useComposerInput();
+  const aui = useAui();
   const pendingInsert = useMcpStore((s) => s.pendingInsert);
   const clearPendingInsert = useMcpStore((s) => s.clearPendingInsert);
   useEffect(() => {
@@ -305,27 +282,30 @@ function PaseoComposer() {
     }
   }, [pendingInsert, setText, clearPendingInsert]);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  useTextareaAutoGrow(textareaRef);
-
   return (
-    <ComposerPrimitive.Root
-      className={cn(
-        "relative flex flex-col",
-        "rounded-2xl border border-border bg-card",
-        "transition-[border-color] duration-200 ease-in-out",
-        "focus-within:border-ring",
-      )}
-    >
-      {/* Textarea */}
-      <div className="px-3 pb-1">
-        <ComposerPrimitive.Input
-          asChild
-          autoFocus
-          submitMode="enter"
-        >
-          <textarea
-            ref={textareaRef}
+    <ComposerContextMenu>
+      <ComposerPrimitive.Root
+        // Own context menu (not the page menu): stop the event here so the
+        // app-shell menu never fires inside the composer. Non-mouse presses
+        // keep bubbling so panel selection bookkeeping is untouched.
+        onContextMenu={(event) => event.stopPropagation()}
+        onPointerDown={(event) => {
+          if (event.pointerType !== "mouse") event.stopPropagation();
+        }}
+        className={cn(
+          "relative flex flex-col",
+          "rounded-2xl border border-border bg-card",
+          "transition-[border-color] duration-200 ease-in-out",
+          "focus-within:border-ring",
+        )}
+      >
+        {/* Textarea: the primitive owns auto-resize (controlled by the
+            runtime, including programmatic clears on send) — no hand-rolled
+            height hook, so paste-then-send always shrinks back. */}
+        <div className="px-3 pb-1">
+          <ComposerPrimitive.Input
+            autoFocus
+            submitMode="enter"
             placeholder="Send a message…  (Enter to send)"
             rows={1}
             className={cn(
@@ -335,55 +315,104 @@ function PaseoComposer() {
               "outline-none",
             )}
           />
-        </ComposerPrimitive.Input>
-      </div>
-
-      {/* Button row: attach on left, model/thinking/voice/cancel/send on right */}
-      <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
-        {/* Left: attach */}
-        <div className="flex items-end gap-1">
-          <AttachDropdown />
         </div>
 
-        {/* Right: model, thinking, voice, cancel, send */}
-        <div className="flex items-center gap-1">
-          {/* Model chip */}
-          <ModelChip />
-          {/* Thinking chip: persists to the conversation default ("Default" =
-              the provider's saved level); also sets a one-shot override for the
-              immediate next message. */}
-          <ThinkingChip />
-          {/* Voice — always visible, disabled (no DictationAdapter) */}
-          <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">
-            <Mic className="size-3.5" />
-          </TooltipIconButton>
-          {/* Cancel — shown while streaming */}
-          <AuiIf condition={(s) => s.thread.isRunning}>
-            <ComposerPrimitive.Cancel asChild>
-              <TooltipIconButton tooltip="Stop generating" side="top">
-                <Square className="size-3.5" />
-              </TooltipIconButton>
-            </ComposerPrimitive.Cancel>
-          </AuiIf>
-          {/* Send — always rendered; disabled automatically by primitive when no content */}
-          <ComposerPrimitive.Send asChild>
-            <button
-              type="submit"
-              className={cn(
-                "size-7 rounded-full flex items-center justify-center",
-                "bg-accent text-accent-foreground",
-                "hover:bg-accent/90 active:scale-95",
-                "transition-all duration-150",
-                "disabled:opacity-30 disabled:pointer-events-none",
-              )}
-            >
-              <ArrowUp className="size-3.5" />
-            </button>
-          </ComposerPrimitive.Send>
+        {/* Button row: attach on left, thinking/model/voice/send-stop on right */}
+        <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
+          {/* Left: attach */}
+          <div className="flex items-end gap-1">
+            <AttachDropdown />
+          </div>
+
+          {/* Right: thinking, model, voice, send/stop (single slot) */}
+          <div className="flex items-center gap-1">
+            {/* Thinking chip: persists to the conversation default ("Default" =
+                the provider's saved level); also sets a one-shot override for the
+                immediate next message. */}
+            <ThinkingChip />
+            {/* Model chip */}
+            <ModelChip />
+            {/* Voice — always visible, disabled (no DictationAdapter) */}
+            <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">
+              <Mic className="size-3.5" />
+            </TooltipIconButton>
+            {/* Single action slot (docs idiom): exactly one of Send / Cancel
+                is mounted — arrow when idle, square Stop while generating.
+                Same footprint, so the row never shifts on swap. */}
+            <AuiIf condition={(s) => !s.thread.isRunning}>
+              <ComposerPrimitive.Send asChild>
+                <button
+                  type="submit"
+                  aria-label={composerConfig.copy.sendMessage}
+                  className={cn(
+                    "size-7 rounded-full flex items-center justify-center",
+                    "bg-accent text-accent-foreground",
+                    "hover:bg-accent/90 active:scale-95",
+                    "transition-all duration-150",
+                    "disabled:opacity-30 disabled:pointer-events-none",
+                  )}
+                >
+                  <ArrowUp className="size-3.5" />
+                </button>
+              </ComposerPrimitive.Send>
+            </AuiIf>
+            <AuiIf condition={(s) => s.thread.isRunning}>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <ComposerPrimitive.Cancel asChild>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Explicit server cancel: runs are server-owned, so
+                          // the browser abort alone merely detaches. Look up
+                          // the active stream id from the resumable store
+                          // (key format owned by runtime.ts) and cancel it.
+                          // Fire-and-forget: the local cancel proceeds
+                          // regardless of the outcome.
+                          try {
+                            const item = aui.threadListItem.getState() as {
+                              remoteId?: string | null;
+                              id?: string | null;
+                            };
+                            const key = item.remoteId ?? item.id;
+                            const streamId = key
+                              ? sessionStorage.getItem(`tbai-resume:${key}`)
+                              : null;
+                            if (streamId) {
+                              void fetch(
+                                `/api/chat/cancel/${encodeURIComponent(streamId)}`,
+                                { method: "POST" },
+                              ).catch(() => {});
+                            }
+                          } catch {
+                            /* sessionStorage unavailable; local cancel applies */
+                          }
+                        }}
+                        aria-label={composerConfig.copy.stopGenerating}
+                        className={cn(
+                          "size-7 rounded-full flex items-center justify-center",
+                          "bg-destructive text-destructive-foreground",
+                          "hover:bg-destructive/90 active:scale-95",
+                          "transition-all duration-150",
+                          "disabled:opacity-30 disabled:pointer-events-none",
+                        )}
+                      >
+                        <Square className="size-3.5" />
+                      </button>
+                    </ComposerPrimitive.Cancel>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {composerConfig.copy.stopGenerating}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </AuiIf>
+          </div>
         </div>
-      </div>
-    </ComposerPrimitive.Root>
+      </ComposerPrimitive.Root>
+    </ComposerContextMenu>
   );
 }
 
-export { PaseoComposer };
+export { Composer };

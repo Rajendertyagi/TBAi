@@ -27,11 +27,13 @@ import {
   runProcesses,
   runKill,
   runSysinfo,
+  WORKSPACE_DIR,
   type BashOutputEvent,
 } from "../services/tools";
 import { runScheduler } from "../services/scheduler/schedulerTools";
 import { runTodo } from "../services/todos";
 import { runBrowserRead, runBrowserAction } from "../services/browser";
+import { instrumentedExecute } from "../lib/tool-funnel";
 
 type ServerToolEntry = {
   type: "backend";
@@ -51,56 +53,56 @@ const entries: Record<string, ServerToolEntry> = {
     description:
       "Read a text file from the workspace. Returns the file content. Runs without approval.",
     parameters: js(toolSchemas.read_file),
-    execute: (a) => runRead(a),
+    execute: instrumentedExecute("read_file", (a) => runRead(a)),
   },
   write_file: {
     type: "backend",
     description:
       "Write or create a text file in the workspace. Requires user approval before executing.",
     parameters: js(toolSchemas.write_file),
-    execute: (a) => runWrite(a),
+    execute: instrumentedExecute("write_file", (a) => runWrite(a)),
   },
   edit_file: {
     type: "backend",
     description:
       "Replace text in a workspace file. Requires user approval before executing.",
     parameters: js(toolSchemas.edit_file),
-    execute: (a) => runEdit(a),
+    execute: instrumentedExecute("edit_file", (a) => runEdit(a)),
   },
   run_command: {
     type: "backend",
     description:
       "Run a shell command inside the workspace. Requires user approval before executing.",
     parameters: js(toolSchemas.run_command),
-    execute: (a) => runBash(a),
+    execute: instrumentedExecute("run_command", (a) => runBash(a)),
   },
   list_dir: {
     type: "backend",
     description:
       "List files and folders inside the workspace. Runs without approval.",
     parameters: js(toolSchemas.list_dir),
-    execute: (a) => runList(a),
+    execute: instrumentedExecute("list_dir", (a) => runList(a)),
   },
   search_files: {
     type: "backend",
     description:
       "Search file contents inside the workspace (case-insensitive). Runs without approval.",
     parameters: js(toolSchemas.search_files),
-    execute: (a) => runSearch(a),
+    execute: instrumentedExecute("search_files", (a) => runSearch(a)),
   },
   file_info: {
     type: "backend",
     description:
       "Show size, type and timestamps for a workspace path. Runs without approval.",
     parameters: js(toolSchemas.file_info),
-    execute: (a) => runStat(a),
+    execute: instrumentedExecute("file_info", (a) => runStat(a)),
   },
   delete_file: {
     type: "backend",
     description:
       "Delete a file or folder inside the workspace. Requires user approval before executing.",
     parameters: js(toolSchemas.delete_file),
-    execute: (a) => runDelete(a),
+    execute: instrumentedExecute("delete_file", (a) => runDelete(a)),
   },
   // ---- Computer ----
   process_list: {
@@ -108,21 +110,21 @@ const entries: Record<string, ServerToolEntry> = {
     description:
       "List running processes on this computer (pid, name, CPU, memory). Runs without approval.",
     parameters: js(toolSchemas.process_list),
-    execute: () => runProcesses(),
+    execute: instrumentedExecute("process_list", () => runProcesses()),
   },
   process_kill: {
     type: "backend",
     description:
       "Stop a running process by pid. Requires user approval before executing. Cannot kill the app itself or system processes.",
     parameters: js(toolSchemas.process_kill),
-    execute: (a) => runKill(a),
+    execute: instrumentedExecute("process_kill", (a) => runKill(a)),
   },
   system_info: {
     type: "backend",
     description:
       "Show computer info: OS, CPU, memory and uptime. Runs without approval.",
     parameters: js(toolSchemas.system_info),
-    execute: () => runSysinfo(),
+    execute: instrumentedExecute("system_info", () => runSysinfo()),
   },
   // ---- Scheduler (AI-controlled, single action-dispatched tool) ----
   scheduler: {
@@ -133,7 +135,7 @@ const entries: Record<string, ServerToolEntry> = {
       "for 'once' also execAt (epoch ms), for 'cron' also cronExpression (5-field). " +
       "get / update / delete / run_now require jobId. list accepts an optional status filter (active|paused|failed|all).",
     parameters: js(toolSchemas.scheduler),
-    execute: (a) => runScheduler(a),
+    execute: instrumentedExecute("scheduler", (a) => runScheduler(a)),
   },
   // ---- Todo (per-conversation durable notepad) ----
   todo: {
@@ -144,7 +146,7 @@ const entries: Record<string, ServerToolEntry> = {
     parameters: js(toolSchemas.todo),
     // threadId is injected per request in `withThreadContext` (chat route); the
     // static entry rejects when no thread context is available.
-    execute: (a) => runTodo(a as any),
+    execute: instrumentedExecute("todo", (a) => runTodo(a as any)),
   },
   // ---- Browser: read/navigation (agent-browser CLI, no MCP) ----
   browser: {
@@ -152,7 +154,7 @@ const entries: Record<string, ServerToolEntry> = {
     description:
       "Browser read/navigation via the agent-browser CLI (external persistent daemon). Actions: open a URL, snapshot the DOM, get page text, screenshot, or extract structured data with a prompt. Runs without approval.",
     parameters: js(toolSchemas.browser),
-    execute: (a) => runBrowserRead(a as any),
+    execute: instrumentedExecute("browser", (a) => runBrowserRead(a as any)),
   },
   // ---- Browser: interactive actions (agent-browser CLI, approval-gated) ----
   browser_action: {
@@ -160,7 +162,7 @@ const entries: Record<string, ServerToolEntry> = {
     description:
       "Interactive browser actions via the agent-browser CLI requiring approval. Actions: click an element by ref, fill a field, press a key, or perform an AI-driven act. Requires user approval before executing.",
     parameters: js(toolSchemas.browser_action),
-    execute: (a) => runBrowserAction(a as any),
+    execute: instrumentedExecute("browser_action", (a) => runBrowserAction(a as any)),
   },
 };
 
@@ -180,24 +182,46 @@ export function withThreadContext(
   tools: any,
   threadId: string | undefined,
   onTerminalOutput?: (toolCallId: string, event: BashOutputEvent) => void,
+  workspaceDir?: string,
 ): any {
-  if (threadId && tools.todo) {
-    tools.todo = {
-      ...tools.todo,
-      execute: (args: unknown) => runTodo(args as any, { threadId }),
-    };
-  }
+  // All filesystem / terminal tools resolve against the conversation's resolved
+  // workspace directory (simple = disposable, project = registered folder). The
+  // model can never supply a different root — `resolveSafe` confines every path.
+  const ws = workspaceDir ?? WORKSPACE_DIR;
+  const wrap = (name: string, fn: (args: any) => unknown) => {
+    if (tools[name]) {
+      tools[name] = { ...tools[name], execute: instrumentedExecute(name, fn) };
+    }
+  };
+  wrap("read_file", (a) => runRead(a, ws));
+  wrap("write_file", (a) => runWrite(a, ws));
+  wrap("edit_file", (a) => runEdit(a, ws));
+  wrap("list_dir", (a) => runList(a, ws));
+  wrap("search_files", (a) => runSearch(a, ws));
+  wrap("file_info", (a) => runStat(a, ws));
+  wrap("delete_file", (a) => runDelete(a, ws));
+
   if (onTerminalOutput && tools.run_command) {
     tools.run_command = {
       ...tools.run_command,
-      execute: (args: unknown, opts?: { toolCallId?: string }) =>
-        runBash({
-          ...(args as { command: string; cwd?: string }),
-          onOutput: (event) => {
-            const id = opts?.toolCallId;
-            if (id) onTerminalOutput(id, event);
+      execute: instrumentedExecute("run_command", (args: unknown, opts?: { toolCallId?: string }) =>
+        runBash(
+          {
+            ...(args as { command: string; cwd?: string }),
+            onOutput: (event) => {
+              const id = opts?.toolCallId;
+              if (id) onTerminalOutput(id, event);
+            },
           },
-        }),
+          ws,
+        ),
+      ),
+    };
+  }
+  if (threadId && tools.todo) {
+    tools.todo = {
+      ...tools.todo,
+      execute: instrumentedExecute("todo", (args: unknown) => runTodo(args as any, { threadId })),
     };
   }
   return tools;

@@ -30,34 +30,27 @@ export function redact(value: unknown): string {
 }
 
 /**
- * User-facing stream error copy. Maps provider/auth/rate-limit/abort failures
- * to stable messages so the ErrorPrimitive UI never renders raw SDK text.
- * Secrets are still scrubbed via redact() before returning.
+ * User-facing stream error copy. Consumes the shared classification so the
+ * ErrorPrimitive UI never renders raw SDK text and never diverges from the
+ * retry/logging policy. Secrets are still scrubbed via redact() before
+ * returning.
  */
 export function sanitizeStreamError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const lower = raw.toLowerCase();
-  let mapped: string;
-  if (lower.includes("abort") || lower.includes("aborted") || lower.includes("cancel")) {
-    mapped = "Generation stopped.";
-  } else if (/(401|403|unauthorized|forbidden|invalid api key|invalid_api_key|authentication)/i.test(raw)) {
-    mapped = "Provider credentials invalid or missing. Check the provider API key.";
-  } else if (/(429|rate limit|rate_limit|quota|too many requests)/i.test(raw)) {
-    mapped = "Provider rate limit reached. Wait briefly and retry.";
-  } else if (/(network|fetch failed|econn|enotfound|timeout|socket)/i.test(raw)) {
-    mapped = "Network error reaching the provider. Retry when online.";
-  } else if (/(tool|mcp)/i.test(raw) && lower.includes("error")) {
-    mapped = "A tool call failed. See diagnostics and retry.";
-  } else {
-    mapped = "Generation failed. Retry or pick another provider/model.";
+  switch (classifyError(error).category) {
+    case "cancelled":
+      return redact("Generation stopped.");
+    case "auth":
+      return redact("Provider credentials invalid or missing. Check the provider API key.");
+    case "rate_limit":
+      return redact("Provider rate limit reached. Wait briefly and retry.");
+    case "network":
+    case "timeout":
+      return redact("Network error reaching the provider. Retry when online.");
+    case "tool":
+      return redact("A tool call failed. See diagnostics and retry.");
+    default:
+      return redact("Generation failed. Retry or pick another provider/model.");
   }
-  return redact(mapped);
 }
 
-import { logger, normalizeError } from "./logger";
-
-/** Server-side diagnostic log for stream failures (no message content). */
-export function logStreamDiagnostic(scope: string, error: unknown): void {
-  // Central logger owns the output; this wrapper preserves the call sites.
-  logger.error(scope, "stream_error", { ...normalizeError(error) });
-}
+import { classifyError } from "./errors";

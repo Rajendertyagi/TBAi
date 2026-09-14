@@ -45,7 +45,7 @@ export function ChatView() {
     <div className="flex h-full min-h-0 flex-col">
       <ChatHeader threadId={target} />
       <div className="min-h-0 flex-1">
-        <ChatWindow />
+        <ChatWindow isDraft={target === NEW_DRAFT_TAB_ID} />
       </div>
     </div>
   );

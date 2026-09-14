@@ -200,12 +200,17 @@ export const schedulerStore = {
     return row ? mapJob(row) : null;
   },
 
-  list(database: Database = db): SchedulerJob[] {
+  list(database: Database = db, status?: string): SchedulerJob[] {
+    const filtered = status && status !== "all";
+    const where = filtered
+      ? `WHERE status != 'deleted' AND status = ?`
+      : `WHERE status != 'deleted'`;
+    const params: SQLQueryBindings[] = filtered ? [status as string] : [];
     const rows = database
       .query<JobRow, SQLQueryBindings[]>(
-        `SELECT ${JOB_COLUMNS} FROM scheduler_jobs WHERE status != 'deleted' ORDER BY created_at DESC`,
+        `SELECT ${JOB_COLUMNS} FROM scheduler_jobs ${where} ORDER BY created_at DESC`,
       )
-      .all();
+      .all(...params);
     return rows.map(mapJob);
   },
 

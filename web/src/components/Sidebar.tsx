@@ -9,7 +9,7 @@ import {
   ThreadListPrimitive,
   useAuiState,
 } from "@assistant-ui/react";
-import { SquarePen } from "lucide-react";
+import { FolderOpenDot, SquarePen } from "lucide-react";
 import { sidebarConfig, type SidebarSectionId } from "../config/sidebar";
 import { historyConfig } from "../config/history";
 import { dateGroupLabel } from "../lib/sidebar-sections";
@@ -22,6 +22,8 @@ import {
   SidebarArchivedRow,
   SidebarThreadRow,
 } from "../features/sidebar/components/SidebarThreadRow";
+import { FoldersSection } from "../features/sidebar/components/FoldersSection";
+import { WorkspaceFolderDialog } from "../features/folders/WorkspaceFolderDialog";
 
 interface RowData {
   remoteId: string;
@@ -41,6 +43,7 @@ interface RowData {
 export function Sidebar() {
   const copy = sidebarConfig.copy;
   const navigate = useNavigate();
+  const [addFolderOpen, setAddFolderOpen] = useState(false);
   // Thread switching itself is done by the row trigger; this only moves the
   // URL (ChatView opens the matching tab, the runtime switches threads,
   // onThreadIdChange confirms the tab store).
@@ -57,6 +60,7 @@ export function Sidebar() {
     (s) => s.setAllSectionsCollapsed,
   );
   const showRecent = useDesktopLayout((s) => s.showRecent);
+  const showCompleted = useDesktopLayout((s) => s.showCompleted);
   const archivedExpanded = useDesktopLayout((s) => s.archivedExpanded);
   const setArchivedExpanded = useDesktopLayout((s) => s.setArchivedExpanded);
   const searchQuery = useDesktopLayout((s) => s.searchQuery);
@@ -64,6 +68,7 @@ export function Sidebar() {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const isVisible = (id: SidebarSectionId): boolean => {
+    if (id === "folders") return true; // Always visible (empty hint when no folders)
     if (id === "recent") return showRecent;
     if (id === "archived") return historyConfig.archiveEnabled;
     return true;
@@ -96,6 +101,8 @@ export function Sidebar() {
         </ThreadListPrimitive.New>
       </div>
 
+      <WorkspaceFolderDialog open={addFolderOpen} onOpenChange={setAddFolderOpen} />
+
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
         <ThreadListPrimitive.Root className="flex flex-col gap-2">
           {order.map((id) => {
@@ -110,25 +117,42 @@ export function Sidebar() {
                 key={id}
                 id={id}
                 label={
-                  id === "chats"
-                    ? copy.chats
-                    : id === "recent"
-                      ? copy.recent
-                      : copy.archived
+                  id === "folders"
+                    ? copy.folders
+                    : id === "chats"
+                      ? copy.chats
+                      : id === "recent"
+                        ? copy.recent
+                        : copy.archived
                 }
                 expanded={expanded}
                 onExpandedChange={setExpanded}
+                actions={
+                  id === "folders" ? (
+                    <button
+                      type="button"
+                      onClick={() => setAddFolderOpen(true)}
+                      title="Open folder"
+                      aria-label="Open folder"
+                      className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    >
+                      <FolderOpenDot className="size-3.5" />
+                    </button>
+                  ) : undefined
+                }
               >
+                {id === "folders" && <FoldersSection />}
                 {id === "chats" && (
                   <ChatsItems
                     search={searchQuery}
+                    showCompleted={showCompleted}
                     onOpenThread={openThread}
                     onOpenArchive={() => setArchivedExpanded(true)}
                     onClearSearch={() => setSearchQuery("")}
                   />
                 )}
                 {id === "recent" && (
-                  <RecentItems search={searchQuery} onOpenThread={openThread} />
+                  <RecentItems search={searchQuery} showCompleted={showCompleted} onOpenThread={openThread} />
                 )}
                 {id === "archived" && expanded && (
                   <ArchivedItems onOpenThread={openThread} />
@@ -190,11 +214,13 @@ function toRowData(value: {
 /** Date-grouped regular threads with session paging + empty/error states. */
 function ChatsItems({
   search,
+  showCompleted,
   onOpenThread,
   onOpenArchive,
   onClearSearch,
 }: {
   search: string;
+  showCompleted: boolean;
   onOpenThread: (remoteId: string) => void;
   onOpenArchive: () => void;
   onClearSearch: () => void;
@@ -224,7 +250,8 @@ function ChatsItems({
     query
       ? s.threads.threadItems.filter(
           (t) =>
-            t.status === "regular" &&
+            (showCompleted || t.status === "regular") &&
+            t.custom?.workspaceMode !== "project" &&
             (t.title ?? "").toLowerCase().includes(query),
         ).length
       : -1,
@@ -236,6 +263,15 @@ function ChatsItems({
         {({ threadListItem }) => {
           const item = toRowData(threadListItem);
           if (!item) return null;
+          // Project conversations render under their folder header in the
+          // Folders section, not here. Only show simple-chat (folderless) items.
+          if (threadListItem.custom?.workspaceMode === "project") return null;
+          // Hide archived conversations when "show completed" is off.
+          if (
+            !showCompleted &&
+            (threadListItem.status === "archived")
+          )
+            return null;
           if (query && !(item.title ?? "").toLowerCase().includes(query)) {
             return null;
           }
@@ -325,9 +361,11 @@ function ChatsItems({
  */
 function RecentItems({
   search,
+  showCompleted,
   onOpenThread,
 }: {
   search: string;
+  showCompleted: boolean;
   onOpenThread: (remoteId: string) => void;
 }) {
   const shownCount = useRef(0);
@@ -339,6 +377,10 @@ function RecentItems({
       {({ threadListItem }) => {
         const item = toRowData(threadListItem);
         if (!item) return null;
+        // Project conversations render under their folder header.
+        if (threadListItem.custom?.workspaceMode === "project") return null;
+        // Hide archived conversations when "show completed" is off.
+        if (!showCompleted && threadListItem.status === "archived") return null;
         if (query && !(item.title ?? "").toLowerCase().includes(query)) {
           return null;
         }
@@ -375,3 +417,4 @@ function ArchivedItems({
     </ThreadListPrimitive.Items>
   );
 }
+

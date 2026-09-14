@@ -1,4 +1,4 @@
-import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, Palette, FolderCog, Server, Monitor, Settings, type LucideIcon } from "lucide-react";
+import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, type LucideIcon } from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -20,6 +20,8 @@ export type ViewId =
   | "logs"
   | "scheduler"
   | "workspace"
+  | "folders"
+  | "quick-messages"
   | "providers"
   | "appearance"
   | "desktop";
@@ -128,6 +130,17 @@ export const appConfig: AppConfig = {
       order: 4,
     },
     {
+      id: "folders",
+      label: "Folders",
+      icon: FolderCog,
+      view: "folders",
+      route: "/folders",
+      description: "Registered project folders",
+      visible: true,
+      railVisible: false,
+      order: 5,
+    },
+    {
       id: "desktop",
       label: "Desktop",
       icon: Monitor,
@@ -148,6 +161,17 @@ export const appConfig: AppConfig = {
       visible: true,
       railVisible: false,
       order: 6,
+    },
+    {
+      id: "quick-messages",
+      label: "Quick Messages",
+      icon: MessageSquareText,
+      view: "quick-messages",
+      route: "/quick-messages",
+      description: "Reusable composer snippets",
+      visible: true,
+      railVisible: false,
+      order: 7,
     },
     {
       id: "search",
@@ -220,9 +244,11 @@ const SETTINGS_VIEWS: ViewId[] = [
   "providers",
   "appearance",
   "workspace",
+  "folders",
   "desktop",
   "mcp",
   "memories",
+  "quick-messages",
   "logs",
 ];
 

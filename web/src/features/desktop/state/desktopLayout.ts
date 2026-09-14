@@ -40,6 +40,8 @@ interface DesktopLayoutState {
   sectionCollapsed: SidebarSectionCollapsed;
   /** Whether the Recent section renders. */
   showRecent: boolean;
+  /** Whether archived conversations are shown in the sidebar lists. */
+  showCompleted: boolean;
   /** Whether the Archived section is expanded. */
   archivedExpanded: boolean;
   /** Live conversation-search query (transient, never persisted). */
@@ -58,6 +60,7 @@ interface DesktopLayoutState {
   setSectionCollapsed: (id: SidebarSectionId, collapsed: boolean) => void;
   setAllSectionsCollapsed: (collapsed: boolean) => void;
   setShowRecent: (v: boolean) => void;
+  setShowCompleted: (v: boolean) => void;
   setArchivedExpanded: (v: boolean) => void;
   setSearchQuery: (q: string) => void;
   setSearchOpen: (open: boolean) => void;
@@ -73,6 +76,7 @@ interface PersistedLayout {
   sectionOrder: readonly SidebarSectionId[];
   sectionCollapsed: SidebarSectionCollapsed;
   showRecent: boolean;
+  showCompleted: boolean;
   archivedExpanded: boolean;
 }
 
@@ -87,6 +91,7 @@ function defaultPersisted(): PersistedLayout {
     sectionOrder: sidebarConfig.defaultSectionOrder,
     sectionCollapsed: {},
     showRecent: sidebarConfig.showRecentByDefault,
+    showCompleted: false,
     archivedExpanded: sidebarConfig.archivedExpandedByDefault,
   };
 }
@@ -128,6 +133,10 @@ function migratePersisted(persisted: unknown): DesktopLayoutState {
         : defaults.sectionCollapsed,
     showRecent:
       typeof p.showRecent === "boolean" ? p.showRecent : defaults.showRecent,
+    showCompleted:
+      typeof p.showCompleted === "boolean"
+        ? p.showCompleted
+        : defaults.showCompleted,
     archivedExpanded:
       typeof p.archivedExpanded === "boolean"
         ? p.archivedExpanded
@@ -172,6 +181,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
           return { sectionCollapsed: next };
         }),
       setShowRecent: (v) => set({ showRecent: v }),
+      setShowCompleted: (v) => set({ showCompleted: v }),
       setArchivedExpanded: (v) => set({ archivedExpanded: v }),
       setSearchQuery: (q) => set({ searchQuery: q }),
       setSearchOpen: (open) => set({ searchOpen: open }),
@@ -191,6 +201,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         sectionOrder: s.sectionOrder,
         sectionCollapsed: s.sectionCollapsed,
         showRecent: s.showRecent,
+        showCompleted: s.showCompleted,
         archivedExpanded: s.archivedExpanded,
       }),
     },

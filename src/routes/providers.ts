@@ -6,6 +6,7 @@ import { generateId } from "../lib/utils";
 import { credentialStore } from "../services/credentials";
 import { redact } from "../lib/redact";
 import { logger } from "../lib/logger";
+import { classifyError } from "../lib/errors";
 import { discoverModels } from "../services/modelDiscovery";
 import { providerCreateSchema, providerUpdateSchema, providerTestSchema, providerDiscoverSchema } from "../lib/validation";
 import { storageError } from "./shared";
@@ -102,6 +103,22 @@ app.put("/api/providers/:id", async (c) => {
 app.delete("/api/providers/:id", async (c) => {
   try {
     const id = c.req.param("id");
+    // In-use protection (Codeg PROVIDER_IN_USE parity): refuse to delete a
+    // provider conversations still point at, naming the count so the user
+    // can move or delete those chats first.
+    const usage = db
+      .query<{ c: number }, SQLQueryBindings[]>(
+        "SELECT COUNT(*) AS c FROM conversations WHERE provider_id = ?",
+      )
+      .get(id);
+    if (usage && usage.c > 0) {
+      return c.json(
+        {
+          error: `Provider is in use by ${usage.c} conversation${usage.c === 1 ? "" : "s"}. Reassign or delete them first.`,
+        },
+        400,
+      );
+    }
     credentialStore.delete(id);
     db.run("DELETE FROM provider_configs WHERE id = ?", [id]);
     await registry.loadFromDb(db);
@@ -145,11 +162,7 @@ app.post("/api/providers/test", async (c) => {
     return c.json({ ok: true, modelCount: models.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Connection failed";
-    logger.warn("ai.provider", "provider_test_failed", {
-      requestId: (c.get("requestId") as string | undefined),
-      provider: cfg.type,
-      message: redact(msg),
-    });
+    logger.warn("ai", "ai.error", { ...classifyError(e, { provider: cfg.type }) });
     return c.json({ ok: false, error: redact(msg) }, 200);
   }
 });
@@ -180,11 +193,7 @@ app.post("/api/providers/discover", async (c) => {
     return c.json({ ok: true, models });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Discovery failed";
-    logger.warn("ai.provider", "model_discovery_failed", {
-      requestId: (c.get("requestId") as string | undefined),
-      provider: cfg.type,
-      message: redact(msg),
-    });
+    logger.warn("ai", "ai.error", { ...classifyError(e, { provider: cfg.type }) });
     return c.json({ ok: false, error: redact(msg) }, 200);
   }
 });

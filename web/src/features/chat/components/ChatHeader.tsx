@@ -59,20 +59,45 @@ export function ChatHeader({ threadId }: { threadId: string }) {
   const isDraft = threadId === NEW_DRAFT_TAB_ID;
 
   const [rootName, setRootName] = useState(copy.workspaceFallback);
+  const [rootHref, setRootHref] = useState("/workspace");
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/workspace")
+    // Draft (pre-creation) chat: nothing is persisted yet — show the default.
+    if (isDraft) {
+      setRootHref("/workspace");
+      fetch("/api/workspace")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!cancelled && data?.name) setRootName(data.name);
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
+    // Existing conversation: derive the crumb from its workspace mode.
+    fetch(`/api/conversations/${threadId}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!cancelled && data && typeof data.name === "string" && data.name) {
-          setRootName(data.name);
+      .then((conv) => {
+        if (cancelled || !conv) return;
+        if (conv.workspaceMode === "project" && conv.workspaceFolderId) {
+          setRootHref("/folders");
+          return fetch(`/api/folders/${conv.workspaceFolderId}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((f) => {
+              if (cancelled) return;
+              setRootName(f ? (f.alias || f.name) : "Project (folder removed)");
+            })
+            .catch(() => {});
         }
+        setRootHref("/workspace");
+        setRootName(copy.temporaryWorkspace);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [copy.workspaceFallback]);
+  }, [threadId, isDraft, copy.workspaceFallback, copy.temporaryWorkspace]);
 
   // Narrow primitive reads: re-render only when THIS thread's title/status
   // change, never on streaming tokens or other threads' updates.
@@ -157,7 +182,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <button
           type="button"
-          onClick={() => navigate("/workspace")}
+          onClick={() => navigate(rootHref)}
           title={rootName}
           className="shrink-0 truncate rounded text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >

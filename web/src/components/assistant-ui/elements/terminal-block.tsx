@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { Check as CheckIcon, Loader as Loader2Icon } from "lucide-react";
+import { Check as CheckIcon, Loader as Loader2Icon, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { mono, paper } from "./surfaces";
 import { take } from "../utils/range";
@@ -35,6 +35,12 @@ export function TerminalBlock({
   visibleCount: number;
   done: boolean;
   variant?: "paper" | "ink";
+  /**
+   * Header status. Defaults to deriving from `done` (success → green "exit 0").
+   * Pass "error" to show a red failure badge instead — the TBAi chrome renders
+   * the real exit code / timeout below the block.
+   */
+  status?: "success" | "error";
 }) {
   const ink = variant === "ink";
 
@@ -60,19 +66,35 @@ export function TerminalBlock({
           {command}
         </span>
         {done ? (
-          <div className="flex items-center gap-1">
-            <CheckIcon className="size-3 text-emerald-500" />
-            <span
-              className={cn(
-                mono,
-                ink
-                  ? "text-background/40 dark:text-foreground/40"
-                  : "text-foreground/40",
-              )}
-            >
-              exit 0
-            </span>
-          </div>
+          status === "error" ? (
+            <div className="flex items-center gap-1">
+              <XIcon className="size-3 text-destructive" />
+              <span
+                className={cn(
+                  mono,
+                  ink
+                    ? "text-background/40 dark:text-foreground/40"
+                    : "text-foreground/40",
+                )}
+              >
+                failed
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <CheckIcon className="size-3 text-emerald-500" />
+              <span
+                className={cn(
+                  mono,
+                  ink
+                    ? "text-background/40 dark:text-foreground/40"
+                    : "text-foreground/40",
+                )}
+              >
+                exit 0
+              </span>
+            </div>
+          )
         ) : (
           <Loader2Icon
             className={cn(

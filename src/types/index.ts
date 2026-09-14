@@ -30,6 +30,18 @@ export interface ProviderConfig {
   updatedAt: Date;
 }
 
+export type WorkspaceMode = "simple" | "project";
+
+/**
+ * Persistent conversation status: binary only.
+ * - regular: active conversation.
+ * - archived: done/hidden conversation (sidebar Archived section, excluded
+ *   from scheduler targeting).
+ * Runtime activity (loading/streaming) lives in assistant-ui thread state,
+ * never here; job execution lives in scheduler_runs.status.
+ */
+export type ConversationStatus = "regular" | "archived";
+
 export interface Conversation {
   id: string;
   title: string;
@@ -37,8 +49,46 @@ export interface Conversation {
   modelId?: string | null;
   reasoningLevel?: string | null;
   systemPrompt?: string | null;
-  status: "regular" | "archived";
+  status: ConversationStatus;
   titleSource?: "auto" | "user";
+  /** Workspace mode: 'simple' (disposable workspace) or 'project' (registered folder). */
+  workspaceMode: WorkspaceMode;
+  /** Registered folder ID for project chats; null for simple chats. */
+  workspaceFolderId?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  path: string;
+  alias?: string | null;
+  color: string;
+  groupId?: string | null;
+  isOpen: boolean;
+  sortOrder: number;
+  kind: "regular" | "chat";
+  lastOpenedAt?: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+  conversationCount?: number;
+}
+
+export interface FolderLink {
+  id: string;
+  folderId: string;
+  name: string;
+  targetPath: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface FolderGroup {
+  id: string;
+  name: string;
+  color: string;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -54,6 +104,16 @@ export interface Message {
 export interface Memory {
   id: string;
   content: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** User-saved reusable message snippet (managed on the Quick Messages page). */
+export interface QuickMessage {
+  id: string;
+  title: string;
+  content: string;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }

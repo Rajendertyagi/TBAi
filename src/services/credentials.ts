@@ -1,6 +1,8 @@
 import { gcm } from "@noble/ciphers/aes.js";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { db } from "../db";
+import { logger } from "../lib/logger";
+import { classifyError } from "../lib/errors";
 
 // Local, portable credential encryption for a personal-use app.
 //
@@ -111,7 +113,13 @@ export class CredentialStore {
     const envelope = JSON.parse(row.encrypted_api_key) as EncryptedEnvelope;
     try {
       return utf8Decode(gcm(key, hexToBytes(envelope.nonce)).decrypt(hexToBytes(envelope.ct)));
-    } catch {
+    } catch (err) {
+      // Security-relevant: a decrypt failure means corruption or tampering.
+      // Logged here (not just at the HTTP edge) with the provider identity.
+      logger.error("credential", "credential.error", {
+        providerId,
+        ...classifyError(err),
+      });
       throw new CredentialError(
         "Failed to decrypt credential (data may be corrupted)",
       );
@@ -151,8 +159,13 @@ export class CredentialStore {
   /** Decrypt a value produced by {@link encryptValue}. */
   decryptValue(envelopeJson: string): string {
     const key = this.requireKey();
-    const envelope = JSON.parse(envelopeJson) as EncryptedEnvelope;
-    return utf8Decode(gcm(key, hexToBytes(envelope.nonce)).decrypt(hexToBytes(envelope.ct)));
+    try {
+      const envelope = JSON.parse(envelopeJson) as EncryptedEnvelope;
+      return utf8Decode(gcm(key, hexToBytes(envelope.nonce)).decrypt(hexToBytes(envelope.ct)));
+    } catch (err) {
+      logger.error("credential", "credential.error", { ...classifyError(err) });
+      throw err instanceof Error ? err : new CredentialError("Failed to decrypt value");
+    }
   }
 }
 

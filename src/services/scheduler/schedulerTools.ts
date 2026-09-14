@@ -14,6 +14,7 @@
 import { db } from "../../db";
 import { registry } from "../../config/providers";
 import { logger, newRequestId } from "../../lib/logger";
+import type { SchedulerArgs } from "../../lib/validation";
 import type { JobCreate } from "./schedulerStore";
 import { schedulerStore } from "./schedulerStore";
 import { runJobNow, scheduleJob, unscheduleJob } from "./scheduler";
@@ -103,7 +104,8 @@ export const schedulerToolHandlers = {
       } satisfies JobCreate,
       db,
     );
-    logger.info("scheduler", "scheduler.job_created", {
+    logger.info("scheduler", "scheduler.admin", {
+      action: "created",
       requestId,
       jobId: created.id,
       message: created.name,
@@ -123,8 +125,8 @@ export const schedulerToolHandlers = {
     return { created: true, job: toJobSummary(created) };
   },
 
-  async list() {
-    const jobs = schedulerStore.list(db);
+  async list(status?: string) {
+    const jobs = schedulerStore.list(db, status);
     return {
       count: jobs.length,
       jobs: jobs.map(toJobSummary),
@@ -200,7 +202,8 @@ export const schedulerToolHandlers = {
       db,
     );
     if (!updated) throw new Error(`Scheduler job not found: ${id}`);
-    logger.info("scheduler", "scheduler.job_updated", {
+    logger.info("scheduler", "scheduler.admin", {
+      action: "updated",
       jobId: id,
       message: updated.name,
     });
@@ -224,7 +227,8 @@ export const schedulerToolHandlers = {
     if (!existing) throw new Error(`Scheduler job not found: ${args.id}`);
     unscheduleJob(args.id);
     schedulerStore.softDelete(args.id, db);
-    logger.info("scheduler", "scheduler.job_deleted", {
+    logger.info("scheduler", "scheduler.admin", {
+      action: "deleted",
       jobId: args.id,
       message: existing.name,
     });
@@ -237,3 +241,100 @@ export const schedulerToolHandlers = {
     return { triggered: true, runId: result.runId, jobId: args.id };
   },
 };
+
+/** Prompt-free summary shape returned for a single job by every action. */
+export type SchedulerJobView = ReturnType<typeof toJobSummary>;
+
+/** Uniform result envelope for the single `scheduler` AI tool. */
+export type SchedulerResult =
+  | {
+      ok: true;
+      action: SchedulerArgs["action"];
+      summary: string;
+      job?: SchedulerJobView;
+      jobs?: SchedulerJobView[];
+      id?: string;
+      runId?: string;
+      jobId?: string;
+    }
+  | { ok: false; action: SchedulerArgs["action"]; error: string };
+
+/**
+ * Single AI entry point for all scheduler operations. Dispatches on `action`
+ * to the existing `schedulerToolHandlers` (which own persistence + timers),
+ * reshaping each handler result into a uniform envelope. `jobId` from the
+ * tool schema is mapped to the `id` the handlers expect; on failure the
+ * envelope carries `ok:false` with the surfaced error rather than throwing.
+ */
+export async function runScheduler(args: SchedulerArgs): Promise<SchedulerResult> {
+  const action = args.action;
+  try {
+    switch (action) {
+      case "create": {
+        const r = await schedulerToolHandlers.create(args);
+        return {
+          ok: true,
+          action,
+          summary: `Created job "${r.job.name}"`,
+          job: r.job,
+          id: r.job.id,
+        };
+      }
+      case "list": {
+        const r = await schedulerToolHandlers.list(args.status);
+        return {
+          ok: true,
+          action,
+          summary: `${r.count} job(s)`,
+          jobs: r.jobs,
+        };
+      }
+      case "get": {
+        const r = await schedulerToolHandlers.get({ id: args.jobId });
+        return {
+          ok: true,
+          action,
+          summary: `Job "${r.job.name}"`,
+          job: r.job,
+          id: args.jobId,
+        };
+      }
+      case "update": {
+        const r = await schedulerToolHandlers.update({ ...args, id: args.jobId });
+        return {
+          ok: true,
+          action,
+          summary: `Updated job "${r.job.name}"`,
+          job: r.job,
+          id: args.jobId,
+        };
+      }
+      case "delete": {
+        await schedulerToolHandlers.delete({ id: args.jobId });
+        return {
+          ok: true,
+          action,
+          summary: "Deleted job",
+          id: args.jobId,
+          jobId: args.jobId,
+        };
+      }
+      case "run_now": {
+        const r = await schedulerToolHandlers.runNow({ id: args.jobId });
+        return {
+          ok: true,
+          action,
+          summary: "Triggered run",
+          runId: r.runId,
+          jobId: args.jobId,
+        };
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      action,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

@@ -11,6 +11,7 @@ import {
 import { useAui, useRemoteThreadListRuntime, type RemoteThreadListAdapter } from "@assistant-ui/react";
 import { useSettingsStore } from "./stores";
 import { logger } from "./lib/logger";
+import { classifyChatError } from "./lib/transport-errors";
 
 /**
  * Wires the assistant-ui runtime to our backend using the native
@@ -68,6 +69,45 @@ function makeIsFinishEvent(): (chunk: Uint8Array, accumulator: string) => boolea
   };
 }
 
+function diagnosticFetch(
+  getThreadListItem: () => { remoteId?: string; id?: string } | undefined,
+): typeof globalThis.fetch {
+  const baseFetch = globalThis.fetch.bind(globalThis);
+  const wrapped = async (
+    input: URL | RequestInfo,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const startedAt = Date.now();
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const threadId = getThreadListItem()?.remoteId ?? getThreadListItem()?.id ?? "unknown";
+    logger.info("chat", "frontend_request_sent", { url, threadId });
+
+    try {
+      const res = await baseFetch(input, init);
+      logger.info("chat", "frontend_response_received", {
+        status: res.status,
+        elapsedMs: Date.now() - startedAt,
+        threadId,
+      });
+      return res;
+    } catch (err) {
+      logger.error("chat", "frontend_request_failed", {
+        elapsedMs: Date.now() - startedAt,
+        threadId,
+        errorType: err instanceof Error ? err.name : typeof err,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  };
+  return Object.assign(wrapped, { preconnect: baseFetch.preconnect });
+}
+
 function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
   const aui = useAui();
   // Hoisted so onResumeError can clear the same per-thread key the transport
@@ -86,6 +126,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     () =>
       new AssistantChatTransport({
         api: "/api/chat",
+        fetch: diagnosticFetch(() => aui.threadListItem.getState()),
         resumable: {
           storage,
           resumeApi: (streamId) => `/api/chat/resume/${streamId}`,
@@ -161,6 +202,16 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
 
   return useChatRuntime({
     transport,
+    // Observability only: classify every run error for the console log so a
+    // transport kill is identifiable without opening devtools networking.
+    // No state changes, no retries — flows into useChat's Chat.onError.
+    onError: (error) => {
+      const kind = classifyChatError(error);
+      logger.debug("chat", "run_error_classified", {
+        kind,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    },
     // Continuation contract (official ai helpers): after a tool result OR an
     // approval decision lands, the runtime automatically resends the thread so
     // the model continues. Without this the run stalls in `ready` state.

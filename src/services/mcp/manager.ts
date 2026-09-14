@@ -9,6 +9,7 @@ import { logger, normalizeError } from "../../lib/logger";
 import { encryptSecret, decryptSecret } from "../../services/credentials";
 import { credentialStore } from "../../services/credentials";
 import { getModel } from "../../services/ai";
+import { instrumentedExecute } from "../../lib/tool-funnel";
 import { registry } from "../../config/providers";
 import type { McpServerCreate } from "../../lib/validation";
 import type {
@@ -291,7 +292,9 @@ export class McpManager {
       this.pushEvent(id, "log", "Roots list changed notification sent");
       return true;
     } catch (err) {
-      logger.error("mcp", "roots_notify_failed", {
+      logger.error("mcp", "mcp.operation", {
+        op: "roots_notify",
+        outcome: "error",
         mcpServer: conn.config.name,
         transport: conn.config.transport,
         ...normalizeError(err),
@@ -427,7 +430,9 @@ export class McpManager {
       this.pushEvent(id, "connected", `Connected to ${config.name} (era: ${conn.protocolEra ?? "unknown"})`);
 
       await this.discoverCapabilities(id);
-      logger.info("mcp", "server_connected", {
+      logger.info("mcp", "mcp.operation", {
+        op: "connect",
+        outcome: "ok",
         mcpServer: config.name,
         transport: config.transport,
         message: `tools=${conn.tools.length} resources=${conn.resources.length} prompts=${conn.prompts.length} era=${conn.protocolEra ?? "unknown"}`,
@@ -438,7 +443,9 @@ export class McpManager {
       conn.error = message;
       conn.lastErrorAt = Date.now();
       this.pushEvent(id, "error", `Connection failed: ${message}`);
-      logger.error("mcp", "connect_failed", {
+      logger.error("mcp", "mcp.operation", {
+        op: "connect",
+        outcome: "error",
         mcpServer: config.name,
         transport: config.transport,
         ...normalizeError(err),
@@ -463,7 +470,7 @@ export class McpManager {
     }
     conn.status = "disconnected";
     this.pushEvent(id, "disconnected", `Disconnected from ${conn.config.name}`);
-    logger.info("mcp", "server_disconnected", { mcpServer: conn.config.name });
+    logger.info("mcp", "mcp.operation", { op: "disconnect", outcome: "ok", mcpServer: conn.config.name });
   }
 
   async reconnect(id: string): Promise<void> {
@@ -490,7 +497,9 @@ export class McpManager {
     conn.reconnectTimer = setTimeout(() => {
       const c = this.connections.get(id);
       if (!c || !c.config.enabled || c.status === "connected") return;
-      logger.info("mcp", "reconnect_attempt", {
+      logger.info("mcp", "mcp.operation", {
+        op: "reconnect",
+        outcome: "started",
         mcpServer: c.config.name,
         transport: c.config.transport,
         message: `attempt=${attempt}`,
@@ -622,7 +631,9 @@ export class McpManager {
     // Roots: advertise which filesystem locations the server may access.
     client.setRequestHandler('roots/list', () => {
       const roots: Root[] = (conn.config.roots ?? []).map((uri) => ({ uri }));
-      logger.debug("mcp", "roots_listed", {
+      logger.debug("mcp", "mcp.operation", {
+        op: "roots",
+        outcome: "ok",
         mcpServer: conn.config.name,
         message: `count=${roots.length}`,
       });
@@ -682,7 +693,9 @@ export class McpManager {
       stopSequences: params.stopSequences,
     });
     this.pushEvent(id, "log", `Sampling request fulfilled via ${provider.name}`);
-    logger.info("mcp", "sampling_fulfilled", {
+    logger.info("mcp", "mcp.operation", {
+      op: "sampling",
+      outcome: "ok",
       mcpServer: this.connections.get(id)?.config.name ?? id,
       provider: provider.type,
       model: provider.model,
@@ -729,7 +742,9 @@ export class McpManager {
       }
       conn.pendingElicitation = { elicitationId, resolve, info };
       this.pushEvent(id, "log", `Elicitation requested: ${info.message}`);
-      logger.info("mcp", "elicitation_requested", {
+      logger.info("mcp", "mcp.operation", {
+        op: "elicitation",
+        outcome: "started",
         mcpServer: conn.config.name,
         message: `mode=${mode} fields=${info.fields?.length ?? 0}`,
       });
@@ -760,7 +775,9 @@ export class McpManager {
         : { action };
     conn.pendingElicitation.resolve(result);
     conn.pendingElicitation = undefined;
-    logger.info("mcp", "elicitation_resolved", {
+    logger.info("mcp", "mcp.operation", {
+      op: "elicitation",
+      outcome: "ok",
       mcpServer: conn.config.name,
       message: `action=${action}`,
     });
@@ -781,14 +798,18 @@ export class McpManager {
         text: c.text,
         blob: c.blob,
       }));
-      logger.debug("mcp", "resource_read", {
+      logger.debug("mcp", "mcp.operation", {
+        op: "resource_read",
+        outcome: "ok",
         mcpServer: conn.config.name,
         message: `uri=${uri} blocks=${contents.length}`,
         durationMs: Date.now() - started,
       });
       return { contents };
     } catch (err) {
-      logger.warn("mcp", "resource_read_failed", {
+      logger.warn("mcp", "mcp.operation", {
+        op: "resource_read",
+        outcome: "error",
         mcpServer: conn.config.name,
         message: `uri=${uri}`,
         durationMs: Date.now() - started,
@@ -808,14 +829,18 @@ export class McpManager {
         role: m.role,
         content: { type: "text", text: extractMessageText(m.content) },
       }));
-      logger.debug("mcp", "prompt_request", {
+      logger.debug("mcp", "mcp.operation", {
+        op: "prompt",
+        outcome: "ok",
         mcpServer: conn.config.name,
         message: `name=${name}`,
         durationMs: Date.now() - started,
       });
       return { description: res.description, messages };
     } catch (err) {
-      logger.warn("mcp", "prompt_request_failed", {
+      logger.warn("mcp", "mcp.operation", {
+        op: "prompt",
+        outcome: "error",
         mcpServer: conn.config.name,
         message: `name=${name}`,
         durationMs: Date.now() - started,
@@ -882,11 +907,11 @@ export class McpManager {
         tools[toolName] = tool({
           description: `[${conn.config.name}] ${t.description ?? t.name}`,
           inputSchema: jsonSchema(schema as never),
-          execute: async (args: unknown, options?: { abortSignal?: AbortSignal }) => {
-            const started = Date.now();
-            const signal = options?.abortSignal ?? requestSignal;
-            // v2 callTool(params, options?) — no result-schema argument.
-            try {
+          execute: instrumentedExecute(
+            toolName,
+            async (args: unknown, options?: { abortSignal?: AbortSignal }) => {
+              const signal = options?.abortSignal ?? requestSignal;
+              // v2 callTool(params, options?) — no result-schema argument.
               const res = await conn.client.callTool(
                 { name: t.name, arguments: args as Record<string, unknown> },
                 signal ? { signal, timeout: 120000 } : { timeout: 120000 },
@@ -895,22 +920,10 @@ export class McpManager {
               if (res?.isError) {
                 throw new Error(text || "MCP tool returned an error");
               }
-              logger.debug("mcp", "tool_call_completed", {
-                mcpServer: conn.config.name,
-                tool: t.name,
-                durationMs: Date.now() - started,
-              });
               return text;
-            } catch (err) {
-              logger.warn("mcp", "tool_call_failed", {
-                mcpServer: conn.config.name,
-                tool: t.name,
-                durationMs: Date.now() - started,
-                ...normalizeError(err),
-              });
-              throw err;
-            }
-          },
+            },
+            { mcpServer: conn.config.name },
+          ),
         });
       }
     }

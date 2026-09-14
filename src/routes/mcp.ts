@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { mcpManager } from "../services/mcp/manager";
 import { redact } from "../lib/redact";
-import { logger, normalizeError } from "../lib/logger";
+import { logger } from "../lib/logger";
+import { classifyError } from "../lib/errors";
 import {
   mcpServerCreateSchema,
   mcpServerUpdateSchema,
@@ -93,10 +94,11 @@ app.post("/servers/test", async (c) => {
     const result = await mcpManager.testConnection(parsed.data);
     return c.json(result);
   } catch (e) {
-    logger.warn("mcp", "test_connection_failed", {
-      requestId: (c.get("requestId") as string | undefined),
+    logger.warn("mcp", "mcp.operation", {
+      op: "test_connection",
+      outcome: "error",
       transport: parsed.data.transport,
-      ...normalizeError(e),
+      ...classifyError(e),
     });
     return c.json({ ok: false, error: redact(e), toolCount: 0, resourceCount: 0, promptCount: 0, tools: [], resources: [], prompts: [], transport: parsed.data.transport });
   }
@@ -110,10 +112,6 @@ app.post("/servers/:id/resource/read", async (c) => {
     const result = await mcpManager.readResource(c.req.param("id"), parsed.data.uri);
     return c.json(result);
   } catch (e) {
-    logger.warn("mcp", "resource_read_failed", {
-      requestId: (c.get("requestId") as string | undefined),
-      ...normalizeError(e),
-    });
     return c.json({ error: redact(e) }, 400);
   }
 });
@@ -126,10 +124,6 @@ app.post("/servers/:id/prompt/get", async (c) => {
     const result = await mcpManager.getPrompt(c.req.param("id"), parsed.data.name, parsed.data.arguments ?? undefined);
     return c.json(result);
   } catch (e) {
-    logger.warn("mcp", "prompt_request_failed", {
-      requestId: (c.get("requestId") as string | undefined),
-      ...normalizeError(e),
-    });
     return c.json({ error: redact(e) }, 400);
   }
 });

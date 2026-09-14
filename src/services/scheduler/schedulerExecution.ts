@@ -34,6 +34,8 @@ import {
   toolStatSchema,
 } from "../../lib/validation";
 import { logger, normalizeError, newRequestId } from "../../lib/logger";
+import { classifyError } from "../../lib/errors";
+import { instrumentedExecute } from "../../lib/tool-funnel";
 import { generateId } from "../../lib/utils";
 import type { SchedulerJob, SchedulerRun } from "./schedulerTypes";
 import { schedulerStore } from "./schedulerStore";
@@ -42,14 +44,14 @@ import { conversationService, messageService } from "../storage";
 const APPROVAL_REFUSAL =
   "Refused: this tool requires interactive user approval, which is unavailable during unattended scheduled execution. The run continues without this action.";
 
-function refusalTool(description: string) {
+function refusalTool(name: string, description: string) {
   return tool({
     description: `${description} UNAVAILABLE in scheduled runs — always refuses (user approval required).`,
     inputSchema: z.object({}).passthrough(),
     outputSchema: z.unknown(),
-    execute: async () => {
+    execute: instrumentedExecute(name, async () => {
       throw new ToolError(APPROVAL_REFUSAL);
-    },
+    }),
   });
 }
 
@@ -61,73 +63,56 @@ export function buildSchedulerTools() {
         "Read a text file from the workspace. Returns the file content.",
       inputSchema: toolReadSchema,
       outputSchema: z.unknown(),
-      execute: async (args) => runRead(args),
+      execute: instrumentedExecute("read_file", async (args: any) => runRead(args)),
     }),
     list_dir: tool({
       description: "List files and folders inside the workspace.",
       inputSchema: toolListSchema,
       outputSchema: z.unknown(),
-      execute: async (args) => runList(args),
+      execute: instrumentedExecute("list_dir", async (args) => runList(args)),
     }),
     search_files: tool({
       description:
         "Search file contents inside the workspace (case-insensitive).",
       inputSchema: toolSearchSchema,
       outputSchema: z.unknown(),
-      execute: async (args) => runSearch(args),
+      execute: instrumentedExecute("search_files", async (args: any) => runSearch(args)),
     }),
     file_info: tool({
       description: "Show size, type and timestamps for a workspace path.",
       inputSchema: toolStatSchema,
       outputSchema: z.unknown(),
-      execute: async (args) => runStat(args),
+      execute: instrumentedExecute("file_info", async (args: any) => runStat(args)),
     }),
     process_list: tool({
       description:
         "List running processes on this computer (pid, name, CPU, memory).",
       inputSchema: z.object({}),
       outputSchema: z.unknown(),
-      execute: async () => runProcesses(),
+      execute: instrumentedExecute("process_list", async () => runProcesses()),
     }),
     system_info: tool({
       description: "Show computer info: OS, CPU, memory and uptime.",
       inputSchema: z.object({}),
       outputSchema: z.unknown(),
-      execute: async () => runSysinfo(),
+      execute: instrumentedExecute("system_info", async () => runSysinfo()),
     }),
-    write_file: refusalTool("Write or create a text file in the workspace."),
-    edit_file: refusalTool("Replace text in a workspace file."),
-    delete_file: refusalTool("Delete a file or folder inside the workspace."),
-    run_command: refusalTool("Run a shell command inside the workspace."),
-    process_kill: refusalTool("Stop a running process by pid."),
+    write_file: refusalTool("write_file", "Write or create a text file in the workspace."),
+    edit_file: refusalTool("edit_file", "Replace text in a workspace file."),
+    delete_file: refusalTool("delete_file", "Delete a file or folder inside the workspace."),
+    run_command: refusalTool("run_command", "Run a shell command inside the workspace."),
+    process_kill: refusalTool("process_kill", "Stop a running process by pid."),
   };
 }
 
 export function isRetryableError(err: unknown): boolean {
-  const norm = normalizeError(err, false);
-  const text = `${norm.errorType} ${norm.message} ${norm.code ?? ""}`.toLowerCase();
-  // Never retry configuration / auth / safety failures.
-  if (
-    /unauthorized|forbidden|invalid api key|invalid_api_key|incorrect api key|authentication|credential|api key.*missing|no api key|invalid model|model.*not found|not found.*model|invalid.*provider|workspace|outside the workspace|approval|refused|permission denied|invalid.*cron|user approval required/i.test(
-      text,
-    )
-  ) {
-    return false;
-  }
-  if (typeof norm.status === "number") {
-    if (norm.status === 408 || norm.status === 429) return true;
-    if (norm.status >= 500) return true;
-    return false;
-  }
-  // Retry timeouts, aborts, network hiccups, overloaded signals.
-  if (
-    /timeout|timed out|abort|econn|enotfound|eai_again|socket|network|fetch failed|overloaded|temporarily|try again|rate limit|429|5\d\d/i.test(
-      text,
-    )
-  ) {
-    return true;
-  }
-  return false;
+  const text = err instanceof Error ? err.message : String(err);
+  // Legacy transport policy preserved: raw aborts are retried (user
+  // cancellation is forced by the caller's `aborted` flag instead).
+  // classifyError conservatively marks these cancelled — the scheduler
+  // deliberately diverges here; see docs/logging.md.
+  if (/abort/i.test(text)) return true;
+  return classifyError(err).retryable;
 }
 
 export interface ExecutionResult {
@@ -260,6 +245,7 @@ export async function ensureJobConversation(
   const created = await conversationService.create({
     title: `[Scheduler] ${job.name}`,
     providerId: job.providerId,
+    workspaceMode: "simple",
   });
   schedulerStore.update(job.id, { conversationId: created.id });
   return { conversationId: created.id, created: true, safeToDelete: true };
@@ -283,7 +269,8 @@ export async function executeJobRun(
     runId: run.id,
   });
   const started = Date.now();
-  log.info("scheduler", "scheduler.run_started", {
+  log.info("scheduler", "scheduler.run", {
+    outcome: "started",
     provider: job.providerId,
     model: job.modelId,
   });
@@ -365,7 +352,8 @@ export async function executeJobRun(
         durationMs,
       });
       schedulerStore.update(job.id, { lastRunAt: Date.now() });
-      log.info("scheduler", "scheduler.run_completed", {
+      log.info("scheduler", "scheduler.run", {
+        outcome: "finished",
         provider: providerType,
         model: job.modelId,
         durationMs,
@@ -383,7 +371,8 @@ export async function executeJobRun(
           durationMs,
         });
         schedulerStore.update(job.id, { lastRunAt: Date.now() });
-        log.info("scheduler", "scheduler.run_cancelled", {
+        log.info("scheduler", "scheduler.run", {
+          outcome: "cancelled",
           provider: job.providerId,
           model: job.modelId,
           durationMs,
@@ -413,8 +402,9 @@ export async function executeJobRun(
         }
       }
       const retryable = !aborted ? isRetryableError(err) : true;
-      log.warn("scheduler", "scheduler.run_failed", {
-        ...norm,
+      log.warn("scheduler", "scheduler.run", {
+        outcome: "failed",
+        ...classifyError(err),
         message,
         attempt,
         retryable,
@@ -432,7 +422,8 @@ export async function executeJobRun(
         schedulerStore.update(job.id, { lastRunAt: Date.now() });
         return { ok: false, text: "", error: message, retryable };
       }
-      log.info("scheduler", "scheduler.run_retried", {
+      log.info("scheduler", "scheduler.run", {
+        outcome: "retried",
         attempt,
         delaySeconds: job.retryDelaySeconds,
       });

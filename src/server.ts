@@ -6,6 +6,8 @@ import { registry } from "./config/providers";
 import { credentialStore } from "./services/credentials";
 import { mcpManager } from "./services/mcp/manager";
 import { initScheduler } from "./services/scheduler/scheduler";
+import { gcOrphanChatDirs } from "./services/workspace";
+import { applyPersistedLogSettings } from "./services/log-settings";
 import { logger } from "./lib/logger";
 
 const DIST_DIR =
@@ -56,6 +58,10 @@ app.get("*", (c) => {
 });
 
 export async function startServer(port = 3000) {
+  // Stored log capture settings win over env defaults (unless TBAI_LOG_LEVEL
+  // is set, which owns the level). Applied before serving so early requests
+  // are captured under the configured filter.
+  applyPersistedLogSettings();
   await registry.loadFromDb(db);
   // Explicit startup initialization of the credential store (never an import
   // side effect). Reads whether a master password has been created.
@@ -66,8 +72,17 @@ export async function startServer(port = 3000) {
   // Rebuild scheduler timers from SQLite (recurring + pending one-time),
   // reconcile interrupted runs, apply the missed-run policy.
   await initScheduler();
+  // Reclaim orphaned chat scratch dirs (codeg parity: GC stale dirs not bound
+  // to a live conversation). Non-fatal; runs once at startup.
+  gcOrphanChatDirs();
 
-  const server = Bun.serve({ fetch: app.fetch, port });
+  // Transport backstop: Bun kills connections idle for 10s by default, which
+  // murders quiet streams (a thinking model, a long tool run). 240s covers
+  // normal stalls for this local single-user app (Bun's maximum is 255).
+  // Long-lived streaming responses additionally disable the timeout
+  // per-request via disableIdleTimeout() — the global value is only the
+  // backstop, never the mechanism that keeps streams alive.
+  const server = Bun.serve({ fetch: app.fetch, port, idleTimeout: 240 });
   logger.info("server", "started", {
     message: `http://localhost:${port} data=${process.env.DATA_DIR || path.join(process.cwd(), "data")}`,
   });

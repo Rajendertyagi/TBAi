@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   ThreadListItemPrimitive,
   ThreadListItemMorePrimitive,
@@ -18,10 +18,22 @@ import {
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { historyConfig } from "@/config/history";
 import { sidebarConfig } from "@/config/sidebar";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
+import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
 
 export interface SidebarRowItem {
   remoteId: string;
@@ -33,10 +45,11 @@ const ROW_CLASS =
   "group relative flex items-center gap-1 rounded-full py-2 pl-3 pr-1.5 text-sm transition-colors hover:bg-sidebar-accent data-[active]:bg-sidebar-accent";
 
 /**
- * One regular conversation row: pill geometry, inline rename, hover `…`
- * menu (rename / archive / delete per `historyConfig`) and a right-click
- * menu (open in tab, copy id). Thread switching goes through the runtime
- * trigger; routing is the caller's `onOpenThread`.
+ * One regular conversation row: pill geometry, hover `…` menu (rename /
+ * archive / delete per `historyConfig`) and a right-click menu (open in tab,
+ * copy id). Rename uses a modal Dialog (not inline input) to avoid
+ * blur/focus race conditions with the ContextMenu. A live running dot shows
+ * while the thread is generating (runtime state, never persisted).
  */
 export function SidebarThreadRow({
   item,
@@ -49,139 +62,146 @@ export function SidebarThreadRow({
   const copy = sidebarConfig.copy;
   const openChat = useChatTabsStore((s) => s.openChat);
   const title = item.title ?? "Untitled";
-  const [renaming, setRenaming] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const [saving, setSaving] = useState(false);
-  const submittedRef = useRef(false);
 
-  const startRename = () => {
-    submittedRef.current = false;
-    setDraft(title);
-    setRenaming(true);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(title);
+
+  const handleOpenRename = () => {
+    setRenameValue(title);
+    setRenameOpen(true);
   };
 
-  const cancelRename = () => {
-    submittedRef.current = true;
-    setRenaming(false);
-  };
-
-  const commitRename = async () => {
-    if (submittedRef.current || !renaming) return;
-    submittedRef.current = true;
-    const next = draft.trim();
+  const handleConfirmRename = async () => {
+    const next = renameValue.trim();
     if (!next || next === title) {
-      setRenaming(false);
+      setRenameOpen(false);
       return;
     }
-    // Through the runtime (never a raw fetch): the adapter persists AND the
-    // store updates, so the title re-renders instantly. The store id is
-    // resolved from state (never assumed === remoteId).
-    setSaving(true);
     try {
       const items = aui.threads.getState().threadItems;
       const match =
         items.find((t) => t.remoteId === item.remoteId) ??
         items.find((t) => t.id === item.remoteId);
       await aui.threads.item({ id: match?.id ?? item.remoteId }).rename(next);
-    } finally {
-      setSaving(false);
-      setRenaming(false);
+    } catch {
+      /* best effort */
     }
+    setRenameOpen(false);
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <ThreadListItemPrimitive.Root className={ROW_CLASS}>
-          {renaming ? (
-            <input
-              autoFocus
-              value={draft}
-              disabled={saving}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void commitRename();
-                if (e.key === "Escape") cancelRename();
-              }}
-              onBlur={() => void commitRename()}
-              onFocus={(e) => e.target.select()}
-              aria-label={copy.rename}
-              className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-0.5 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          ) : (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <ThreadListItemPrimitive.Root className={ROW_CLASS}>
             <ThreadListItemPrimitive.Trigger
               className="min-w-0 flex-1 truncate text-left"
               onClick={() => onOpenThread(item.remoteId)}
             >
+              <span className="relative inline-flex shrink-0">
+                <ThreadRunningDot
+                  remoteId={item.remoteId}
+                  size="sm"
+                  className="absolute -left-1 -top-0.5 ring-2 ring-sidebar"
+                />
+              </span>
               <ThreadListItemPrimitive.Title />
             </ThreadListItemPrimitive.Trigger>
-          )}
 
-          <ThreadListItemMorePrimitive.Root>
-            <ThreadListItemMorePrimitive.Trigger
-              className="shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreVertical className="size-4" />
-            </ThreadListItemMorePrimitive.Trigger>
-            <ThreadListItemMorePrimitive.Content className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
-              {historyConfig.renameEnabled && (
-                <ThreadListItemMorePrimitive.Item
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
-                  onSelect={() => startRename()}
-                >
-                  <Pencil className="size-4" /> {copy.rename}
-                </ThreadListItemMorePrimitive.Item>
-              )}
-              {historyConfig.archiveEnabled && item.status === "regular" && (
-                <ThreadListItemPrimitive.Archive asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                    <Archive className="size-4" /> {copy.archive}
+            <ThreadListItemMorePrimitive.Root>
+              <ThreadListItemMorePrimitive.Trigger
+                className="shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical className="size-4" />
+              </ThreadListItemMorePrimitive.Trigger>
+              <ThreadListItemMorePrimitive.Content className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+                {historyConfig.renameEnabled && (
+                  <ThreadListItemMorePrimitive.Item
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
+                    onSelect={() => handleOpenRename()}
+                  >
+                    <Pencil className="size-4" /> {copy.rename}
                   </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Archive>
-              )}
-              {historyConfig.deleteEnabled && (
-                <ThreadListItemPrimitive.Delete asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                    <Trash2 className="size-4" /> {copy.delete}
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Delete>
-              )}
-            </ThreadListItemMorePrimitive.Content>
-          </ThreadListItemMorePrimitive.Root>
-        </ThreadListItemPrimitive.Root>
-      </ContextMenuTrigger>
+                )}
+                {historyConfig.archiveEnabled && item.status === "regular" && (
+                  <ThreadListItemPrimitive.Archive asChild>
+                    <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
+                      <Archive className="size-4" /> {copy.archive}
+                    </ThreadListItemMorePrimitive.Item>
+                  </ThreadListItemPrimitive.Archive>
+                )}
+                {historyConfig.deleteEnabled && (
+                  <ThreadListItemPrimitive.Delete asChild>
+                    <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
+                      <Trash2 className="size-4" /> {copy.delete}
+                    </ThreadListItemMorePrimitive.Item>
+                  </ThreadListItemPrimitive.Delete>
+                )}
+              </ThreadListItemMorePrimitive.Content>
+            </ThreadListItemMorePrimitive.Root>
+          </ThreadListItemPrimitive.Root>
+        </ContextMenuTrigger>
 
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => openChat(item.remoteId)}>
-          <ExternalLink className="size-4" /> {copy.openInNewTab}
-        </ContextMenuItem>
-        {historyConfig.renameEnabled && (
-          <ContextMenuItem onSelect={() => startRename()}>
-            <Pencil className="size-4" /> Rename
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => openChat(item.remoteId)}>
+            <ExternalLink className="size-4" /> {copy.openInNewTab}
           </ContextMenuItem>
-        )}
-        {historyConfig.archiveEnabled && item.status === "regular" && (
-          <ThreadListItemPrimitive.Archive asChild>
-            <ContextMenuItem>
-              <Archive className="size-4" /> Archive
+          {historyConfig.renameEnabled && (
+            <ContextMenuItem onSelect={() => handleOpenRename()}>
+              <Pencil className="size-4" /> Rename
             </ContextMenuItem>
-          </ThreadListItemPrimitive.Archive>
-        )}
-        <ContextMenuItem
-          onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}
-        >
-          <Copy className="size-4" /> {copy.copyId}
-        </ContextMenuItem>
-        {historyConfig.deleteEnabled && (
-          <ThreadListItemPrimitive.Delete asChild>
-            <ContextMenuItem variant="destructive">
-              <Trash2 className="size-4" /> Delete
-            </ContextMenuItem>
-          </ThreadListItemPrimitive.Delete>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+          )}
+            {historyConfig.archiveEnabled && item.status === "regular" && (
+            <ThreadListItemPrimitive.Archive asChild>
+              <ContextMenuItem>
+                <Archive className="size-4" /> Archive
+              </ContextMenuItem>
+            </ThreadListItemPrimitive.Archive>
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}
+          >
+            <Copy className="size-4" /> {copy.copyId}
+          </ContextMenuItem>
+          {historyConfig.deleteEnabled && (
+            <ThreadListItemPrimitive.Delete asChild>
+              <ContextMenuItem variant="destructive">
+                <Trash2 className="size-4" /> Delete
+              </ContextMenuItem>
+            </ThreadListItemPrimitive.Delete>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
+
+      {/* Rename dialog (modal, not inline) */}
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{copy.rename}</DialogTitle>
+            <DialogDescription>Rename this conversation.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleConfirmRename();
+            }}
+            placeholder={title}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>
+              {copy.cancel}
+            </Button>
+            <Button onClick={() => void handleConfirmRename()}>
+              {copy.save}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -249,7 +269,7 @@ export function SidebarArchivedRow({
         {historyConfig.deleteEnabled && (
           <ThreadListItemPrimitive.Delete asChild>
             <ContextMenuItem variant="destructive">
-              <Trash2 className="size-4" /> {copy.delete}
+              <Trash2 className="size-4" /> Delete
             </ContextMenuItem>
           </ThreadListItemPrimitive.Delete>
         )}

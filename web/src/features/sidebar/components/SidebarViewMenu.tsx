@@ -29,6 +29,8 @@ export function SidebarViewMenu() {
   const aui = useAui();
   const showRecent = useDesktopLayout((s) => s.showRecent);
   const setShowRecent = useDesktopLayout((s) => s.setShowRecent);
+  const showCompleted = useDesktopLayout((s) => s.showCompleted);
+  const setShowCompleted = useDesktopLayout((s) => s.setShowCompleted);
   const sidebarSort = useDesktopLayout((s) => s.sidebarSort);
   const setSidebarSort = useDesktopLayout((s) => s.setSidebarSort);
 
@@ -57,6 +59,13 @@ export function SidebarViewMenu() {
               onSelect={(event) => event.preventDefault()}
             >
               {copy.showRecent}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={showCompleted}
+              onCheckedChange={setShowCompleted}
+              onSelect={(event) => event.preventDefault()}
+            >
+              {copy.showCompleted}
             </DropdownMenuCheckboxItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>

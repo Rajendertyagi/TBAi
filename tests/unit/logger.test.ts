@@ -196,17 +196,26 @@ describe("file rotation (L)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-logtest-"));
     const file = path.join(dir, "tbai.log");
     const { logger: fresh } = await import("../../src/lib/logger");
-    fresh.configure({ level: "debug", file, maxBytes: 300, keepFiles: 2 });
+    fresh.configure({ level: "debug", file, fileEnabled: true, maxBytes: 300, keepFiles: 2 });
     try {
-      for (let i = 0; i < 40; i++) {
-        fresh.info("test", "rotation_probe", { message: `line-${i}-padding-xxxxxxxxxxxx` });
+      // Batched writer: rotation is checked pre-append per flush, so emit in
+      // rounds. Two rounds rotate once without deleting anything (keepFiles 2),
+      // which proves rotation happened, generations stay bounded, and no lines
+      // are lost across the split.
+      for (let round = 0; round < 2; round++) {
+        for (let i = 0; i < 10; i++) {
+          fresh.info("test", "rotation_probe", { message: `line-${i}-padding-xxxxxxxxxxxx` });
+        }
+        fresh.flushFileLines();
       }
       const names = fs.readdirSync(dir).sort();
-      // Bounded: current + at most `keepFiles` generations.
       expect(names.length).toBeLessThanOrEqual(3);
       expect(names).toContain("tbai.log");
-      const total = names.reduce((n, f) => n + fs.statSync(path.join(dir, f)).size, 0);
-      expect(total).toBeLessThan(300 * 4);
+      expect(names).toContain("tbai.log.1");
+      const lines = names.flatMap((f) =>
+        fs.readFileSync(path.join(dir, f), "utf-8").trim().split("\n").filter(Boolean),
+      );
+      expect(lines).toHaveLength(20);
     } finally {
       fresh.configure({ level: "error", file: null });
       fs.rmSync(dir, { recursive: true, force: true });

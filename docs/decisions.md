@@ -940,7 +940,7 @@ future agents don't re-litigate:
   buttons are `icon-xs`. Rule: chips = xs+outline, icons = icon-xs,
   actions = sm, primary CTA = default.
 - **Sentence schedule row:** one dynamic line per mode (Every [N] min,
-  At [H]:[M], weekday/month variants) with compact inline inputs — the
+  At [H]:[M], weekday/month variants) with compact inline inputs ï¿½ the
   labeled input maze and quick-pick chips are gone. Patterns show in
   Advanced mode only.
 - **Seeded summary:** template/duplicate seeds start the When section
@@ -954,11 +954,11 @@ future agents don't re-litigate:
 ## Scheduler pane separation (single-color wash fix)
 
 - **Cause:** dark `--muted` and `--card` are both `#171717`, so list
-  (`bg-muted/50`) and detail (`bg-card/50`) rendered identically — verified
+  (`bg-muted/50`) and detail (`bg-card/50`) rendered identically ï¿½ verified
   against codeg, whose dark card (0.205) and muted (0.269) differ. Global
   retoken was rejected (whole-app blast radius, no visual proof available).
 - **Fix (scoped):** detail + onboarding shells go solid `bg-card`; list stays
-  `bg-muted/50`. Dark: #171717 vs ~#0e0e0e; light: #ffffff vs ~#fafafa — same
+  `bg-muted/50`. Dark: #171717 vs ~#0e0e0e; light: #ffffff vs ~#fafafa ï¿½ same
   direction as codeg (detail darker than list). Selected rows (`bg-accent`)
   keep their contrast on both.
 - **Verification:** typecheck 0, build green. Visual sign-off needs eyeballs.
@@ -966,20 +966,20 @@ future agents don't re-litigate:
 ## Durable dark theme: adopt codeg`s neutral-dark scale
 
 - **Stop patching, adopt the system:** `.dark` now uses codeg`s scale
-  verbatim (oklch) — card 0.205, muted/secondary 0.269, accent 0.371,
+  verbatim (oklch) ï¿½ card 0.205, muted/secondary 0.269, accent 0.371,
   border/input translucent white, sidebar set to match, destructive
   lightened for dark. Only `--background` stays ours (#0a0a0a identity).
   Light theme untouched. This replaces the solid-vs-wash tricks: detail is
-  back to `bg-card/50`, toolbar pill to plain `bg-accent` — the scale
+  back to `bg-card/50`, toolbar pill to plain `bg-accent` ï¿½ the scale
   carries them correctly.
 - **Why it works:** panes/rows/chips/dialogs all inherit codeg`s measured
   relationships (list lighter, detail darker; selected elements lift via
-  accent 0.371). Future components get it free — no per-surface compensation.
+  accent 0.371). Future components get it free ï¿½ no per-surface compensation.
 - **Verified live (agent-browser, computed styles + screenshots):** scheduler
   panes/step/rows/chips/gallery, chat + composer, providers settings cards,
   sidebar/rail/status/tab strip. Dark first, light unchanged by construction
   (untouched block).
-- **Note:** initial load served stale CSS (browser cache) — `reload` before
+- **Note:** initial load served stale CSS (browser cache) ï¿½ `reload` before
   measuring; build output verified to contain the new values first.
 
 ## Terminal Block migration (official assistant-ui element, live output)
@@ -997,25 +997,25 @@ future agents don't re-litigate:
   TextDecoder per stream (no cross-stream split corruption), listener
   errors swallowed, timeout/kill/workspace/limits untouched.
 - **Live streaming (existing transport only):** `withThreadContext` wires
-  `run_command.execute(args, opts)` — `toolCallId` comes from the standard
+  `run_command.execute(args, opts)` ï¿½ `toolCallId` comes from the standard
   AI SDK `ToolExecutionOptions` (verified in provider-utils typings:
   "use it e.g. when sending tool-call related information with stream
   data"). `src/lib/terminal-stream.ts` batches into `data-tbai-terminal`
   parts (150ms/4KB flush, 400-part cap, done part always lands, per-call
   isolation). `chat.ts` emits via the existing writer + closes on
   `onToolExecutionEnd` with exit metadata. No smoothing (`useSmooth` /
-  `smoothStream` explicitly out — terminal shows real timing).
+  `smoothStream` explicitly out ï¿½ terminal shows real timing).
 - **Read path (fallback-first):** `terminal-ui.tsx` renders the official
   block from the final tool result always (complete on reload/history).
   Live lines merge from message-scope `data-tbai-terminal` parts matched by
   `toolCallId`. Critical fix found in verification: the assistant-ui
   converter normalizes wire `{type:"data-tbai-terminal"}` to
   `{type:"data", name:"tbai-terminal"}` (verified in
-  @assistant-ui/ai-sdk convertMessage.js) — the initial check missed this
+  @assistant-ui/ai-sdk convertMessage.js) ï¿½ the initial check missed this
   and live lines silently returned []. Unregistered data parts render
   nothing (no stray UI; progress parts use the same path).
-- **Exits:** official header hardcodes `exit 0` (no failure prop — do not
-  fork). TBAi chrome below the block shows red `exit N` / `timed out —
+- **Exits:** official header hardcodes `exit 0` (no failure prop ï¿½ do not
+  fork). TBAi chrome below the block shows red `exit N` / `timed out ï¿½
   process killed`. Non-zero is never presented as success.
 - **Verification:** backend tsc 0, `bun test` 271 pass / 0 fail (incl. 16
   terminal-lines + 7 batcher + 5 runBash tests), web build green. Live E2E
@@ -1023,4 +1023,87 @@ future agents don't re-litigate:
   checkmark, failing command red exit footer, approval?execute?result,
   denial?zero execution. Live stderr/timeout-kill covered at unit level
   only (same code paths). Transient provider "network error" seen twice
-  (also on tool-free sends) — external endpoint flake, unrelated.
+  (also on tool-free sends) ï¿½ external endpoint flake, unrelated.
+
+## Welcome new-chat screen (Codeg parity, UI-only)
+
+- **Decision:** centered welcome (WelcomeScreen: hero + Code/Office/Research quick actions + folder-scope picker + tall composer) rendered only on 	hread.isEmpty; thread creation carries pending {workspaceMode, workspaceFolderId} via adapter initialize() with simple-chat fallback. No new deps, no backend change.
+- **Why:** matches Codeg start-chat UX while keeping assistant-ui runtime, untime.ts wiring, and SQLite workspace model untouched; config-first copy in config/welcome.ts, UI state in eatures/chat/state/welcomeScope.ts.
+- **Edges:** deleted folder falls back to simple, kind=chat never listed, bound threads show static scope, storage keys namespaced with safe-parse.
+
+
+- **Single composer update:** one <PaseoComposer/> tag owned by ChatWindow (footer slot carries the Codeg-style folder chip row inside the composer box); welcome and docked placements share identical size/features. Folder chip trigger/panel and quick-action accent cards + skill rail converge on Codeg classes without adding cmdk (DropdownMenu substitute, documented). Verified live via browser: 1 textarea on /chat/new and on existing threads.
+
+
+- **Refresh-flash fix (identity gate):** welcome renders iff draft route (ChatView passes isDraft) AND thread empty; bound threads never mount WelcomeScreen, even while history loads. Composer footer scope row always rendered (editable chip on drafts, static chip from 	hreadListItem.custom on bound threads) so box size is identical. E2E (web/e2e, Playwright + system Edge headed): single-composer + refresh-flash specs; @playwright/test added as web devDependency.
+
+
+- **Identical composer box:** docked wrapper uses the same mx-auto w-full max-w-3xl px-4 container as welcome (one class-token change, no inline styles); headed e2e asserts welcome/docked textarea boxes equal (710x40 at x=421).
+
+
+- **Chip row below the box:** folder scope chip renders as a separate row beneath the composer (not Codeg's inside-the-box attached row) per user call; composer box is textarea + button row only, unconditionally identical on both screens.
+
+
+- **Identical composer+chip gap:** welcome column wraps composer + picker in the same px-1 pt-1 sub-structure as docked (was column gap-6 = 24px vs pt-1 = 4px); measured 4px on both screens.
+
+
+- **Status CHECK rebuild (2026-09-13):** live DB predated the status-vocabulary change and kept CHECK(status IN ('regular','archived')) while code writes in_progress ï¿½ all conversation creation 500d. Fixed with a gated table rebuild (copy 12 cols, convert values in SQL, preserve ids/indexes/triggers/FTS). Old DB backed up to data/backup-20260913/; user then opted to delete the live DB instead, so production runs a fresh DB. dapter.initialize() now throws on failed creation instead of resolving an undefined remoteId.
+
+
+- **Binary conversation status (regular/archived):** removed the 4-status model (nothing fully used it; it broke archive/unarchive which PATCH binary values). DB CHECK rebuilt, scheduler guard reads archived, sidebar shows runtime running dots + Archive/Unarchive only. conversation persistence (regular/archived) != runtime activity (isLoading/isRunning) != job execution (scheduler_runs.status).
+
+
+- **Composer bar pass:** single Composer.tsx (renamed from PaseoComposer); primitive owns textarea autoresize (custom grow hook deleted); single-slot Send/Stop via documented AuiIf idiom with identical footprint; thinking/model chip order; searchable keyboard-navigable model picker (no virtua ï¿½ small lists); own composer context menu (atomic clipboard ops, quick messages); all icons retained.
+
+
+- **Providers Codeg visuals, our domain:** rows/badges/toolbar/header/dialogs copy Codeg classes verbatim (rounded-md border px-3 py-2.5 rows, Badge secondary text-3xs, h-8 w-40 filter Select, sm:max-w-md dialogs) while keeping our provider model (types, models/discovery, thinking, set-active, test-connection, in-use delete guard). Inline add/edit form moved into Add/EditProviderDialog; list stays mounted. New ui/select.tsx + ui/badge.tsx copied from Codeg (radix-ui meta-package already installed â€” no new deps).
+
+- **Logs sink reuse (no new appender):** the files card reads the logger's existing rotated JSON-lines sink (data/tbai.log*, 5 MB x 3) â€” zero writer/rotation code added or touched. Empty in dev (file sink off by default); copy says so.
+
+- **Logs scope semantics:** overrides match dot-separated scope prefixes (longest wins, `mcp` covers `mcp.client`), validated by SCOPE_RE; Codeg's `::` EnvFilter syntax does not apply to our flat scopes. No `trace` level anywhere (never emitted): capture/view offer off + debug/info/warn/error only.
+
+- **Logs spans omission:** our LogEntry has no span chain, so the expanded detail is fields-grid only â€” Codeg's spans breadcrumb has nothing to render from.
+
+- **Logs virtualization deferred:** plain scrollbox keeps Codeg look (h-[30rem] mono viewport, stick-to-bottom at 80px); add virtua only if scroll jank is observed with the 2000-row client cap. Transport stays SSE (UI-invisible); pause closes the stream like Codeg instead of buffering.
+
+- **Theme tokens from Codeg:** --radius-4xl (calc(var(--radius) * 2.6), same 0.625rem base so identical 26px) plus text-2xs (11px) / text-3xs (10px) font-size-only utilities; replacing text-[10px]/[11px] arbitrary values is zero-diff at 100% zoom.
+
+- **Pill Button/Input/Textarea base, app-wide:** ui/button.tsx + ui/input.tsx + ui/textarea.tsx copied from Codeg verbatim (rounded-4xl base, border-transparent buttons, bg-input/30 outline/inputs, select-none, active press translate, asChild/Slot support). Blast radius is every button/input in the app by design â€” that IS the Codeg look (the logs/providers rounding complaints came from mixing pill Selects with rounded-md buttons). Size/variant names match 1:1 so call sites are untouched; icon-xs/sm/lg keep working. Verified by full unit + headed e2e.
+
+- **Self-hosted Inter:** @fontsource-variable/inter added (first intentional UI font dep) + :root --font-sans stack, 16px/1.5em, font-synthesis none, optimizeLegibility, antialiased/grayscale smoothing â€” mirrors Codeg's root typography. Mono stacks untouched (Codeg also uses the Tailwind default mono for UI).
+
+- **Stale-server JSON banner (2026-09-14):** "Unexpected token '<' ... not valid JSON" on /#/logs means the running server predates /api/logs/settings + /files (SPA fallback serves index.html). The banner is correct handling; fix is restarting the :3000 server, not code.
+
+- **Logs DOM leak: duplicate React keys (2026-09-14):** "logs escaping the box" was tens of thousands of leaked row nodes, not styling. Two compounding causes, both fixed: (1) the h-[30rem] viewport's inner list had no height bound, so rows spilled past the border â€” inner is now `h-full overflow-y-auto overflow-x-hidden` with the scroll ref on it. (2) Every page load appended the SSE backlog on top of the initial GET /recent snapshot, duplicating every seq; duplicate keys desync React reconciliation and orphan DOM nodes on each update (~1300/sec). mergeLogEntries (web/src/lib/log-entries.ts, unit-tested) now drops re-delivered seqs, and a server bootId (fresh per process, sent with /recent + stream) replaces state on restart instead of colliding with reused seqs. Note: the elicit/pending poller emits ~500 entries/sec, so the 1000-entry ring holds ~2s of history â€” silence noisy scopes via overrides or calm the poller as follow-up.
+
+- **Centralized logging refinements (2026-09-14):** RequestContext stays minimal (requestId, conversationId, toolCallId, jobId, providerId, modelId â€” correlation only). docs/logging.md charter holds the hard funnel rule (one owning funnel per event; lower layers never re-log lifecycle). Event taxonomy standardized: http.request/http.error, ai.request/response/error, tool.start/finish/error, scheduler.run/admin/maintenance, credential.error, mcp.operation â€” ~60 call sites migrated, established one-off diagnostics kept. src/lib/errors.ts#classifyError is the single classifier (category/statusCode/provider/retryable/message/errorType); onError, sanitizeStreamError, and isRetryableError all consume it (scheduler keeps its documented abort nuance). Edge middleware auto-logs every 4xx/5xx response, which let us DELETE the scattered route error lines (tools, mcp routes, providers test/discover converted to ai.error since they return 200). Storage stays replaceable: only logger.ts knows entry/file formats; files endpoint serves opaque bytes. Explicitly NOT added: separate logging service, Redis, Elasticsearch, OpenTelemetry, custom event bus, per-function logging, logging-driven retries.
+
+- **SSE idle kills (2026-09-14):** ERR_INCOMPLETE_CHUNKED_ENCODING on /api/logs/stream was Bun.serve's ~10s idle timeout killing quiet streams â€” our heartbeat was 15s, so any silence over 10s (capture off, filtered scopes) died mid-chunk. Heartbeat is now 5s (~7 bytes per ping; documented in routes/logs.ts). Client additionally reconnects SSE with backoff (5 tries) before degrading to polling, instead of abandoning SSE on the first error. Proven live: idle stream held 25s+ receiving pings on an isolated server.
+
+- **Server transport hardening, Phase 1 (2026-09-14):** Bun.serve idleTimeout 10s -> 240s global backstop (Bun maximum is 255; 240 leaves headroom). Streaming endpoints (POST /api/chat, GET /api/chat/resume/:streamId, GET /api/logs/stream) additionally disable the timeout per-request via disableIdleTimeout() in routes/shared.ts, using server.timeout(req, 0) reached through Hono's env (verified live: c.env.timeout is a function in our stack) with a graceful no-op guard. 5s SSE heartbeat kept (beats proxies too). No bytes injected into the UI-message stream; no client changes. Research basis: Bun docs prescribe per-request disable over global raises; industry (model-lens ADR, LiteLLM, RFC 8895) confirms keepalive-comments + conservative-global + reconnect layering. Quiet SSE held 30s+ on an isolated server post-change.
+
+- **Emit hardening + 24h retention (2026-09-14):** file sink is async-batched (10ms/64KB flush, unref'd timer, drop-with-counter over 5000 queued, sync drain on exit); ring+console stay synchronous. Rotation check cached (byte estimate + 60s); prune piggybacks the flush path hourly â€” no new timer system. Policy 5MB x 20 / 100MB total / 24h age (all runtime-configurable + persisted, env-overridable); file toggle in the capture card. Elicit poll 1.5s -> 3s and routine 200s demoted to debug via a DEBUG_PATHS table (pending hits stay info at the MCP funnel). sample() ships tested for Phase 5, no production caller yet (verified by grep).
+/files also exposes writer {queued, dropped} so batching/load-shedding is
+observable without trusting internals.
+
+- **Tail contract + viewer durability + governance (2026-09-14):** polling
+fallback retired (SSE-only; since+bootId dedupe makes redelivery safe).
+virtua Virtualizer added (recorded here per dependency rule) wrapping the
+existing scroll container â€” Codeg's exact pattern, all stick/scroll logic
+untouched; ring + client caps raised to 5000. Time-range query (from/until,
+server + client), export-to-JSON-lines, "/" + "End" keyboard, capture-off and
+reconnecting indicators, requestId-searchable filter (documented Codeg
+deviation). Token-bucket throttle (burst 100, 1/sec, info/debug non-http) with
+in-stream scope.throttled markers + snapshot in /settings + capture-card note.
+E2E lesson recorded: datetime-local inputs interpret as LOCAL time â€”
+toISOString (UTC) silently lands in the past; build test datetimes from local
+components. Live measurement 2026-09-14: elicit
+polls at ~3/sec aggregate from multiple open tabs (stale pre-fix tabs still on
+1.5s cadence + old polling fallback) â€” code ships 3s + debug demotion; users
+reload tabs to converge. Our sink is data/tbai.log, not the .agnes path from
+an unrelated report (different app). Existing rotation test updated to the batch contract (flush-per-round, lossless line count instead of byte totals).
+
+- **Funnels built (2026-09-14):** tool funnel = instrumentedExecute in src/lib/tool-funnel.ts (leaf module, zero cycle risk by construction after rejecting a tools/index.ts home that cycled via schedulerTools); all 16 native entries + withThreadContext rebinds + MCP bridge + 11 scheduler tools pass through it. AI funnel = taxonomy boundary emitters at both streamText sites (chat keeps its pipeline shape; shared streamChat helper deferred to a third site). Scheduler funnel = run lifecycle taxonomy + jobId/providerId/modelId context bound at both executeJobRun call sites. Credential funnel = decrypt-failure lines only. extendRequestContext skips undefined (never wipes outer bindings); emit() now merges the full context â€” a funnel unit test caught that gap before it shipped. AI SDK tool() overloads need the generic-passthrough wrapper shape (fixed signature poisons input/output inference); three scheduler literals needed explicit any.
+
+- **Server-owned chat runs + explicit cancel (2026-09-14):** the isolated signal experiment proved c.req.raw.signal fires identically (AbortError: The connection was closed) on client-disconnect, Bun idle-kill, and explicit cancel â€” the server cannot distinguish causes, so an explicit cancel channel is mandatory, not optional. src/services/chat-runs.ts owns runs keyed by streamId (own AbortController per run, 30-min wall clock via TBAI_CHAT_RUN_TIMEOUT_MS, 1h terminal TTL via TBAI_CHAT_RUN_RECORD_TTL_MS, 2000-record cap, lazy sweep on every mutation, unref'd timers). src/routes/chat.ts binds model + MCP tools to run.controller.signal, never the request signal; disconnect marks detached (ai.run_detached) and the run continues. POST /api/chat/cancel/:streamId is the only path that stops a run: settles synchronously (markCancelled â†’ single ai.error/category=cancelled log â†’ controller.abort) so onAbort no-ops on the terminal record instead of racing the API response; repeated cancel returns cancelled:false with current status (404 on unknown id). Frontend Stop fires it fire-and-forget via sessionStorage tbai-resume:${threadId}. Orphan policy: abandoned-running runs continue detached until explicit cancel or wall clock; terminal records swept after TTL/cap â€” no background loop. Mount-path resume unchanged. Explicitly out: mid-run auto-resume trigger (no public seam in @assistant-ui/ai-sdk 0.0.4 / ai 7.0.93; Option B classification + copy + observability only). Test-seed lesson: black-hole providers must be type ollama (keyless by design) â€” type custom requires a stored key and the route correctly 400s. Proven: 7 unit + 2 integration + 419 full suite + 9 e2e (2 empty-DB skips) + live temp-server proof (abortâ†’detachedâ†’cancelâ†’idempotent). Wall-clock kill covered by unit fake-timers only.
+

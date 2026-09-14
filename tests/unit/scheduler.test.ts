@@ -544,6 +544,61 @@ describe("existing_thread safety", () => {
     const justCreated = all?.threads.find((c) => c.title.startsWith("[Scheduler]"));
     expect(justCreated).toBeUndefined();
   });
+
+  it("refuses an archived target conversation", async () => {
+    const conv = await conversationService.create({
+      title: "Test conv archived-guard",
+      providerId: "p1",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+      workspaceMode: "simple",
+      workspaceFolderId: null,
+    });
+    await conversationService.update(conv.id, { status: "archived" });
+    const job = schedulerStore.create({
+      name: "test-safety-archived",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+    });
+    schedulerStore.update(job.id, { conversationId: conv.id });
+    await expect(ensureJobConversation(schedulerStore.get(job.id)!)).rejects.toThrow(/archived/i);
+    await conversationService.delete(conv.id);
+  });
+
+  it("permits a regular target conversation", async () => {
+    const conv = await conversationService.create({
+      title: "Test conv regular-guard",
+      providerId: "p1",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+      workspaceMode: "simple",
+      workspaceFolderId: null,
+    });
+    const job = schedulerStore.create({
+      name: "test-safety-regular",
+      scheduleType: "once",
+      execAt: Date.now() + 3600_000,
+      timezone: "UTC",
+      providerId: "p1",
+      modelId: "m1",
+      workspacePath: getWorkspaceDir(),
+      prompt: "hello",
+      conversationPolicy: "existing_thread",
+    });
+    schedulerStore.update(job.id, { conversationId: conv.id });
+    const result = await ensureJobConversation(schedulerStore.get(job.id)!);
+    expect(result.conversationId).toBe(conv.id);
+    expect(result.created).toBe(false);
+    await conversationService.delete(conv.id);
+  });
 });
 
 describe("enable endpoint regression", () => {

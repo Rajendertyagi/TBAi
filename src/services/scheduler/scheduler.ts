@@ -8,7 +8,7 @@
  */
 import { db } from "../../db";
 import type { Database } from "bun:sqlite";
-import { logger, newRequestId } from "../../lib/logger";
+import { extendRequestContext, logger, newRequestId } from "../../lib/logger";
 import type { SchedulerJob } from "./schedulerTypes";
 import { isTerminalJobStatus } from "./schedulerTypes";
 import { schedulerStore } from "./schedulerStore";
@@ -86,7 +86,8 @@ export function cancelRun(
     };
   }
   controller.abort();
-  logger.info("scheduler", "scheduler.run_cancel_requested", {
+  logger.info("scheduler", "scheduler.admin", {
+    action: "cancel_requested",
     jobId,
     runId,
     occurrenceId: run.occurrenceId,
@@ -122,7 +123,8 @@ export async function fireJob(
 ): Promise<void> {
   const job = schedulerStore.get(jobId, database);
   if (!job) {
-    logger.warn("scheduler", "scheduler.job_due", {
+    logger.warn("scheduler", "scheduler.run", {
+      outcome: "skipped",
       jobId,
       occurrenceId,
       message: "Job no longer exists; ignoring fire",
@@ -130,7 +132,8 @@ export async function fireJob(
     return;
   }
   if (!job.enabled || job.status !== "active") {
-    logger.info("scheduler", "scheduler.job_due", {
+    logger.info("scheduler", "scheduler.run", {
+      outcome: "skipped",
       jobId,
       occurrenceId,
       message: "Job disabled or not active; ignoring fire",
@@ -138,19 +141,16 @@ export async function fireJob(
     return;
   }
   const requestId = newRequestId();
-  logger.info("scheduler", "scheduler.job_due", {
-    requestId,
-    jobId,
-    occurrenceId,
-  });
 
   // Bun.cron guarantees no-overlap: the next fire is scheduled only after the
   // handler Promise settles, so invocations never stack. The overlap guard
   // below remains for manual "Run now" (runJobNow) where two rapid clicks can
-  // bypass Bun's guarantee.
+  // bypass Bun's guarantee. (Run start is logged once by executeJobRun with
+  // the runId — no duplicate started line here.)
   const run = schedulerStore.claimRun(job, occurrenceId, requestId, database);
   if (!run) {
-    logger.info("scheduler", "scheduler.run_skipped", {
+    logger.info("scheduler", "scheduler.run", {
+      outcome: "skipped",
       requestId,
       jobId,
       occurrenceId,
@@ -158,13 +158,6 @@ export async function fireJob(
     });
     return;
   }
-  logger.info("scheduler", "scheduler.run_claimed", {
-    requestId,
-    jobId,
-    occurrenceId,
-    runId: run.id,
-  });
-
   // Resolve the conversation used for this execution and persist it on the run.
   // This captures the exact conversation at claim time, so later job edits
   // do not alter historical run records.
@@ -174,7 +167,8 @@ export async function fireJob(
     resolvedConversationId = conv.conversationId;
     schedulerStore.updateRun(run.id, { conversationId: conv.conversationId }, database);
   } catch (err) {
-    logger.warn("scheduler", "scheduler.run_failed", {
+    logger.warn("scheduler", "scheduler.run", {
+      outcome: "failed",
       requestId,
       jobId,
       occurrenceId,
@@ -185,11 +179,18 @@ export async function fireJob(
 
   let result;
   try {
-    result = await executeJobRun(
-      job,
-      run,
-      resolvedConversationId ?? "",
-      controllerForRun(run.id),
+    // Scheduler funnel context: everything nested in the run (tool calls,
+    // storage ops, model calls) inherits job/provider/model identity — no
+    // manual id-passing below this line.
+    result = await extendRequestContext(
+      { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
+      () =>
+        executeJobRun(
+          job,
+          run,
+          resolvedConversationId ?? "",
+          controllerForRun(run.id),
+        ),
     );
   } finally {
     releaseRun(run.id);
@@ -290,7 +291,8 @@ export async function handleOverdueOnce(
   const overdueSec = Math.floor((now - (job.execAt ?? now)) / 1000);
   const requestId = newRequestId();
   if (overdueSec <= Math.max(0, job.missedGraceSeconds)) {
-    logger.info("scheduler", "scheduler.job_due", {
+    logger.info("scheduler", "scheduler.run", {
+      outcome: "started",
       requestId,
       jobId: job.id,
       occurrenceId: onceOccurrenceId(),
@@ -313,7 +315,8 @@ export async function handleOverdueOnce(
     nextRunAt: null,
   });
   clearTimer(job.id);
-  logger.info("scheduler", "scheduler.run_missed", {
+  logger.info("scheduler", "scheduler.run", {
+    outcome: "missed",
     requestId,
     jobId: job.id,
     occurrenceId: onceOccurrenceId(),
@@ -364,18 +367,13 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
   }
   const run = schedulerStore.claimRun(job, occurrenceId, requestId);
   if (!run) return { error: "Occurrence already claimed" };
-  logger.info("scheduler", "scheduler.run_claimed", {
-    requestId,
-    jobId,
-    occurrenceId,
-    runId: run.id,
-  });
   const conv = await ensureJobConversation(job);
   schedulerStore.updateRun(run.id, { conversationId: conv.conversationId });
   const signal = controllerForRun(run.id);
-  void executeJobRun(job, run, conv.conversationId, signal).finally(() =>
-    releaseRun(run.id),
-  );
+  void extendRequestContext(
+    { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
+    () => executeJobRun(job, run, conv.conversationId, signal),
+  ).finally(() => releaseRun(run.id));
   return { runId: run.id };
 }
 
@@ -390,7 +388,7 @@ export interface RecoveryReport {
 
 /** Startup recovery: reconcile interrupted runs, rebuild timers, apply missed policy. */
 export async function recover(database: Database = db): Promise<RecoveryReport> {
-  logger.info("scheduler", "scheduler.recovery_started", {});
+  logger.info("scheduler", "scheduler.maintenance", { phase: "started" });
   const report: RecoveryReport = {
     interrupted: 0,
     prunedRuns: 0,
@@ -407,7 +405,8 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
     try {
       if (job.scheduleType === "cron") {
         if (!job.cronExpression) {
-          logger.warn("scheduler", "scheduler.recovery_completed", {
+          logger.warn("scheduler", "scheduler.maintenance", {
+            phase: "job_skipped",
             jobId: job.id,
             message: "Recurring job has no cron expression; left unscheduled",
           });
@@ -434,7 +433,8 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
         }
       }
     } catch (err) {
-      logger.warn("scheduler", "scheduler.recovery_completed", {
+      logger.warn("scheduler", "scheduler.maintenance", {
+        phase: "job_failed",
         jobId: job.id,
         message: err instanceof Error ? err.message : "Recovery failed for job",
       });
@@ -445,7 +445,8 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
       );
     }
   }
-  logger.info("scheduler", "scheduler.recovery_completed", {
+  logger.info("scheduler", "scheduler.maintenance", {
+    phase: "finished",
     ...report,
   });
   return report;

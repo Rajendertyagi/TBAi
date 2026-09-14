@@ -17,7 +17,7 @@ export class ToolError extends Error {
   }
 }
 
-const WORKSPACE_DIR = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), "workspace"));
+export const WORKSPACE_DIR = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), "workspace"));
 
 // Ensure the sandbox root exists so relative paths resolve predictably.
 fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -28,11 +28,12 @@ export function getWorkspaceDir(): string {
 
 /**
  * Resolve `target` (absolute or relative to the workspace) to an absolute path
- * that is provably inside WORKSPACE_DIR, defending against `..` traversal and
- * symlink escapes.
+ * that is provably inside `base` (the conversation's resolved workspace dir),
+ * defending against `..` traversal and symlink escapes. `base` defaults to the
+ * legacy WORKSPACE_DIR but is normally the per-conversation resolved directory
+ * from `resolveConversationWorkspace`.
  */
-export function resolveSafe(target: string): string {
-  const base = WORKSPACE_DIR;
+export function resolveSafe(target: string, base: string = WORKSPACE_DIR): string {
   const abs = path.resolve(base, target);
   if (abs !== base && !abs.startsWith(base + path.sep)) {
     throw new ToolError(`Path "${target}" is outside the workspace`);
@@ -81,8 +82,8 @@ export type StatArgs = { path: string };
 export type DeleteArgs = { path: string };
 export type KillArgs = { pid: number };
 
-export function runRead({ path: p, offset = 0, limit }: ReadArgs) {
-  const abs = resolveSafe(p);
+export function runRead({ path: p, offset = 0, limit }: ReadArgs, workspaceDir: string = WORKSPACE_DIR) {
+  const abs = resolveSafe(p, workspaceDir);
   if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
   if (!fs.statSync(abs).isFile()) throw new ToolError(`Not a file: ${p}`);
 
@@ -104,15 +105,15 @@ export function runRead({ path: p, offset = 0, limit }: ReadArgs) {
   };
 }
 
-export function runWrite({ path: p, content }: WriteArgs) {
-  const abs = resolveSafe(p);
+export function runWrite({ path: p, content }: WriteArgs, workspaceDir: string = WORKSPACE_DIR) {
+  const abs = resolveSafe(p, workspaceDir);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content, "utf8");
   return { path: p, bytes: Buffer.byteLength(content, "utf8"), created: !fs.existsSync(abs) };
 }
 
-export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditArgs) {
-  const abs = resolveSafe(p);
+export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditArgs, workspaceDir: string = WORKSPACE_DIR) {
+  const abs = resolveSafe(p, workspaceDir);
   if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
   const original = fs.readFileSync(abs, "utf8");
 
@@ -136,8 +137,9 @@ export async function runBash(
   { command, cwd, onOutput }: BashArgs & {
     onOutput?: (event: BashOutputEvent) => void;
   },
+  workspaceDir: string = WORKSPACE_DIR,
 ) {
-  const workdir = cwd ? resolveSafe(cwd) : WORKSPACE_DIR;
+  const workdir = cwd ? resolveSafe(cwd, workspaceDir) : workspaceDir;
   const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", command], {
     cwd: workdir,
     stdout: "pipe",
@@ -221,8 +223,8 @@ export async function runBash(
 
 // ---- Coding tools (workspace-sandboxed, read-only unless noted) ----
 
-export function runList({ path: dir = "." }: ListArgs) {
-  const abs = resolveSafe(dir);
+export function runList({ path: dir = "." }: ListArgs, workspaceDir: string = WORKSPACE_DIR) {
+  const abs = resolveSafe(dir, workspaceDir);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${dir}`);
   const stat = fs.statSync(abs);
   if (!stat.isDirectory()) throw new ToolError(`Not a directory: ${dir}`);
@@ -247,8 +249,8 @@ export function runList({ path: dir = "." }: ListArgs) {
   return { path: dir, entries };
 }
 
-export function runStat({ path: p }: StatArgs) {
-  const abs = resolveSafe(p);
+export function runStat({ path: p }: StatArgs, workspaceDir: string = WORKSPACE_DIR) {
+  const abs = resolveSafe(p, workspaceDir);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${p}`);
   const s = fs.statSync(abs);
   return {
@@ -273,9 +275,9 @@ const SEARCH_SKIP_DIRS = new Set([
 const MAX_SEARCH_FILES = 5000;
 const MAX_SEARCH_BYTES = 1_000_000;
 
-export function runSearch({ query, path: target = ".", maxResults = 50 }: SearchArgs) {
+export function runSearch({ query, path: target = ".", maxResults = 50 }: SearchArgs, workspaceDir: string = WORKSPACE_DIR) {
   if (!query) throw new ToolError("Search query is required");
-  const abs = resolveSafe(target);
+  const abs = resolveSafe(target, workspaceDir);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${target}`);
   const needle = query.toLowerCase();
   const matches: { path: string; line: number; snippet: string }[] = [];
@@ -351,9 +353,9 @@ export function runSearch({ query, path: target = ".", maxResults = 50 }: Search
   return { query, path: target, matches, filesScanned, truncated: totalHits > matches.length };
 }
 
-export function runDelete({ path: p }: DeleteArgs) {
-  const abs = resolveSafe(p);
-  if (abs === WORKSPACE_DIR) throw new ToolError("Refusing to delete the workspace root");
+export function runDelete({ path: p }: DeleteArgs, workspaceDir: string = WORKSPACE_DIR) {
+  const abs = resolveSafe(p, workspaceDir);
+  if (abs === workspaceDir) throw new ToolError("Refusing to delete the workspace root");
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${p}`);
   const wasDir = fs.statSync(abs).isDirectory();
   fs.rmSync(abs, { recursive: true, force: true });

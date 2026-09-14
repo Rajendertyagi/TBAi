@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import path from "path";
 import fs from "fs";
+import { logger } from "../lib/logger";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "chat.db");
@@ -41,6 +42,16 @@ sqlite.run(`
   )
 `);
 
+// Durable key/value app settings (runtime log capture level/overrides, ...).
+// Single-row-per-key; values are JSON. Read at boot, written by settings APIs.
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`);
+
 sqlite.run(`
   CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -52,6 +63,22 @@ sqlite.run(`
     updated_at INTEGER NOT NULL
   )
 `);
+
+// Per-conversation durable to-do notepad (model-driven, user-owned). Cascade
+// deletes with the parent conversation so abandoned threads leave no orphans.
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS todos (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    text TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (thread_id) REFERENCES conversations(id) ON DELETE CASCADE
+  )
+`);
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_todos_thread ON todos(thread_id, position)");
 
 const CREATE_MESSAGES = `
   CREATE TABLE messages (
@@ -100,6 +127,81 @@ const messagesHadOrderSeq = messagesColumns.some((c) => c.name === "order_seq");
 const roleIsNotNull = (messagesColumns.find((c) => c.name === "role")?.notnull ?? 0) === 1;
 
 addColumnIfNotExists("conversations", "status", "TEXT NOT NULL DEFAULT 'regular'");
+// Rebuild `conversations` unless it already carries the binary status CHECK
+// (`IN ('regular', 'archived')`). SQLite cannot ALTER a CHECK constraint, so
+// any older CHECK (legacy binary-with-wrong-default or the interim 4-status
+// model) is replaced by a table rebuild: copy all columns (mapping every
+// known status into the binary model in SQL), preserve ids (FKs from
+// messages/todos and conv_fts rows stay valid), recreate indexes; the FTS
+// trigger block below recreates the dropped triggers. Idempotent: no-op once
+// the binary CHECK is present. Never crashes startup: failure rolls back
+// and logs.
+try {
+  const def = sqlite.query("SELECT sql FROM sqlite_master WHERE name = 'conversations'").get() as
+    | { sql: string }
+    | undefined;
+  const needsRebuild =
+    !!def?.sql &&
+    !/CHECK\s*\(\s*status\s+IN\s*\(\s*'regular'\s*,\s*'archived'\s*\)/i.test(def.sql);
+  if (needsRebuild) {
+    const before = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number }).c;
+    sqlite.run("PRAGMA foreign_keys=OFF");
+    try {
+      sqlite.run("BEGIN");
+      sqlite.run("DROP TRIGGER IF EXISTS trg_conv_fts_ai");
+      sqlite.run("DROP TRIGGER IF EXISTS trg_conv_fts_au");
+      sqlite.run("DROP TRIGGER IF EXISTS trg_conv_fts_ad");
+      sqlite.run(`
+        CREATE TABLE conversations_new (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          provider_id TEXT,
+          system_prompt TEXT,
+          status TEXT NOT NULL DEFAULT 'regular' CHECK(status IN ('regular', 'archived')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          title_source TEXT CHECK(title_source IN ('auto', 'user')),
+          model_id TEXT,
+          reasoning_level TEXT,
+          workspace_mode TEXT NOT NULL DEFAULT 'simple',
+          workspace_folder_id TEXT
+        )
+      `);
+      sqlite.run(`
+        INSERT INTO conversations_new (id, title, provider_id, system_prompt, status, created_at, updated_at, title_source, model_id, reasoning_level, workspace_mode, workspace_folder_id)
+        SELECT id, title, provider_id, system_prompt,
+          CASE status
+            WHEN 'archived' THEN 'archived'
+            WHEN 'completed' THEN 'archived'
+            WHEN 'cancelled' THEN 'archived'
+            ELSE 'regular'
+          END,
+          created_at, updated_at, title_source, model_id, reasoning_level, workspace_mode, workspace_folder_id
+        FROM conversations
+      `);
+      sqlite.run("DROP TABLE conversations");
+      sqlite.run("ALTER TABLE conversations_new RENAME TO conversations");
+      sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)");
+      sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
+      sqlite.run("COMMIT");
+    } catch (e) {
+      try {
+        sqlite.run("ROLLBACK");
+      } catch { /* already rolled back */ }
+      throw e;
+    } finally {
+      sqlite.run("PRAGMA foreign_keys=ON");
+    }
+    const after = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number }).c;
+    logger.info("db", "conversations_status_check_rebuilt", {
+      message: `conversations=${before}->${after}`,
+    });
+  }
+} catch (err) {
+  logger.error("db", "conversations_rebuild_failed", {
+    message: err instanceof Error ? err.message : String(err),
+  });
+}
 addColumnIfNotExists("conversations", "provider_id", "TEXT");
 addColumnIfNotExists("messages", "parent_id", "TEXT");
 addColumnIfNotExists("messages", "order_seq", "INTEGER NOT NULL DEFAULT 0");
@@ -110,6 +212,12 @@ addColumnIfNotExists("conversations", "title_source", "TEXT CHECK(title_source I
 // Per-conversation AI configuration (conversation default, SQLite source of truth).
 addColumnIfNotExists("conversations", "model_id", "TEXT");
 addColumnIfNotExists("conversations", "reasoning_level", "TEXT");
+// Two-mode workspace model (codeg-aligned): a conversation is either a Simple Chat
+// (disposable per-conversation workspace) or a Project Chat attached to a
+// registered folder. The folder ID is the canonical identity; the path is
+// resolved server-side. Legacy conversations default to 'simple'.
+addColumnIfNotExists("conversations", "workspace_mode", "TEXT NOT NULL DEFAULT 'simple'");
+addColumnIfNotExists("conversations", "workspace_folder_id", "TEXT");
 
 // The original messages table had `role TEXT NOT NULL` and stored a plain-text
 // content format incompatible with the assistant-ui storage format we now
@@ -230,6 +338,70 @@ try {
 } catch {
   // FTS unavailable or already populated; title/message LIKE fallback still works.
 }
+
+// ---- Folders / workspace registry (codeg-aligned two-mode model) ----
+// Registered project folders the user can attach a Project Chat to, plus folder
+// links (authorization records for allowed/linked paths) and folder groups. The
+// folder ID is the canonical identity; paths are resolved server-side.
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE,
+    alias TEXT,
+    color TEXT NOT NULL DEFAULT '#6b7280',
+    group_id TEXT,
+    is_open INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'regular' CHECK(kind IN ('regular', 'chat')),
+    last_opened_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER
+  )
+`);
+
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS folder_links (
+    id TEXT PRIMARY KEY,
+    folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`);
+
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS folder_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT 'inherit',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`);
+
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_folders_group ON folders(group_id)");
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_folders_sort ON folders(sort_order)");
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_folder_links_folder ON folder_links(folder_id)");
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_folder_groups_sort ON folder_groups(sort_order)");
+
+// ---- Quick messages (user-saved reusable snippets) ----
+// Title + content + manual sort order. No seeds: empty until the user
+// creates entries on the Quick Messages settings page.
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS quick_messages (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`);
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_quick_messages_sort ON quick_messages(sort_order)");
 
 // ---- Built-in scheduler (TBAi cron) — additive tables, existing data untouched ----
 sqlite.run(`

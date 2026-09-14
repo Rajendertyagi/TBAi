@@ -162,11 +162,11 @@ error/output excerpt).
 
 ## Logging
 
-`scheduler.job_created|job_updated|job_deleted|job_enabled|job_disabled|`
-`job_due|run_claimed|run_started|run_completed|run_failed|run_skipped|`
-`run_interrupted|run_missed|run_retried|run_cancel_requested|run_cancelled|recovery_started|recovery_completed`
+`scheduler.run` (outcomes: started/finished/failed/missed/skipped/cancelled/retried),
+`scheduler.admin` (actions: created/updated/deleted/enabled/disabled/cancel_requested),
+`scheduler.maintenance` (phases: started/finished/job_skipped/job_failed)
 — every execution carries jobId + occurrenceId + runId + requestId. No
-secrets, no full prompts.
+secrets, no full prompts. See docs/logging.md for the taxonomy.
 
 ## Limitations (V1)
 

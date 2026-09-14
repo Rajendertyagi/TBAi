@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createAssistantStream } from "assistant-stream";
 import { createThreadHistoryAdapter } from "./threadHistoryAdapter";
 import { historyConfig } from "../config/history";
+import { getWelcomeScopeSnapshot } from "../features/chat/state/welcomeScope";
 
 interface ConvDTO {
   id: string;
@@ -15,6 +16,8 @@ interface ConvDTO {
   providerId?: string | null;
   modelId?: string | null;
   reasoningLevel?: string | null;
+  workspaceMode?: "simple" | "project";
+  workspaceFolderId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +33,9 @@ type ThreadMetadata = {
     providerId?: string | null;
     modelId?: string | null;
     reasoningLevel?: string | null;
+    /** Two-mode workspace model (codeg-aligned). */
+    workspaceMode?: "simple" | "project";
+    workspaceFolderId?: string | null;
     /** Creation ISO passthrough for client-side created-sort (never a secret). */
     createdAt?: string;
   };
@@ -38,6 +44,8 @@ type ThreadMetadata = {
 function toMetadata(c: ConvDTO): ThreadMetadata {
   return {
     remoteId: c.id,
+    // Persistent status is binary (regular/archived) and passes through
+    // untouched — no mapping layer. Anything else is a backend bug.
     status: c.status === "archived" ? "archived" : "regular",
     title: c.title,
     lastMessageAt: c.updatedAt ? new Date(c.updatedAt) : undefined,
@@ -45,6 +53,8 @@ function toMetadata(c: ConvDTO): ThreadMetadata {
       providerId: c.providerId ?? null,
       modelId: c.modelId ?? null,
       reasoningLevel: c.reasoningLevel ?? null,
+      workspaceMode: c.workspaceMode ?? "simple",
+      workspaceFolderId: c.workspaceFolderId ?? null,
       // Creation time passthrough for client-side created-sort. Kept in
       // `custom` (the adapter contract's open bag) — never a secret.
       createdAt: c.createdAt,
@@ -131,12 +141,62 @@ export function createRemoteThreadListAdapter(
     },
 
     async initialize() {
+      let workspaceMode: "simple" | "project" = "simple";
+      let workspaceFolderId: string | null = null;
+      try {
+        const scope = getWelcomeScopeSnapshot();
+        if (scope.mode === "project" && scope.folderId) {
+          workspaceMode = "project";
+          workspaceFolderId = scope.folderId;
+        }
+      } catch {
+        /* welcome scope unavailable — fall back to a disposable workspace */
+      }
       const res = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "New Conversation" }),
+        body: JSON.stringify({
+          title: "New Conversation",
+          workspaceMode,
+          workspaceFolderId,
+        }),
       });
-      const conv = await res.json();
+      if (!res.ok) {
+        // Edge: stale project folder rejected by validation — retry once as
+        // a simple chat so the user never sits on a dead draft.
+        if (workspaceMode === "project") {
+          const fallback = await fetch("/api/conversations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: "New Conversation",
+              workspaceMode: "simple",
+              workspaceFolderId: null,
+            }),
+          });
+          if (!fallback.ok) {
+            const detail = await fallback
+              .json()
+              .catch(() => ({}));
+            throw new Error(
+              `Failed to create conversation (${fallback.status}): ${(detail as { error?: string }).error ?? "unknown error"}`,
+            );
+          }
+          const conv = (await fallback.json()) as { id?: string };
+          if (!conv.id) throw new Error("Conversation creation returned no id");
+          return { remoteId: conv.id };
+        }
+        // Contract: never resolve with an undefined remoteId — that masks
+        // the failure and turns it into a misleading downstream
+        // `conversation_missing` chat error. Throw so the original backend
+        // error stays visible.
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(
+          `Failed to create conversation (${res.status}): ${(detail as { error?: string }).error ?? "unknown error"}`,
+        );
+      }
+      const conv = (await res.json()) as { id?: string };
+      if (!conv.id) throw new Error("Conversation creation returned no id");
       return { remoteId: conv.id };
     },
 
@@ -195,4 +255,28 @@ export function createRemoteThreadListAdapter(
       return createAssistantStream(() => {});
     },
   };
+}
+
+/**
+ * Explicit conversation creation with workspace mode/folder. Used by "New Project
+ * Chat" (mode='project' + folderId) and any flow that needs a conversation
+ * before the runtime's automatic `initialize()` would. The folder ID is the
+ * canonical project identity; the path is resolved server-side.
+ */
+export async function createConversation(input: {
+  workspaceMode?: "simple" | "project";
+  workspaceFolderId?: string | null;
+  title?: string;
+}): Promise<{ id: string }> {
+  const res = await fetch("/api/conversations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: input.title ?? "New Conversation",
+      workspaceMode: input.workspaceMode ?? "simple",
+      workspaceFolderId: input.workspaceFolderId ?? null,
+    }),
+  });
+  if (!res.ok) throw new Error("Failed to create conversation");
+  return res.json();
 }

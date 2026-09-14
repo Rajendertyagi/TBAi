@@ -1,4 +1,4 @@
-import type { ProviderConfig, Conversation, Message, Memory } from "../types";
+import type { ProviderConfig, Conversation, ConversationStatus, Message, Memory } from "../types";
 
 // Helper to convert DB rows to our types
 export function mapProviderConfig(row: any): ProviderConfig {
@@ -22,7 +22,9 @@ export function mapConversation(row: any): Conversation {
     modelId: row.model_id ?? null,
     reasoningLevel: row.reasoning_level ?? null,
     systemPrompt: row.system_prompt,
-    status: (row.status as "regular" | "archived") ?? "regular",
+    status: (row.status as ConversationStatus) ?? "regular",
+    workspaceMode: (row.workspace_mode as "simple" | "project") ?? "simple",
+    workspaceFolderId: row.workspace_folder_id ?? null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };

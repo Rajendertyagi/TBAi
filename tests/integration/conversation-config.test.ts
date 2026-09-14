@@ -193,3 +193,79 @@ describe("per-conversation config — chat route fallback (resolveChatModel seam
     expect(resolved?.reasoning).toBe("medium");
   });
 });
+
+describe("conversation status lifecycle (regular/archived)", () => {
+  it("POST creates regular conversations", async () => {
+    const { status, json } = await appFetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "status probe" }),
+    });
+    expect(status).toBe(200);
+    const conv = await json();
+    expect(conv.status).toBe("regular");
+    await conversationService.delete(conv.id);
+  });
+
+  it("archive/unarchive round-trips through PATCH and persists", async () => {
+    const created = await conversationService.create({
+      title: "archive probe",
+      providerId: "x",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+    });
+    expect((await conversationService.get(created.id))?.status).toBe("regular");
+
+    const archived = await appFetch(`/api/conversations/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "archived" }),
+    });
+    expect(archived.status).toBe(200);
+    expect((await archived.json()).status).toBe("archived");
+    expect((await conversationService.get(created.id))?.status).toBe("archived");
+
+    const unarchived = await appFetch(`/api/conversations/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "regular" }),
+    });
+    expect(unarchived.status).toBe(200);
+    expect((await unarchived.json()).status).toBe("regular");
+
+    await conversationService.delete(created.id);
+  });
+
+  it("rejects the obsolete 4-state statuses", async () => {
+    const created = await conversationService.create({
+      title: "reject probe",
+      providerId: "x",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+    });
+    for (const status of ["in_progress", "pending_review", "completed", "cancelled"]) {
+      const res = await appFetch(`/api/conversations/${created.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      expect(res.status).toBe(400);
+    }
+    // Untouched by the rejected writes.
+    expect((await conversationService.get(created.id))?.status).toBe("regular");
+    await conversationService.delete(created.id);
+  });
+
+  it("narrows ?status= filtering to regular/archived", async () => {
+    const list = await appFetch("/api/conversations?status=archived&limit=5");
+    expect(list.status).toBe(200);
+    const data = await list.json();
+    for (const t of data.threads as Array<{ status: string }>) {
+      expect(t.status).toBe("archived");
+    }
+    const unknown = await appFetch("/api/conversations?status=completed&limit=5");
+    expect(unknown.status).toBe(200);
+  });
+});

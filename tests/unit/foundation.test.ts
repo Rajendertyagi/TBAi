@@ -134,8 +134,10 @@ describe("settings nav source of truth", () => {
       "/providers",
       "/appearance",
       "/workspace",
+      "/folders",
       "/desktop",
       "/memory",
+      "/quick-messages",
       "/mcp",
       "/logs",
     ]);

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { registry } from "../config/providers";
 import { conversationService, messageService } from "../services/storage";
 import { conversationCreateSchema, conversationUpdateSchema, messageUpsertSchema } from "../lib/validation";
+import { folderService } from "../services/folders";
 import { storageError } from "./shared";
 
 const app = new Hono();
@@ -10,7 +11,7 @@ const app = new Hono();
 app.get("/api/conversations", async (c) => {
   try {
     const statusQuery = c.req.query("status");
-    const status = statusQuery === "archived" || statusQuery === "regular" ? statusQuery : undefined;
+    const status = statusQuery === "regular" || statusQuery === "archived" ? statusQuery : undefined;
     const search = c.req.query("search") || undefined;
     const orderQuery = c.req.query("order");
     const order = orderQuery === "created" ? "created" : "updated";
@@ -42,6 +43,8 @@ app.post("/api/conversations", async (c) => {
       modelId,
       reasoningLevel,
       systemPrompt: parsed.systemPrompt,
+      workspaceMode: parsed.workspaceMode ?? "simple",
+      workspaceFolderId: parsed.workspaceFolderId ?? null,
     });
 
     return c.json(conversation);
@@ -117,6 +120,12 @@ app.patch("/api/conversations/:id", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
     const parsed = conversationUpdateSchema.parse(body);
+
+    // Capture old folder id before update so we can clean up hidden chat
+    // folders when switching modes (codeg parity).
+    const old = await conversationService.get(id);
+    const oldFolderId = old?.workspaceFolderId ?? null;
+
     const conversation = await conversationService.update(id, {
       ...parsed,
       // Normalize "unset" sentinels to undefined so they don't overwrite an
@@ -124,7 +133,24 @@ app.patch("/api/conversations/:id", async (c) => {
       modelId: parsed.modelId === null ? undefined : parsed.modelId,
       reasoningLevel:
         parsed.reasoningLevel === null ? undefined : parsed.reasoningLevel,
+      // A simple chat must not retain a folder. Switching the mode to "simple"
+      // clears the folder id; an explicit null also clears it; otherwise leave
+      // an unspecified value untouched.
+      workspaceFolderId:
+        parsed.workspaceMode === "simple"
+          ? null
+          : parsed.workspaceFolderId === null
+            ? null
+            : parsed.workspaceFolderId ?? undefined,
     });
+
+    // Cleanup old hidden chat folder when switching away from simple mode,
+    // or when the folder id changed. The GC would eventually reclaim it, but
+    // eager cleanup is cleaner (codeg parity).
+    if (oldFolderId && oldFolderId !== conversation.workspaceFolderId) {
+      await folderService.cleanupChatFolder(oldFolderId);
+    }
+
     return c.json(conversation);
   } catch (e) {
     return storageError(c, e);
@@ -134,8 +160,16 @@ app.patch("/api/conversations/:id", async (c) => {
 app.delete("/api/conversations/:id", async (c) => {
   try {
     const id = c.req.param("id");
+    // Capture the folder id before deleting the conversation so we can
+    // clean up the hidden chat folder afterward.
+    const conv = await conversationService.get(id);
+    const folderId = conv?.workspaceFolderId ?? null;
     await messageService.deleteByConversation(id);
     await conversationService.delete(id);
+    // Cleanup hidden chat folder if no other conversations reference it.
+    if (folderId) {
+      await folderService.cleanupChatFolder(folderId);
+    }
     return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);

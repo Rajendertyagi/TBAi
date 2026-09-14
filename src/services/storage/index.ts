@@ -1,7 +1,8 @@
 import { db } from "../../db";
 import { generateId } from "../../lib/utils";
 import type { SQLQueryBindings } from "bun:sqlite";
-import type { Conversation, Message, Memory } from "../../types";
+import type { Conversation, ConversationStatus, Message, Memory, WorkspaceMode } from "../../types";
+import { createChatWorkspace } from "../workspace";
 
 interface ConversationRow {
   id: string;
@@ -12,6 +13,8 @@ interface ConversationRow {
   system_prompt: string | null;
   status: string;
   title_source: string | null;
+  workspace_mode: string;
+  workspace_folder_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -36,7 +39,7 @@ interface StoredMessageContent {
 }
 
 export interface ConversationListOptions {
-  status?: "regular" | "archived";
+  status?: ConversationStatus;
   search?: string;
   limit?: number;
   offset?: number;
@@ -57,8 +60,10 @@ function mapConversation(row: ConversationRow): Conversation {
     modelId: row.model_id ?? null,
     reasoningLevel: row.reasoning_level ?? null,
     systemPrompt: row.system_prompt,
-    status: row.status as "regular" | "archived",
+    status: (row.status as ConversationStatus) ?? "regular",
     titleSource: row.title_source as "auto" | "user" | undefined,
+    workspaceMode: (row.workspace_mode as WorkspaceMode) ?? "simple",
+    workspaceFolderId: row.workspace_folder_id ?? null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -66,12 +71,32 @@ function mapConversation(row: ConversationRow): Conversation {
 
 export const conversationService = {
   async create(
-    data: Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt">,
+    data: Pick<
+      Conversation,
+      | "title"
+      | "providerId"
+      | "modelId"
+      | "reasoningLevel"
+      | "systemPrompt"
+      | "workspaceMode"
+      | "workspaceFolderId"
+    >,
   ): Promise<Conversation> {
     const now = Date.now();
     const id = generateId();
+    const workspaceMode = data.workspaceMode ?? "simple";
+
+    let workspaceFolderId: string | null;
+    if (workspaceMode === "project") {
+      workspaceFolderId = data.workspaceFolderId ?? null;
+    } else {
+      // Simple chats get a hidden kind='chat' folder with a scratch dir.
+      const { folderId } = await createChatWorkspace();
+      workspaceFolderId = folderId;
+    }
+
     db.run(
-      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?)",
+      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?)",
       [
         id,
         data.title,
@@ -79,6 +104,8 @@ export const conversationService = {
         data.modelId ?? null,
         data.reasoningLevel ?? null,
         data.systemPrompt || null,
+        workspaceMode,
+        workspaceFolderId,
         now,
         now,
       ],
@@ -133,7 +160,7 @@ export const conversationService = {
 
   async update(
     id: string,
-    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource">>,
+    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId">>,
   ): Promise<Conversation> {
     const updates: string[] = [];
     const values: SQLQueryBindings[] = [];
@@ -165,6 +192,17 @@ export const conversationService = {
     if (data.titleSource !== undefined) {
       updates.push("title_source = ?");
       values.push(data.titleSource);
+    }
+    if (data.workspaceMode !== undefined) {
+      updates.push("workspace_mode = ?");
+      values.push(data.workspaceMode);
+    }
+    if (data.workspaceFolderId !== undefined) {
+      // A simple chat must not retain a folder; a project chat keeps its id.
+      const folderId =
+        data.workspaceMode === "simple" ? null : (data.workspaceFolderId ?? null);
+      updates.push("workspace_folder_id = ?");
+      values.push(folderId);
     }
 
     updates.push("updated_at = ?");

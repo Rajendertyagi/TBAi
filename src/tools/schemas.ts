@@ -5,8 +5,11 @@
  * client `defineToolkit` both derive from these. Schemas are pure (no server
  * imports) so they are safe to share across the Bun backend and the Vite
  * frontend. The 11 filesystem/computer schemas are re-exported from
- * `lib/validation.ts` (the API boundary); the 6 scheduler schemas mirror the
+ * `lib/validation.ts` (the API boundary); the scheduler schemas mirror the
  * REST job schemas so a model-driven job and a UI-created job validate alike.
+ * The todo and browser schemas are likewise re-exported here as the single
+ * source of truth for both the server `AISDKToolkit` and the client
+ * `defineToolkit`.
  */
 import { z } from "zod";
 import {
@@ -19,11 +22,10 @@ import {
   toolStatSchema,
   toolDeleteSchema,
   toolKillSchema,
-  schedulerJobCreateSchema,
-  schedulerJobUpdateSchema,
-  schedulerToolIdSchema,
-  schedulerToolRunSchema,
-  schedulerToolListSchema,
+  schedulerSchema,
+  todoSchema,
+  browserReadSchema,
+  browserActionSchemaFull,
 } from "../lib/validation";
 
 export const toolSchemas = {
@@ -40,13 +42,13 @@ export const toolSchemas = {
   process_list: z.object({}),
   process_kill: toolKillSchema,
   system_info: z.object({}),
-  // Scheduler (AI-controlled)
-  create_scheduled_job: schedulerJobCreateSchema,
-  list_scheduled_jobs: schedulerToolListSchema,
-  get_scheduled_job: schedulerToolIdSchema,
-  update_scheduled_job: schedulerJobUpdateSchema,
-  delete_scheduled_job: schedulerToolIdSchema,
-  run_scheduled_job_now: schedulerToolRunSchema,
+  // Scheduler (AI-controlled, single action-dispatched tool)
+  scheduler: schedulerSchema,
+  // Todo (per-conversation notepad)
+  todo: todoSchema,
+  // Browser (native agent-browser CLI, no MCP)
+  browser: browserReadSchema,
+  browser_action: browserActionSchemaFull,
 } as const;
 
 export type ToolName = keyof typeof toolSchemas;

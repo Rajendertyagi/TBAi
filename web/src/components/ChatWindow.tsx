@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   ActionBarPrimitive,
-  AuiIf,
   ErrorPrimitive,
   groupPartByType,
   MessagePrimitive,
@@ -29,41 +28,88 @@ import { SyntaxHighlighter } from "./assistant-ui/elements/shiki-highlighter.aui
 import { DiffViewer } from "../components/diff-viewer";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
-import { PaseoComposer } from "./PaseoComposer";
+import { Composer } from "./Composer";
+import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
+import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePicker";
+import { historyConfig } from "../config/history";
 import { useSettingsStore } from "../stores";
+import { useMessageError } from "@assistant-ui/core/react";
+import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
-export function ChatWindow() {
+/**
+ * Lightweight boot skeleton for a persisted thread whose history has not
+ * resolved yet. Rendered inside the messages viewport (never Welcome);
+ * unmounts the moment history settles. Copy comes from `historyConfig`.
+ */
+function ThreadBootSkeleton() {
+  return (
+    <div
+      data-testid="thread-boot"
+      role="status"
+      aria-label={historyConfig.copy.loadingConversation}
+      className="space-y-4"
+    >
+      <div className="ml-auto h-10 w-2/5 animate-pulse rounded-xl bg-muted" />
+      <div className="h-24 w-4/5 animate-pulse rounded-xl bg-muted" />
+      <div className="ml-auto h-10 w-1/3 animate-pulse rounded-xl bg-muted" />
+      <div className="h-16 w-3/5 animate-pulse rounded-xl bg-muted" />
+      <span className="sr-only">{historyConfig.copy.loadingConversation}</span>
+    </div>
+  );
+}
+
+export function ChatWindow({ isDraft }: { isDraft: boolean }) {
+  // Single composer instance for the whole app: one tag, one live mount,
+  // identical size/features everywhere. Identity is structural, never
+  // message-derived: welcome shows iff this is a draft thread AND it is
+  // empty. A bound thread never mounts welcome — while its history loads
+  // (`thread.isLoading`, assistant-ui's canonical history-loading signal)
+  // it renders the boot skeleton instead. The folder scope chip renders as
+  // a separate row below the composer box (editable on drafts, static on
+  // bound threads) so the box itself never changes.
+  const isEmpty = useAuiState((s) => s.thread.isEmpty);
+  // Canonical history-loading signal: true from per-thread runtime mount
+  // until ThreadHistoryAdapter.load() settles (success or failure).
+  const isHistoryLoading = useAuiState((s) => s.thread.isLoading);
+  const showWelcome = isDraft && isEmpty;
+  const showBoot = !isDraft && isHistoryLoading;
+  const composer = <Composer />;
+
   return (
     <ThreadPrimitive.Root className="relative flex h-full min-h-0 flex-col">
-      <ThreadPrimitive.Viewport className="flex-1 space-y-4 overflow-y-auto px-4 py-6 pb-4">
-        <AuiIf condition={(s) => s.thread.isEmpty}>
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              Start a conversation…
-            </p>
+      {showWelcome ? (
+        <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6 pb-4">
+          <WelcomeScreen composer={composer} />
+        </ThreadPrimitive.Viewport>
+      ) : (
+        <>
+          <ThreadPrimitive.Viewport className="flex-1 space-y-4 overflow-y-auto px-4 py-6 pb-4">
+            {showBoot ? <ThreadBootSkeleton /> : null}
+            <ThreadPrimitive.Messages>
+              {({ message }) =>
+                message.role === "user" ? <UserMessage /> : <AssistantMessage />
+              }
+            </ThreadPrimitive.Messages>
+          </ThreadPrimitive.Viewport>
+
+          <ThreadPrimitive.ScrollToBottom asChild>
+            <TooltipIconButton
+              tooltip="Scroll to bottom"
+              side="top"
+              className="absolute bottom-24 right-6 rounded-full border border-border bg-background shadow-md"
+            >
+              <ArrowDown />
+            </TooltipIconButton>
+          </ThreadPrimitive.ScrollToBottom>
+
+          <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+            {composer}
+            <div className="px-1 pt-1">
+              <WelcomeScopePicker editable={false} />
+            </div>
           </div>
-        </AuiIf>
-
-        <ThreadPrimitive.Messages>
-          {({ message }) =>
-            message.role === "user" ? <UserMessage /> : <AssistantMessage />
-          }
-        </ThreadPrimitive.Messages>
-      </ThreadPrimitive.Viewport>
-
-      <ThreadPrimitive.ScrollToBottom asChild>
-        <TooltipIconButton
-          tooltip="Scroll to bottom"
-          side="top"
-          className="absolute bottom-24 right-6 rounded-full border border-border bg-background shadow-md"
-        >
-          <ArrowDown />
-        </TooltipIconButton>
-      </ThreadPrimitive.ScrollToBottom>
-
-      <div className="px-4 pb-4">
-        <PaseoComposer />
-      </div>
+        </>
+      )}
     </ThreadPrimitive.Root>
   );
 }
@@ -322,8 +368,20 @@ function AssistantError() {
   return (
     <MessagePrimitive.Error>
       <ErrorPrimitive.Root className="mt-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
-        <ErrorPrimitive.Message />
+        <AssistantErrorMessage />
       </ErrorPrimitive.Root>
     </MessagePrimitive.Error>
   );
+}
+
+/**
+ * Transport-aware error copy. Reads the raw message error through the
+ * library's own hook and substitutes the single specified copy for transport
+ * kills; every other error renders exactly as before (same component, same
+ * DOM). No state changes, no runtime interference, no recovery attempts.
+ */
+function AssistantErrorMessage() {
+  const error = useMessageError();
+  const copy = error === undefined ? null : chatErrorCopy(classifyChatError(error));
+  return <>{copy ?? <ErrorPrimitive.Message />}</>;
 }

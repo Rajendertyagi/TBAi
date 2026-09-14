@@ -4,23 +4,29 @@ import type {
 } from "@assistant-ui/react";
 import { BackendToolView, Json } from "../filesystem/ui";
 
-type AnyArgs = Record<string, unknown>;
+type SchedulerArgs = {
+  action: string;
+  jobId?: string;
+  name?: string;
+  [key: string]: unknown;
+};
 type AnyResult = unknown;
-type AnyProps = ToolCallMessagePartProps<AnyArgs, AnyResult>;
+type AnyProps = ToolCallMessagePartProps<SchedulerArgs, AnyResult>;
 
 /**
- * Renderer for the six AI-controlled scheduler tools (create/list/get/update/
- * delete/run). UI-only — execution happens server-side (the AISDKToolkit
- * `execute`), exactly like the filesystem and computer tools. The result is a
- * JSON summary, so a single card component covers all six.
+ * Single renderer for the `scheduler` AI tool (action-dispatched: create /
+ * list / get / update / delete / run_now). UI-only — execution happens
+ * server-side (the AISDKToolkit `execute`), like the filesystem and computer
+ * tools. The result is a uniform JSON envelope, so one card covers every
+ * action.
  */
 export const SchedulerToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
+  const action = String(p.args?.action ?? "scheduler");
   const label =
-    String(p.args.name ?? p.args.id ?? "").trim() ||
-    (p.args.prompt ? "scheduler job" : "scheduler");
+    String(p.args?.name ?? p.args?.jobId ?? "").trim() || "scheduler";
   return (
     <BackendToolView
-      title={`scheduler · ${label}`}
+      title={`scheduler · ${action} · ${label}`}
       args={p.args}
       result={p.result}
       status={p.status}

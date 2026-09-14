@@ -84,6 +84,23 @@ describe("CredentialStore (local DEK encryption)", () => {
     expect(() => credentialStore.get("p2")).toThrow(/Failed to decrypt/);
   });
 
+  it("logs credential.error on decrypt failure (funnel proof)", async () => {
+    const { logger } = await import("../lib/logger");
+    logger.configure({ level: "debug", targets: [], file: null });
+    try {
+      const since = logger.lastSeq;
+      expect(() => credentialStore.get("p2")).toThrow(/Failed to decrypt/);
+      const entry = logger
+        .getRecentEntries(since)
+        .find((e) => e.event === "credential.error");
+      expect(entry).toBeTruthy();
+      expect(entry?.level).toBe("error");
+      expect((entry as { providerId?: string }).providerId).toBe("p2");
+    } finally {
+      logger.configure({ level: "error", targets: [], file: null });
+    }
+  });
+
   it("never persists the plaintext secret", () => {
     seedProvider("p3");
     credentialStore.set("p3", "sk-plaintext-must-not-appear");
