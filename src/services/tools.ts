@@ -1,13 +1,16 @@
 import fs from "fs";
 import path from "path";
+import { consumeGrant } from "./grants";
 
 /**
- * Agentic file/shell tools, executed on the server inside a sandbox.
+ * Agentic file/shell tools, executed on the server.
  *
- * Every path is confined to WORKSPACE_DIR (default ./workspace next to cwd).
- * Path-traversal and symlink-escape are rejected before any IO. The client
- * drives execution via the human-tool UI (see web/src/components/ToolUIs.tsx),
- * which calls the /api/tools/* HTTP endpoints defined in src/routes/index.ts.
+ * Path arguments are confined to a per-conversation workspace root
+ * (see resolveSafe): path-traversal and symlink-escape are rejected before
+ * any IO. This confinement applies ONLY to path arguments. `runBash` confines
+ * just its starting directory — the command body is unsandboxed PowerShell
+ * running with the server's own privileges (see run_command's tool
+ * description). Do not describe shell execution as sandboxed.
  */
 
 export class ToolError extends Error {
@@ -15,6 +18,55 @@ export class ToolError extends Error {
     super(message);
     this.name = "ToolError";
   }
+}
+
+/**
+ * Structured outside-workspace refusal. Message strings stay identical to the
+ * historic `ToolError` texts (log classifier + existing tests match on them);
+ * the fields carry what the message cannot: which operation, which canonical
+ * target, which root. `code` lets funnel/UI match without string-parsing.
+ */
+export class OutsideWorkspaceError extends ToolError {
+  code = "OUTSIDE_WORKSPACE" as const;
+  operation?: string;
+  requestedPath: string;
+  resolvedTarget?: string;
+  root: string;
+  constructor(opts: {
+    message: string;
+    requestedPath: string;
+    root: string;
+    operation?: string;
+    resolvedTarget?: string;
+  }) {
+    super(opts.message);
+    this.name = "OutsideWorkspaceError";
+    this.requestedPath = opts.requestedPath;
+    this.root = opts.root;
+    this.operation = opts.operation;
+    this.resolvedTarget = opts.resolvedTarget;
+  }
+}
+
+/**
+ * One-shot outside-workspace authorization (minted + consumed in Phase 2).
+ * Narrow by construction: one operation, one canonical target, one
+ * conversation. Single-use (`consumed`) with an expiry; never widens the root.
+ */
+export interface WorkspaceGrant {
+  id: string;
+  conversationId: string;
+  tool: string;
+  resolvedTarget: string;
+  createdAt: number;
+  expiresAt: number;
+  consumed: boolean;
+}
+
+/** Grant lookup scope for one tool execution: conversation + tool name. */
+export interface GrantScope {
+  conversationId: string;
+  tool: string;
 }
 
 export const WORKSPACE_DIR = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), "workspace"));
@@ -27,35 +79,103 @@ export function getWorkspaceDir(): string {
 }
 
 /**
- * Resolve `target` (absolute or relative to the workspace) to an absolute path
- * that is provably inside `base` (the conversation's resolved workspace dir),
- * defending against `..` traversal and symlink escapes. `base` defaults to the
- * legacy WORKSPACE_DIR but is normally the per-conversation resolved directory
- * from `resolveConversationWorkspace`.
+ * Canonicalize a workspace root: absolute, normalized, symlinks/junctions
+ * resolved. Roots that do not exist yet (fresh chat dirs are created by the
+ * caller) resolve lexically. Always compare canonical-to-canonical so a
+ * symlinked project folder can neither wrongly reject inside-paths nor admit
+ * outside ones.
  */
-export function resolveSafe(target: string, base: string = WORKSPACE_DIR): string {
-  const abs = path.resolve(base, target);
-  if (abs !== base && !abs.startsWith(base + path.sep)) {
-    throw new ToolError(`Path "${target}" is outside the workspace`);
+export function canonicalizeRoot(dir: string): string {
+  const abs = path.resolve(dir);
+  try {
+    if (fs.existsSync(abs)) return fs.realpathSync(abs);
+  } catch {
+    /* fall through to the lexical form */
   }
+  return abs;
+}
 
-  // Walk up to the nearest existing ancestor and verify its realpath stays
-  // inside the workspace. This blocks symlinks that point outside the sandbox.
+const insideRoot = (real: string, root: string): boolean => {
+  if (process.platform === "win32") {
+    const r = real.toLowerCase();
+    const b = root.toLowerCase();
+    return r === b || r.startsWith(b + path.sep);
+  }
+  return real === root || real.startsWith(root + path.sep);
+};
+
+/**
+ * Shared target inspection: lexical resolve + nearest-existing-ancestor
+ * canonicalization, compared in canonical space (case-insensitive on
+ * Windows). Single implementation so the check endpoint, grant minting, and
+ * execution all derive the same target identity — approving one path and
+ * executing a different resolved path is structurally impossible.
+ */
+export function inspectTarget(
+  target: string,
+  base: string,
+): { abs: string; real: string; root: string; inside: boolean } {
+  if (!base) throw new ToolError("No workspace root for this operation");
+  const root = canonicalizeRoot(base);
+  const abs = path.resolve(root, target);
+  let real = abs;
   let probe = abs;
   while (true) {
     if (fs.existsSync(probe)) {
-      const real = fs.realpathSync(probe);
-      if (real !== base && !real.startsWith(base + path.sep)) {
-        throw new ToolError(`Symlink target for "${target}" escapes the workspace`);
-      }
+      real = fs.realpathSync(probe) + abs.slice(probe.length);
       break;
     }
     const parent = path.dirname(probe);
     if (parent === probe) break;
     probe = parent;
   }
+  return { abs, real, root, inside: insideRoot(real, root) };
+}
 
-  return abs;
+/**
+ * Resolve `target` (absolute or relative to the workspace) to an absolute path
+ * provably inside `base` (the conversation's resolved workspace dir),
+ * defending against `..` traversal and symlink escapes. `base` is REQUIRED —
+ * no conversation-bound call may silently fall back to the global process
+ * workspace; callers without a conversation root (manual /api/tools surface,
+ * unattended scheduler root) pass their explicit root. Both sides compare in
+ * canonical space (case-insensitive on Windows).
+ *
+ * `grantScope` admits exactly one outside target per conversation+tool: a live
+ * grant whose canonical target equals the freshly re-resolved target is
+ * consumed (single-use) and the path admitted. The walk above IS the
+ * revalidation — a symlink swapped between approval and execution resolves
+ * differently and fails closed. Anything else outside throws
+ * `OutsideWorkspaceError` before any IO.
+ */
+export function resolveSafe(
+  target: string,
+  base: string,
+  grantScope?: GrantScope,
+): string {
+  const { abs, real, root, inside } = inspectTarget(target, base);
+  if (inside) return abs;
+  if (grantScope) {
+    if (consumeGrant(grantScope.conversationId, grantScope.tool, real)) {
+      return abs;
+    }
+  }
+  if (!insideRoot(abs, root)) {
+    throw new OutsideWorkspaceError({
+      message: `Path "${target}" is outside the workspace`,
+      requestedPath: target,
+      root,
+      operation: grantScope?.tool,
+      resolvedTarget: abs,
+    });
+  }
+  throw new OutsideWorkspaceError({
+    message: `Symlink target for "${target}" escapes the workspace`,
+    requestedPath: target,
+    root,
+    operation: grantScope?.tool,
+    resolvedTarget: real,
+  });
 }
 
 const MAX_READ_BYTES = 200_000;
@@ -82,8 +202,8 @@ export type StatArgs = { path: string };
 export type DeleteArgs = { path: string };
 export type KillArgs = { pid: number };
 
-export function runRead({ path: p, offset = 0, limit }: ReadArgs, workspaceDir: string = WORKSPACE_DIR) {
-  const abs = resolveSafe(p, workspaceDir);
+export function runRead({ path: p, offset = 0, limit }: ReadArgs, workspaceDir: string, grantScope?: GrantScope) {
+  const abs = resolveSafe(p, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
   if (!fs.statSync(abs).isFile()) throw new ToolError(`Not a file: ${p}`);
 
@@ -105,15 +225,15 @@ export function runRead({ path: p, offset = 0, limit }: ReadArgs, workspaceDir: 
   };
 }
 
-export function runWrite({ path: p, content }: WriteArgs, workspaceDir: string = WORKSPACE_DIR) {
-  const abs = resolveSafe(p, workspaceDir);
+export function runWrite({ path: p, content }: WriteArgs, workspaceDir: string, grantScope?: GrantScope) {
+  const abs = resolveSafe(p, workspaceDir, grantScope);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content, "utf8");
   return { path: p, bytes: Buffer.byteLength(content, "utf8"), created: !fs.existsSync(abs) };
 }
 
-export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditArgs, workspaceDir: string = WORKSPACE_DIR) {
-  const abs = resolveSafe(p, workspaceDir);
+export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditArgs, workspaceDir: string, grantScope?: GrantScope) {
+  const abs = resolveSafe(p, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
   const original = fs.readFileSync(abs, "utf8");
 
@@ -137,9 +257,10 @@ export async function runBash(
   { command, cwd, onOutput }: BashArgs & {
     onOutput?: (event: BashOutputEvent) => void;
   },
-  workspaceDir: string = WORKSPACE_DIR,
+  workspaceDir: string,
+  grantScope?: GrantScope,
 ) {
-  const workdir = cwd ? resolveSafe(cwd, workspaceDir) : workspaceDir;
+  const workdir = cwd ? resolveSafe(cwd, workspaceDir, grantScope) : workspaceDir;
   const proc = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", command], {
     cwd: workdir,
     stdout: "pipe",
@@ -223,8 +344,8 @@ export async function runBash(
 
 // ---- Coding tools (workspace-sandboxed, read-only unless noted) ----
 
-export function runList({ path: dir = "." }: ListArgs, workspaceDir: string = WORKSPACE_DIR) {
-  const abs = resolveSafe(dir, workspaceDir);
+export function runList({ path: dir = "." }: ListArgs, workspaceDir: string, grantScope?: GrantScope) {
+  const abs = resolveSafe(dir, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${dir}`);
   const stat = fs.statSync(abs);
   if (!stat.isDirectory()) throw new ToolError(`Not a directory: ${dir}`);
@@ -249,8 +370,8 @@ export function runList({ path: dir = "." }: ListArgs, workspaceDir: string = WO
   return { path: dir, entries };
 }
 
-export function runStat({ path: p }: StatArgs, workspaceDir: string = WORKSPACE_DIR) {
-  const abs = resolveSafe(p, workspaceDir);
+export function runStat({ path: p }: StatArgs, workspaceDir: string, grantScope?: GrantScope) {
+  const abs = resolveSafe(p, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${p}`);
   const s = fs.statSync(abs);
   return {
@@ -275,9 +396,9 @@ const SEARCH_SKIP_DIRS = new Set([
 const MAX_SEARCH_FILES = 5000;
 const MAX_SEARCH_BYTES = 1_000_000;
 
-export function runSearch({ query, path: target = ".", maxResults = 50 }: SearchArgs, workspaceDir: string = WORKSPACE_DIR) {
+export function runSearch({ query, path: target = ".", maxResults = 50 }: SearchArgs, workspaceDir: string, grantScope?: GrantScope) {
   if (!query) throw new ToolError("Search query is required");
-  const abs = resolveSafe(target, workspaceDir);
+  const abs = resolveSafe(target, workspaceDir, grantScope);
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${target}`);
   const needle = query.toLowerCase();
   const matches: { path: string; line: number; snippet: string }[] = [];
@@ -325,7 +446,7 @@ export function runSearch({ query, path: target = ".", maxResults = 50 }: Search
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].toLowerCase().includes(needle)) {
             push({
-              path: path.relative(WORKSPACE_DIR, full),
+              path: path.relative(workspaceDir, full),
               line: i + 1,
               snippet: lines[i].slice(0, 300),
             });
@@ -353,8 +474,8 @@ export function runSearch({ query, path: target = ".", maxResults = 50 }: Search
   return { query, path: target, matches, filesScanned, truncated: totalHits > matches.length };
 }
 
-export function runDelete({ path: p }: DeleteArgs, workspaceDir: string = WORKSPACE_DIR) {
-  const abs = resolveSafe(p, workspaceDir);
+export function runDelete({ path: p }: DeleteArgs, workspaceDir: string, grantScope?: GrantScope) {
+  const abs = resolveSafe(p, workspaceDir, grantScope);
   if (abs === workspaceDir) throw new ToolError("Refusing to delete the workspace root");
   if (!fs.existsSync(abs)) throw new ToolError(`Not found: ${p}`);
   const wasDir = fs.statSync(abs).isDirectory();

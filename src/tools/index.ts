@@ -27,6 +27,7 @@ import {
   runProcesses,
   runKill,
   runSysinfo,
+  ToolError,
   WORKSPACE_DIR,
   type BashOutputEvent,
 } from "../services/tools";
@@ -53,56 +54,56 @@ const entries: Record<string, ServerToolEntry> = {
     description:
       "Read a text file from the workspace. Returns the file content. Runs without approval.",
     parameters: js(toolSchemas.read_file),
-    execute: instrumentedExecute("read_file", (a) => runRead(a)),
+    execute: instrumentedExecute("read_file", (a) => runRead(a, WORKSPACE_DIR)),
   },
   write_file: {
     type: "backend",
     description:
       "Write or create a text file in the workspace. Requires user approval before executing.",
     parameters: js(toolSchemas.write_file),
-    execute: instrumentedExecute("write_file", (a) => runWrite(a)),
+    execute: instrumentedExecute("write_file", (a) => runWrite(a, WORKSPACE_DIR)),
   },
   edit_file: {
     type: "backend",
     description:
       "Replace text in a workspace file. Requires user approval before executing.",
     parameters: js(toolSchemas.edit_file),
-    execute: instrumentedExecute("edit_file", (a) => runEdit(a)),
+    execute: instrumentedExecute("edit_file", (a) => runEdit(a, WORKSPACE_DIR)),
   },
   run_command: {
     type: "backend",
     description:
-      "Run a shell command inside the workspace. Requires user approval before executing.",
+      "Run a PowerShell command starting in the workspace directory. The command body itself is NOT sandboxed — only the starting directory is confined, and the command runs with the server's own privileges (absolute paths, directory changes, redirection, and network access are all possible). Requires user approval before executing.",
     parameters: js(toolSchemas.run_command),
-    execute: instrumentedExecute("run_command", (a) => runBash(a)),
+    execute: instrumentedExecute("run_command", (a) => runBash(a, WORKSPACE_DIR)),
   },
   list_dir: {
     type: "backend",
     description:
       "List files and folders inside the workspace. Runs without approval.",
     parameters: js(toolSchemas.list_dir),
-    execute: instrumentedExecute("list_dir", (a) => runList(a)),
+    execute: instrumentedExecute("list_dir", (a) => runList(a, WORKSPACE_DIR)),
   },
   search_files: {
     type: "backend",
     description:
       "Search file contents inside the workspace (case-insensitive). Runs without approval.",
     parameters: js(toolSchemas.search_files),
-    execute: instrumentedExecute("search_files", (a) => runSearch(a)),
+    execute: instrumentedExecute("search_files", (a) => runSearch(a, WORKSPACE_DIR)),
   },
   file_info: {
     type: "backend",
     description:
       "Show size, type and timestamps for a workspace path. Runs without approval.",
     parameters: js(toolSchemas.file_info),
-    execute: instrumentedExecute("file_info", (a) => runStat(a)),
+    execute: instrumentedExecute("file_info", (a) => runStat(a, WORKSPACE_DIR)),
   },
   delete_file: {
     type: "backend",
     description:
       "Delete a file or folder inside the workspace. Requires user approval before executing.",
     parameters: js(toolSchemas.delete_file),
-    execute: instrumentedExecute("delete_file", (a) => runDelete(a)),
+    execute: instrumentedExecute("delete_file", (a) => runDelete(a, WORKSPACE_DIR)),
   },
   // ---- Computer ----
   process_list: {
@@ -131,8 +132,9 @@ const entries: Record<string, ServerToolEntry> = {
     type: "backend",
     description:
       "Manage scheduled AI jobs via an `action` selector (create | list | get | update | delete | run_now). " +
-      "create requires: name, scheduleType ('once'|'cron'), timezone (IANA), providerId, modelId, workspacePath, prompt; " +
+      "create requires: name, scheduleType ('once'|'cron'), timezone (IANA), prompt; " +
       "for 'once' also execAt (epoch ms), for 'cron' also cronExpression (5-field). " +
+      "providerId, modelId, and workspacePath are optional — when omitted they default to this conversation's provider, model, and workspace. " +
       "get / update / delete / run_now require jobId. list accepts an optional status filter (active|paused|failed|all).",
     parameters: js(toolSchemas.scheduler),
     execute: instrumentedExecute("scheduler", (a) => runScheduler(a)),
@@ -183,23 +185,36 @@ export function withThreadContext(
   threadId: string | undefined,
   onTerminalOutput?: (toolCallId: string, event: BashOutputEvent) => void,
   workspaceDir?: string,
+  chatDefaults?: { providerId?: string; modelId?: string },
 ): any {
+  // Conversation-bound binding: the workspace root is REQUIRED. A missing
+  // root fails closed here rather than silently falling back to the global
+  // process workspace. (The static `entries` defaults below still target
+  // WORKSPACE_DIR explicitly — they are the pre-bind shape, always replaced
+  // by this function on the chat path.)
+  if (!workspaceDir) {
+    throw new ToolError("No workspace root for this conversation");
+  }
   // All filesystem / terminal tools resolve against the conversation's resolved
   // workspace directory (simple = disposable, project = registered folder). The
   // model can never supply a different root — `resolveSafe` confines every path.
-  const ws = workspaceDir ?? WORKSPACE_DIR;
+  // One-shot outside-workspace grants (if the user approved one) ride along as
+  // the grant scope; without a thread there is no scope and outside stays hard.
+  const ws = workspaceDir;
+  const scopeFor = (tool: string) =>
+    threadId ? { conversationId: threadId, tool } : undefined;
   const wrap = (name: string, fn: (args: any) => unknown) => {
     if (tools[name]) {
       tools[name] = { ...tools[name], execute: instrumentedExecute(name, fn) };
     }
   };
-  wrap("read_file", (a) => runRead(a, ws));
-  wrap("write_file", (a) => runWrite(a, ws));
-  wrap("edit_file", (a) => runEdit(a, ws));
-  wrap("list_dir", (a) => runList(a, ws));
-  wrap("search_files", (a) => runSearch(a, ws));
-  wrap("file_info", (a) => runStat(a, ws));
-  wrap("delete_file", (a) => runDelete(a, ws));
+  wrap("read_file", (a) => runRead(a, ws, scopeFor("read_file")));
+  wrap("write_file", (a) => runWrite(a, ws, scopeFor("write_file")));
+  wrap("edit_file", (a) => runEdit(a, ws, scopeFor("edit_file")));
+  wrap("list_dir", (a) => runList(a, ws, scopeFor("list_dir")));
+  wrap("search_files", (a) => runSearch(a, ws, scopeFor("search_files")));
+  wrap("file_info", (a) => runStat(a, ws, scopeFor("file_info")));
+  wrap("delete_file", (a) => runDelete(a, ws, scopeFor("delete_file")));
 
   if (onTerminalOutput && tools.run_command) {
     tools.run_command = {
@@ -214,6 +229,7 @@ export function withThreadContext(
             },
           },
           ws,
+          scopeFor("run_command"),
         ),
       ),
     };
@@ -222,6 +238,34 @@ export function withThreadContext(
     tools.todo = {
       ...tools.todo,
       execute: instrumentedExecute("todo", (args: unknown) => runTodo(args as any, { threadId })),
+    };
+  }
+  if (tools.scheduler) {
+    // Default the current conversation's provider/model/workspace into
+    // scheduler creates — the model cannot guess provider cuid values, so
+    // explicit IDs stay optional overrides. The inner execute is already
+    // instrumented once; this wrapper only fills omissions (no double log).
+    // It MUST forward the second (options) argument untouched: the incoming
+    // execute is the framework's (args, callOptions) wrapper and drops it at
+    // the cost of a callOptions.toolCallId TypeError on every scheduler call.
+    const inner = tools.scheduler.execute;
+    tools.scheduler = {
+      ...tools.scheduler,
+      execute: (args: unknown, opts?: unknown) => {
+        const a = (args ?? {}) as Record<string, unknown>;
+        if (a.action === "create") {
+          return (inner as (filled: unknown, o?: unknown) => unknown)(
+            {
+              ...a,
+              providerId: a.providerId ?? chatDefaults?.providerId,
+              modelId: a.modelId ?? chatDefaults?.modelId,
+              workspacePath: a.workspacePath ?? ws,
+            },
+            opts,
+          );
+        }
+        return (inner as (filled: unknown, o?: unknown) => unknown)(a, opts);
+      },
     };
   }
   return tools;

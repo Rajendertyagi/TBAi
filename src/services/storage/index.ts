@@ -90,8 +90,10 @@ export const conversationService = {
     if (workspaceMode === "project") {
       workspaceFolderId = data.workspaceFolderId ?? null;
     } else {
-      // Simple chats get a hidden kind='chat' folder with a scratch dir.
-      const { folderId } = await createChatWorkspace();
+      // Simple chats get a hidden kind='chat' folder on the stable
+      // conversation-owned path (workspace/chats/<id>) so no legacy
+      // data/chat/<uuid> debt accrues for new conversations.
+      const { folderId } = await createChatWorkspace(id);
       workspaceFolderId = folderId;
     }
 

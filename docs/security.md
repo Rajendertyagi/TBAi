@@ -83,6 +83,28 @@ Invalid input is rejected with `400` before any provider call.
 - A **Test connection** button (`POST /api/providers/test`) validates a provider
   (with the entered or stored key) without persisting anything.
 
+## Workspace filesystem policy
+
+- Every conversation resolves to its own workspace directory server-side
+  (`resolveConversationWorkspace`: simple chats use a per-conversation folder,
+  project chats use the registered folder path). The model can never supply a
+  different root.
+- Path arguments to file tools are confined by `resolveSafe`
+  (`src/services/tools.ts`): lexical `..` traversal is rejected, and the
+  nearest existing ancestor is canonicalized (`realpath`) so symlinks and
+  Windows junctions pointing outside are rejected before any IO. Comparison is
+  case-insensitive on Windows. There is no flag to allow escape.
+- Unattended scheduler runs resolve against the workspace root and refuse
+  outside paths (`verifyJobWorkspace`); destructive tools always refuse there.
+- **Shell commands are NOT sandboxed.** `run_command` confines only its
+  starting directory; the command body is full PowerShell with the server's
+  privileges (absolute paths, `cd`, redirection, network, environment). It is
+  gated by interactive approval in chat and refused in scheduler runs.
+- MCP tools run at full server-process privilege with no conversation
+  workspace context (isolation currently unsupported — see `mcp.md`).
+- The manual `/api/tools/*` HTTP surface executes tools without approval;
+  it is a local dev/test surface, not a confinement boundary.
+
 ## Logging / redaction
 
 - Keys are never logged. Error messages that might accidentally include a secret are

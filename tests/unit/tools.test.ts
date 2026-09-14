@@ -10,6 +10,7 @@ import {
   runSysinfo,
   runKill,
   resolveSafe,
+  canonicalizeRoot,
   getWorkspaceDir,
 } from "../../src/services/tools";
 
@@ -30,10 +31,14 @@ function seed() {
 }
 
 describe("coding tools", () => {
-  beforeEach(seed);
+  let root = "";
+  beforeEach(() => {
+    seed();
+    root = getWorkspaceDir();
+  });
 
   it("lists directories dirs-first with sizes", () => {
-    const r = runList({ path: "proj" });
+    const r = runList({ path: "proj" }, root);
     expect(r.entries.map((e) => e.name).sort()).toEqual(["a.ts", "sub"]);
     expect(r.entries[0].type).toBe("dir");
     const file = r.entries.find((e) => e.name === "a.ts")!;
@@ -42,12 +47,12 @@ describe("coding tools", () => {
   });
 
   it("rejects traversal outside the workspace", () => {
-    expect(() => runList({ path: "../.." })).toThrow();
-    expect(() => resolveSafe("C:/Windows")).toThrow();
+    expect(() => runList({ path: "../.." }, root)).toThrow();
+    expect(() => resolveSafe("C:/Windows", root)).toThrow();
   });
 
   it("searches contents with file:line hits", () => {
-    const r = runSearch({ query: "hello", path: "proj" });
+    const r = runSearch({ query: "hello", path: "proj" }, root);
     expect(r.filesScanned).toBe(2);
     expect(r.matches.length).toBe(2);
     expect(r.matches[0]).toMatchObject({ line: 2 });
@@ -55,23 +60,76 @@ describe("coding tools", () => {
   });
 
   it("searches a single file and caps results", () => {
-    const r = runSearch({ query: "hello", path: "proj/a.ts", maxResults: 1 });
+    const r = runSearch({ query: "hello", path: "proj/a.ts", maxResults: 1 }, root);
     expect(r.matches.length).toBe(1);
     expect(r.truncated).toBe(false);
   });
 
   it("stats a file", () => {
-    const r = runStat({ path: "top.txt" });
+    const r = runStat({ path: "top.txt" }, root);
     expect(r.type).toBe("file");
     expect(r.size).toBeGreaterThan(0);
     expect(r.modifiedAt).toBeTruthy();
   });
 
   it("deletes a file but never the workspace root", () => {
-    expect(() => runDelete({ path: "." })).toThrow();
-    const r = runDelete({ path: "top.txt" });
+    expect(() => runDelete({ path: "." }, root)).toThrow();
+    const r = runDelete({ path: "top.txt" }, root);
     expect(r.deleted).toBe(true);
     expect(fs.existsSync(path.join(getWorkspaceDir(), "top.txt"))).toBe(false);
+  });
+});
+
+describe("canonical containment", () => {
+  beforeEach(seed);
+
+  it("canonicalizeRoot resolves symlinked roots to their real location", () => {
+    const root = getWorkspaceDir();
+    const link = path.join(root, "rootlink");
+    try {
+      fs.symlinkSync(path.join(root, "proj"), link, "junction");
+    } catch {
+      return; // symlink privilege unavailable; containment below still holds
+    }
+    expect(canonicalizeRoot(link)).toBe(fs.realpathSync(path.join(root, "proj")));
+  });
+
+  it("admits inside-paths when the root itself is a symlink", () => {
+    const root = getWorkspaceDir();
+    const link = path.join(root, "rootlink");
+    try {
+      fs.symlinkSync(path.join(root, "proj"), link, "junction");
+    } catch {
+      return;
+    }
+    expect(() => resolveSafe("a.ts", link)).not.toThrow();
+    expect(() => resolveSafe("..", link)).toThrow();
+  });
+
+  it("rejects symlink escapes regardless of root case", () => {
+    const root = getWorkspaceDir();
+    const outside = path.join(root, "..", "outside-target");
+    fs.mkdirSync(outside, { recursive: true });
+    const link = path.join(root, "proj", "evil");
+    try {
+      fs.symlinkSync(outside, link, "junction");
+    } catch {
+      return;
+    }
+    expect(() => resolveSafe("proj/evil", root)).toThrow(/escapes the workspace/);
+    expect(() => resolveSafe("proj/evil", root.toUpperCase())).toThrow(/escapes the workspace/);
+  });
+
+  it("compares roots case-insensitively on Windows", () => {
+    const root = getWorkspaceDir();
+    expect(() => resolveSafe("proj", root.toUpperCase())).not.toThrow();
+    expect(() => resolveSafe("../..", root.toUpperCase())).toThrow(/outside the workspace/);
+  });
+
+  it("requires an explicit root (no silent fallback)", () => {
+    expect(() =>
+      resolveSafe("proj", undefined as unknown as string),
+    ).toThrow(/No workspace root/);
   });
 });
 

@@ -6,15 +6,20 @@
  * Executed with `bun test`.
  */
 import { describe, it, expect } from "bun:test";
-import { runBash, type BashOutputEvent } from "../../src/services/tools";
+import { getWorkspaceDir, runBash, type BashOutputEvent } from "../../src/services/tools";
+
+const ws = () => getWorkspaceDir();
 
 describe("runBash onOutput", () => {
   it("emits incremental stdout events while running", async () => {
     const events: BashOutputEvent[] = [];
-    const res = await runBash({
-      command: "1..5 | ForEach-Object { $_; Start-Sleep -Milliseconds 150 }",
-      onOutput: (e) => events.push(e),
-    });
+    const res = await runBash(
+      {
+        command: "1..5 | ForEach-Object { $_; Start-Sleep -Milliseconds 150 }",
+        onOutput: (e) => events.push(e),
+      },
+      ws(),
+    );
     expect(res.exitCode).toBe(0);
     expect(events.length).toBeGreaterThan(0);
     expect(events.every((e) => e.stream === "stdout")).toBe(true);
@@ -28,26 +33,32 @@ describe("runBash onOutput", () => {
 
   it("emits stderr with its stream label", async () => {
     const events: BashOutputEvent[] = [];
-    const res = await runBash({
-      command: "[Console]::Error.WriteLine('boom')",
-      onOutput: (e) => events.push(e),
-    });
+    const res = await runBash(
+      {
+        command: "[Console]::Error.WriteLine('boom')",
+        onOutput: (e) => events.push(e),
+      },
+      ws(),
+    );
     expect(events.some((e) => e.stream === "stderr")).toBe(true);
     expect(res.stderr).toContain("boom");
   });
 
   it("reports non-zero exit with output intact", async () => {
     const events: BashOutputEvent[] = [];
-    const res = await runBash({
-      command: "Write-Output 'before-fail'; exit 3",
-      onOutput: (e) => events.push(e),
-    });
+    const res = await runBash(
+      {
+        command: "Write-Output 'before-fail'; exit 3",
+        onOutput: (e) => events.push(e),
+      },
+      ws(),
+    );
     expect(res.exitCode).toBe(3);
     expect(res.stdout).toContain("before-fail");
   });
 
   it("without onOutput the result shape is unchanged", async () => {
-    const res = await runBash({ command: "Write-Output 'hello'" });
+    const res = await runBash({ command: "Write-Output 'hello'" }, ws());
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("hello");
     expect(res.stderr).toBe("");
@@ -59,7 +70,7 @@ describe("runBash onOutput", () => {
   it("workspace restrictions still apply", async () => {
     let threw = false;
     try {
-      await runBash({ command: "echo hi", cwd: "../../.." });
+      await runBash({ command: "echo hi", cwd: "../../.." }, ws());
     } catch (e) {
       threw = true;
       expect(String(e)).toContain("outside the workspace");

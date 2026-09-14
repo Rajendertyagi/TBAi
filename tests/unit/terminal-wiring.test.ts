@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from "bun:test";
 import { withThreadContext } from "../../src/tools/index";
+import { getWorkspaceDir } from "../../src/services/tools";
 import {
   createTerminalBatcher,
   TERMINAL_DATA_TYPE,
@@ -25,6 +26,7 @@ describe("chat terminal wiring", () => {
       { run_command: { execute: (() => {}) as never } },
       undefined,
       (id, ev) => events.push([id, ev]),
+      getWorkspaceDir(),
     );
     const res = await (tools.run_command.execute as (
       args: { command: string },
@@ -49,9 +51,110 @@ describe("chat terminal wiring", () => {
         },
       },
       undefined,
+      undefined,
+      getWorkspaceDir(),
     );
     await tools.run_command.execute({ command: "Write-Output hi" });
     expect(called).toBe(true);
+  });
+
+  it("withThreadContext injects chat provider/model/workspace into scheduler creates", async () => {
+    let seen: Record<string, unknown> | null = null;
+    const tools = withThreadContext(
+      {
+        scheduler: {
+          execute: async (args: unknown) => {
+            seen = args as Record<string, unknown>;
+            return { ok: true };
+          },
+        },
+      },
+      "thread-1",
+      undefined,
+      getWorkspaceDir(),
+      { providerId: "p-chat", modelId: "m-chat" },
+    );
+    await tools.scheduler.execute({
+      action: "create",
+      name: "n",
+      scheduleType: "once",
+      execAt: 1,
+      timezone: "UTC",
+      prompt: "p",
+    });
+    expect(seen).toMatchObject({
+      action: "create",
+      providerId: "p-chat",
+      modelId: "m-chat",
+      workspacePath: getWorkspaceDir(),
+    });
+  });
+
+  it("withThreadContext leaves explicit scheduler IDs alone", async () => {
+    let seen: Record<string, unknown> | null = null;
+    const tools = withThreadContext(
+      {
+        scheduler: {
+          execute: async (args: unknown) => {
+            seen = args as Record<string, unknown>;
+            return { ok: true };
+          },
+        },
+      },
+      "thread-1",
+      undefined,
+      getWorkspaceDir(),
+      { providerId: "p-chat", modelId: "m-chat" },
+    );
+    await tools.scheduler.execute({
+      action: "create",
+      name: "n",
+      scheduleType: "once",
+      execAt: 1,
+      timezone: "UTC",
+      prompt: "p",
+      providerId: "p-other",
+      modelId: "m-other",
+      workspacePath: "/elsewhere",
+    });
+    expect(seen).toMatchObject({
+      providerId: "p-other",
+      modelId: "m-other",
+      workspacePath: "/elsewhere",
+    });
+  });
+
+  it("withThreadContext forwards the framework options object to the scheduler execute", async () => {
+    // Regression: aiToolkit.tools() returns the framework's
+    // (args, callOptions) wrapper, which throws
+    // "callOptions.toolCallId" when invoked without its second argument.
+    // The scheduler wrapper must forward options untouched.
+    let seenOpts: unknown = "not-called";
+    const tools = withThreadContext(
+      {
+        scheduler: {
+          execute: async (_args: unknown, callOptions?: { toolCallId: string }) => {
+            seenOpts = callOptions;
+            if (callOptions?.toolCallId === undefined) {
+              throw new TypeError(
+                "undefined is not an object (evaluating 'callOptions.toolCallId')",
+              );
+            }
+            return { ok: true };
+          },
+        },
+      },
+      "thread-1",
+      undefined,
+      getWorkspaceDir(),
+      { providerId: "p-chat", modelId: "m-chat" },
+    );
+    const res = await tools.scheduler.execute(
+      { action: "list" },
+      { toolCallId: "call-9" },
+    );
+    expect(res).toEqual({ ok: true });
+    expect(seenOpts).toMatchObject({ toolCallId: "call-9" });
   });
 
   it("terminalBatcher emits data-tbai-terminal parts and a final done part", () => {

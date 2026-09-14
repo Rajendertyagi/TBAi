@@ -127,6 +127,9 @@ app.post("/api/chat", async (c) => {
       threadId,
       (toolCallId, event) => terminalBatcher.push(toolCallId, event),
       workspaceDir,
+      // Scheduler creates inherit the current provider/model when the model
+      // omits them (it cannot guess provider cuid values).
+      { providerId: provider.id, modelId: modelConfig.model },
     );
     modelMessages = await prepareModelMessages(
       messages as unknown as UIMessage[],

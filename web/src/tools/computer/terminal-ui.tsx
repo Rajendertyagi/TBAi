@@ -8,7 +8,7 @@ import {
 } from "@assistant-ui/react";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { mergeTerminalParts, resultToLines } from "@/lib/terminal-lines";
-import { BackendToolView } from "../filesystem/ui";
+import { BackendToolView, denialOf } from "../filesystem/ui";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -76,14 +76,16 @@ export const RunCommandTerminalUI: ToolCallMessagePartComponent = (
       ? (p.result as RunResult)
       : undefined;
 
-  // Non-terminal states keep the shared dispatcher byte-identically.
-  const denied =
-    result && typeof result === "object" && typeof result.error === "string"
-      ? result.error
-      : null;
+  // Non-terminal states keep the shared dispatcher byte-identically. Any
+  // result error (denial or execution failure) routes there too — the
+  // shared denialOf classifier inside BackendToolView tells them apart.
+  const hasError =
+    result && typeof result === "object" && typeof result.error === "string";
+  const denied = denialOf(p.result, p.approval);
   if (
     (approval && approval.approved === undefined) ||
     denied !== null ||
+    hasError ||
     p.status?.type === "incomplete" ||
     (approval?.approved === true && result === undefined && !running) ||
     (result === undefined && !running && liveLines.length === 0)
@@ -98,6 +100,8 @@ export const RunCommandTerminalUI: ToolCallMessagePartComponent = (
         respondToApproval={p.respondToApproval}
         runningLabel="Running…"
         summarize={() => null}
+        tool="run_command"
+        targetPath={String((p.args as { cwd?: unknown } | undefined)?.cwd ?? ".")}
       />
     );
   }

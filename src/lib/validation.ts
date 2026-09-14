@@ -152,6 +152,30 @@ export const toolKillSchema = z.object({
   pid: z.number().int().min(1),
 });
 
+// One-shot outside-workspace authorization (chat approval flow). Both bodies
+// name the conversation, tool, and requested path; the server resolves and
+// canonicalizes everything itself — the client never supplies a resolved path.
+export const outsideCheckSchema = z.object({
+  conversationId: z.string().min(1).max(200),
+  tool: z.string().min(1).max(64),
+  path: z.string().min(1).max(4096),
+});
+
+export const outsideGrantSchema = z.object({
+  conversationId: z.string().min(1).max(200),
+  tool: z.string().min(1).max(64),
+  path: z.string().min(1).max(4096),
+});
+
+// One-shot granted execution for ungated read tools: full args travel so the
+// server can re-validate (per-tool schema) and execute exactly once inline.
+// Only the read tools below are admitted; destructive tools keep the gate flow.
+export const outsideRunGrantedSchema = z.object({
+  conversationId: z.string().min(1).max(200),
+  tool: z.enum(["read_file", "list_dir", "search_files", "file_info"]),
+  args: z.unknown(),
+});
+
 // ---- Todo tool (per-conversation durable notepad) ----
 export const todoActionSchema = z.enum(["add", "list", "update", "toggle", "remove", "clear"]);
 export const todoFilterSchema = z.enum(["all", "active", "done"]);
@@ -353,8 +377,8 @@ const schedulerCreateSchema = z.object({
   execAt: z.number().int().positive().optional().nullable(),
   timezone: z.string().min(1).max(80),
   prompt: z.string().min(1).max(100000),
-  providerId: z.string().min(1).max(200),
-  modelId: z.string().min(1).max(200),
+  providerId: z.string().min(1).max(200).optional(),
+  modelId: z.string().min(1).max(200).optional(),
   reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
   workspacePath: z.string().min(1).max(4096).optional(),
   conversationPolicy: z.enum(["dedicated_thread", "existing_thread"]).optional(),

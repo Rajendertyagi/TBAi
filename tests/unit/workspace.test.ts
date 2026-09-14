@@ -43,8 +43,8 @@ describe("resolveConversationWorkspace", () => {
     const conv = await seedConversation({ workspaceMode: "simple" });
     const ws = await resolveConversationWorkspace(conv.id);
     expect(ws.mode).toBe("simple");
-    // Now uses a hidden chat folder under data/chat/<uuid>/
-    expect(ws.dir).toContain(path.join("chat"));
+    // Conversation-owned workspace under workspace/chats/<conversationId>.
+    expect(ws.dir).toContain(path.join("chats", conv.id));
     expect(ws.folderId).toBeTruthy();
     expect(ws.folderName).toBe("Chat");
     expect(fs.existsSync(ws.dir)).toBe(true);

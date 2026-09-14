@@ -73,6 +73,12 @@ describe("scheduler AI tool (consolidated)", () => {
       expect(res.success).toBe(false);
     });
 
+    it("parses a create without providerId/modelId (chat injects them)", () => {
+      const { providerId: _p, modelId: _m, ...rest } = baseCreateArgs();
+      const res = schedulerSchema.safeParse(rest);
+      expect(res.success).toBe(true);
+    });
+
     it("rejects get without jobId (required)", () => {
       const res = schedulerSchema.safeParse({ action: "get" });
       expect(res.success).toBe(false);
@@ -98,6 +104,14 @@ describe("scheduler AI tool (consolidated)", () => {
       expect(res.ok).toBe(false);
       if (res.ok) return;
       expect(res.error).toMatch(/does not exist/i);
+    });
+
+    it("create without IDs fails with a clear required-message (chat fills them)", async () => {
+      const { providerId: _p, modelId: _m, ...rest } = baseCreateArgs();
+      const res = await runScheduler(rest as never);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toMatch(/providerId and modelId are required/i);
     });
 
     it("list returns all jobs", async () => {

@@ -63,26 +63,26 @@ export function buildSchedulerTools() {
         "Read a text file from the workspace. Returns the file content.",
       inputSchema: toolReadSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("read_file", async (args: any) => runRead(args)),
+      execute: instrumentedExecute("read_file", async (args: any) => runRead(args, getWorkspaceDir())),
     }),
     list_dir: tool({
       description: "List files and folders inside the workspace.",
       inputSchema: toolListSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("list_dir", async (args) => runList(args)),
+      execute: instrumentedExecute("list_dir", async (args) => runList(args, getWorkspaceDir())),
     }),
     search_files: tool({
       description:
         "Search file contents inside the workspace (case-insensitive).",
       inputSchema: toolSearchSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("search_files", async (args: any) => runSearch(args)),
+      execute: instrumentedExecute("search_files", async (args: any) => runSearch(args, getWorkspaceDir())),
     }),
     file_info: tool({
       description: "Show size, type and timestamps for a workspace path.",
       inputSchema: toolStatSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("file_info", async (args: any) => runStat(args)),
+      execute: instrumentedExecute("file_info", async (args: any) => runStat(args, getWorkspaceDir())),
     }),
     process_list: tool({
       description:

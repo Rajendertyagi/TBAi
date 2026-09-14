@@ -26,6 +26,11 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  ApprovalActions,
+  ApprovalCard,
+  useApprovalExit,
+} from "@/components/shared/approval-card";
 
 const ANIMATION_DURATION = 200;
 
@@ -365,6 +370,7 @@ function ToolFallbackApproval({
   approval,
   respondToApproval,
   status,
+  title,
   ...props
 }: React.ComponentProps<"div"> &
   Partial<
@@ -375,11 +381,16 @@ function ToolFallbackApproval({
   > & {
     interrupt?: ToolCallMessagePart["interrupt"];
     approval?: ToolCallMessagePart["approval"];
+    title?: string;
   }) {
   const [submitted, setSubmitted] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // 100ms exit fade: sends below are deferred so the card can fade out
+  // before the runtime swaps it for the result. Same payloads, a UI tick
+  // later; a refused send clears the fade and the controls come back.
+  const { leaving, runWithExit, cancelExit } = useApprovalExit();
 
   if (
     approval != null &&
@@ -403,16 +414,17 @@ function ToolFallbackApproval({
   const submit = (send: () => Promise<void> | void) => {
     setSubmitted(true);
     setError(null);
-    void (async () => {
+    runWithExit(async () => {
       try {
         await send();
       } catch (sendError) {
+        cancelExit();
         setSubmitted(false);
         setError(
           sendError instanceof Error ? sendError.message : String(sendError),
         );
       }
-    })();
+    });
   };
 
   const respond = (approved: boolean) => {
@@ -525,6 +537,7 @@ function ToolFallbackApproval({
         )}
         {...props}
       >
+      <ApprovalCard leaving={leaving}>
         <p className="aui-tool-fallback-approval-confirm-title font-semibold">
           {confirmMeta?.title ?? `${approvalOptionLabel(confirming)}?`}
         </p>
@@ -544,7 +557,7 @@ function ToolFallbackApproval({
             ))}
           </ul>
         )}
-        <div className="flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
           <Button
             size="sm"
             className={pressable}
@@ -563,6 +576,7 @@ function ToolFallbackApproval({
             Back
           </Button>
         </div>
+      </ApprovalCard>
       </div>
     );
   }
@@ -582,6 +596,7 @@ function ToolFallbackApproval({
         )}
         {...props}
       >
+        <ApprovalCard title={title} leaving={leaving}>
         {promptText}
         <div className="flex flex-wrap items-center gap-2">
           {[...allowOptions, ...customOptions, ...rejectOptions].map(
@@ -612,6 +627,7 @@ function ToolFallbackApproval({
         </div>
         {answerField}
         {errorText}
+        </ApprovalCard>
       </div>
     );
   }
@@ -628,9 +644,11 @@ function ToolFallbackApproval({
         )}
         {...props}
       >
+        <ApprovalCard title={title} leaving={leaving}>
         {promptText}
         {answerField}
         {errorText}
+        </ApprovalCard>
       </div>
     );
   }
@@ -644,28 +662,18 @@ function ToolFallbackApproval({
       )}
       {...props}
     >
+      <ApprovalCard title={title} leaving={leaving}>
       {promptText}
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          className={pressable}
-          onClick={() => respond(true)}
-          disabled={submitted}
-        >
-          Allow
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className={pressable}
-          onClick={() => respond(false)}
-          disabled={submitted}
-        >
-          Deny
-        </Button>
-      </div>
+      <ApprovalActions
+        busy={submitted}
+        approveLabel="Allow"
+        denyLabel="Deny"
+        onApprove={() => respond(true)}
+        onDeny={() => respond(false)}
+      />
       {answerField}
       {errorText}
+      </ApprovalCard>
     </div>
   );
 }
@@ -712,6 +720,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
             approval={approval}
             respondToApproval={respondToApproval}
             status={status}
+            title={toolName}
           />
         )}
         {!isCancelled && <ToolFallbackResult result={result} />}

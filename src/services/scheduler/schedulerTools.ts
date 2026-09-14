@@ -70,6 +70,14 @@ export const schedulerToolHandlers = {
       modelId: v.modelId,
     });
     if (providerErr) throw new Error(providerErr);
+    // providerId/modelId are optional on the AI-tool schema because the chat
+    // route injects the current conversation's values; direct callers must
+    // still supply them.
+    if (!v.providerId || !v.modelId) {
+      throw new Error(
+        "providerId and modelId are required (omit them only in chat, where the current conversation's provider and model apply)",
+      );
+    }
 
     const threadErr = await checkExistingThread({
       conversationPolicy: v.conversationPolicy,
