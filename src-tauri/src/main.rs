@@ -303,21 +303,21 @@ fn attempt(app: &AppHandle) {
         None => {
             let (state, sidecar, reason) =
                 match owned.exited.lock().expect("exited lock").clone() {
-                    Some(note) => ("sidecar_exited", note, "The local server process ended before it could be verified. Its port (if any) was left alone — TBAi did not connect to whatever else may be listening there."),
+                    Some(note) => ("sidecar_exited", note, "The local server process ended before it could be verified. Its port (if any) was left alone — TBAi did not connect to whatever else may be listening there.".to_string()),
                     None if last_state == "identity_mismatch" => (
                         "identity_mismatch",
-                        "running (foreign)",
-                        "The port answered with a different instance id — likely a development or another copy's server. TBAi refused to connect to it.",
+                        "running (foreign)".to_string(),
+                        "The port answered with a different instance id — likely a development or another copy's server. TBAi refused to connect to it.".to_string(),
                     ),
                     None if last_state == "old_build_or_foreign" => (
                         "unverified_server",
-                        "running (unverified)",
-                        "The port serves HTTP but has no instance identity (old build or another application). TBAi refused to connect to it.",
+                        "running (unverified)".to_string(),
+                        "The port serves HTTP but has no instance identity (old build or another application). TBAi refused to connect to it.".to_string(),
                     ),
                     None => (
                         "timeout",
-                        "unknown",
-                        "The owned server did not answer in time. It may still be starting — Retry makes a fresh attempt.",
+                        "unknown".to_string(),
+                        "The owned server did not answer in time. It may still be starting — Retry makes a fresh attempt.".to_string(),
                     ),
                 };
             render_error(&win, read_mirror_port(&cfg.data_dir), state, &sidecar, reason);
@@ -336,7 +336,10 @@ fn retry_startup(app: AppHandle) {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
