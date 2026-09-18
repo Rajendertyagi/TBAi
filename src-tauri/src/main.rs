@@ -320,7 +320,7 @@ fn attempt(app: &AppHandle) {
                         "The owned server did not answer in time. It may still be starting — Retry makes a fresh attempt.".to_string(),
                     ),
                 };
-            render_error(&win, read_mirror_port(&cfg.data_dir), state, &sidecar, reason);
+            render_error(&win, read_mirror_port(&cfg.data_dir), state, &sidecar, &reason);
         }
     }
 }
