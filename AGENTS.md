@@ -108,3 +108,37 @@ Maintain `docs/`: `architecture.md`, `development-rules.md`, `ai-integration.md`
 
 Propose in `docs/decisions.md` with the reason and alternatives considered. Keep the
 project small; prefer removing unused code/dependencies over adding new ones.
+
+
+## Durable forward architecture
+
+The governing forward architecture is documented in `docs/architectural-principles.md`.
+Read it before making architectural changes.
+
+Core rule:
+
+> **TBAi owns orchestration and policy, not infrastructure already solved by assistant-ui,
+> AI SDK, OpenCode, MCP, or ICM.**
+
+Use these boundaries:
+
+- **assistant-ui** → chat UI/runtime primitives and rendering contracts.
+- **AI SDK v7** → Direct model execution and streaming.
+- **OpenCode** → coding-agent execution and OpenCode protocol, behind the OpenCode adapter.
+- **MCP** → external tool/service protocol through the official MCP implementation.
+- **ICM** → durable shared memory, accessed by TBAi through a `MemoryService` adapter.
+- **TBAi SQLite** → authoritative application state; do not merge it with ICM's memory DB.
+
+UI/tool rendering is library-first: normalize runtime data, then prefer official assistant-ui
+elements. Add a TBAi-specific renderer only for a demonstrated capability gap. Do not build a
+second generic tool-card framework around assistant-ui.
+
+Questions and permissions are separate contracts. Questions use a provider-agnostic form and
+produce `answers[][]`; permissions use the approval lifecycle. Never model questions as
+permission/approval cards.
+
+Keep provider-specific and vendor-specific protocol details behind adapters. Prefer deleting
+custom implementations when upstream capability becomes sufficient rather than preserving
+custom architecture for compatibility with the old design.
+
+Full contract: `docs/architectural-principles.md`.
