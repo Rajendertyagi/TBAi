@@ -437,3 +437,34 @@ order-preserving visibility into what the agent is doing.
   assistant-ui's data-part flow — a compact list with status icons
   (spinning loader / check / X), done stages struck through, active count
   in the header. Hidden when there are no stages.
+
+
+## Forward architecture contract
+
+The durable forward-looking architecture is defined in
+`docs/architectural-principles.md`. The key boundary is that TBAi remains a thin
+orchestration and policy layer around mature runtimes:
+
+```
+TBAi
+  +-- application state/policy -> TBAi SQLite
+  +-- Direct runtime ----------> AI SDK
+  +-- Code runtime ------------> OpenCode adapter
+  +-- external services -------> official MCP
+  +-- durable memory ----------> MemoryService -> ICM
+  +-- chat/tool UI ------------> assistant-ui + small adapters
+```
+
+This is the target architecture, not a requirement to preserve today's custom
+implementation. When upstream capabilities become sufficient, prefer replacing/deleting
+custom code over maintaining parallel frameworks.
+
+ICM is the shared durable memory engine, while TBAi SQLite remains authoritative for TBAi
+application state. Direct Chat can use ICM's local HTTP API through `MemoryService`; OpenCode
+and other external agents can continue using ICM's native MCP/hooks integration. These paths
+share the ICM corpus without merging the two databases.
+
+UI/tool rendering is library-first. External tool data is normalized at an adapter boundary
+and then rendered by an official assistant-ui element when possible. TBAi-specific renderers
+exist only for demonstrated capability gaps. Questions are a separate form interaction from
+permissions/approvals.
