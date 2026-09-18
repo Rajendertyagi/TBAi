@@ -55,6 +55,16 @@ export interface Conversation {
   workspaceMode: WorkspaceMode;
   /** Registered folder ID for project chats; null for simple chats. */
   workspaceFolderId?: string | null;
+  /** OpenCode session id bound to this conversation for Code mode; null if unused. */
+  opencodeSessionId?: string | null;
+  /** Engine that owns this conversation: Direct chat or OpenCode agent mode. */
+  engine?: "direct" | "opencode";
+  /** OpenCode agent id chosen at creation (OpenCode engine only). */
+  opencodeAgent?: string | null;
+  /** OpenCode model id chosen at creation (OpenCode engine only). */
+  opencodeModel?: string | null;
+  /** OpenCode thinking level (model variant) chosen at creation; null = Default. */
+  opencodeVariant?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

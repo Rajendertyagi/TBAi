@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ProviderConfig, Memory } from "../types";
+import type { ProviderConfig, Memory, ReasoningLevel } from "../types";
 
 interface SettingsState {
   providers: ProviderConfig[];
@@ -11,11 +11,11 @@ interface SettingsState {
   // means "fall back to the conversation default / global default".
   selectedProviderId: string | null;
   selectedModelId: string | null;
-  selectedReasoningLevel: "low" | "medium" | "high" | null;
+  selectedReasoningLevel: ReasoningLevel | null;
   setProviders: (providers: ProviderConfig[]) => void;
   setActiveProvider: (id: string) => void;
   setSelectedModel: (id: string | null) => void;
-  setSelectedReasoningLevel: (level: "low" | "medium" | "high" | null) => void;
+  setSelectedReasoningLevel: (level: ReasoningLevel | null) => void;
   /** Point the next message at another provider's model (session-only). */
   selectChatTarget: (providerId: string, modelId: string) => void;
   /** Revert a one-shot pick: back to saved defaults (transport calls this). */

@@ -168,7 +168,6 @@ export function TabStrip() {
   const setActive = useChatTabsStore((s) => s.setActive);
   const close = useChatTabsStore((s) => s.close);
   const reorder = useChatTabsStore((s) => s.reorder);
-  const openChat = useChatTabsStore((s) => s.openChat);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -258,7 +257,6 @@ export function TabStrip() {
       <button
         type="button"
         onClick={() => {
-          openChat("new");
           navigate("/chat/new");
         }}
         className="flex items-center px-2 text-muted-foreground transition-colors hover:bg-muted/50"

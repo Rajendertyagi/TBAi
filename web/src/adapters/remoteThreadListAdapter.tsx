@@ -7,7 +7,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createAssistantStream } from "assistant-stream";
 import { createThreadHistoryAdapter } from "./threadHistoryAdapter";
 import { historyConfig } from "../config/history";
+import { logger } from "../lib/logger";
 import { getWelcomeScopeSnapshot } from "../features/chat/state/welcomeScope";
+import { getWelcomeEngineSnapshot } from "../features/chat/state/welcomeEngine";
 
 interface ConvDTO {
   id: string;
@@ -18,6 +20,10 @@ interface ConvDTO {
   reasoningLevel?: string | null;
   workspaceMode?: "simple" | "project";
   workspaceFolderId?: string | null;
+  engine?: "direct" | "opencode";
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +42,11 @@ type ThreadMetadata = {
     /** Two-mode workspace model (codeg-aligned). */
     workspaceMode?: "simple" | "project";
     workspaceFolderId?: string | null;
+    /** Engine + OpenCode agent/model/variant chosen at creation (P1 unified picker). */
+    engine?: "direct" | "opencode";
+    opencodeAgent?: string | null;
+    opencodeModel?: string | null;
+    opencodeVariant?: string | null;
     /** Creation ISO passthrough for client-side created-sort (never a secret). */
     createdAt?: string;
   };
@@ -55,6 +66,10 @@ function toMetadata(c: ConvDTO): ThreadMetadata {
       reasoningLevel: c.reasoningLevel ?? null,
       workspaceMode: c.workspaceMode ?? "simple",
       workspaceFolderId: c.workspaceFolderId ?? null,
+      engine: c.engine ?? "direct",
+      opencodeAgent: c.opencodeAgent ?? null,
+      opencodeModel: c.opencodeModel ?? null,
+      opencodeVariant: c.opencodeVariant ?? null,
       // Creation time passthrough for client-side created-sort. Kept in
       // `custom` (the adapter contract's open bag) — never a secret.
       createdAt: c.createdAt,
@@ -131,26 +146,56 @@ export function createRemoteThreadListAdapter(
       const url =
         `/api/conversations?status=all&limit=${pageSize}&offset=${offset}&order=${threadListSortOrder}` +
         (q ? `&search=${encodeURIComponent(q)}` : "");
-      const res = await fetch(url);
-      if (!res.ok) return { threads: [] };
-      const data = await res.json();
-      return {
-        threads: (data.threads as ConvDTO[]).map(toMetadata),
-        nextCursor: data.nextCursor,
-      };
+      const startMs = Date.now();
+      logger.debug("opencode", "conversations.list.request", { url });
+      try {
+        const res = await fetch(url);
+        if (!res.ok) {
+          logger.debug("opencode", "conversations.list.error", {
+            status: res.status,
+            errorType: "upstream_http_error",
+          });
+          return { threads: [] };
+        }
+        const data = await res.json();
+        const threads = (data.threads as ConvDTO[]).map(toMetadata);
+        logger.debug("opencode", "conversations.list.success", {
+          status: res.status,
+          count: threads.length,
+          elapsedMs: Date.now() - startMs,
+        });
+        return { threads, nextCursor: data.nextCursor };
+      } catch (err) {
+        logger.debug("opencode", "conversations.list.error", {
+          errorType: err instanceof Error ? err.name : typeof err,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return { threads: [] };
+      }
     },
 
     async initialize() {
       let workspaceMode: "simple" | "project" = "simple";
       let workspaceFolderId: string | null = null;
+      let engine = "direct";
+      let opencodeAgent: string | null = null;
+      let opencodeModel: string | null = null;
+      let opencodeVariant: string | null = null;
       try {
         const scope = getWelcomeScopeSnapshot();
         if (scope.mode === "project" && scope.folderId) {
           workspaceMode = "project";
           workspaceFolderId = scope.folderId;
         }
+        const draft = getWelcomeEngineSnapshot();
+        engine = draft.engine;
+        if (draft.engine === "opencode") {
+          opencodeAgent = draft.agent || null;
+          opencodeModel = draft.model || null;
+          opencodeVariant = draft.variant || null;
+        }
       } catch {
-        /* welcome scope unavailable — fall back to a disposable workspace */
+        /* welcome scope/engine unavailable — fall back to a disposable direct chat */
       }
       const res = await fetch("/api/conversations", {
         method: "POST",
@@ -159,6 +204,10 @@ export function createRemoteThreadListAdapter(
           title: "New Conversation",
           workspaceMode,
           workspaceFolderId,
+          engine,
+          opencodeAgent,
+          opencodeModel,
+          opencodeVariant,
         }),
       });
       if (!res.ok) {
@@ -172,6 +221,10 @@ export function createRemoteThreadListAdapter(
               title: "New Conversation",
               workspaceMode: "simple",
               workspaceFolderId: null,
+              engine,
+              opencodeAgent,
+              opencodeModel,
+              opencodeVariant,
             }),
           });
           if (!fallback.ok) {
@@ -203,44 +256,82 @@ export function createRemoteThreadListAdapter(
     // Persists a conversation's AI config back to SQLite. Called by the runtime
     // when the user picks a model/reasoning level in the composer — the browser
     // only sends providerId/modelId/reasoningLevel, never secrets or protocol.
+    // Best-effort by contract: every send re-transmits the effective config in
+    // the request body, so a dropped PATCH self-heals on the next message.
+    // Failures are logged, never thrown (the composer pick must not break).
     async updateCustom(remoteId: string, custom: Record<string, unknown>) {
-      await fetch(`/api/conversations/${remoteId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          providerId: custom.providerId ?? undefined,
-          modelId: custom.modelId ?? undefined,
-          reasoningLevel: custom.reasoningLevel ?? undefined,
-        }),
-      });
+      try {
+        const res = await fetch(`/api/conversations/${remoteId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerId: custom.providerId ?? undefined,
+            modelId: custom.modelId ?? undefined,
+            reasoningLevel: custom.reasoningLevel ?? undefined,
+          }),
+        });
+        if (!res.ok) {
+          logger.debug("chat", "config_sync_failed", {
+            threadId: remoteId,
+            status: res.status,
+          });
+        }
+      } catch (err) {
+        logger.debug("chat", "config_sync_failed", {
+          threadId: remoteId,
+          errorType: err instanceof Error ? err.name : typeof err,
+        });
+      }
     },
 
+    // Destructive mutations MUST reject when the server rejects: the runtime
+    // applies them optimistically and only rolls the row back when the adapter
+    // throws. Resolving on failure would commit a lie to local state.
     async rename(remoteId, newTitle) {
-      await fetch(`/api/conversations/${remoteId}`, {
+      const res = await fetch(`/api/conversations/${remoteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: newTitle }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to rename conversation (${res.status})`);
+      }
     },
 
     async archive(remoteId) {
-      await fetch(`/api/conversations/${remoteId}`, {
+      const res = await fetch(`/api/conversations/${remoteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "archived" }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to archive conversation (${res.status})`);
+      }
     },
 
     async unarchive(remoteId) {
-      await fetch(`/api/conversations/${remoteId}`, {
+      const res = await fetch(`/api/conversations/${remoteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "regular" }),
       });
+      if (!res.ok) {
+        throw new Error(`Failed to unarchive conversation (${res.status})`);
+      }
     },
 
     async delete(remoteId) {
-      await fetch(`/api/conversations/${remoteId}`, { method: "DELETE" });
+      const res = await fetch(`/api/conversations/${remoteId}`, {
+        method: "DELETE",
+      });
+      // Idempotent by HTTP semantics: 404 means already gone (e.g. the
+      // deletion coordinator ran first) — the desired end state holds, so
+      // resolve. Any other non-2xx is a real failure: throw so the runtime's
+      // optimistic update rolls the row back instead of dropping it locally
+      // while the server row survives.
+      if (!res.ok && res.status !== 404) {
+        throw new Error(`Failed to delete conversation (${res.status})`);
+      }
     },
 
     async fetch(threadId) {
@@ -258,14 +349,29 @@ export function createRemoteThreadListAdapter(
 }
 
 /**
+ * Row engine from thread metadata. The conversation row is authoritative:
+ * unknown or absent engine reads as Direct (legacy conversations predate
+ * the engine column). Single home for row→engine reads so surfaces never
+ * re-derive it ad hoc.
+ */
+export function threadEngine(meta: {
+  custom?: { engine?: unknown } | undefined;
+}): "direct" | "opencode" {
+  return meta.custom?.engine === "opencode" ? "opencode" : "direct";
+}
+
+/**
  * Explicit conversation creation with workspace mode/folder. Used by "New Project
  * Chat" (mode='project' + folderId) and any flow that needs a conversation
  * before the runtime's automatic `initialize()` would. The folder ID is the
  * canonical project identity; the path is resolved server-side.
  */
-export async function createConversation(input: {
-  workspaceMode?: "simple" | "project";
+export async function createConversation(input: {  workspaceMode?: "simple" | "project";
   workspaceFolderId?: string | null;
+  engine?: "direct" | "opencode";
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
   title?: string;
 }): Promise<{ id: string }> {
   const res = await fetch("/api/conversations", {
@@ -275,8 +381,34 @@ export async function createConversation(input: {
       title: input.title ?? "New Conversation",
       workspaceMode: input.workspaceMode ?? "simple",
       workspaceFolderId: input.workspaceFolderId ?? null,
+      engine: input.engine ?? "direct",
+      opencodeAgent: input.opencodeAgent ?? null,
+      opencodeModel: input.opencodeModel ?? null,
+      opencodeVariant: input.opencodeVariant ?? null,
     }),
   });
   if (!res.ok) throw new Error("Failed to create conversation");
   return res.json();
+}
+
+/**
+ * Partial conversation update (PATCH). The row is authoritative: callers
+ * changing engine/scope must await success before navigating, so the route
+ * never disagrees with the row.
+ */
+export async function updateConversation(
+  id: string,
+  patch: {
+    engine?: "direct" | "opencode";
+    workspaceMode?: "simple" | "project";
+    workspaceFolderId?: string | null;
+    title?: string;
+  },
+): Promise<void> {
+  const res = await fetch(`/api/conversations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error("Failed to update conversation");
 }

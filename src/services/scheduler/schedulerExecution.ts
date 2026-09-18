@@ -251,8 +251,21 @@ export async function ensureJobConversation(
   return { conversationId: created.id, created: true, safeToDelete: true };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Sleep that resolves early when the signal aborts (never rejects). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export async function executeJobRun(
@@ -290,6 +303,10 @@ export async function executeJobRun(
       controller.abort();
     };
     if (!cancelledByParent) parentSignal?.addEventListener("abort", onParentAbort);
+    // A run cancelled during the previous attempt's retry sleep must not start
+    // a fresh provider call: abort the new controller so streamText throws
+    // immediately and the catch below settles the run as cancelled.
+    if (parentSignal?.aborted) controller.abort();
     const timeoutMs = Math.max(5, job.timeoutSeconds) * 1000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -427,7 +444,7 @@ export async function executeJobRun(
         attempt,
         delaySeconds: job.retryDelaySeconds,
       });
-      await sleep(Math.max(0, job.retryDelaySeconds) * 1000);
+      await sleep(Math.max(0, job.retryDelaySeconds) * 1000, parentSignal);
     }
   }
   const durationMs = Date.now() - started;

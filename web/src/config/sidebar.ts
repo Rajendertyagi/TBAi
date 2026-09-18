@@ -187,6 +187,7 @@ export const chatHeaderConfig = {
     archive: "Archive",
     unarchive: "Unarchive",
     copyId: "Copy ID",
+    openInCode: "Open in Code",
     delete: "Delete",
     deleteTitle: "Delete conversation?",
     deleteDescription: (title: string) =>

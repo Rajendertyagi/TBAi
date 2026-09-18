@@ -9,6 +9,7 @@ import {
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { mergeTerminalParts, resultToLines } from "@/lib/terminal-lines";
 import { BackendToolView, denialOf } from "../filesystem/ui";
+import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -98,7 +99,7 @@ export const RunCommandTerminalUI: ToolCallMessagePartComponent = (
         status={p.status}
         approval={p.approval}
         respondToApproval={p.respondToApproval}
-        runningLabel="Running…"
+        runningLabel={toolsConfig.copy.running.running}
         summarize={() => null}
         tool="run_command"
         targetPath={String((p.args as { cwd?: unknown } | undefined)?.cwd ?? ".")}

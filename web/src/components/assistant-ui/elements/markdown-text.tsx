@@ -47,11 +47,20 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
     };
   }, [stableComponents]);
 
+  // `smooth` is explicitly disabled. The library defaults it to `true`, which
+  // re-animates arriving text as a client-side typewriter (useSmooth) and
+  // reports the part as still running until that animation catches up — so the
+  // rendered reply is not the text that arrived, it is an animation of it.
+  // Streamed Markdown must paint as tokens land, the same rule the terminal
+  // block already follows (docs/decisions.md). `defer` is retained: it only
+  // lowers the priority of re-parsing the growing message; it does not
+  // re-animate text.
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
       className="aui-md"
       components={markdownComponents}
+      smooth={false}
       defer
     />
   );

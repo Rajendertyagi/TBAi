@@ -69,6 +69,13 @@ export const conversationCreateSchema = z.object({
   // conversation workspace; Project Chat = attached to a registered folder.
   workspaceMode: z.enum(["simple", "project"]).optional().default("simple"),
   workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
+  // OpenCode session id for Code mode (set by the backend, accepted on create/update).
+  opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
+  // Engine selection + OpenCode agent/model chosen at creation (unified picker).
+  engine: z.enum(["direct", "opencode"]).optional(),
+  opencodeAgent: z.string().min(1).max(200).optional().nullable(),
+  opencodeModel: z.string().min(1).max(200).optional().nullable(),
+  opencodeVariant: z.string().min(1).max(100).optional().nullable(),
 }).superRefine((value, ctx) => {
   if (value.workspaceMode === "project" && !value.workspaceFolderId) {
     ctx.addIssue({
@@ -88,6 +95,11 @@ export const conversationUpdateSchema = z.object({
   titleSource: z.enum(["auto", "user"]).optional(),
   workspaceMode: z.enum(["simple", "project"]).optional(),
   workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
+  opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  opencodeAgent: z.string().min(1).max(200).optional().nullable(),
+  opencodeModel: z.string().min(1).max(200).optional().nullable(),
+  opencodeVariant: z.string().min(1).max(100).optional().nullable(),
 });
 
 // A persisted message entry in the runtime's storage format (produced by the
@@ -581,3 +593,9 @@ export type LogLevelFilter = z.infer<typeof logLevelFilterSchema>;
 export type LogTarget = z.infer<typeof logTargetSchema>;
 export type LogFileSettings = z.infer<typeof logFileSchema>;
 export type LogSettings = z.infer<typeof logSettingsSchema>;
+
+// ---- Web server port (single application server; explicit restart to apply) ----
+export const serverPortSchema = z.number().int().min(1).max(65535);
+export const serverPortBodySchema = z.object({ port: serverPortSchema });
+
+export type ServerPortBody = z.infer<typeof serverPortBodySchema>;

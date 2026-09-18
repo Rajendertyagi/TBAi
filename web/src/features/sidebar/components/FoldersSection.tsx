@@ -3,7 +3,7 @@ import { useLocation } from "react-router";
 import { FolderPlus } from "lucide-react";
 import { useFoldersStore } from "@/stores/foldersStore";
 import { FolderHeader } from "./FolderHeader";
-import { FolderConversationRow } from "./FolderConversationRow";
+import { conversationIdFromPath } from "@/features/chat/state/chatTabs";import { FolderConversationRow } from "./FolderConversationRow";
 import { WorkspaceFolderDialog } from "@/features/folders/WorkspaceFolderDialog";
 import type { Folder } from "@/types";
 
@@ -25,10 +25,9 @@ export function FoldersSection() {
   );
   const { pathname } = useLocation();
 
-  // Extract the active conversation id from the URL (/chat/:threadId).
-  const activeId = pathname.startsWith("/chat/")
-    ? pathname.slice(6) || null
-    : null;
+  // Active conversation id from the URL — either engine surface (chat or
+  // code). Scope UI keys off the conversation, never the engine route.
+  const activeId = conversationIdFromPath(pathname);
 
   useEffect(() => {
     void loadFolders();

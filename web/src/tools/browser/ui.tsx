@@ -3,6 +3,7 @@ import type {
   ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { BackendToolView } from "../filesystem/ui";
+import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -41,7 +42,7 @@ function browserSummary(result: AnyResult) {
     return (
       <div className="space-y-1">
         <div className="text-muted-foreground">
-          {r.ok ? "Screenshot saved" : "Screenshot failed"}: {r.path}
+          {r.ok ? toolsConfig.copy.status.screenshotSaved : toolsConfig.copy.status.screenshotFailed}: {r.path}
         </div>
         {r.stdout ? (
           <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
@@ -68,7 +69,7 @@ export const BrowserToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Browsing…"
+    runningLabel={toolsConfig.copy.running.browsing}
     summarize={browserSummary}
   />
 );
@@ -81,7 +82,7 @@ export const BrowserActionToolUI: ToolCallMessagePartComponent = (p: AnyProps) =
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Acting…"
+    runningLabel={toolsConfig.copy.running.acting}
     summarize={browserSummary}
   />
 );

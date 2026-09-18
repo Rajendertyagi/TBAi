@@ -41,7 +41,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { sidebarConfig } from "@/config/sidebar";
 import { historyConfig } from "@/config/history";
-import { useChatTabsStore } from "@/features/chat/state/chatTabs";
+import { useChatTabsStore, threadUrl } from "@/features/chat/state/chatTabs";
 import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
 
 const ROW_CLASS =
@@ -95,6 +95,10 @@ export const FolderConversationRow = memo(function FolderConversationRow({
             title={item.title ?? "Untitled"}
             status={item.status}
             isActive={activeId === id}
+            engine={
+              (item.custom as { engine?: string | null } | undefined)?.engine ??
+              null
+            }
           />
         );
       })}
@@ -111,15 +115,19 @@ const FolderConvRow = memo(function FolderConvRow({
   title: initialTitle,
   status: rawStatus,
   isActive,
+  engine,
 }: {
   remoteId: string;
   title: string;
   status: string;
   isActive: boolean;
+  /** Engine for route selection (chat vs code surface). Null = legacy Direct. */
+  engine?: string | null;
 }) {
   const navigate = useNavigate();
   const aui = useAui();
   const openChat = useChatTabsStore((s) => s.openChat);
+  const openAgent = useChatTabsStore((s) => s.openAgent);
   const copy = sidebarConfig.copy;
 
   // Persistent status is binary (regular/archived) and comes straight from
@@ -197,7 +205,7 @@ const FolderConvRow = memo(function FolderConvRow({
           <div className={cn(ROW_CLASS, isActive && "bg-sidebar-accent")}>
             <button
               type="button"
-              onClick={() => navigate(`/chat/${remoteId}`)}
+              onClick={() => navigate(threadUrl(remoteId, engine))}
               className="flex min-w-0 flex-1 items-center gap-1.5 outline-none"
             >
               <span className="relative shrink-0">
@@ -240,7 +248,13 @@ const FolderConvRow = memo(function FolderConvRow({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => openChat(remoteId)}>
+          <ContextMenuItem
+            onSelect={() =>
+              engine === "opencode"
+                ? openAgent(remoteId)
+                : openChat(remoteId)
+            }
+          >
             <ExternalLink className="size-4" />
             {copy.openInNewTab}
           </ContextMenuItem>

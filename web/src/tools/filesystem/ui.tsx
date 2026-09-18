@@ -13,6 +13,12 @@ import {
   DecisionBadge,
   useApprovalExit,
 } from "@/components/shared/approval-card";
+import {
+  approvalOptionApproves,
+  approvalOptionLabel,
+} from "@/components/shared/approval-options";
+import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
+import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -61,11 +67,8 @@ function Spinner({ label }: { label: string }) {
 }
 
 type ApprovalState = NonNullable<AnyProps["approval"]>;
-type ApprovalOption = {
-  id: string;
-  kind?: string;
-  label?: string;
-};
+/** One declared choice on a gate — derived from the runtime's own type. */
+type ApprovalOption = NonNullable<ApprovalState["options"]>[number];
 
 /**
  * Approval card for server-gated tools. Renders only while the gate is open
@@ -97,11 +100,19 @@ export function ApprovalGate({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freeform, setFreeform] = useState("");
+  // A declared option that opts into a confirmation step (e.g. "Always allow")
+  // holds its id here until the user confirms; every other option resolves on
+  // the first click. Nothing is sent while an option is merely held.
+  const [confirmingOptionId, setConfirmingOptionId] = useState<string | null>(null);
   // 100ms exit fade: the submit below is deferred so the card can fade out
   // before the runtime swaps it for the result. Semantics unchanged — the
   // same response shape reaches respondToApproval, just a UI tick later.
   const { leaving, runWithExit, cancelExit } = useApprovalExit();
   const aui = useAui();
+  // The SAME stale-permission guard the generic tool block uses. Shared rather
+  // than re-implemented so this surface cannot drift from it — an approval path
+  // without the guard is the original wedge (buttons that can only ever 404).
+  const { stale, reportGone } = useStaleApprovalGuard(approval.id);
 
   // Outside-workspace pre-check (display only): ask the server whether the
   // requested path resolves outside this conversation's workspace. Failure
@@ -141,6 +152,12 @@ export function ApprovalGate({
     };
   }, [tool, targetPath]);
 
+  // A request the server has forgotten can never be answered from here either:
+  // Approve and Deny both come back "Permission request not found", leaving a
+  // card that cannot be dismissed. Render nothing — the same exit the generic
+  // tool block takes. Presentation only; nothing is sent.
+  if (stale) return null;
+
   if (approval.isAutomatic) {
     return (
       <CollapsedDecisionRow
@@ -165,12 +182,23 @@ export function ApprovalGate({
         // Await acceptance so a refused response leaves the gate retryable.
         await respondToApproval(response);
       } catch (e) {
+        // Backstop: a reply that PROVES the request is gone retires the card,
+        // rather than showing a retryable error for something that can never
+        // succeed. An ordinary transient failure still stays retryable.
+        if (reportGone(e)) return;
         cancelExit();
         setError(e instanceof Error ? e.message : String(e));
         setBusy(false);
       }
     });
   };
+
+  // The one path for a declared option. The decision is derived from the
+  // option's kind: the runtime rejects a mismatch (choosing a `reject` option
+  // while claiming approval throws), so a hardcoded `approved` would be wrong
+  // for exactly the option that refuses.
+  const chooseOption = (option: ApprovalOption) =>
+    answer({ approved: approvalOptionApproves(option), optionId: option.id });
 
   // One-shot outside-workspace approval: mint the grant FIRST (server
   // re-resolves and canonicalizes the target itself), then answer the tool
@@ -198,6 +226,9 @@ export function ApprovalGate({
         if (!res.ok) throw new Error(data?.error ?? "Could not authorize outside access");
         await respondToApproval({ approved: true });
       } catch (e) {
+        // Same backstop as `answer`: a request the server no longer holds is
+        // retired rather than left offering an action that cannot succeed.
+        if (reportGone(e)) return;
         cancelExit();
         setError(e instanceof Error ? e.message : String(e));
         setBusy(false);
@@ -205,29 +236,90 @@ export function ApprovalGate({
     });
   };
 
-  const options = (approval.options ?? []) as ApprovalOption[];
-  const prompt = (approval as { prompt?: string }).prompt;
-  const display = (approval as { display?: string }).display;
-  const allowFreeform = (approval as { allowFreeform?: boolean }).allowFreeform;
+  const options = approval.options ?? [];
+  const prompt = approval.prompt;
+  const display = approval.display;
+  const allowFreeform = approval.allowFreeform;
+  // A gate that declares its choices renders ONLY those choices. The generic
+  // approve/deny pair cannot express "always allow", and drawing both put two
+  // decision surfaces on one card.
+  const hasDeclaredOptions = options.length > 0;
+  const confirmingOption =
+    confirmingOptionId === null
+      ? undefined
+      : options.find((option) => option.id === confirmingOptionId);
+  const confirmMeta =
+    confirmingOption !== undefined && typeof confirmingOption.confirm === "object"
+      ? confirmingOption.confirm
+      : undefined;
+  const confirmDescription =
+    confirmMeta?.description ?? confirmingOption?.description;
 
   return (
     <ToolCard title={title} leaving={leaving}>
       {prompt ? <p className="mb-1 font-medium text-foreground">{prompt}</p> : details}
-      {options.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {options.map((o) => (
+      {confirmingOption !== undefined ? (
+        <div className="mt-2 rounded-xl border border-border bg-muted/40 px-3 py-2">
+          <p className="font-medium text-foreground">
+            {confirmMeta?.title ?? `${approvalOptionLabel(confirmingOption)}?`}
+          </p>
+          {confirmDescription !== undefined && (
+            <p className="mt-1 text-muted-foreground">{confirmDescription}</p>
+          )}
+          {confirmingOption.grants !== undefined &&
+            confirmingOption.grants.length > 0 && (
+              <ul className="mt-2 flex flex-col gap-1">
+                {confirmingOption.grants.map((grant) => (
+                  <li key={grant}>
+                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                      {grant}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            )}
+          <div className="mt-3 flex items-center gap-2">
             <Button
-              key={o.id}
+              size="xs"
+              disabled={busy}
+              onClick={() => void chooseOption(confirmingOption)}
+            >
+              Confirm
+            </Button>
+            <Button
               size="xs"
               variant="outline"
               disabled={busy}
-              aria-label={o.label ?? o.id}
-              onClick={() => void answer({ approved: true, optionId: o.id })}
+              onClick={() => setConfirmingOptionId(null)}
             >
-              {o.label ?? o.id}
+              Back
             </Button>
-          ))}
+          </div>
         </div>
+      ) : (
+        hasDeclaredOptions && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {options.map((option) => (
+              <Button
+                key={option.id}
+                size="xs"
+                variant="outline"
+                disabled={busy}
+                aria-label={approvalOptionLabel(option)}
+                title={option.description}
+                onClick={() => {
+                  if (option.confirm) {
+                    setConfirmingOptionId(option.id);
+                    return;
+                  }
+                  void chooseOption(option);
+                }}
+              >
+                {approvalOptionLabel(option)}
+              </Button>
+            ))}
+          </div>
+        )
       )}
       {(display === "text" || allowFreeform) && (
         <div className="mt-2 flex gap-2">
@@ -268,13 +360,15 @@ export function ApprovalGate({
           {error}
         </div>
       )}
-      <ApprovalActions
-        busy={busy}
-        approveAria={`Approve ${title}`}
-        denyAria={`Deny ${title}`}
-        onApprove={() => (outside ? approveOutside() : answer({ approved: true }))}
-        onDeny={() => answer({ approved: false, reason: "Denied by user" })}
-      />
+      {!hasDeclaredOptions && (
+        <ApprovalActions
+          busy={busy}
+          approveAria={`Approve ${title}`}
+          denyAria={`Deny ${title}`}
+          onApprove={() => (outside ? approveOutside() : answer({ approved: true }))}
+          onDeny={() => answer({ approved: false, reason: "Denied by user" })}
+        />
+      )}
     </ToolCard>
   );
 }
@@ -412,7 +506,7 @@ function FailedOutsideRetry({
 export function ClosedGateMessage({ resolution }: { resolution: string }) {
   return (
     <span className="text-muted-foreground">
-      Approval {resolution} before a decision — run the request again if still needed.
+      {toolsConfig.copy.status.closedGate(resolution)}
     </span>
   );
 }
@@ -436,6 +530,7 @@ export function BackendToolView({
   summarize,
   tool,
   targetPath,
+  variant = "card",
 }: {
   title: string;
   args: AnyArgs;
@@ -445,11 +540,13 @@ export function BackendToolView({
   approval: AnyProps["approval"];
   respondToApproval: AnyProps["respondToApproval"];
   runningLabel: string;
-  summarize: (result: AnyResult) => ReactNode;
+  summarize: (result: AnyResult, args?: AnyArgs) => ReactNode;
   /** Native tool name — enables the outside-workspace pre-check on the gate. */
   tool?: string;
   /** Requested path (or cwd) — resolved server-side for the pre-check display. */
   targetPath?: string;
+  /** Presentation variant: standard full card or lightweight compact row. */
+  variant?: "card" | "compact";
 }) {
   if (approval && approval.approved === undefined) {
     if (approval.resolution) {
@@ -485,7 +582,7 @@ export function BackendToolView({
         badge={<DecisionBadge tone="approved">Approved</DecisionBadge>}
       >
         <span className="text-muted-foreground">
-          Approved — will execute with your next message in this conversation.
+          {toolsConfig.copy.status.approvedWillExecute}
         </span>
       </CollapsedDecisionRow>
     );
@@ -513,7 +610,9 @@ export function BackendToolView({
         }
       >
         <span className="text-destructive" role="alert">
-          {cancelled ? "Cancelled before completion." : `Failed: ${String(reason)}`}
+          {cancelled
+            ? toolsConfig.copy.status.cancelledBeforeCompletion
+            : toolsConfig.copy.status.failedWithReason(String(reason))}
         </span>
       </CollapsedDecisionRow>
     );
@@ -528,7 +627,7 @@ export function BackendToolView({
           badge={<DecisionBadge tone="denied">Denied</DecisionBadge>}
         >
           <span className="text-destructive" role="alert">
-            Denied: {denied}
+            {toolsConfig.copy.status.deniedWithReason(denied)}
           </span>
         </CollapsedDecisionRow>
       );
@@ -542,18 +641,36 @@ export function BackendToolView({
           badge={<DecisionBadge tone="denied">Failed</DecisionBadge>}
         >
           <span className="text-destructive" role="alert">
-            Failed: {failed}
+            {toolsConfig.copy.status.failedWithReason(failed)}
           </span>
           <FailedOutsideRetry title={title} failed={failed} tool={tool} args={args} />
         </CollapsedDecisionRow>
       );
     }
-    return <ToolCard title={title}>{summarize(result)}</ToolCard>;
+    if (variant === "compact") {
+      return (
+        <div className="my-1 flex w-full items-center gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+          {summarize(result, args)}
+        </div>
+      );
+    }
+    return <ToolCard title={title}>{summarize(result, args)}</ToolCard>;
+  }
+  // Waiting on the reader with NO gate of its own. OpenCode's `question` tool is
+  // this case: the prompt IS the request, and it is answered on the dedicated
+  // question surface, so there is nothing for this card to approve. Showing the
+  // request beats a spinner, which would read as "still working" for something
+  // that is actually blocked on a person. `argPreview` is the existing hook for
+  // "what this call is about", so no new prop or card machinery is added.
+  if (status?.type === "requires-action" && !approval) {
+    return (
+      <ToolCard title={title}>{argPreview ?? <Json value={args} />}</ToolCard>
+    );
   }
   return (
     <ToolCard title={title}>
       {approval?.approved === true ? (
-        <Spinner label="Approved — executing…" />
+        <Spinner label={toolsConfig.copy.running.approvedExecuting} />
       ) : (
         <Spinner label={runningLabel} />
       )}
@@ -564,7 +681,7 @@ export function BackendToolView({
 export function dirSummary(result: AnyResult) {
   const r = result as any;
   const entries = (r?.entries ?? []) as { name: string; type: string; size: number | null }[];
-  if (entries.length === 0) return <span className="text-muted-foreground">Empty folder.</span>;
+  if (entries.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.emptyFolder}</span>;
   return (
     <div className="space-y-0.5">
       {entries.slice(0, 100).map((e) => (
@@ -576,7 +693,7 @@ export function dirSummary(result: AnyResult) {
         </div>
       ))}
       {entries.length > 100 && (
-        <div className="text-muted-foreground">…and {entries.length - 100} more</div>
+        <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(entries.length - 100)}</div>
       )}
     </div>
   );
@@ -586,7 +703,7 @@ export function searchSummary(result: AnyResult) {
   const r = result as any;
   const matches = (r?.matches ?? []) as { path: string; line: number; snippet: string }[];
   if (matches.length === 0)
-    return <span className="text-muted-foreground">No matches in {r?.filesScanned ?? 0} files.</span>;
+    return <span className="text-muted-foreground">{toolsConfig.copy.status.noMatchesInFiles(r?.filesScanned ?? 0)}</span>;
   return (
     <div className="space-y-1">
       {matches.map((m, i) => (
@@ -595,12 +712,13 @@ export function searchSummary(result: AnyResult) {
           <span className="text-muted-foreground">{m.snippet}</span>
         </div>
       ))}
-      {r?.truncated && <div className="text-muted-foreground">…more matches omitted</div>}
+      {r?.truncated && <div className="text-muted-foreground">{toolsConfig.copy.status.moreMatchesOmitted}</div>}
     </div>
   );
 }
 
-function textPreview(text: string, max = 2000) {
+/** Cap a long body so a big file result cannot blow up the transcript. */
+export function textPreview(text: string, max = 2000) {
   return text.length > max ? `${text.slice(0, max)}\n…(${text.length - max} more chars)` : text;
 }
 
@@ -614,7 +732,7 @@ export const ReadFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Reading…"
+    runningLabel={toolsConfig.copy.running.reading}
     summarize={(r) => <Json value={(r as any).content} />}
   />
 );
@@ -629,7 +747,7 @@ export const ListDirToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Listing…"
+    runningLabel={toolsConfig.copy.running.listing}
     summarize={dirSummary}
   />
 );
@@ -644,7 +762,7 @@ export const SearchFilesToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Searching…"
+    runningLabel={toolsConfig.copy.running.searching}
     summarize={searchSummary}
   />
 );
@@ -659,7 +777,7 @@ export const FileInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Reading…"
+    runningLabel={toolsConfig.copy.running.reading}
     summarize={(r) => <Json value={r} />}
   />
 );
@@ -679,7 +797,7 @@ export const WriteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Writing…"
+    runningLabel={toolsConfig.copy.running.writing}
     summarize={(r) => <Json value={r} />}
   />
 );
@@ -706,7 +824,7 @@ export const EditFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Editing…"
+    runningLabel={toolsConfig.copy.running.editing}
     summarize={(r) => <Json value={r} />}
   />
 );
@@ -721,7 +839,7 @@ export const DeleteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Deleting…"
+    runningLabel={toolsConfig.copy.running.deleting}
     summarize={(r) => <Json value={r} />}
   />
 );

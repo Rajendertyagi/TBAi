@@ -10,8 +10,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { EnginePicker } from "@/components/EnginePicker";
 import { useFoldersStore } from "@/stores/foldersStore";
 import { createConversation } from "@/adapters/remoteThreadListAdapter";
+import { threadUrl } from "@/features/chat/state/chatTabs";
+import type { WelcomeEngine } from "@/features/chat/state/welcomeEngine";
 
 /**
  * "New Project Chat" picker. Lets the user choose a registered folder before
@@ -30,11 +33,13 @@ export function NewProjectChatDialog({
   const folders = useFoldersStore((s) => s.folders);
   const loadFolders = useFoldersStore((s) => s.loadFolders);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [engine, setEngine] = useState<WelcomeEngine>("direct");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
       setSelectedId(null);
+      setEngine("direct");
       void loadFolders();
     }
   }, [open, loadFolders]);
@@ -46,10 +51,11 @@ export function NewProjectChatDialog({
       const { id } = await createConversation({
         workspaceMode: "project",
         workspaceFolderId: selectedId,
+        engine,
         title: "New Project Chat",
       });
       onOpenChange(false);
-      navigate(`/chat/${id}`);
+      navigate(threadUrl(id, engine));
     } finally {
       setBusy(false);
     }
@@ -97,8 +103,9 @@ export function NewProjectChatDialog({
           </div>
         )}
 
-        <DialogFooter>
-          <Button
+        <DialogFooter className="flex-col gap-3 sm:flex-col">
+          <EnginePicker value={engine} onChange={setEngine} />
+          <div className="flex w-full justify-between gap-2">          <Button
             variant="outline"
             onClick={() => navigate("/folders")}
             type="button"
@@ -113,6 +120,7 @@ export function NewProjectChatDialog({
           >
             Start chat
           </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

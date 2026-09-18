@@ -4,6 +4,7 @@ import type {
 } from "@assistant-ui/react";
 import { CheckCircle2Icon, CircleIcon } from "lucide-react";
 import { BackendToolView } from "../filesystem/ui";
+import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -18,13 +19,13 @@ type TodoItem = { id: string; text: string; done: boolean; position: number };
  */
 function todoSummary(result: AnyResult) {
   const items = (result as { items?: TodoItem[] } | undefined)?.items ?? [];
-  if (items.length === 0) return <span className="text-muted-foreground">No items.</span>;
+  if (items.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.noItems}</span>;
   return (
     <ul className="space-y-0.5">
       {items.map((item) => (
         <li key={item.id} className="flex items-center gap-2">
           {item.done ? (
-            <CheckCircle2Icon className="h-3.5 w-3.5 shrink-0 text-green-500" />
+            <CheckCircle2Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           ) : (
             <CircleIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
           )}
@@ -45,7 +46,7 @@ export const TodoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Updating list…"
+    runningLabel={toolsConfig.copy.running.updatingList}
     summarize={todoSummary}
   />
 );

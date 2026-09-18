@@ -3,6 +3,7 @@ import type {
   ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { BackendToolView, Json } from "../filesystem/ui";
+import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -20,7 +21,7 @@ type AnyProps = ToolCallMessagePartProps<AnyArgs, AnyResult>;
 function processSummary(result: AnyResult) {
   const r = result as any;
   const list = (r?.processes ?? []) as { pid: number; name: string; cpuSeconds: number | null; memoryMB: number | null }[];
-  if (list.length === 0) return <span className="text-muted-foreground">No processes.</span>;
+  if (list.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.noProcesses}</span>;
   return (
     <div className="space-y-0.5">
       {list.slice(0, 30).map((p) => (
@@ -31,7 +32,7 @@ function processSummary(result: AnyResult) {
           {p.memoryMB != null && <span className="shrink-0 text-muted-foreground">{p.memoryMB} MB</span>}
         </div>
       ))}
-      {list.length > 30 && <div className="text-muted-foreground">…and {list.length - 30} more</div>}
+      {list.length > 30 && <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(list.length - 30)}</div>}
     </div>
   );
 }
@@ -44,7 +45,7 @@ export const ProcessListToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Listing processes…"
+    runningLabel={toolsConfig.copy.running.listingProcesses}
     summarize={processSummary}
   />
 );
@@ -57,7 +58,7 @@ export const ProcessKillToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Stopping process…"
+    runningLabel={toolsConfig.copy.running.stoppingProcess}
     summarize={(r) => <Json value={r} />}
   />
 );
@@ -70,7 +71,7 @@ export const SystemInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     status={p.status}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
-    runningLabel="Reading system info…"
+    runningLabel={toolsConfig.copy.running.readingSystemInfo}
     summarize={(r) => <Json value={r} />}
   />
 );

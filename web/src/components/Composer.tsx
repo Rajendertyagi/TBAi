@@ -24,6 +24,8 @@ import {
 import { composerConfig } from "../config/composer";
 import { logger } from "../lib/logger";
 import { useSettingsStore } from "../stores";
+import type { ReasoningLevel } from "../types";
+import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
 import { useMcpStore } from "../stores/mcpStore";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import {
@@ -33,8 +35,12 @@ import {
   TooltipTrigger,
 } from "./ui/tooltip";
 import { ComposerContextMenu } from "./chat/ComposerContextMenu";
+import { cancelActiveRun } from "../features/chat/state/deleteConversation";
 import { ModelOptionList } from "./chat/ModelOptionList";
 import { buildModelGroups, resolveModelOwner } from "../lib/model-groups";
+import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
+import { OpenCodeModelChip } from "../features/opencode/OpenCodeModelChip";
+import { OpenCodeThinkingChip } from "../features/opencode/OpenCodeThinkingChip";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -43,8 +49,15 @@ import {
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
 
-const THINKING_OPTIONS = [
-  { id: "default", label: composerConfig.copy.thinkingDefault },
+/**
+ * The four levels, `Off` included.
+ *
+ * `Off` is a level, not a "default" placeholder: with it selected the provider
+ * receives no thinking option and no reasoning part can come back. Naming the
+ * off state honestly is what lets a reader tell thinking is disabled.
+ */
+const THINKING_OPTIONS: ReadonlyArray<{ id: ReasoningLevel; label: string }> = [
+  { id: "off", label: composerConfig.copy.thinkingOff },
   { id: "low", label: composerConfig.copy.thinkingLow },
   { id: "medium", label: composerConfig.copy.thinkingMedium },
   { id: "high", label: composerConfig.copy.thinkingHigh },
@@ -53,7 +66,8 @@ const THINKING_OPTIONS = [
 type ConversationCustom = {
   providerId?: string | null;
   modelId?: string | null;
-  reasoningLevel?: string | null;
+  reasoningLevel?: ReasoningLevel | null;
+  engine?: "direct" | "opencode";
 };
 
 function ModelChip() {
@@ -172,19 +186,19 @@ function ThinkingChip() {
     const pid = s.selectedProviderId ?? custom?.providerId ?? s.activeProviderId;
     return s.providers.find((p) => p.id === pid)?.thinking ?? "off";
   });
-  const effective = stored ?? custom?.reasoningLevel ?? providerDefault;
-  const selected = effective === "off" ? "default" : effective;
+  // Show the level that will actually be used. The old code mapped "off" onto a
+  // "Default" label, so a conversation with thinking disabled still read as if
+  // something would happen.
+  const selected: ReasoningLevel =
+    stored ?? custom?.reasoningLevel ?? providerDefault;
 
-  const handleSelect = (id: string) => {
+  const handleSelect = (level: ReasoningLevel) => {
     setOpen(false);
-    // "default" means the provider's saved level; persist that concrete value.
-    const level = id === "default" ? null : (id as "low" | "medium" | "high");
+    // Persist the chosen level as the conversation default AND as the one-shot
+    // pick, so the very next message uses exactly what was chosen.
     useSettingsStore.getState().setSelectedReasoningLevel(level);
     const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
-    aui.threadListItem.updateCustom({
-      ...base,
-      reasoningLevel: level ?? providerDefault,
-    });
+    aui.threadListItem.updateCustom({ ...base, reasoningLevel: level });
   };
 
   return (
@@ -270,9 +284,22 @@ function AttachDropdown() {
  * everywhere; the folder scope chip renders as a separate row below it
  * (deliberate divergence from Codeg's inside-the-box row — see decisions).
  */
-function Composer() {
+function Composer({
+  isWelcomeDraft = false,
+  isCodeSurface = false,
+}: {
+  /** True only on the welcome draft (drives the draft-only OpenCode chips). */
+  isWelcomeDraft?: boolean;
+  /** True on the Code surface (bound OpenCode conversation). */
+  isCodeSurface?: boolean;
+}) {
   const { setText } = unstable_useComposerInput();
   const aui = useAui();
+  // Draft engine for the welcome surface. Bound threads never set
+  // isWelcomeDraft, so showOpenCodeDraft is true only on the new-chat draft
+  // with the OpenCode engine — never inferred, always explicit.
+  const draftEngine = useWelcomeEngineStore((s) => s.engine);
+  const showOpenCodeDraft = isWelcomeDraft && draftEngine === "opencode";
   const pendingInsert = useMcpStore((s) => s.pendingInsert);
   const clearPendingInsert = useMcpStore((s) => s.clearPendingInsert);
   useEffect(() => {
@@ -327,11 +354,27 @@ function Composer() {
           {/* Right: thinking, model, voice, send/stop (single slot) */}
           <div className="flex items-center gap-1">
             {/* Thinking chip: persists to the conversation default ("Default" =
-                the provider's saved level); also sets a one-shot override for the
-                immediate next message. */}
-            <ThinkingChip />
-            {/* Model chip */}
-            <ModelChip />
+                 the provider's saved level); also sets a one-shot override for the
+                 immediate next message. */}
+            {/* OpenCode (both the started Code chat and the new-chat draft) renders
+                 the same three independent chips — Agent, Model, Thinking — each
+                 persisting to its own store column (bound conversation, or the
+                 welcome-engine store in draft). Never the Direct provider chips,
+                 and the Thinking chip auto-hides when the model exposes no
+                 variants. Direct chat uses the thinking+model chips. */}
+            {(isCodeSurface || showOpenCodeDraft) ? (
+              <>
+                <OpenCodeAgentChip />
+                <OpenCodeModelChip />
+                <OpenCodeThinkingChip />
+              </>
+            ) : (
+              <>
+                <ThinkingChip />
+                {/* Model chip */}
+                <ModelChip />
+              </>
+            )}
             {/* Voice — always visible, disabled (no DictationAdapter) */}
             <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">
               <Mic className="size-3.5" />
@@ -365,29 +408,15 @@ function Composer() {
                         type="button"
                         onClick={() => {
                           // Explicit server cancel: runs are server-owned, so
-                          // the browser abort alone merely detaches. Look up
-                          // the active stream id from the resumable store
-                          // (key format owned by runtime.ts) and cancel it.
-                          // Fire-and-forget: the local cancel proceeds
-                          // regardless of the outcome.
-                          try {
-                            const item = aui.threadListItem.getState() as {
-                              remoteId?: string | null;
-                              id?: string | null;
-                            };
-                            const key = item.remoteId ?? item.id;
-                            const streamId = key
-                              ? sessionStorage.getItem(`tbai-resume:${key}`)
-                              : null;
-                            if (streamId) {
-                              void fetch(
-                                `/api/chat/cancel/${encodeURIComponent(streamId)}`,
-                                { method: "POST" },
-                              ).catch(() => {});
-                            }
-                          } catch {
-                            /* sessionStorage unavailable; local cancel applies */
-                          }
+                          // the browser abort alone merely detaches. Shared
+                          // helper looks up the resumable-store stream id and
+                          // cancels it; fire-and-forget so the local cancel
+                          // proceeds regardless of the outcome.
+                          const item = aui.threadListItem.getState() as {
+                            remoteId?: string | null;
+                            id?: string | null;
+                          };
+                          void cancelActiveRun(item.remoteId ?? item.id);
                         }}
                         aria-label={composerConfig.copy.stopGenerating}
                         className={cn(

@@ -51,6 +51,12 @@ The AI/chat stack is fixed:
   and application behavior.
 - Use database / configuration-driven values wherever practical.
 - Keep provider-specific code isolated behind the provider adapter/registry.
+- **Tool UI copy is configuration-driven.** User-facing strings in TBAi-owned tool
+  renderers (running labels, empty states, summaries, fallback cards) live in
+  `web/src/config/tools.ts` (`toolsConfig.copy`). Renderers must consume this config
+  rather than defining inline string literals. Dynamic values (queries, filenames,
+  counts, results) remain parameterized. Third-party vendored assistant-ui elements
+  (such as `web/src/components/assistant-ui/elements/web-search.tsx`) are left untouched.
 - **Navigation is configuration-driven.** All navigation items (labels, icons,
   badges, target views/routes, children, ordering, visibility) and branding strings
   live in `web/src/config/navigation.ts` as the single source of truth. Components

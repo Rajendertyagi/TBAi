@@ -3,7 +3,6 @@ import { LayoutGrid, MessageSquare } from "lucide-react";
 import { getSettingsNav } from "@/config/navigation";
 import { statusBarConfig } from "@/config/statusBar";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
-import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,11 +25,9 @@ export function StatusBarQuickActions() {
   const navigate = useNavigate();
   const toggleSidebar = useDesktopLayout((s) => s.toggleSidebar);
   const toggleStatusBar = useDesktopLayout((s) => s.toggleStatusBar);
-  const openChat = useChatTabsStore((s) => s.openChat);
   const areas = getSettingsNav();
 
   const handleNewChat = () => {
-    openChat("new");
     navigate("/chat/new");
   };
 

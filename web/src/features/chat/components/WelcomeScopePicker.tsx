@@ -30,6 +30,7 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
   const setScope = useWelcomeScopeStore((s) => s.setScope);
   const validate = useWelcomeScopeStore((s) => s.validateAgainstFolderIds);
   const folders = useFoldersStore((s) => s.folders);
+  const foldersLoaded = useFoldersStore((s) => s.foldersLoaded);
   const loadFolders = useFoldersStore((s) => s.loadFolders);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -38,9 +39,12 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
     void loadFolders();
   }, [loadFolders]);
 
+  // Prune a preset/dead folder id only against a loaded list. An empty list
+  // before the first load means "unknown" — validating against it wiped a
+  // just-preset folder scope (e.g. folder "+" → draft) back to Chat mode.
   useEffect(() => {
-    validate(folders.map((f) => f.id));
-  }, [folders, validate]);
+    if (foldersLoaded) validate(folders.map((f) => f.id));
+  }, [folders, foldersLoaded, validate]);
 
   useEffect(() => {
     if (!open) setQuery("");

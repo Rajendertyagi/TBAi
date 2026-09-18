@@ -1,0 +1,311 @@
+import { createOpenCodeClient, type OpenCodeClient } from "./client";
+import { toOpenCodeError } from "./errors";
+import { conversationService } from "../storage";
+import { resolveConversationWorkspace } from "../workspace";
+import { openCodeServerManager } from "./serverManager";
+import { resolveOpenCodeModelRef } from "./capabilities";
+import { logger } from "../../lib/logger";
+import { classifyError } from "../../lib/errors";
+
+/** OpenCode `ModelRef` shape accepted by `session.create` / `defaultModel`. */
+type ModelRef = { id: string; providerID: string; variant?: string };
+
+/** Mutable form of the official `SessionCreateInput` (whose fields are readonly). */
+type SessionCreateParams = {
+  location: { directory: string };
+  agent?: string;
+  model?: ModelRef;
+};
+
+/**
+ * Caller error: the conversation row is not an OpenCode row. The row is
+ * authoritative — a Direct (or legacy pre-engine) conversation must never
+ * gain an OpenCode session pointer. Carries a stable code so the route maps
+ * it to 422 instead of the generic 500; the message names only engine kinds
+ * (safe to surface). Canonical home of the ENGINE_MISMATCH code — the chat
+ * route's mirror guard cites this class rather than redefining the code.
+ */
+export class EngineMismatchError extends Error {
+  readonly code = "ENGINE_MISMATCH";
+  constructor(
+    readonly conversationId: string,
+    readonly engine: string,
+  ) {
+    super(
+      `Conversation ${conversationId} uses the ${engine} engine, not OpenCode`,
+    );
+    this.name = "EngineMismatchError";
+  }
+}
+
+/**
+ * A conversation's OpenCode session binding: the server-side session identity
+ * plus the directory scope that identity is addressed by.
+ *
+ * Both halves are needed to talk to a session. `sessionId` names it; the
+ * directory scopes it. OpenCode keys most routes on a directory, and the event
+ * stream is the one that matters here: `GET /event` **without** a `directory`
+ * answers with a stub carrying only `server.connected` + `server.heartbeat`, so
+ * a client that subscribes unscoped receives no session events at all — the
+ * completed reply then only appears after a history reload. Returning the two
+ * together means a caller can never hold an id without its scope.
+ */
+export type OpenCodeSessionBinding = {
+  /** The OpenCode session id: the server-side identity of this conversation. */
+  sessionId: string;
+  /**
+   * The directory the server records for this session, or `null` when it could
+   * not be read. `null` is not an error: the caller simply cannot scope
+   * directory-keyed routes, and must not guess a path.
+   */
+  directory: string | null;
+};
+
+/** Reads a non-empty string, or `undefined` for anything else. */
+function asDirectory(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Fetches the server's record for a session, or `null` when the server
+ * definitively does not have it. Returns the session's **directory** as well,
+ * because that value is the scope every directory-keyed OpenCode route needs
+ * and the server's own record is its authoritative source — reading it from
+ * TBAi's folder table instead would go stale the moment a workspace migrates.
+ *
+ * The directory is read from the V2 location field first (`location.directory`,
+ * the shape `@opencode/client` types) and from a top-level `directory` second
+ * (the shape OpenCode 1.18.x returns on its V1 session route). Which one is
+ * present depends on the route the server answers, so both are accepted rather
+ * than pinning this code to one server version.
+ *
+ * Liveness semantics are unchanged from the probe this replaces: only a
+ * **definitive "not found"** reads as absent. Everything else reads as present,
+ * including the HTTP 500 that OpenCode 1.18.29 returns for a session whose
+ * bound directory has been removed from disk: measured across 50 live
+ * sessions, that 500 correlated 100% with "directory missing" (server log:
+ * `PlatformError: NotFound: FileSystem.realPath … ENOENT`) and never with
+ * absence — every session whose directory existed answered 200. Reading that
+ * 500 as dead made TBAi abandon a live session and create a fresh one on every
+ * call, for 46 of those 50 sessions. This is an OpenCode 1.18.29 defect, not an
+ * absence signal, so it must not be treated as one. Such a session reads as
+ * present with no directory, since its directory is precisely what is gone.
+ *
+ * Never throws — an unreachable server reads as absent, which is the safe
+ * direction (the caller recreates rather than handing out an unverified id).
+ *
+ * @param client - Client bound to the managed server's base URL.
+ * @param sessionId - The persisted OpenCode session id to look up.
+ * @returns The session id + directory, or null when the server has no such session.
+ */
+async function fetchOpenCodeSession(
+  client: OpenCodeClient,
+  sessionId: string,
+): Promise<{ id: string; directory: string | null } | null> {
+  try {
+    const session = await client.session.get({ sessionID: sessionId });
+    if (typeof session?.id !== "string" || session.id.length === 0) return null;
+    const wire = session as unknown as {
+      directory?: unknown;
+      location?: { directory?: unknown };
+    };
+    return {
+      id: session.id,
+      directory:
+        asDirectory(wire.location?.directory) ??
+        asDirectory(wire.directory) ??
+        null,
+    };
+  } catch (err) {
+    const failure = toOpenCodeError(err);
+    // OpenCode 1.18.29 answers 500 when the session's bound directory is gone.
+    // The session itself still exists, so it is live. See the doc comment.
+    if (failure.kind === "http" && failure.statusCode === 500) {
+      return { id: sessionId, directory: null };
+    }
+    return null;
+  }
+}
+
+/**
+ * Liveness probe for a stored session id: does the managed server still know
+ * this session? The id is only a pointer — the server restarts independently,
+ * so a persisted id may reference a session that no longer exists.
+ *
+ * A thin predicate over `fetchOpenCodeSession`, so the liveness rules (and the
+ * OpenCode 1.18.29 500 defect documented there) live in exactly one place.
+ *
+ * @param client - Client bound to the managed server's base URL.
+ * @param sessionId - The persisted OpenCode session id to verify.
+ * @returns True when the server still has the session.
+ */
+export async function isOpenCodeSessionLive(
+  client: OpenCodeClient,
+  sessionId: string,
+): Promise<boolean> {
+  return (await fetchOpenCodeSession(client, sessionId)) !== null;
+}
+
+/**
+ * Ensures an OpenCode session exists for a conversation and returns its
+ * **binding** — the session id plus the directory scope that id is addressed
+ * by. Reuses the conversation's resolved workspace directory as the session
+ * cwd, creating the session once and persisting the id on the conversation row.
+ * Subsequent calls return the stored id (idempotent resume).
+ *
+ * The directory is read back from the server's own session record rather than
+ * re-derived from the folder table, so callers always receive the scope the
+ * server actually bound — including after the conversation's workspace has
+ * been migrated out from under an existing session.
+ *
+ * @param conversationId - TBAi conversation whose workspace roots the session.
+ * @returns The session id and its directory scope (`null` when unreadable).
+ * @throws {EngineMismatchError} When the conversation is not an OpenCode row.
+ * @throws {OpenCodeError} When the server is unreachable or refuses the create.
+ */
+export async function ensureOpenCodeSession(
+  conversationId: string,
+): Promise<OpenCodeSessionBinding> {
+  const conversation = await conversationService.get(conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation not found: ${conversationId}`);
+  }
+  // Row-authoritative engine guard: refuse before spawning anything (no
+  // server, no session, no pointer write). Absent engine reads as Direct —
+  // legacy conversations predate the engine column and are all Direct.
+  if (conversation.engine !== "opencode") {
+    throw new EngineMismatchError(
+      conversationId,
+      conversation.engine ?? "direct",
+    );
+  }
+
+  const baseUrl = await openCodeServerManager.ensureBaseUrl();
+  const client = createOpenCodeClient(baseUrl);
+  if (conversation.opencodeSessionId) {
+    const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
+    if (live) {
+      return { sessionId: live.id, directory: live.directory };
+    }
+    // Stale pointer (e.g. server restarted since the session was stored):
+    // fall through and recreate rather than handing out a dead id.
+    logger.warn("opencode", "opencode.session_stale", {
+      conversationId,
+      sessionId: conversation.opencodeSessionId,
+    });
+  }
+
+  const resolved = await resolveConversationWorkspace(conversationId);
+  const directory = resolved.dir;
+  // `session.create` posts to `POST /api/session` and accepts a flat
+  // `{ location: { directory }, agent?, model? }` body — `location.directory`
+  // is what roots the session in the conversation's workspace (it is NOT a
+  // query param). The call resolves to the created `SessionInfo`, so the id is
+  // read straight off it. Verified live against the managed server.
+  const params: SessionCreateParams = { location: { directory } };
+
+  if (conversation.opencodeAgent) {
+    params.agent = conversation.opencodeAgent;
+  }
+  if (conversation.opencodeModel) {
+    const modelRef = await resolveOpenCodeModelRef(conversation.opencodeModel);
+    if (modelRef) {
+      params.model = { id: modelRef.modelID, providerID: modelRef.providerID };
+      // The thinking level (variant) is baked into the session's model config
+      // at creation time. Changing the variant mid-session takes effect on
+      // the next session creation (server restart / session expiry).
+      if (conversation.opencodeVariant) {
+        params.model.variant = conversation.opencodeVariant;
+      }
+    }
+  }
+
+  let sessionId: string | undefined;
+  let createdDirectory: string | null = null;
+  try {
+    const session = await client.session.create(params);
+    sessionId = session?.id;
+    // Prefer the server's own echo of the bound directory over the path we
+    // sent: it is what the session is actually scoped to.
+    const wire = session as unknown as {
+      directory?: unknown;
+      location?: { directory?: unknown };
+    };
+    createdDirectory =
+      asDirectory(wire.location?.directory) ??
+      asDirectory(wire.directory) ??
+      null;
+  } catch (err) {
+    throw toOpenCodeError(err);
+  }
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    throw new Error("OpenCode session create failed: response carried no session id");
+  }
+
+  await conversationService.update(conversationId, { opencodeSessionId: sessionId });
+  logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
+  // Fall back to the directory we created the session in when the server's
+  // response omits it (older servers do): that path is still its scope.
+  return { sessionId, directory: createdDirectory ?? directory };
+}
+
+/**
+ * Best-effort termination of the OpenCode session bound to a conversation.
+ * Interrupts any live work, removes the server-side session, and clears the
+ * persisted pointer. Every step tolerates absence (missing conversation, no
+ * session, dead server) so the call is idempotent and safe to repeat — the
+ * deletion coordinator relies on this to never block conversation teardown.
+ *
+ * Uses the official V2 `session.interrupt` then `session.remove`. On OpenCode
+ * 1.18.29 those two endpoints do not match the V2 contract, which is absorbed
+ * by the transport in `./client` rather than by any caller here.
+ *
+ * @param conversationId - TBAi conversation whose session should end.
+ * @returns Whether a live session was terminated (false = nothing to do).
+ */
+export async function terminateOpenCodeSession(
+  conversationId: string,
+): Promise<{ terminated: boolean }> {
+  const conversation = await conversationService.get(conversationId);
+  const sessionId = conversation?.opencodeSessionId;
+  if (!conversation || !sessionId) {
+    return { terminated: false };
+  }
+  try {
+    const baseUrl = await openCodeServerManager.ensureBaseUrl();
+    const client = createOpenCodeClient(baseUrl);
+    // Interrupt first, then remove: stop live work before dropping the session
+    // out from under it. Each step is individually best-effort — an idle run
+    // has nothing to interrupt and a restarted server has nothing to remove.
+    // Failures are recorded at debug level (both are expected on the happy
+    // path) so a genuinely broken call is still diagnosable.
+    try {
+      await client.session.interrupt({ sessionID: sessionId });
+    } catch (err) {
+      logger.debug("opencode", "opencode.session_interrupt_skipped", {
+        conversationId,
+        ...classifyError(toOpenCodeError(err)),
+      });
+    }
+    try {
+      await client.session.remove({ sessionID: sessionId });
+    } catch (err) {
+      logger.debug("opencode", "opencode.session_remove_skipped", {
+        conversationId,
+        ...classifyError(toOpenCodeError(err)),
+      });
+    }
+  } catch (err) {
+    logger.warn("opencode", "opencode.session_terminate_failed", {
+      conversationId,
+      ...classifyError(toOpenCodeError(err)),
+    });
+    return { terminated: false };
+  }
+  await conversationService.update(conversationId, { opencodeSessionId: null });
+  logger.info("opencode", "opencode.session_terminate", {
+    conversationId,
+    sessionId,
+  });
+  return { terminated: true };
+}

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { WelcomeHero } from "./WelcomeHero";
 import { QuickActions } from "./QuickActions";
 import { WelcomeScopePicker } from "./WelcomeScopePicker";
+import { WelcomeEnginePicker } from "./WelcomeEnginePicker";
 
 /** Composer-less welcome column. The app's single composer instance is
  *  injected via the `composer` slot by ChatWindow (one tag, one mount). */
@@ -33,6 +34,7 @@ export function WelcomeScreen({ composer }: { composer: ReactNode }) {
         <WelcomeHero />
         <QuickActions />
         <div className="flex flex-col">
+          <WelcomeEnginePicker />
           {composer}
           <div className="px-1 pt-1">
             <WelcomeScopePicker editable />

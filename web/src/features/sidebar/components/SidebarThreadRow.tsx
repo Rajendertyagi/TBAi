@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   ThreadListItemPrimitive,
   ThreadListItemMorePrimitive,
@@ -32,6 +33,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { historyConfig } from "@/config/history";
 import { sidebarConfig } from "@/config/sidebar";
+import { logger } from "@/lib/logger";
+import { useDeleteConversation } from "@/features/chat/state/deleteConversation";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
 
@@ -39,6 +42,8 @@ export interface SidebarRowItem {
   remoteId: string;
   title?: string;
   status?: string;
+  /** Engine for route selection (chat vs code surface). Null = legacy Direct. */
+  engine?: string | null;
 }
 
 const ROW_CLASS =
@@ -56,18 +61,32 @@ export function SidebarThreadRow({
   onOpenThread,
 }: {
   item: SidebarRowItem;
-  onOpenThread: (remoteId: string) => void;
+  onOpenThread: (remoteId: string, engine?: string | null) => void;
 }) {
   const aui = useAui();
   const copy = sidebarConfig.copy;
   const openChat = useChatTabsStore((s) => s.openChat);
+  const openAgent = useChatTabsStore((s) => s.openAgent);
   const title = item.title ?? "Untitled";
+  const removeConversation = useDeleteConversation();
+
+  // Full deletion lifecycle (server → runtime → tabs → route via TabUrlSync).
+  // Failures surface as a toast; nothing is removed when the server refuses.
+  const handleDelete = (remoteId: string) => {
+    void removeConversation(remoteId).catch((err: unknown) => {
+      toast.error(
+        err instanceof Error ? err.message : "Could not delete conversation.",
+      );
+    });
+  };
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(title);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const handleOpenRename = () => {
     setRenameValue(title);
+    setRenameError(null);
     setRenameOpen(true);
   };
 
@@ -83,8 +102,13 @@ export function SidebarThreadRow({
         items.find((t) => t.remoteId === item.remoteId) ??
         items.find((t) => t.id === item.remoteId);
       await aui.threads.item({ id: match?.id ?? item.remoteId }).rename(next);
-    } catch {
-      /* best effort */
+    } catch (err) {
+      logger.debug("chat", "rename_failed", {
+        threadId: item.remoteId,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+      setRenameError(err instanceof Error ? err.message : "Rename failed");
+      return;
     }
     setRenameOpen(false);
   };
@@ -96,7 +120,7 @@ export function SidebarThreadRow({
           <ThreadListItemPrimitive.Root className={ROW_CLASS}>
             <ThreadListItemPrimitive.Trigger
               className="min-w-0 flex-1 truncate text-left"
-              onClick={() => onOpenThread(item.remoteId)}
+              onClick={() => onOpenThread(item.remoteId, item.engine ?? null)}
             >
               <span className="relative inline-flex shrink-0">
                 <ThreadRunningDot
@@ -132,11 +156,12 @@ export function SidebarThreadRow({
                   </ThreadListItemPrimitive.Archive>
                 )}
                 {historyConfig.deleteEnabled && (
-                  <ThreadListItemPrimitive.Delete asChild>
-                    <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                      <Trash2 className="size-4" /> {copy.delete}
-                    </ThreadListItemMorePrimitive.Item>
-                  </ThreadListItemPrimitive.Delete>
+                  <ThreadListItemMorePrimitive.Item
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted"
+                    onSelect={() => handleDelete(item.remoteId)}
+                  >
+                    <Trash2 className="size-3.5" /> {copy.delete}
+                  </ThreadListItemMorePrimitive.Item>
                 )}
               </ThreadListItemMorePrimitive.Content>
             </ThreadListItemMorePrimitive.Root>
@@ -144,7 +169,13 @@ export function SidebarThreadRow({
         </ContextMenuTrigger>
 
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => openChat(item.remoteId)}>
+          <ContextMenuItem
+            onSelect={() =>
+              item.engine === "opencode"
+                ? openAgent(item.remoteId)
+                : openChat(item.remoteId)
+            }
+          >
             <ExternalLink className="size-4" /> {copy.openInNewTab}
           </ContextMenuItem>
           {historyConfig.renameEnabled && (
@@ -166,11 +197,12 @@ export function SidebarThreadRow({
             <Copy className="size-4" /> {copy.copyId}
           </ContextMenuItem>
           {historyConfig.deleteEnabled && (
-            <ThreadListItemPrimitive.Delete asChild>
-              <ContextMenuItem variant="destructive">
-                <Trash2 className="size-4" /> Delete
-              </ContextMenuItem>
-            </ThreadListItemPrimitive.Delete>
+            <ContextMenuItem
+              variant="destructive"
+              onSelect={() => handleDelete(item.remoteId)}
+            >
+              <Trash2 className="size-4" /> Delete
+            </ContextMenuItem>
           )}
         </ContextMenuContent>
       </ContextMenu>
@@ -191,6 +223,11 @@ export function SidebarThreadRow({
             placeholder={title}
             autoFocus
           />
+          {renameError && (
+            <p role="alert" className="text-xs text-destructive">
+              {renameError}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameOpen(false)}>
               {copy.cancel}
@@ -208,12 +245,23 @@ export function SidebarThreadRow({
 /** Archived conversation row: muted, unarchive instead of archive. */
 export function SidebarArchivedRow({
   remoteId,
+  engine,
   onOpenThread,
 }: {
   remoteId: string;
-  onOpenThread: (remoteId: string) => void;
+  engine?: string | null;
+  onOpenThread: (remoteId: string, engine?: string | null) => void;
 }) {
   const copy = sidebarConfig.copy;
+  const removeConversation = useDeleteConversation();
+
+  const handleDelete = (id: string) => {
+    void removeConversation(id).catch((err: unknown) => {
+      toast.error(
+        err instanceof Error ? err.message : "Could not delete conversation.",
+      );
+    });
+  };
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -222,7 +270,7 @@ export function SidebarArchivedRow({
         >
           <ThreadListItemPrimitive.Trigger
             className="min-w-0 flex-1 truncate text-left"
-            onClick={() => onOpenThread(remoteId)}
+            onClick={() => onOpenThread(remoteId, engine ?? null)}
           >
             <ThreadListItemPrimitive.Title />
           </ThreadListItemPrimitive.Trigger>
@@ -242,11 +290,12 @@ export function SidebarArchivedRow({
                 </ThreadListItemPrimitive.Unarchive>
               )}
               {historyConfig.deleteEnabled && (
-                <ThreadListItemPrimitive.Delete asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted">
-                    <Trash2 className="size-4" /> {copy.delete}
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Delete>
+                <ThreadListItemMorePrimitive.Item
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted"
+                  onSelect={() => handleDelete(remoteId)}
+                >
+                  <Trash2 className="size-3.5" /> {copy.delete}
+                </ThreadListItemMorePrimitive.Item>
               )}
             </ThreadListItemMorePrimitive.Content>
           </ThreadListItemMorePrimitive.Root>
@@ -266,14 +315,15 @@ export function SidebarArchivedRow({
         >
           <Copy className="size-4" /> {copy.copyId}
         </ContextMenuItem>
-        {historyConfig.deleteEnabled && (
-          <ThreadListItemPrimitive.Delete asChild>
-            <ContextMenuItem variant="destructive">
+          {historyConfig.deleteEnabled && (
+            <ContextMenuItem
+              variant="destructive"
+              onSelect={() => handleDelete(remoteId)}
+            >
               <Trash2 className="size-4" /> Delete
             </ContextMenuItem>
-          </ThreadListItemPrimitive.Delete>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
-  );
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
+    );
 }

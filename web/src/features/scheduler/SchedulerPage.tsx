@@ -11,6 +11,7 @@ import { JobListItem } from "./components/JobListItem";
 import { JobDetail } from "./components/JobDetail";
 import { TemplateGallery } from "./components/TemplateGallery";
 import { JobEditor } from "./components/JobEditor";
+import { threadUrl } from "../chat/state/chatTabs";
 import {
   blankSeed,
   duplicateSeed,
@@ -56,7 +57,7 @@ export function SchedulerPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<
-    Array<{ id: string; title: string }>
+    Array<{ id: string; title: string; engine?: string | null }>
   >([]);
   const [problems, setProblems] = useState<
     Array<{ id: string; jobId: string; startedAt: number }>
@@ -93,8 +94,11 @@ export function SchedulerPage() {
       .then(
         (data) =>
           setConversations(
-            (data as { threads: Array<{ id: string; title: string }> }).threads ??
-              [],
+            (
+              data as {
+                threads: Array<{ id: string; title: string; engine?: string | null }>;
+              }
+            ).threads ?? [],
           ),
       )
       .catch(() => {});
@@ -304,8 +308,15 @@ export function SchedulerPage() {
     setMode("detail");
   };
 
+  // Thread opening follows the conversation engine (chat vs code surface);
+  // unknown engine falls back to the Direct route (legacy default).
   const openThread = (conversationId: string) =>
-    navigate(`/chat/${conversationId}`);
+    navigate(
+      threadUrl(
+        conversationId,
+        conversations.find((c) => c.id === conversationId)?.engine ?? null,
+      ),
+    );
 
   const editorPane =
     editorTarget != null ? (

@@ -105,6 +105,25 @@ Invalid input is rejected with `400` before any provider call.
 - The manual `/api/tools/*` HTTP surface executes tools without approval;
   it is a local dev/test surface, not a confinement boundary.
 
+## OpenCode agent mode
+
+- "Open in Code" is the explicit opt-in: it launches a managed `opencode serve`
+  subprocess for a conversation and renders it as a separate agent chat tab. It is
+  never started automatically.
+- OpenCode runs with the **app's own OS privileges** and works inside the
+  conversation's resolved workspace directory (`resolveConversationWorkspace`).
+  It is a separate process: its file and shell access is **not** confined by
+  TBAi's `resolveSafe`, so it can read/write/execute beyond TBAi's tool policy.
+  This is why Code mode is opt-in and scope-locked at creation.
+- OpenCode's tool-permission prompts are answered in-app through the shared
+  `ApprovalCard` shell. Approving replies **straight to OpenCode** (`once` /
+  `reject` / `always`) — there is **no TBAi grant involved**, and TBAi's native
+  `/api/tools/grant` machinery does not govern OpenCode's server-executed tools.
+- When OpenCode offers a persist pattern for a request, an **Always** action is
+  shown. If accepted, the rule is **remembered by OpenCode across all chats**,
+  outside TBAi's scope policy and outside TBAi's ability to revoke it. TBAi
+  implements no host-side persistence for this choice.
+
 ## Logging / redaction
 
 - Keys are never logged. Error messages that might accidentally include a secret are

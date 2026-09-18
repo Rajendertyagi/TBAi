@@ -1,5 +1,6 @@
 import { createHashRouter, Navigate } from "react-router";
-import { AppShell } from "./layout/AppShell";
+import { ChatShell } from "./layout/ChatShell";
+import { RouteError } from "./RouteError";
 import { SettingsLayout } from "./layout/SettingsLayout";
 import { IndexRedirect } from "./IndexRedirect";
 import { ChatView } from "../features/chat/components/ChatView";
@@ -13,17 +14,27 @@ import { SchedulerPage } from "../features/scheduler/SchedulerPage";
 import { DesktopSettings } from "../features/desktop/DesktopSettings";
 import { FoldersPage } from "../features/folders/FoldersPage";
 import { QuickMessagesPage } from "../features/quick-messages/QuickMessagesPage";
+import { CodeShell } from "../features/opencode/CodeShell";
 
 /**
  * Application surfaces (hash routing: works under vite dev, the Bun SPA
  * fallback, and the ElectroBun desktop bundle serving local files — the
  * hash never reaches the server). The router owns PAGES only; chat message
  * state stays in the assistant-ui runtime, tab state in the chat-tab store.
+ *
+ * Branch/shell split (structural, not stylistic): the chat branch renders
+ * inside `ChatShell` (normal TBAi thread-list runtime + full chrome) while
+ * the Code branch renders inside `CodeShell` (OpenCode runtime at its top,
+ * focused chrome). The OpenCode adapter's `useRemoteThreadListRuntime`
+ * degrades to a parent-context no-op when nested inside another
+ * RemoteThreadListRuntime, so the two shells must never nest — paths are
+ * unchanged, only the grouping.
  */
 export const router = createHashRouter([
   {
     path: "/",
-    Component: AppShell,
+    Component: ChatShell,
+    errorElement: <RouteError />,
     children: [
       { index: true, Component: IndexRedirect },
       { path: "chat/:threadId?", Component: ChatView },
@@ -46,5 +57,13 @@ export const router = createHashRouter([
       },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
+  },
+  {
+    // OpenCode Code mode: a managed agent chat surface (own runtime +
+    // session) in a dedicated shell — deliberately OUTSIDE the chat
+    // runtime/provider (see above).
+    path: "/code/:agentId?",
+    Component: CodeShell,
+    errorElement: <RouteError />,
   },
 ]);

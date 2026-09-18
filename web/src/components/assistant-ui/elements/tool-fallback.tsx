@@ -31,6 +31,12 @@ import {
   ApprovalCard,
   useApprovalExit,
 } from "@/components/shared/approval-card";
+import {
+  approvalOptionLabel,
+  isAllowApprovalOptionKind,
+  isKnownApprovalOptionKind,
+} from "@/components/shared/approval-options";
+import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 
 const ANIMATION_DURATION = 200;
 
@@ -325,26 +331,6 @@ function ToolFallbackError({
 const APPROVED_RESULT = "Approved by user";
 const DENIED_RESULT = "User denied tool execution";
 
-const APPROVAL_OPTION_DEFAULT_LABELS: Record<string, string> = {
-  "allow-once": "Allow",
-  "allow-always": "Always allow",
-  "reject-once": "Deny",
-  "reject-always": "Always deny",
-};
-
-const isKnownKind = (kind: string) =>
-  Object.hasOwn(APPROVAL_OPTION_DEFAULT_LABELS, kind);
-
-const isAllowKind = (kind: string) =>
-  kind === "allow-once" || kind === "allow-always";
-
-const approvalOptionLabel = (option: ToolApprovalOption) =>
-  option.label ??
-  (isKnownKind(option.kind)
-    ? APPROVAL_OPTION_DEFAULT_LABELS[option.kind]
-    : undefined) ??
-  option.id;
-
 /**
  * A request that declares how it wants to be presented is asking a question,
  * not gating an action, so a refusal is not one of the answers it accepts.
@@ -391,12 +377,22 @@ function ToolFallbackApproval({
   // before the runtime swaps it for the result. Same payloads, a UI tick
   // later; a refused send clears the fade and the controls come back.
   const { leaving, runWithExit, cancelExit } = useApprovalExit();
+  // Shared with the rich tool UIs' approval gate (`tools/filesystem/ui.tsx`) —
+  // ONE implementation, so no approval surface can end up without the guard.
+  const { stale, reportGone } = useStaleApprovalGuard(approval?.id);
 
   if (
     approval != null &&
     (approval.approved !== undefined || approval.resolution !== undefined)
   )
     return null;
+
+  // A request the server has forgotten can never be answered: Approve and Deny
+  // both come back "Permission request not found", so the card would sit there
+  // offering two buttons that can only fail. Retire it the same way a recorded
+  // decision retires it — no controls, no dead end. Presentation only: nothing
+  // is sent, and the tool call the request belongs to still renders.
+  if (stale) return null;
 
   if (!offersInterruptAction(status, approval, interrupt)) return null;
 
@@ -418,6 +414,10 @@ function ToolFallbackApproval({
       try {
         await send();
       } catch (sendError) {
+        // The one failure that can never succeed on a retry: the server no
+        // longer holds this request. Record it so the card retires instead of
+        // coming back offering the same two buttons.
+        if (reportGone(sendError)) return;
         cancelExit();
         setSubmitted(false);
         setError(
@@ -455,7 +455,7 @@ function ToolFallbackApproval({
     // so it resolves as approved.
     submit(() =>
       respondToApproval?.(
-        isKnownKind(option.kind)
+        isKnownApprovalOptionKind(option.kind)
           ? { optionId: option.id, ...typedAnswer() }
           : { optionId: option.id, approved: true, ...typedAnswer() },
       ),
@@ -582,10 +582,15 @@ function ToolFallbackApproval({
   }
 
   if (declaredOptions && declaredOptions.length > 0) {
-    const allowOptions = declaredOptions.filter((o) => isAllowKind(o.kind));
-    const customOptions = declaredOptions.filter((o) => !isKnownKind(o.kind));
+    const allowOptions = declaredOptions.filter((o) =>
+      isAllowApprovalOptionKind(o.kind),
+    );
+    const customOptions = declaredOptions.filter(
+      (o) => !isKnownApprovalOptionKind(o.kind),
+    );
     const rejectOptions = declaredOptions.filter(
-      (o) => isKnownKind(o.kind) && !isAllowKind(o.kind),
+      (o) =>
+        isKnownApprovalOptionKind(o.kind) && !isAllowApprovalOptionKind(o.kind),
     );
     return (
       <div

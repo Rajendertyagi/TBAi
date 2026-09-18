@@ -18,6 +18,12 @@ interface FoldersState {
   /** Per-folder expand/collapse state for the sidebar Folders section. */
   folderExpanded: Record<string, boolean>;
   loading: boolean;
+  /**
+   * True once the folder list has been fetched successfully at least once.
+   * Guards pruning logic (e.g. draft scope validation): an empty list before
+   * the first load means "unknown", never "no folders".
+   */
+  foldersLoaded: boolean;
   loadFolders: () => Promise<void>;
   loadGroups: () => Promise<void>;
   createFolder: (input: {
@@ -114,12 +120,13 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     })(),
   folderExpanded: loadFolderExpanded(),
   loading: false,
+  foldersLoaded: false,
 
   loadFolders: async () => {
     set({ loading: true });
     try {
       const folders = await api<Folder[]>("/api/folders");
-      set({ folders });
+      set({ folders, foldersLoaded: true });
     } finally {
       set({ loading: false });
     }

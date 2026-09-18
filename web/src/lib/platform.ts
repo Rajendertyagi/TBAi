@@ -36,3 +36,21 @@ export async function windowClose(): Promise<void> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().close();
 }
+
+/**
+ * OS autostart state via the official Tauri autostart plugin. The OS
+ * registration is the single source of truth — nothing is cached in app
+ * config. The dynamic import (plus `vite-ignore`) keeps the browser bundle
+ * free of Tauri code; call only when `isTauri()` is true.
+ */
+export async function isAutostartEnabled(): Promise<boolean> {
+  const { isEnabled } = await import("@tauri-apps/plugin-autostart");
+  return isEnabled();
+}
+
+/** Enables or disables OS autostart. Throws when the OS call fails. */
+export async function setAutostartEnabled(on: boolean): Promise<void> {
+  const { enable, disable } = await import("@tauri-apps/plugin-autostart");
+  if (on) await enable();
+  else await disable();
+}

@@ -9,7 +9,7 @@ import {
   ThreadListPrimitive,
   useAuiState,
 } from "@assistant-ui/react";
-import { FolderOpenDot, SquarePen } from "lucide-react";
+import { FolderOpenDot, MessageSquarePlus, SquarePen } from "lucide-react";
 import { sidebarConfig, type SidebarSectionId } from "../config/sidebar";
 import { historyConfig } from "../config/history";
 import { dateGroupLabel } from "../lib/sidebar-sections";
@@ -23,13 +23,17 @@ import {
   SidebarThreadRow,
 } from "../features/sidebar/components/SidebarThreadRow";
 import { FoldersSection } from "../features/sidebar/components/FoldersSection";
+import { NewProjectChatDialog } from "./NewProjectChatDialog";
 import { WorkspaceFolderDialog } from "../features/folders/WorkspaceFolderDialog";
+import { threadUrl } from "../features/chat/state/chatTabs";
 
 interface RowData {
   remoteId: string;
   title?: string;
   status?: string;
   lastMessageAt?: Date;
+  /** Engine for route selection (chat vs code surface). Null = legacy Direct. */
+  engine?: string | null;
 }
 
 /**
@@ -44,11 +48,17 @@ export function Sidebar() {
   const copy = sidebarConfig.copy;
   const navigate = useNavigate();
   const [addFolderOpen, setAddFolderOpen] = useState(false);
+  // "New Project Chat" dialog (folder picker + engine switch). Trigger lives
+  // in the Folders section header actions, next to "Open folder" — the dialog
+  // existed unwired since its creation, which locked folder chats to Direct.
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
   // Thread switching itself is done by the row trigger; this only moves the
-  // URL (ChatView opens the matching tab, the runtime switches threads,
-  // onThreadIdChange confirms the tab store).
+  // URL (ChatView/OpenCodeView opens the matching tab, the runtime switches
+  // threads, onThreadIdChange confirms the tab store). The route follows the
+  // conversation engine so Code threads open on the Code surface.
   const openThread = useCallback(
-    (remoteId: string) => navigate(`/chat/${remoteId}`),
+    (remoteId: string, engine?: string | null) =>
+      navigate(threadUrl(remoteId, engine)),
     [navigate],
   );
   useThreadListQuerySync();
@@ -102,6 +112,7 @@ export function Sidebar() {
       </div>
 
       <WorkspaceFolderDialog open={addFolderOpen} onOpenChange={setAddFolderOpen} />
+      <NewProjectChatDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} />
 
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
         <ThreadListPrimitive.Root className="flex flex-col gap-2">
@@ -129,15 +140,26 @@ export function Sidebar() {
                 onExpandedChange={setExpanded}
                 actions={
                   id === "folders" ? (
-                    <button
-                      type="button"
-                      onClick={() => setAddFolderOpen(true)}
-                      title="Open folder"
-                      aria-label="Open folder"
-                      className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                    >
-                      <FolderOpenDot className="size-3.5" />
-                    </button>
+                    <div className="flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => setNewProjectOpen(true)}
+                        title={copy.newProjectChat}
+                        aria-label={copy.newProjectChat}
+                        className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                      >
+                        <MessageSquarePlus className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAddFolderOpen(true)}
+                        title="Open folder"
+                        aria-label="Open folder"
+                        className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                      >
+                        <FolderOpenDot className="size-3.5" />
+                      </button>
+                    </div>
                   ) : undefined
                 }
               >
@@ -201,6 +223,7 @@ function toRowData(value: {
   title?: string;
   status?: string;
   lastMessageAt?: Date;
+  custom?: { engine?: string | null };
 }): RowData | null {
   if (!value.remoteId) return null;
   return {
@@ -208,6 +231,7 @@ function toRowData(value: {
     title: value.title,
     status: value.status,
     lastMessageAt: value.lastMessageAt,
+    engine: value.custom?.engine ?? null,
   };
 }
 
@@ -221,7 +245,7 @@ function ChatsItems({
 }: {
   search: string;
   showCompleted: boolean;
-  onOpenThread: (remoteId: string) => void;
+  onOpenThread: (remoteId: string, engine?: string | null) => void;
   onOpenArchive: () => void;
   onClearSearch: () => void;
 }) {
@@ -366,7 +390,7 @@ function RecentItems({
 }: {
   search: string;
   showCompleted: boolean;
-  onOpenThread: (remoteId: string) => void;
+  onOpenThread: (remoteId: string, engine?: string | null) => void;
 }) {
   const shownCount = useRef(0);
   shownCount.current = 0;
@@ -401,7 +425,7 @@ function RecentItems({
 function ArchivedItems({
   onOpenThread,
 }: {
-  onOpenThread: (remoteId: string) => void;
+  onOpenThread: (remoteId: string, engine?: string | null) => void;
 }) {
   return (
     <ThreadListPrimitive.Items archived>
@@ -410,6 +434,10 @@ function ArchivedItems({
           <SidebarArchivedRow
             key={threadListItem.remoteId}
             remoteId={threadListItem.remoteId}
+            engine={
+              (threadListItem.custom as { engine?: string | null } | undefined)
+                ?.engine ?? null
+            }
             onOpenThread={onOpenThread}
           />
         ) : null

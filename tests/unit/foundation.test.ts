@@ -48,7 +48,7 @@ describe("unified tab store", () => {
     const api = useChatTabsStore.getState();
     api.openChat(NEW_DRAFT_TAB_ID);
     expect(useChatTabsStore.getState().activeKey).toBe("chat:new");
-    useChatTabsStore.getState().attachRealId(NEW_DRAFT_TAB_ID, "real-1");
+    useChatTabsStore.getState().resolveDraftId("real-1", "direct");
     const s = useChatTabsStore.getState();
     expect(s.tabs).toEqual([{ key: "chat:real-1", kind: "chat", ref: "real-1" }]);
     expect(s.activeKey).toBe("chat:real-1");

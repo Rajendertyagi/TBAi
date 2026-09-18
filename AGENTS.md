@@ -46,6 +46,44 @@ lifting. Chat must remain provider-agnostic.
    unnecessary agent frameworks/abstractions. Add a dependency only with a clear
    reason, recorded in `docs/decisions.md`.
 
+## Dependency / context integrity (learned 2026-09-15)
+
+Before adding, upgrading, downgrading, pinning, or directly importing any
+library that provides React context, runtime state, or provider infrastructure:
+
+1. Inspect the existing dependency tree and installed versions.
+2. Determine which package owns the canonical provider/context.
+3. Prefer the public API exposed by the application's canonical top-level package.
+4. Do not directly import lower-level/internal packages when doing so can create
+   a second provider/context instance.
+5. Do not solve dependency/context conflicts with Vite dedupe, overrides,
+   aliases, or package churn unless the canonical package architecture
+   explicitly requires it.
+6. Never rely on undeclared transitive dependencies.
+7. After dependency changes, perform a clean install and inspect the resolved
+   dependency tree.
+8. Verify that context-bearing packages have a single effective instance for
+   the active application path.
+9. Test the error/loading/provider paths, not only the normal happy path,
+   because duplicate-context bugs may remain hidden until a conditional
+   component mounts.
+10. Keep isolated feature adapters (e.g. OpenCode) from consuming the main
+    application's context unless explicitly designed to share it.
+
+### Mandatory acceptance rule
+
+A dependency change is not complete merely because typecheck/build passes. It
+must also prove: correct provider/context identity; clean install; no
+unintended duplicate context instances; existing runtime/error paths still
+work. When uncertain, STOP and audit first rather than repeatedly
+adding/removing dependencies.
+
+### Train freeze (2026-09-15)
+
+The assistant-ui dependency train is frozen. No `@assistant-ui/*`
+upgrade, downgrade, replacement, or independent re-resolution without an
+explicit compatibility review and approval.
+
 ## Architecture boundaries
 
 - `web/src/runtime.ts` — only place that wires the chat transport to `/api/chat`
@@ -92,6 +130,24 @@ lifting. Chat must remain provider-agnostic.
   feature code, never log secrets/tokens/message text. Every request carries a
   `requestId` (AsyncLocalStorage) — include it when adding new boundaries.
   `AI_DEBUG_REQUESTS=true` enables sanitized outbound-request diagnostics.
+- OpenCode isolation boundary (adapter/service, never inline):
+  `src/services/opencode/` is the ONLY backend code that talks to the managed
+  `opencode serve` process or the `@opencode-ai/sdk` — process ownership in
+  `serverManager.ts`, session lifecycle in `session.ts`. The rest of the
+  backend (chat route, workspace, tools, scheduler) never imports the SDK;
+  the OpenCode module receives `conversationId` + the already-resolved dir
+  via existing entry points (`resolveConversationWorkspace`).
+  `web/src/features/opencode/` is the ONLY frontend code that imports
+  `@assistant-ui/react-opencode` (runtime, session/question/permission hooks,
+  status). `ChatWindow.tsx`, the chat runtime, and all other UI never import
+  the adapter — Code mode composes through the shared `mode="agent"` prop.
+  New OpenCode capability (permissions, questions, models, agents) → new
+  module under the owning `opencode/` dir, called through a small named
+  function — never inline OpenCode logic in TBAi core files.
+- `web/src/config/tools.ts` — single source of truth for TBAi-owned tool UI copy
+  (running labels, empty states, summary notices, decisions). Individual tool
+  renderers import copy from this module; vendored assistant-ui elements retain
+  their upstream copy.
 
 ## Testing before "done"
 
@@ -109,36 +165,120 @@ Maintain `docs/`: `architecture.md`, `development-rules.md`, `ai-integration.md`
 Propose in `docs/decisions.md` with the reason and alternatives considered. Keep the
 project small; prefer removing unused code/dependencies over adding new ones.
 
-
-## Durable forward architecture
-
-The governing forward architecture is documented in `docs/architectural-principles.md`.
-Read it before making architectural changes.
-
-Core rule:
-
-> **TBAi owns orchestration and policy, not infrastructure already solved by assistant-ui,
-> AI SDK, OpenCode, MCP, or ICM.**
-
-Use these boundaries:
-
-- **assistant-ui** → chat UI/runtime primitives and rendering contracts.
-- **AI SDK v7** → Direct model execution and streaming.
-- **OpenCode** → coding-agent execution and OpenCode protocol, behind the OpenCode adapter.
-- **MCP** → external tool/service protocol through the official MCP implementation.
-- **ICM** → durable shared memory, accessed by TBAi through a `MemoryService` adapter.
-- **TBAi SQLite** → authoritative application state; do not merge it with ICM's memory DB.
-
-UI/tool rendering is library-first: normalize runtime data, then prefer official assistant-ui
-elements. Add a TBAi-specific renderer only for a demonstrated capability gap. Do not build a
-second generic tool-card framework around assistant-ui.
-
-Questions and permissions are separate contracts. Questions use a provider-agnostic form and
-produce `answers[][]`; permissions use the approval lifecycle. Never model questions as
-permission/approval cards.
-
-Keep provider-specific and vendor-specific protocol details behind adapters. Prefer deleting
-custom implementations when upstream capability becomes sufficient rather than preserving
-custom architecture for compatibility with the old design.
-
 Full contract: `docs/architectural-principles.md`.
+
+## Engineering standards — non-negotiable, every file touched, new or existing
+
+### 1. No hardcoding
+
+- Magic numbers, strings, URLs, paths, colors, timeouts, feature flags:
+  none of them inline. Centralize into typed config/constants modules.
+- Every repeated value gets a named constant or config entry the first
+  time it appears a second time.
+- If two places need the same value, that value lives in exactly one
+  place and both import it.
+
+### 2. Modular & layered
+
+- Small, single-responsibility modules. No god-files, no 500-line components.
+- Clear dependency direction: UI → store → service → data. No
+  circular imports. No reaching across layers.
+- Public API of each module is minimal. Internal helpers stay private
+  (non-exported) unless genuinely reusable across modules.
+- When you add a new feature, you add a new module. You do NOT
+  append 200 lines to an existing "utils" or "index" file.
+
+### 3. Standard practices
+
+- Named exports over default (except components where the convention differs).
+- Types are explicit at module boundaries. No `any`, no `as unknown as X`
+  casts to silence the compiler.
+- Error handling: catch at the boundary, surface a typed result or
+  throw a domain error. No silent `catch {}` swallows.
+- Tests: every new public function gets at least one happy-path +
+  one edge-case test. Tests describe behavior, not implementation detail.
+- Naming: descriptive, intent-revealing. `isEligible` not `flag2`.
+  `getUserBy(id)` not `fn()`.
+
+### 4. No hacks, no workarounds
+
+- If you find yourself writing `// TODO: fix properly`, stop and
+  fix it properly now.
+- No `setTimeout` to "fix" a timing bug — fix the actual race.
+- No `!important` to override a CSS layering mistake.
+- No duplicating a function because "the other one almost did what
+  I need" — refactor the shared primitive.
+- No commenting out code to make tests pass. Delete it or fix the test.
+- If a library does something "by accident" that you rely on,
+  that's a bug waiting to happen. Pin the behavior explicitly or
+  wrap it in your own module with tests.
+
+### 5. Durable by default
+
+- Code you write today should be readable by a new developer in 6
+  months without asking you.
+- Prefer boring, well-understood patterns over clever ones.
+- If a solution requires 3+ lines of comment to explain WHY, the
+  design is probably wrong — redesign instead.
+- Every public function has a one-line doc comment: what it does,
+  what it returns, what it throws.
+- Configuration is externalized: env vars or a config file, not
+  scattered `if` checks in component code.
+
+### 6. Before you submit any change
+
+- `git diff` — read it like you've never seen it before. Would a
+  stranger understand it in one pass?
+- If the diff adds more "fix this later" notes than it removes, it's not done.
+- Run the full test suite. Report the actual numbers, not "should be fine."
+
+### Definition of DONE (binding on every agent + the planner)
+
+A phase is complete only when ALL hold:
+1. Planner disk-review ACCEPTED (adapter shapes, route order, boundary
+   greps for SDK/adapter leakage, no stale references).
+2. `bun run typecheck` (backend + web) exit 0 AND `bun run build` exit 0,
+   independently re-run — agent-reported green is not sufficient.
+3. Test-agent suite numbers recorded (suite + case counts, actual numbers).
+No commit/push until the end-to-end verification passes. Anything marked
+complete without all three is in-progress with a named owner.
+
+### Output when you're done with a task
+
+- What you changed (files + one-line per file)
+- What tests cover it (test file + case names)
+- What you deliberately did NOT touch, and why
+- Any assumption you made that I should confirm
+
+### UI changes — extend surfaces, prove flows (learned 2026-09-15)
+
+P1 built a new dialog that bypassed the existing welcome surface instead of
+extending it. Never again:
+- Every UI pack names the EXACT surface/component to extend. Creating a new
+  dialog, page, route, or entry flow requires explicit maintainer approval —
+  default is extend, never duplicate.
+- Every UI report walks the user-visible flow step by step (entry → surface →
+  creation → resulting route): what the user clicks, what renders, what gets
+  created and when. Typecheck + build green is necessary but never sufficient
+  for UI work.
+- When mimicking a reference implementation (e.g. CodeG), the pack cites the
+  exact file/lines embodying the pattern, and the planner verifies them on
+  disk BEFORE the pack is issued — never from memory.
+- Creation timing is a design decision, not an implementation detail: the
+  pack states whether the conversation/row is created up-front or at first
+  send, and the report confirms the flow matches.
+- Behavior first, files second: the maintainer is not a coder. Every UI pack
+  and every UI review leads with what the user clicks and sees, step by
+  step, anchored to the reference app ("same as CodeG's new-chat tab, except
+  an Engine row on top") — file lists come last. If it can't be described as
+  visible behavior, it isn't specified clearly enough.
+
+## Agent division of labor (applies alongside the standards above)
+
+- The **coding agent** implements features following all sections above,
+  EXCEPT it does not author test files and does not run test suites.
+- A **separate test agent** owns tests: it adds the happy-path + edge-case
+  tests per §3 and runs the full suite per §6, reporting actual numbers.
+- The coding agent's "done" report still uses the Output format above, with
+  the tests section stating "handed to test agent" where applicable, and its
+  verification is `bun run typecheck` → `bun run build` with actual output.

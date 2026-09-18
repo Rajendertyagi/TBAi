@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { createRemoteThreadListAdapter } from "./remoteThreadListAdapter";
 import { useWelcomeScopeStore } from "../features/chat/state/welcomeScope";
+import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
 
 const realFetch = globalThis.fetch;
 
@@ -34,11 +35,13 @@ function failure(status: number, error: string): Response {
 describe("adapter initialize() failure contract", () => {
   beforeEach(() => {
     useWelcomeScopeStore.getState().setScope({ mode: "simple", folderId: null });
+    useWelcomeEngineStore.setState({ engine: "direct", agent: "", model: "" });
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
   });
+
 
   it("resolves remoteId on success", async () => {
     stubFetch(() => ({ id: "c1" }));
@@ -83,6 +86,81 @@ describe("adapter initialize() failure contract", () => {
       thrown = e;
     }
     expect(thrown).toBeInstanceOf(Error);
+  });
+});
+
+describe("adapter initialize() — welcome-engine snapshot pass-through", () => {
+  beforeEach(() => {
+    useWelcomeScopeStore.getState().setScope({ mode: "simple", folderId: null });
+    useWelcomeEngineStore.setState({ engine: "direct", agent: "", model: "" });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("sends the engine + opencode agent/model from the draft store on create", async () => {
+    useWelcomeEngineStore.setState({
+      engine: "opencode",
+      agent: "coder",
+      model: "openai/gpt-4o",
+    });
+    const captured: { body?: unknown } = {};
+    // Capture the POST body: wrap fetch to record it.
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith("/api/conversations") && init?.method === "POST") {
+        captured.body = JSON.parse(String(init.body));
+      }
+      return { ok: true, status: 200, json: async () => ({ id: "c-engine" }) } as Response;
+    }) as typeof fetch;
+
+    const adapter = createRemoteThreadListAdapter();
+    const result = await adapter.initialize("__LOCALID_engine");
+
+    expect(result).toEqual({ remoteId: "c-engine" });
+    const posted = captured.body as {
+      engine: string;
+      opencodeAgent: string | null;
+      opencodeModel: string | null;
+    };
+    expect(posted.engine).toBe("opencode");
+    expect(posted.opencodeAgent).toBe("coder");
+    expect(posted.opencodeModel).toBe("openai/gpt-4o");
+
+    globalThis.fetch = origFetch;
+  });
+
+  it("drops agent/model when the engine is Direct (no OpenCode fields on a Direct create)", async () => {
+    // Edge: a stale opencode pick must not leak when the draft is Direct.
+    useWelcomeEngineStore.setState({
+      engine: "direct",
+      agent: "",
+      model: "",
+    });
+    const captured: { body?: unknown } = {};
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith("/api/conversations") && init?.method === "POST") {
+        captured.body = JSON.parse(String(init.body));
+      }
+      return { ok: true, status: 200, json: async () => ({ id: "c-direct" }) } as Response;
+    }) as typeof fetch;
+
+    const adapter = createRemoteThreadListAdapter();
+    const result = await adapter.initialize("__LOCALID_direct");
+
+    expect(result).toEqual({ remoteId: "c-direct" });
+    const posted = captured.body as {
+      engine: string;
+      opencodeAgent: unknown;
+      opencodeModel: unknown;
+    };
+    expect(posted.engine).toBe("direct");
+    expect(posted.opencodeAgent).toBeNull();
+    expect(posted.opencodeModel).toBeNull();
+
+    globalThis.fetch = origFetch;
   });
 });
 

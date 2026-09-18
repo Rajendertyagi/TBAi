@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { logger, newRequestId, normalizeError } from "../lib/logger";
 import { generateId } from "../lib/utils";
 import { getModel } from "../services/ai";
+import { buildReasoningProviderOptions } from "./chat-provider-options";
 import { credentialStore } from "../services/credentials";
 import { redact, sanitizeStreamError } from "../lib/redact";
 import { classifyError } from "../lib/errors";
@@ -19,6 +20,7 @@ import { chatRequestSchema } from "../lib/validation";
 import { resolveChatModel } from "./chat-model";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
+import { conversationService } from "../services/storage";
 import { resolveConversationWorkspace, WorkspaceError } from "../services/workspace";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
@@ -68,6 +70,27 @@ app.post("/api/chat", async (c) => {
     modelConfig = { ...modelConfig, model: effectiveModel };
   }
 
+  // Row-authoritative engine guard: a persisted OpenCode row must never be
+  // served as Direct (the Code surface owns it). Rejected before run
+  // creation so no run record is minted for a refused request. Missing rows
+  // and ad-hoc (rowless) sends fall through to the existing workspace path
+  // unchanged. Code "ENGINE_MISMATCH" is canonical in EngineMismatchError
+  // (services/opencode/sessions.ts) — cited here, not redefined, to respect
+  // the OpenCode isolation boundary.
+  if (threadId) {
+    const conversation = await conversationService.get(threadId);
+    if (conversation?.engine === "opencode") {
+      return c.json(
+        {
+          error: `Conversation ${threadId} uses the OpenCode engine; open it on the Code surface instead of /api/chat.`,
+          code: "ENGINE_MISMATCH",
+          requestId,
+        },
+        422,
+      );
+    }
+  }
+
   // Server-owned run: the registry (not the HTTP connection) owns this run's
   // lifetime. Client disconnect detaches; only explicit cancel, wall timeout,
   // or terminal completion changes run state. See services/chat-runs.ts.
@@ -80,22 +103,14 @@ app.post("/api/chat", async (c) => {
   const streamId = run.streamId;
 
   const languageModel = getModel(modelConfig);
-  const isLite = /lite|nano/i.test(modelConfig.model || "");
   const reasoning = effectiveReasoning ?? provider.thinking ?? "off";
-
-  const providerOptions: Record<string, any> = {};
-  if (!isLite && reasoning !== "off") {
-    if (provider.type === "google") {
-      const budget = { low: 1024, medium: 4096, high: 8192 }[reasoning] ?? 4096;
-      providerOptions.google = { thinkingConfig: { thinkingBudget: budget } };
-    } else if (provider.type === "anthropic") {
-      const budget = { low: 1024, medium: 4096, high: 8192 }[reasoning] ?? 4096;
-      providerOptions.anthropic = { thinking: { type: "enabled", budgetTokens: budget } };
-    } else if (provider.type === "openai" || provider.type === "custom") {
-      const effort = { low: "low", medium: "medium", high: "high" }[reasoning] ?? "medium";
-      providerOptions.openai = { reasoningEffort: effort };
-    }
-  }
+  // Every provider quirk that decides whether reasoning is returned at all
+  // lives in that module — see it for why each option is shaped the way it is.
+  const providerOptions = buildReasoningProviderOptions(
+    provider,
+    modelConfig.model,
+    reasoning,
+  );
 
   // Setup failures after run creation must settle the record explicitly —
   // otherwise a run that never executed lingers as "running" until the sweep.

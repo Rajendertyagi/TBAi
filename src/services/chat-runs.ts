@@ -34,6 +34,8 @@ export interface ChatRunRecord {
   detachedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  /** Resolves when the record reaches a terminal status (settlement signal). */
+  settled: Promise<void>;
   requestId?: string;
   conversationId?: string;
   providerId?: string;
@@ -65,6 +67,10 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
   const maxRecords = opts.maxRecords ?? DEFAULT_MAX_RECORDS;
   const now = opts.now ?? Date.now;
   const records = new Map<string, ChatRunRecord>();
+  /** Per-record settlement resolvers, cleaned on settle and sweep. */
+  const settleResolvers = new Map<string, () => void>();
+  /** Set by abortAll(): create() then refuses new runs (shutdown gate). */
+  let shuttingDown = false;
 
   function clearTimer(rec: ChatRunRecord): void {
     if (rec.timeoutHandle !== undefined) {
@@ -80,6 +86,8 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
     clearTimer(rec);
     rec.status = status;
     rec.updatedAt = now();
+    settleResolvers.get(id)?.();
+    settleResolvers.delete(id);
     return true;
   }
 
@@ -88,6 +96,7 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
     for (const [id, rec] of records) {
       if (rec.status !== "running" && sweepNow - rec.updatedAt > recordTtlMs) {
         clearTimer(rec);
+        settleResolvers.delete(id);
         records.delete(id);
         pruned += 1;
       }
@@ -99,6 +108,7 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
         .sort((a, b) => a.updatedAt - b.updatedAt);
       for (const rec of terminal.slice(0, records.size - maxRecords)) {
         clearTimer(rec);
+        settleResolvers.delete(rec.streamId);
         records.delete(rec.streamId);
         pruned += 1;
       }
@@ -115,6 +125,26 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
       modelId?: string;
     }): ChatRunRecord {
       sweep();
+      if (shuttingDown) {
+        const rec: ChatRunRecord = {
+          streamId: generateId(),
+          status: "cancelled",
+          controller: new AbortController(),
+          timedOut: false,
+          detachedAt: null,
+          createdAt: now(),
+          updatedAt: now(),
+          settled: Promise.resolve(),
+          ...fields,
+        };
+        rec.controller.abort();
+        records.set(rec.streamId, rec);
+        return rec;
+      }
+      let resolveSettled: () => void = () => {};
+      const settled = new Promise<void>((resolve) => {
+        resolveSettled = resolve;
+      });
       const rec: ChatRunRecord = {
         streamId: generateId(),
         status: "running",
@@ -123,8 +153,10 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
         detachedAt: null,
         createdAt: now(),
         updatedAt: now(),
+        settled,
         ...fields,
       };
+      settleResolvers.set(rec.streamId, resolveSettled);
       rec.timeoutHandle = setTimeout(() => {
         if (rec.status !== "running") return;
         // Mark only: the abort below drives the single terminal transition
@@ -176,6 +208,40 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
 
     markCancelled(id: string): boolean {
       return settle(id, "cancelled");
+    },
+
+    /** Abort every running run's controller; returns how many were aborted. */
+    abortAll(): number {
+      shuttingDown = true;
+      let aborted = 0;
+      for (const rec of records.values()) {
+        if (rec.status !== "running") continue;
+        clearTimer(rec);
+        rec.timedOut = false;
+        rec.updatedAt = now();
+        try {
+          rec.controller.abort();
+          aborted += 1;
+        } catch {
+          /* abort is best-effort; onAbort still observes the terminal state */
+        }
+      }
+      return aborted;
+    },
+
+    /** Await in-flight runs' settlement, bounded; returns settled vs timed out. */
+    async awaitSettled(timeoutMs = 10_000): Promise<{ settled: number; timedOut: number }> {
+      const snapshot = [...records.values()].filter((r) => r.status === "running");
+      if (snapshot.length === 0) return { settled: 0, timedOut: 0 };
+      let boundTimer: ReturnType<typeof setTimeout> | undefined;
+      const bound = new Promise<void>((resolve) => {
+        boundTimer = setTimeout(resolve, timeoutMs);
+      });
+      // The bound must never keep the process alive on its own.
+      (boundTimer as unknown as { unref?: () => void }).unref?.();
+      await Promise.race([Promise.allSettled(snapshot.map((r) => r.settled)), bound]);
+      const stillRunning = snapshot.filter((r) => r.status === "running").length;
+      return { settled: snapshot.length - stillRunning, timedOut: stillRunning };
     },
 
     sweep,

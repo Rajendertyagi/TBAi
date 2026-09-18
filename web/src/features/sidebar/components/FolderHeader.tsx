@@ -43,7 +43,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { sidebarConfig } from "@/config/sidebar";
 import { useFoldersStore } from "@/stores/foldersStore";
-import { createConversation } from "@/adapters/remoteThreadListAdapter";
+import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
 import type { Folder } from "@/types";
 
 const ROW_CLASS =
@@ -85,13 +85,16 @@ export function FolderHeader({
 
   const label = folder.alias || folder.name;
 
-  const handleNewConversation = useCallback(async () => {
-    const { id } = await createConversation({
-      workspaceMode: "project",
-      workspaceFolderId: folder.id,
-      title: "New Chat",
-    });
-    navigate(`/chat/${id}`);
+  // New folder chat goes through the unified draft: the folder is preset as
+  // the draft scope and the user picks the engine (Direct/Code) in the one
+  // creation surface, so folder flows can mint either engine. No direct
+  // creation here — a second creation path is how folder chats got locked to
+  // Direct.
+  const handleNewConversation = useCallback(() => {
+    useWelcomeScopeStore
+      .getState()
+      .setScope({ mode: "project", folderId: folder.id });
+    navigate("/chat/new");
   }, [folder.id, navigate]);
 
   const handleOpenAlias = useCallback(() => {

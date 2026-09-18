@@ -47,6 +47,28 @@ const timers = new Map<string, TimerEntry>();
 /** In-flight run abort controllers, keyed by run id (cancel-run support). */
 const runControllers = new Map<string, AbortController>();
 
+/** Promises of in-flight scheduler executions, awaited at shutdown. */
+const pendingRuns = new Set<Promise<unknown>>();
+
+/** Set once shutdown begins: fire paths refuse new work. */
+let shuttingDown = false;
+
+/** Test seam: invoked after controllerForRun, before ensureJobConversation. */
+let setupDelayHook: (() => Promise<void>) | null = null;
+
+/**
+ * Track a fire-and-forget execution promise so shutdown can await its
+ * settlement (SQLite bookkeeping writes finish before the DB closes).
+ */
+function trackRun(p: Promise<unknown>): void {
+  pendingRuns.add(p);
+  void p
+    .finally(() => pendingRuns.delete(p))
+    .catch(() => {
+      /* fire paths log their own failures; never reject the tracker */
+    });
+}
+
 /**
  * Create and register an abort controller for a run. The controller is
  * removed when the run settles. Used by fire paths; cancelRun aborts it.
@@ -121,6 +143,15 @@ export async function fireJob(
   occurrenceId: string,
   database: Database = db,
 ): Promise<void> {
+  if (shuttingDown) {
+    logger.info("scheduler", "scheduler.run", {
+      outcome: "skipped",
+      jobId,
+      occurrenceId,
+      message: "Server is shutting down; fire ignored",
+    });
+    return;
+  }
   const job = schedulerStore.get(jobId, database);
   if (!job) {
     logger.warn("scheduler", "scheduler.run", {
@@ -158,6 +189,10 @@ export async function fireJob(
     });
     return;
   }
+  // Register the abort controller immediately after the claim so shutdown
+  // (abortAllRuns) can cancel a run even while it is still resolving its
+  // conversation. Released in the finally below once execution settles.
+  const signal = controllerForRun(run.id);
   // Resolve the conversation used for this execution and persist it on the run.
   // This captures the exact conversation at claim time, so later job edits
   // do not alter historical run records.
@@ -184,13 +219,7 @@ export async function fireJob(
     // manual id-passing below this line.
     result = await extendRequestContext(
       { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
-      () =>
-        executeJobRun(
-          job,
-          run,
-          resolvedConversationId ?? "",
-          controllerForRun(run.id),
-        ),
+      () => executeJobRun(job, run, resolvedConversationId ?? "", signal),
     );
   } finally {
     releaseRun(run.id);
@@ -238,7 +267,7 @@ function scheduleRecurring(job: SchedulerJob): void {
   const handle = Bun.cron(
     expression,
     () => {
-      void fireJob(jobId, slotOccurrenceId());
+      trackRun(fireJob(jobId, slotOccurrenceId()));
     },
     { tz: job.timezone },
   );
@@ -262,12 +291,12 @@ function scheduleOnce(job: SchedulerJob): void {
   const delay = job.execAt - Date.now();
   if (delay <= 0) {
     // Overdue at (re)schedule time → apply the missed-run policy now.
-    void handleOverdueOnce(job);
+    trackRun(handleOverdueOnce(job));
     return;
   }
   const jobId = job.id;
   const handle = setTimeout(() => {
-    void fireJob(jobId, onceOccurrenceId());
+    trackRun(fireJob(jobId, onceOccurrenceId()));
   }, delay);
   try {
     (handle as unknown as { unref?: () => void }).unref?.();
@@ -325,6 +354,10 @@ export async function handleOverdueOnce(
 
 /** (Re)schedule a single active job from its database state. */
 export function scheduleJob(job: SchedulerJob): void {
+  if (shuttingDown) {
+    clearTimer(job.id);
+    return;
+  }
   if (!job.enabled || job.status !== "active") {
     clearTimer(job.id);
     schedulerStore.update(job.id, { nextRunAt: null });
@@ -348,6 +381,7 @@ export function unscheduleJob(jobId: string): void {
 
 /** Manual "Run now": a fresh explicit occurrence, never colliding with schedule. */
 export async function runJobNow(jobId: string): Promise<{ runId: string } | { error: string }> {
+  if (shuttingDown) return { error: "Server is shutting down" };
   const job = schedulerStore.get(jobId);
   if (!job) return { error: "Job not found" };
   const occurrenceId = manualOccurrenceId();
@@ -367,14 +401,32 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
   }
   const run = schedulerStore.claimRun(job, occurrenceId, requestId);
   if (!run) return { error: "Occurrence already claimed" };
-  const conv = await ensureJobConversation(job);
-  schedulerStore.updateRun(run.id, { conversationId: conv.conversationId });
+  // Register the controller right after the claim so shutdown can cancel the
+  // run even while its conversation is still being resolved.
   const signal = controllerForRun(run.id);
-  void extendRequestContext(
-    { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
-    () => executeJobRun(job, run, conv.conversationId, signal),
-  ).finally(() => releaseRun(run.id));
-  return { runId: run.id };
+  // Two-phase tracking: the conversation-setup phase (DB writes) is tracked
+  // too, so shutdown awaits it before closing the database. Setup rejection
+  // still rethrows (route 500 preserved); { runId } still returns immediately.
+  const setup = (async () => {
+    await setupDelayHook?.();
+    const conv = await ensureJobConversation(job);
+    schedulerStore.updateRun(run.id, { conversationId: conv.conversationId });
+    return conv;
+  })();
+  trackRun(setup);
+  try {
+    const conv = await setup;
+    trackRun(
+      extendRequestContext(
+        { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
+        () => executeJobRun(job, run, conv.conversationId, signal),
+      ).finally(() => releaseRun(run.id)),
+    );
+    return { runId: run.id };
+  } catch (err) {
+    releaseRun(run.id);
+    throw err;
+  }
 }
 
 export interface RecoveryReport {
@@ -465,4 +517,47 @@ export function activeTimerCount(): number {
 /** For tests/shutdown: clear all cached timers without touching the DB. */
 export function clearAllTimers(): void {
   for (const jobId of [...timers.keys()]) clearTimer(jobId);
+}
+
+/**
+ * Begin scheduler shutdown: refuse new work and clear all timers. Idempotent.
+ * Called first in the shutdown spine so no new fire/schedule can start.
+ */
+export function beginSchedulerShutdown(): void {
+  shuttingDown = true;
+  clearAllTimers();
+}
+
+/** Test seam: clear the shutdown gate (module state only, never the DB). */
+export function resetSchedulerShutdown(): void {
+  shuttingDown = false;
+}
+
+/** Test seam: delay the runJobNow conversation-setup phase deterministically. */
+export function setSetupDelayHook(hook: (() => Promise<void>) | null): void {
+  setupDelayHook = hook;
+}
+
+/**
+ * Abort every in-flight scheduler run and await their settlement, bounded by
+ * timeoutMs. Sets the shutdown gate. Returns how many controllers were
+ * aborted, how many tracked runs settled, and how many were still pending when
+ * the bound expired. Used at shutdown so the SQLite database is only closed
+ * after run bookkeeping is written.
+ */
+export async function abortAllRuns(
+  timeoutMs = 10_000,
+): Promise<{ aborted: number; settled: number; timedOut: number }> {
+  shuttingDown = true;
+  const snapshot = [...pendingRuns];
+  const controllers = [...runControllers.values()];
+  for (const controller of controllers) controller.abort();
+  const bound = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
+  await Promise.race([Promise.allSettled(snapshot), bound]);
+  const stillPending = snapshot.filter((p) => pendingRuns.has(p)).length;
+  return {
+    aborted: controllers.length,
+    settled: snapshot.length - stillPending,
+    timedOut: stillPending,
+  };
 }

@@ -4,6 +4,12 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    // Matches web/tsconfig: declaration files (node_modules) are the
+    // packages' contract, not our source. A dependency minor bump otherwise
+    // breaks the build on third-party .d.ts drift in code paths we never
+    // import (e.g. assistant-ui cloud adapters). Our own source stays fully
+    // checked.
+    "skipLibCheck": true,
     "types": ["bun"],
     "baseUrl": ".",
     "paths": {

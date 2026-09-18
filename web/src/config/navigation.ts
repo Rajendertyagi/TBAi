@@ -149,7 +149,7 @@ export const appConfig: AppConfig = {
       description: "Window layout and desktop options",
       visible: true,
       railVisible: false,
-      order: 5,
+      order: 6,
     },
     {
       id: "memories",
@@ -160,7 +160,7 @@ export const appConfig: AppConfig = {
       description: "Long-term memories",
       visible: true,
       railVisible: false,
-      order: 6,
+      order: 7,
     },
     {
       id: "quick-messages",
@@ -171,7 +171,7 @@ export const appConfig: AppConfig = {
       description: "Reusable composer snippets",
       visible: true,
       railVisible: false,
-      order: 7,
+      order: 8,
     },
     {
       id: "search",
@@ -180,7 +180,7 @@ export const appConfig: AppConfig = {
       view: "search",
       route: "/memory",
       visible: features.search,
-      order: 7,
+      order: 8,
     },
     {
       id: "mcp",
@@ -191,7 +191,7 @@ export const appConfig: AppConfig = {
       description: "External model tools",
       visible: true,
       railVisible: false,
-      order: 8,
+      order: 9,
     },
     {
       id: "scheduler",
@@ -201,7 +201,7 @@ export const appConfig: AppConfig = {
       route: "/scheduler",
       description: "Automated scheduled runs",
       visible: true,
-      order: 9,
+      order: 10,
     },
     {
       id: "logs",
@@ -212,7 +212,7 @@ export const appConfig: AppConfig = {
       description: "Application logs",
       visible: true,
       railVisible: false,
-      order: 10,
+      order: 11,
     },
     {
       id: "settings",
@@ -222,7 +222,7 @@ export const appConfig: AppConfig = {
       route: SETTINGS_INDEX_ROUTE,
       description: "All settings in one place",
       visible: true,
-      order: 11,
+      order: 12,
     },
   ],
 };

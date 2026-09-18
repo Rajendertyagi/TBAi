@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { registry } from "../config/providers";
 import { conversationService, messageService } from "../services/storage";
+import { terminateOpenCodeSession } from "../services/opencode/sessions";
+import { logger, normalizeError } from "../lib/logger";
 import { conversationCreateSchema, conversationUpdateSchema, messageUpsertSchema } from "../lib/validation";
 import { folderService } from "../services/folders";
 import { storageError } from "./shared";
@@ -45,6 +47,10 @@ app.post("/api/conversations", async (c) => {
       systemPrompt: parsed.systemPrompt,
       workspaceMode: parsed.workspaceMode ?? "simple",
       workspaceFolderId: parsed.workspaceFolderId ?? null,
+      engine: parsed.engine ?? "direct",
+      opencodeAgent: parsed.opencodeAgent ?? null,
+      opencodeModel: parsed.opencodeModel ?? null,
+      opencodeVariant: parsed.opencodeVariant ?? null,
     });
 
     return c.json(conversation);
@@ -164,6 +170,20 @@ app.delete("/api/conversations/:id", async (c) => {
     // clean up the hidden chat folder afterward.
     const conv = await conversationService.get(id);
     const folderId = conv?.workspaceFolderId ?? null;
+    // Phase 6: terminate the bound OpenCode session BEFORE the deletes —
+    // terminate reads the conversation row for the session id, and only
+    // opencode-engine conversations own a session. Best-effort: a failed
+    // cleanup is logged and never blocks conversation teardown.
+    if (conv?.engine === "opencode") {
+      try {
+        await terminateOpenCodeSession(id);
+      } catch (err) {
+        logger.warn("opencode", "conversation_delete_terminate_failed", {
+          conversationId: id,
+          ...normalizeError(err),
+        });
+      }
+    }
     await messageService.deleteByConversation(id);
     await conversationService.delete(id);
     // Cleanup hidden chat folder if no other conversations reference it.

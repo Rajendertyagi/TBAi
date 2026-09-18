@@ -2,6 +2,8 @@ import { Monitor, PanelLeft, PanelBottom } from "lucide-react";
 import { SettingsPage, SettingsSection, SettingRow } from "../../components/shared/settings";
 import { Switch } from "../../components/ui/switch";
 import { useDesktopLayout } from "./state/desktopLayout";
+import { StartupSection } from "./StartupSection";
+import { ServerSection } from "./ServerSection";
 
 /**
  * Desktop settings page (mounted under the Settings area). Lets the user toggle
@@ -49,6 +51,8 @@ export function DesktopSettings() {
           }
         />
       </SettingsSection>
+      <StartupSection />
+      <ServerSection />
     </SettingsPage>
   );
 }

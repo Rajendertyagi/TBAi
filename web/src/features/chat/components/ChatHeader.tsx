@@ -5,6 +5,7 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
+  Code2,
   Copy,
   EllipsisVertical,
   Pencil,
@@ -13,7 +14,10 @@ import {
 } from "lucide-react";
 import { chatHeaderConfig } from "@/config/sidebar";
 import { historyConfig } from "@/config/history";
+import { logger } from "@/lib/logger";
+import { useDeleteConversation } from "@/features/chat/state/deleteConversation";
 import { NEW_DRAFT_TAB_ID } from "@/features/chat/state/chatTabs";
+import { updateConversation } from "@/adapters/remoteThreadListAdapter";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,6 +60,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
   const copy = chatHeaderConfig.copy;
   const navigate = useNavigate();
   const aui = useAui();
+  const removeConversation = useDeleteConversation();
   const isDraft = threadId === NEW_DRAFT_TAB_ID;
 
   const [rootName, setRootName] = useState(copy.workspaceFallback);
@@ -126,6 +131,10 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     id: string;
     title: string;
   } | null>(null);
+  // Mutation failure text (server/adapter message, never invented copy).
+  // Shown inside the open dialog; the runtime rolls the optimistic change
+  // back, so the dialog must stay open instead of hanging silently.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const resolveStoreId = (): string | null => {
     const items = aui.threads.getState().threadItems;
@@ -141,6 +150,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     const id = resolveStoreId();
     if (!id) return;
     setRenameValue(title);
+    setActionError(null);
     setRenameTarget({ id, title });
   };
 
@@ -148,7 +158,16 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     if (!renameTarget) return;
     const next = renameValue.trim();
     if (next && next !== renameTarget.title) {
-      await aui.threads.item({ id: renameTarget.id }).rename(next);
+      try {
+        await aui.threads.item({ id: renameTarget.id }).rename(next);
+      } catch (err) {
+        logger.debug("chat", "rename_failed", {
+          threadId,
+          errorType: err instanceof Error ? err.name : typeof err,
+        });
+        setActionError(err instanceof Error ? err.message : "Rename failed");
+        return;
+      }
     }
     setRenameTarget(null);
   };
@@ -157,23 +176,64 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     const id = resolveStoreId();
     if (!id) return;
     const item = aui.threads.item({ id });
-    if (status === "archived") void item.unarchive();
-    else void item.archive();
+    // Fire-and-forget against the throwing adapter: log centrally instead of
+    // surfacing unhandled rejections; the row stays truthful via rollback.
+    const done =
+      status === "archived" ? item.unarchive() : item.archive();
+    void Promise.resolve(done).catch((err: unknown) => {
+      logger.debug("chat", "archive_toggle_failed", {
+        threadId,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+    });
   };
 
   const handleCopyId = () => {
     void navigator.clipboard?.writeText(threadId);
   };
 
+  // Open this conversation's workspace in Code mode (managed OpenCode agent).
+  // Surfaced per-conversation rather than as a rail icon so the single-gear
+  // rail rule (chat + scheduler + gear) stays intact. Row-authoritative: the
+  // engine column is persisted FIRST and navigation follows only on success,
+  // so the /code route never disagrees with the row. A failed write keeps the
+  // user on the truthful Direct surface and logs centrally.
+  const handleOpenInCode = async () => {
+    if (isDraft) return;
+    try {
+      await updateConversation(threadId, { engine: "opencode" });
+    } catch (err) {
+      logger.debug("chat", "open_in_code_failed", {
+        threadId,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+      return;
+    }
+    navigate(`/code/${threadId}`);
+  };
+
   const handleDeleteOpen = () => {
     const id = resolveStoreId();
     if (!id) return;
+    setActionError(null);
     setDeleteTarget({ id, title });
   };
 
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
-    await aui.threads.item({ id: deleteTarget.id }).delete();
+    // Full deletion lifecycle (server → runtime → tabs → route via
+    // TabUrlSync). Failures stay in this dialog; nothing is removed when the
+    // server refuses.
+    try {
+      await removeConversation(threadId);
+    } catch (err) {
+      logger.debug("chat", "delete_failed", {
+        threadId,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+      setActionError(err instanceof Error ? err.message : "Delete failed");
+      return;
+    }
     setDeleteTarget(null);
   };
 
@@ -241,6 +301,12 @@ export function ChatHeader({ threadId }: { threadId: string }) {
                 {copy.copyId}
               </DropdownMenuItem>
             )}
+            {!isDraft && (
+              <DropdownMenuItem onSelect={() => void handleOpenInCode()}>
+                <Code2 className="size-4" />
+                {copy.openInCode}
+              </DropdownMenuItem>
+            )}
             {historyConfig.deleteEnabled && (
               <>
                 <DropdownMenuSeparator />
@@ -277,6 +343,11 @@ export function ChatHeader({ threadId }: { threadId: string }) {
             autoFocus
             aria-label={copy.renameTitle}
           />
+          {actionError && renameTarget && (
+            <p role="alert" className="text-xs text-destructive">
+              {actionError}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenameTarget(null)}>
               {copy.cancel}
@@ -300,6 +371,11 @@ export function ChatHeader({ threadId }: { threadId: string }) {
             <AlertDialogDescription>
               {copy.deleteDescription(deleteTarget?.title ?? "")}
             </AlertDialogDescription>
+            {actionError && deleteTarget && (
+              <p role="alert" className="text-xs text-destructive">
+                {actionError}
+              </p>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>

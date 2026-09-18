@@ -13,6 +13,14 @@ const sqlite = new Database(DB_PATH);
 // Enable WAL mode for better concurrency
 sqlite.run("PRAGMA journal_mode=WAL");
 
+// Phase 5: brief busy-wait so a contended lock retries internally instead of
+// throwing SQLITE_BUSY immediately. Defensive only — the single synchronous
+// bun:sqlite connection cannot self-contend; this covers a second process
+// (inspector/script) touching the same file. Not a shutdown mechanism:
+// ordered settlement (Phase 3) is what keeps writes ahead of db.close().
+const SQLITE_BUSY_TIMEOUT_MS = 5000;
+sqlite.run(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
+
 // Create tables
 sqlite.run(`
   CREATE TABLE IF NOT EXISTS provider_configs (
@@ -218,6 +226,19 @@ addColumnIfNotExists("conversations", "reasoning_level", "TEXT");
 // resolved server-side. Legacy conversations default to 'simple'.
 addColumnIfNotExists("conversations", "workspace_mode", "TEXT NOT NULL DEFAULT 'simple'");
 addColumnIfNotExists("conversations", "workspace_folder_id", "TEXT");
+// OpenCode agent mode: the OpenCode session id bound to this conversation.
+// Kept separate from normal chat messages; TBAi owns the conversation, OpenCode
+// owns its session/events. Null until Code mode is first opened.
+addColumnIfNotExists("conversations", "opencode_session_id", "TEXT");
+// Engine selection (Direct chat vs OpenCode agent mode) and the OpenCode
+// agent/model chosen at creation. Nullable: legacy conversations are Direct and
+// carry no OpenCode selection.
+addColumnIfNotExists("conversations", "engine", "TEXT");
+addColumnIfNotExists("conversations", "opencode_agent", "TEXT");
+addColumnIfNotExists("conversations", "opencode_model", "TEXT");
+// OpenCode thinking level (model variant) chosen at creation, e.g. "low"/"high".
+// Null = Default (omit the variant field on prompt_async).
+addColumnIfNotExists("conversations", "opencode_variant", "TEXT");
 
 // The original messages table had `role TEXT NOT NULL` and stored a plain-text
 // content format incompatible with the assistant-ui storage format we now

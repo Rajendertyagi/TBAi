@@ -3,6 +3,7 @@ import type {
   ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { BackendToolView, Json } from "../filesystem/ui";
+import { toolsConfig } from "@/config/tools";
 
 type SchedulerArgs = {
   action: string;
@@ -32,7 +33,7 @@ export const SchedulerToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
       status={p.status}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
-      runningLabel="Working…"
+      runningLabel={toolsConfig.copy.running.working}
       summarize={(r) => <Json value={r} />}
     />
   );

@@ -15,7 +15,6 @@ export type JobStatus =
   | "paused"
   | "completed"
   | "missed"
-  | "expired"
   | "failed"
   | "cancelled"
   | "deleted";
@@ -77,13 +76,9 @@ export interface SchedulerRun {
   createdAt: number;
 }
 
-/** A claimed-but-unfinished run left behind by a previous process. */
-export const INTERRUPTED_FROM: RunStatus[] = ["running", "scheduled"];
-
 export const TERMINAL_JOB_STATUSES: JobStatus[] = [
   "completed",
   "missed",
-  "expired",
   "cancelled",
   "deleted",
 ];

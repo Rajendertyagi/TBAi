@@ -26,7 +26,6 @@ export function ChromeShortcuts() {
 
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
-        store.openChat("new");
         navigate("/chat/new");
       } else if (e.key === "w" || e.key === "W") {
         e.preventDefault();

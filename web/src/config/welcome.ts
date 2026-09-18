@@ -78,6 +78,17 @@ export interface WelcomeConfig {
     noFolders: string;
     chatModeLabel: string;
     folderRemoved: string;
+    engineLabel: string;
+    agentLabel: string;
+    modelLabel: string;
+    loadingCapabilities: string;
+    capabilitiesError: string;
+    selectAgent: string;
+    selectModel: string;
+    engineDirect: string;
+    engineOpenCode: string;
+    agentHint: string;
+    modelHint: string;
     withoutFolderTitle: string;
     withoutFolderDescription: string;
     projectFolderTitle: string;
@@ -130,6 +141,17 @@ export const welcomeConfig: WelcomeConfig = {
     noFolders: "No folders",
     chatModeLabel: "Chat mode",
     folderRemoved: "Project (folder removed)",
+    engineLabel: "Engine",
+    agentLabel: "Agent",
+    modelLabel: "Model",
+    loadingCapabilities: "Loading OpenCode agents and models…",
+    capabilitiesError: "Could not load OpenCode capabilities",
+    selectAgent: "Select an agent",
+    selectModel: "Select a model",
+    engineDirect: "Direct",
+    engineOpenCode: "OpenCode",
+    agentHint: "OpenCode agent that owns this conversation",
+    modelHint: "OpenCode model the agent runs with",
     withoutFolderTitle: "Without folder",
     withoutFolderDescription: "Quick chat in a disposable workspace",
     projectFolderTitle: "With a project folder",

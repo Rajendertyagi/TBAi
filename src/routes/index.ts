@@ -14,6 +14,8 @@ import memoriesApp from "./memories";
 import quickMessagesApp from "./quick-messages";
 import workspaceApp from "./workspace";
 import foldersApp from "./folders";
+import opencodeApp from "./opencode";
+import serverApp from "./server";
 
 /**
  * Application composition root: middleware + sub-app mounts.
@@ -91,6 +93,12 @@ app.route("/api/logs", logsApp);
 
 // Built-in scheduler / cron (SQLite-backed, Bun.cron + one-time timers).
 app.route("/api/scheduler", schedulerApp);
+
+// OpenCode agent mode: managed server proxy + session lifecycle seam.
+app.route("/api/opencode", opencodeApp);
+
+// Single application server identity + explicit port restart.
+app.route("/api/server", serverApp);
 
 // Error handler — classify once; logging and the safe response consume the
 // same classification. Redact any accidental secret material before responding.

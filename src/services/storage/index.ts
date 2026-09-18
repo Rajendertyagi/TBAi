@@ -15,6 +15,11 @@ interface ConversationRow {
   title_source: string | null;
   workspace_mode: string;
   workspace_folder_id: string | null;
+  opencode_session_id: string | null;
+  engine: string | null;
+  opencode_agent: string | null;
+  opencode_model: string | null;
+  opencode_variant: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -64,6 +69,11 @@ function mapConversation(row: ConversationRow): Conversation {
     titleSource: row.title_source as "auto" | "user" | undefined,
     workspaceMode: (row.workspace_mode as WorkspaceMode) ?? "simple",
     workspaceFolderId: row.workspace_folder_id ?? null,
+    opencodeSessionId: row.opencode_session_id ?? null,
+    engine: (row.engine as "direct" | "opencode") ?? "direct",
+    opencodeAgent: row.opencode_agent ?? null,
+    opencodeModel: row.opencode_model ?? null,
+    opencodeVariant: row.opencode_variant ?? null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -80,6 +90,11 @@ export const conversationService = {
       | "systemPrompt"
       | "workspaceMode"
       | "workspaceFolderId"
+      | "opencodeSessionId"
+      | "engine"
+      | "opencodeAgent"
+      | "opencodeModel"
+      | "opencodeVariant"
     >,
   ): Promise<Conversation> {
     const now = Date.now();
@@ -98,7 +113,7 @@ export const conversationService = {
     }
 
     db.run(
-      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?)",
+      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, engine, opencode_agent, opencode_model, opencode_variant, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         data.title,
@@ -108,6 +123,11 @@ export const conversationService = {
         data.systemPrompt || null,
         workspaceMode,
         workspaceFolderId,
+        data.opencodeSessionId ?? null,
+        data.engine ?? "direct",
+        data.opencodeAgent ?? null,
+        data.opencodeModel ?? null,
+        data.opencodeVariant ?? null,
         now,
         now,
       ],
@@ -162,7 +182,7 @@ export const conversationService = {
 
   async update(
     id: string,
-    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId">>,
+    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId" | "opencodeSessionId" | "engine" | "opencodeAgent" | "opencodeModel" | "opencodeVariant">>,
   ): Promise<Conversation> {
     const updates: string[] = [];
     const values: SQLQueryBindings[] = [];
@@ -205,6 +225,26 @@ export const conversationService = {
         data.workspaceMode === "simple" ? null : (data.workspaceFolderId ?? null);
       updates.push("workspace_folder_id = ?");
       values.push(folderId);
+    }
+    if (data.opencodeSessionId !== undefined) {
+      updates.push("opencode_session_id = ?");
+      values.push(data.opencodeSessionId);
+    }
+    if (data.engine !== undefined) {
+      updates.push("engine = ?");
+      values.push(data.engine);
+    }
+    if (data.opencodeAgent !== undefined) {
+      updates.push("opencode_agent = ?");
+      values.push(data.opencodeAgent);
+    }
+    if (data.opencodeModel !== undefined) {
+      updates.push("opencode_model = ?");
+      values.push(data.opencodeModel);
+    }
+    if (data.opencodeVariant !== undefined) {
+      updates.push("opencode_variant = ?");
+      values.push(data.opencodeVariant);
     }
 
     updates.push("updated_at = ?");

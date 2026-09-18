@@ -7,6 +7,16 @@ export interface ModelOption {
 
 export type ApiProtocol = "responses" | "chat-completions";
 
+/**
+ * A reasoning ("thinking") level.
+ *
+ * `off` is a real level, not an absence: it means the provider is sent no
+ * thinking option at all, so no reasoning part can ever come back. Kept as one
+ * named union so the provider default, the composer picker and the scheduler
+ * cannot drift into different spellings of the same four values.
+ */
+export type ReasoningLevel = "off" | "low" | "medium" | "high";
+
 export interface ProviderConfig {
   id: string;
   name: string;
@@ -17,7 +27,7 @@ export interface ProviderConfig {
   endpoint?: string;
   model: string;
   models?: ModelOption[];
-  thinking?: "off" | "low" | "medium" | "high";
+  thinking?: ReasoningLevel;
   credentialConfigured?: boolean;
   isActive?: boolean;
   createdAt: Date;
@@ -39,6 +49,14 @@ export interface Conversation {
   workspaceMode: WorkspaceMode;
   /** Registered folder ID for project chats; null for simple chats. */
   workspaceFolderId?: string | null;
+  /** Engine that owns this conversation: Direct chat or OpenCode agent mode. */
+  engine?: "direct" | "opencode";
+  /** OpenCode agent id chosen at creation (OpenCode engine only). */
+  opencodeAgent?: string | null;
+  /** OpenCode model id chosen at creation (OpenCode engine only). */
+  opencodeModel?: string | null;
+  /** OpenCode thinking level (model variant); null = Default. */
+  opencodeVariant?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -252,7 +270,6 @@ export type SchedulerJobStatus =
   | "paused"
   | "completed"
   | "missed"
-  | "expired"
   | "failed"
   | "cancelled";
 export type SchedulerRunStatus =

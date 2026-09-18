@@ -12,10 +12,11 @@
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
     "core:window:allow-set-title",
+    "autostart:default",
     "opener:default",
     "opener:allow-open-path"
   ],
   "remote": {
-    "urls": ["http://localhost:3000", "http://127.0.0.1:3000"]
+    "urls": ["http://localhost:*/**", "http://127.0.0.1:*/**"]
   }
 }

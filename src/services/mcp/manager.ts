@@ -378,6 +378,11 @@ export class McpManager {
     const prior = this.connections.get(id);
     if (prior) {
       if (prior.reconnectTimer) clearTimeout(prior.reconnectTimer);
+      // Cancel any elicitation still awaiting user input on the prior client
+      // so its tool-level promise settles as { action: "cancel" } instead of
+      // being rejected by the SDK's "Connection closed" abort when the
+      // transport closes below.
+      this.cancelPendingElicitation(id);
       try {
         await prior.client.close();
       } catch {
@@ -413,7 +418,6 @@ export class McpManager {
       conn.transport = transport;
       this.registerNotificationHandlers(id);
       this.registerRequestHandlers(id);
-      this.registerCloseHandler(id);
 
       await client.connect(transport);
 
@@ -463,14 +467,34 @@ export class McpManager {
       conn.reconnectTimer = undefined;
     }
     conn.reconnectAttempts = 0;
+    // Resolve any pending elicitation as cancelled so a waiting tool call
+    // settles instead of hanging forever during shutdown.
+    this.cancelPendingElicitation(id);
+    // Mark disconnected BEFORE closing: status is the manager's single source
+    // of truth, so intentional teardown can never be mistaken for an
+    // unexpected loss and re-triggered into reconnect bookkeeping.
+    conn.status = "disconnected";
     try {
       await conn.client.close();
     } catch {
       /* ignore */
     }
-    conn.status = "disconnected";
     this.pushEvent(id, "disconnected", `Disconnected from ${conn.config.name}`);
     logger.info("mcp", "mcp.operation", { op: "disconnect", outcome: "ok", mcpServer: conn.config.name });
+  }
+
+  /** Disconnect every connection; never throws (used at shutdown). */
+  async disconnectAll(): Promise<void> {
+    const ids = [...this.connections.keys()];
+    await Promise.allSettled(ids.map((id) => this.disconnect(id)));
+  }
+
+  /** Resolve a pending elicitation as cancelled, if one exists. */
+  private cancelPendingElicitation(id: string): void {
+    const conn = this.connections.get(id);
+    if (!conn?.pendingElicitation) return;
+    conn.pendingElicitation.resolve({ action: "cancel" });
+    conn.pendingElicitation = undefined;
   }
 
   async reconnect(id: string): Promise<void> {
@@ -506,25 +530,6 @@ export class McpManager {
       });
       void this.connect(id);
     }, RECONNECT_DELAY_MS);
-  }
-
-  private registerCloseHandler(id: string): void {
-    const conn = this.connections.get(id);
-    if (!conn) return;
-    const transport = conn.transport as unknown as {
-      on?: (event: string, cb: (...args: unknown[]) => void) => void;
-    };
-    if (transport?.on) {
-      transport.on("close", () => {
-        const c = this.connections.get(id);
-        if (!c) return;
-        if (c.status === "connected") {
-          c.status = "disconnected";
-          this.pushEvent(id, "disconnected", `Lost connection to ${c.config.name}`);
-          this.scheduleReconnect(id);
-        }
-      });
-    }
   }
 
   // ---- Capability discovery ----

@@ -10,7 +10,6 @@ import {
 import { sidebarConfig } from "../config/sidebar";
 import { lastSettingsRoute } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
-import { useChatTabsStore } from "../features/chat/state/chatTabs";
 
 /**
  * Page-level (right-click on the content area) context menu. A desktop-chrome
@@ -26,11 +25,9 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   const copy = sidebarConfig.copy;
   const toggleSidebar = useDesktopLayout((s) => s.toggleSidebar);
   const toggleStatusBar = useDesktopLayout((s) => s.toggleStatusBar);
-  const openChat = useChatTabsStore((s) => s.openChat);
   const navigate = useNavigate();
 
   const handleNewChat = () => {
-    openChat("new");
     navigate("/chat/new");
   };
 
