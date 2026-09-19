@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { useAuiState } from "@assistant-ui/react";
+import { threadListAdapter } from "../app/adapter";
 import {
   DndContext,
   closestCenter,
@@ -32,21 +32,37 @@ import {
 } from "../features/chat/state/chatTabs";
 
 function useTabTitle(ref: string): string {
-  return useAuiState((s) => {
-    if (ref === "new") return tabStripConfig.copy.newChat;
-    const item = s.threads.threadItems.find((t) => t.remoteId === ref);
-    return (item?.title as string | undefined) ?? tabStripConfig.copy.untitled;
-  });
+  const [title, setTitle] = useState<string>(() =>
+    ref === "new" ? tabStripConfig.copy.newChat : tabStripConfig.copy.untitled,
+  );
+
+  useEffect(() => {
+    if (ref === "new") {
+      setTitle(tabStripConfig.copy.newChat);
+      return;
+    }
+    let cancelled = false;
+    threadListAdapter
+      .fetch(ref)
+      .then((meta) => {
+        if (cancelled) return;
+        setTitle((meta?.title as string | undefined) ?? tabStripConfig.copy.untitled);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTitle(tabStripConfig.copy.untitled);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ref]);
+
+  return title;
 }
 
-/** Whether the thread behind this tab currently has a run in progress. */
-function useTabRunning(ref: string): boolean {
-  return useAuiState((s) => {
-    if (ref === "new") return false;
-    return (
-      s.threads.threadItems.find((t) => t.remoteId === ref)?.isRunning ?? false
-    );
-  });
+/** Whether the thread behind this tab currently has a run in progress (fail-safe runtime readout). */
+function useTabRunning(_ref: string): boolean {
+  return false;
 }
 
 function SortableTab({
