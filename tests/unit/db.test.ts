@@ -28,17 +28,6 @@ const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 /** The file the module singleton opened (WAL + busy_timeout already applied). */
 const CHAT_DB_PATH = path.join(DATA_DIR, "chat.db");
 
-/** A fresh scratch DB in the isolated tmp dir (WAL, unique per call). */
-let scratchSeq = 0;
-function scratch(): Database {
-  scratchSeq += 1;
-  const p = path.join(DATA_DIR, `phase5-scratch-${process.pid}-${scratchSeq}.db`);
-  const d = new Database(p);
-  d.run("PRAGMA journal_mode=WAL");
-  d.run("CREATE TABLE IF NOT EXISTS t(x INTEGER)");
-  return d;
-}
-
 describe("db open + busy_timeout + WAL (Phase 5)", () => {
   it("the module DB is open and normal read/write works", () => {
     db.run(

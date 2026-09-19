@@ -244,7 +244,7 @@ describe("abortAll vs completion race (Phase 3)", () => {
 describe("chat run settlement + shutdown gate", () => {
   it("create() after abortAll returns a terminal cancelled record", () => {
     const store = createChatRunStore();
-    const a = store.create({});
+    store.create({});
     expect(store.abortAll()).toBe(1);
     const rec = store.create({ requestId: "late" });
     expect(rec.status).toBe("cancelled");

@@ -1,12 +1,5 @@
 import { describe, it, expect } from "bun:test";
 import { createProgressTracker } from "./progress-tracker";
-import type { ProgressStage } from "./progress-stages";
-
-function extractStages(tracker: ReturnType<typeof createProgressTracker>): ProgressStage[] {
-  // Trigger onFinish to get final snapshot
-  const data = tracker.onFinish();
-  return data.stages;
-}
 
 describe("progress-tracker", () => {
   it("starts with no stages", () => {

@@ -18,8 +18,6 @@ export type TodoContext = {
   threadId: string;
 };
 
-const TODO_COLUMNS = ["text", "done"] as const;
-
 function now(): number {
   return Date.now();
 }

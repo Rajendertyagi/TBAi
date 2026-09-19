@@ -116,3 +116,11 @@ All phases committed and green:
   (agent stuck at "Working"); switching to `opencode/big-pickle` worked. The
   bash tool itself reports "OpenCode session is not bound to a Paseo agent"
   (server-side limitation, unrelated to the Shield).
+
+### Lint cleanup (2026-09-19)
+
+`bun run lint` was clean except 6 pre-existing `noUnusedVariables` warnings and
+1 Biome config deprecation. All fixed (dead code removed, unused vars dropped,
+`recommended` → `preset` in `biome.json`): `progress-tracker.test.ts`,
+`mcp/manager.ts`, `todos.ts`, `chat-runs.test.ts`, `db.test.ts`,
+`startup-prefs.test.ts`, `biome.json`. Lint now reports **0 warnings / 0 info**.

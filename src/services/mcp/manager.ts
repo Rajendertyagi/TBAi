@@ -73,12 +73,6 @@ interface McpConnection {
   };
 }
 
-interface PendingElicitation {
-  elicitationId: string;
-  resolve: (result: ElicitResult) => void;
-  info: McpPendingElicitation;
-}
-
 const MAX_EVENTS = 50;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
