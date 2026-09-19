@@ -24,8 +24,9 @@ import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
  * fixed corner overlays, and the native-style caption buttons float as a
  * top-right overlay that is simply absent in the browser.
  *
- * The shell must render inside AssistantRuntimeProvider (the sidebar thread list,
- * tab titles, and all views consume the ambient runtime).
+ * The shell navigation (Sidebar, TabStrip, ActivityBar, StatusBar) does NOT
+ * depend on an assistant-ui execution runtime — chat/code execution runtimes
+ * are isolated to their respective route surfaces (/chat, /code).
  *
  * Chrome geometry (sidebar width, overlay reserves, band heights) is published
  * as CSS variables by `syncChromeVars` and consumed via `var(--…)` classes —
@@ -34,7 +35,11 @@ import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
  * The shell only *composes* chrome. Feature menus (e.g. the page-level context
  * menu) live in their own chrome components so this file stays a thin layout.
  */
-export function AppShell() {
+export interface AppShellProps {
+  children?: React.ReactNode;
+}
+
+export function AppShell({ children }: AppShellProps = {}) {
   const sidebarVisible = useDesktopLayout((s) => s.sidebarVisible);
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
@@ -75,7 +80,7 @@ export function AppShell() {
           {/* Page-level context menu is its own chrome component; the shell only
               composes it around the routed content. */}
           <PageContextMenu>
-            <Outlet />
+            {children ?? <Outlet />}
           </PageContextMenu>
         </main>
       </div>

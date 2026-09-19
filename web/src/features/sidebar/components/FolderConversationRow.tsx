@@ -1,6 +1,5 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { useNavigate } from "react-router";
-import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   Archive,
   ArchiveRestore,
@@ -42,6 +41,12 @@ import { cn } from "@/lib/utils";
 import { sidebarConfig } from "@/config/sidebar";
 import { historyConfig } from "@/config/history";
 import { useChatTabsStore, threadUrl } from "@/features/chat/state/chatTabs";
+import { useConversationsList } from "@/features/sidebar/hooks/useConversationsList";
+import {
+  renameConversation,
+  setConversationStatus,
+} from "@/features/chat/state/conversationMutations";
+import { useDeleteConversation } from "@/features/chat/state/deleteConversation";
 import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
 
 const ROW_CLASS =
@@ -49,34 +54,20 @@ const ROW_CLASS =
 
 /**
  * Standalone conversation row rendered under a folder header in the sidebar's
- * "Folders" section. Reads from the assistant-ui runtime's thread items,
- * filtered by `custom.workspaceFolderId`. Full conversation management:
+ * "Folders" section. Reads via useConversationsList. Full conversation management:
  * context menu (rename, archive/unarchive, delete, copy ID), hover actions,
  * live running dot (runtime state), rename dialog.
- *
- * Does NOT use `ThreadListItemPrimitive` — reads from `useAuiState` directly
- * and handles all actions through the runtime adapter + fetch PATCH.
  */
 export const FolderConversationRow = memo(function FolderConversationRow({
-  folderId,
+  folderId: _folderId,
   activeId,
 }: {
   folderId: string;
   activeId: string | null;
 }) {
-  const items = useAuiState((s) => s.threads.threadItems);
+  const { items, refetch } = useConversationsList({ status: "regular" });
 
-  const folderConvs = useMemo(
-    () =>
-      items.filter(
-        (t) =>
-          t.custom?.workspaceFolderId === folderId &&
-          t.status !== "archived",
-      ),
-    [items, folderId],
-  );
-
-  if (folderConvs.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="flex h-8 items-center pl-6 pr-1 text-xs text-muted-foreground">
         No conversations
@@ -86,22 +77,17 @@ export const FolderConversationRow = memo(function FolderConversationRow({
 
   return (
     <>
-      {folderConvs.map((item) => {
-        const id = item.remoteId ?? item.id;
-        return (
-          <FolderConvRow
-            key={id}
-            remoteId={id}
-            title={item.title ?? "Untitled"}
-            status={item.status}
-            isActive={activeId === id}
-            engine={
-              (item.custom as { engine?: string | null } | undefined)?.engine ??
-              null
-            }
-          />
-        );
-      })}
+      {items.map((item) => (
+        <FolderConvRow
+          key={item.remoteId}
+          remoteId={item.remoteId}
+          title={item.title ?? "Untitled"}
+          status={item.status ?? "regular"}
+          isActive={activeId === item.remoteId}
+          engine={item.engine ?? null}
+          onMutate={refetch}
+        />
+      ))}
     </>
   );
 });
@@ -116,6 +102,7 @@ const FolderConvRow = memo(function FolderConvRow({
   status: rawStatus,
   isActive,
   engine,
+  onMutate,
 }: {
   remoteId: string;
   title: string;
@@ -123,20 +110,16 @@ const FolderConvRow = memo(function FolderConvRow({
   isActive: boolean;
   /** Engine for route selection (chat vs code surface). Null = legacy Direct. */
   engine?: string | null;
+  onMutate?: () => void;
 }) {
   const navigate = useNavigate();
-  const aui = useAui();
+  const removeConversation = useDeleteConversation();
   const openChat = useChatTabsStore((s) => s.openChat);
   const openAgent = useChatTabsStore((s) => s.openAgent);
   const copy = sidebarConfig.copy;
 
-  // Persistent status is binary (regular/archived) and comes straight from
-  // the runtime — no mapping layer. Generation activity is shown separately
-  // via the runtime-derived running dot.
   const status = rawStatus === "archived" ? "archived" : "regular";
 
-  // Rename dialog state (modal Dialog, not inline input — avoids blur/focus
-  // race conditions with the ContextMenu).
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(initialTitle);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -153,46 +136,33 @@ const FolderConvRow = memo(function FolderConvRow({
       return;
     }
     try {
-      const items = aui.threads.getState().threadItems;
-      const match =
-        items.find((t) => t.remoteId === remoteId) ??
-        items.find((t) => t.id === remoteId);
-      await aui.threads.item({ id: match?.id ?? remoteId }).rename(next);
+      await renameConversation(remoteId, next);
+      onMutate?.();
     } catch {
       /* best effort */
     }
     setRenameOpen(false);
-  }, [renameValue, initialTitle, remoteId, aui]);
+  }, [renameValue, initialTitle, remoteId, onMutate]);
 
   const handleArchiveToggle = useCallback(async () => {
     try {
-      const items = aui.threads.getState().threadItems;
-      const match =
-        items.find((t) => t.remoteId === remoteId) ??
-        items.find((t) => t.id === remoteId);
-      const id = match?.id ?? remoteId;
-      if (status === "archived") {
-        await aui.threads.item({ id }).unarchive();
-      } else {
-        await aui.threads.item({ id }).archive();
-      }
+      const nextStatus = status === "archived" ? "regular" : "archived";
+      await setConversationStatus(remoteId, nextStatus);
+      onMutate?.();
     } catch {
       /* best effort */
     }
-  }, [remoteId, aui, status]);
+  }, [remoteId, status, onMutate]);
 
   const handleDelete = useCallback(async () => {
     try {
-      const items = aui.threads.getState().threadItems;
-      const match =
-        items.find((t) => t.remoteId === remoteId) ??
-        items.find((t) => t.id === remoteId);
-      await aui.threads.item({ id: match?.id ?? remoteId }).delete();
+      await removeConversation(remoteId);
+      onMutate?.();
     } catch {
       /* best effort */
     }
     setDeleteOpen(false);
-  }, [remoteId, aui]);
+  }, [remoteId, removeConversation, onMutate]);
 
   const handleCopyId = useCallback(() => {
     void navigator.clipboard?.writeText(remoteId);
@@ -297,7 +267,7 @@ const FolderConvRow = memo(function FolderConvRow({
         </ContextMenuContent>
       </ContextMenu>
 
-      {/* Rename dialog (modal, not inline — avoids blur/focus race with ContextMenu) */}
+      {/* Rename dialog */}
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <DialogHeader>
@@ -346,3 +316,4 @@ const FolderConvRow = memo(function FolderConvRow({
     </>
   );
 });
+

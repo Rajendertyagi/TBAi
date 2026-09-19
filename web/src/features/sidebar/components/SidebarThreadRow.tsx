@@ -1,11 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import {
-  ThreadListItemPrimitive,
-  ThreadListItemMorePrimitive,
-  useAui,
-} from "@assistant-ui/react";
-import {
   Archive,
   ArchiveRestore,
   Copy,
@@ -14,6 +9,7 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -21,6 +17,12 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +37,10 @@ import { historyConfig } from "@/config/history";
 import { sidebarConfig } from "@/config/sidebar";
 import { logger } from "@/lib/logger";
 import { useDeleteConversation } from "@/features/chat/state/deleteConversation";
+import {
+  renameConversation,
+  setConversationStatus,
+} from "@/features/chat/state/conversationMutations";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
 
@@ -59,25 +65,45 @@ const ROW_CLASS =
 export function SidebarThreadRow({
   item,
   onOpenThread,
+  onMutate,
 }: {
   item: SidebarRowItem;
   onOpenThread: (remoteId: string, engine?: string | null) => void;
+  onMutate?: () => void;
 }) {
-  const aui = useAui();
   const copy = sidebarConfig.copy;
   const openChat = useChatTabsStore((s) => s.openChat);
   const openAgent = useChatTabsStore((s) => s.openAgent);
+  const activeKey = useChatTabsStore((s) => s.activeKey);
   const title = item.title ?? "Untitled";
   const removeConversation = useDeleteConversation();
 
-  // Full deletion lifecycle (server → runtime → tabs → route via TabUrlSync).
-  // Failures surface as a toast; nothing is removed when the server refuses.
+  const isActive =
+    activeKey === `chat:${item.remoteId}` ||
+    activeKey === `agent:${item.remoteId}`;
+
   const handleDelete = (remoteId: string) => {
-    void removeConversation(remoteId).catch((err: unknown) => {
-      toast.error(
-        err instanceof Error ? err.message : "Could not delete conversation.",
-      );
-    });
+    void removeConversation(remoteId)
+      .then(() => {
+        onMutate?.();
+      })
+      .catch((err: unknown) => {
+        toast.error(
+          err instanceof Error ? err.message : "Could not delete conversation.",
+        );
+      });
+  };
+
+  const handleArchive = (remoteId: string) => {
+    void setConversationStatus(remoteId, "archived")
+      .then(() => {
+        onMutate?.();
+      })
+      .catch((err: unknown) => {
+        toast.error(
+          err instanceof Error ? err.message : "Could not archive conversation.",
+        );
+      });
   };
 
   const [renameOpen, setRenameOpen] = useState(false);
@@ -97,11 +123,8 @@ export function SidebarThreadRow({
       return;
     }
     try {
-      const items = aui.threads.getState().threadItems;
-      const match =
-        items.find((t) => t.remoteId === item.remoteId) ??
-        items.find((t) => t.id === item.remoteId);
-      await aui.threads.item({ id: match?.id ?? item.remoteId }).rename(next);
+      await renameConversation(item.remoteId, next);
+      onMutate?.();
     } catch (err) {
       logger.debug("chat", "rename_failed", {
         threadId: item.remoteId,
@@ -117,9 +140,13 @@ export function SidebarThreadRow({
     <>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <ThreadListItemPrimitive.Root className={ROW_CLASS}>
-            <ThreadListItemPrimitive.Trigger
-              className="min-w-0 flex-1 truncate text-left"
+          <div
+            className={cn(ROW_CLASS, isActive && "bg-sidebar-accent")}
+            data-active={isActive || undefined}
+          >
+            <button
+              type="button"
+              className="min-w-0 flex-1 truncate text-left outline-none cursor-pointer"
               onClick={() => onOpenThread(item.remoteId, item.engine ?? null)}
             >
               <span className="relative inline-flex shrink-0">
@@ -129,43 +156,41 @@ export function SidebarThreadRow({
                   className="absolute -left-1 -top-0.5 ring-2 ring-sidebar"
                 />
               </span>
-              <ThreadListItemPrimitive.Title />
-            </ThreadListItemPrimitive.Trigger>
+              <span className="truncate">{title}</span>
+            </button>
 
-            <ThreadListItemMorePrimitive.Root>
-              <ThreadListItemMorePrimitive.Trigger
-                className="shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreVertical className="size-4" />
-              </ThreadListItemMorePrimitive.Trigger>
-              <ThreadListItemMorePrimitive.Content className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100 outline-none"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MoreVertical className="size-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="right" className="z-50 min-w-40">
                 {historyConfig.renameEnabled && (
-                  <ThreadListItemMorePrimitive.Item
-                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted"
-                    onSelect={() => handleOpenRename()}
-                  >
+                  <DropdownMenuItem onSelect={() => handleOpenRename()}>
                     <Pencil className="size-4" /> {copy.rename}
-                  </ThreadListItemMorePrimitive.Item>
+                  </DropdownMenuItem>
                 )}
                 {historyConfig.archiveEnabled && item.status === "regular" && (
-                  <ThreadListItemPrimitive.Archive asChild>
-                    <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                      <Archive className="size-4" /> {copy.archive}
-                    </ThreadListItemMorePrimitive.Item>
-                  </ThreadListItemPrimitive.Archive>
+                  <DropdownMenuItem onSelect={() => handleArchive(item.remoteId)}>
+                    <Archive className="size-4" /> {copy.archive}
+                  </DropdownMenuItem>
                 )}
                 {historyConfig.deleteEnabled && (
-                  <ThreadListItemMorePrimitive.Item
-                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted"
+                  <DropdownMenuItem
+                    variant="destructive"
                     onSelect={() => handleDelete(item.remoteId)}
                   >
                     <Trash2 className="size-3.5" /> {copy.delete}
-                  </ThreadListItemMorePrimitive.Item>
+                  </DropdownMenuItem>
                 )}
-              </ThreadListItemMorePrimitive.Content>
-            </ThreadListItemMorePrimitive.Root>
-          </ThreadListItemPrimitive.Root>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </ContextMenuTrigger>
 
         <ContextMenuContent>
@@ -183,12 +208,10 @@ export function SidebarThreadRow({
               <Pencil className="size-4" /> Rename
             </ContextMenuItem>
           )}
-            {historyConfig.archiveEnabled && item.status === "regular" && (
-            <ThreadListItemPrimitive.Archive asChild>
-              <ContextMenuItem>
-                <Archive className="size-4" /> Archive
-              </ContextMenuItem>
-            </ThreadListItemPrimitive.Archive>
+          {historyConfig.archiveEnabled && item.status === "regular" && (
+            <ContextMenuItem onSelect={() => handleArchive(item.remoteId)}>
+              <Archive className="size-4" /> Archive
+            </ContextMenuItem>
           )}
           <ContextMenuSeparator />
           <ContextMenuItem
@@ -245,85 +268,104 @@ export function SidebarThreadRow({
 /** Archived conversation row: muted, unarchive instead of archive. */
 export function SidebarArchivedRow({
   remoteId,
+  title,
   engine,
   onOpenThread,
+  onMutate,
 }: {
   remoteId: string;
+  title?: string;
   engine?: string | null;
   onOpenThread: (remoteId: string, engine?: string | null) => void;
+  onMutate?: () => void;
 }) {
   const copy = sidebarConfig.copy;
   const removeConversation = useDeleteConversation();
 
   const handleDelete = (id: string) => {
-    void removeConversation(id).catch((err: unknown) => {
-      toast.error(
-        err instanceof Error ? err.message : "Could not delete conversation.",
-      );
-    });
+    void removeConversation(id)
+      .then(() => {
+        onMutate?.();
+      })
+      .catch((err: unknown) => {
+        toast.error(
+          err instanceof Error ? err.message : "Could not delete conversation.",
+        );
+      });
   };
+
+  const handleUnarchive = (id: string) => {
+    void setConversationStatus(id, "regular")
+      .then(() => {
+        onMutate?.();
+      })
+      .catch((err: unknown) => {
+        toast.error(
+          err instanceof Error ? err.message : "Could not unarchive conversation.",
+        );
+      });
+  };
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <ThreadListItemPrimitive.Root
-          className={`${ROW_CLASS} text-muted-foreground`}
-        >
-          <ThreadListItemPrimitive.Trigger
-            className="min-w-0 flex-1 truncate text-left"
+        <div className={cn(ROW_CLASS, "text-muted-foreground")}>
+          <button
+            type="button"
+            className="min-w-0 flex-1 truncate text-left outline-none cursor-pointer"
             onClick={() => onOpenThread(remoteId, engine ?? null)}
           >
-            <ThreadListItemPrimitive.Title />
-          </ThreadListItemPrimitive.Trigger>
-          <ThreadListItemMorePrimitive.Root>
-            <ThreadListItemMorePrimitive.Trigger
-              className="shrink-0 rounded-full p-1 opacity-0 transition-opacity hover:bg-background group-hover:opacity-100"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreVertical className="size-4" />
-            </ThreadListItemMorePrimitive.Trigger>
-            <ThreadListItemMorePrimitive.Content className="z-50 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+            <span className="truncate">{title || remoteId}</span>
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="shrink-0 rounded-full p-1 opacity-0 transition-opacity hover:bg-background group-hover:opacity-100 outline-none"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical className="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="right" className="z-50 min-w-40">
               {historyConfig.archiveEnabled && (
-                <ThreadListItemPrimitive.Unarchive asChild>
-                  <ThreadListItemMorePrimitive.Item className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-muted">
-                    <ArchiveRestore className="size-4" /> {copy.unarchive}
-                  </ThreadListItemMorePrimitive.Item>
-                </ThreadListItemPrimitive.Unarchive>
+                <DropdownMenuItem onSelect={() => handleUnarchive(remoteId)}>
+                  <ArchiveRestore className="size-4" /> {copy.unarchive}
+                </DropdownMenuItem>
               )}
               {historyConfig.deleteEnabled && (
-                <ThreadListItemMorePrimitive.Item
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive outline-none hover:bg-muted"
+                <DropdownMenuItem
+                  variant="destructive"
                   onSelect={() => handleDelete(remoteId)}
                 >
                   <Trash2 className="size-3.5" /> {copy.delete}
-                </ThreadListItemMorePrimitive.Item>
+                </DropdownMenuItem>
               )}
-            </ThreadListItemMorePrimitive.Content>
-          </ThreadListItemMorePrimitive.Root>
-        </ThreadListItemPrimitive.Root>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </ContextMenuTrigger>
 
       <ContextMenuContent>
         {historyConfig.archiveEnabled && (
-          <ThreadListItemPrimitive.Unarchive asChild>
-            <ContextMenuItem>
-              <ArchiveRestore className="size-4" /> {copy.unarchive}
-            </ContextMenuItem>
-          </ThreadListItemPrimitive.Unarchive>
+          <ContextMenuItem onSelect={() => handleUnarchive(remoteId)}>
+            <ArchiveRestore className="size-4" /> {copy.unarchive}
+          </ContextMenuItem>
         )}
         <ContextMenuItem
           onSelect={() => void navigator.clipboard?.writeText(remoteId)}
         >
           <Copy className="size-4" /> {copy.copyId}
         </ContextMenuItem>
-          {historyConfig.deleteEnabled && (
-            <ContextMenuItem
-              variant="destructive"
-              onSelect={() => handleDelete(remoteId)}
-            >
-              <Trash2 className="size-4" /> Delete
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
-    );
+        {historyConfig.deleteEnabled && (
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={() => handleDelete(remoteId)}
+          >
+            <Trash2 className="size-4" /> Delete
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }

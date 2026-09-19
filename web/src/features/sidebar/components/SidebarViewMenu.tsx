@@ -1,5 +1,4 @@
 import { Eye, MessagesSquare } from "lucide-react";
-import { useAui } from "@assistant-ui/react";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -16,17 +15,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { sidebarConfig } from "@/config/sidebar";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
-import { reloadThreadList } from "@/features/sidebar/hooks/useThreadListQuerySync";
 import { SidebarSectionOrderControl } from "@/features/sidebar/components/SidebarSectionOrderControl";
 
 /**
  * The sidebar's view-options (eye) menu: list toggles → sort mode → section
  * order. A settings panel, not a command list — options keep the menu open on
- * select. Sort changes propagate to the server (`?order=`) with a reload.
+ * select. Sort changes propagate to the server (`?order=`) via useDesktopLayout.
  */
 export function SidebarViewMenu() {
   const copy = sidebarConfig.copy;
-  const aui = useAui();
   const showRecent = useDesktopLayout((s) => s.showRecent);
   const setShowRecent = useDesktopLayout((s) => s.setShowRecent);
   const showCompleted = useDesktopLayout((s) => s.showCompleted);
@@ -77,8 +74,6 @@ export function SidebarViewMenu() {
             onValueChange={(value) => {
               const sort = value === "created" ? "created" : "updated";
               setSidebarSort(sort);
-              // The store effect also syncs; reload here for immediacy.
-              reloadThreadList(aui);
             }}
           >
             <DropdownMenuRadioItem
