@@ -17,6 +17,7 @@ import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
 import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { logger } from "@/lib/logger";
+import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
 import { OpenCodeQuestions } from "./OpenCodeQuestions";
@@ -275,6 +276,7 @@ function AgentRuntime({
   );
 
   return (
+    <OpenCodeIsolationBoundary>
       <OpenCodeRuntimeContext.Provider value={runtimeContext}>
         <AssistantRuntimeProvider runtime={runtime} config={config}>
           <div className="flex h-full min-h-0 flex-col">
@@ -294,5 +296,6 @@ function AgentRuntime({
           <DevToolsModal />
         </AssistantRuntimeProvider>
       </OpenCodeRuntimeContext.Provider>
+    </OpenCodeIsolationBoundary>
   );
 }
