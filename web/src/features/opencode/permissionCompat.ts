@@ -1,6 +1,12 @@
 import type { OpenCodeRuntimeClient } from "./eventScope";
 import { PERMISSION_GONE_MESSAGE, isPermissionGone } from "@/stores/stalePermissionsStore";
 import {
+  AUTO_RESPONSE,
+  shouldAutoApprove,
+  type PermissionMode,
+} from "@/features/permissions/permissionPolicy";
+import { getAutoPolicy } from "./sessionAutoPolicy";
+import {
   isRouteUnsupported,
   statusOf,
   withDirectory,
@@ -207,4 +213,123 @@ export function applyPermissionCompat(
   // narrow, documented assertion `eventScope.ts` uses for `event.subscribe`.
   permission.list = listCompat as unknown as OpenCodeRuntimeClient["permission"]["list"];
   permission.reply = replyCompat as unknown as OpenCodeRuntimeClient["permission"]["reply"];
+}
+
+/** The minimum a pending permission must expose to be auto-answered. */
+export interface PendingPermission {
+  readonly id: string;
+}
+
+/**
+ * Answers a session's pending permission requests automatically — the Auto
+ * shield's only behaviour.
+ *
+ * It calls `client.permission.reply`, which is **already the patched
+ * `replyCompat`** once {@link applyPermissionCompat} has run: so the automatic
+ * path inherits the authoritative directory scope, the canonical-route-then-
+ * fallback behaviour and the 404→stale normalisation rather than re-deriving
+ * any of them. **One response boundary, not two.** No HTTP is issued here, and
+ * no OpenCode protocol detail is duplicated.
+ *
+ * `scope` is deliberately NOT a parameter: the patch closed over it, so the
+ * directory and session identity are already applied. Passing them again would
+ * be a second source of truth for the same fact.
+ *
+ * The reply is always {@link AUTO_RESPONSE} — `"once"`. There is no branch that
+ * can send `"always"`, because `"always"` appears nowhere in this path.
+ *
+ * @param client - The runtime client {@link applyPermissionCompat} has patched.
+ * @param pending - The session's pending requests, from the EXISTING
+ *   reconciliation/hydration path.
+ * @param mode - This session's shield position. Anything but `"auto"` is a
+ *   no-op, so a manual session is untouched.
+ * @param answered - Request ids already answered. Reconciliation can run more
+ *   than once (enable, then reconnect); this is what makes a second pass safe
+ *   rather than a duplicate reply. **Successful replies are recorded here**, so
+ *   every caller (hydration, the live path, the reconcile seam) shares one set
+ *   and a request is never answered twice. A FAILED reply is not recorded — it
+ *   stays retryable.
+ * @returns How many requests were answered.
+ */
+export async function autoAcceptPendingPermissions(
+  client: OpenCodeRuntimeClient,
+  pending: readonly PendingPermission[],
+  mode: PermissionMode,
+  answered: Set<string>,
+): Promise<number> {
+  if (!shouldAutoApprove(mode)) return 0;
+
+  let handled = 0;
+  for (const request of pending) {
+    // A resolved request is never answered again — not on a second
+    // reconciliation pass, not after a reconnect.
+    if (answered.has(request.id)) continue;
+    try {
+      await client.permission.reply({ requestID: request.id, reply: AUTO_RESPONSE });
+      answered.add(request.id);
+      handled += 1;
+    } catch {
+      // Leave it pending. A gone request is retired by the shared stale guard,
+      // and a transient failure stays retryable — neither is this helper's call
+      // to make, and swallowing it here keeps one classification rule.
+    }
+  }
+  return handled;
+}
+
+/**
+ * Reads the session's currently-pending permissions through the EXISTING
+ * scoped list call, returning only entries with a usable string id.
+ *
+ * @param client - The runtime client {@link applyPermissionCompat} has patched.
+ * @returns The pending requests, or `[]` when the list is unavailable.
+ */
+async function listPendingPermissions(
+  client: OpenCodeRuntimeClient,
+): Promise<PendingPermission[]> {
+  try {
+    const result = (await client.permission.list({}, { throwOnError: false })) as
+      | { data?: unknown }
+      | undefined;
+    const data = Array.isArray(result?.data) ? result.data : [];
+    const out: PendingPermission[] = [];
+    for (const item of data) {
+      if (
+        item !== null &&
+        typeof item === "object" &&
+        typeof (item as { id?: unknown }).id === "string"
+      ) {
+        out.push({ id: (item as { id: string }).id });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reconciles a session's pending permissions against the CURRENT Auto policy.
+ *
+ * The single responder for "a permission is already pending and Auto just came
+ * on" — used by the toggle write path and by post-hydration reconciliation. It
+ * reuses the existing permission list API, the existing
+ * {@link autoAcceptPendingPermissions} helper (which never throws) and the
+ * already-patched `client.permission.reply` (`replyCompat`), so there is still
+ * exactly one response boundary.
+ *
+ * @param client - The runtime client {@link applyPermissionCompat} has patched.
+ * @param sessionId - The OpenCode session, or undefined (fail closed → no-op).
+ * @param answered - The shared per-runtime answered set, so a request already
+ *   answered by hydration or a live event is never answered twice.
+ * @returns How many requests were answered.
+ */
+export async function reconcileAutoApprove(
+  client: OpenCodeRuntimeClient,
+  sessionId: string | undefined,
+  answered: Set<string>,
+): Promise<number> {
+  if (!sessionId || !getAutoPolicy(sessionId)) return 0;
+  const pending = await listPendingPermissions(client);
+  return autoAcceptPendingPermissions(client, pending, "auto", answered);
 }
