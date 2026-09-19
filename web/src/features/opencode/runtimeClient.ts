@@ -1,9 +1,22 @@
 import { createScopedOpenCodeClient, type OpenCodeRuntimeClient } from "./eventScope";
-import { applyPermissionCompat } from "./permissionCompat";
+import { applyPermissionCompat, reconcileAutoApprove } from "./permissionCompat";
 import { applyQuestionCompat } from "./questionCompat";
 import { applyInitialHydration } from "./initialHydration";
 import { applyPermissionPayloadCompat } from "./permissionPayloadCompat";
 import { applyTodoCompat } from "./todoState";
+
+/**
+ * The runtime client plus the Auto-shield reconcile seam.
+ *
+ * `reconcileAutoApprove` is attached here because it closes over the SAME
+ * per-runtime `answered` set the hydration and live patches share — it is the
+ * "a permission is already pending and Auto just came on" responder, and it
+ * must dedupe against the same set or it could double-reply.
+ */
+export interface OpenCodeRuntimeClientWithReconcile extends OpenCodeRuntimeClient {
+  /** Reconciles pending permissions against the current Auto policy. */
+  reconcileAutoApprove?: () => Promise<number>;
+}
 
 /**
  * The single construction point for the OpenCode client the assistant-ui
@@ -46,8 +59,11 @@ import { applyTodoCompat } from "./todoState";
 export function createOpenCodeRuntimeClient(
   baseUrl: string,
   options: { directory: string | null; sessionId: string | undefined },
-): OpenCodeRuntimeClient {
-  const client = createScopedOpenCodeClient(baseUrl, options.directory);
+): OpenCodeRuntimeClientWithReconcile {
+  const client = createScopedOpenCodeClient(
+    baseUrl,
+    options.directory,
+  ) as OpenCodeRuntimeClientWithReconcile;
   const scope = { sessionId: options.sessionId, directory: options.directory };
   // ONE answered set per runtime, shared by initial hydration, the live
   // permission path and the reconcile seam — never global across sessions.
@@ -62,5 +78,6 @@ export function createOpenCodeRuntimeClient(
   // frames inside its own wrapper, so a normalizer applied earlier would never
   // see them. Outermost, it normalizes live SSE frames and replayed ones alike.
   applyPermissionPayloadCompat(client, { answered, sessionId: options.sessionId });
+  client.reconcileAutoApprove = () => reconcileAutoApprove(client, options.sessionId, answered);
   return client;
 }

@@ -137,7 +137,7 @@ export function useOpenCodeRuntime(
     };
   }, [runtime, sessionId]);
 
-  return { runtime, reconnect };
+  return { runtime, reconnect, reconcileAutoApprove: client.reconcileAutoApprove };
 }
 
 /** Defensive text-length sum over assistant-ui message content parts. */

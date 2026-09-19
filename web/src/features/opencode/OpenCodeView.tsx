@@ -220,7 +220,7 @@ function AgentRuntime({
   // truth — no store, no context, no global.
   const conversationConfig = useOpenCodeConversationConfig(conversationId);
 
-  const { runtime, reconnect } = useOpenCodeRuntime(
+  const { runtime, reconnect, reconcileAutoApprove } = useOpenCodeRuntime(
     sessionId,
     defaultModel,
     defaultAgent,
@@ -230,11 +230,16 @@ function AgentRuntime({
   // Hydrate the runtime policy cache the moment the authoritative config is
   // known. The cache is keyed by the OpenCode sessionId (the identity the
   // event-time read has), so this is the one place that holds both the session
-  // id and the conversation config.
+  // id and the conversation config. When Auto is on, reconcile any request that
+  // was already pending before the config arrived — the same responder the
+  // toggle write path uses, so a late config can never leave a request stuck.
   useEffect(() => {
     if (!sessionId || !conversationConfig) return;
     hydrateAutoPolicy(sessionId, conversationConfig.opencodeAutoApprove);
-  }, [sessionId, conversationConfig]);
+    if (conversationConfig.opencodeAutoApprove) {
+      void reconcileAutoApprove?.();
+    }
+  }, [sessionId, conversationConfig, reconcileAutoApprove]);
 
   // Code mode needs its OWN tool-renderer registration.
   //
