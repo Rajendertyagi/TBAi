@@ -61,6 +61,6 @@ export function createOpenCodeRuntimeClient(
   // LAST, so it is the outermost wrapper: hydration synthesizes its replayed
   // frames inside its own wrapper, so a normalizer applied earlier would never
   // see them. Outermost, it normalizes live SSE frames and replayed ones alike.
-  applyPermissionPayloadCompat(client);
+  applyPermissionPayloadCompat(client, { answered, sessionId: options.sessionId });
   return client;
 }

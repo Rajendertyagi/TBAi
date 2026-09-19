@@ -1,4 +1,14 @@
 import type { OpenCodeRuntimeClient } from "./eventScope";
+import { autoAcceptPendingPermissions } from "./permissionCompat";
+import { getAutoPolicy } from "./sessionAutoPolicy";
+
+/** The live auto-approval inputs the payload patch closes over. */
+interface AutoApproveOptions {
+  /** The shared per-runtime answered set (also used by hydration). */
+  readonly answered: Set<string>;
+  /** The OpenCode session id; undefined ⇒ fail closed (never auto-approve). */
+  readonly sessionId: string | undefined;
+}
 
 /**
  * OpenCode V2 interaction-payload compatibility layer.
@@ -72,6 +82,39 @@ const V2_ASKED_PERMISSION = "permission.v2.asked";
 
 /** A frame's property bag, as far as this layer needs to see it. */
 type Properties = Record<string, unknown>;
+
+/**
+ * True when a normalized frame is a `permission.asked` event, in either of the
+ * two envelopes the adapter's event source accepts (bare or `payload`-wrapped).
+ *
+ * @param frame - A frame already passed through {@link normalizeOpenCodeInteractionFrame}.
+ * @returns True when the frame asks for a permission decision.
+ */
+function isPermissionAsked(frame: unknown): boolean {
+  const outer = asRecord(frame);
+  if (!outer) return false;
+  const payload = asRecord(outer.payload);
+  const record = payload ?? outer;
+  return record.type === "permission.asked";
+}
+
+/**
+ * Reads the permission request id from a normalized `permission.asked` frame.
+ *
+ * The id is the frame's own `properties.id` — the real permission id, never a
+ * toolCallId or messageID.
+ *
+ * @param frame - A normalized `permission.asked` frame.
+ * @returns The request id, or `undefined` when it is unusable.
+ */
+function permissionIdOf(frame: unknown): string | undefined {
+  const outer = asRecord(frame);
+  if (!outer) return undefined;
+  const payload = asRecord(outer.payload);
+  const properties = asRecord((payload ?? outer).properties);
+  const id = properties?.id;
+  return typeof id === "string" ? id : undefined;
+}
 
 /** Reads a value as a plain object, or `undefined` when it is not one. */
 function asRecord(value: unknown): Properties | undefined {
@@ -209,12 +252,32 @@ export function normalizeOpenCodeInteractionFrame(frame: unknown): unknown {
   return normalizeFrameRecord(outer);
 }
 
-/** Yields every frame, normalizing the V2 interactions among them. */
+/**
+ * Yields every frame, normalizing the V2 interactions among them and answering
+ * a live `permission.asked` automatically when the session's Auto shield is on.
+ *
+ * **Reply before yield, always yield.** The auto reply is awaited BEFORE the
+ * frame is yielded, so a request that is auto-accepted never needs a card; the
+ * frame is still yielded afterwards so the event always continues through the
+ * normal pipeline. {@link autoAcceptPendingPermissions} never throws (each
+ * request is wrapped in its own try/catch), so a failed reply simply yields an
+ * unanswered request that falls through to the manual UI — nothing is
+ * suppressed and no success is fabricated.
+ */
 async function* normalizeFrames(
   stream: AsyncIterable<unknown>,
+  client: OpenCodeRuntimeClient,
+  compat: AutoApproveOptions,
 ): AsyncGenerator<unknown> {
   for await (const frame of stream) {
-    yield normalizeOpenCodeInteractionFrame(frame);
+    const normalized = normalizeOpenCodeInteractionFrame(frame);
+    if (isPermissionAsked(normalized) && getAutoPolicy(compat.sessionId)) {
+      const id = permissionIdOf(normalized);
+      if (id) {
+        await autoAcceptPendingPermissions(client, [{ id }], "auto", compat.answered);
+      }
+    }
+    yield normalized;
   }
 }
 
@@ -233,8 +296,12 @@ async function* normalizeFrames(
  * that is already V1.
  *
  * @param client - The client the assistant-ui OpenCode runtime is built around.
+ * @param compat - The shared answered set and session id for live auto-approval.
  */
-export function applyPermissionPayloadCompat(client: OpenCodeRuntimeClient): void {
+export function applyPermissionPayloadCompat(
+  client: OpenCodeRuntimeClient,
+  compat: AutoApproveOptions,
+): void {
   const event = client.event;
   const subscribe = event.subscribe.bind(event);
 
@@ -245,7 +312,10 @@ export function applyPermissionPayloadCompat(client: OpenCodeRuntimeClient): voi
     const subscription = (await subscribe(parameters, options)) as {
       stream: AsyncIterable<unknown>;
     };
-    return { ...subscription, stream: normalizeFrames(subscription.stream) };
+    return {
+      ...subscription,
+      stream: normalizeFrames(subscription.stream, client, compat),
+    };
   };
 
   // The SDK declares `subscribe` as generic in `ThrowOnError`; this replacement
