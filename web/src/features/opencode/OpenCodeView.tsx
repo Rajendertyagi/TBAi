@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { AssistantRuntimeProvider, AuiConfig, Tools } from "@assistant-ui/react";
 import { DevToolsModal } from "@assistant-ui/react-devtools";
 import { ChatWindow } from "@/components/ChatWindow";
+import { ThreadBootSkeleton } from "@/components/assistant-ui/elements/thread-boot-skeleton";
 import { appToolkit } from "@/tools/toolkit";
 import { useConversationTab } from "@/features/chat/state/useConversationTab";
 import { OPENCODE_INIT_TIMEOUT_MS } from "@/config/opencode";
@@ -181,10 +182,14 @@ export function OpenCodeView() {
     );
   }
   if (!sessionId) {
+    // Session not yet resolved: show the message-shaped boot skeleton inside
+    // the normal content surface (the AppShell chrome stays visible). This is
+    // a loading surface, not fake readiness — the existing session
+    // creation/resume flow continues unchanged and the runtime mounts once
+    // `sessionId` exists.
     return (
-      <div className="flex items-center gap-2 p-4 text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-        Starting OpenCode…
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto px-4 py-6 pb-4">
+        <ThreadBootSkeleton />
       </div>
     );
   }
