@@ -51,6 +51,7 @@ app.post("/api/conversations", async (c) => {
       opencodeAgent: parsed.opencodeAgent ?? null,
       opencodeModel: parsed.opencodeModel ?? null,
       opencodeVariant: parsed.opencodeVariant ?? null,
+      opencodeAutoApprove: parsed.opencodeAutoApprove ?? false,
     });
 
     return c.json(conversation);

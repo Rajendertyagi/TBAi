@@ -76,6 +76,9 @@ export const conversationCreateSchema = z.object({
   opencodeAgent: z.string().min(1).max(200).optional().nullable(),
   opencodeModel: z.string().min(1).max(200).optional().nullable(),
   opencodeVariant: z.string().min(1).max(100).optional().nullable(),
+  // Per-conversation Auto Approval shield (Phase 6D-B). Strictly boolean; a
+  // malformed or absent value must not arm Auto.
+  opencodeAutoApprove: z.boolean().optional(),
 }).superRefine((value, ctx) => {
   if (value.workspaceMode === "project" && !value.workspaceFolderId) {
     ctx.addIssue({
@@ -100,6 +103,7 @@ export const conversationUpdateSchema = z.object({
   opencodeAgent: z.string().min(1).max(200).optional().nullable(),
   opencodeModel: z.string().min(1).max(200).optional().nullable(),
   opencodeVariant: z.string().min(1).max(100).optional().nullable(),
+  opencodeAutoApprove: z.boolean().optional(),
 });
 
 // A persisted message entry in the runtime's storage format (produced by the
@@ -599,3 +603,10 @@ export const serverPortSchema = z.number().int().min(1).max(65535);
 export const serverPortBodySchema = z.object({ port: serverPortSchema });
 
 export type ServerPortBody = z.infer<typeof serverPortBodySchema>;
+
+// ---- Startup preferences (tray boot; mirror file read by the launcher) ----
+export const startupPrefsBodySchema = z.object({
+  startMinimized: z.boolean(),
+});
+
+export type StartupPrefsBody = z.infer<typeof startupPrefsBodySchema>;

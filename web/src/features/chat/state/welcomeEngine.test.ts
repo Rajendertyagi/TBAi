@@ -86,13 +86,25 @@ function writeStorage(value: string) {
 }
 
 function defaultState() {
-  return { engine: "direct" as WelcomeEngine, agent: "", model: "", variant: "" };
+  return {
+    engine: "direct" as WelcomeEngine,
+    agent: "",
+    model: "",
+    variant: "",
+    autoApprove: false,
+  };
 }
 
 /** Read just the data fields of the store state (not the setter functions). */
 function dataShape() {
   const s = useWelcomeEngineStore.getState();
-  return { engine: s.engine, agent: s.agent, model: s.model, variant: s.variant };
+  return {
+    engine: s.engine,
+    agent: s.agent,
+    model: s.model,
+    variant: s.variant,
+    autoApprove: s.autoApprove,
+  };
 }
 
 describe("welcome engine store — engine switch semantics", () => {
@@ -162,6 +174,19 @@ describe("welcome engine store — engine switch semantics", () => {
     useWelcomeEngineStore.getState().setModel("");
     expect(useWelcomeEngineStore.getState().model).toBe("");
   });
+
+  it("setAutoApprove flips the draft shield and survives an engine switch", () => {
+    useWelcomeEngineStore.getState().setEngine("opencode");
+    useWelcomeEngineStore.getState().setAutoApprove(true);
+    expect(useWelcomeEngineStore.getState().autoApprove).toBe(true);
+
+    // The shield is a session permission preference, not engine config: an
+    // engine switch must not silently disarm it.
+    useWelcomeEngineStore.getState().setEngine("direct");
+    expect(useWelcomeEngineStore.getState().autoApprove).toBe(true);
+    useWelcomeEngineStore.getState().setAutoApprove(false);
+    expect(useWelcomeEngineStore.getState().autoApprove).toBe(false);
+  });
 });
 
 describe("getWelcomeEngineSnapshot — non-React caller shape", () => {
@@ -170,7 +195,7 @@ describe("getWelcomeEngineSnapshot — non-React caller shape", () => {
     useWelcomeEngineStore.setState(defaultState());
   });
 
-  it("returns the full { engine, agent, model, variant } shape", () => {
+  it("returns the full { engine, agent, model, variant, autoApprove } shape", () => {
     useWelcomeEngineStore.getState().setEngine("opencode");
     useWelcomeEngineStore.getState().setAgent("coder");
     useWelcomeEngineStore.getState().setModel("openai/gpt-4o");
@@ -180,6 +205,7 @@ describe("getWelcomeEngineSnapshot — non-React caller shape", () => {
       agent: "coder",
       model: "openai/gpt-4o",
       variant: "",
+      autoApprove: false,
     });
     // It's a live read: a follow-up change is reflected in the next snapshot.
     useWelcomeEngineStore.getState().setAgent("");
@@ -213,12 +239,14 @@ describe("welcome engine store — localStorage persistence + fallback", () => {
       agent: string;
       model: string;
       variant: string;
+      autoApprove: boolean;
     };
     expect(stored).toEqual({
       engine: "opencode",
       agent: "coder",
       model: "openai/gpt-4o",
       variant: "",
+      autoApprove: false,
     });
   });
 
@@ -233,8 +261,15 @@ describe("welcome engine store — localStorage persistence + fallback", () => {
         agent: string;
         model: string;
         variant: string;
+        autoApprove: boolean;
       };
-      expect(stored).toEqual({ engine: "direct", agent: "", model: "", variant: "" });
+      expect(stored).toEqual({
+        engine: "direct",
+        agent: "",
+        model: "",
+        variant: "",
+        autoApprove: false,
+      });
   });
 
   // ---- load() fallback branch ----
@@ -250,11 +285,18 @@ describe("welcome engine store — localStorage persistence + fallback", () => {
   it("initial state equals the documented fallback (load() catch branch)", () => {
     // Reset to the fallback: this is what load() returns when storage is
     // unavailable OR when getItem returns null (no record yet).
-    const fallback: { engine: WelcomeEngine; agent: string; model: string; variant: string } = {
+    const fallback: {
+      engine: WelcomeEngine;
+      agent: string;
+      model: string;
+      variant: string;
+      autoApprove: boolean;
+    } = {
       engine: "direct",
       agent: "",
       model: "",
       variant: "",
+      autoApprove: false,
     };
     useWelcomeEngineStore.setState(fallback);
     expect(dataShape()).toEqual(fallback);

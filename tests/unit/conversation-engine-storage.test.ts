@@ -134,4 +134,60 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
     expect(updated.engine).toBe("opencode");
     await cleaned(created.id);
   });
+
+  it("create persists opencodeAutoApprove and round-trips it", async () => {
+    const created = await conversationService.create({
+      title: "auto-happy",
+      providerId: "p",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+      opencodeAutoApprove: true,
+    });
+    expect(created.opencodeAutoApprove).toBe(true);
+
+    const fetched = await conversationService.get(created.id);
+    expect(fetched?.opencodeAutoApprove).toBe(true);
+    await cleaned(created.id);
+  });
+
+  it("create without opencodeAutoApprove defaults to manual (false)", async () => {
+    const created = await conversationService.create({
+      title: "auto-default",
+      providerId: "p",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+    });
+    expect(created.opencodeAutoApprove).toBe(false);
+    await cleaned(created.id);
+  });
+
+  it("update patches opencodeAutoApprove and persists it", async () => {
+    const created = await conversationService.create({
+      title: "auto-update",
+      providerId: "p",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+    });
+    expect(created.opencodeAutoApprove).toBe(false);
+
+    const updated = await conversationService.update(created.id, {
+      opencodeAutoApprove: true,
+    });
+    expect(updated.opencodeAutoApprove).toBe(true);
+
+    const reloaded = await conversationService.get(created.id);
+    expect(reloaded?.opencodeAutoApprove).toBe(true);
+    await cleaned(created.id);
+  });
+
+  it("legacy row with NULL opencode_auto_approve maps to manual (false)", async () => {
+    const legacy = legacyConversation("legacy-auto-" + Date.now());
+    const mapped = await conversationService.get(legacy.id);
+    expect(mapped).not.toBeNull();
+    expect(mapped?.opencodeAutoApprove).toBe(false);
+    await cleaned(legacy.id);
+  });
 });

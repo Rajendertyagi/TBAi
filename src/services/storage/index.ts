@@ -20,6 +20,7 @@ interface ConversationRow {
   opencode_agent: string | null;
   opencode_model: string | null;
   opencode_variant: string | null;
+  opencode_auto_approve: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -74,6 +75,7 @@ function mapConversation(row: ConversationRow): Conversation {
     opencodeAgent: row.opencode_agent ?? null,
     opencodeModel: row.opencode_model ?? null,
     opencodeVariant: row.opencode_variant ?? null,
+    opencodeAutoApprove: row.opencode_auto_approve === 1,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -95,6 +97,7 @@ export const conversationService = {
       | "opencodeAgent"
       | "opencodeModel"
       | "opencodeVariant"
+      | "opencodeAutoApprove"
     >,
   ): Promise<Conversation> {
     const now = Date.now();
@@ -113,7 +116,7 @@ export const conversationService = {
     }
 
     db.run(
-      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, engine, opencode_agent, opencode_model, opencode_variant, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         data.title,
@@ -128,6 +131,7 @@ export const conversationService = {
         data.opencodeAgent ?? null,
         data.opencodeModel ?? null,
         data.opencodeVariant ?? null,
+        data.opencodeAutoApprove === true ? 1 : 0,
         now,
         now,
       ],
@@ -182,7 +186,7 @@ export const conversationService = {
 
   async update(
     id: string,
-    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId" | "opencodeSessionId" | "engine" | "opencodeAgent" | "opencodeModel" | "opencodeVariant">>,
+    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId" | "opencodeSessionId" | "engine" | "opencodeAgent" | "opencodeModel" | "opencodeVariant" | "opencodeAutoApprove">>,
   ): Promise<Conversation> {
     const updates: string[] = [];
     const values: SQLQueryBindings[] = [];
@@ -245,6 +249,10 @@ export const conversationService = {
     if (data.opencodeVariant !== undefined) {
       updates.push("opencode_variant = ?");
       values.push(data.opencodeVariant);
+    }
+    if (data.opencodeAutoApprove !== undefined) {
+      updates.push("opencode_auto_approve = ?");
+      values.push(data.opencodeAutoApprove === true ? 1 : 0);
     }
 
     updates.push("updated_at = ?");

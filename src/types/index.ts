@@ -65,6 +65,11 @@ export interface Conversation {
   opencodeModel?: string | null;
   /** OpenCode thinking level (model variant) chosen at creation; null = Default. */
   opencodeVariant?: string | null;
+  /**
+   * The Auto Approval shield for this conversation (Phase 6D-B). True = accept
+   * permission requests once automatically; false/absent = manual (ask).
+   */
+  opencodeAutoApprove?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

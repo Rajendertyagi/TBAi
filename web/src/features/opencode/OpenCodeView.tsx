@@ -13,6 +13,7 @@ import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
 import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
 import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
+import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { logger } from "@/lib/logger";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
@@ -195,6 +196,7 @@ export function OpenCodeView() {
       eventDirectory={eventDirectory}
       defaultModel={defaultModel}
       defaultAgent={defaultAgent}
+      conversationId={agentId}
     />
   );
 }
@@ -204,18 +206,35 @@ function AgentRuntime({
   eventDirectory,
   defaultModel,
   defaultAgent,
+  conversationId,
 }: {
   sessionId: string;
   eventDirectory: string | null;
   defaultModel?: { providerID: string; modelID: string };
   defaultAgent?: string;
+  /** The TBAi conversation this session belongs to — the Auto shield's owner. */
+  conversationId?: string;
 }) {
+  // The conversation's persisted OpenCode config, read through the existing
+  // path. `opencodeAutoApprove` on it is the Auto shield's single source of
+  // truth — no store, no context, no global.
+  const conversationConfig = useOpenCodeConversationConfig(conversationId);
+
   const { runtime, reconnect } = useOpenCodeRuntime(
     sessionId,
     defaultModel,
     defaultAgent,
     eventDirectory,
   );
+
+  // Hydrate the runtime policy cache the moment the authoritative config is
+  // known. The cache is keyed by the OpenCode sessionId (the identity the
+  // event-time read has), so this is the one place that holds both the session
+  // id and the conversation config.
+  useEffect(() => {
+    if (!sessionId || !conversationConfig) return;
+    hydrateAutoPolicy(sessionId, conversationConfig.opencodeAutoApprove);
+  }, [sessionId, conversationConfig]);
 
   // Code mode needs its OWN tool-renderer registration.
   //

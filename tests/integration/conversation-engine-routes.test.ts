@@ -196,4 +196,66 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
 
     await conversationService.delete(created.id);
   });
+
+  it("POST /api/conversations persists opencodeAutoApprove", async () => {
+    const { status, json } = await appFetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "auto via POST",
+        opencodeAutoApprove: true,
+      }),
+    });
+    expect(status).toBe(200);
+    const conv = await json();
+    expect(conv.opencodeAutoApprove).toBe(true);
+
+    const reloaded = await conversationService.get(conv.id);
+    expect(reloaded?.opencodeAutoApprove).toBe(true);
+    await conversationService.delete(conv.id);
+  });
+
+  it("PATCH /api/conversations/:id updates opencodeAutoApprove", async () => {
+    const created = await conversationService.create({
+      title: "auto patch target",
+      providerId: "prov-engine-route",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+    });
+    expect(created.opencodeAutoApprove).toBe(false);
+
+    const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ opencodeAutoApprove: true }),
+    });
+    expect(status).toBe(200);
+    const updated = await json();
+    expect(updated.opencodeAutoApprove).toBe(true);
+
+    const reloaded = await conversationService.get(created.id);
+    expect(reloaded?.opencodeAutoApprove).toBe(true);
+    await conversationService.delete(created.id);
+  });
+
+  it("PATCH rejects a non-boolean opencodeAutoApprove with 400", async () => {
+    const created = await conversationService.create({
+      title: "auto bad probe",
+      providerId: "prov-engine-route",
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+    });
+
+    const { status } = await appFetch(`/api/conversations/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ opencodeAutoApprove: "yes" }),
+    });
+    expect(status).toBe(400);
+
+    expect((await conversationService.get(created.id))?.opencodeAutoApprove).toBe(false);
+    await conversationService.delete(created.id);
+  });
 });

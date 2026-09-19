@@ -239,6 +239,9 @@ addColumnIfNotExists("conversations", "opencode_model", "TEXT");
 // OpenCode thinking level (model variant) chosen at creation, e.g. "low"/"high".
 // Null = Default (omit the variant field on prompt_async).
 addColumnIfNotExists("conversations", "opencode_variant", "TEXT");
+// Per-conversation Auto Approval shield (Phase 6D-B). 0 = manual (ask), 1 = auto
+// (accept once). Fail-closed: absent rows read manual.
+addColumnIfNotExists("conversations", "opencode_auto_approve", "INTEGER NOT NULL DEFAULT 0");
 
 // The original messages table had `role TEXT NOT NULL` and stored a plain-text
 // content format incompatible with the assistant-ui storage format we now

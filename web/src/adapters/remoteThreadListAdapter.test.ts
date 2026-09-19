@@ -131,6 +131,56 @@ describe("adapter initialize() — welcome-engine snapshot pass-through", () => 
     globalThis.fetch = origFetch;
   });
 
+  it("materializes the draft Auto shield into the create payload", async () => {
+    useWelcomeEngineStore.setState({
+      engine: "opencode",
+      agent: "coder",
+      model: "openai/gpt-4o",
+      autoApprove: true,
+    });
+    const captured: { body?: unknown } = {};
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith("/api/conversations") && init?.method === "POST") {
+        captured.body = JSON.parse(String(init.body));
+      }
+      return { ok: true, status: 200, json: async () => ({ id: "c-auto" }) } as Response;
+    }) as typeof fetch;
+
+    const adapter = createRemoteThreadListAdapter();
+    await adapter.initialize("__LOCALID_auto");
+
+    const posted = captured.body as { opencodeAutoApprove?: unknown };
+    expect(posted.opencodeAutoApprove).toBe(true);
+
+    globalThis.fetch = origFetch;
+  });
+
+  it("a draft with Auto off materializes as manual (fail closed)", async () => {
+    useWelcomeEngineStore.setState({
+      engine: "opencode",
+      agent: "coder",
+      model: "openai/gpt-4o",
+      autoApprove: false,
+    });
+    const captured: { body?: unknown } = {};
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith("/api/conversations") && init?.method === "POST") {
+        captured.body = JSON.parse(String(init.body));
+      }
+      return { ok: true, status: 200, json: async () => ({ id: "c-manual" }) } as Response;
+    }) as typeof fetch;
+
+    const adapter = createRemoteThreadListAdapter();
+    await adapter.initialize("__LOCALID_manual");
+
+    const posted = captured.body as { opencodeAutoApprove?: unknown };
+    expect(posted.opencodeAutoApprove).toBe(false);
+
+    globalThis.fetch = origFetch;
+  });
+
   it("drops agent/model when the engine is Direct (no OpenCode fields on a Direct create)", async () => {
     // Edge: a stale opencode pick must not leak when the draft is Direct.
     useWelcomeEngineStore.setState({

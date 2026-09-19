@@ -181,6 +181,9 @@ export function createRemoteThreadListAdapter(
       let opencodeAgent: string | null = null;
       let opencodeModel: string | null = null;
       let opencodeVariant: string | null = null;
+      // The Auto Approval shield for the NEW conversation. Defaults to `false`
+      // so a draft that never set it materializes as manual.
+      let opencodeAutoApprove = false;
       try {
         const scope = getWelcomeScopeSnapshot();
         if (scope.mode === "project" && scope.folderId) {
@@ -193,6 +196,11 @@ export function createRemoteThreadListAdapter(
           opencodeAgent = draft.agent || null;
           opencodeModel = draft.model || null;
           opencodeVariant = draft.variant || null;
+          // `=== true`, not the value itself: only an explicit boolean true arms
+          // the shield, so a malformed or missing draft value materializes as
+          // manual. Same fail-closed rule as the read in
+          // `useOpenCodeConversationConfig`.
+          opencodeAutoApprove = draft.autoApprove === true;
         }
       } catch {
         /* welcome scope/engine unavailable — fall back to a disposable direct chat */
@@ -208,6 +216,7 @@ export function createRemoteThreadListAdapter(
           opencodeAgent,
           opencodeModel,
           opencodeVariant,
+          opencodeAutoApprove,
         }),
       });
       if (!res.ok) {
