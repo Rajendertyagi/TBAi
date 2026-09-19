@@ -30,18 +30,20 @@ app.post("/api/conversations", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const parsed = conversationCreateSchema.parse(body);
-    const activeProvider = registry.getActive();
+    // Phase 2 contract: persist explicit values as-given; absent stays absent
+    // (NULL), resolved to global defaults only at request time. The server
+    // must NOT concretize active-provider values into the row — a persisted
+    // value means "the user chose this" and must survive refresh/switching.
+    // (Rows created before this contract carry baked defaults that are
+    // indistinguishable from explicit choices; only new behavior is covered.)
     const provider =
-      (parsed.providerId && registry.get(parsed.providerId)) || activeProvider;
-    // New chats default non-null to the active provider's model + reasoning
-    // level so every conversation owns a concrete config from creation.
-    const modelId = parsed.modelId ?? provider?.model ?? null;
-    const reasoningLevel =
-      parsed.reasoningLevel ?? provider?.thinking ?? "off";
+      (parsed.providerId && registry.get(parsed.providerId)) || null;
+    const modelId = parsed.modelId ?? null;
+    const reasoningLevel = parsed.reasoningLevel ?? null;
 
     const conversation = await conversationService.create({
       title: parsed.title || "New Conversation",
-      providerId: provider?.id || activeProvider?.id || "",
+      providerId: provider?.id ?? parsed.providerId ?? null,
       modelId,
       reasoningLevel,
       systemPrompt: parsed.systemPrompt,
@@ -135,11 +137,9 @@ app.patch("/api/conversations/:id", async (c) => {
 
     const conversation = await conversationService.update(id, {
       ...parsed,
-      // Normalize "unset" sentinels to undefined so they don't overwrite an
-      // existing persisted value with null on a partial PATCH.
-      modelId: parsed.modelId === null ? undefined : parsed.modelId,
-      reasoningLevel:
-        parsed.reasoningLevel === null ? undefined : parsed.reasoningLevel,
+      // Phase 2 contract: explicit null clears the field (storage.update
+      // writes NULL for null, skips undefined). Omitted fields stay
+      // undefined via the schema and preserve existing values.
       // A simple chat must not retain a folder. Switching the mode to "simple"
       // clears the folder id; an explicit null also clears it; otherwise leave
       // an unspecified value untouched.

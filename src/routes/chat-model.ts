@@ -10,19 +10,55 @@ import type { ProviderConfig } from "../types";
  * can verify the exact resolution the route performs without a live provider.
  *
  * Resolution order (most specific first):
- *   1. the request's own `model` / `reasoningLevel` (one-shot overrides the
- *      client already merged in from its picker + conversation default),
+ *   1. the request's own `providerId` / `model` / `reasoningLevel` (one-shot
+ *      overrides the client already merged in from its picker + conversation
+ *      default),
  *   2. the conversation's persisted default (SQLite source of truth),
  *   3. the active provider's saved default.
  *
- * When a field is absent on the request, fall back to the conversation's
- * persisted default so a missing header never silently drops the user's
- * chosen config.
+ * Phase 2 contract: explicit references are honored verbatim and never
+ * silently re-paired. An explicitly named provider that the registry does not
+ * know throws UnknownProviderError (the route maps it to a diagnosable 400)
+ * instead of falling back to the active provider. A request-level provider
+ * wins outright — the conversation model is NOT carried across to a different
+ * provider, since that would silently re-pair a model with another provider.
+ * Global fallback applies only when neither the request nor the conversation
+ * names a provider.
  */
 export interface ResolvedChatModel {
   provider: ProviderConfig;
   model?: string;
   reasoning?: string;
+}
+
+/** Explicit reference to a provider the registry does not know. */
+export class UnknownProviderError extends Error {
+  readonly code = "UNKNOWN_PROVIDER" as const;
+  readonly providerId: string;
+
+  constructor(providerId: string) {
+    super(`Unknown provider: ${providerId}`);
+    this.name = "UnknownProviderError";
+    this.providerId = providerId;
+  }
+}
+
+function withProviderDefaults(
+  provider: ProviderConfig,
+  model?: string,
+  reasoning?: string,
+): ResolvedChatModel {
+  return {
+    provider,
+    model: model ?? provider.model ?? undefined,
+    reasoning: reasoning ?? provider.thinking ?? "off",
+  };
+}
+
+function knownProviderOrThrow(providerId: string): ProviderConfig {
+  const provider = registry.get(providerId);
+  if (!provider) throw new UnknownProviderError(providerId);
+  return provider;
 }
 
 export async function resolveChatModel(opts: {
@@ -32,27 +68,28 @@ export async function resolveChatModel(opts: {
   threadId?: string;
 }): Promise<ResolvedChatModel | null> {
   const { providerId, model, reasoningLevel, threadId } = opts;
-  const provider = (providerId && registry.get(providerId)) || registry.getActive();
-  if (!provider) return null;
+  const requestedId = providerId?.trim() ? providerId : undefined;
 
-  let effectiveModel = model;
-  let effectiveReasoning: string | undefined = reasoningLevel;
-  if (effectiveModel === undefined || effectiveReasoning === undefined) {
-    // The conversation's persisted default (source of truth). If no thread is
-    // given, or the row has no value, fall through to the provider's saved
-    // default — mirroring the inline logic the route previously carried.
-    const conv = threadId ? await conversationService.get(threadId) : null;
-    if (conv) {
-      if (effectiveModel === undefined) {
-        effectiveModel = conv.modelId ?? provider.model ?? undefined;
-      }
-      if (effectiveReasoning === undefined) {
-        effectiveReasoning = conv.reasoningLevel ?? provider.thinking ?? "off";
-      }
-    }
-    if (effectiveModel === undefined) effectiveModel = provider.model ?? undefined;
-    if (effectiveReasoning === undefined) effectiveReasoning = provider.thinking ?? "off";
+  if (requestedId) {
+    // One-shot override: honored verbatim against its own provider defaults.
+    return withProviderDefaults(knownProviderOrThrow(requestedId), model, reasoningLevel);
   }
 
-  return { provider, model: effectiveModel, reasoning: effectiveReasoning };
+  const conv = threadId ? await conversationService.get(threadId) : null;
+  const convProviderId = conv?.providerId?.trim() ? conv.providerId : undefined;
+  if (convProviderId) {
+    // Explicit conversation config: honored verbatim, never re-paired.
+    const convProvider = knownProviderOrThrow(convProviderId);
+    return withProviderDefaults(
+      convProvider,
+      model ?? conv?.modelId ?? undefined,
+      reasoningLevel ?? conv?.reasoningLevel ?? undefined,
+    );
+  }
+
+  // No explicit configuration anywhere: global fallback (or null when
+  // nothing is configured at all — the route reports "No provider configured").
+  const provider = registry.getActive();
+  if (!provider) return null;
+  return withProviderDefaults(provider, model, reasoningLevel);
 }

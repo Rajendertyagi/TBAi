@@ -1,11 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 import { welcomeConfig } from "@/config/welcome";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
-import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
+import {
+  updateConversationConfig,
+  useOpenCodeConversationConfig,
+} from "./useOpenCodeConversationConfig";
 import { useWelcomeEngineStore } from "../chat/state/welcomeEngine";
 
 /**
@@ -46,13 +50,45 @@ export function useOpenCodeChipState(conversationId: string) {
     }
     if (!conversationId) return;
     try {
-      await fetch(`/api/conversations/${conversationId}`, {
+      const res = await fetch(`/api/conversations/${conversationId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
+      if (!res.ok) {
+        logger.debug("opencode", "config persist failed", {
+          conversationId,
+          status: res.status,
+        });
+        return;
+      }
+      const updated = (await res.json().catch(() => null)) as {
+        opencodeAgent?: string | null;
+        opencodeModel?: string | null;
+        opencodeVariant?: string | null;
+      } | null;
+      // Publish ONLY server-echoed values: the override map must reflect
+      // SQLite, not the request. A mismatch leaves all visible state
+      // untouched — a failed write changes nothing visible.
+      const confirmed: Record<string, string | null> = {};
+      for (const [key, sent] of Object.entries(patch)) {
+        const echoed = updated?.[key as keyof typeof updated] ?? null;
+        if (echoed !== sent) {
+          logger.debug("opencode", "config persist mismatch", {
+            conversationId,
+            key,
+          });
+          return;
+        }
+        confirmed[key] = echoed;
+      }
+      updateConversationConfig(conversationId, {
+        ...(confirmed.opencodeAgent !== undefined ? { opencodeAgent: confirmed.opencodeAgent } : {}),
+        ...(confirmed.opencodeModel !== undefined ? { opencodeModel: confirmed.opencodeModel } : {}),
+        ...(confirmed.opencodeVariant !== undefined ? { opencodeVariant: confirmed.opencodeVariant } : {}),
+      });
     } catch {
-      /* a failed persist is non-fatal; the session falls back to server defaults */
+      logger.debug("opencode", "config persist error", { conversationId });
     }
   };
 
@@ -185,19 +221,42 @@ export function OpenCodeChipOption({
   );
 }
 
-/** Wrapper div with consistent menu chrome. */
+/** Wrapper div with consistent menu chrome. Closes on outside click / Escape. */
 export function OpenCodeChipMenu({
   open,
+  onClose,
   children,
   className,
 }: {
   open: boolean;
+  onClose: () => void;
   children: React.ReactNode;
   className?: string;
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        onCloseRef.current();
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCloseRef.current();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
   if (!open) return null;
   return (
     <div
+      ref={rootRef}
       role="menu"
       className={cn(
         "absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-border bg-card p-0 text-sm shadow-md",

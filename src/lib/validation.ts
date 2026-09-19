@@ -71,7 +71,7 @@ export type ProviderTest = z.infer<typeof providerTestSchema>;
 // Conversation persistence (assistant-ui RemoteThreadListAdapter)
 export const conversationCreateSchema = z.object({
   title: z.string().min(1).max(200).optional(),
-  providerId: z.string().optional(),
+  providerId: z.string().optional().nullable(),
   modelId: z.string().max(200).optional().nullable(),
   reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
   systemPrompt: z.string().optional(),
@@ -100,7 +100,11 @@ export const conversationCreateSchema = z.object({
 
 export const conversationUpdateSchema = z.object({
   title: z.string().min(1).max(200).optional(),
-  providerId: z.string().optional(),
+  // PATCH contract (Phase 2: conversation config persistence contract):
+  // omitted = leave unchanged; explicit null = clear to NULL; value = set.
+  // providerId accepts explicit null so a conversation-level override can be
+  // cleared back to "no explicit configuration" (global fallback applies).
+  providerId: z.string().optional().nullable(),
   modelId: z.string().max(200).optional().nullable(),
   reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
   status: z.enum(["regular", "archived"]).optional(),

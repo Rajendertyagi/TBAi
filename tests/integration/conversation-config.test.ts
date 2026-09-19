@@ -2,11 +2,12 @@
  * Per-conversation AI config persistence — end-to-end through the real Hono
  * app + the chat model-resolution seam.
  *
- * Covers the three-layer resolution the docs describe:
- *   POST /api/conversations  → defaults to the active provider's model + thinking
- *   PATCH /api/conversations/:id → persists providerId/modelId/reasoningLevel
- *   POST /api/chat (omitting model/reasoningLevel) → route falls back to the
- *   conversation's persisted default via resolveChatModel (the seam).
+ * Covers the Phase 2 resolution contract the docs describe:
+ *   POST /api/conversations  → absent stays NULL (no baked defaults)
+ *   PATCH /api/conversations/:id → persists providerId/modelId/reasoningLevel;
+ *     omitted = preserved, explicit null = cleared
+ *   resolveChatModel (the seam) → request provider wins outright (row model
+ *   is NOT re-paired); conversation default → active provider default.
  *
  * DB isolation: tests/setup.ts (bunfig preload) redirects DATA_DIR to tmp, so
  * the developer database is never touched.
@@ -48,7 +49,7 @@ describe("per-conversation config — real Hono app", () => {
     await seedActiveProvider("conv-model", "medium");
   });
 
-  it("POST /api/conversations defaults modelId + reasoningLevel to the active provider", async () => {
+  it("POST /api/conversations leaves modelId + reasoningLevel NULL when no explicit selection", async () => {
     const { status, json } = await appFetch("/api/conversations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -57,10 +58,16 @@ describe("per-conversation config — real Hono app", () => {
     expect(status).toBe(200);
     const conv = await json();
     expect(conv.id).toBeTruthy();
-    // Non-null: every conversation owns a concrete config from creation.
-    expect(conv.modelId).toBe("conv-model");
-    expect(conv.reasoningLevel).toBe("medium");
-    expect(conv.providerId).toBeTruthy();
+    // Phase 2 contract (mirror P2-07): absent stays NULL — no baked
+    // active-provider defaults. Resolution falls back at request time.
+    expect(conv.providerId).toBeNull();
+    expect(conv.modelId).toBeNull();
+    expect(conv.reasoningLevel).toBeNull();
+
+    const reloaded = await conversationService.get(conv.id);
+    expect(reloaded?.providerId).toBeNull();
+    expect(reloaded?.modelId).toBeNull();
+    expect(reloaded?.reasoningLevel).toBeNull();
 
     await conversationService.delete(conv.id);
   });
@@ -98,7 +105,7 @@ describe("per-conversation config — real Hono app", () => {
     await conversationService.delete(created.id);
   });
 
-  it("PATCH normalizes an explicit null modelId/reasoningLevel to a no-op (no clobber)", async () => {
+  it("PATCH explicit null modelId/reasoningLevel clears to NULL", async () => {
     const created = await conversationService.create({
       title: "null patch",
       providerId: "p",
@@ -107,55 +114,74 @@ describe("per-conversation config — real Hono app", () => {
       systemPrompt: null,
     });
 
-    // The adapter sends `?? undefined` for absent custom fields, which Zod sees
-    // as absent → preserved. A literal null arrives as the "unset" sentinel and
-    // is normalized to undefined in the route so it does NOT clobber.
+    // Phase 2 contract (mirror P2-03): explicit null clears the field to
+    // NULL. Only omitted (undefined) fields preserve existing values.
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: null, reasoningLevel: null }),
+      body: JSON.stringify({
+        providerId: null,
+        modelId: null,
+        reasoningLevel: null,
+      }),
     });
     expect(status).toBe(200);
     const updated = await json();
-    expect(updated.modelId).toBe("keep-me");
-    expect(updated.reasoningLevel).toBe("keep-reasoning");
+    expect(updated.providerId).toBeNull();
+    expect(updated.modelId).toBeNull();
+    expect(updated.reasoningLevel).toBeNull();
+
+    const reloaded = await conversationService.get(created.id);
+    expect(reloaded?.providerId).toBeNull();
+    expect(reloaded?.modelId).toBeNull();
+    expect(reloaded?.reasoningLevel).toBeNull();
 
     await conversationService.delete(created.id);
   });
 });
 
 describe("per-conversation config — chat route fallback (resolveChatModel seam)", () => {
-  it("an omitted request model/reasoningLevel falls back to the conversation's persisted default", async () => {
-    // Seed an active provider, then give the conversation its own default.
+  it("a request-level provider wins outright without carrying the row model across", async () => {
+    // Phase 2 contract (mirror P2-13/P2-12a): a request-level provider wins
+    // outright against its own defaults — the conversation's modelId is NOT
+    // re-paired onto the request provider, and the row is left untouched.
     await seedActiveProvider("conv-model", "medium");
+    db.run(
+      `INSERT OR REPLACE INTO provider_configs
+         (id, name, type, encrypted_api_key, credential_version, endpoint, model, models, thinking, is_active, created_at, updated_at)
+       VALUES (?, ?, 'ollama', NULL, NULL, NULL, ?, '[]', ?, 0, ?, ?)`,
+      ["prov-int-second", "int-second", "second-model", "low", Date.now(), Date.now()],
+    );
+    await registry.loadFromDb(db);
     const conv = await conversationService.create({
       title: "fallback chat",
       providerId: "prov-int-conv-model",
-      modelId: "conv-model",
-      reasoningLevel: "medium",
-      systemPrompt: null,
-    });
-    // Patch to concrete persisted values that differ from what a bare request
-    // would otherwise resolve to, proving the fallback reads the conversation.
-    await conversationService.update(conv.id, {
       modelId: "persisted-conv-model",
       reasoningLevel: "high",
+      systemPrompt: null,
     });
 
-    // The exact resolution the chat route performs (src/routes/chat.ts calls
-    // this seam). Omit model + reasoningLevel: it must pull them from the
-    // conversation row.
+    // Request names a different provider and omits model/reasoning: resolves
+    // against the request provider's own defaults, not the row's model.
     const resolved = await resolveChatModel({
-      providerId: conv.providerId ?? undefined,
+      providerId: "prov-int-second",
       model: undefined,
       reasoningLevel: undefined,
       threadId: conv.id,
     });
-    expect(resolved?.provider.id).toBe("prov-int-conv-model");
-    expect(resolved?.model).toBe("persisted-conv-model");
-    expect(resolved?.reasoning).toBe("high");
+    expect(resolved?.provider.id).toBe("prov-int-second");
+    expect(resolved?.model).toBe("second-model");
+    expect(resolved?.reasoning).toBe("low");
+
+    // The persisted row is untouched by the one-shot use.
+    const row = await conversationService.get(conv.id);
+    expect(row?.providerId).toBe("prov-int-conv-model");
+    expect(row?.modelId).toBe("persisted-conv-model");
+    expect(row?.reasoningLevel).toBe("high");
 
     await conversationService.delete(conv.id);
+    db.run("DELETE FROM provider_configs WHERE id = ?", ["prov-int-second"]);
+    await registry.loadFromDb(db);
   });
 
   it("an explicit request model/reasoningLevel wins over the conversation default", async () => {

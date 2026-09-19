@@ -17,7 +17,7 @@ import { createProgressTracker } from "../lib/progress-tracker";
 import type { ProgressData } from "../lib/progress-stages";
 import { RESUMABLE_STREAM_ID_HEADER, ResumableStreamError } from "assistant-stream/resumable";
 import { chatRequestSchema } from "../lib/validation";
-import { resolveChatModel } from "./chat-model";
+import { resolveChatModel, UnknownProviderError } from "./chat-model";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService } from "../services/storage";
@@ -44,12 +44,22 @@ app.post("/api/chat", async (c) => {
   const { providerId, model, reasoningLevel: reasoningOverride, messages } = parsed.data;
   const requestId = (c.get("requestId") as string | undefined) ?? newRequestId();
   const threadId = (parsed.data as { id?: string }).id;
-  const resolved = await resolveChatModel({
-    providerId,
-    model,
-    reasoningLevel: reasoningOverride,
-    threadId,
-  });
+  let resolved: Awaited<ReturnType<typeof resolveChatModel>>;
+  try {
+    resolved = await resolveChatModel({
+      providerId,
+      model,
+      reasoningLevel: reasoningOverride,
+      threadId,
+    });
+  } catch (e) {
+    // Explicit but unknown provider reference: diagnosable 400, never a
+    // silent substitution of the active provider (Phase 2 contract).
+    if (e instanceof UnknownProviderError) {
+      return c.json({ error: e.message, code: e.code, requestId }, 400);
+    }
+    throw e;
+  }
   if (!resolved) {
     return c.json({ error: "No provider configured", requestId }, 400);
   }

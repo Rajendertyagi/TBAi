@@ -10,6 +10,7 @@ import { historyConfig } from "../config/history";
 import { logger } from "../lib/logger";
 import { getWelcomeScopeSnapshot } from "../features/chat/state/welcomeScope";
 import { getWelcomeEngineSnapshot } from "../features/chat/state/welcomeEngine";
+import { useSettingsStore } from "../stores";
 
 interface ConvDTO {
   id: string;
@@ -184,6 +185,13 @@ export function createRemoteThreadListAdapter(
       // The Auto Approval shield for the NEW conversation. Defaults to `false`
       // so a draft that never set it materializes as manual.
       let opencodeAutoApprove = false;
+      // Explicit Direct picks on the draft (one-shot picker state). Carried
+      // into the row so the materialized conversation owns the user's choice
+      // instead of silently inheriting active-provider defaults. Absent stays
+      // absent (never concretized here — resolution falls back at request time).
+      let providerId: string | null = null;
+      let modelId: string | null = null;
+      let reasoningLevel: string | null = null;
       try {
         const scope = getWelcomeScopeSnapshot();
         if (scope.mode === "project" && scope.folderId) {
@@ -201,23 +209,32 @@ export function createRemoteThreadListAdapter(
           // manual. Same fail-closed rule as the read in
           // `useOpenCodeConversationConfig`.
           opencodeAutoApprove = draft.autoApprove === true;
+        } else {
+          const pick = useSettingsStore.getState();
+          providerId = pick.selectedProviderId ?? null;
+          modelId = pick.selectedModelId ?? null;
+          reasoningLevel = pick.selectedReasoningLevel ?? null;
         }
       } catch {
         /* welcome scope/engine unavailable — fall back to a disposable direct chat */
       }
+      const createBody = {
+        title: "New Conversation",
+        workspaceMode,
+        workspaceFolderId,
+        engine,
+        providerId,
+        modelId,
+        reasoningLevel,
+        opencodeAgent,
+        opencodeModel,
+        opencodeVariant,
+        opencodeAutoApprove,
+      };
       const res = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: "New Conversation",
-          workspaceMode,
-          workspaceFolderId,
-          engine,
-          opencodeAgent,
-          opencodeModel,
-          opencodeVariant,
-          opencodeAutoApprove,
-        }),
+        body: JSON.stringify(createBody),
       });
       if (!res.ok) {
         // Edge: stale project folder rejected by validation — retry once as
@@ -231,9 +248,13 @@ export function createRemoteThreadListAdapter(
               workspaceMode: "simple",
               workspaceFolderId: null,
               engine,
+              providerId,
+              modelId,
+              reasoningLevel,
               opencodeAgent,
               opencodeModel,
               opencodeVariant,
+              opencodeAutoApprove,
             }),
           });
           if (!fallback.ok) {
@@ -265,31 +286,61 @@ export function createRemoteThreadListAdapter(
     // Persists a conversation's AI config back to SQLite. Called by the runtime
     // when the user picks a model/reasoning level in the composer — the browser
     // only sends providerId/modelId/reasoningLevel, never secrets or protocol.
-    // Best-effort by contract: every send re-transmits the effective config in
-    // the request body, so a dropped PATCH self-heals on the next message.
-    // Failures are logged, never thrown (the composer pick must not break).
+    // Phase 2 contract (authoritative persistence): explicit null clears the
+    // field; the echoed row is verified against the request. A rejected or
+    // mismatched write THROWS so the runtime rolls the optimistic custom state
+    // back instead of committing a lie to local state (same contract as
+    // rename). Failures are never swallowed.
     async updateCustom(remoteId: string, custom: Record<string, unknown>) {
+      const pick = (v: unknown): string | null | undefined =>
+        v === null ? null : typeof v === "string" ? v : undefined;
+      const body: Record<string, string | null> = {};
+      const providerId = pick(custom.providerId);
+      const modelId = pick(custom.modelId);
+      const reasoningLevel = pick(custom.reasoningLevel);
+      if (providerId !== undefined) body.providerId = providerId;
+      if (modelId !== undefined) body.modelId = modelId;
+      if (reasoningLevel !== undefined) body.reasoningLevel = reasoningLevel;
+      let res: Response;
       try {
-        const res = await fetch(`/api/conversations/${remoteId}`, {
+        res = await fetch(`/api/conversations/${remoteId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            providerId: custom.providerId ?? undefined,
-            modelId: custom.modelId ?? undefined,
-            reasoningLevel: custom.reasoningLevel ?? undefined,
-          }),
+          body: JSON.stringify(body),
         });
-        if (!res.ok) {
-          logger.debug("chat", "config_sync_failed", {
-            threadId: remoteId,
-            status: res.status,
-          });
-        }
       } catch (err) {
         logger.debug("chat", "config_sync_failed", {
           threadId: remoteId,
           errorType: err instanceof Error ? err.name : typeof err,
         });
+        throw new Error(`Failed to persist conversation config: network error`);
+      }
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const serverError = (detail as { error?: unknown }).error;
+        logger.debug("chat", "config_sync_failed", {
+          threadId: remoteId,
+          status: res.status,
+        });
+        throw new Error(
+          `Failed to persist conversation config (${res.status}): ${typeof serverError === "string" ? serverError : "unknown error"}`,
+        );
+      }
+      const updated = (await res.json().catch(() => null)) as {
+        providerId?: string | null;
+        modelId?: string | null;
+        reasoningLevel?: string | null;
+      } | null;
+      const echoed: Record<string, string | null | undefined> = {
+        providerId: updated?.providerId,
+        modelId: updated?.modelId,
+        reasoningLevel: updated?.reasoningLevel,
+      };
+      for (const [key, sent] of Object.entries(body)) {
+        if ((echoed[key] ?? null) !== sent) {
+          logger.debug("chat", "config_sync_mismatch", { threadId: remoteId, key });
+          throw new Error(`Conversation config not reflected by server: ${key}`);
+        }
       }
     },
 
