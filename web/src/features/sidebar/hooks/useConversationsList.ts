@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useAvailabilityStore } from "../../availability/availabilityStore";
 
 export interface ConversationItem {
   remoteId: string;
@@ -39,6 +40,14 @@ export function useConversationsList(
   const [hasMore, setHasMore] = useState<boolean>(false);
   const [page, setPage] = useState<number>(0);
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+  // Coordinated recovery (Phase 3.8): refetch the authoritative list when
+  // the backend returns. Failure retains the previous items (catch below).
+  const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
+  useEffect(() => {
+    if (recoveryEpoch === 0) return;
+    setPage(0);
+    setRefreshTrigger((n) => n + 1);
+  }, [recoveryEpoch]);
 
   const refetch = useCallback(() => {
     setPage(0);

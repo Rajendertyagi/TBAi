@@ -11,6 +11,7 @@ import { appToolkit } from "@/tools/toolkit";
 import { useConversationTab } from "@/features/chat/state/useConversationTab";
 import { OPENCODE_INIT_TIMEOUT_MS } from "@/config/opencode";
 import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
+import { useAvailabilityStore } from "../availability/availabilityStore";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
 import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
 import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
@@ -233,6 +234,16 @@ function AgentRuntime({
     defaultAgent,
     eventDirectory,
   );
+
+  // Global backend recovery (Phase 3.10): trigger the EXISTING reconnect
+  // boundary (client-epoch rebuild + hydration/reconcile) — never a second
+  // implementation. Only when a session is actually bound; each recovery
+  // epoch fires exactly once, so no duplicate reconnects.
+  const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
+  useEffect(() => {
+    if (recoveryEpoch === 0 || !sessionId) return;
+    reconnect();
+  }, [recoveryEpoch, sessionId, reconnect]);
 
   // Hydrate the runtime policy cache the moment the authoritative config is
   // known. The cache is keyed by the OpenCode sessionId (the identity the

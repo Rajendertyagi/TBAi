@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useAvailabilityStore } from "../availability/availabilityStore";
 
 export interface OpenCodeAgentOption {
   id: string;
@@ -56,6 +57,10 @@ export function useOpenCodeCapabilities(enabled = true) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Coordinated recovery (Phase 3.8): refetch authoritative capabilities
+  // when the backend returns. Failure retains the previous lists.
+  const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
+
   useEffect(() => {
     if (!enabled) {
       setAgents([]);
@@ -93,7 +98,7 @@ export function useOpenCodeCapabilities(enabled = true) {
       cancelled = true;
       controller.abort();
     };
-  }, [enabled]);
+  }, [enabled, recoveryEpoch]);
 
   return { agents, models, isLoading, error };
 }

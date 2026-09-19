@@ -47,7 +47,10 @@ export function ElicitationModal() {
   const resolve = async (action: "accept" | "decline" | "cancel") => {
     setBusy(true);
     try {
-      await fetch("/api/mcp/elicit/resolve", {
+      // Phase 3.11: dismissal requires server confirmation. A failed resolve
+      // keeps the pending request visible instead of reporting an answer the
+      // server never received.
+      const res = await fetch("/api/mcp/elicit/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -57,6 +60,7 @@ export function ElicitationModal() {
           content: action === "accept" ? values : undefined,
         }),
       });
+      if (!res.ok) return;
       setPending(null);
     } finally {
       setBusy(false);

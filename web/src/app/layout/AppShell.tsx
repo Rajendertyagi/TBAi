@@ -13,6 +13,8 @@ import { TabUrlSync } from "../TabUrlSync";
 import { isTauri } from "../../lib/platform";
 import { syncChromeVars } from "../../lib/chrome-vars";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
+import { useAvailabilityStore } from "../../features/availability/availabilityStore";
+import { registerAvailabilityRecovery } from "../../features/availability/recovery";
 
 /**
  * Single application shell for BOTH the browser and the Windows desktop.
@@ -54,6 +56,18 @@ export function AppShell({ children }: AppShellProps = {}) {
   useEffect(() => {
     syncChromeVars({ sidebarWidth, searchOpen, captionStrip });
   }, [sidebarWidth, searchOpen, captionStrip]);
+
+  // Global backend availability (Phase 3): exactly one readiness poller for
+  // the whole app lifetime, plus the single coordinated recovery listener.
+  // Both are idempotent singletons; StrictMode remounts cannot duplicate them.
+  useEffect(() => {
+    const unregister = registerAvailabilityRecovery();
+    useAvailabilityStore.getState().start();
+    return () => {
+      unregister();
+      useAvailabilityStore.getState().stop();
+    };
+  }, []);
 
   return (
     <div className="relative flex h-screen flex-col bg-background text-foreground">

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { threadListAdapter } from "../../../app/adapter";
-import { threadEngine } from "../../../adapters/remoteThreadListAdapter";
+import { ConversationNotFoundError, threadEngine } from "../../../adapters/remoteThreadListAdapter";
+import { logger } from "../../../lib/logger";
 import {
   NEW_DRAFT_TAB_ID,
   agentKey,
@@ -77,8 +78,20 @@ export function useConversationTab(
         }
         navigate(threadUrl(ref, rowEngine), { replace: true });
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled) return;
+        // Phase 3.4: only CONFIRMED server evidence (404) may destroy.
+        // Network failure / 5xx / indeterminate means existence is UNKNOWN:
+        // keep the tab, keep the route, keep known data (marked stale by the
+        // global availability indicator). Never generic error-swallowing —
+        // the distinction lives in the adapter's typed fetch errors.
+        if (!(err instanceof ConversationNotFoundError)) {
+          logger.debug("chat", "conversation validation unknown, retaining", {
+            ref,
+            errorType: err instanceof Error ? err.name : typeof err,
+          });
+          return;
+        }
         const current = useChatTabsStore.getState();
         for (const tab of current.tabs) {
           if (tab.ref === ref) current.close(tab.key);

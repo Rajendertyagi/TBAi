@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { appConfig, getNavItem } from "../config/navigation";
 import { statusBarConfig } from "../config/statusBar";
 import { useSettingsStore } from "../stores/index";
+import { useAvailabilityStore } from "../features/availability/availabilityStore";
 import { StatusBarQuickActions } from "./StatusBarQuickActions";
 
 /**
@@ -34,6 +35,20 @@ export function StatusBar() {
   const openProviders = () =>
     navigate(getNavItem("providers")?.route ?? appConfig.settingsIndexRoute);
 
+  // Global backend availability (Phase 3.3). Healthy keeps the existing
+  // "Local" chrome byte-identical; degraded/offline states say explicitly
+  // that visible data is last-known, never authoritative.
+  const availability = useAvailabilityStore((s) => s.status);
+  const availabilityCopy =
+    availability === "offline"
+      ? { label: copy.availabilityOffline, title: copy.availabilityOfflineTitle }
+      : availability === "degraded"
+        ? { label: copy.availabilityDegraded, title: copy.availabilityDegradedTitle }
+        : availability === "online"
+          ? { label: copy.availabilityOnline, title: copy.availabilityOnlineTitle }
+          : { label: copy.availabilityUnknown, title: copy.availabilityUnknownTitle };
+  const availabilityUnhealthy = availability === "offline" || availability === "degraded";
+
   return (
     <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-muted/40 pl-2 pr-4 text-xs text-muted-foreground">
       <div className="flex min-w-0 items-center gap-3">
@@ -41,11 +56,18 @@ export function StatusBar() {
         <button
           type="button"
           onClick={openProviders}
-          title={copy.connectionTitle}
+          title={availabilityCopy.title}
           className="flex items-center gap-1.5 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <Circle aria-hidden="true" className="size-2 fill-current" />
-          {copy.connectionLocal}
+          <Circle
+            aria-hidden="true"
+            className={
+              availabilityUnhealthy
+                ? "size-2 fill-destructive text-destructive"
+                : "size-2 fill-current"
+            }
+          />
+          {availabilityCopy.label}
         </button>
         <button
           type="button"

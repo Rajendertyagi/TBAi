@@ -89,7 +89,15 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       selectedReasoningLevel: null,
     }),
   loadProviders: async () => {
-    const response = await fetch("/api/providers");
+    // Phase 3.5: a failed load retains the previous provider list (stale
+    // rather than empty). Only a confirmed response replaces it.
+    let response: Response;
+    try {
+      response = await fetch("/api/providers");
+    } catch {
+      return;
+    }
+    if (!response.ok) return;
     const providers = (await response.json()) as ProviderConfig[];
     useSettingsStore.getState().setProviders(providers);
   },

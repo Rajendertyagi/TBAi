@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useAvailabilityStore } from "../availability/availabilityStore";
 
 /**
  * OpenCode configuration for a bound conversation: the persisted agent, model,
@@ -32,11 +33,27 @@ export interface OpenCodeConversationConfig {
  * TBAi conversation API (the same source `OpenCodeSessionRow` displays). No
  * value leaks into the normal-chat runtime: this hook is only mounted under the
  * OpenCode feature tree.
+ *
+ * Freshness: the server fetch runs once per conversationId, but successful
+ * chip writes also land in a module-level override map via
+ * {@link updateConversationConfig}, merged over the fetched value in EVERY
+ * instance (chips, `OpenCodeView` runtime defaults, session rows). Without
+ * this, a PATCH would update the server while every mounted reader kept
+ * showing — and sending with — the stale pick until reload. Overrides are
+ * keyed by conversationId, so switching conversations can never leak one
+ * chat's picks into another; they only ever hold last-confirmed server
+ * writes, so a failed PATCH changes nothing visible.
  */
 export function useOpenCodeConversationConfig(
   conversationId: string | undefined,
 ): OpenCodeConversationConfig | null {
   const [config, setConfig] = useState<OpenCodeConversationConfig | null>(null);
+  // Re-render every instance when any override lands.
+  const version = useSyncExternalStore(subscribeOverrides, getOverrideVersion);
+
+  // Coordinated recovery (Phase 3.8): re-read authoritative config when the
+  // backend returns. Failure retains the previous config (catch below).
+  const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
 
   useEffect(() => {
     if (!conversationId) {
@@ -63,7 +80,53 @@ export function useOpenCodeConversationConfig(
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, recoveryEpoch]);
 
-  return config;
+  return useMemo(() => {
+    if (!config || !conversationId) return config;
+    const override = configOverrides.get(conversationId);
+    if (!override) return config;
+    return { ...config, ...override };
+  }, [config, conversationId, version]);
+}
+
+type ConfigPatch = Partial<
+  Pick<
+    OpenCodeConversationConfig,
+    "opencodeAgent" | "opencodeModel" | "opencodeVariant" | "opencodeAutoApprove"
+  >
+>;
+
+/** Last-confirmed server writes, keyed by conversation. Never fail-closed data. */
+const configOverrides = new Map<string, ConfigPatch>();
+let overrideVersion = 0;
+const overrideListeners = new Set<() => void>();
+
+function getOverrideVersion(): number {
+  return overrideVersion;
+}
+
+function subscribeOverrides(notify: () => void): () => void {
+  overrideListeners.add(notify);
+  return () => {
+    overrideListeners.delete(notify);
+  };
+}
+
+/**
+ * Record a successfully persisted conversation-config write so every mounted
+ * reader (chips, runtime defaults) reflects it immediately instead of waiting
+ * for a reload. Call ONLY after the PATCH succeeded — a failed write must
+ * leave the visible state untouched.
+ */
+export function updateConversationConfig(
+  conversationId: string,
+  patch: ConfigPatch,
+): void {
+  const prev = configOverrides.get(conversationId) ?? {};
+  configOverrides.set(conversationId, { ...prev, ...patch });
+  overrideVersion++;
+  overrideListeners.forEach((notify) => {
+    notify();
+  });
 }

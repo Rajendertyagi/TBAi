@@ -28,6 +28,10 @@ export const composerConfig = {
     addGithub: "Add GitHub PR / Issue",
     sendMessage: "Send message",
     stopGenerating: "Stop generating",
+    // Offline send gate (Phase 3.7): the draft is retained, nothing is sent
+    // or queued, and the user must explicitly send after recovery.
+    sendOffline: "Backend unavailable — draft kept",
+    sendOfflineTitle: "Backend unavailable. Your draft is kept — send it after reconnect.",
     modelSearchPlaceholder: "Search models...",
     modelSearchAria: "Search models",
     modelListAria: "Models",

@@ -94,6 +94,35 @@ export function setThreadListSearchQuery(q: string): void {
 // Same module-var pattern as the search query; list() appends it as ?order=.
 let threadListSortOrder: "updated" | "created" = "updated";
 
+// Last-good thread-list projection (Phase 3.5: stale-state retention).
+// A failed list() returns the previous successful result instead of empty so
+// a backend outage renders stale-with-badge rather than zero conversations.
+// Only a CONFIRMED server response (ok, possibly []) replaces the cache.
+// Cleared by invalidateThreadListCache() during coordinated recovery so the
+// next read is authoritative. Module-level: shared by all runtime instances,
+// never a secret (titles/ids only).
+let lastGoodThreads: ThreadMetadata[] | null = null;
+
+/** Drop the retained thread-list projection (recovery forces fresh reads). */
+export function invalidateThreadListCache(): void {
+  lastGoodThreads = null;
+}
+
+/**
+ * Confirmed server evidence that a conversation does not exist (HTTP 404).
+ * Only this error may drive destructive transitions (tab close + fallback);
+ * every other fetch failure means existence is UNKNOWN and must retain.
+ */
+export class ConversationNotFoundError extends Error {
+  readonly threadId: string;
+
+  constructor(threadId: string) {
+    super(`Thread not found: ${threadId}`);
+    this.name = "ConversationNotFoundError";
+    this.threadId = threadId;
+  }
+}
+
 export function setThreadListSortOrder(order: "updated" | "created"): void {
   threadListSortOrder = order;
 }
@@ -156,10 +185,15 @@ export function createRemoteThreadListAdapter(
             status: res.status,
             errorType: "upstream_http_error",
           });
-          return { threads: [] };
+          // Temporary failure (or confirmed empty): a non-ok response carries
+          // no authoritative list, so retain the previous projection. An empty
+          // server response arrives as ok + [] and replaces the cache below —
+          // "could not be reached" never becomes "zero conversations".
+          return lastGoodThreads ? { threads: lastGoodThreads } : { threads: [] };
         }
         const data = await res.json();
         const threads = (data.threads as ConvDTO[]).map(toMetadata);
+        lastGoodThreads = threads;
         logger.debug("opencode", "conversations.list.success", {
           status: res.status,
           count: threads.length,
@@ -171,7 +205,7 @@ export function createRemoteThreadListAdapter(
           errorType: err instanceof Error ? err.name : typeof err,
           message: err instanceof Error ? err.message : String(err),
         });
-        return { threads: [] };
+        return lastGoodThreads ? { threads: lastGoodThreads } : { threads: [] };
       }
     },
 
@@ -395,8 +429,18 @@ export function createRemoteThreadListAdapter(
     },
 
     async fetch(threadId) {
-      const res = await fetch(`/api/conversations/${threadId}`);
-      if (!res.ok) throw new Error("Thread not found");
+      let res: Response;
+      try {
+        res = await fetch(`/api/conversations/${threadId}`);
+      } catch {
+        // Network failure: existence UNKNOWN — propagate without a verdict so
+        // callers retain rather than delete.
+        throw new Error(`Thread status unknown: ${threadId}`);
+      }
+      // Only a confirmed 404 means "does not exist". Any other non-ok status
+      // is indeterminate (500/503/…) and must not drive deletion either.
+      if (res.status === 404) throw new ConversationNotFoundError(threadId);
+      if (!res.ok) throw new Error(`Thread status unknown: ${threadId}`);
       const conv = await res.json();
       return toMetadata(conv);
     },

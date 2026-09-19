@@ -1,6 +1,36 @@
 import type { ThreadHistoryAdapter, ExportedMessageRepositoryItem } from "@assistant-ui/react";
 
 /**
+ * Last-good history projection per conversation (Phase 3.5: stale-state
+ * retention). A failed load() returns the previous successful messages
+ * instead of empty so an outage renders stale messages rather than a blank
+ * thread. Only a CONFIRMED server response replaces the entry. Bounded and
+ * cleared by invalidateHistoryCache() during coordinated recovery so the
+ * next load is authoritative. Message content only — never credentials.
+ */
+type BaseHistoryMessage = { message: any; parentId: string | null };
+const lastGoodHistory = new Map<string, unknown[]>();
+const HISTORY_CACHE_LIMIT = 20;
+
+function rememberHistory(remoteId: string, messages: unknown[]): void {
+  if (lastGoodHistory.size >= HISTORY_CACHE_LIMIT && !lastGoodHistory.has(remoteId)) {
+    const oldest = lastGoodHistory.keys().next().value;
+    if (oldest !== undefined) lastGoodHistory.delete(oldest);
+  }
+  lastGoodHistory.set(remoteId, messages);
+}
+
+function retainedHistory<T>(remoteId: string): T[] {
+  return (lastGoodHistory.get(remoteId) ?? []) as T[];
+}
+
+/** Drop retained history projections (recovery forces fresh reads). */
+export function invalidateHistoryCache(remoteId?: string): void {
+  if (remoteId) lastGoodHistory.delete(remoteId);
+  else lastGoodHistory.clear();
+}
+
+/**
  * HTTP-backed ThreadHistoryAdapter for assistant-ui's RemoteThreadListRuntime.
  *
  * The AI SDK runtime (`useChatRuntime`) requires the adapter to expose
@@ -39,11 +69,17 @@ export function createThreadHistoryAdapter(
     content: unknown;
   }) => {
     const remoteId = await ensureRemoteId();
-    await fetch(`/api/conversations/${remoteId}/messages`, {
+    // Phase 3.11: the write is only successful when the server confirms it.
+    // A failed persist throws so the runtime surfaces the failure instead of
+    // diverging silently from SQLite.
+    const res = await fetch(`/api/conversations/${remoteId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: entry }),
     });
+    if (!res.ok) {
+      throw new Error(`Failed to persist message (${res.status})`);
+    }
   };
 
   const baseAdapter: ThreadHistoryAdapter = {
@@ -52,17 +88,22 @@ export function createThreadHistoryAdapter(
       if (!remoteId) return { messages: [] };
       try {
         const res = await fetch(`/api/conversations/${remoteId}/messages`);
-        if (!res.ok) return { messages: [] };
+        // Non-ok carries no authoritative history: retain the previous
+        // projection. A confirmed ok (even []) replaces the cache — "could
+        // not be reached" never becomes "no messages".
+        if (!res.ok) return { headId: null, messages: retainedHistory<BaseHistoryMessage>(remoteId) };
         const data = (await res.json()) as { messages: Array<{ content: unknown; parent_id: string | null }> };
+        const messages: BaseHistoryMessage[] = (data.messages ?? []).map((m) => ({
+          message: m.content as any,
+          parentId: m.parent_id ?? null,
+        }));
+        rememberHistory(remoteId, messages);
         return {
           headId: null,
-          messages: (data.messages ?? []).map((m) => ({
-            message: m.content as any,
-            parentId: m.parent_id ?? null,
-          })),
+          messages,
         };
       } catch {
-        return { messages: [] };
+        return { headId: null, messages: retainedHistory<BaseHistoryMessage>(remoteId) };
       }
     },
 
@@ -82,10 +123,15 @@ export function createThreadHistoryAdapter(
     async delete(items: ExportedMessageRepositoryItem[]) {
       const remoteId = await ensureRemoteId();
       for (const it of items) {
-        await fetch(`/api/conversations/${remoteId}/messages/${it.message.id}`, {
+        // Phase 3.11: deletion must be server-confirmed like appends.
+        const res = await fetch(`/api/conversations/${remoteId}/messages/${it.message.id}`, {
           method: "DELETE",
         });
+        if (!res.ok) {
+          throw new Error(`Failed to delete message (${res.status})`);
+        }
       }
+      invalidateHistoryCache(remoteId);
     },
   };
 
@@ -113,10 +159,15 @@ export function createThreadHistoryAdapter(
         async delete(items) {
           const remoteId = await ensureRemoteId();
           for (const it of items) {
-            await fetch(`/api/conversations/${remoteId}/messages/${formatAdapter.getId(it.message)}`, {
+            // Phase 3.11: deletion must be server-confirmed like appends.
+            const res = await fetch(`/api/conversations/${remoteId}/messages/${formatAdapter.getId(it.message)}`, {
               method: "DELETE",
             });
+            if (!res.ok) {
+              throw new Error(`Failed to delete message (${res.status})`);
+            }
           }
+          invalidateHistoryCache(remoteId);
         },
 
         reportTelemetry() {},
@@ -126,24 +177,26 @@ export function createThreadHistoryAdapter(
           if (!remoteId) return { messages: [] };
           try {
             const res = await fetch(`/api/conversations/${remoteId}/messages`);
-            if (!res.ok) return { messages: [] };
+            // Same retention rule as the base load: only a confirmed ok
+            // replaces the cache; failure retains the previous projection.
+        if (!res.ok) return { messages: retainedHistory(remoteId) };
             const data = (await res.json()) as {
               messages: Array<{ id: string; parent_id: string | null; format: string; content: unknown }>;
             };
-            return {
-              messages: (data.messages ?? [])
-                .filter((e) => e.content != null)
-                .map((e) =>
-                  formatAdapter.decode({
-                    id: e.id,
-                    parent_id: e.parent_id ?? null,
-                    format: e.format,
-                    content: e.content as any,
-                  })
-                ),
-            };
+            const messages = (data.messages ?? [])
+              .filter((e) => e.content != null)
+              .map((e) =>
+                formatAdapter.decode({
+                  id: e.id,
+                  parent_id: e.parent_id ?? null,
+                  format: e.format,
+                  content: e.content as any,
+                })
+              );
+            rememberHistory(remoteId, messages);
+            return { messages };
           } catch {
-            return { messages: [] };
+            return { messages: retainedHistory(remoteId) };
           }
         },
       };

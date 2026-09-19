@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AuiIf,
   ComposerPrimitive,
@@ -26,6 +26,11 @@ import { logger } from "../lib/logger";
 import { useSettingsStore } from "../stores";
 import type { ReasoningLevel } from "../types";
 import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
+import { useAvailabilityStore } from "../features/availability/availabilityStore";
+import {
+  readComposerDraft,
+  writeComposerDraft,
+} from "../features/chat/state/composerDraft";
 import { useMcpStore } from "../stores/mcpStore";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import {
@@ -294,8 +299,39 @@ function Composer({
   /** True on the Code surface (bound OpenCode conversation). */
   isCodeSurface?: boolean;
 }) {
-  const { setText } = unstable_useComposerInput();
+  const { value: composerText, setText } = unstable_useComposerInput();
   const aui = useAui();
+  // Thread identity for draft persistence. Guarded: the composer also mounts
+  // under runtimes where the thread item may be momentarily unavailable —
+  // without an identity we skip persistence rather than cross-contaminate.
+  const threadKey = (() => {
+    try {
+      const item = aui.threadListItem.getState() as {
+        remoteId?: string | null;
+        id?: string | null;
+      };
+      return item.remoteId ?? item.id ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const isOffline = useAvailabilityStore((s) => s.status === "offline");
+
+  // Draft durability (Phase 3.7): restore once on mount when the box is empty
+  // and a saved draft exists; persist every non-empty change; drop the key
+  // when the box empties (send or manual clear). Recovery never auto-submits.
+  const draftRestored = useRef(false);
+  useEffect(() => {
+    if (draftRestored.current || !threadKey) return;
+    draftRestored.current = true;
+    if (composerText) return;
+    const saved = readComposerDraft(threadKey);
+    if (saved) setText(saved.text);
+  }, [threadKey, composerText, setText]);
+  useEffect(() => {
+    if (!threadKey || !draftRestored.current) return;
+    writeComposerDraft(threadKey, composerText);
+  }, [threadKey, composerText]);
   // Draft engine for the welcome surface. Bound threads never set
   // isWelcomeDraft, so showOpenCodeDraft is true only on the new-chat draft
   // with the OpenCode engine — never inferred, always explicit.
@@ -383,23 +419,42 @@ function Composer({
             </TooltipIconButton>
             {/* Single action slot (docs idiom): exactly one of Send / Cancel
                 is mounted — arrow when idle, square Stop while generating.
-                Same footprint, so the row never shifts on swap. */}
+                Same footprint, so the row never shifts on swap. While the
+                backend is offline the Send primitive is replaced by an inert
+                button (same footprint): the draft is retained, nothing is
+                sent or queued, and recovery never auto-submits. */}
             <AuiIf condition={(s) => !s.thread.isRunning}>
-              <ComposerPrimitive.Send asChild>
+              {isOffline ? (
                 <button
-                  type="submit"
-                  aria-label={composerConfig.copy.sendMessage}
+                  type="button"
+                  disabled
+                  aria-label={composerConfig.copy.sendOffline}
+                  title={composerConfig.copy.sendOfflineTitle}
                   className={cn(
                     "size-7 rounded-full flex items-center justify-center",
                     "bg-accent text-accent-foreground",
-                    "hover:bg-accent/90 active:scale-95",
-                    "transition-all duration-150",
                     "disabled:opacity-30 disabled:pointer-events-none",
                   )}
                 >
                   <ArrowUp className="size-3.5" />
                 </button>
-              </ComposerPrimitive.Send>
+              ) : (
+                <ComposerPrimitive.Send asChild>
+                  <button
+                    type="submit"
+                    aria-label={composerConfig.copy.sendMessage}
+                    className={cn(
+                      "size-7 rounded-full flex items-center justify-center",
+                      "bg-accent text-accent-foreground",
+                      "hover:bg-accent/90 active:scale-95",
+                      "transition-all duration-150",
+                      "disabled:opacity-30 disabled:pointer-events-none",
+                    )}
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </button>
+                </ComposerPrimitive.Send>
+              )}
             </AuiIf>
             <AuiIf condition={(s) => s.thread.isRunning}>
               <TooltipProvider>
