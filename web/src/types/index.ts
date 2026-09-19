@@ -1,8 +1,20 @@
+export type CapabilitySupport = "supported" | "unsupported" | "unknown";
+
+export interface ReasoningCapability {
+  support: CapabilitySupport;
+  levels?: string[];
+}
+
+export interface ModelCapabilities {
+  reasoning: ReasoningCapability;
+}
+
 export interface ModelOption {
   id: string;
   label?: string;
   provider: string;
   contextWindow?: number;
+  capabilities?: ModelCapabilities;
 }
 
 export type ApiProtocol = "responses" | "chat-completions";

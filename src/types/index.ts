@@ -1,8 +1,43 @@
+/**
+ * Canonical per-model capability representation (Phase 1: model capabilities
+ * foundation). Describes what a model supports as reported by a truthful
+ * source — never inferred from model-name patterns and never hardcoded per
+ * model. Three-state semantics are load-bearing:
+ * - "supported": a source explicitly reported the capability.
+ * - "unsupported": a source explicitly reported its absence.
+ * - "unknown": no source has reported either way. Absence of metadata is NOT
+ *   evidence of absence — consumers must never collapse unknown into false.
+ */
+export type CapabilitySupport = "supported" | "unsupported" | "unknown";
+
+export interface ReasoningCapability {
+  support: CapabilitySupport;
+  /**
+   * Opaque source-provided thinking mode identifiers (count-agnostic: a model
+   * may expose none, one, or many). Present only when the source supplies
+   * meaningful mode ids. Never mapped to TBAi's off/low/medium/high control
+   * vocabulary here — that mapping is a later UI/configuration decision.
+   */
+  levels?: string[];
+}
+
+export interface ModelCapabilities {
+  /** Reasoning support. Required when capabilities are present: a producer
+   * must take an explicit stance (supported/unsupported/unknown). */
+  reasoning: ReasoningCapability;
+}
+
 export interface ModelOption {
   id: string;
   label?: string;
   provider: string;
   contextWindow?: number;
+  /**
+   * Derived discovery metadata. Re-derived on each discovery pass and carried
+   * inside the existing provider `models` JSON column — never an independently
+   * persisted source of truth. Absent on legacy models (treated as unknown).
+   */
+  capabilities?: ModelCapabilities;
 }
 
 export type ApiProtocol = "responses" | "chat-completions";

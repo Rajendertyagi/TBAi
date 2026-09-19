@@ -1,4 +1,4 @@
-import type { ModelOption, ProviderConfig } from "../types";
+import type { ModelCapabilities, ModelOption, ProviderConfig } from "../types";
 
 export type DiscoverInput = {
   type: ProviderConfig["type"];
@@ -33,10 +33,79 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs = 15000): Pro
   }
 }
 
+/**
+ * Modalities that can never serve as chat models. This is the legitimate half
+ * of discovery filtering ("is this usable as a model?").
+ */
+function isExcludedModality(lowerId: string): boolean {
+  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-/.test(lowerId);
+}
+
+/**
+ * Legacy family allowlist. This is a discovery-noise filter only — it answers
+ * "have we seen this family before", never "what can this model do". It must
+ * NOT grow into a capability mechanism: capability metadata comes exclusively
+ * from truthful per-model sources via ModelCapabilities. New families must be
+ * handled by richer discovery, not by extending this expression.
+ */
+function isKnownChatFamily(lowerId: string, type: string): boolean {
+  return /gpt|claude|gemini|llama|qwen|mistral|deepseek|codestral|sonnet|opus|haiku|flash|pro|yi|grok|phi|command|nighttales/.test(lowerId) || type === "ollama";
+}
+
 function isChatModel(id: string, type: string): boolean {
   const lower = id.toLowerCase();
-  if (/embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-/.test(lower)) return false;
-  return /gpt|claude|gemini|llama|qwen|mistral|deepseek|codestral|sonnet|opus|haiku|flash|pro|yi|grok|phi|command|nighttales/.test(lower) || type === "ollama";
+  return !isExcludedModality(lower) && isKnownChatFamily(lower, type);
+}
+
+/** Single owner of the "no source has reported anything yet" capability state. */
+function unknownReasoning(): ModelCapabilities {
+  return { reasoning: { support: "unknown" } };
+}
+
+/**
+ * Ollama `/api/show` capability lookup (Phase 1's only truthful per-model
+ * capability source besides identity listing). Contract: POST {model} →
+ * `{capabilities?: unknown}` where the array holds lowercase tokens such as
+ * "thinking". Only an explicitly reported "thinking" entry yields supported;
+ * a missing/unreachable/malformed source stays unknown — never unsupported.
+ * Shape-guarded throughout: an unexpected daemon response degrades one model
+ * to unknown instead of breaking discovery.
+ */
+async function fetchOllamaCapabilities(base: string, model: string): Promise<ModelCapabilities> {
+  try {
+    const raw = (await fetchJson(joinBase(base, "api/show"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    })) as { capabilities?: unknown };
+    const caps = raw?.capabilities;
+    if (Array.isArray(caps) && caps.some((c) => c === "thinking")) {
+      return { reasoning: { support: "supported" } };
+    }
+    return unknownReasoning();
+  } catch {
+    return unknownReasoning();
+  }
+}
+
+/** Bounded parallel fan-out (no dependency, no retries, no sleeps). */
+const OLLAMA_SHOW_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) continue;
+      out[index] = await fn(item);
+    }
+  };
+  const pool = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: pool }, () => worker()));
+  return out;
 }
 
 function normalizeOpenAI(raw: any, provider: string): ModelOption[] {
@@ -44,7 +113,9 @@ function normalizeOpenAI(raw: any, provider: string): ModelOption[] {
   return data
     .map((m: any) => String(m?.id ?? "").trim())
     .filter((id): id is string => Boolean(id) && isChatModel(id, provider))
-    .map((id: string) => ({ id, provider }));
+    // OpenAI listing endpoints expose identity only — no truthful per-model
+    // capability source exists here, so reasoning stays unknown.
+    .map((id: string) => ({ id, provider, capabilities: unknownReasoning() }));
 }
 
 function normalizeAnthropic(raw: any, provider: string): ModelOption[] {
@@ -58,6 +129,9 @@ function normalizeAnthropic(raw: any, provider: string): ModelOption[] {
         provider,
         label: m?.display_name ? String(m.display_name) : undefined,
         contextWindow: typeof m?.max_input_tokens === "number" ? m.max_input_tokens : undefined,
+        // Anthropic listing exposes identity/label/context only — reasoning
+        // support is not reported, so it stays unknown.
+        capabilities: unknownReasoning(),
       } as ModelOption;
     })
     .filter((m: ModelOption | null): m is ModelOption => m !== null);
@@ -68,15 +142,17 @@ function normalizeGoogle(raw: any, provider: string): ModelOption[] {
   return data
     .map((m: any) => String(m?.name ?? "").replace(/^models\//, "").trim())
     .filter((id): id is string => Boolean(id) && isChatModel(id, provider))
-    .map((id: string) => ({ id, provider }));
+    // Google listing exposes identity only — no truthful per-model
+    // capability source exists here, so reasoning stays unknown.
+    .map((id: string) => ({ id, provider, capabilities: unknownReasoning() }));
 }
 
-function normalizeOllama(raw: any, provider: string): ModelOption[] {
+/** Ollama tag listing: identity only. Capabilities resolve per model via /api/show. */
+function normalizeOllama(raw: any): string[] {
   const data = Array.isArray(raw?.models) ? raw.models : [];
   return data
     .map((m: any) => String(m?.name ?? "").trim())
-    .filter(Boolean)
-    .map((id: string) => ({ id, provider }));
+    .filter(Boolean);
 }
 
 export async function discoverModels(input: DiscoverInput): Promise<ModelOption[]> {
@@ -111,7 +187,12 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
     }
     case "ollama": {
       const raw = await fetchJson(joinBase(base, "api/tags"), {});
-      return normalizeOllama(raw, type);
+      const ids = normalizeOllama(raw);
+      return mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => ({
+        id,
+        provider: type,
+        capabilities: await fetchOllamaCapabilities(base, id),
+      }));
     }
     default:
       throw new Error(`Model discovery is not supported for type: ${type}`);

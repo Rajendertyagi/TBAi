@@ -8,11 +8,21 @@ const uiMessageSchema = z
   .object({ role: z.string() })
   .passthrough();
 
+export const reasoningCapabilitySchema = z.object({
+  support: z.enum(["supported", "unsupported", "unknown"]),
+  levels: z.array(z.string().min(1).max(200)).optional(),
+});
+
+export const modelCapabilitiesSchema = z.object({
+  reasoning: reasoningCapabilitySchema,
+});
+
 export const modelOptionSchema = z.object({
   id: z.string().min(1).max(200),
   label: z.string().max(200).optional(),
   provider: z.string().min(1).max(40),
   contextWindow: z.number().int().positive().optional(),
+  capabilities: modelCapabilitiesSchema.optional(),
 });
 
 export const chatRequestSchema = z
