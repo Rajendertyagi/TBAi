@@ -89,6 +89,11 @@ export interface WelcomeConfig {
     engineOpenCode: string;
     agentHint: string;
     modelHint: string;
+    shieldOffLabel: string;
+    shieldOnLabel: string;
+    shieldOffTitle: string;
+    shieldOnTitle: string;
+    shieldAria: (enabled: boolean) => string;
     withoutFolderTitle: string;
     withoutFolderDescription: string;
     projectFolderTitle: string;
@@ -152,6 +157,12 @@ export const welcomeConfig: WelcomeConfig = {
     engineOpenCode: "OpenCode",
     agentHint: "OpenCode agent that owns this conversation",
     modelHint: "OpenCode model the agent runs with",
+    shieldOffLabel: "Auto off",
+    shieldOnLabel: "Auto on",
+    shieldOffTitle: "Auto-approval off — permission requests are asked",
+    shieldOnTitle: "Auto-approval on — permission requests are accepted once",
+    shieldAria: (enabled: boolean) =>
+      enabled ? "Auto-approve permissions: on" : "Auto-approve permissions: off",
     withoutFolderTitle: "Without folder",
     withoutFolderDescription: "Quick chat in a disposable workspace",
     projectFolderTitle: "With a project folder",

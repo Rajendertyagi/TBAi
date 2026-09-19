@@ -41,6 +41,7 @@ import { buildModelGroups, resolveModelOwner } from "../lib/model-groups";
 import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
 import { OpenCodeModelChip } from "../features/opencode/OpenCodeModelChip";
 import { OpenCodeThinkingChip } from "../features/opencode/OpenCodeThinkingChip";
+import { OpenCodeShieldChip } from "../features/opencode/OpenCodeShieldChip";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -367,6 +368,7 @@ function Composer({
                 <OpenCodeAgentChip />
                 <OpenCodeModelChip />
                 <OpenCodeThinkingChip />
+                <OpenCodeShieldChip />
               </>
             ) : (
               <>

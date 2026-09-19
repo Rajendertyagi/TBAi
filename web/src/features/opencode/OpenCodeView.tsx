@@ -14,6 +14,7 @@ import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
 import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
 import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
 import { hydrateAutoPolicy } from "./sessionAutoPolicy";
+import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { logger } from "@/lib/logger";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
@@ -259,23 +260,34 @@ function AgentRuntime({
     [],
   );
 
+  // The composer's Shield chip reads the session id + reconcile seam from here
+  // (it renders deep inside the runtime provider and cannot call
+  // `useOpenCodeRuntime` itself). Memoized so the provider value is stable for
+  // the life of the client; a reconnect rebuilds the client and updates it.
+  const runtimeContext = useMemo(
+    () => ({ sessionId, reconcileAutoApprove }),
+    [sessionId, reconcileAutoApprove],
+  );
+
   return (
-      <AssistantRuntimeProvider runtime={runtime} config={config}>
-        <div className="flex h-full min-h-0 flex-col">
-          <OpenCodeSessionRow />
-          <OpenCodePermissions />
-          <OpenCodeQuestions />
-          <OpenCodeTodoTracker sessionId={sessionId} />
-          <div className="min-h-0 flex-1">
-            <ChatWindow
-              mode="agent"
-              belowComposerExtra={
-                <OpenCodeStatus compact onReconnect={reconnect} />
-              }
-            />
+      <OpenCodeRuntimeContext.Provider value={runtimeContext}>
+        <AssistantRuntimeProvider runtime={runtime} config={config}>
+          <div className="flex h-full min-h-0 flex-col">
+            <OpenCodeSessionRow />
+            <OpenCodePermissions />
+            <OpenCodeQuestions />
+            <OpenCodeTodoTracker sessionId={sessionId} />
+            <div className="min-h-0 flex-1">
+              <ChatWindow
+                mode="agent"
+                belowComposerExtra={
+                  <OpenCodeStatus compact onReconnect={reconnect} />
+                }
+              />
+            </div>
           </div>
-        </div>
-        <DevToolsModal />
-      </AssistantRuntimeProvider>
+          <DevToolsModal />
+        </AssistantRuntimeProvider>
+      </OpenCodeRuntimeContext.Provider>
   );
 }
