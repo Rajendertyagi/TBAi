@@ -83,3 +83,36 @@ Fail closed: unknown/absent session ⇒ manual. Questions untouched.
 `bun run typecheck` · `bun run lint` · focused tests · `bun run build`.
 Commit only intended files (the working tree carries unrelated agents' changes;
 stage per-file, never `git add -A`).
+
+## Completion record (2026-09-19)
+
+All phases committed and green:
+
+| Phase | Commit | Work |
+|---|---|---|
+| 1 | `61895bb` | `sessionAutoPolicy.ts` + 8 tests |
+| 2 | `7d7f8e4` | persistence (verified surviving backend) + config read + draft + materialize + session hydration |
+| 3 | `c2e8cbd` | `autoAcceptPendingPermissions` + `reconcileAutoApprove` + 12 tests |
+| 4 | `705caad` | hydration/reconnect auto-approval + 4 tests |
+| 5 | `731379e` | live `permission.asked` reply-before-yield + 9 deterministic tests |
+| 6 | `f236416` | `persistAutoApprove` + immediate OFF→ON reconciliation + 5 tests |
+| 7 | `c119c72` | verified no obsolete React getter path remains |
+| 8 | `766f226` | Shield UI (chip + context + composer wiring) + 16 tests |
+
+### Browser verification (observed, real OpenCode server)
+
+- Draft Shield renders OFF, toggles ON immediately, persists across reload.
+- Draft ON materialized into `conversation.opencodeAutoApprove=true`.
+- Bound Shield renders from conversation config; toggles OFF/ON immediately;
+  backend persists; reload preserves.
+- **Shield ON → live permission auto-approved "once"** (directory-scoped reply,
+  tool ran, no card).
+- **Shield OFF → manual approval card** (Allow/Always allow/Deny), no auto-reply;
+  manual Allow works.
+- **Pending permission reconciles immediately after enabling** (PATCH → list →
+  reply 200).
+- **Session isolation**: conv1=True, conv2=False.
+- Environmental note: the `deepseek-v4-flash-free` model produced no output
+  (agent stuck at "Working"); switching to `opencode/big-pickle` worked. The
+  bash tool itself reports "OpenCode session is not bound to a Paseo agent"
+  (server-side limitation, unrelated to the Shield).
