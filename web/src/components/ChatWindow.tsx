@@ -37,6 +37,31 @@ import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePick
 import { useSettingsStore } from "../stores";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
+/**
+ * Whether the thread boot skeleton renders. Pure (no hooks) so the
+ * draft/loading/mode matrix is unit-testable without a DOM runner.
+ *
+ * - Drafts never show it (chat drafts mount Welcome; agent surfaces have no
+ *   draft state, and a hypothetical agent draft must not either).
+ * - Chat shows it for a bound thread while history loads.
+ * - Agent shows it while history loads, so an existing OpenCode conversation
+ *   is never a visually empty viewport during reconnect.
+ */
+export function shouldShowThreadBoot({
+  mode,
+  isDraft,
+  isHistoryLoading,
+}: {
+  /** chat = TBAi chat; agent = OpenCode Code mode (separate runtime). */
+  mode: "chat" | "agent";
+  isDraft: boolean;
+  isHistoryLoading: boolean;
+}): boolean {
+  if (isDraft) return false;
+  if (mode === "agent") return isHistoryLoading;
+  return mode === "chat" && isHistoryLoading;
+}
+
 export function ChatWindow({
   isDraft = false,
   mode = "chat",
@@ -61,14 +86,15 @@ export function ChatWindow({
   // a separate row below the composer box (editable on drafts, static on
   // bound threads) so the box itself never changes.
   // In agent (Code) mode the OpenCode runtime owns the thread and directory,
-  // so welcome/boot/scope-chip are suppressed — only the message surface and
-  // composer remain, reused verbatim.
+  // so welcome/scope-chip are suppressed — only the message surface and
+  // composer remain, reused verbatim. The boot skeleton is NOT suppressed:
+  // an existing OpenCode conversation shows it while history loads.
   const isEmpty = useAuiState((s) => s.thread.isEmpty);
   // Canonical history-loading signal: true from per-thread runtime mount
   // until ThreadHistoryAdapter.load() settles (success or failure).
   const isHistoryLoading = useAuiState((s) => s.thread.isLoading);
   const showWelcome = mode === "chat" && isDraft && isEmpty;
-  const showBoot = mode === "chat" && !isDraft && isHistoryLoading;
+  const showBoot = shouldShowThreadBoot({ mode, isDraft, isHistoryLoading });
   const showScopePicker = mode === "chat";
   // Code mode shows OpenCode's three independent chips instead of the Direct
   // provider chips; the two engines' model worlds never mix.
