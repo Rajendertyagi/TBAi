@@ -49,10 +49,13 @@ export function createOpenCodeRuntimeClient(
 ): OpenCodeRuntimeClient {
   const client = createScopedOpenCodeClient(baseUrl, options.directory);
   const scope = { sessionId: options.sessionId, directory: options.directory };
+  // ONE answered set per runtime, shared by initial hydration, the live
+  // permission path and the reconcile seam — never global across sessions.
+  const answered = new Set<string>();
   applyPermissionCompat(client, scope);
   applyQuestionCompat(client, scope);
   // Hydration reads through the scoped list calls patched above.
-  applyInitialHydration(client, scope);
+  applyInitialHydration(client, scope, answered);
   // Captures todo.updated frames from the stream
   applyTodoCompat(client, scope);
   // LAST, so it is the outermost wrapper: hydration synthesizes its replayed

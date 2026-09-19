@@ -1,6 +1,8 @@
 import type { OpenCodeRuntimeClient } from "./eventScope";
 import type { OpenCodeScope } from "./opencodeScope";
 import { hydrateSessionTodos } from "./todoState";
+import { autoAcceptPendingPermissions, type PendingPermission } from "./permissionCompat";
+import { getAutoPolicy } from "./sessionAutoPolicy";
 
 /**
  * Initial pending-request hydration.
@@ -82,6 +84,7 @@ async function* hydrateAfterConnect(
   stream: AsyncIterable<unknown>,
   client: OpenCodeRuntimeClient,
   scope: OpenCodeScope,
+  answered: Set<string>,
 ): AsyncGenerator<unknown> {
   let hydrated = false;
   for await (const raw of stream) {
@@ -90,8 +93,27 @@ async function* hydrateAfterConnect(
     hydrated = true;
     // Hydrate authoritative todos asynchronously on connect
     void hydrateSessionTodos(client, scope);
-    for (const event of await readPending(client)) yield event;
+    const events = await readPending(client);
+    // Auto shield: answer the pending permissions BEFORE replaying them, so a
+    // request that predates the mount is accepted without ever needing a card.
+    // The shared `answered` set is what makes a later live `permission.asked`
+    // for the same request a no-op rather than a duplicate reply.
+    if (getAutoPolicy(scope.sessionId)) {
+      await autoAcceptPendingPermissions(client, permissionsOf(events), "auto", answered);
+    }
+    for (const event of events) yield event;
   }
+}
+
+/** The pending permission ids among the replayed events, nothing derived. */
+function permissionsOf(events: RawEvent[]): PendingPermission[] {
+  const out: PendingPermission[] = [];
+  for (const event of events) {
+    if (event.type !== "permission.asked") continue;
+    const id = event.properties.id;
+    if (typeof id === "string") out.push({ id });
+  }
+  return out;
 }
 
 /**
@@ -105,10 +127,13 @@ async function* hydrateAfterConnect(
  *
  * @param client - The client the assistant-ui OpenCode runtime is built around.
  * @param scope - The session id and authoritative directory.
+ * @param answered - The shared per-runtime answered set (also used by the live
+ *   path), so hydration and live events never answer the same request twice.
  */
 export function applyInitialHydration(
   client: OpenCodeRuntimeClient,
   scope: OpenCodeScope,
+  answered: Set<string>,
 ): void {
   if (!scope.sessionId || !scope.directory) return;
 
@@ -122,7 +147,10 @@ export function applyInitialHydration(
     const subscription = (await subscribe(parameters, options)) as {
       stream: AsyncIterable<unknown>;
     };
-    return { ...subscription, stream: hydrateAfterConnect(subscription.stream, client, scope) };
+    return {
+      ...subscription,
+      stream: hydrateAfterConnect(subscription.stream, client, scope, answered),
+    };
   };
 
   event.subscribe = hydratingSubscribe as unknown as OpenCodeRuntimeClient["event"]["subscribe"];
