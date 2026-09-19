@@ -579,6 +579,8 @@ describe("reconnect — hook logic (source guard: no DOM runner)", () => {
   });
 
   it("exposes runtime + reconnect as the reconnect contract", () => {
-    expect(source).toContain("return { runtime, reconnect }");
+    expect(source).toContain(
+      "return { runtime, reconnect, reconcileAutoApprove: client.reconcileAutoApprove }",
+    );
   });
 });
