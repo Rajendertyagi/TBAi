@@ -12,6 +12,8 @@ import { useAui, useRemoteThreadListRuntime, type RemoteThreadListAdapter } from
 import { useSettingsStore } from "./stores";
 import { logger } from "./lib/logger";
 import { classifyChatError } from "./lib/transport-errors";
+import { peekMaterializedEngine } from "./features/chat/state/materializeDraft";
+import { setPendingFirstMessage } from "./features/chat/state/pendingFirstMessage";
 
 /**
  * Wires the assistant-ui runtime to our backend using the native
@@ -48,6 +50,45 @@ function pruneSendConfigs(): void {
   if (sendConfigs.size <= 60) return;
   const oldest = sendConfigs.keys().next().value;
   if (oldest !== undefined) sendConfigs.delete(oldest);
+}
+
+/**
+ * Thrown from prepareSendMessagesRequest to abort a library-driven send that
+ * must never reach Direct /api/chat: a first send on a thread the single
+ * owner materialized as opencode (Enter key or any non-custom trigger — the
+ * Composer custom button bypasses the runtime entirely). The text is handed
+ * to the pending-first-prompt stash (consumed once by the Code surface) and
+ * tab binding drops the draft thread, so the failed run left behind is
+ * invisible and the prompt executes exactly once through OpenCode.
+ */
+export class OpencodeDraftRedirectError extends Error {
+  readonly threadId: string;
+
+  constructor(threadId: string) {
+    super(`Opencode draft send redirected (thread ${threadId})`);
+    this.name = "OpencodeDraftRedirectError";
+    this.threadId = threadId;
+  }
+}
+
+type UIMessageLike = {
+  role?: string;
+  parts?: Array<{ type?: string; text?: string }>;
+};
+
+/** Plain text of the last user message (defensive: non-text parts ignored). */
+function lastUserText(msgs: unknown): string | null {
+  if (!Array.isArray(msgs)) return null;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i] as UIMessageLike;
+    if (m?.role !== "user" || !Array.isArray(m.parts)) continue;
+    const text = m.parts
+      .filter((p) => p?.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string)
+      .join("\n");
+    if (text) return text;
+  }
+  return null;
 }
 
 /** Detects terminal stream markers so Stop / errors / natural finish clear the
@@ -143,6 +184,24 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
           const s = useSettingsStore.getState();
           const item = aui.threadListItem.getState();
           const threadKey = item.remoteId ?? item.id ?? "nothread";
+          // Phase 4 backstop: a library-driven send on a thread materialized
+          // as opencode (Enter key et al. bypass the Composer custom send)
+          // must never reach Direct /api/chat. Stash the text for the Code
+          // surface's exactly-once handoff and abort this send; tab binding
+          // (same owner record) drops the draft thread, so the failed run
+          // left behind is never visible.
+          if (peekMaterializedEngine(threadKey) === "opencode") {
+            const text = lastUserText(messages);
+            if (text) setPendingFirstMessage(threadKey, text);
+            // The one-shot pick was consumed by this handoff (carried into
+            // the row at initialize): revert so it cannot leak into a later
+            // Direct draft. The Code surface never reads one-shot state.
+            s.revertChatTarget();
+            logger.debug("chat", "opencode draft send redirected", {
+              threadId: threadKey,
+            });
+            throw new OpencodeDraftRedirectError(threadKey);
+          }
           // Conversation-owned default, projected from SQLite (source of truth).
           const custom = (item.custom ?? {}) as {
             providerId?: string | null;

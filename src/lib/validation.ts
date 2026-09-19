@@ -86,6 +86,11 @@ export const conversationCreateSchema = z.object({
   opencodeAgent: z.string().min(1).max(200).optional().nullable(),
   opencodeModel: z.string().min(1).max(200).optional().nullable(),
   opencodeVariant: z.string().min(1).max(100).optional().nullable(),
+  // Idempotency identity for draft materialization (Phase 4): the client
+  // generates one key per draft and replays it on retry, so a create that
+  // committed but whose response was lost resolves to the same conversation
+  // instead of minting a duplicate row. Opaque to the server otherwise.
+  clientRequestId: z.string().min(1).max(200).optional(),
   // Per-conversation Auto Approval shield (Phase 6D-B). Strictly boolean; a
   // malformed or absent value must not arm Auto.
   opencodeAutoApprove: z.boolean().optional(),

@@ -14,6 +14,11 @@ import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
 import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
+import {
+  claimPendingFirstMessage,
+  clearPendingFirstMessage,
+  unclaimPendingFirstMessage,
+} from "@/features/chat/state/pendingFirstMessage";
 import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
 import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
@@ -258,6 +263,31 @@ function AgentRuntime({
       void reconcileAutoApprove?.();
     }
   }, [sessionId, conversationConfig, reconcileAutoApprove]);
+
+  // First-prompt handoff (Phase 4): fire a stashed draft prompt exactly once
+  // into the session-bound runtime. Claim-guarded, so remounts and reconnects
+  // (new runtime identity) can never refire it — the claim persists before
+  // the append, and the stash clears right after the runtime accepts the
+  // prompt. Async prompt failures surface in-thread as an error card with the
+  // message already present; the user retries explicitly, never auto-replay.
+  useEffect(() => {
+    if (!sessionId || !conversationId) return;
+    const text = claimPendingFirstMessage(conversationId);
+    if (!text) return;
+    try {
+      runtime.thread.append(text);
+    } catch (err) {
+      // Synchronous handoff failure: release the claim so a later attempt
+      // may fire it, and log instead of crashing the surface.
+      unclaimPendingFirstMessage(conversationId);
+      logger.warn("opencode", "pending first prompt handoff failed", {
+        conversationId,
+        errorType: err instanceof Error ? err.name : typeof err,
+      });
+      return;
+    }
+    clearPendingFirstMessage(conversationId);
+  }, [runtime, sessionId, conversationId]);
 
   // Code mode needs its OWN tool-renderer registration.
   //

@@ -9,6 +9,29 @@ import { storageError } from "./shared";
 
 const app = new Hono();
 
+// Phase 4 idempotency for draft materialization: clientRequestId → conversation.
+// Covers two holes the client cannot close alone: concurrent duplicate POSTs
+// (singleflight: latecomers await the same creation) and commit-but-response-
+// lost retries (completed map: replays resolve to the existing row). Plain
+// in-memory maps — no new table, no migration.
+//
+// Documented limitation: process lifetime only. A server restart between the
+// commit and the client retry loses the map, and the retry mints a second
+// row. No existing conversations-table field can carry the identity without
+// semantic abuse (every TEXT column owns a feature meaning; title_source is
+// CHECK-constrained), so durable cross-restart idempotency would require a
+// migration — explicitly deferred, not pretended.
+const CREATE_KEY_TTL_MS = 10 * 60 * 1000;
+const createInFlight = new Map<string, Promise<{ id: string }>>();
+const createCompleted = new Map<string, { id: string; at: number }>();
+
+function pruneCreateKeys(now: number): void {
+  if (createCompleted.size <= 200) return;
+  for (const [key, entry] of createCompleted) {
+    if (now - entry.at > CREATE_KEY_TTL_MS) createCompleted.delete(key);
+  }
+}
+
 // Conversation routes
 app.get("/api/conversations", async (c) => {
   try {
@@ -41,22 +64,60 @@ app.post("/api/conversations", async (c) => {
     const modelId = parsed.modelId ?? null;
     const reasoningLevel = parsed.reasoningLevel ?? null;
 
-    const conversation = await conversationService.create({
-      title: parsed.title || "New Conversation",
-      providerId: provider?.id ?? parsed.providerId ?? null,
-      modelId,
-      reasoningLevel,
-      systemPrompt: parsed.systemPrompt,
-      workspaceMode: parsed.workspaceMode ?? "simple",
-      workspaceFolderId: parsed.workspaceFolderId ?? null,
-      engine: parsed.engine ?? "direct",
-      opencodeAgent: parsed.opencodeAgent ?? null,
-      opencodeModel: parsed.opencodeModel ?? null,
-      opencodeVariant: parsed.opencodeVariant ?? null,
-      opencodeAutoApprove: parsed.opencodeAutoApprove ?? false,
-    });
+    // Idempotent create (Phase 4): same clientRequestId resolves to the same
+    // conversation. In-flight duplicates share one creation; completed keys
+    // replay the existing row (see module map + limitation note above).
+    const idempotencyKey = parsed.clientRequestId ?? null;
+    if (idempotencyKey) {
+      const inFlight = createInFlight.get(idempotencyKey);
+      if (inFlight) {
+        const existing = await inFlight;
+        const row = await conversationService.get(existing.id);
+        if (row) return c.json(row);
+      } else {
+        const completed = createCompleted.get(idempotencyKey);
+        if (completed && Date.now() - completed.at <= CREATE_KEY_TTL_MS) {
+          const row = await conversationService.get(completed.id);
+          if (row) return c.json(row);
+          createCompleted.delete(idempotencyKey);
+        }
+      }
+    }
 
-    return c.json(conversation);
+    const createOne = async () => {
+      return conversationService.create({
+        title: parsed.title || "New Conversation",
+        providerId: provider?.id ?? parsed.providerId ?? null,
+        modelId,
+        reasoningLevel,
+        systemPrompt: parsed.systemPrompt,
+        workspaceMode: parsed.workspaceMode ?? "simple",
+        workspaceFolderId: parsed.workspaceFolderId ?? null,
+        engine: parsed.engine ?? "direct",
+        opencodeAgent: parsed.opencodeAgent ?? null,
+        opencodeModel: parsed.opencodeModel ?? null,
+        opencodeVariant: parsed.opencodeVariant ?? null,
+        opencodeAutoApprove: parsed.opencodeAutoApprove ?? false,
+      });
+    };
+
+    if (!idempotencyKey) {
+      return c.json(await createOne());
+    }
+
+    const creation = createOne().then((conversation) => ({ id: conversation.id }));
+    createInFlight.set(idempotencyKey, creation);
+    try {
+      const created = await creation;
+      pruneCreateKeys(Date.now());
+      createCompleted.set(idempotencyKey, { id: created.id, at: Date.now() });
+      const conversation = await conversationService.get(created.id);
+      return c.json(conversation);
+    } finally {
+      if (createInFlight.get(idempotencyKey) === creation) {
+        createInFlight.delete(idempotencyKey);
+      }
+    }
   } catch (e) {
     return storageError(c, e);
   }

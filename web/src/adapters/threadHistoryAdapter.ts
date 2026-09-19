@@ -1,4 +1,5 @@
 import type { ThreadHistoryAdapter, ExportedMessageRepositoryItem } from "@assistant-ui/react";
+import { peekMaterializedEngine } from "../features/chat/state/materializeDraft";
 
 /**
  * Last-good history projection per conversation (Phase 3.5: stale-state
@@ -69,6 +70,11 @@ export function createThreadHistoryAdapter(
     content: unknown;
   }) => {
     const remoteId = await ensureRemoteId();
+    // Phase 4: opencode rows are session-history owned (OpenCode server is
+    // the authority; the runtime projects it). The SQLite adapter must never
+    // store their messages — the first prompt lives in the session. Skip
+    // silently: the write is redirected to its correct authority, not lost.
+    if (peekMaterializedEngine(remoteId) === "opencode") return;
     // Phase 3.11: the write is only successful when the server confirms it.
     // A failed persist throws so the runtime surfaces the failure instead of
     // diverging silently from SQLite.
@@ -122,6 +128,9 @@ export function createThreadHistoryAdapter(
 
     async delete(items: ExportedMessageRepositoryItem[]) {
       const remoteId = await ensureRemoteId();
+      // Phase 4: opencode rows are session-history owned — nothing of theirs
+      // was ever appended here, so there is nothing to delete.
+      if (peekMaterializedEngine(remoteId) === "opencode") return;
       for (const it of items) {
         // Phase 3.11: deletion must be server-confirmed like appends.
         const res = await fetch(`/api/conversations/${remoteId}/messages/${it.message.id}`, {
@@ -158,6 +167,8 @@ export function createThreadHistoryAdapter(
 
         async delete(items) {
           const remoteId = await ensureRemoteId();
+          // Phase 4: opencode rows are session-history owned (see append).
+          if (peekMaterializedEngine(remoteId) === "opencode") return;
           for (const it of items) {
             // Phase 3.11: deletion must be server-confirmed like appends.
             const res = await fetch(`/api/conversations/${remoteId}/messages/${formatAdapter.getId(it.message)}`, {

@@ -26,8 +26,15 @@ import { logger } from "../lib/logger";
 import { useSettingsStore } from "../stores";
 import type { ReasoningLevel } from "../types";
 import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
+import { useChatTabsStore } from "../features/chat/state/chatTabs";
+import {
+  captureDraftSnapshot,
+  materializeDraft,
+} from "../features/chat/state/materializeDraft";
+import { setPendingFirstMessage } from "../features/chat/state/pendingFirstMessage";
 import { useAvailabilityStore } from "../features/availability/availabilityStore";
 import {
+  clearComposerDraft,
   readComposerDraft,
   writeComposerDraft,
 } from "../features/chat/state/composerDraft";
@@ -118,8 +125,20 @@ function ModelChip() {
   const handleSelect = (providerId: string, modelId: string) => {
     // Set the one-shot override for the NEXT message, AND persist it as this
     // conversation's default (SQLite source of truth) so it survives reloads
-    // and is the baseline for subsequent messages.
+    // and is the baseline for subsequent messages. On a draft there is no
+    // server row yet: the one-shot plus the initialize() carry own the pick,
+    // so skip the PATCH (the SDK throws updateCustom on unbound threads).
     selectChatTarget(providerId, modelId);
+    let remoteId: string | null = null;
+    try {
+      remoteId = (aui.threadListItem.getState() as { remoteId?: string | null }).remoteId ?? null;
+    } catch {
+      remoteId = null;
+    }
+    if (!remoteId) {
+      setOpen(false);
+      return;
+    }
     const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
     aui.threadListItem.updateCustom({
       ...base,
@@ -201,8 +220,17 @@ function ThinkingChip() {
   const handleSelect = (level: ReasoningLevel) => {
     setOpen(false);
     // Persist the chosen level as the conversation default AND as the one-shot
-    // pick, so the very next message uses exactly what was chosen.
+    // pick, so the very next message uses exactly what was chosen. Drafts have
+    // no server row yet (one-shot + initialize() carry own the pick), so skip
+    // the PATCH there — the SDK throws updateCustom on unbound threads.
     useSettingsStore.getState().setSelectedReasoningLevel(level);
+    let remoteId: string | null = null;
+    try {
+      remoteId = (aui.threadListItem.getState() as { remoteId?: string | null }).remoteId ?? null;
+    } catch {
+      remoteId = null;
+    }
+    if (!remoteId) return;
     const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
     aui.threadListItem.updateCustom({ ...base, reasoningLevel: level });
   };
@@ -299,7 +327,7 @@ function Composer({
   /** True on the Code surface (bound OpenCode conversation). */
   isCodeSurface?: boolean;
 }) {
-  const { value: composerText, setText } = unstable_useComposerInput();
+  const { value: composerText, setText, send: sendViaRuntime } = unstable_useComposerInput();
   const aui = useAui();
   // Thread identity for draft persistence. Guarded: the composer also mounts
   // under runtimes where the thread item may be momentarily unavailable —
@@ -345,6 +373,42 @@ function Composer({
       clearPendingInsert();
     }
   }, [pendingInsert, setText, clearPendingInsert]);
+
+  // OpenCode draft first send (Phase 4): the Direct runtime must NEVER see
+  // this send (it would mint an opencode row then fail the prompt with
+  // ENGINE_MISMATCH 422). Instead: snapshot once → materialize via the
+  // single owner → stash the text as the conversation's pending first prompt
+  // → bind the agent tab (TabUrlSync navigates to /code/:id). The Code
+  // surface consumes the stash into its session-bound runtime exactly once.
+  // Failure keeps the text in the box (never cleared here) with a truthful
+  // error; offline is already gated by the inert button below.
+  const [codeSending, setCodeSending] = useState(false);
+  const [codeSendError, setCodeSendError] = useState<string | null>(null);
+  const sendOpenCodeDraft = async () => {
+    if (codeSending || !composerText.trim()) return;
+    const snapshot = captureDraftSnapshot();
+    if (snapshot.engine !== "opencode") {
+      // Engine flipped between render and click: fall back to the library
+      // Direct send rather than dropping the user's click.
+      sendViaRuntime();
+      return;
+    }
+    setCodeSending(true);
+    setCodeSendError(null);
+    try {
+      const created = await materializeDraft(snapshot);
+      setPendingFirstMessage(created.id, composerText);
+      // The one-shot pick was consumed by this handoff (carried into the row
+      // by materialize): revert so it cannot leak into a later Direct draft.
+      useSettingsStore.getState().revertChatTarget();
+      clearComposerDraft(threadKey);
+      useChatTabsStore.getState().resolveDraftId(created.id, snapshot.engine);
+    } catch (err) {
+      setCodeSendError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCodeSending(false);
+    }
+  };
 
   return (
     <ComposerContextMenu>
@@ -438,6 +502,23 @@ function Composer({
                 >
                   <ArrowUp className="size-3.5" />
                 </button>
+              ) : showOpenCodeDraft ? (
+                <button
+                  type="button"
+                  onClick={() => void sendOpenCodeDraft()}
+                  disabled={codeSending || !composerText.trim()}
+                  aria-label={composerConfig.copy.sendMessage}
+                  title={codeSendError ?? composerConfig.copy.sendMessage}
+                  className={cn(
+                    "size-7 rounded-full flex items-center justify-center",
+                    "bg-accent text-accent-foreground",
+                    "hover:bg-accent/90 active:scale-95",
+                    "transition-all duration-150",
+                    "disabled:opacity-30 disabled:pointer-events-none",
+                  )}
+                >
+                  <ArrowUp className="size-3.5" />
+                </button>
               ) : (
                 <ComposerPrimitive.Send asChild>
                   <button
@@ -495,6 +576,13 @@ function Composer({
               </TooltipProvider>
             </AuiIf>
           </div>
+          {codeSendError && (
+            <div className="px-3 pb-3" role="alert">
+              <p className="text-xs text-destructive">
+                Couldn&apos;t start the Code chat: {codeSendError} Your text is kept above.
+              </p>
+            </div>
+          )}
         </div>
       </ComposerPrimitive.Root>
     </ComposerContextMenu>

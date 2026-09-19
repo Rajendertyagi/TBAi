@@ -166,6 +166,27 @@ export async function isOpenCodeSessionLive(
 export async function ensureOpenCodeSession(
   conversationId: string,
 ): Promise<OpenCodeSessionBinding> {
+  // Phase 4 singleflight: concurrent callers for one conversation share a
+  // single ensure — no second session.create, no last-writer-wins orphan.
+  // (The persisted pointer covers the sequential case; this covers overlap.)
+  const inFlight = sessionEnsuresInFlight.get(conversationId);
+  if (inFlight) return inFlight;
+  const ensure = ensureOpenCodeSessionInner(conversationId);
+  sessionEnsuresInFlight.set(conversationId, ensure);
+  try {
+    return await ensure;
+  } finally {
+    if (sessionEnsuresInFlight.get(conversationId) === ensure) {
+      sessionEnsuresInFlight.delete(conversationId);
+    }
+  }
+}
+
+const sessionEnsuresInFlight = new Map<string, Promise<OpenCodeSessionBinding>>();
+
+async function ensureOpenCodeSessionInner(
+  conversationId: string,
+): Promise<OpenCodeSessionBinding> {
   const conversation = await conversationService.get(conversationId);
   if (!conversation) {
     throw new Error(`Conversation not found: ${conversationId}`);

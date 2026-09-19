@@ -6,6 +6,7 @@ import { DevToolsModal } from "@assistant-ui/react-devtools";
 import { useSettingsStore } from "../../stores";
 import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../features/chat/state/chatTabs";
 import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngine";
+import { peekMaterializedEngine } from "../../features/chat/state/materializeDraft";
 import { appToolkit } from "../../tools/toolkit";
 import { TodoList } from "../../components/assistant-ui/elements/todo-list";
 import { AppShell } from "./AppShell";
@@ -39,10 +40,13 @@ export function ChatShell() {
     const state = useChatTabsStore.getState();
     const current = activeTab(state);
     if (current?.kind === "chat" && current.ref === NEW_DRAFT_TAB_ID) {
-      // First send: the draft snapshot's engine decides the destination
-      // surface, but the binding itself lives in one store method
-      // (`resolveDraftId`) — no second id-binding path by engine.
-      state.resolveDraftId(id, getWelcomeEngineSnapshot().engine);
+      // First send: bind with the engine the single materialization owner
+      // used for this conversation — never a fresh mutable read that could
+      // observe a different engine than the row was created with. Peek (not
+      // take): the send-interception guard in prepareSendMessagesRequest reads
+      // the same record afterwards. Falls back to the live snapshot only for
+      // rows the owner did not create.
+      state.resolveDraftId(id, peekMaterializedEngine(id) ?? getWelcomeEngineSnapshot().engine);
     } else if (
       !state.tabs.some((t) => t.kind === "chat" && t.ref === id)
     ) {

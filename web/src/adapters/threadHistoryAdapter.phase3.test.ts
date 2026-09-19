@@ -7,6 +7,14 @@ import {
   createThreadHistoryAdapter,
   invalidateHistoryCache,
 } from "./threadHistoryAdapter";
+import {
+  captureDraftSnapshot,
+  materializeDraft,
+  peekMaterializedEngine,
+} from "../features/chat/state/materializeDraft";
+import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
+import { useWelcomeScopeStore } from "../features/chat/state/welcomeScope";
+import { useSettingsStore } from "../stores";
 
 const realFetch = globalThis.fetch;
 
@@ -181,3 +189,138 @@ function networkDown(): typeof fetch {
     throw new TypeError("fetch failed");
   }) as unknown as typeof fetch;
 }
+
+/**
+ * Phase 4 — opencode rows must never touch SQLite history.
+ * The adapter silently skips append/update/delete when the owner record
+ * says opencode, because the OpenCode server is the sole authority.
+ */
+describe("Phase 4 — opencode history skip (case C)", () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    invalidateHistoryCache();
+    useWelcomeEngineStore.setState({
+      engine: "opencode",
+      agent: "test",
+      model: "",
+      variant: "",
+      autoApprove: false,
+    });
+    useWelcomeScopeStore.getState().setScope({ mode: "simple", folderId: null });
+    useSettingsStore.getState().revertChatTarget();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    invalidateHistoryCache();
+  });
+
+  async function seedOpencodeAdapter(): Promise<{ adapter: ReturnType<typeof makeAdapter>; remoteId: string }> {
+    // Materialize an opencode draft to seed the owner record.
+    // Stub fetch first so the POST /api/conversations inside materializeDraft
+    // resolves instead of hitting the real network.
+    const stubFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      ({ ok: true, status: 200, json: async () => ({ id: "c-oc-seeded" }) } as unknown as Response)) as unknown as typeof fetch;
+    try {
+      const snapshot = captureDraftSnapshot();
+      const created = await materializeDraft(snapshot);
+      return { adapter: makeAdapter(created.id), remoteId: created.id };
+    } finally {
+      globalThis.fetch = stubFetch;
+    }
+  }
+
+  it("append on an opencode-recognized remoteId issues zero fetch calls", async () => {
+    const { adapter, remoteId } = await seedOpencodeAdapter();
+    expect(peekMaterializedEngine(remoteId)).toBe("opencode");
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async (_url: unknown, _init?: RequestInit) => {
+      fetchCalls += 1;
+      return { ok: true, status: 200, json: async () => ({ id: "never-reached" }) } as Response;
+    }) as typeof fetch;
+
+    await adapter.append(repoItem("m1"));
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("update on an opencode-recognized remoteId issues zero fetch calls", async () => {
+    const { adapter, remoteId } = await seedOpencodeAdapter();
+    expect(peekMaterializedEngine(remoteId)).toBe("opencode");
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async (_url: unknown, _init?: RequestInit) => {
+      fetchCalls += 1;
+      return { ok: true, status: 200, json: async () => ({ id: "never-reached" }) } as Response;
+    }) as typeof fetch;
+
+    await adapter.update!(repoItem("m1"));
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("delete on an opencode-recognized remoteId issues zero fetch calls", async () => {
+    const { adapter, remoteId } = await seedOpencodeAdapter();
+    expect(peekMaterializedEngine(remoteId)).toBe("opencode");
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async (_url: unknown, _init?: RequestInit) => {
+      fetchCalls += 1;
+      return { ok: true, status: 200, json: async () => ({ id: "never-reached" }) } as Response;
+    }) as typeof fetch;
+
+    await adapter.delete!([repoItem("m1")]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("withFormat append/delete on opencode also skips fetches", async () => {
+    const { adapter, remoteId } = await seedOpencodeAdapter();
+    expect(peekMaterializedEngine(remoteId)).toBe("opencode");
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async (_url: unknown, _init?: RequestInit) => {
+      fetchCalls += 1;
+      return { ok: true, status: 200, json: async () => ({ id: "never-reached" }) } as Response;
+    }) as typeof fetch;
+
+    const wfAdapter = adapter.withFormat!(fakeFormat);
+    await wfAdapter.append({ message: { id: "m1" }, parentId: null } as never);
+    await wfAdapter.delete!([{ message: { id: "m1" }, parentId: null } as never]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("Direct-recognized remoteId still issues fetches normally", async () => {
+    useWelcomeEngineStore.setState({ engine: "direct" });
+    useWelcomeScopeStore.getState().setScope({ mode: "simple", folderId: null });
+    useSettingsStore.getState().revertChatTarget();
+
+    const stubFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      ({ ok: true, status: 200, json: async () => ({ id: "c-direct-seeded" }) } as unknown as Response)) as unknown as typeof fetch;
+    let createdId = "";
+    try {
+      const snapshot = captureDraftSnapshot();
+      const created = await materializeDraft(snapshot);
+      createdId = created.id;
+    } finally {
+      globalThis.fetch = stubFetch;
+    }
+
+    const adapter = makeAdapter(createdId);
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async (url: unknown, _init?: RequestInit) => {
+      fetchCalls += 1;
+      if (String(url).endsWith("/messages")) {
+        return { ok: true, status: 200, json: async () => ({ messages: [] }) } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ id: createdId }) } as Response;
+    }) as typeof fetch;
+
+    await adapter.append(repoItem("m1"));
+    // At least one fetch (the POST to /messages) must have been issued.
+    expect(fetchCalls).toBeGreaterThanOrEqual(1);
+    expect(peekMaterializedEngine(createdId)).toBe("direct");
+  });
+});

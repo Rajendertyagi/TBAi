@@ -8,9 +8,10 @@ import { createAssistantStream } from "assistant-stream";
 import { createThreadHistoryAdapter } from "./threadHistoryAdapter";
 import { historyConfig } from "../config/history";
 import { logger } from "../lib/logger";
-import { getWelcomeScopeSnapshot } from "../features/chat/state/welcomeScope";
-import { getWelcomeEngineSnapshot } from "../features/chat/state/welcomeEngine";
-import { useSettingsStore } from "../stores";
+import {
+  captureDraftSnapshot,
+  materializeDraft,
+} from "../features/chat/state/materializeDraft";
 
 interface ConvDTO {
   id: string;
@@ -210,111 +211,13 @@ export function createRemoteThreadListAdapter(
     },
 
     async initialize() {
-      let workspaceMode: "simple" | "project" = "simple";
-      let workspaceFolderId: string | null = null;
-      let engine = "direct";
-      let opencodeAgent: string | null = null;
-      let opencodeModel: string | null = null;
-      let opencodeVariant: string | null = null;
-      // The Auto Approval shield for the NEW conversation. Defaults to `false`
-      // so a draft that never set it materializes as manual.
-      let opencodeAutoApprove = false;
-      // Explicit Direct picks on the draft (one-shot picker state). Carried
-      // into the row so the materialized conversation owns the user's choice
-      // instead of silently inheriting active-provider defaults. Absent stays
-      // absent (never concretized here — resolution falls back at request time).
-      let providerId: string | null = null;
-      let modelId: string | null = null;
-      let reasoningLevel: string | null = null;
-      try {
-        const scope = getWelcomeScopeSnapshot();
-        if (scope.mode === "project" && scope.folderId) {
-          workspaceMode = "project";
-          workspaceFolderId = scope.folderId;
-        }
-        const draft = getWelcomeEngineSnapshot();
-        engine = draft.engine;
-        if (draft.engine === "opencode") {
-          opencodeAgent = draft.agent || null;
-          opencodeModel = draft.model || null;
-          opencodeVariant = draft.variant || null;
-          // `=== true`, not the value itself: only an explicit boolean true arms
-          // the shield, so a malformed or missing draft value materializes as
-          // manual. Same fail-closed rule as the read in
-          // `useOpenCodeConversationConfig`.
-          opencodeAutoApprove = draft.autoApprove === true;
-        } else {
-          const pick = useSettingsStore.getState();
-          providerId = pick.selectedProviderId ?? null;
-          modelId = pick.selectedModelId ?? null;
-          reasoningLevel = pick.selectedReasoningLevel ?? null;
-        }
-      } catch {
-        /* welcome scope/engine unavailable — fall back to a disposable direct chat */
-      }
-      const createBody = {
-        title: "New Conversation",
-        workspaceMode,
-        workspaceFolderId,
-        engine,
-        providerId,
-        modelId,
-        reasoningLevel,
-        opencodeAgent,
-        opencodeModel,
-        opencodeVariant,
-        opencodeAutoApprove,
-      };
-      const res = await fetch("/api/conversations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(createBody),
-      });
-      if (!res.ok) {
-        // Edge: stale project folder rejected by validation — retry once as
-        // a simple chat so the user never sits on a dead draft.
-        if (workspaceMode === "project") {
-          const fallback = await fetch("/api/conversations", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: "New Conversation",
-              workspaceMode: "simple",
-              workspaceFolderId: null,
-              engine,
-              providerId,
-              modelId,
-              reasoningLevel,
-              opencodeAgent,
-              opencodeModel,
-              opencodeVariant,
-              opencodeAutoApprove,
-            }),
-          });
-          if (!fallback.ok) {
-            const detail = await fallback
-              .json()
-              .catch(() => ({}));
-            throw new Error(
-              `Failed to create conversation (${fallback.status}): ${(detail as { error?: string }).error ?? "unknown error"}`,
-            );
-          }
-          const conv = (await fallback.json()) as { id?: string };
-          if (!conv.id) throw new Error("Conversation creation returned no id");
-          return { remoteId: conv.id };
-        }
-        // Contract: never resolve with an undefined remoteId — that masks
-        // the failure and turns it into a misleading downstream
-        // `conversation_missing` chat error. Throw so the original backend
-        // error stays visible.
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(
-          `Failed to create conversation (${res.status}): ${(detail as { error?: string }).error ?? "unknown error"}`,
-        );
-      }
-      const conv = (await res.json()) as { id?: string };
-      if (!conv.id) throw new Error("Conversation creation returned no id");
-      return { remoteId: conv.id };
+      // Single materialization owner (Phase 4): the draft snapshot is
+      // captured once and materialized into exactly one conversation. Runs
+      // inside the SDK's shared initializeTask, so concurrent triggers
+      // converge here rather than minting duplicate rows.
+      const snapshot = captureDraftSnapshot();
+      const created = await materializeDraft(snapshot);
+      return { remoteId: created.id };
     },
 
     // Persists a conversation's AI config back to SQLite. Called by the runtime
