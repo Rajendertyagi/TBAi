@@ -30,34 +30,12 @@ import { patchToCodeDiffs } from "../lib/patch-to-diffs";
 import { toolsConfig } from "../config/tools";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
+import { ThreadBootSkeleton } from "./assistant-ui/elements/thread-boot-skeleton";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
 import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePicker";
-import { historyConfig } from "../config/history";
 import { useSettingsStore } from "../stores";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
-
-/**
- * Lightweight boot skeleton for a persisted thread whose history has not
- * resolved yet. Rendered inside the messages viewport (never Welcome);
- * unmounts the moment history settles. Copy comes from `historyConfig`.
- */
-function ThreadBootSkeleton() {
-  return (
-    <div
-      data-testid="thread-boot"
-      role="status"
-      aria-label={historyConfig.copy.loadingConversation}
-      className="space-y-4"
-    >
-      <div className="ml-auto h-10 w-2/5 animate-pulse rounded-xl bg-muted" />
-      <div className="h-24 w-4/5 animate-pulse rounded-xl bg-muted" />
-      <div className="ml-auto h-10 w-1/3 animate-pulse rounded-xl bg-muted" />
-      <div className="h-16 w-3/5 animate-pulse rounded-xl bg-muted" />
-      <span className="sr-only">{historyConfig.copy.loadingConversation}</span>
-    </div>
-  );
-}
 
 export function ChatWindow({
   isDraft = false,
