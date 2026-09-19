@@ -439,7 +439,121 @@ order-preserving visibility into what the agent is doing.
   in the header. Hidden when there are no stages.
 
 
+## Frontend boundary (shared presentation, isolated execution)
+
+TBAi has **one unified frontend presentation layer** over **two independent
+runtimes**. The principle is *unify presentation, isolate execution*: the UI is
+shared where the presentation contract is genuinely engine-neutral; execution
+stays with the runtime that owns it. The detailed audit and evidence live in
+`docs/unified-frontend-plan.md`; this section records the durable boundary.
+
+```
+                    Shared Presentation
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+        Direct Runtime             OpenCode Runtime
+             │                           │
+      AI SDK / providers           OpenCode session
+                                     │
+                         tools / permissions /
+                         questions / terminal /
+                         diff / Shield
+```
+
+### Shared presentation
+
+The following are intentionally shared across both engines:
+
+- `ChatWindow` — the message surface (viewport, message list, markdown,
+  reasoning, tool groups, scroll-to-bottom, welcome/boot states).
+- `Composer` — the composer box (textarea, attach, voice, send/stop).
+- Common message presentation, navigation, tabs, and application chrome.
+- Any other genuinely engine-neutral UI.
+
+### Separate runtimes
+
+Direct and OpenCode execution remain independent. Direct runs on the AI SDK /
+provider runtime; OpenCode runs on the OpenCode session/runtime with its own
+tools, permissions, questions, terminal, diffs, Shield, and session behavior.
+The UI must **not** force these different runtime contracts into one universal
+runtime abstraction.
+
+### Engine-specific capabilities
+
+OpenCode-only features remain OpenCode-only. The Shield, OpenCode permissions,
+OpenCode Questions, and OpenCode terminal/diff/tool-specific UI must **not**
+leak into Direct Chat. Direct-specific behavior stays isolated as well.
+
+### Shell boundary
+
+```
+/chat  → ChatShell
+/code  → CodeShell
+```
+
+The shell separation is **intentional**, not accidental duplication: the two
+runtimes have different lifecycle/context requirements (the OpenCode adapter's
+`useRemoteThreadListRuntime` degrades to a no-op when nested under another
+`RemoteThreadListRuntime`, so the shells must never nest). Both shells may use
+the shared `ChatWindow`/presentation layer.
+
+### ChatWindow
+
+`ChatWindow` is the effective unified chat surface. It is shared across engines;
+runtime-specific behavior enters through the appropriate runtime/context
+boundary (the `mode="chat" | "agent"` prop selects which runtime's context the
+surface reads).
+
+### Composer
+
+`Composer` is shared. It may render engine-specific controls where required
+(Direct: model/thinking chips; OpenCode: agent/model/thinking/Shield chips).
+There is deliberately **no generic capability registry** — the existing simple
+`mode` branching is sufficient.
+
+### Capability model decision
+
+A formal capability descriptor/registry is **not currently justified**:
+
+- there are only two engines;
+- the existing Composer `mode` branching is simple;
+- engine-specific controls have different data sources and runtime contracts;
+- an abstraction would add indirection without removing meaningful duplication.
+
+Revisit only when a third engine is introduced, or engine-specific controls grow
+enough that the existing approach becomes materially complex.
+
+### `/code` future direction
+
+`/code` may eventually be viewed as an OpenCode-specific entry/projection into
+the shared chat presentation, but the current `ChatShell`/`CodeShell`
+separation should remain. No route rewrite is required.
+
+### State ownership
+
+Existing state ownership is preserved. assistant-ui state, Zustand state,
+conversation state, OpenCode session state, and Direct runtime state are **not**
+moved merely to make the frontend look more uniform. The architecture unifies UI
+contracts only where the underlying state/runtime contract is genuinely
+compatible.
+
+### Explicit non-goals
+
+This boundary does **not** mean: merging `DirectRuntime` and `OpenCodeRuntime`;
+creating one universal `ChatManager`; creating one giant conditional chat
+component; adding an engine capability framework prematurely; moving
+OpenCode-only features into Direct Chat; removing `/code`; combining
+`ChatShell` and `CodeShell`; redesigning assistant-ui integration; or changing
+the Shield architecture.
+
 ## Forward architecture contract
+
+> `docs/architectural-principles.md` is the **forward-looking** architectural
+> contract (what the system should remain / evolve into). This file
+> (`docs/architecture.md`) describes the **current** system architecture and
+> implementation. When they diverge, the principles doc is the target; this
+> doc is the as-is state.
 
 The durable forward-looking architecture is defined in
 `docs/architectural-principles.md`. The key boundary is that TBAi remains a thin
