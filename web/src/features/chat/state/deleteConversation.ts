@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { useAui } from "@assistant-ui/react";
 import { logger } from "@/lib/logger";
 import { useChatTabsStore } from "./chatTabs";
 
@@ -103,30 +102,17 @@ export async function deleteConversation(
 
 /**
  * UI-side deletion flow (projection layer). Runs the server coordinator,
- * then drops the runtime row (stopping its runtime — the adapter DELETE
- * 404-resolves since the row is already gone, so the removal commits), then
- * closes every tab bound to the conversation on both surfaces. Route
+ * then closes every tab bound to the conversation on both surfaces. Route
  * correction follows structurally through TabUrlSync reacting to the
  * active-key change, so this hook never navigates. Rejects with the
- * coordinator or runtime error for the caller to surface.
+ * coordinator error for the caller to surface.
  */
 export function useDeleteConversation(): (
   ref: string,
 ) => Promise<DeleteConversationResult> {
-  const aui = useAui();
-  return useCallback(
-    async (ref: string) => {
-      const result = await deleteConversation(ref);
-      const items = aui.threads.getState().threadItems;
-      const match =
-        items.find((t) => t.remoteId === ref) ??
-        items.find((t) => t.id === ref);
-      if (match) {
-        await aui.threads.item({ id: match.id ?? ref }).delete();
-      }
-      useChatTabsStore.getState().closeByRef(ref);
-      return result;
-    },
-    [aui],
-  );
+  return useCallback(async (ref: string) => {
+    const result = await deleteConversation(ref);
+    useChatTabsStore.getState().closeByRef(ref);
+    return result;
+  }, []);
 }
