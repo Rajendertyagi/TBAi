@@ -18,7 +18,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use fs2::FileExt;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -132,6 +134,27 @@ fn fetch_instance(port: u32) -> Result<String, &'static str> {
         .ok_or("bad_response")
 }
 
+fn read_minimized(data_dir: &PathBuf) -> bool {
+    std::fs::read_to_string(data_dir.join("start-minimized"))
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// Full quit: stop the owned sidecar, then end the process (the folder lock
+/// releases via handle drop). Used by the tray menu and the Settings Quit
+/// button — the ONLY desktop paths that end the server. Window ❌ does NOT
+/// come here: close hides to tray and the server keeps running.
+fn quit_owned(app: &AppHandle) {
+    if let Some(owned) = app.try_state::<StartupOwned>() {
+        if let Some(child) = owned.child.lock().expect("child lock").take() {
+            let _ = child.kill();
+        }
+    }
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    quit_owned(&app);
+}
+
 fn render_error(win: &tauri::WebviewWindow, port: u32, state: &str, sidecar: &str, reason: &str) {
     let page = STARTUP_ERROR_HTML
         .replace("{{PORT}}", &port.to_string())
@@ -147,8 +170,15 @@ fn render_error(win: &tauri::WebviewWindow, port: u32, state: &str, sidecar: &st
     let _ = win.set_focus();
 }
 
-fn navigate_verified(win: &tauri::WebviewWindow, port: u32) {
+fn navigate_verified(win: &tauri::WebviewWindow, port: u32, minimized: bool) {
     let origin = format!("http://localhost:{port}");
+    if let Some(tray) = win.app_handle().tray_by_id("main") {
+        let _ = tray.set_tooltip(format!("TBAi · port {port}"));
+    }
+    if minimized {
+        // Tray-only boot: the window stays hidden until the user Opens it.
+        return;
+    }
     let _ = win.eval(format!("location.href='{origin}'"));
     let _ = win.show();
     let _ = win.set_focus();
@@ -298,7 +328,7 @@ fn attempt(app: &AppHandle) {
     match verified_port {
         Some(port) => {
             *owned.verified.lock().expect("verified lock") = true;
-            navigate_verified(&win, port);
+            navigate_verified(&win, port, read_minimized(&cfg.data_dir));
         }
         None => {
             let (state, sidecar, reason) =
@@ -358,6 +388,61 @@ fn main() {
                 last_start: Mutex::new(Instant::now()),
             });
 
+            // System tray: Open restores the window, Quit stops the owned
+            // sidecar and ends the process. Best-effort by design — a missing
+            // icon must never prevent boot, so failures only log.
+            if let Some(icon) = app.default_window_icon().cloned() {
+                let tray_result: tauri::Result<()> = (|| {
+                    let menu = Menu::with_items(
+                        app,
+                        &[
+                            &MenuItem::with_id(app, "open", "Open TBAi", true, None::<&str>)?,
+                            &MenuItem::with_id(app, "quit", "Quit TBAi", true, None::<&str>)?,
+                        ],
+                    )?;
+                    TrayIconBuilder::with_id("main")
+                        .icon(icon)
+                        .tooltip("TBAi")
+                        .menu(&menu)
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "open" => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
+                            }
+                            "quit" => quit_owned(app),
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            if matches!(event, TrayIconEvent::Click { .. }) {
+                                let app = tray.app_handle();
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
+                            }
+                        })
+                        .build(app)?;
+                    Ok(())
+                })();
+                if let Err(err) = tray_result {
+                    eprintln!("[tray] disabled: {err}");
+                }
+            }
+
+            // Close hides to tray — the server keeps running. Full quit is
+            // ONLY via tray Quit / Settings Quit (quit_owned), never ❌.
+            if let Some(win) = app.get_webview_window("main") {
+                let hidden = win.clone();
+                win.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hidden.hide();
+                    }
+                });
+            }
+
             let handle = app.handle().clone();
             std::thread::spawn(move || attempt(&handle));
             // Backstop: recovery must not depend on the error page's Retry
@@ -380,7 +465,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![retry_startup])
+        .invoke_handler(tauri::generate_handler![retry_startup, quit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

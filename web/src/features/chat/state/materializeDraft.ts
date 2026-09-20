@@ -1,6 +1,7 @@
 import { getWelcomeScopeSnapshot } from "./welcomeScope";
 import { getWelcomeEngineSnapshot } from "./welcomeEngine";
 import { useSettingsStore } from "../../../stores";
+import { logger } from "../../../lib/logger";
 
 /**
  * Single owner of draft materialization (Phase 4).
@@ -100,7 +101,7 @@ export function captureDraftSnapshot(): DraftSnapshot {
   }
   const pick = useSettingsStore.getState();
   const engine = draft.engine === "opencode" ? "opencode" : "direct";
-  return {
+  const snapshot: DraftSnapshot = {
     engine,
     providerId: engine === "direct" ? (pick.selectedProviderId ?? null) : null,
     modelId: engine === "direct" ? (pick.selectedModelId ?? null) : null,
@@ -115,6 +116,16 @@ export function captureDraftSnapshot(): DraftSnapshot {
     opencodeAutoApprove: engine === "opencode" ? draft.autoApprove === true : false,
     clientRequestId: currentDraftClientRequestId(),
   };
+  // The engine decision is a load-bearing branch (it decides which surface runs
+  // the send) and was previously invisible; record it with the idempotency key
+  // so a draft's whole life can be followed from snapshot to row.
+  logger.info("chat", "draft.snapshot", {
+    engine,
+    workspaceMode: snapshot.workspaceMode,
+    hasFolder: snapshot.workspaceFolderId !== null,
+    clientRequestId: snapshot.clientRequestId,
+  });
+  return snapshot;
 }
 
 async function postConversations(body: Record<string, unknown>): Promise<{ id: string }> {
@@ -156,33 +167,53 @@ export async function materializeDraft(snapshot: DraftSnapshot): Promise<{ id: s
     opencodeAutoApprove: snapshot.opencodeAutoApprove,
     clientRequestId: snapshot.clientRequestId,
   };
+  logger.info("chat", "draft.materialize_start", {
+    engine: snapshot.engine,
+    workspaceMode: snapshot.workspaceMode,
+    clientRequestId: snapshot.clientRequestId,
+  });
+  // One success path for all three call shapes, so the "row exists" evidence
+  // (conversationId + which engine it was created with) is emitted exactly once.
+  const done = (created: { id: string }, workspaceFallback: boolean): { id: string } => {
+    recordMaterializedEngine(created.id, snapshot.engine);
+    clearDraftClientRequestId();
+    logger.info("chat", "draft.materialized", {
+      conversationId: created.id,
+      engine: snapshot.engine,
+      clientRequestId: snapshot.clientRequestId,
+      ...(workspaceFallback ? { workspaceFallback: true } : {}),
+    });
+    return created;
+  };
   try {
     if (snapshot.workspaceMode === "project") {
       try {
-        const created = await postConversations(body);
-        recordMaterializedEngine(created.id, snapshot.engine);
-        clearDraftClientRequestId();
-        return created;
-      } catch {
+        return done(await postConversations(body), false);
+      } catch (firstErr) {
         // Edge: stale project folder rejected — retry once as simple so the
         // user never sits on a dead draft. Same idempotency key.
-        const created = await postConversations({
-          ...body,
-          workspaceMode: "simple",
-          workspaceFolderId: null,
+        logger.debug("chat", "draft.workspace_fallback", {
+          message: firstErr instanceof Error ? firstErr.message : String(firstErr),
         });
-        recordMaterializedEngine(created.id, snapshot.engine);
-        clearDraftClientRequestId();
-        return created;
+        return done(
+          await postConversations({
+            ...body,
+            workspaceMode: "simple",
+            workspaceFolderId: null,
+          }),
+          true,
+        );
       }
     }
-    const created = await postConversations(body);
-    recordMaterializedEngine(created.id, snapshot.engine);
-    clearDraftClientRequestId();
-    return created;
+    return done(await postConversations(body), false);
   } catch (err) {
     // Key retained: a retry replays the same identity so a commit the client
     // never saw still resolves to one row.
+    logger.error("chat", "draft.materialize_failed", {
+      engine: snapshot.engine,
+      clientRequestId: snapshot.clientRequestId,
+      message: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 }

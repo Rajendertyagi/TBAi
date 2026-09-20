@@ -314,14 +314,14 @@ export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (
   // stale output.
   const gateOwnsCard = p.approval != null && p.approval.approved === undefined;
 
-  if (!gateOwnsCard && p.status?.type !== "incomplete" && lines.length > 0) {
+  if (!gateOwnsCard && p.status?.type !== "running" && lines.length > 0) {
     return (
       <div className="my-1 w-full">
         <TerminalBlock
           command={command}
           lines={lines}
           visibleCount={lines.length}
-          done={p.status?.type !== "running"}
+          done={true}
           variant="ink"
         />
       </div>

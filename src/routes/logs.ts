@@ -5,10 +5,15 @@ import {
   defaultLogFilePath,
   listLogFiles,
   logger,
+  newRequestId,
   retentionInfo,
+  runWithRequestContext,
+  getRequestContext,
   type LogEntry,
 } from "../lib/logger";
+import { isKnownClientScope } from "../lib/log-scopes";
 import {
+  clientLogBatchSchema,
   logFileNameSchema,
   logRecentQuerySchema,
   logSettingsSchema,
@@ -79,6 +84,70 @@ app.put("/settings", async (c) => {
     return c.json({ error: "Could not persist log settings" }, 500);
   }
   return c.json({ ok: true, level: logger.level, targets: logger.targets });
+});
+
+// ---- Browser event ingest ----
+//
+// The frontend logger batches structured events and posts them here, so client
+// lifecycle evidence lands in the SAME ring/file/UI pipeline as backend lines:
+// one timeline, one correlation model, no second logging system. Every axis is
+// bounded — payload bytes, batch size, event count, field count, value length —
+// and the logger redacts on arrival exactly as it does for backend lines.
+const CLIENT_BATCH_MAX_BYTES = 256 * 1024;
+
+app.post("/client", async (c) => {
+  const declared = Number(c.req.header("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > CLIENT_BATCH_MAX_BYTES) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+  const raw = await c.req.text().catch(() => "");
+  if (raw.length > CLIENT_BATCH_MAX_BYTES) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  const parsed = clientLogBatchSchema.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid client log batch", issues: parsed.error.issues }, 400);
+  }
+  // Scope registry check: the browser may only emit scopes the FRONTEND
+  // actually owns, so a stray client cannot fragment the vocabulary or
+  // masquerade as a backend-only subsystem (`scheduler`, `db`, …).
+  const unknownScopes = [
+    ...new Set(parsed.data.events.map((e) => e.scope)),
+  ].filter((s) => !isKnownClientScope(s));
+  if (unknownScopes.length > 0) {
+    return c.json({ error: "Unknown log scope", scopes: unknownScopes }, 400);
+  }
+
+  // Attribution: the ingest POST's requestId is kept (it IS the request these
+  // events arrived in), but the request's operationId is deliberately NOT
+  // inherited — a queued batch can span operations, so each event carries its
+  // own operationId or none. Without this, an event from an earlier action
+  // would be misattributed to whatever action triggered the flush.
+  const ingestRequestId = getRequestContext()?.requestId ?? newRequestId();
+  let accepted = 0;
+  runWithRequestContext({ requestId: ingestRequestId }, () => {
+    for (const e of parsed.data.events) {
+      logger[e.level](e.scope, e.event, {
+        plane: "client",
+        // Client clock, kept separate from the server receipt time (`ts`), so
+        // cross-plane ordering never has to guess which clock a field is on.
+        clientTs: e.ts,
+        operationId: e.operationId,
+        threadId: e.threadId,
+        conversationId: e.conversationId,
+        message: e.message,
+        ...e.fields,
+      });
+      accepted += 1;
+    }
+  });
+  return c.json({ accepted });
 });
 
 // Recent buffered entries (post-redaction). `since` = last seen seq;
@@ -189,7 +258,13 @@ app.get("/files", (c) => {
       retentionHours: sink.retentionHours,
       maxTotalMb: sink.maxTotalMb,
     }),
-    writer: { queued: writer.queued, dropped: writer.dropped },
+    writer: {
+      queued: writer.queued,
+      dropped: writer.dropped,
+      // Loss accounting: every path that can discard an entry, so a reader can
+      // tell "nothing happened" apart from "evidence was dropped".
+      loss: writer.loss,
+    },
   });
 });
 

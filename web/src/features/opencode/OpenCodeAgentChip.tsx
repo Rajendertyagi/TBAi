@@ -49,7 +49,7 @@ export function OpenCodeAgentChip() {
         onToggle={() => setOpen((v) => !v)}
         ariaLabel={copy.agentLabel}
       />
-      <OpenCodeChipMenu open={open}>
+      <OpenCodeChipMenu open={open} onClose={() => setOpen(false)}>
         <OpenCodeChipMenuContent isLoading={isLoading} error={error}>
           <div className="p-2">
             <div role="list" className="max-h-40 overflow-y-auto">

@@ -18,8 +18,13 @@ const { credentialStore, CredentialError } = await import("../services/credentia
 const { db } = await import("../db");
 
 function seedProvider(id: string, type = "openai") {
+  // INSERT OR REPLACE: the suite shares one DB per process with other suites
+  // (see header comment), and sibling suites seed the same fixed ids (e.g.
+  // scheduler-ai-tools seeds "p1"). A bare INSERT would UNIQUE-violation
+  // depending on file order — replace keeps this file order-independent
+  // without changing what it asserts (set() overwrites the key anyway).
   db.run(
-    `INSERT INTO provider_configs (id, name, type, endpoint, model, is_active, created_at, updated_at)
+    `INSERT OR REPLACE INTO provider_configs (id, name, type, endpoint, model, is_active, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, id, type, null, "gpt-4o", 0, Date.now(), Date.now()],
   );

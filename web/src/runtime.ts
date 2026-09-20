@@ -12,6 +12,13 @@ import { useAui, useRemoteThreadListRuntime, type RemoteThreadListAdapter } from
 import { useSettingsStore } from "./stores";
 import { logger } from "./lib/logger";
 import { classifyChatError } from "./lib/transport-errors";
+import { currentOperationId } from "./lib/operation";
+import {
+  attachSendOperation,
+  beginSendOperation,
+  endSendOperation,
+  observeBodySettled,
+} from "./lib/send-operation";
 import { peekMaterializedEngine } from "./features/chat/state/materializeDraft";
 import { setPendingFirstMessage } from "./features/chat/state/pendingFirstMessage";
 
@@ -42,6 +49,13 @@ interface SendConfig {
   providerId: string;
   model: string;
   reasoningLevel?: string;
+  /**
+   * The operation this logical send owns. Snapshotted with the rest of the
+   * send config so every continuation (tool result, approval resend) re-opens
+   * the SAME operation instead of starting a second one — that is what keeps a
+   * tool-call turn joinable by a single operationId.
+   */
+  operationId: string;
 }
 
 const sendConfigs = new Map<string, SendConfig>();
@@ -99,14 +113,35 @@ const ABORT_MARKER = '"type":"abort"';
 const FINISH_MARKER = '"type":"finish"';
 const ERROR_MARKER = '"type":"error"';
 
+// The send operation's lifetime, its lifecycle events, and the guaranteed
+// release live in `lib/send-operation.ts` (extracted so the rules are testable
+// without a DOM). This file only wires them: a fresh logical send opens the
+// operation, a continuation re-opens the same one, and the response body
+// settling ends it.
+
 function makeIsFinishEvent(): (chunk: Uint8Array, accumulator: string) => boolean {
   let sawAbort = false;
+  let reported = false;
+  const report = (marker: string) => {
+    if (reported) return;
+    reported = true;
+    endSendOperation(marker);
+  };
   return (_chunk, accumulator) => {
     if (!sawAbort && accumulator.includes(ABORT_MARKER)) {
       sawAbort = true;
+      report("abort");
       return true;
     }
-    return accumulator.includes(FINISH_MARKER) || accumulator.includes(ERROR_MARKER);
+    if (accumulator.includes(FINISH_MARKER)) {
+      report("finish");
+      return true;
+    }
+    if (accumulator.includes(ERROR_MARKER)) {
+      report("error");
+      return true;
+    }
+    return false;
   };
 }
 
@@ -126,19 +161,43 @@ function diagnosticFetch(
           ? input.toString()
           : input.url;
     const threadId = getThreadListItem()?.remoteId ?? getThreadListItem()?.id ?? "unknown";
-    logger.info("chat", "frontend_request_sent", { url, threadId });
+    // Path only — never the query string, which can carry user data. This is
+    // the browser half of the request pair the backend logs as
+    // `http.request_start` / `http.request`.
+    let path = url;
+    try {
+      path = new URL(url, window.location.origin).pathname;
+    } catch {
+      /* keep the raw value if it is not a URL */
+    }
+    // The operation this request belongs to, captured at issue time. A late
+    // settle of a superseded response must not end the operation that replaced
+    // it, so the id travels with the request instead of being re-read later.
+    const operationId = currentOperationId();
+    logger.info("chat", "request_sent", { path, threadId });
 
     try {
       const res = await baseFetch(input, init);
-      logger.info("chat", "frontend_response_received", {
+      logger.info("chat", "request_completed", {
+        path,
         status: res.status,
-        elapsedMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt,
         threadId,
       });
-      return res;
+      if (!res.body) return res;
+      return new Response(
+        observeBodySettled(res.body, () =>
+          endSendOperation("stream-settled", operationId),
+        ),
+        { status: res.status, statusText: res.statusText, headers: res.headers },
+      );
     } catch (err) {
-      logger.error("chat", "frontend_request_failed", {
-        elapsedMs: Date.now() - startedAt,
+      // The request never produced a body, so nothing will settle: release the
+      // operation here or this failure path leaks it.
+      endSendOperation("request-failed", operationId);
+      logger.error("chat", "request_failed", {
+        path,
+        durationMs: Date.now() - startedAt,
         threadId,
         errorType: err instanceof Error ? err.name : typeof err,
         message: err instanceof Error ? err.message : String(err),
@@ -197,9 +256,8 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             // the row at initialize): revert so it cannot leak into a later
             // Direct draft. The Code surface never reads one-shot state.
             s.revertChatTarget();
-            logger.debug("chat", "opencode draft send redirected", {
-              threadId: threadKey,
-            });
+            logger.info("chat", "send.redirected_to_opencode", { threadId: threadKey });
+            endSendOperation("redirected");
             throw new OpencodeDraftRedirectError(threadKey);
           }
           // Conversation-owned default, projected from SQLite (source of truth).
@@ -229,17 +287,35 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             const providerId =
               s.selectedProviderId ?? custom.providerId ?? s.activeProviderId ?? s.providers[0]?.id ?? "";
             const provider = s.providers.find((p) => p.id === providerId) ?? s.providers[0];
+            const resolvedProviderId = provider?.id ?? "";
+            const resolvedModel = s.selectedModelId ?? custom.modelId ?? provider?.model ?? "";
+            // A fresh logical send (not a tool/approval continuation) opens the
+            // operation; its id is snapshotted into the send config so every
+            // continuation of THIS send re-opens the same one.
+            const operationId = beginSendOperation({
+              trigger,
+              threadId: threadKey,
+              providerId: resolvedProviderId,
+              model: resolvedModel,
+            });
             sel = {
-              providerId: provider?.id ?? "",
-              model: s.selectedModelId ?? custom.modelId ?? provider?.model ?? "",
+              providerId: resolvedProviderId,
+              model: resolvedModel,
               reasoningLevel:
                 s.selectedReasoningLevel ?? (custom.reasoningLevel as string | undefined) ?? undefined,
+              operationId,
             };
             sendConfigs.set(sendKey, sel);
             pruneSendConfigs();
             if (hasPendingPick) {
               s.revertChatTarget();
             }
+          } else {
+            // Continuation of one logical send (tool result, approval resend).
+            // The previous response settling may already have ended the
+            // operation, so re-open the SAME id: the whole turn stays joinable
+            // by one operationId instead of splitting into several.
+            attachSendOperation(sel.operationId);
           }
           return {
             body: {
@@ -261,15 +337,17 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
 
   return useChatRuntime({
     transport,
-    // Observability only: classify every run error for the console log so a
-    // transport kill is identifiable without opening devtools networking.
-    // No state changes, no retries — flows into useChat's Chat.onError.
+    // A failed run is the terminal event of the send operation, so it is the
+    // one that ends it. `kind` distinguishes a transport kill from anything
+    // else, which is what tells "the answer never arrived" apart from "the
+    // model failed".
     onError: (error) => {
       const kind = classifyChatError(error);
-      logger.debug("chat", "run_error_classified", {
+      logger.warn("chat", "send.failed", {
         kind,
         message: error instanceof Error ? error.message : String(error),
       });
+      endSendOperation("failed");
     },
     // Continuation contract (official ai helpers): after a tool result OR an
     // approval decision lands, the runtime automatically resends the thread so

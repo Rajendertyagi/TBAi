@@ -14,6 +14,7 @@ import { SchedulerPage } from "../features/scheduler/SchedulerPage";
 import { DesktopSettings } from "../features/desktop/DesktopSettings";
 import { FoldersPage } from "../features/folders/FoldersPage";
 import { QuickMessagesPage } from "../features/quick-messages/QuickMessagesPage";
+import { ArchivedPage } from "../features/sidebar/ArchivedPage";
 import { CodeShell } from "../features/opencode/CodeShell";
 
 /**
@@ -41,6 +42,9 @@ export const router = createHashRouter([
       // Dedicated Scheduler page (top-level workbench route, never inside
       // the settings sub-sidebar).
       { path: "scheduler", Component: SchedulerPage },
+      // Archived conversations (rail surface; the sidebar keeps
+      // Folders → Chats → Recent only).
+      { path: "archived", Component: ArchivedPage },
       {
         Component: SettingsLayout,
         children: [

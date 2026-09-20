@@ -4,20 +4,12 @@ import { toast } from "sonner";
 import { SettingsSection, SettingRow } from "../../components/shared/settings";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { useServerIdentity } from "./state/serverIdentity";
 
 /** Poll cadence while waiting for the rebound server to answer. */
 const READY_POLL_INTERVAL_MS = 250;
 /** How long to wait for the new origin before reporting failure. */
 const READY_TIMEOUT_MS = 15000;
-/** Live status refresh cadence (cheap same-origin identity read). */
-const STATUS_POLL_INTERVAL_MS = 15000;
-
-interface ServerIdentity {
-  activePort: number;
-  configuredPort: number;
-  persistedPort: number | null;
-  envLocked: boolean;
-}
 
 interface PortProbe {
   port: number;
@@ -61,11 +53,14 @@ async function waitForReady(origin: string): Promise<boolean> {
  * base URL exists.
  */
 export function ServerSection() {
-  const [identity, setIdentity] = useState<ServerIdentity | null>(null);
-  const [reachable, setReachable] = useState<boolean | null>(null);
-  const [checkedAt, setCheckedAt] = useState<number | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // Shared server identity (also drives the status-bar indicator): active vs
+  // configured ports plus reachability. Local input state stays here — the
+  // shared poller never steals typed text; it only refreshes on explicit
+  // reload() calls below.
+  const { identity, reachable, checkedAt, loadError, reload } =
+    useServerIdentity();
   const [input, setInput] = useState("");
+  const [inputSeeded, setInputSeeded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -74,39 +69,21 @@ export function ServerSection() {
   const [restartError, setRestartError] = useState<string | null>(null);
   const mounted = useRef(true);
 
-  const load = useCallback(async (preserveInput = false) => {
-    try {
-      const res = await fetch("/api/server", { cache: "no-store" });
-      if (!res.ok) throw new Error(`Server responded ${res.status}`);
-      const data = (await res.json()) as ServerIdentity;
-      if (!mounted.current) return;
-      setIdentity(data);
-      if (!preserveInput) setInput(String(data.configuredPort));
-      setReachable(true);
-      setCheckedAt(Date.now());
-      setLoadError(null);
-    } catch (err: unknown) {
-      if (!mounted.current) return;
-      setReachable(false);
-      setCheckedAt(Date.now());
-      setLoadError(
-        err instanceof Error ? err.message : "Could not read server state.",
-      );
-    }
-  }, []);
-
   useEffect(() => {
     mounted.current = true;
-    void load(false);
-    const timer = setInterval(() => {
-      // Status refresh never steals the user's typed input.
-      void load(true);
-    }, STATUS_POLL_INTERVAL_MS);
     return () => {
       mounted.current = false;
-      clearInterval(timer);
     };
-  }, [load]);
+  }, []);
+
+  // Seed the input once from the configured port; afterwards it belongs to
+  // the user until save/restart replace it.
+  useEffect(() => {
+    if (!inputSeeded && identity != null) {
+      setInput(String(identity.configuredPort));
+      setInputSeeded(true);
+    }
+  }, [identity, inputSeeded]);
 
   const busy = saving || restarting || testing;
   const inputValid = isValidPortText(input);
@@ -130,20 +107,20 @@ export function ServerSection() {
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `Save failed (${res.status})`);
-      if (mounted.current) {
-        setIdentity({ ...identity, configuredPort: inputPort });
-      }
+      // Re-read shared identity so Save/Restart visibility follows the
+      // persisted value; the typed input is left alone.
+      await reload();
       toast.success(`Port ${inputPort} saved. Restart to apply.`);
     } catch (err: unknown) {
       if (!mounted.current) return;
       const message = err instanceof Error ? err.message : "Save failed.";
       setRestartError(message);
       toast.error(message);
-      await load(true);
+      await reload();
     } finally {
       if (mounted.current) setSaving(false);
     }
-  }, [identity, busy, dirty, inputPort, load]);
+  }, [busy, dirty, inputPort, reload]);
 
   const probePort = useCallback(async (port: number): Promise<PortProbe> => {
     const res = await fetch("/api/server/check-port", {
@@ -219,7 +196,7 @@ export function ServerSection() {
           `The server did not answer on port ${port}. It may still be starting — retry, or return to port ${identity.activePort} if that listener is still up.`,
         );
         toast.error(`Server not reachable on port ${port}.`);
-        await load(true);
+        await reload();
         return;
       }
       window.location.href = `${origin}${loc.pathname}${loc.search}${loc.hash}`;
@@ -230,11 +207,11 @@ export function ServerSection() {
       toast.error(message);
       // Re-read: a bind conflict leaves the old listener running, so the UI
       // must show the still-active port rather than the failed target.
-      await load(true);
+      await reload();
     } finally {
       if (mounted.current) setRestarting(false);
     }
-  }, [identity, busy, pending, inputPort, load, probePort]);
+  }, [identity, busy, pending, inputPort, reload, probePort]);
 
   const onCopyUrl = useCallback(async () => {
     if (!identity) return;

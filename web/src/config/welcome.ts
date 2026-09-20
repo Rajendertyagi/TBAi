@@ -85,6 +85,8 @@ export interface WelcomeConfig {
     capabilitiesError: string;
     selectAgent: string;
     selectModel: string;
+    modelSearchPlaceholder: string;
+    noModelsMatch: string;
     engineDirect: string;
     engineOpenCode: string;
     agentHint: string;
@@ -153,6 +155,8 @@ export const welcomeConfig: WelcomeConfig = {
     capabilitiesError: "Could not load OpenCode capabilities",
     selectAgent: "Select an agent",
     selectModel: "Select a model",
+    modelSearchPlaceholder: "Search models…",
+    noModelsMatch: "No models match",
     engineDirect: "Direct",
     engineOpenCode: "OpenCode",
     agentHint: "OpenCode agent that owns this conversation",

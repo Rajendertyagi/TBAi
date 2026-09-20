@@ -6,7 +6,11 @@ import {
 } from "react";
 import { useNavigate } from "react-router";
 import { FolderOpenDot, MessageSquarePlus, SquarePen } from "lucide-react";
-import { sidebarConfig, type SidebarSectionId } from "../config/sidebar";
+import {
+  sidebarConfig,
+  SIDEBAR_SECTION_IDS,
+  type SidebarSectionId,
+} from "../config/sidebar";
 import { historyConfig } from "../config/history";
 import { dateGroupLabel } from "../lib/sidebar-sections";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
@@ -16,7 +20,6 @@ import { SidebarHeader } from "../features/sidebar/components/SidebarHeader";
 import { SidebarNavButton } from "../features/sidebar/components/SidebarNavButton";
 import { SidebarSection } from "../features/sidebar/components/SidebarSection";
 import {
-  SidebarArchivedRow,
   SidebarThreadRow,
 } from "../features/sidebar/components/SidebarThreadRow";
 import { FoldersSection } from "../features/sidebar/components/FoldersSection";
@@ -27,7 +30,7 @@ import { threadUrl } from "../features/chat/state/chatTabs";
 /**
  * Conversation sidebar (codeg `layout/sidebar` parity): fixed `h-10` header
  * (locate / expand-all / view-options), one fixed `New Chat` pill, then the
- * persisted `Chats / Recent / Archived` sections. Search lives in the
+ * persisted `Folders / Chats / Recent` sections. Search lives in the
  * top-left chrome overlay (`LeftEdgeChrome`), never here — the sidebar
  * unmounts on collapse. Data is loaded via `useConversationsList`.
  */
@@ -52,8 +55,6 @@ export function Sidebar() {
   );
   const showRecent = useDesktopLayout((s) => s.showRecent);
   const showCompleted = useDesktopLayout((s) => s.showCompleted);
-  const archivedExpanded = useDesktopLayout((s) => s.archivedExpanded);
-  const setArchivedExpanded = useDesktopLayout((s) => s.setArchivedExpanded);
   const searchQuery = useDesktopLayout((s) => s.searchQuery);
   const setSearchQuery = useDesktopLayout((s) => s.setSearchQuery);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -61,14 +62,19 @@ export function Sidebar() {
   const isVisible = (id: SidebarSectionId): boolean => {
     if (id === "folders") return true;
     if (id === "recent") return showRecent;
-    if (id === "archived") return historyConfig.archiveEnabled;
     return true;
   };
   const isExpanded = (id: SidebarSectionId): boolean => {
-    if (id === "archived") return archivedExpanded;
     return !sectionCollapsed[id];
   };
-  const visibleSections = order.filter(isVisible);
+  // Drop ids retired after a user persisted their order (e.g. the former
+  // `archived` section, now a rail surface) so a stale entry can never
+  // render an empty unknown section.
+  const visibleSections = order
+    .filter((id): id is SidebarSectionId =>
+      (SIDEBAR_SECTION_IDS as readonly string[]).includes(id),
+    )
+    .filter(isVisible);
   const allExpanded = visibleSections.every(isExpanded);
 
   return (
@@ -99,8 +105,7 @@ export function Sidebar() {
             if (!isVisible(id)) return null;
             const expanded = isExpanded(id);
             const setExpanded = (v: boolean) => {
-              if (id === "archived") setArchivedExpanded(v);
-              else setSectionCollapsed(id, !v);
+              setSectionCollapsed(id, !v);
             };
             return (
               <SidebarSection
@@ -111,9 +116,7 @@ export function Sidebar() {
                     ? copy.folders
                     : id === "chats"
                       ? copy.chats
-                      : id === "recent"
-                        ? copy.recent
-                        : copy.archived
+                      : copy.recent
                 }
                 expanded={expanded}
                 onExpandedChange={setExpanded}
@@ -148,15 +151,12 @@ export function Sidebar() {
                     search={searchQuery}
                     showCompleted={showCompleted}
                     onOpenThread={openThread}
-                    onOpenArchive={() => setArchivedExpanded(true)}
+                    onOpenArchive={() => navigate("/archived")}
                     onClearSearch={() => setSearchQuery("")}
                   />
                 )}
                 {id === "recent" && (
                   <RecentItems search={searchQuery} showCompleted={showCompleted} onOpenThread={openThread} />
-                )}
-                {id === "archived" && expanded && (
-                  <ArchivedItems onOpenThread={openThread} />
                 )}
               </SidebarSection>
             );
@@ -323,31 +323,6 @@ function RecentItems({
         <SidebarThreadRow
           key={item.remoteId}
           item={item}
-          onOpenThread={onOpenThread}
-          onMutate={refetch}
-        />
-      ))}
-    </>
-  );
-}
-
-function ArchivedItems({
-  onOpenThread,
-}: {
-  onOpenThread: (remoteId: string, engine?: string | null) => void;
-}) {
-  const { items, refetch } = useConversationsList({
-    status: "archived",
-  });
-
-  return (
-    <>
-      {items.map((item) => (
-        <SidebarArchivedRow
-          key={item.remoteId}
-          remoteId={item.remoteId}
-          title={item.title}
-          engine={item.engine}
           onOpenThread={onOpenThread}
           onMutate={refetch}
         />

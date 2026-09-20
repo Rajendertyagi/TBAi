@@ -31,13 +31,21 @@ export async function cancelActiveRun(
   }
   if (!streamId) return false;
   try {
+    // Cancellation is a lifecycle event, not just cleanup: it ends a run whose
+    // server side would otherwise keep burning tokens. Logged before the call
+    // so the request exists in the timeline even if the response never lands.
+    logger.info("chat", "run.cancel_requested", { streamId });
     const res = await fetch(
       `/api/chat/cancel/${encodeURIComponent(streamId)}`,
       { method: "POST" },
     );
+    if (!res.ok) {
+      logger.warn("chat", "run.cancel_rejected", { streamId, status: res.status });
+    }
     return res.ok;
   } catch (err) {
-    logger.debug("chat", "run_cancel_failed", {
+    logger.warn("chat", "run_cancel_failed", {
+      streamId,
       errorType: err instanceof Error ? err.name : typeof err,
     });
     return false;

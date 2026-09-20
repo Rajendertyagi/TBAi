@@ -56,7 +56,7 @@ export function OpenCodeThinkingChip() {
         onToggle={() => setOpen((v) => !v)}
         ariaLabel="Thinking level"
       />
-      <OpenCodeChipMenu open={open}>
+      <OpenCodeChipMenu open={open} onClose={() => setOpen(false)}>
         <OpenCodeChipMenuContent isLoading={isLoading} error={error}>
           <div role="list" className="p-2">
             {thinkingOptions.map((opt) => (

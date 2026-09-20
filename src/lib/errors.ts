@@ -17,9 +17,14 @@ export type ErrorCategory =
   | "rate_limit"
   | "network"
   | "timeout"
+  | "validation"
   | "config"
   | "tool"
   | "provider"
+  | "database"
+  | "lifecycle"
+  | "runtime"
+  | "transport"
   | "unknown";
 
 export interface ClassifiedError {
@@ -29,6 +34,13 @@ export interface ClassifiedError {
   retryable: boolean;
   errorType: string;
   message: string;
+  /**
+   * True when the failure is a provider-side billing/credit condition (not a
+   * transient throttle). Deliberately a FLAG rather than a category: the
+   * coarse category stays `rate_limit`/`provider` so retry policy is
+   * unchanged, while logs and diagnostics can still tell the two apart.
+   */
+  billing?: boolean;
 }
 
 const CANCELLED_RE = /abort|cancel|stopped/i;
@@ -42,40 +54,89 @@ const CONFIG_RE =
 const TOOL_SUBJECT_RE = /tool|mcp/i;
 const TOOL_OUTCOME_RE = /error|fail/i;
 
+// ---------------------------------------------------------------------------
+// Refinement markers. These split the two COARSE buckets (`config`, `unknown`)
+// into actionable categories. They are applied only to those two buckets, and
+// never to retryability (which is computed from the coarse category), so
+// extending the vocabulary cannot change retry behavior or user-facing copy.
+// Each pattern is deliberately specific: a generic word like "invalid" would
+// swallow the existing `config` cases (`invalid model`, `invalid provider`).
+// ---------------------------------------------------------------------------
+
+/** Explicit request-validation rejections (Zod boundaries, malformed input). */
+const VALIDATION_RE =
+  /\bvalidation\b|invalid request|invalid query|invalid body|invalid payload|invalid log settings|invalid port|invalid startup|invalid scope|unprocessable|zod|schema validation/i;
+/** SQLite / persistence faults. */
+const DATABASE_RE =
+  /sqlite|database is locked|database is closed|no such table|no such column|constraint failed|unique constraint|db_unavailable/i;
+/** Process/boot lifecycle faults (startup, shutdown, listener ownership). */
+const LIFECYCLE_RE =
+  /\bstartup_failed\b|\bshutdown\b|server_not_running|port_bind_failed|port_persist_failed|is shutting down|not been started/i;
+/** Programming errors that escape to a runtime boundary. */
+const RUNTIME_RE =
+  /\b(TypeError|ReferenceError|RangeError|SyntaxError|URIError)\b|is not a function|is not a constructor|cannot read propert|of undefined|of null|invariant/i;
+/** Stream/connection transport faults (not DNS/connectivity, which is `network`). */
+const TRANSPORT_RE =
+  /incomplete chunked|err_incomplete|controller is already closed|premature close|stream (closed|error|aborted)|socket hang up|other side closed|econnreset/i;
+/** Provider-side billing/credit exhaustion. */
+const BILLING_RE =
+  /insufficient balance|insufficient credit|out of credit|credit balance|insufficient_quota|billing|payment required|402|exceeded your current quota|quota exceeded/i;
+
+/**
+ * Narrows a coarse category into a more actionable one. Only `config` and
+ * `unknown` are refined — every other category is already specific and is
+ * returned untouched, which is what keeps the existing contract stable.
+ */
+function refineCategory(base: ErrorCategory, text: string): ErrorCategory {
+  if (base === "config") return VALIDATION_RE.test(text) ? "validation" : base;
+  if (base !== "unknown") return base;
+  if (VALIDATION_RE.test(text)) return "validation";
+  if (DATABASE_RE.test(text)) return "database";
+  if (LIFECYCLE_RE.test(text)) return "lifecycle";
+  if (RUNTIME_RE.test(text)) return "runtime";
+  if (TRANSPORT_RE.test(text)) return "transport";
+  return base;
+}
+
 export function classifyError(err: unknown, opts?: { provider?: string }): ClassifiedError {
   const norm = normalizeError(err, false);
   const text = `${norm.errorType} ${norm.message} ${norm.code ?? ""}`;
   const status = norm.status;
 
-  let category: ErrorCategory = "unknown";
-  if (CANCELLED_RE.test(text)) category = "cancelled";
-  else if (status === 401 || status === 403 || AUTH_RE.test(text)) category = "auth";
-  else if (status === 429 || RATE_RE.test(text)) category = "rate_limit";
-  else if (NETWORK_RE.test(text)) category = "network";
-  else if (status === 408 || TIMEOUT_RE.test(text)) category = "timeout";
+  let base: ErrorCategory = "unknown";
+  if (CANCELLED_RE.test(text)) base = "cancelled";
+  else if (status === 401 || status === 403 || AUTH_RE.test(text)) base = "auth";
+  else if (status === 429 || RATE_RE.test(text)) base = "rate_limit";
+  else if (NETWORK_RE.test(text)) base = "network";
+  else if (status === 408 || TIMEOUT_RE.test(text)) base = "timeout";
   else if (
     (status !== undefined && status >= 400 && status < 500 && status !== 408) ||
     CONFIG_RE.test(text)
   )
-    category = "config";
-  else if (TOOL_SUBJECT_RE.test(text) && TOOL_OUTCOME_RE.test(text)) category = "tool";
+    base = "config";
+  else if (TOOL_SUBJECT_RE.test(text) && TOOL_OUTCOME_RE.test(text)) base = "tool";
   // A 5xx is only a *provider* failure when we know which provider; otherwise
   // it is an unknown server-side fault. Either way it is retryable.
   else if (status !== undefined && status >= 500)
-    category = opts?.provider ? "provider" : "unknown";
+    base = opts?.provider ? "provider" : "unknown";
 
+  // Retryability comes from the COARSE category — the pre-existing policy.
+  // Deriving it here (rather than from the refined label) is what guarantees
+  // that widening the taxonomy cannot change retry behavior anywhere.
   const retryable =
-    category === "rate_limit" ||
-    category === "network" ||
-    category === "timeout" ||
+    base === "rate_limit" ||
+    base === "network" ||
+    base === "timeout" ||
     (status !== undefined && status >= 500);
 
-  return {
-    category,
+  const out: ClassifiedError = {
+    category: refineCategory(base, text),
     statusCode: status,
     provider: opts?.provider,
     retryable,
     errorType: norm.errorType,
     message: norm.message,
   };
+  if (BILLING_RE.test(text)) out.billing = true;
+  return out;
 }

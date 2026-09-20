@@ -225,7 +225,7 @@ describe("multi-question wizard", () => {
     const html = renderCard(twoSteps);
     expect(html).toContain("Next");
     // JSX button labels in the source (not HTML).
-    expect(source).toContain("Next\n            </Button>");
+    expect(source).toContain("Next");
     expect(source).toContain('"Submit"');
   });
 

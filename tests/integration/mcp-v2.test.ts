@@ -454,12 +454,20 @@ describe("MCP lifecycle (Phase 4)", () => {
     // No disconnect: let the capped timer chain run. It must fire at most 5
     // times total, then stop — a 6th timer would be unbounded re-scheduling.
     await expectReconnectsBounded(badId, "p4-cap-bad", 5, RECONNECT_DELAY_MS);
+    // The helper's window is exactly maxAttempts * delayMs, so the FIFTH and
+    // final reconnect fires right at the boundary. Its `connect()` is still in
+    // flight at that point (status "connecting") and, under suite load, a
+    // failing spawn can outlast the helper's fixed settle wait — which made an
+    // instant assertion here fail intermittently. Wait for the chain to settle
+    // instead: this is strictly stronger than the instant check, because it
+    // fails if the status never reaches "error" (the cap is the whole point).
+    await waitForStatus(badId, "error");
     expect(statusOf(badId)).toBe("error");
     // The cap constant is honored: MAX_RECONNECT_ATTEMPTS (5) bounds
     // reconnectAttempts; scheduleReconnect schedules at most one timer per
     // failing connect, so the chain terminates (verified above behaviorally,
     // no source assertion here).
-  }, 45000);
+  }, 60000);
 
   it("repeated disconnect is safe and idempotent", async () => {
     const id = await createStdioFixture("p4-repeated");

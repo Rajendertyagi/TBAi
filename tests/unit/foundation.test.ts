@@ -145,8 +145,11 @@ describe("settings nav source of truth", () => {
 });
 
 describe("rail nav (single-gear rule)", () => {
-  it("shows chat, scheduler, and one settings gear — never area icons", () => {
+  it("shows chat, scheduler, archived, and one settings gear — never settings-area icons", () => {
+    // Archived is a top-level rail surface (T3-UI), so it joins the rail
+    // alongside chat + scheduler. Settings *areas* (providers, appearance,
+    // mcp, logs, etc.) must stay behind the single gear, never as rail icons.
     const ids = getRailNav().map((item) => item.id);
-    expect(ids).toEqual(["chat", "scheduler", "settings"]);
+    expect(ids).toEqual(["chat", "scheduler", "archived", "settings"]);
   });
 });

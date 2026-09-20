@@ -11,7 +11,12 @@
     "build:backend": "bun build src/index.ts --target bun --outdir dist",
     "build:web": "cd web && bun run build",
     "typecheck": "tsc --noEmit -p tsconfig.json && cd web && tsc --noEmit",
-    "test": "bun test --path-ignore-patterns \"web/e2e/**\" --path-ignore-patterns \"tests/integration/shutdown-lifecycle.test.ts\"",
+    "lint": "bunx --bun @biomejs/biome check .",
+    "format": "bunx --bun @biomejs/biome format --write .",
+    "security": "semgrep scan --config auto",
+    "verify": "bun run typecheck && bun run lint && bun test && bun run build",
+    "verify:full": "bun run verify && bun run security",
+    "test": "bun test ./tests ./src ./web/src ./web/tests --path-ignore-patterns \"**/shutdown-lifecycle.test.ts\" --timeout=30000",
     "test:shutdown": "bun test tests/integration/shutdown-lifecycle.test.ts",
     "test:e2e": "cd web && bunx playwright test",
     "gen:icon": "bun run scripts/gen-icon.ts"

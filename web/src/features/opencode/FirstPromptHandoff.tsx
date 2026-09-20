@@ -8,6 +8,7 @@ import {
   unclaimPendingFirstMessage,
 } from "@/features/chat/state/pendingFirstMessage";
 import { logger } from "@/lib/logger";
+import { startOperation, type OperationHandle } from "@/lib/operation";
 
 /**
  * First-prompt handoff boundary for OpenCode code mode.
@@ -47,6 +48,30 @@ export function isSessionThreadBound(
 export type FirstPromptHandoffOutcome = "skipped" | "none" | "sent" | "failed";
 
 /**
+ * The handoff as ONE operation.
+ *
+ * Deliberately NOT ended when the prompt is accepted: the accepted prompt is
+ * what triggers the session's first run, so the requests that follow (session
+ * bootstrap, prompt dispatch, SSE) belong to the same user action. It is ended
+ * when the view that owns it goes away, which bounds it without pretending the
+ * run is over the moment the text is handed over.
+ */
+let handoffOperation: OperationHandle | null = null;
+
+function beginHandoffOperation(): void {
+  handoffOperation?.end("superseded");
+  handoffOperation = startOperation("opencode.first_prompt");
+}
+
+/** End the handoff operation (view unmount, session change, or failure). */
+export function endHandoffOperation(reason: string): void {
+  const op = handoffOperation;
+  if (!op) return;
+  handoffOperation = null;
+  op.end(reason);
+}
+
+/**
  * Claim → append → clear/unclaim exactly once for a settled session thread.
  *
  * - Returns "skipped" without touching the stash while the thread is still
@@ -64,20 +89,40 @@ export async function fireFirstPromptHandoff(args: {
 }): Promise<FirstPromptHandoffOutcome> {
   const { conversationId, sessionId, boundSessionId, append } = args;
   if (!conversationId || !sessionId) return "skipped";
-  if (boundSessionId !== sessionId) return "skipped";
+  if (boundSessionId !== sessionId) {
+    // The staged prompt exists but the runtime's main thread is not bound to
+    // the session yet. This was the invisible half of the historical
+    // first-send bug: debug level, because it is re-evaluated on every render
+    // until the binding settles.
+    logger.debug("opencode", "handoff.not_bound", {
+      conversationId,
+      sessionId,
+      boundSessionId: boundSessionId ?? null,
+    });
+    return "skipped";
+  }
   const text = claimPendingFirstMessage(conversationId);
-  if (!text) return "none";
+  if (!text) {
+    logger.debug("opencode", "handoff.no_pending", { conversationId, sessionId });
+    return "none";
+  }
+  beginHandoffOperation();
+  logger.info("opencode", "handoff.start", { conversationId, sessionId });
   try {
     await append(text);
   } catch (err) {
     unclaimPendingFirstMessage(conversationId);
-    logger.warn("opencode", "pending first prompt handoff failed", {
+    logger.warn("opencode", "handoff.failed", {
       conversationId,
+      sessionId,
       errorType: err instanceof Error ? err.name : typeof err,
     });
+    endHandoffOperation("failed");
     return "failed";
   }
   clearPendingFirstMessage(conversationId);
+  // Accepted, not finished: the operation stays open for the run it starts.
+  logger.info("opencode", "handoff.accepted", { conversationId, sessionId });
   return "sent";
 }
 
@@ -112,6 +157,10 @@ export function FirstPromptHandoff({
       append: (text) => runtime.thread.append(text),
     });
   }, [runtime, boundSessionId, conversationId, sessionId]);
+
+  // Bound the handoff operation to the view that owns it, so a run it started
+  // stops inheriting the operation once the session surface is gone.
+  useEffect(() => () => endHandoffOperation("view-unmounted"), [sessionId]);
 
   return null;
 }

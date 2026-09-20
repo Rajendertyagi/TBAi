@@ -149,6 +149,44 @@ explicit compatibility review and approval.
   renderers import copy from this module; vendored assistant-ui elements retain
   their upstream copy.
 
+## Durable forward architecture
+
+Agents MUST read `docs/architectural-principles.md` before making architectural
+changes. It is the forward-looking contract for the system. Key non-negotiables:
+
+- **TBAi is the orchestration/policy layer.** It owns application state,
+  policy, workspace rules, conversation persistence, scheduler, provider
+  configuration, security, and memory policy. It does **not** own infrastructure
+  already solved well by assistant-ui, AI SDK, OpenCode, MCP, or ICM.
+- **assistant-ui** owns chat UI primitives, runtime state, and the
+  message/tool rendering contract. No second generic component framework, no
+  universal custom tool-card framework.
+- **AI SDK** owns Direct model execution, streaming, and the tool
+  execution/continuation contract. No second streaming protocol, no
+  application-owned message runtime.
+- **OpenCode** owns coding-agent sessions/tools/execution behind the OpenCode
+  adapter boundary. Do not spread OpenCode wire-format assumptions through
+  generic TBAi code.
+- **MCP** uses the official `@modelcontextprotocol/sdk`. No hand-rolled
+  JSON-RPC, no second MCP client.
+- **ICM** is the durable shared memory engine, behind TBAi's `MemoryService`.
+- **TBAi SQLite** remains authoritative for application state (conversations,
+  messages, providers, workspaces, scheduler, settings). ICM's database is
+  authoritative for memory; never merge the schemas.
+- **UI is library-first.** Prefer official assistant-ui elements before custom
+  renderers; a TBAi-specific renderer is justified only by a real capability
+  gap. Execution stays with the backend/runtime — rendering never takes over
+  execution.
+- **Questions are forms, not approval cards.** A question routes through a
+  QuestionForm and returns `answers[][]`; it must not use ApprovalGate,
+  `respondToApproval`, or permission APIs. Permissions remain a separate
+  allow/deny contract.
+- **Provider/vendor protocols stay behind adapters** (AI SDK, OpenCode, MCP).
+- **No framework multiplication.** No second chat runtime, state framework,
+  router, or MCP implementation.
+- **Prefer deleting obsolete custom code** when upstream capability becomes
+  sufficient; do not preserve custom architecture merely because it exists.
+
 ## Testing before "done"
 
 Typecheck → build → start → real AI request works → streaming works → errors handled
@@ -165,7 +203,9 @@ Maintain `docs/`: `architecture.md`, `development-rules.md`, `ai-integration.md`
 Propose in `docs/decisions.md` with the reason and alternatives considered. Keep the
 project small; prefer removing unused code/dependencies over adding new ones.
 
-Full contract: `docs/architectural-principles.md`.
+Full contract: `docs/architectural-principles.md` (read it before making
+architectural changes; see the "Durable forward architecture" section above for
+the non-negotiable rules).
 
 ## Engineering standards — non-negotiable, every file touched, new or existing
 

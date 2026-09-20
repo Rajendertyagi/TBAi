@@ -612,6 +612,46 @@ export const logRecentQuerySchema = z.object({
 });
 export const logFileNameSchema = z.string().regex(/^tbai\.log(\.\d+)?$/);
 
+// ---- Client (browser) event ingest ----
+//
+// The frontend logger batches structured events and POSTs them here so browser
+// lifecycle evidence lands in the SAME ring/file/UI pipeline as backend lines.
+// Bounded on every axis: level is a closed enum, scope must be a registered
+// scope path, `fields` is FLAT scalars only (no nested objects/arrays, so a
+// payload cannot be used to smuggle a body or blow up entry size), and the
+// batch is capped. Values are additionally redacted by the logger on arrival.
+export const clientLogFieldValueSchema = z.union([
+  z.string().max(500),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+export const clientLogEventSchema = z.object({
+  level: logLevelSchema,
+  scope: logScopeSchema,
+  event: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[A-Za-z0-9_.:-]+$/, "Invalid event name"),
+  message: z.string().max(2000).optional(),
+  /** Client epoch ms — the ordering key across the browser/backend boundary. */
+  ts: z.number().int().nonnegative(),
+  operationId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+  threadId: z.string().max(200).optional(),
+  conversationId: z.string().max(200).optional(),
+  fields: z
+    .record(z.string().max(64), clientLogFieldValueSchema)
+    .refine((f) => Object.keys(f).length <= 24, "Too many fields")
+    .optional(),
+});
+export const clientLogBatchSchema = z.object({
+  events: z.array(clientLogEventSchema).min(1).max(200),
+});
+
+export type ClientLogEvent = z.infer<typeof clientLogEventSchema>;
+export type ClientLogBatch = z.infer<typeof clientLogBatchSchema>;
+
 export type LogLevelFilter = z.infer<typeof logLevelFilterSchema>;
 export type LogTarget = z.infer<typeof logTargetSchema>;
 export type LogFileSettings = z.infer<typeof logFileSchema>;

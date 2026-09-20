@@ -19,6 +19,7 @@ import {
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { toolsConfig } from "@/config/tools";
+import { logger } from "@/lib/logger";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -177,11 +178,30 @@ export function ApprovalGate({
     if (busy) return;
     setBusy(true);
     setError(null);
+    // This card is the only place a user can refuse a gated tool, and nothing
+    // recorded that a decision happened, which one, or whether the runtime
+    // accepted it — so a wedged approval had no client-side evidence.
+    logger.info("approval", "decision.submitted", {
+      tool: tool ?? undefined,
+      approved: response.approved,
+      optionId: response.optionId ?? undefined,
+      hasReason: response.reason !== undefined,
+      automatic: approval.isAutomatic,
+    });
     runWithExit(async () => {
       try {
         // Await acceptance so a refused response leaves the gate retryable.
         await respondToApproval(response);
+        logger.debug("approval", "decision.accepted", {
+          tool: tool ?? undefined,
+          optionId: response.optionId ?? undefined,
+        });
       } catch (e) {
+        logger.warn("approval", "decision.failed", {
+          tool: tool ?? undefined,
+          optionId: response.optionId ?? undefined,
+          errorType: e instanceof Error ? e.name : typeof e,
+        });
         // Backstop: a reply that PROVES the request is gone retires the card,
         // rather than showing a retryable error for something that can never
         // succeed. An ordinary transient failure still stays retryable.

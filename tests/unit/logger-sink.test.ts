@@ -6,8 +6,6 @@ import {
   listLogFiles,
   logger,
   pruneLogFiles,
-  resetSampleCounters,
-  shouldSample,
 } from "../../src/lib/logger";
 
 let tmpRoot: string;
@@ -29,14 +27,14 @@ function touch(dir: string, name: string, ageMs = 0, size = 10): void {
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-logsink-"));
-  resetSampleCounters();
+  logger.resetLossCounters();
   logger.configure({ level: "debug", targets: [], file: null, fileEnabled: false });
 });
 
 afterEach(() => {
   logger.flushFileLines();
   logger.configure({ level: "error", targets: [], file: null, fileEnabled: false });
-  resetSampleCounters();
+  logger.resetLossCounters();
 });
 
 afterAll(() => {
@@ -154,18 +152,5 @@ describe("scope throttling", () => {
     const fresh = logger.getRecentEntries(since);
     expect(fresh.filter((e) => e.scope === "throttle.probe2")).toHaveLength(10);
     expect(fresh.filter((e) => e.scope === "http")).toHaveLength(150);
-  });
-});
-
-describe("shouldSample", () => {
-  it("passes first then every Nth (deterministic 1-in-N)", () => {
-    const out = Array.from({ length: 7 }, () => shouldSample("k", 3));
-    expect(out).toEqual([true, false, false, true, false, false, true]);
-  });
-
-  it("passes everything at ratio <= 1 and namespaces keys", () => {
-    expect([shouldSample("a", 1), shouldSample("a", 0)]).toEqual([true, true]);
-    expect(shouldSample("b", 100)).toBe(true);
-    expect(shouldSample("b", 100)).toBe(false);
   });
 });

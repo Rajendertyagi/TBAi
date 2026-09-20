@@ -24,10 +24,11 @@ function thread(
 
 describe("normalizeSectionOrder", () => {
   it("passes a full permutation through", () => {
+    // Archived is a rail surface (not a sidebar section) — only folders/chats/
+    // recent are known sidebar section ids, so an "archived" entry is dropped.
     expect(normalizeSectionOrder(["recent", "chats", "archived", "folders"])).toEqual([
       "recent",
       "chats",
-      "archived",
       "folders",
     ]);
   });
@@ -35,7 +36,7 @@ describe("normalizeSectionOrder", () => {
   it("drops unknowns and repeats, appends missing in default order", () => {
     expect(
       normalizeSectionOrder(["recent", "nope", "recent", "chats"]),
-    ).toEqual(["recent", "chats", "folders", "archived"]);
+    ).toEqual(["recent", "chats", "folders"]);
   });
 
   it("falls back to default for absent or corrupt values", () => {
@@ -43,44 +44,40 @@ describe("normalizeSectionOrder", () => {
       "folders",
       "chats",
       "recent",
-      "archived",
     ]);
     expect(normalizeSectionOrder("chats-first")).toEqual([
       "folders",
       "chats",
       "recent",
-      "archived",
     ]);
     expect(normalizeSectionOrder(null)).toEqual([
       "folders",
       "chats",
       "recent",
-      "archived",
     ]);
   });
 });
 
 describe("moveSectionInOrder", () => {
-  const order = ["folders", "chats", "recent", "archived"] as const;
+  const order = ["folders", "chats", "recent"] as const;
 
   it("moves down and up", () => {
     expect(moveSectionInOrder(order, "chats", 1)).toEqual([
       "folders",
       "recent",
       "chats",
-      "archived",
     ]);
-    expect(moveSectionInOrder(order, "archived", -2)).toEqual([
-      "folders",
-      "archived",
-      "chats",
+    // `recent` (index 2) moved up two slots lands at index 0.
+    expect(moveSectionInOrder(order, "recent", -2)).toEqual([
       "recent",
+      "folders",
+      "chats",
     ]);
   });
 
   it("returns the same reference for clamped or unknown moves", () => {
     expect(moveSectionInOrder(order, "folders", -1)).toBe(order);
-    expect(moveSectionInOrder(order, "archived", 1)).toBe(order);
+    expect(moveSectionInOrder(order, "recent", 1)).toBe(order);
     expect(moveSectionInOrder(order, "chats", 0)).toBe(order);
     expect(
       moveSectionInOrder(order, "unknown" as never, 1),

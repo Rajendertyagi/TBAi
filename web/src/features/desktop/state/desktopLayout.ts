@@ -42,8 +42,6 @@ interface DesktopLayoutState {
   showRecent: boolean;
   /** Whether archived conversations are shown in the sidebar lists. */
   showCompleted: boolean;
-  /** Whether the Archived section is expanded. */
-  archivedExpanded: boolean;
   /** Live conversation-search query (transient, never persisted). */
   searchQuery: string;
   /** Whether the chrome search input is expanded (transient). */
@@ -61,7 +59,6 @@ interface DesktopLayoutState {
   setAllSectionsCollapsed: (collapsed: boolean) => void;
   setShowRecent: (v: boolean) => void;
   setShowCompleted: (v: boolean) => void;
-  setArchivedExpanded: (v: boolean) => void;
   setSearchQuery: (q: string) => void;
   setSearchOpen: (open: boolean) => void;
   requestSearchFocus: () => void;
@@ -77,7 +74,6 @@ interface PersistedLayout {
   sectionCollapsed: SidebarSectionCollapsed;
   showRecent: boolean;
   showCompleted: boolean;
-  archivedExpanded: boolean;
 }
 
 const STORE_VERSION = 1;
@@ -92,7 +88,6 @@ function defaultPersisted(): PersistedLayout {
     sectionCollapsed: {},
     showRecent: sidebarConfig.showRecentByDefault,
     showCompleted: false,
-    archivedExpanded: sidebarConfig.archivedExpandedByDefault,
   };
 }
 
@@ -137,10 +132,6 @@ function migratePersisted(persisted: unknown): DesktopLayoutState {
       typeof p.showCompleted === "boolean"
         ? p.showCompleted
         : defaults.showCompleted,
-    archivedExpanded:
-      typeof p.archivedExpanded === "boolean"
-        ? p.archivedExpanded
-        : defaults.archivedExpanded,
   } as DesktopLayoutState;
 }
 
@@ -182,7 +173,6 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         }),
       setShowRecent: (v) => set({ showRecent: v }),
       setShowCompleted: (v) => set({ showCompleted: v }),
-      setArchivedExpanded: (v) => set({ archivedExpanded: v }),
       setSearchQuery: (q) => set({ searchQuery: q }),
       setSearchOpen: (open) => set({ searchOpen: open }),
       requestSearchFocus: () =>
@@ -202,7 +192,6 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         sectionCollapsed: s.sectionCollapsed,
         showRecent: s.showRecent,
         showCompleted: s.showCompleted,
-        archivedExpanded: s.archivedExpanded,
       }),
     },
   ),

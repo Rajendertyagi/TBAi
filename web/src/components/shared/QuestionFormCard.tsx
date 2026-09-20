@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 export interface QuestionFormOption {
   label: string;
@@ -149,8 +150,21 @@ export function QuestionFormCard({
     setError(null);
     try {
       const fullAnswers = questions.map((_, idx) => getEffectiveAnswer(idx));
+      // Counts only: answers are user text and must never enter a log. What
+      // matters for reconstruction is that an answer was given, for how many
+      // questions, and whether the runtime accepted it.
+      logger.info("approval", "question.submitted", {
+        questionCount: fullAnswers.length,
+        answeredCount: fullAnswers.filter((a) => a.length > 0).length,
+      });
       await onSubmit(fullAnswers);
+      logger.debug("approval", "question.accepted", {
+        questionCount: fullAnswers.length,
+      });
     } catch (e) {
+      logger.warn("approval", "question.failed", {
+        errorType: e instanceof Error ? e.name : typeof e,
+      });
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
@@ -161,8 +175,12 @@ export function QuestionFormCard({
     setBusy(true);
     setError(null);
     try {
+      logger.info("approval", "question.dismissed", { questionCount: questions.length });
       await onDismiss();
     } catch (e) {
+      logger.warn("approval", "question.dismiss_failed", {
+        errorType: e instanceof Error ? e.name : typeof e,
+      });
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }

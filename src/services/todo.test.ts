@@ -1,10 +1,16 @@
 import { describe, it, expect } from "bun:test";
 import { runTodo } from "./todos";
+import { generateId } from "../lib/utils";
 
 // DATA_DIR is isolated by tests/setup.ts (preload) to a per-run temp dir, so the
 // `todos` table lives in the shared test database. Thread ids are namespaced to
-// avoid colliding with other suites sharing that database.
-const T = (id: string) => `todo-test-${id}`;
+// avoid colliding with other suites sharing that database — and the namespace
+// has to be unique per MODULE INSTANCE, not a fixed literal. With a literal, a
+// second copy of this same suite (a compiled `.js` twin, a duplicate runner)
+// reuses the identical ids, its leftover rows survive in the shared DB, and the
+// count assertions below fail with "expected length 1, received 2".
+const RUN = generateId();
+const T = (id: string) => `todo-test-${RUN}-${id}`;
 
 describe("todo service", () => {
   it("rejects when no thread context is supplied", () => {

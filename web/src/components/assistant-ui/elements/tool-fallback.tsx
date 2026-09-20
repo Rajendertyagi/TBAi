@@ -37,6 +37,7 @@ import {
   isKnownApprovalOptionKind,
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
+import { logger } from "@/lib/logger";
 
 const ANIMATION_DURATION = 200;
 
@@ -407,13 +408,24 @@ function ToolFallbackApproval({
 
   // A refused response leaves the request open, so the controls come back
   // rather than staying spent on a decision the runtime never recorded.
+  // Single choke point for every answer this card can give (approve, deny,
+  // declared option, typed text), so the decision is recorded exactly once.
   const submit = (send: () => Promise<void> | void) => {
     setSubmitted(true);
     setError(null);
+    logger.info("approval", "decision.submitted", {
+      tool: title ?? undefined,
+      path: "tool-fallback",
+    });
     runWithExit(async () => {
       try {
         await send();
+        logger.debug("approval", "decision.accepted", { tool: title ?? undefined });
       } catch (sendError) {
+        logger.warn("approval", "decision.failed", {
+          tool: title ?? undefined,
+          errorType: sendError instanceof Error ? sendError.name : typeof sendError,
+        });
         // The one failure that can never succeed on a retry: the server no
         // longer holds this request. Record it so the card retires instead of
         // coming back offering the same two buttons.

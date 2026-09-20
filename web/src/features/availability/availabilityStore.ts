@@ -137,7 +137,8 @@ async function probeOnce(): Promise<void> {
     }
   }
 
-  const wasOnline = useAvailabilityStore.getState().status === "online";
+  const previousStatus = useAvailabilityStore.getState().status;
+  const wasOnline = previousStatus === "online";
   useAvailabilityStore.setState({
     status,
     checkedAt: Date.now(),
@@ -145,8 +146,22 @@ async function probeOnce(): Promise<void> {
     consecutiveFailures: failures,
   });
 
+  // Availability transitions drive real user-visible behavior (sends refused,
+  // data refetched) and were previously invisible: only a failed recovery
+  // listener was logged, never the state change itself.
+  if (status !== previousStatus) {
+    logger.info("availability", "state.change", {
+      from: previousStatus,
+      to: status,
+      reason: status === "online" ? null : reason,
+      consecutiveFailures: failures,
+    });
+  }
+
   if (status === "online" && !wasOnline) {
-    useAvailabilityStore.setState((s) => ({ recoveryEpoch: s.recoveryEpoch + 1 }));
+    const recoveryEpoch = useAvailabilityStore.getState().recoveryEpoch + 1;
+    useAvailabilityStore.setState({ recoveryEpoch });
+    logger.info("availability", "recovery", { recoveryEpoch });
     await runRecoveryListeners();
   }
 }

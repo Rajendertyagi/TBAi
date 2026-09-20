@@ -8,6 +8,7 @@ import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../features/ch
 import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngine";
 import { peekMaterializedEngine } from "../../features/chat/state/materializeDraft";
 import { appToolkit } from "../../tools/toolkit";
+import { logger } from "../../lib/logger";
 import { TodoList } from "../../components/assistant-ui/elements/todo-list";
 import { AppShell } from "./AppShell";
 
@@ -64,6 +65,12 @@ export function ChatShell() {
   useEffect(() => {
     loadProviders();
   }, [loadProviders]);
+
+  // Runtime lifecycle: which shell owns a live runtime, and when.
+  useEffect(() => {
+    logger.info("app", "runtime.mount", { shell: "chat" });
+    return () => logger.info("app", "runtime.unmount", { shell: "chat" });
+  }, []);
 
   // Single authoritative tool-renderer registration (toolkit architecture).
   // Stable reference: the toolkit object is module-scope, registered once.

@@ -483,3 +483,104 @@ from memory (`web/src/tools/opencode/adapt.ts` documents this contract).
 - **Gap A (todo panel)** and **Gap B (structured websearch):** NOT yet built.
   Suggested order: **B** then **A** (pure display, low risk). The question
   form-richness is a third, smaller item after C's base.
+
+## 11. OpenCode auto-approval — study (OpenChamber reference, for TBAi)
+
+Source: `D:\Temp\openchamber`. Goal: TBAi gets the same "auto-accept
+permissions for this session" shield toggle OpenChamber has in its composer,
+scoped to TBAi's OpenCode (Code) mode. **Docs-only for now — no code written,
+prompt not yet issued.**
+
+### 11.1 What OpenChamber does (the 4 layers)
+
+A shield button in the composer footer. ON = OpenCode permission requests for
+that session are auto-approved; no manual Approve clicks.
+
+| Layer | File | Role |
+|---|---|---|
+| UI | `packages/ui/.../composer/ui/PermissionAutoAcceptButton.tsx` | Shield icon in footer; `shield-user` (off) / `shield-check` (on, blue accent), `aria-pressed`, tooltip "Permission auto-accept: on/off" |
+| Toggle logic | `packages/ui/.../chat/permissionAutoAccept.ts` | live session → PUT policy; new-session draft → stash flag on the draft, apply at session materialization |
+| Client store | `packages/ui/.../stores/permissionStore.ts` (Zustand) | per-session boolean map; hydrates from server; revision-guarded (a stale write can't clobber a fresh one) |
+| Backend runtime | `packages/web/server/lib/permission-auto-accept/runtime.js` | **Authoritative** policy. Persists to settings, subscribes to OpenCode SSE event hub, auto-replies `once` on each `permission.asked`; on enable/reconnect **reconciles** all pending permissions |
+
+Key subtleties in the backend runtime:
+- **Lineage inheritance:** a child session walks up to its parent/grandparent;
+  nearest explicit value wins, so a child `false` overrides a parent `true`.
+- **`once`, never `always`:** auto-accept replies `once` — it is a per-session
+  convenience switch, **not a trust grant**. ("Always" trust is a separate,
+  explicit user action.)
+- **Fail closed:** unknown lineage / failed policy load → not auto-accepting.
+- **Reconcile-on-enable:** enabling a session immediately answers every
+  currently-pending matching request; survives UI disconnect + server restart.
+- **UI is a projection:** the server is the sole responder; the client renders
+  pending cards until the authoritative `permission.replied` SSE event arrives.
+
+### 11.2 How TBAi differs (why the design is smaller)
+
+- **No backend SSE bridge.** TBAi's backend never subscribes to OpenCode
+  events. `@assistant-ui/react-opencode` (in the browser) owns the runtime;
+  `useOpenCodePermissions` + `reply()` live client-side
+  (`web/src/features/opencode/OpenCodePermissions.tsx`). So "reconcile pending
+  on server restart / headless auto-approve" has **no TBAi equivalent** — and
+  per the OpenCode-isolation boundary we should NOT add one.
+- **No session lineage.** TBAi's OpenCode sessions are 1:1 with conversations,
+  no subagents. Drop the inheritance machinery entirely.
+- **No draft concept.** `CodeShell`/`OpenCodeView` creates the OpenCode
+  session on entry; the toggle only matters once a session exists.
+
+### 11.3 Proposed TBAi design (3 layers, OpenCode-mode-scoped)
+
+- **Persistence** — new SQLite row in the `app_settings` pattern:
+  `conversationId → boolean`. App state ⇒ SQLite is correct (AGENTS.md).
+- **Backend routes** (`src/routes/opencode.ts`, named routes registered
+  **before** the `app.all("*")` proxy catch-all):
+  - `GET  /api/opencode/permissions/auto-accept` → `{ sessions: Record<string,boolean> }`
+  - `PUT  /api/opencode/permissions/auto-accept/:conversationId` → `{ enabled }`
+  - Zod-validated. New service `src/services/opencode/autoAccept.ts` (under the
+    OpenCode boundary) reads/writes the policy. No event handling.
+- **Frontend store** — new `web/src/stores/` slice (Zustand, mirrors
+  `stalePermissionsStore`): per-conversation flag; hydrates from backend;
+  exposes `isConversationAutoAccepting(conversationId)` +
+  `setAutoAccept(conversationId, enabled)`.
+- **UI button** — new `web/src/features/opencode/` component, placed in the
+  Code-mode composer area (sibling of `OpenCodeSessionRow`/`OpenCodeStatus`),
+  shadcn `Tooltip` + lucide `ShieldCheck`/`ShieldQuestion`, TBAi tokens
+  (NOT OpenChamber's `--status-info`), matching §9's visual language.
+
+**Decisive decision — auto-approvals execute in the browser, gated on the flag.**
+A small effect in `web/src/features/opencode/` watches
+`useOpenCodePermissions().pending`; when the active conversation's flag is ON it
+auto-replies `once` to each unlinked permission (same `reply(request.id,"once")`
+call `OpenCodePermissions.tsx` uses). The manual card then disappears on the
+authoritative `permission.replied` SSE event — **no second protocol**, library-
+first.
+
+**Tradeoff (flag for the user):** auto-approvals only run while TBAi's UI is
+open and in Code mode. OpenChamber's server runtime auto-approves headless; TBAi
+client-side cannot. Accept it to stay library-first (no new SSE bridge).
+
+**Safety parity:** reply `once` only (never `always`) — the existing "Always"
+button already delegates trust to OpenCode, so auto-accept stays a
+convenience, never a trust grant. Fail closed if the conversation can't resolve.
+
+### 11.4 Files a dev agent would touch (plan only — DO NOT code yet)
+- `src/db` — new settings table/row (conversationId → boolean)
+- `src/services/opencode/autoAccept.ts` — NEW service (read/write policy)
+- `src/routes/opencode.ts` — 2 named routes (before the proxy catch-all)
+- `web/src/stores/` — NEW slice (per-conversation flag + hydrate)
+- `web/src/features/opencode/` — NEW button + the auto-reply effect
+- i18n copy (shield on/off labels, e.g. "Permission auto-accept: on")
+- `docs/decisions.md` — one entry (client-side auto-approve scope + `once`
+  safety + "UI must be open" tradeoff)
+- **No new dependencies.**
+
+### 11.5 Open decisions (user to confirm before the prompt is written)
+1. **Scope:** client-side only (accept the "UI must be open + Code mode"
+   tradeoff) vs also a headless backend auto-approver (bigger: bridge OpenCode
+   event stream into TBAi backend — not recommended).
+2. **Button placement:** Code-mode composer area (sibling of
+   `OpenCodeSessionRow`/`OpenCodeStatus`) vs a more prominent slot.
+3. **Fail-closed vs fail-open default:** when the flag can't be read, treat as
+   OFF (recommended) — never auto-approve by default.
+
+> **Status 2026-09-19: STUDIED + PLANNED, NOT BUILT. Prompt not yet issued.**

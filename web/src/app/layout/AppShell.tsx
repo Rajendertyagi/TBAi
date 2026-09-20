@@ -10,6 +10,7 @@ import { WindowControls } from "../../components/WindowControls";
 import { ChromeShortcuts } from "../../components/ChromeShortcuts";
 import { PageContextMenu } from "../../components/PageContextMenu";
 import { TabUrlSync } from "../TabUrlSync";
+import { RouteObserver } from "../RouteObserver";
 import { isTauri } from "../../lib/platform";
 import { syncChromeVars } from "../../lib/chrome-vars";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
@@ -116,6 +117,9 @@ export function AppShell({ children }: AppShellProps = {}) {
       {/* Desktop keyboard shortcuts (self-gates on isTauri) */}
       <ChromeShortcuts />
       <TabUrlSync />
+      {/* Route transitions are part of every operation's story — recorded once,
+          for both shells, since both render through this component. */}
+      <RouteObserver />
     </div>
   );
 }

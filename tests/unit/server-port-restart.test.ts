@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { db } from "../../src/db";
 import * as serverPortModule from "../../src/services/server-port";
-import { restartListener, getActivePort } from "../../src/server";
+import { restartListener, getActivePort } from "../../src/services/server-listener";
 
 // ── Fake server objects standing in for Bun.serve results ───────────────────
 
@@ -48,8 +48,15 @@ function resetFakes() {
   bindFail = false;
 }
 
-// The real boot + restart primitives.
-import { startServer, restartListener as realRestartListener, getActivePort as realGetActivePort } from "../../src/server";
+// The real boot + restart primitives. `restartListener` / `getActivePort` now
+// live in the server-listener service (T3-SRV-07 extracted listener ownership
+// + identity out of src/server.ts); `startServer` still lives in src/server.ts
+// and initializes the listener's fetch handler before binding.
+import { startServer } from "../../src/server";
+import {
+  restartListener as realRestartListener,
+  getActivePort as realGetActivePort,
+} from "../../src/services/server-listener";
 
 // We mutate `Bun.serve` (the bind layer) and the server module's persist layer.
 // `Bun.serve` is read inside the real module at call time, so patching the

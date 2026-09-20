@@ -6,7 +6,7 @@
  * literals, per the configuration-first rule.
  */
 
-export type SidebarSectionId = "folders" | "chats" | "recent" | "archived";
+export type SidebarSectionId = "folders" | "chats" | "recent";
 
 export type SidebarSortMode = "updated" | "created";
 
@@ -15,7 +15,6 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
   "folders",
   "chats",
   "recent",
-  "archived",
 ];
 
 export const DEFAULT_SECTION_ORDER: readonly SidebarSectionId[] =
@@ -33,8 +32,6 @@ export interface SidebarConfig {
   defaultSort: SidebarSortMode;
   /** Whether the Recent section renders by default. */
   showRecentByDefault: boolean;
-  /** Whether the Archived section starts expanded. */
-  archivedExpandedByDefault: boolean;
   /** Flat item cap for the Recent section (Chats paginates via the runtime). */
   recentSectionLimit: number;
   /** Anti-flood page size for the Chats date-grouped list (session-only). */
@@ -97,8 +94,7 @@ export interface SidebarConfig {
 export const sidebarConfig: SidebarConfig = {
   defaultSectionOrder: DEFAULT_SECTION_ORDER,
   defaultSort: DEFAULT_SORT_MODE,
-  showRecentByDefault: true,
-  archivedExpandedByDefault: false,
+    showRecentByDefault: true,
   recentSectionLimit: 10,
   chatsPageSize: 20,
   searchDebounceMs: 300,
@@ -163,8 +159,6 @@ export function sectionLabel(id: SidebarSectionId): string {
       return sidebarConfig.copy.chats;
     case "recent":
       return sidebarConfig.copy.recent;
-    case "archived":
-      return sidebarConfig.copy.archived;
   }
 }
 

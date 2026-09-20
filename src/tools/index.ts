@@ -203,9 +203,13 @@ export function withThreadContext(
   const ws = workspaceDir;
   const scopeFor = (tool: string) =>
     threadId ? { conversationId: threadId, tool } : undefined;
+  // Tool-funnel correlation: the funnel owns toolCallId (from the AI SDK
+  // execute options), so the thread is bound here to complete the pair. Every
+  // `tool.start|finish|error` line then names both the call and its thread.
+  const funnelExtra = threadId ? { conversationId: threadId } : {};
   const wrap = (name: string, fn: (args: any) => unknown) => {
     if (tools[name]) {
-      tools[name] = { ...tools[name], execute: instrumentedExecute(name, fn) };
+      tools[name] = { ...tools[name], execute: instrumentedExecute(name, fn, funnelExtra) };
     }
   };
   wrap("read_file", (a) => runRead(a, ws, scopeFor("read_file")));
@@ -231,13 +235,17 @@ export function withThreadContext(
           ws,
           scopeFor("run_command"),
         ),
-      ),
+      funnelExtra),
     };
   }
   if (threadId && tools.todo) {
     tools.todo = {
       ...tools.todo,
-      execute: instrumentedExecute("todo", (args: unknown) => runTodo(args as any, { threadId })),
+      execute: instrumentedExecute(
+        "todo",
+        (args: unknown) => runTodo(args as any, { threadId }),
+        funnelExtra,
+      ),
     };
   }
   if (tools.scheduler) {

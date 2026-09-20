@@ -26,6 +26,13 @@ start.bat
 /workspace/
 web/vite.config.js
 web/vite.config.d.ts
+# Compiled twins that a bare `tsc` used to emit beside every source file. The
+# root tsconfig now sets `noEmit`, so they should never reappear — this is the
+# guard against one being committed by accident (13 stale `*.test.js` twins had
+# accumulated and were being collected as duplicate test suites).
+# `scripts/*.mjs` are hand-written and deliberately NOT matched.
+src/**/*.js
+scripts/**/*.js
 src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/

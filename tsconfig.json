@@ -4,6 +4,15 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    // Mirrors web/tsconfig. This config has no `outDir`, so a bare
+    // `tsc -p tsconfig.json` emits a `.js` twin beside EVERY source file under
+    // `src/` and `scripts/`. That is exactly how ~80 stale compiled twins
+    // accumulated — including 13 `*.test.js` copies that `bun test` collected
+    // as duplicate suites (which made `todo.test.ts` fail on the shared test
+    // database and doubled the reported test counts). Nothing needs tsc to
+    // emit: the backend bundles with `bun build`, the web app builds with vite,
+    // and `typecheck` already passes `--noEmit` explicitly.
+    "noEmit": true,
     // Matches web/tsconfig: declaration files (node_modules) are the
     // packages' contract, not our source. A dependency minor bump otherwise
     // breaks the build on third-party .d.ts drift in code paths we never

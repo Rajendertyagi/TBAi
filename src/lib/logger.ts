@@ -56,6 +56,11 @@ function isProd(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.NODE_ENV ?? "development") === "production";
 }
 
+/** Default live-tail ring cap (entries). The Logs viewer mirrors this cap. */
+export const DEFAULT_LOG_BUFFER_SIZE = 5000;
+/** Default file-sink backlog cap (lines) before overflow shedding. */
+export const DEFAULT_LOG_FILE_QUEUE_LIMIT = 5000;
+
 export interface LoggerConfig {
   level: LogLevelFilter;
   targets: LogTargetDirective[];
@@ -67,6 +72,10 @@ export interface LoggerConfig {
   keepFiles: number;
   maxTotalBytes: number;
   retentionMs: number;
+  /** Live-tail ring cap (entries). Bounded by design — overflow is counted. */
+  bufferSize: number;
+  /** File-sink backlog cap (lines). Overflow is counted, never blocking. */
+  fileQueueLimit: number;
 }
 
 /** Default sink path for a data dir (production default; dev default is off). */
@@ -99,6 +108,8 @@ export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env): Logge
     keepFiles: Math.max(1, Math.floor(numEnv(env, "TBAI_LOG_KEEP", 20))),
     maxTotalBytes: Math.floor(numEnv(env, "TBAI_LOG_MAX_TOTAL_MB", 100) * 1024 * 1024),
     retentionMs: Math.floor(numEnv(env, "TBAI_LOG_RETENTION_HOURS", 24) * 3600 * 1000),
+    bufferSize: Math.floor(numEnv(env, "TBAI_LOG_RING", DEFAULT_LOG_BUFFER_SIZE)),
+    fileQueueLimit: Math.floor(numEnv(env, "TBAI_LOG_QUEUE", DEFAULT_LOG_FILE_QUEUE_LIMIT)),
   };
 }
 
@@ -106,12 +117,16 @@ export interface LogFields {
   event?: string;
   message?: string;
   requestId?: string;
+  operationId?: string;
   conversationId?: string;
+  threadId?: string;
+  clientRequestId?: string;
+  streamId?: string;
+  sessionId?: string;
   toolCallId?: string;
   jobId?: string;
   providerId?: string;
   modelId?: string;
-  threadId?: string;
   provider?: string;
   model?: string;
   tool?: string;
@@ -126,6 +141,11 @@ export interface LogFields {
 
 export interface LogEntry extends LogFields {
   time: string;
+  /** Epoch milliseconds — the machine-readable ordering key. `time` is the
+   *  local human string (console) and the file sink overrides it with a UTC
+   *  ISO-8601 string, so consumers that need to order or join entries across
+   *  sinks must use `ts`, never `time`. */
+  ts: number;
   level: LogLevel;
   scope: string;
 }
@@ -182,16 +202,48 @@ export function redactFields(fields: LogFields): LogFields {
  * Correlation only — never a dumping ground. New fields require a
  * demonstrated funnel need (see docs/logging.md). Funnels bind what they own
  * (fireJob binds jobId, the tool wrapper binds toolCallId); routes bind
- * requestId/conversationId; the AI funnel binds providerId/modelId.
+ * requestId/operationId/conversationId; the AI funnel binds
+ * providerId/modelId/streamId.
+ *
+ * `operationId` is the one id that is NOT minted here: it is minted by the
+ * frontend for one meaningful user action and arrives on the
+ * `X-TBAI-Operation-ID` header, so every request that action causes shares it
+ * while each request keeps its own `requestId`. Absent for requests with no
+ * user operation behind them (health probes, scheduler runs — those bind
+ * `jobId` instead).
  */
 export interface RequestContext {
   requestId: string;
+  operationId?: string;
   conversationId?: string;
+  threadId?: string;
+  clientRequestId?: string;
+  streamId?: string;
+  sessionId?: string;
   toolCallId?: string;
   jobId?: string;
   providerId?: string;
   modelId?: string;
 }
+
+/**
+ * The correlation fields `emit()` inherits from the ambient context. Kept as
+ * one list so a new id cannot be added to `RequestContext` and then silently
+ * forgotten here (the previous hand-written merge had that drift risk).
+ */
+const CORRELATION_KEYS = [
+  "operationId",
+  "requestId",
+  "conversationId",
+  "threadId",
+  "clientRequestId",
+  "streamId",
+  "sessionId",
+  "toolCallId",
+  "jobId",
+  "providerId",
+  "modelId",
+] as const satisfies readonly (keyof RequestContext)[];
 
 const requestStore = new AsyncLocalStorage<RequestContext>();
 
@@ -226,6 +278,52 @@ export function extendRequestContext<T>(patch: Partial<RequestContext>, fn: () =
 /** Generate a correlation ID: req_ + compact unique suffix. */
 export function newRequestId(): string {
   return `req_${generateId()}`;
+}
+
+/** Generate an operation ID: op_ + compact unique suffix (frontend format). */
+export function newOperationId(): string {
+  return `op_${generateId()}`;
+}
+
+/**
+ * Inbound header carrying the frontend-minted operation id. One value for the
+ * whole user action; the backend binds it into the request context so every
+ * log line the action causes inherits it.
+ */
+export const OPERATION_ID_HEADER = "x-tbai-operation-id";
+
+/**
+ * Accepted shape for any inbound correlation id (request OR operation).
+ * Deliberately opaque and restricted to URL-safe idents: an id is never
+ * interpreted, only matched, so nothing sensitive can ride in one.
+ */
+export const CORRELATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Header carrying an inbound request id (echoed, for client-side tracing). */
+export const REQUEST_ID_HEADER = "x-request-id";
+
+/**
+ * Resolve the correlation ids for one inbound request from its headers.
+ *
+ * Pure, and used by the edge middleware itself — so the accepted header shape
+ * is covered by a direct unit test rather than only through a live server.
+ * A malformed or absent id is replaced (requestId) or dropped (operationId);
+ * neither is ever trusted as-is.
+ */
+export function resolveInboundCorrelation(headers: {
+  get(name: string): string | null;
+}): { requestId: string; operationId?: string } {
+  const incomingRequest = headers.get(REQUEST_ID_HEADER);
+  const requestId =
+    incomingRequest && CORRELATION_ID_RE.test(incomingRequest)
+      ? incomingRequest
+      : newRequestId();
+  const incomingOperation = headers.get(OPERATION_ID_HEADER);
+  const operationId =
+    incomingOperation && CORRELATION_ID_RE.test(incomingOperation)
+      ? incomingOperation
+      : undefined;
+  return { requestId, operationId };
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +406,8 @@ function formatTime(date: Date): string {
 function formatHuman(entry: LogEntry): string {
   const bits: string[] = [];
   for (const [key, value] of Object.entries(entry)) {
-    if (["time", "level", "scope", "event", "message"].includes(key)) continue;
+    // `ts` is the machine-readable twin of `time`; printing both is noise.
+    if (["time", "ts", "level", "scope", "event", "message"].includes(key)) continue;
     if (value === undefined) continue;
     bits.push(`${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
   }
@@ -453,23 +552,14 @@ interface ThrottleState {
   dropped: number;
 }
 
-const sampleCounters = new Map<string, number>();
-
-export function shouldSample(key: string, ratio: number): boolean {
-  if (!Number.isFinite(ratio) || ratio <= 1) return true;
-  const n = (sampleCounters.get(key) ?? 0) + 1;
-  sampleCounters.set(key, n);
-  return n % Math.floor(ratio) === 1;
-}
-
-/** Clear sampling counters (tests). */
-export function resetSampleCounters(): void {
-  sampleCounters.clear();
-}
+// Sampling was deliberately NOT adopted as a volume policy: a deterministic
+// 1-in-N gate drops evidence silently and unconditionally, which is the
+// opposite of what reconstruction needs. The token bucket (which announces
+// itself via `scope.throttled` and counts its drops) is the only volume
+// control, and every loss path is counted (see `getWriteStats().loss`).
 
 const FILE_FLUSH_MS = 10;
 const FILE_FLUSH_BYTES = 64 * 1024;
-const FILE_QUEUE_LIMIT = 5000;
 const ROTATION_CHECK_MS = 60 * 1000;
 const PRUNE_CHECK_MS = 60 * 60 * 1000;
 
@@ -492,7 +582,13 @@ class Logger {
   private fileQueue: string[] = [];
   private fileQueueBytes = 0;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Loss accounting: every path that can discard an entry increments exactly
+  // one counter, so "did we lose evidence?" is answerable from the API and
+  // /metrics instead of inferred. Monotonic per process.
   private fileDropped = 0;
+  private levelFiltered = 0;
+  private ringSpliced = 0;
+  private ioFailures = 0;
   private estBytesSinceRotate = 0;
   private lastRotationCheck = 0;
   private lastPruneCheck = 0;
@@ -532,12 +628,24 @@ class Logger {
     };
   }
 
-  /** Writer health for tests and the throttle UI. */
+  /**
+   * Writer health + loss accounting for tests, the throttle UI, and
+   * `/api/logs/*`. `loss` is the answer to "could evidence have disappeared?":
+   * `levelFiltered` (policy filtering), `ringSpliced` (live-tail cap),
+   * `fileQueueDropped` (sink backlog cap), `ioFailures` (file/rotate/prune
+   * errors). Throttle drops stay per-scope in `throttled`.
+   */
   getWriteStats(): {
     queued: number;
     queuedBytes: number;
     dropped: number;
     throttled: Array<{ scope: string; dropped: number }>;
+    loss: {
+      levelFiltered: number;
+      ringSpliced: number;
+      fileQueueDropped: number;
+      ioFailures: number;
+    };
   } {
     return {
       queued: this.fileQueue.length,
@@ -546,7 +654,21 @@ class Logger {
       throttled: [...this.throttleStates.entries()]
         .filter(([, st]) => st.throttled || st.dropped > 0)
         .map(([scope, st]) => ({ scope, dropped: st.dropped })),
+      loss: {
+        levelFiltered: this.levelFiltered,
+        ringSpliced: this.ringSpliced,
+        fileQueueDropped: this.fileDropped,
+        ioFailures: this.ioFailures,
+      },
     };
+  }
+
+  /** Clear loss counters (tests). */
+  resetLossCounters(): void {
+    this.levelFiltered = 0;
+    this.ringSpliced = 0;
+    this.fileDropped = 0;
+    this.ioFailures = 0;
   }
 
   /** Clear throttle buckets (tests). */
@@ -617,14 +739,22 @@ class Logger {
   }
 
   private write(entry: LogEntry): void {
-    if (!this.isEnabled(entry.level, entry.scope)) return;
+    if (!this.isEnabled(entry.level, entry.scope)) {
+      // Level filtering is a deliberate policy, but it must not be invisible:
+      // a scope pinned to `off`/`error` silently discards everything below it,
+      // so the count is exposed alongside the other loss counters.
+      this.levelFiltered += 1;
+      return;
+    }
     if (!this.throttleCheck(entry.scope, entry.level)) return;
     const safe = redactFields(entry) as LogEntry;
     // Ring buffer for the live Logs panel (bounded; redacted; cheap scalars).
     const buffered = { ...safe, seq: ++this.bufferSeq };
     this.buffer.push(buffered);
-    if (this.buffer.length > LOG_BUFFER_SIZE) {
-      this.buffer.splice(0, this.buffer.length - LOG_BUFFER_SIZE);
+    const overflow = this.buffer.length - this.config.bufferSize;
+    if (overflow > 0) {
+      this.buffer.splice(0, overflow);
+      this.ringSpliced += overflow;
     }
     for (const listener of this.bufferListeners) {
       try {
@@ -647,7 +777,7 @@ class Logger {
   }
 
   private enqueueFileLine(line: string): void {
-    if (this.fileQueue.length >= FILE_QUEUE_LIMIT) {
+    if (this.fileQueue.length >= this.config.fileQueueLimit) {
       this.fileDropped += 1;
       return;
     }
@@ -703,32 +833,33 @@ class Logger {
         });
       }
     } catch {
-      /* file logging is best-effort; console already emitted */
+      // File logging is best-effort — console and ring already emitted — but a
+      // failure must be counted, otherwise a dead sink looks like a quiet app.
+      this.ioFailures += 1;
     }
   }
 
   private emit(level: LogLevel, scope: string, event: string, fields: LogFields = {}): void {
     const ctx = getRequestContext();
-    const merged: LogFields = {
-      requestId: ctx?.requestId,
-      conversationId: ctx?.conversationId,
-      toolCallId: ctx?.toolCallId,
-      jobId: ctx?.jobId,
-      providerId: ctx?.providerId,
-      modelId: ctx?.modelId,
-      ...fields,
-      event,
-    };
-    // Explicit fields win; drop undefined correlation ids.
-    if (merged.requestId === undefined) delete merged.requestId;
-    if (merged.conversationId === undefined) delete merged.conversationId;
-    if (merged.toolCallId === undefined) delete merged.toolCallId;
-    if (merged.jobId === undefined) delete merged.jobId;
-    if (merged.providerId === undefined) delete merged.providerId;
-    if (merged.modelId === undefined) delete merged.modelId;
+    // Explicit fields win; otherwise inherit whatever the ambient context
+    // carries. Undefined values are never written — a missing id stays absent
+    // rather than appearing as a null the reader has to interpret.
+    const merged: LogFields = { ...fields, event };
+    if (ctx) {
+      for (const key of CORRELATION_KEYS) {
+        if (merged[key] === undefined && ctx[key] !== undefined) {
+          merged[key] = ctx[key];
+        }
+      }
+    }
+    for (const key of CORRELATION_KEYS) {
+      if (merged[key] === undefined) delete merged[key];
+    }
+    const now = Date.now();
     this.write({
       ...merged,
-      time: formatTime(new Date()),
+      time: formatTime(new Date(now)),
+      ts: now,
       level,
       scope,
     });
@@ -789,10 +920,6 @@ class Logger {
     return () => this.bufferListeners.delete(listener);
   }
 }
-
-// Live-tail ring: sized for post-governance volume (viewer virtualizes;
-// ~1MB at typical entry sizes). Matches the client cap below.
-const LOG_BUFFER_SIZE = 5000;
 
 /** The canonical server logger. */
 export const logger = new Logger();

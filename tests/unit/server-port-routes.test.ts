@@ -9,13 +9,17 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { Hono } from "hono";
 
-// Mock the server module BEFORE importing the route, so the route's
-// `import { getActivePort, restartListener } from "../server"` resolves to our
-// fakes. `activePort` is mutable so individual tests can control which port
-// the probe treats as "active".
+// Mock the server-listener service BEFORE importing the route, so the
+// route's `import { getActivePort, getInstanceId, restartListener } from
+// "../services/server-listener"` resolves to our fakes. The factory must
+// expose EVERY export `routes/server.ts` imports from the service — a stale,
+// partial mock makes the route module's import throw. `activePort` is
+// mutable so individual tests can control which port the probe treats as
+// "active".
 let activePort = 3000;
-mock.module("../../src/server", () => ({
+mock.module("../../src/services/server-listener", () => ({
   getActivePort: () => activePort,
+  getInstanceId: () => "test-instance",
   restartListener: async (port: number) => ({ port, restarted: true }),
 }));
 

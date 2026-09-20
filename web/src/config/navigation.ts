@@ -1,4 +1,4 @@
-import { Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, type LucideIcon } from "lucide-react";
+import { Archive, Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, type LucideIcon } from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -19,6 +19,7 @@ export type ViewId =
   | "mcp"
   | "logs"
   | "scheduler"
+  | "archived"
   | "workspace"
   | "folders"
   | "quick-messages"
@@ -202,6 +203,16 @@ export const appConfig: AppConfig = {
       description: "Automated scheduled runs",
       visible: true,
       order: 10,
+    },
+    {
+      id: "archived",
+      label: "Archived",
+      icon: Archive,
+      view: "archived",
+      route: "/archived",
+      description: "Archived conversations",
+      visible: true,
+      order: 11,
     },
     {
       id: "logs",

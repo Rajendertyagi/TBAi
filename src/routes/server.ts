@@ -1,12 +1,16 @@
 import { Hono } from "hono";
-import { serverPortBodySchema } from "../lib/validation";
+import { serverPortBodySchema, startupPrefsBodySchema } from "../lib/validation";
 import {
   getPersistedPort,
   isPortEnvLocked,
   persistConfiguredPort,
   resolveConfiguredPort,
 } from "../services/server-port";
-import { getActivePort, getInstanceId, restartListener } from "../server";
+import {
+  getPersistedStartMinimized,
+  persistStartMinimized,
+} from "../services/startup-prefs";
+import { getActivePort, getInstanceId, restartListener } from "../services/server-listener";
 import { logger } from "../lib/logger";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
@@ -121,6 +125,25 @@ app.post("/check-port", async (c) => {
     }
     return c.json({ port, available: true });
   }
+});
+
+// Startup preferences (start minimized to tray). Same persist+mirror shape
+// as the port: the DB owns the value, the file lets the launcher read it.
+app.get("/startup", (c) => {
+  return c.json({ startMinimized: getPersistedStartMinimized() });
+});
+
+app.put("/startup", async (c) => {
+  const parsed = startupPrefsBodySchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return c.json({ error: "Invalid startup preferences", issues: parsed.error.issues }, 400);
+  }
+  try {
+    persistStartMinimized(parsed.data.startMinimized);
+  } catch {
+    return c.json({ error: "Could not persist startup preferences" }, 500);
+  }
+  return c.json({ startMinimized: parsed.data.startMinimized });
 });
 
 export default app;

@@ -165,7 +165,16 @@ app.post("/api/chat", async (c) => {
     chatRuns.markFailed(run.streamId);
     throw err;
   }
-  const chatLog = logger.child({ requestId, provider: provider.type, model: modelConfig.model });
+  // Correlation bindings for every line this route emits: requestId (this
+  // request) + conversationId (the thread) + provider/model. `operationId` is
+  // inherited from the request context, so all of these lines join the user
+  // action that caused them without being repeated per call site.
+  const chatLog = logger.child({
+    requestId,
+    conversationId: threadId,
+    provider: provider.type,
+    model: modelConfig.model,
+  });
   const chatStartedAt = Date.now();
 
   // ── Diagnostic: chat_request_received ─────────────────────────────────────
@@ -536,6 +545,7 @@ app.post("/api/chat/cancel/:streamId", (c) => {
     category: "cancelled",
     streamId,
     requestId,
+    ...(rec.conversationId ? { conversationId: rec.conversationId } : {}),
     ...(rec.providerId ? { providerId: rec.providerId } : {}),
     ...(rec.modelId ? { modelId: rec.modelId } : {}),
     elapsedMs: Date.now() - rec.createdAt,

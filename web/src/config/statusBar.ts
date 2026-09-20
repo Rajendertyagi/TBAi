@@ -21,6 +21,8 @@ export const statusBarConfig = {
     availabilityOfflineTitle: "Backend unavailable — showing last known state",
     availabilityUnknown: "Local",
     availabilityUnknownTitle: "Backend status unknown",
+    openServer: "Web server status — open server settings",
+    serverOffline: "Server unreachable",
     noProvider: "No provider configured",
     openProviders: "Open provider settings",
   },
