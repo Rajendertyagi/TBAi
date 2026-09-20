@@ -33,13 +33,19 @@ export function disableIdleTimeout(c: {
  * Storage/persistence route failure: safe response only. The edge middleware
  * logs every 4xx/5xx response centrally (see docs/logging.md), so this helper
  * stays a pure response mapper — no log call here by design.
+ *
+ * Validation failures are client errors (400), not server faults, and their
+ * issues are returned STRUCTURALLY — the same `{ error, issues }` shape every
+ * other route uses (chat, logs, mcp). Stringifying the issue array into `error`
+ * made a 400 unreadable as copy and unusable as data.
  */
 export function storageError(c: Context, e: unknown, status = 500) {
-  // Validation failures are client errors (400), not server faults.
-  const resolved = e instanceof ZodError ? 400 : status;
   const requestId = c.get("requestId") as string | undefined;
+  if (e instanceof ZodError) {
+    return c.json({ error: "Invalid request", issues: e.issues, requestId }, 400);
+  }
   return c.json(
     { error: e instanceof Error ? e.message : "Unknown error", requestId },
-    resolved as 400 | 500,
+    status as 500,
   );
 }

@@ -85,6 +85,10 @@ naming styles.
 | `scheduler.maintenance` | `scheduler` | boot recovery, GC | `phase`, report counters |
 | `credential.error` | `credential` | decrypt/get/store failure (never key material) | classification fields |
 | `mcp.operation` | `mcp` | connect/disconnect/reconnect/roots/sampling/elicitation/resource/prompt/test | `op`, `outcome`, `mcpServer` |
+| `conversation.materialize` | `conversations` | a draft became a row (or an idempotent replay of one) | `conversationId`, `engine`, `workspaceMode`, `providerConfigured`, `modelConfigured`, `replayed` |
+| `conversation.open` | `conversations` | a conversation row was read (debug — this route is also the existence probe every surface mounts with) | `conversationId`, `engine` |
+| `conversation.update` | `conversations` | a PATCH landed | `conversationId`, `fields` (NAMES only, never values), `engine`, `status` |
+| `conversation.delete` | `conversations` | a conversation was torn down | `conversationId`, `deleted` (whether a row existed), `engine` |
 | `scope.throttled` | emitting scope | throttle engage/disengage (governance marker, never silent) | `engaged`, `dropped`, `budgetPerSec` |
 
 ### 3.1 Client lifecycle events (scope `chat` / `opencode` / `app` / `availability` / `approval`)
@@ -271,7 +275,7 @@ client ingest boundary rejects anything not registered for the browser plane, so
 the two lists cannot drift silently.
 
 Backend: `http`, `ai`, `chat`, `tool`, `mcp`, `scheduler`, `credential`,
-`opencode`, `server`, `db`, `workspace`.
+`opencode`, `server`, `db`, `workspace`, `conversations`.
 
 Client: `app`, `chat`, `composer`, `availability`, `opencode`, `approval`,
 `quick-messages.ui`, `mcp.ui`, `folders.ui`.

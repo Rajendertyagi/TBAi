@@ -1,6 +1,7 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { registry } from "../config/providers";
-import { conversationService, messageService } from "../services/storage";
+import { ConversationNotFoundError, conversationService, messageService } from "../services/storage";
 import { terminateOpenCodeSession } from "../services/opencode/sessions";
 import { logger, normalizeError } from "../lib/logger";
 import { conversationCreateSchema, conversationUpdateSchema, messageUpsertSchema } from "../lib/validation";
@@ -8,6 +9,18 @@ import { folderService } from "../services/folders";
 import { storageError } from "./shared";
 
 const app = new Hono();
+
+/**
+ * Truthful 404 for a conversation row that no longer exists. Returned by every
+ * mutation that targets a missing id, so a stale client can tell "this is gone"
+ * apart from "the server broke" (which is a 5xx and retryable). Same body shape
+ * as the GET 404 below — one shape for "not found" across this route module.
+ * The requestId is not echoed here; the edge middleware already stamps every
+ * 4xx/5xx log line with it.
+ */
+function conversationNotFound(c: Context) {
+  return c.json({ error: "Conversation not found" }, 404);
+}
 
 // Phase 4 idempotency for draft materialization: clientRequestId → conversation.
 // Covers two holes the client cannot close alone: concurrent duplicate POSTs
@@ -67,18 +80,45 @@ app.post("/api/conversations", async (c) => {
     // Idempotent create (Phase 4): same clientRequestId resolves to the same
     // conversation. In-flight duplicates share one creation; completed keys
     // replay the existing row (see module map + limitation note above).
+    // Lifecycle evidence for the draft→row transition — the highest-value
+    // conversation event, and the one a duplicate-row bug would surface in.
+    // `replayed` distinguishes a fresh materialization from an idempotent
+    // replay of the same clientRequestId, so a duplicate can never be
+    // mistaken for two real creations. Values are never logged (title is user
+    // text); only ids, enums and presence flags.
+    const materialized = (
+      row: {
+        id: string;
+        engine?: string | null;
+        workspaceMode?: string | null;
+        providerId?: string | null;
+        modelId?: string | null;
+      },
+      replayed: boolean,
+    ) => {
+      logger.info("conversations", "conversation.materialize", {
+        conversationId: row.id,
+        engine: row.engine ?? "direct",
+        workspaceMode: row.workspaceMode ?? "simple",
+        providerConfigured: row.providerId != null,
+        modelConfigured: row.modelId != null,
+        replayed,
+      });
+      return c.json(row);
+    };
+
     const idempotencyKey = parsed.clientRequestId ?? null;
     if (idempotencyKey) {
       const inFlight = createInFlight.get(idempotencyKey);
       if (inFlight) {
         const existing = await inFlight;
         const row = await conversationService.get(existing.id);
-        if (row) return c.json(row);
+        if (row) return materialized(row, true);
       } else {
         const completed = createCompleted.get(idempotencyKey);
         if (completed && Date.now() - completed.at <= CREATE_KEY_TTL_MS) {
           const row = await conversationService.get(completed.id);
-          if (row) return c.json(row);
+          if (row) return materialized(row, true);
           createCompleted.delete(idempotencyKey);
         }
       }
@@ -102,7 +142,7 @@ app.post("/api/conversations", async (c) => {
     };
 
     if (!idempotencyKey) {
-      return c.json(await createOne());
+      return materialized(await createOne(), false);
     }
 
     const creation = createOne().then((conversation) => ({ id: conversation.id }));
@@ -112,7 +152,8 @@ app.post("/api/conversations", async (c) => {
       pruneCreateKeys(Date.now());
       createCompleted.set(idempotencyKey, { id: created.id, at: Date.now() });
       const conversation = await conversationService.get(created.id);
-      return c.json(conversation);
+      if (!conversation) return conversationNotFound(c);
+      return materialized(conversation, false);
     } finally {
       if (createInFlight.get(idempotencyKey) === creation) {
         createInFlight.delete(idempotencyKey);
@@ -132,6 +173,14 @@ app.get("/api/conversations/:id", async (c) => {
       return c.json({ error: "Conversation not found" }, 404);
     }
 
+    // Opening is a read, and this route is also the existence probe every
+    // surface mounts with — so it is recorded at debug (visible when tracing a
+    // lifecycle, quiet under normal production capture) rather than as a second
+    // info line beside the http audit entry.
+    logger.debug("conversations", "conversation.open", {
+      conversationId: id,
+      engine: conversation.engine ?? "direct",
+    });
     return c.json(conversation);
   } catch (e) {
     return storageError(c, e);
@@ -194,7 +243,11 @@ app.patch("/api/conversations/:id", async (c) => {
     // Capture old folder id before update so we can clean up hidden chat
     // folders when switching modes (codeg parity).
     const old = await conversationService.get(id);
-    const oldFolderId = old?.workspaceFolderId ?? null;
+    // A mutation against a missing row is a stale-client condition, not a
+    // server fault: answer 404 so the caller can stop referencing it, instead
+    // of a 5xx that reads as "retry".
+    if (!old) return conversationNotFound(c);
+    const oldFolderId = old.workspaceFolderId ?? null;
 
     const conversation = await conversationService.update(id, {
       ...parsed,
@@ -219,8 +272,20 @@ app.patch("/api/conversations/:id", async (c) => {
       await folderService.cleanupChatFolder(oldFolderId);
     }
 
+    // Which fields changed — names only, never values (title/systemPrompt are
+    // user text). This is what makes "did my update land, and what did it
+    // touch" answerable without diffing rows by hand.
+    logger.info("conversations", "conversation.update", {
+      conversationId: id,
+      fields: Object.keys(parsed).sort().join(",") || "none",
+      engine: conversation.engine ?? "direct",
+      ...(parsed.status ? { status: parsed.status } : {}),
+    });
     return c.json(conversation);
   } catch (e) {
+    // A row deleted between the existence check and the UPDATE is the same
+    // stale-client condition, not a server fault.
+    if (e instanceof ConversationNotFoundError) return conversationNotFound(c);
     return storageError(c, e);
   }
 });
@@ -247,12 +312,20 @@ app.delete("/api/conversations/:id", async (c) => {
       }
     }
     await messageService.deleteByConversation(id);
-    await conversationService.delete(id);
+    const deleted = await conversationService.delete(id);
     // Cleanup hidden chat folder if no other conversations reference it.
     if (folderId) {
       await folderService.cleanupChatFolder(folderId);
     }
-    return c.json({ success: true });
+    // Truthful teardown record. `deleted:false` means the row was already gone
+    // (a repeat or raced delete): the desired end state still holds, but the
+    // difference is visible instead of being flattened into "success".
+    logger.info("conversations", "conversation.delete", {
+      conversationId: id,
+      deleted,
+      ...(conv ? { engine: conv.engine ?? "direct" } : {}),
+    });
+    return c.json({ success: true, deleted });
   } catch (e) {
     return storageError(c, e);
   }

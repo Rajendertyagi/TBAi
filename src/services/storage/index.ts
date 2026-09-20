@@ -81,6 +81,21 @@ function mapConversation(row: ConversationRow): Conversation {
   };
 }
 
+/**
+ * Thrown when a mutation targets a conversation row that does not exist.
+ *
+ * Typed so the route layer can answer 404 ("this conversation is gone") instead
+ * of a generic 500. The distinction matters to callers: a 5xx says the server
+ * is at fault and invites a retry, while a missing row means the client's view
+ * is stale and the correct response is to stop referencing it.
+ */
+export class ConversationNotFoundError extends Error {
+  constructor(readonly conversationId: string) {
+    super(`Conversation not found: ${conversationId}`);
+    this.name = "ConversationNotFoundError";
+  }
+}
+
 export const conversationService = {
   async create(
     data: Pick<
@@ -260,13 +275,22 @@ export const conversationService = {
 
     db.run(`UPDATE conversations SET ${updates.join(", ")} WHERE id = ?`, values);
     const updated = await this.get(id);
-    if (!updated) throw new Error("Failed to update conversation");
+    // A missing row is NOT a server fault: the caller asked to modify something
+    // that no longer exists (deleted concurrently, or a stale client id).
+    if (!updated) throw new ConversationNotFoundError(id);
     return updated;
   },
 
-  async delete(id: string): Promise<void> {
+  /** Removes the conversation and its messages. Returns whether a row existed. */
+  async delete(id: string): Promise<boolean> {
     db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
+    const before = db
+      .query<{ c: number }, SQLQueryBindings[]>(
+        "SELECT COUNT(*) AS c FROM conversations WHERE id = ?",
+      )
+      .get(id);
     db.run("DELETE FROM conversations WHERE id = ?", [id]);
+    return (before?.c ?? 0) > 0;
   },
 };
 

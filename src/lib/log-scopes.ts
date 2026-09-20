@@ -41,6 +41,8 @@ export const BACKEND_LOG_SCOPES = [
   "db",
   /** Conversation workspace: GC + migration. */
   "workspace",
+  /** Conversation lifecycle: materialize / open / update / delete. */
+  "conversations",
 ] as const;
 
 export type BackendLogScope = (typeof BACKEND_LOG_SCOPES)[number];
