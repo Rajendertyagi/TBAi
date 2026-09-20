@@ -8,9 +8,6 @@ import {
 import {
   setPendingFirstMessage,
   peekPendingFirstMessage,
-  claimPendingFirstMessage,
-  unclaimPendingFirstMessage,
-  clearPendingFirstMessage,
 } from "./pendingFirstMessage";
 import { OpencodeDraftRedirectError } from "../../../runtime";
 import {
@@ -26,6 +23,7 @@ import {
 } from "./welcomeEngine";
 import { useSettingsStore } from "../../../stores";
 import { createRemoteThreadListAdapter } from "../../../adapters/remoteThreadListAdapter";
+import { fireFirstPromptHandoff } from "../../opencode/FirstPromptHandoff";
 
 /**
  * Wave-2 Phase 4 — first-send cross-module flow (cases 2, 3, 4, 8n, 10, 11f, 12, 15, 18).
@@ -36,11 +34,12 @@ import { createRemoteThreadListAdapter } from "../../../adapters/remoteThreadLis
  *   direct draft path:  adapter.initialize → take-or-live engine → resolveDraftId
  *   Enter-path backstop:  prepareSendMessagesRequest stub sees opencode record → throw + stash
  *
- * The consume step replicates the OpenCodeView AgentRuntime effect guard
- * (`if (!sessionId || !conversationId) return; claim → append → clear`) —
- * the replica is kept honest by the source-guard test below, which asserts
- * the effect still contains the same lines (web/ has no DOM runner, same
- * convention as OpenCodeView.test.tsx).
+ * The consume step calls the REAL `fireFirstPromptHandoff`
+ * (`web/src/features/opencode/FirstPromptHandoff.tsx`) — the settled
+ * boundary that appends only after the runtime's main thread is bound to
+ * the session id. A source-guard test below pins the boundary's location
+ * and gate (web/ has no DOM runner, same convention as
+ * OpenCodeView.test.tsx).
  *
  * Case map:
  *   A.  Enter-path backstop: library-driven prepare on opencode thread throws
@@ -79,24 +78,8 @@ function installMemoryStorage(): () => void {
   };
 }
 
-/** Faithful replica of the OpenCodeView first-prompt consume effect. */
-function consumePendingFirstMessage(
-  conversationId: string | undefined,
-  sessionId: string | undefined,
-  runtime: { thread: { append: (text: string) => void } },
-): "skipped" | "none" | "sent" | "failed" {
-  if (!sessionId || !conversationId) return "skipped";
-  const text = claimPendingFirstMessage(conversationId);
-  if (!text) return "none";
-  try {
-    runtime.thread.append(text);
-  } catch {
-    unclaimPendingFirstMessage(conversationId);
-    return "failed";
-  }
-  clearPendingFirstMessage(conversationId);
-  return "sent";
-}
+/** Settled-boundary handoff notes (replica removed — these flow tests call
+ * the real `fireFirstPromptHandoff` imported above). */
 
 function mockRuntime() {
   const appendCalls: string[] = [];
@@ -173,22 +156,59 @@ describe("opencode draft flow — materialize, bind, stash, consume once (case 2
     expect(state.tabs.map((t) => t.key)).toEqual([agentKey("conv-oc-flow")]);
     expect(state.activeKey).toBe(agentKey("conv-oc-flow"));
 
-    // Code surface binds the session → consume fires once…
-    expect(consumePendingFirstMessage(created.id, "ses-flow-1", runtime)).toBe("sent");
+    // Code surface binds the session AND the main thread settles on it →
+    // consume fires once…
+    expect(
+      await fireFirstPromptHandoff({
+        conversationId: created.id,
+        sessionId: "ses-flow-1",
+        boundSessionId: "ses-flow-1",
+        append: (text) => runtime.thread.append(text),
+      }),
+    ).toBe("sent");
     expect(appendCalls).toEqual(["build me a widget"]);
     // …and a remount/reconnect never refires (case 18: single append total,
     // no second prompt required for the exchange to exist).
-    expect(consumePendingFirstMessage(created.id, "ses-flow-1", runtime)).toBe("none");
+    expect(
+      await fireFirstPromptHandoff({
+        conversationId: created.id,
+        sessionId: "ses-flow-1",
+        boundSessionId: "ses-flow-1",
+        append: (text) => runtime.thread.append(text),
+      }),
+    ).toBe("none");
     expect(appendCalls).toHaveLength(1);
   });
 
-  it("no session → consume never runs, append never called (cases 2neg + 10)", () => {
+  it("no session → consume never runs, append never called (cases 2neg + 10)", async () => {
     setPendingFirstMessage("conv-nosession", "waiting for session");
     const { appendCalls, runtime } = mockRuntime();
-    expect(consumePendingFirstMessage("conv-nosession", undefined, runtime)).toBe("skipped");
+    expect(
+      await fireFirstPromptHandoff({
+        conversationId: "conv-nosession",
+        sessionId: undefined,
+        boundSessionId: undefined,
+        append: (text) => runtime.thread.append(text),
+      }),
+    ).toBe("skipped");
     expect(appendCalls).toHaveLength(0);
     // The handoff is still staged for when the session arrives.
     expect(peekPendingFirstMessage("conv-nosession")?.text).toBe("waiting for session");
+  });
+
+  it("unbound draft thread → consume never runs, append never called (settled boundary)", async () => {
+    setPendingFirstMessage("conv-unbound", "waiting for the switch");
+    const { appendCalls, runtime } = mockRuntime();
+    expect(
+      await fireFirstPromptHandoff({
+        conversationId: "conv-unbound",
+        sessionId: "ses-unbound-1",
+        boundSessionId: undefined,
+        append: (text) => runtime.thread.append(text),
+      }),
+    ).toBe("skipped");
+    expect(appendCalls).toHaveLength(0);
+    expect(peekPendingFirstMessage("conv-unbound")?.text).toBe("waiting for the switch");
   });
 });
 
@@ -327,10 +347,25 @@ describe("failed session creation sends no prompt (case 12)", () => {
       sessionId = undefined;
     }
     expect(sessionId).toBeUndefined();
-    expect(consumePendingFirstMessage("conv-bootfail", sessionId, runtime)).toBe("skipped");
+    expect(
+      await fireFirstPromptHandoff({
+        conversationId: "conv-bootfail",
+        sessionId,
+        boundSessionId: undefined,
+        append: (text) => runtime.thread.append(text),
+      }),
+    ).toBe("skipped");
     expect(appendCalls).toHaveLength(0);
-    // Staged, not lost: it fires once the session eventually binds.
-    expect(consumePendingFirstMessage("conv-bootfail", "ses-late", runtime)).toBe("sent");
+    // Staged, not lost: it fires once the session eventually binds AND the
+    // main thread settles on it.
+    expect(
+      await fireFirstPromptHandoff({
+        conversationId: "conv-bootfail",
+        sessionId: "ses-late",
+        boundSessionId: "ses-late",
+        append: (text) => runtime.thread.append(text),
+      }),
+    ).toBe("sent");
     expect(appendCalls).toEqual(["do not send me yet"]);
   });
 });
@@ -360,16 +395,24 @@ describe("route/tab transition does not determine execution identity (case 15)",
   });
 });
 
-describe("OpenCodeView consume effect — source pins the replica (cases 10/12/18)", () => {
-  it("the effect still claims → appends → clears behind the session guard", async () => {
+describe("FirstPromptHandoff settled boundary — source pins the production path (cases 10/12/18)", () => {
+  it("the boundary claims → appends → clears only behind the session-thread gate", async () => {
     const source = await Bun.file(
-      new URL("../../opencode/OpenCodeView.tsx", import.meta.url),
+      new URL("../../opencode/FirstPromptHandoff.tsx", import.meta.url),
     ).text();
-    expect(source).toContain("if (!sessionId || !conversationId) return;");
+    expect(source).toContain("boundSessionId !== sessionId");
     expect(source).toContain("claimPendingFirstMessage(conversationId)");
     expect(source).toContain("runtime.thread.append(text)");
     expect(source).toContain("clearPendingFirstMessage(conversationId)");
     expect(source).toContain("unclaimPendingFirstMessage(conversationId)");
+  });
+
+  it("OpenCodeView hosts the boundary inside the provider with no competing consumer", async () => {
+    const source = await Bun.file(
+      new URL("../../opencode/OpenCodeView.tsx", import.meta.url),
+    ).text();
+    expect(source).toContain("<FirstPromptHandoff");
+    expect(source).not.toContain("claimPendingFirstMessage(conversationId)");
   });
 
   it("ChatShell binds through the owner record with the live snapshot as backstop", async () => {

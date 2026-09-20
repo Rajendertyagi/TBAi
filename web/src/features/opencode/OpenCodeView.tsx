@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { RefreshCw } from "lucide-react";
 import { AssistantRuntimeProvider, AuiConfig, Tools } from "@assistant-ui/react";
@@ -14,15 +14,15 @@ import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
 import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
-import {
-  claimPendingFirstMessage,
-  clearPendingFirstMessage,
-  unclaimPendingFirstMessage,
-} from "@/features/chat/state/pendingFirstMessage";
 import { useResolvedOpenCodeModel } from "./resolveOpenCodeModel";
 import { hydrateAutoPolicy } from "./sessionAutoPolicy";
+import { shouldReconnectForEpoch } from "./recoveryEpoch";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
-import { logger } from "@/lib/logger";
+import { FirstPromptHandoff } from "./FirstPromptHandoff";
+import {
+  bootstrapOpenCodeSession,
+  invalidateBootstrap,
+} from "./sessionBootstrap";
 import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
@@ -71,11 +71,14 @@ export function OpenCodeView() {
   const retry = useCallback(() => {
     setError(null);
     setTimedOut(false);
+    if (agentId) {
+      invalidateBootstrap(agentId);
+    }
     setAttempt((n) => n + 1);
-  }, []);
+  }, [agentId]);
 
   useEffect(() => {
-    if (!agentId) {
+    if (!agentId || !agentId.trim()) {
       // No auto-created conversation: Code mode shares the welcome draft
       // with normal chat (engine picker). The first send with the OpenCode
       // engine mints the conversation and routes here, so visiting /code
@@ -95,80 +98,29 @@ export function OpenCodeView() {
     // call is not orphaned; clear it on any resolution.
     timer = setTimeout(onTimeout, OPENCODE_INIT_TIMEOUT_MS);
 
-    const signal = new AbortController();
-    const histStart = Date.now();
-    logger.debug("opencode", "history.load_start", {
-      ocSession: agentId,
-      conversationId: agentId,
-    });
-    fetch("/api/opencode/session", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ conversationId: agentId }),
-      signal: signal.signal,
-    })
-      .then(async (r) => {
-        // Non-2xx carries a server error message (e.g. missing OpenCode CLI).
-        // Surface it instead of hanging on "Starting OpenCode…" forever.
-        const data = (await r.json().catch(() => ({}))) as {
-          sessionId?: string;
-          directory?: string | null;
-          error?: string;
-        };
-        if (!r.ok) {
-          logger.debug("opencode", "history.load_error", {
-            ocSession: agentId,
-            status: r.status,
-            errorType: "upstream_http_error",
-            message: data.error ?? "Could not start OpenCode session",
-          });
-          throw new Error(data.error ?? "Could not start OpenCode session");
-        }
-        logger.debug("opencode", "history.load_success", {
-          ocSession: agentId,
-          status: r.status,
-          elapsedMs: Date.now() - histStart,
-          hasSession: Boolean(data.sessionId),
-          // Whether the event-stream scope came back alongside the session id.
-          // `false` means the runtime cannot scope its subscription and live
-          // streaming will not work — the single field that explains this whole
-          // failure mode. The path value itself is never logged.
-          hasDirectory: Boolean(data.directory),
-        });
-        return data;
-      })
+    bootstrapOpenCodeSession(agentId)
       .then((data) => {
         if (cancelled) return;
         setTimedOut(false);
-        if (!data.sessionId) {
-          setError("Could not start OpenCode session");
-          return;
-        }
         // Both are set in one update, so the runtime — which only mounts once
         // `sessionId` exists — always builds its event subscription from a
         // client that already carries the scope.
-        setEventDirectory(data.directory ?? null);
+        setEventDirectory(data.directory);
         setSessionId(data.sessionId);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setTimedOut(false);
-        logger.debug("opencode", "history.load_error", {
-          ocSession: agentId,
-          errorType: e instanceof Error ? e.name : typeof e,
-          message: e instanceof Error ? e.message : "Could not start OpenCode session",
-        });
         setError(e instanceof Error ? e.message : "Could not start OpenCode session");
       })
       .finally(() => {
         if (timer) clearTimeout(timer);
       });
+
     return () => {
       cancelled = true;
-      signal.abort();
       if (timer) clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, navigate, attempt]);
 
   if (error || timedOut) {
@@ -244,10 +196,24 @@ function AgentRuntime({
   // boundary (client-epoch rebuild + hydration/reconcile) — never a second
   // implementation. Only when a session is actually bound; each recovery
   // epoch fires exactly once, so no duplicate reconnects.
+  //
+  // Mount-time reconnect is deliberately skipped: the client was just created
+  // for this mount, so rebuilding it immediately would swap the frozen
+  // thread-list adapter (client identity change) while the first thread
+  // switch/append is still pending — the library turns that into
+  // ThreadListAdapterChangedError. A stale non-zero epoch from an old flap
+  // must not trigger this; only an epoch CHANGE while mounted (a genuine
+  // recovery) reconnects.
   const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
+  const seenRecoveryEpochRef = useRef(recoveryEpoch);
   useEffect(() => {
-    if (recoveryEpoch === 0 || !sessionId) return;
-    reconnect();
+    const decision = shouldReconnectForEpoch({
+      sessionId,
+      recoveryEpoch,
+      seenRecoveryEpoch: seenRecoveryEpochRef.current,
+    });
+    seenRecoveryEpochRef.current = decision.seenRecoveryEpoch;
+    if (decision.reconnect) reconnect();
   }, [recoveryEpoch, sessionId, reconnect]);
 
   // Hydrate the runtime policy cache the moment the authoritative config is
@@ -264,30 +230,17 @@ function AgentRuntime({
     }
   }, [sessionId, conversationConfig, reconcileAutoApprove]);
 
-  // First-prompt handoff (Phase 4): fire a stashed draft prompt exactly once
-  // into the session-bound runtime. Claim-guarded, so remounts and reconnects
-  // (new runtime identity) can never refire it — the claim persists before
-  // the append, and the stash clears right after the runtime accepts the
-  // prompt. Async prompt failures surface in-thread as an error card with the
-  // message already present; the user retries explicitly, never auto-replay.
-  useEffect(() => {
-    if (!sessionId || !conversationId) return;
-    const text = claimPendingFirstMessage(conversationId);
-    if (!text) return;
-    try {
-      runtime.thread.append(text);
-    } catch (err) {
-      // Synchronous handoff failure: release the claim so a later attempt
-      // may fire it, and log instead of crashing the surface.
-      unclaimPendingFirstMessage(conversationId);
-      logger.warn("opencode", "pending first prompt handoff failed", {
-        conversationId,
-        errorType: err instanceof Error ? err.name : typeof err,
-      });
-      return;
-    }
-    clearPendingFirstMessage(conversationId);
-  }, [runtime, sessionId, conversationId]);
+  // First-prompt handoff (Phase 4) lives in <FirstPromptHandoff/>, rendered
+  // inside the provider below: it fires the stashed draft prompt exactly
+  // once, and only after the runtime's main thread is actually bound to this
+  // session id. Firing on the draft thread would invoke the frozen adapter's
+  // initialize() (upstream session.create → 400) or race an adapter
+  // replacement (ThreadListAdapterChangedError). Claim-guarded, so remounts
+  // and reconnects (new runtime identity) can never refire it — the claim
+  // persists before the append, and the stash clears right after the runtime
+  // accepts the prompt. Async prompt failures unclaim (retained for a later
+  // settled attempt) and surface in-thread as an error card with the message
+  // already present; the user retries explicitly, never auto-replay.
 
   // Code mode needs its OWN tool-renderer registration.
   //
@@ -320,6 +273,11 @@ function AgentRuntime({
     <OpenCodeIsolationBoundary>
       <OpenCodeRuntimeContext.Provider value={runtimeContext}>
         <AssistantRuntimeProvider runtime={runtime} config={config}>
+          <FirstPromptHandoff
+            conversationId={conversationId}
+            sessionId={sessionId}
+            runtime={runtime}
+          />
           <div className="flex h-full min-h-0 flex-col">
             <OpenCodeSessionRow />
             <OpenCodePermissions />

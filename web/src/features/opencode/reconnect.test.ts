@@ -6,6 +6,7 @@ import {
 } from "@assistant-ui/react-opencode";
 import { createOpenCodeRuntimeClient } from "./runtimeClient";
 import type { OpenCodeRuntimeClient } from "./eventScope";
+import { shouldReconnectForEpoch } from "./recoveryEpoch";
 
 /**
  * OpenCode reconnect capability (coding-agent hardening).
@@ -582,5 +583,82 @@ describe("reconnect — hook logic (source guard: no DOM runner)", () => {
     expect(source).toContain(
       "return { runtime, reconnect, reconcileAutoApprove: client.reconcileAutoApprove }",
     );
+  });
+});
+
+describe("reconnect — epoch gate (behavioral, no DOM runner)", () => {
+  // `shouldReconnectForEpoch` is the pure decision behind AgentRuntime's
+  // recovery effect. A mount must never rebuild the client/adapter merely
+  // because the epoch is already non-zero (stale flap); only an epoch
+  // CHANGE while mounted reconnects. Deterministic state-machine walk.
+  it("mount with epoch 0 never reconnects, re-renders neither", () => {
+    let seen = 0;
+    const step = (epoch: number) => {
+      const d = shouldReconnectForEpoch({
+        sessionId: "ses_1",
+        recoveryEpoch: epoch,
+        seenRecoveryEpoch: seen,
+      });
+      seen = d.seenRecoveryEpoch;
+      return d.reconnect;
+    };
+    expect(step(0)).toBe(false);
+    expect(step(0)).toBe(false);
+    expect(step(0)).toBe(false);
+  });
+
+  it("mount with a stale non-zero epoch does NOT reconnect", () => {
+    let seen = 1;
+    const d = shouldReconnectForEpoch({
+      sessionId: "ses_1",
+      recoveryEpoch: 1,
+      seenRecoveryEpoch: seen,
+    });
+    expect(d.reconnect).toBe(false);
+    expect(d.seenRecoveryEpoch).toBe(1);
+  });
+
+  it("epoch transition while mounted reconnects exactly once per transition", () => {
+    let seen = 1;
+    let reconnects = 0;
+    const step = (epoch: number) => {
+      const d = shouldReconnectForEpoch({
+        sessionId: "ses_1",
+        recoveryEpoch: epoch,
+        seenRecoveryEpoch: seen,
+      });
+      seen = d.seenRecoveryEpoch;
+      if (d.reconnect) reconnects++;
+    };
+    step(1);
+    step(1);
+    expect(reconnects).toBe(0);
+    step(2);
+    expect(reconnects).toBe(1);
+    step(2);
+    step(2);
+    expect(reconnects).toBe(1);
+    step(3);
+    expect(reconnects).toBe(2);
+  });
+
+  it("no session bound never reconnects and leaves the seen epoch untouched", () => {
+    const d = shouldReconnectForEpoch({
+      sessionId: undefined,
+      recoveryEpoch: 7,
+      seenRecoveryEpoch: 2,
+    });
+    expect(d.reconnect).toBe(false);
+    expect(d.seenRecoveryEpoch).toBe(2);
+  });
+
+  it("AgentRuntime wires the gate through a previous-epoch ref, not a bare epoch check", async () => {
+    const source = await Bun.file(
+      new URL("./OpenCodeView.tsx", import.meta.url),
+    ).text();
+    expect(source).toContain("seenRecoveryEpochRef");
+    expect(source).toContain("shouldReconnectForEpoch({");
+    // The old unconditional mount-time reconnect is gone.
+    expect(source).not.toContain("if (recoveryEpoch === 0 || !sessionId) return;");
   });
 });

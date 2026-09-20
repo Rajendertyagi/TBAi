@@ -42,7 +42,7 @@ describe("OpenCodeView loading surface", () => {
     expect(source).toContain("Retry");
   });
 
-  it("keeps the session creation/resume request path unchanged", () => {
-    expect(source).toContain('fetch("/api/opencode/session"');
+  it("keeps the session creation/resume bootstrap path", () => {
+    expect(source).toContain("bootstrapOpenCodeSession(agentId)");
   });
 });

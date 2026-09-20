@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 import { composerConfig } from "../../config/composer";
+import { shouldReconnectForEpoch } from "../opencode/recoveryEpoch";
 
 /**
  * Phase 3 component/hook boundary pins.
@@ -92,25 +93,34 @@ describe("elicitation resolve failure contract (Phase 3.11)", () => {
 });
 
 describe("OpenCode recovery reconnect (Phase 3.10)", () => {
-  it("[P3-18a] nonzero recoveryEpoch with a bound session calls the EXISTING reconnect once", () => {
+  it("[P3-18a] bound session + epoch change calls the EXISTING reconnect once (never on stale mount)", () => {
     const src = sources.openCodeView;
-    expect(src).toContain("if (recoveryEpoch === 0 || !sessionId) return;");
+    // Previous-epoch ref + pure gate: only an epoch CHANGE while mounted
+    // reconnects. A mount with an already-non-zero epoch must not rebuild
+    // the client (that would swap the frozen thread-list adapter while the
+    // first thread switch/append is still pending).
+    expect(src).toContain("seenRecoveryEpochRef");
+    expect(src).toContain("shouldReconnectForEpoch({");
     expect(src).toContain("reconnect();");
     expect(src).toContain("}, [recoveryEpoch, sessionId, reconnect]);");
+    expect(src).not.toContain("if (recoveryEpoch === 0 || !sessionId) return;");
   });
 
   it("[P3-18b] epoch changes map to exactly one reconnect each (declared-deps simulation)", () => {
     let calls = 0;
     // Models the declared effect deps: React re-runs the effect only when
-    // [recoveryEpoch, sessionId, reconnect] change; the guard inside matches
-    // the pinned source line above.
-    let lastEpoch = 0;
+    // [recoveryEpoch, sessionId, reconnect] change; the decision matches the
+    // production gate (`shouldReconnectForEpoch`) with a mount-seen epoch.
+    let seen = 0;
     let sessionId: string | undefined;
     const fireEpoch = (epoch: number) => {
-      if (epoch === 0 || !sessionId) return;
-      if (epoch === lastEpoch) return;
-      lastEpoch = epoch;
-      calls += 1; // reconnect();
+      const d = shouldReconnectForEpoch({
+        sessionId,
+        recoveryEpoch: epoch,
+        seenRecoveryEpoch: seen,
+      });
+      seen = d.seenRecoveryEpoch;
+      if (d.reconnect) calls += 1; // reconnect();
     };
 
     fireEpoch(1);
@@ -118,14 +128,18 @@ describe("OpenCode recovery reconnect (Phase 3.10)", () => {
     expect(calls).toBe(0); // no bound session: never reconnects
 
     sessionId = "sess-1";
-    fireEpoch(1);
-    expect(calls).toBe(1);
-    fireEpoch(1);
-    expect(calls).toBe(1); // no duplicate per epoch
+    // Mount lands on a stale non-zero epoch: the ref records it, no reconnect.
+    seen = 2;
     fireEpoch(2);
-    expect(calls).toBe(2); // second epoch → exactly one more
+    expect(calls).toBe(0);
+    fireEpoch(2);
+    expect(calls).toBe(0); // no duplicate per epoch
+    fireEpoch(3);
+    expect(calls).toBe(1); // genuine transition → exactly one more
+    fireEpoch(3);
+    expect(calls).toBe(1);
     fireEpoch(0);
-    expect(calls).toBe(2); // epoch 0 never fires
+    expect(calls).toBe(1); // epoch 0 never fires
   });
 });
 
