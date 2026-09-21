@@ -107,11 +107,39 @@ there) and never carry prompt text, model output, or answer content.
 | `handoff.start` / `handoff.accepted` / `handoff.failed` / `handoff.not_bound` | `opencode` | first-prompt handoff lifecycle | `conversationId`, `sessionId`, `boundSessionId` |
 | `route.change` | `app` | the active surface changed | `from`, `to` (pathname only) |
 | `runtime.mount` / `runtime.unmount` | `app` | a shell's runtime came up / went away | `shell` (`chat`/`code`) |
+| `runtime.bind` | `app` | the runtime reported the thread it bound | `threadId` |
+| `tab.open` / `tab.activate` / `tab.close` | `chat` | open-tab layout changed | `kind`, `threadId`/`conversationId`, `tabKey`, `nextActiveKey`, `closedCount` |
+| `conversation.draft_resolved` | `chat` | a draft tab became a persisted conversation | `conversationId`, `engine` |
+| `navigation.redirect` / `navigation.rejected` | `app` | a route→tab binding moved the surface / declined to act | `ref`, `to`, `pathname`, `reason` |
 | `window_error` / `unhandled_rejection` / `boundary_error` | `app` | genuine browser/React failures | `message`, `errorType`, `stack` (bounded 500), `source`/`line`/`column`, `route` |
 | `browser_layout_diagnostic` | `app` | the EXACT ResizeObserver delivery notice (see §3.2) | same fields, recorded at `warn` |
 | `state.change` / `recovery` | `availability` | reachability transition / epoch bump | `from`, `to`, `reason`, `recoveryEpoch` |
 | `decision.submitted` / `decision.accepted` / `decision.failed` | `approval` | a tool approval was answered | `tool`, `approved`, `optionId`, `automatic` |
 | `question.submitted` / `question.accepted` / `question.failed` / `question.dismissed` | `approval` | a question form was answered / dismissed | `questionCount`, `answeredCount` (counts only) |
+
+Reading the tab/navigation events:
+
+- **`tab.close` has two shapes.** Closing by key (the user closing one tab)
+  carries `tabKey`, plus `nextActiveKey` only when that tab was active. Closing
+  by conversation (`closeByRef`, the delete path) carries `conversationId` and
+  `closedCount` — one line per delete, covering every tab the conversation owned
+  on both engine surfaces, not one line per tab.
+- **`navigation.rejected` is not an error.** It records that an async completion
+  (existence validation, engine reconciliation) landed after the route had moved
+  on, so it declined to rewrite navigation. `reason` names the guard that fired:
+  `stale-engine-reconciliation` or `stale-not-found`. `navigation.redirect`
+  carries either `engine-surface-mismatch` (the row's engine disagreed with the
+  route, so the surface follows the row) or `conversation-not-found` (confirmed
+  404 → fall back to the draft).
+- **`tab.activate` fires only on an actual change**, so re-selecting the active
+  tab is silent — the caller skips navigation for it too, which is what keeps
+  back/forward free of duplicate entries.
+- **The invariants these events exist to prove:** a persisted conversation id
+  names exactly one conversation; opening it repeatedly converges on one tab per
+  surface (compared by conversation id, never by object identity); a draft is
+  not a conversation until the backend's `conversation.materialize` or the
+  client's `conversation.draft_resolved` says so; and a deleted conversation
+  never becomes active again — a late validation cannot resurrect it.
 
 ### 3.2 The send operation's lifetime (why `send.stream_end` is guaranteed)
 
