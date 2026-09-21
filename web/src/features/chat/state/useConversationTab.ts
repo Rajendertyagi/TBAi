@@ -1,12 +1,14 @@
-import { useEffect } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { threadListAdapter } from "../../../app/adapter";
 import { ConversationNotFoundError, threadEngine } from "../../../adapters/remoteThreadListAdapter";
 import { logger } from "../../../lib/logger";
 import {
   NEW_DRAFT_TAB_ID,
+  activeTab,
   agentKey,
   chatKey,
+  routeStillReferencesRef,
   threadUrl,
   useChatTabsStore,
 } from "./chatTabs";
@@ -36,6 +38,13 @@ export function useConversationTab(
   kind: "chat" | "agent",
 ): void {
   const navigate = useNavigate();
+  const location = useLocation();
+  // Read at COMPLETION time, not dispatch time: an async validation result
+  // must be judged against the route showing when it lands, never the route
+  // that started it. (Not an effect dep — validation must not refetch on
+  // every unrelated navigation.)
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
 
   useEffect(() => {
     // Draft routes must still open + activate the draft tab (the pre-hook
@@ -61,6 +70,17 @@ export function useConversationTab(
         const rowWantsAgent = rowEngine === "opencode";
         const onAgentSurface = kind === "agent";
         if (rowWantsAgent === onAgentSurface) return;
+        // Stale guard (Phase 8): reconcile only while this validation still
+        // owns the route. A validation for a conversation the user already
+        // left must never rewrite tabs/navigation behind the newer location.
+        if (!routeStillReferencesRef(pathnameRef.current, ref)) {
+          logger.info("app", "navigation.rejected", {
+            ref,
+            pathname: pathnameRef.current,
+            reason: "stale-engine-reconciliation",
+          });
+          return;
+        }
         // Mismatch: the wrong-kind tab opened above must give way to the
         // row's surface. Order matters: open the correct-kind tab FIRST so
         // the active key already points at the destination when TabUrlSync
@@ -76,6 +96,11 @@ export function useConversationTab(
           current.openChat(ref);
           current.close(agentKey(ref));
         }
+        logger.info("app", "navigation.redirect", {
+          ref,
+          to: threadUrl(ref, rowEngine),
+          reason: "engine-surface-mismatch",
+        });
         navigate(threadUrl(ref, rowEngine), { replace: true });
       })
       .catch((err: unknown) => {
@@ -104,7 +129,28 @@ export function useConversationTab(
         if (kind === "agent") {
           useWelcomeEngineStore.getState().setEngine("opencode");
         }
-        navigate("/chat/new", { replace: true });
+        // Stale guard (Phase 8): the tab store already moved the active key
+        // (TabUrlSync corrects the URL from there). Drive navigation ONLY
+        // when the dead route is still showing and no surviving conversation
+        // took over — otherwise this late 404 would overwrite newer state
+        // (e.g. delete-while-open racing TabUrlSync to the neighbor tab).
+        const survivor = activeTab(useChatTabsStore.getState());
+        const survivorIsDraft =
+          !survivor || survivor.ref === NEW_DRAFT_TAB_ID;
+        if (routeStillReferencesRef(pathnameRef.current, ref) && survivorIsDraft) {
+          logger.info("app", "navigation.redirect", {
+            ref,
+            to: "/chat/new",
+            reason: "conversation-not-found",
+          });
+          navigate("/chat/new", { replace: true });
+        } else {
+          logger.info("app", "navigation.rejected", {
+            ref,
+            pathname: pathnameRef.current,
+            reason: "stale-not-found",
+          });
+        }
       });
     return () => {
       cancelled = true;

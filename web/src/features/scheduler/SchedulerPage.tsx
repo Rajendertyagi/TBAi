@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { X } from "lucide-react";
 import { schedulerViewConfig } from "../../config/scheduler";
@@ -11,7 +11,7 @@ import { JobListItem } from "./components/JobListItem";
 import { JobDetail } from "./components/JobDetail";
 import { TemplateGallery } from "./components/TemplateGallery";
 import { JobEditor } from "./components/JobEditor";
-import { threadUrl } from "../chat/state/chatTabs";
+import { shouldNavigateToThread, threadUrl } from "../chat/state/chatTabs";
 import {
   blankSeed,
   duplicateSeed,
@@ -45,6 +45,7 @@ function readSeenTs(): number {
 export function SchedulerPage() {
   const copy = schedulerViewConfig.copy;
   const navigate = useNavigate();
+  const location = useLocation();
   const { jobs, runsByJob, loading, error, loadJobs, loadRuns, setError } =
     useSchedulerStore();
   const { providers, loadProviders } = useSettingsStore();
@@ -310,13 +311,14 @@ export function SchedulerPage() {
 
   // Thread opening follows the conversation engine (chat vs code surface);
   // unknown engine falls back to the Direct route (legacy default).
-  const openThread = (conversationId: string) =>
-    navigate(
-      threadUrl(
-        conversationId,
-        conversations.find((c) => c.id === conversationId)?.engine ?? null,
-      ),
-    );
+  // Re-opening the shown conversation pushes no duplicate history entry.
+  const openThread = (conversationId: string) => {
+    const engine =
+      conversations.find((c) => c.id === conversationId)?.engine ?? null;
+    if (shouldNavigateToThread(location.pathname, conversationId, engine)) {
+      navigate(threadUrl(conversationId, engine));
+    }
+  };
 
   const editorPane =
     editorTarget != null ? (

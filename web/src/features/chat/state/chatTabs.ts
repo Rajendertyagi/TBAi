@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { logger } from "../../../lib/logger";
 
 export const NEW_DRAFT_TAB_ID = "new";
 const STORAGE_KEY = "tbai:openTabs";
@@ -226,14 +227,44 @@ export function conversationIdFromPath(pathname: string): string | null {
   return null;
 }
 
+/**
+ * Phase 8 stale-navigation guard (pure). True only while the route still
+ * names `ref` on either engine surface. An async completion (existence
+ * validation, engine reconciliation) captured `ref` at dispatch time; by the
+ * time it resolves the user may have moved on, and rewriting navigation then
+ * would overwrite newer state. Callers skip the redirect and emit
+ * `navigation.rejected` instead. Exact match (not prefix): a deeper path is
+ * never a conversation route, and query strings never carry identity.
+ */
+export function routeStillReferencesRef(pathname: string, ref: string): boolean {
+  return pathname === `/chat/${ref}` || pathname === `/code/${ref}`;
+}
+
+/**
+ * History-duplication guard (pure). Opening the already-shown conversation
+ * must not push an identical entry — back/forward would otherwise step
+ * through duplicates of one location. Callers navigate only when true.
+ */
+export function shouldNavigateToThread(
+  currentPathname: string,
+  remoteId: string,
+  engine?: string | null,
+): boolean {
+  return currentPathname !== threadUrl(remoteId, engine);
+}
+
 export const useChatTabsStore = create<ChatTabsState>((set) => ({
   tabs: initial.tabs,
   activeKey: initial.activeKey,
   groupId: DEFAULT_GROUP_ID,
-  openChat: (threadId) =>
-    set((state) => withActive(state.tabs, chatKey(threadId))),
-  openAgent: (conversationId) =>
-    set((state) => withActive(state.tabs, agentKey(conversationId))),
+  openChat: (threadId) => {
+    logger.info("chat", "tab.open", { kind: "chat", threadId });
+    set((state) => withActive(state.tabs, chatKey(threadId)));
+  },
+  openAgent: (conversationId) => {
+    logger.info("chat", "tab.open", { kind: "agent", conversationId });
+    set((state) => withActive(state.tabs, agentKey(conversationId)));
+  },
   openPage: (route) =>
     set((state) => withActive(state.tabs, pageKey(route))),
   close: (key) =>
@@ -249,22 +280,49 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
         state.activeKey === key
           ? (nextActiveAfterClose(state.tabs, key) ?? tabs[0]?.key)
           : state.activeKey;
+      if (state.activeKey === key) {
+        logger.info("chat", "tab.close", { tabKey: key, nextActiveKey: activeKey });
+      } else {
+        logger.info("chat", "tab.close", { tabKey: key });
+      }
       persist(tabs, activeKey);
       return { tabs, activeKey };
     }),
   closeByRef: (ref) =>
     set((state) => {
+      const removed = state.tabs.filter((t) => t.ref === ref);
       const remaining = state.tabs.filter((t) => t.ref !== ref);
       const tabs = remaining.length === 0 ? [freshDraftTab()] : remaining;
       const activeGone = !tabs.some((t) => t.key === state.activeKey);
+      // Same right-neighbor rule as `close` (never a second fallback rule):
+      // the candidate from the shared helper wins when it survived, otherwise
+      // the last remaining tab. Deletion and close always agree on the next
+      // active tab, so TabUrlSync has one deterministic URL to follow.
+      const candidate =
+        state.activeKey !== undefined
+          ? nextActiveAfterClose(state.tabs, state.activeKey)
+          : undefined;
       const activeKey = activeGone
-        ? tabs[tabs.length - 1]?.key
+        ? (candidate && tabs.some((t) => t.key === candidate)
+            ? candidate
+            : tabs[tabs.length - 1]?.key)
         : state.activeKey;
+      logger.info("chat", "tab.close", {
+        conversationId: ref,
+        closedCount: removed.length,
+        nextActiveKey: activeKey,
+      });
       persist(tabs, activeKey);
       return { tabs, activeKey };
     }),
-  setActive: (key) =>
-    set((state) => withActive(state.tabs, key)),
+  setActive: (key) => {
+    // Idempotent: re-selecting the active tab is a no-op for history (the
+    // caller skips navigation), but still recorded so activation is traceable.
+    if (useChatTabsStore.getState().activeKey !== key) {
+      logger.info("chat", "tab.activate", { tabKey: key });
+    }
+    set((state) => withActive(state.tabs, key));
+  },
   reorder: (from, to) =>
     set((state) => {
       if (
@@ -295,6 +353,10 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
         const next = tabs.some((t) => t.key === nextKey)
           ? tabs
           : [...tabs, tabForKey(nextKey)];
+        logger.info("chat", "conversation.draft_resolved", {
+          conversationId: realId,
+          engine: "opencode",
+        });
         persist(next, nextKey);
         return { tabs: next, activeKey: nextKey };
       }
@@ -308,6 +370,10 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
         );
       const nextActiveKey =
         state.activeKey === draftKey ? newKey : state.activeKey;
+      logger.info("chat", "conversation.draft_resolved", {
+        conversationId: realId,
+        engine: "direct",
+      });
       persist(tabs, nextActiveKey);
       return { tabs, activeKey: nextActiveKey };
     }),

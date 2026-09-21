@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { threadListAdapter } from "../app/adapter";
 import {
   DndContext,
@@ -26,6 +26,8 @@ import { X, Plus } from "lucide-react";
 import { cn } from "../lib/utils";
 import { tabStripConfig } from "../config/tabStrip";
 import {
+  NEW_DRAFT_TAB_ID,
+  chatKey,
   type Tab,
   urlForTab,
   useChatTabsStore,
@@ -179,6 +181,7 @@ function SortableTab({
  */
 export function TabStrip() {
   const navigate = useNavigate();
+  const location = useLocation();
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeKey = useChatTabsStore((s) => s.activeKey);
   const setActive = useChatTabsStore((s) => s.setActive);
@@ -199,7 +202,10 @@ export function TabStrip() {
 
   const select = (tab: Tab) => {
     setActive(tab.key);
-    navigate(urlForTab(tab));
+    // Re-selecting the shown tab must not push an identical history entry
+    // (back/forward would otherwise step through duplicates of one location).
+    const want = urlForTab(tab);
+    if (location.pathname !== want) navigate(want);
   };
 
   const closeOthers = (key: string) => {
@@ -273,7 +279,12 @@ export function TabStrip() {
       <button
         type="button"
         onClick={() => {
-          navigate("/chat/new");
+          // Repeated new-chat clicks must not stack identical history
+          // entries; navigating alone never persists (the draft is UI-only
+          // until first send). Already on the draft route: just make sure
+          // the draft tab is the active one.
+          if (location.pathname !== "/chat/new") navigate("/chat/new");
+          else setActive(chatKey(NEW_DRAFT_TAB_ID));
         }}
         className="flex items-center px-2 text-muted-foreground transition-colors hover:bg-muted/50"
         title={tabStripConfig.copy.newChat}

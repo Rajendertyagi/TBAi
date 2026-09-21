@@ -1,10 +1,10 @@
 import { useCallback } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { getNavItem } from "@/config/navigation";
 import { sidebarConfig } from "@/config/sidebar";
 import { useConversationsList } from "./hooks/useConversationsList";
 import { SidebarArchivedRow } from "./components/SidebarThreadRow";
-import { threadUrl } from "../chat/state/chatTabs";
+import { shouldNavigateToThread, threadUrl } from "../chat/state/chatTabs";
 
 /**
  * Archived conversations workbench surface (rail icon, `/archived`).
@@ -17,12 +17,16 @@ import { threadUrl } from "../chat/state/chatTabs";
 export function ArchivedPage() {
   const copy = sidebarConfig.copy;
   const navigate = useNavigate();
+  const location = useLocation();
   const title = getNavItem("archived")?.label ?? copy.archived;
 
   const openThread = useCallback(
-    (remoteId: string, engine?: string | null) =>
-      navigate(threadUrl(remoteId, engine)),
-    [navigate],
+    (remoteId: string, engine?: string | null) => {
+      if (shouldNavigateToThread(location.pathname, remoteId, engine)) {
+        navigate(threadUrl(remoteId, engine));
+      }
+    },
+    [navigate, location.pathname],
   );
 
   const { items, refetch } = useConversationsList({ status: "archived" });

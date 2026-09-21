@@ -4,7 +4,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { FolderOpenDot, MessageSquarePlus, SquarePen } from "lucide-react";
 import {
   sidebarConfig,
@@ -25,7 +25,7 @@ import {
 import { FoldersSection } from "../features/sidebar/components/FoldersSection";
 import { NewProjectChatDialog } from "./NewProjectChatDialog";
 import { WorkspaceFolderDialog } from "../features/folders/WorkspaceFolderDialog";
-import { threadUrl } from "../features/chat/state/chatTabs";
+import { shouldNavigateToThread, threadUrl } from "../features/chat/state/chatTabs";
 
 /**
  * Conversation sidebar (codeg `layout/sidebar` parity): fixed `h-10` header
@@ -37,13 +37,20 @@ import { threadUrl } from "../features/chat/state/chatTabs";
 export function Sidebar() {
   const copy = sidebarConfig.copy;
   const navigate = useNavigate();
+  const location = useLocation();
   const [addFolderOpen, setAddFolderOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
 
+  // Clicking the already-shown conversation must not push an identical
+  // history entry; every other open navigates (the route view owns tab
+  // opening — the sidebar never creates rows).
   const openThread = useCallback(
-    (remoteId: string, engine?: string | null) =>
-      navigate(threadUrl(remoteId, engine)),
-    [navigate],
+    (remoteId: string, engine?: string | null) => {
+      if (shouldNavigateToThread(location.pathname, remoteId, engine)) {
+        navigate(threadUrl(remoteId, engine));
+      }
+    },
+    [navigate, location.pathname],
   );
   useThreadListQuerySync();
 

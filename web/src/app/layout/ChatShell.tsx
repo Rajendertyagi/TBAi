@@ -40,6 +40,11 @@ export function ChatShell() {
     if (!id) return;
     const state = useChatTabsStore.getState();
     const current = activeTab(state);
+    // Runtime/thread liveness only: the runtime reports which thread it
+    // bound, and the tab store follows. Never the reverse — a runtime report
+    // must not invent a conversation, only resolve the draft or reveal an
+    // already-persisted row.
+    logger.info("app", "runtime.bind", { threadId: id });
     if (current?.kind === "chat" && current.ref === NEW_DRAFT_TAB_ID) {
       // First send: bind with the engine the single materialization owner
       // used for this conversation — never a fresh mutable read that could
