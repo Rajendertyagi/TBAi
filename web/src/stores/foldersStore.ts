@@ -107,6 +107,24 @@ function saveFolderExpanded(state: Record<string, boolean>): void {
   }
 }
 
+/**
+ * Drop a persisted navigation selection that no longer names a registered
+ * folder (removed/never-existed after reload). Pure so the rule is
+ * unit-testable; the store applies it to every loaded list.
+ */
+export function pruneSelectedFolderId(
+  folders: Folder[],
+  selectedId: string | null,
+): string | null {
+  if (!selectedId) return null;
+  return folders.some((f) => f.id === selectedId) ? selectedId : null;
+}
+
+// Monotonic load epoch: overlapping loadFolders() calls converge on the
+// NEWEST response. A stale (slower, earlier-issued) list must never overwrite
+// newer registry state — the same stale-completion rule as navigation.
+let foldersLoadEpoch = 0;
+
 export const useFoldersStore = create<FoldersState>((set, get) => ({
   folders: [],
   folderGroups: [],
@@ -123,12 +141,28 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   foldersLoaded: false,
 
   loadFolders: async () => {
+    const epoch = ++foldersLoadEpoch;
     set({ loading: true });
     try {
       const folders = await api<Folder[]>("/api/folders");
-      set({ folders, foldersLoaded: true });
+      // A newer load issued while this one was in flight owns the state;
+      // this response is stale and must not overwrite it.
+      if (epoch !== foldersLoadEpoch) return;
+      const selectedFolderId = pruneSelectedFolderId(
+        folders,
+        get().selectedFolderId,
+      );
+      if (selectedFolderId !== get().selectedFolderId) {
+        try {
+          if (selectedFolderId) window.localStorage.setItem(SELECTED_KEY, selectedFolderId);
+          else window.localStorage.removeItem(SELECTED_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
+      set({ folders, foldersLoaded: true, selectedFolderId });
     } finally {
-      set({ loading: false });
+      if (epoch === foldersLoadEpoch) set({ loading: false });
     }
   },
 

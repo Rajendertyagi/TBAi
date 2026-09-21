@@ -77,6 +77,26 @@ app.post("/api/conversations", async (c) => {
     const modelId = parsed.modelId ?? null;
     const reasoningLevel = parsed.reasoningLevel ?? null;
 
+    // Project conversations bind a live registered folder at creation: the
+    // folder id must reference a non-deleted regular (project) folder. A
+    // stale/foreign id fails truthfully here instead of minting a row that
+    // can never resolve its workspace.
+    if ((parsed.workspaceMode ?? "simple") === "project") {
+      const folder = parsed.workspaceFolderId
+        ? await folderService.get(parsed.workspaceFolderId)
+        : null;
+      if (!folder || folder.kind === "chat") {
+        logger.warn("workspace", "workspace.rejected", {
+          reason: "folder_not_available",
+          folderId: parsed.workspaceFolderId ?? null,
+        });
+        return c.json(
+          { error: "Project folder is not available" },
+          400,
+        );
+      }
+    }
+
     // Idempotent create (Phase 4): same clientRequestId resolves to the same
     // conversation. In-flight duplicates share one creation; completed keys
     // replay the existing row (see module map + limitation note above).
@@ -248,6 +268,32 @@ app.patch("/api/conversations/:id", async (c) => {
     // of a 5xx that reads as "retry".
     if (!old) return conversationNotFound(c);
     const oldFolderId = old.workspaceFolderId ?? null;
+
+    // Effective-state guard: a patch that would leave the row project-scoped
+    // with no live folder (mode flip without an id, or an id pointing at a
+    // deleted/chat folder) fails truthfully. Without this, the row would
+    // silently convert to simple on first filesystem use.
+    const effectiveMode = parsed.workspaceMode ?? old.workspaceMode ?? "simple";
+    const effectiveFolderId =
+      parsed.workspaceMode === "simple" || parsed.workspaceFolderId === null
+        ? null
+        : (parsed.workspaceFolderId ?? oldFolderId);
+    if (effectiveMode === "project") {
+      const folder = effectiveFolderId
+        ? await folderService.get(effectiveFolderId)
+        : null;
+      if (!folder || folder.kind === "chat") {
+        logger.warn("workspace", "workspace.rejected", {
+          reason: "folder_not_available",
+          conversationId: id,
+          folderId: effectiveFolderId,
+        });
+        return c.json(
+          { error: "Project folder is not available" },
+          400,
+        );
+      }
+    }
 
     const conversation = await conversationService.update(id, {
       ...parsed,

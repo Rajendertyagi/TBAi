@@ -151,6 +151,9 @@ function scheduleFlush(): void {
 
 function installPagehideFlush(): void {
   if (pagehideInstalled || typeof window === "undefined") return;
+  // Degraded hosts (test stubs, minimal embeds) may expose `window` without
+  // event plumbing: the transport must never throw, so check before hooking.
+  if (typeof window.addEventListener !== "function") return;
   pagehideInstalled = true;
   // Best-effort final delivery on navigation/close. `keepalive` lets the
   // request outlive the page; failures are still swallowed.

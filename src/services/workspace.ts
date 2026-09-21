@@ -28,6 +28,7 @@ import { logger } from "../lib/logger";
 export type WorkspaceErrorCode =
   | "conversation_missing"
   | "folder_missing"
+  | "folder_unavailable"
   | "invalid_mode"
   | "migration_verify_failed";
 
@@ -346,11 +347,38 @@ export async function resolveConversationWorkspace(
   if (mode === "simple" && !samePath(row.path, chatWorkspaceDir(conversationId))) {
     await migrateChatWorkspace(conversationId, row.id, row.path);
   }
-  const current =
-    mode === "simple" ? chatWorkspaceDir(conversationId) : canonicalizeRoot(row.path);
+  if (mode === "project") {
+    // A registered project whose directory vanished (moved/deleted/unmounted)
+    // is an explicit unavailable state — never a silent switch to another
+    // folder. The row is preserved (recovery = restore the directory or
+    // re-point the folder), and every caller already maps WorkspaceError to
+    // a controlled failure.
+    let isDir = false;
+    try {
+      isDir = fs.statSync(canonicalizeRoot(row.path)).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) {
+      logger.warn("workspace", "workspace.unavailable", {
+        conversationId,
+        folderId: row.id,
+      });
+      throw new WorkspaceError(
+        "folder_unavailable",
+        `Project folder is unavailable: ${row.alias || row.name}`,
+      );
+    }
+    return {
+      mode,
+      dir: canonicalizeRoot(row.path),
+      folderId: row.id,
+      folderName: row.alias || row.name,
+    };
+  }
   return {
     mode,
-    dir: current,
+    dir: chatWorkspaceDir(conversationId),
     folderId: row.id,
     folderName: row.alias || row.name,
   };

@@ -509,7 +509,9 @@ export type SchedulerArgs = z.infer<typeof schedulerSchema>;
 // Registered project folders, their linked/allowed paths, and groups.
 export const folderCreateSchema = z.object({
   // A path the user picked via the directory browser (absolute, server-scoped).
-  path: z.string().min(1).max(4096),
+  // Trimmed first so whitespace-only input fails min(1) instead of resolving
+  // to the server's working directory downstream.
+  path: z.string().trim().min(1).max(4096),
   name: z.string().min(1).max(200).optional(),
   alias: z.string().min(1).max(200).optional().nullable(),
   color: z.string().max(40).optional(),

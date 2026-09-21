@@ -6,6 +6,7 @@ import {
   type QuickActionTabId,
 } from "@/config/welcome";
 import type { WorkspaceMode } from "@/types";
+import { logger } from "@/lib/logger";
 
 export interface WelcomeScope {
   mode: WorkspaceMode;
@@ -72,6 +73,21 @@ export const useWelcomeScopeStore = create<WelcomeScopeState>((set) => ({
       scope.mode === "project" && scope.folderId
         ? { mode: "project", folderId: scope.folderId }
         : { mode: "simple", folderId: null };
+    const prev = useWelcomeScopeStore.getState().scope;
+    // Lifecycle record on actual transitions only (steady re-selection is
+    // noise): the draft scope is UI state, and binding is what a later
+    // materialization will attach the conversation to.
+    if (prev.mode !== next.mode || prev.folderId !== next.folderId) {
+      if (next.mode === "project" && next.folderId) {
+        logger.info("folders.ui", "workspace.bind", {
+          workspaceId: next.folderId,
+        });
+      } else {
+        logger.info("folders.ui", "workspace.unbind", {
+          from: prev.mode,
+        });
+      }
+    }
     persistScope(next);
     set({ scope: next });
   },
@@ -83,6 +99,13 @@ export const useWelcomeScopeStore = create<WelcomeScopeState>((set) => ({
     set((state) => {
       if (state.scope.mode !== "project" || !state.scope.folderId) return state;
       if (liveIds.includes(state.scope.folderId)) return state;
+      // A pruned preset is a real lifecycle transition (the draft loses its
+      // project binding), so it is recorded rather than happening silently.
+      logger.info("folders.ui", "workspace.unbind", {
+        from: "project",
+        reason: "folder_not_registered",
+        workspaceId: state.scope.folderId,
+      });
       const next: WelcomeScope = { mode: "simple", folderId: null };
       persistScope(next);
       return { scope: next };

@@ -35,11 +35,16 @@ export function NewProjectChatDialog({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [engine, setEngine] = useState<WelcomeEngine>("direct");
   const [busy, setBusy] = useState(false);
+  // Truthful creation failure (e.g. the selected folder was unregistered
+  // between list and click): the dialog stays open with the server's message
+  // instead of rejecting into an unhandled promise.
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setSelectedId(null);
       setEngine("direct");
+      setCreateError(null);
       void loadFolders();
     }
   }, [open, loadFolders]);
@@ -47,6 +52,7 @@ export function NewProjectChatDialog({
   const handleCreate = async () => {
     if (!selectedId) return;
     setBusy(true);
+    setCreateError(null);
     try {
       const { id } = await createConversation({
         workspaceMode: "project",
@@ -56,6 +62,8 @@ export function NewProjectChatDialog({
       });
       onOpenChange(false);
       navigate(threadUrl(id, engine));
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -101,6 +109,12 @@ export function NewProjectChatDialog({
               );
             })}
           </div>
+        )}
+
+        {createError && (
+          <p role="alert" className="text-xs text-destructive">
+            {createError}
+          </p>
         )}
 
         <DialogFooter className="flex-col gap-3 sm:flex-col">

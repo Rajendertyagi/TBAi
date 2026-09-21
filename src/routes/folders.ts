@@ -5,7 +5,9 @@ import {
   folderService,
   folderLinkService,
   folderGroupService,
+  FolderRegistrationError,
 } from "../services/folders";
+import { logger } from "../lib/logger";
 import {
   folderCreateSchema,
   folderUpdateSchema,
@@ -138,8 +140,19 @@ app.post("/", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = folderCreateSchema.parse(body);
     const folder = await folderService.openFolder(parsed);
+    // Registration lifecycle record (stable id only — never the path; the
+    // folder id is the canonical identity every consumer binds by).
+    logger.info("workspace", "workspace.register", { folderId: folder.id });
     return c.json(folder);
   } catch (e) {
+    if (e instanceof FolderRegistrationError) {
+      logger.warn("workspace", "workspace.rejected", {
+        reason: e.code,
+        message: e.message,
+      });
+      const status = e.code === "path_missing" ? 404 : 400;
+      return c.json({ error: e.message }, status);
+    }
     return storageError(c, e);
   }
 });
@@ -188,7 +201,11 @@ app.post("/:id/open", async (c) => {
 /** Remove from workspace = close (row stays, conversations stay bound). */
 app.delete("/:id", async (c) => {
   try {
-    await folderService.close(c.req.param("id"));
+    const id = c.req.param("id");
+    await folderService.close(id);
+    // Close, not delete: the row and its conversation bindings survive, so
+    // bound Project conversations keep resolving instead of being orphaned.
+    logger.info("workspace", "workspace.unregister", { folderId: id });
     return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);
