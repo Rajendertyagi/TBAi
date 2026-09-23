@@ -6,15 +6,6 @@ on:
     tags:
       - "v*"
 
-# Build the Tauri 2 desktop shell. The Rust/Tauri toolchain is NOT installed
-# locally — this workflow is the only place the desktop bundle is produced.
-#
-# Tauri v2 has no "zip" bundle target (only deb/rpm/appimage/msi/nsis/app/dmg),
-# so we compile with bundling disabled (bundle.active:false) and assemble the
-# portable folder ourselves from the compiled executable + bundled resources +
-# the portable Bun sidecar. Output: a portable folder (zipped by the artifact
-# upload step — single level, no nested archive).
-
 jobs:
   build:
     runs-on: windows-latest
@@ -22,7 +13,7 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5 # Updated to v5 for Node 24 support
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -40,11 +31,8 @@ jobs:
           workspaces: src-tauri
 
       - name: Cache Bun dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5 # Updated to v5 for Node 24 support
         with:
-          # Cache ONLY bun's global package cache, never node_modules — caching
-          # node_modules (which contains bun's .bun linker dir) restores with
-          # broken permissions on Windows and breaks `bun build` (EPERM).
           path: ~/.bun/install/cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
@@ -69,8 +57,6 @@ jobs:
       - name: Generate icon set from source PNG
         run: bunx tauri icon src-tauri/app-icon.png
 
-      # bundle.active:false -> compiles the executable only (no msi/nsis). The
-      # beforeBuildCommand builds dist/ (backend) and web/dist/ (frontend).
       - name: Build Tauri (compile, no bundle)
         run: bunx tauri build --target x86_64-pc-windows-msvc
 
@@ -78,25 +64,13 @@ jobs:
         shell: pwsh
         run: |
           $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
-          # The Tauri binary is named after the Cargo package (tbai-desktop.exe).
-          # Copy the app binary explicitly by its package name (never glob "*.exe"
-          # — Tauri also drops the ~82 MB Bun sidecar here, so the first match
-          # would be the wrong file).
           $app = "$rel/tbai-desktop.exe"
           if (-not (Test-Path $app)) { throw "tbai-desktop.exe not found at $rel" }
           Copy-Item -Path $app -Destination "$rel/TBAi.exe" -Force
-          # Runtime Bun sidecar. Tauri's `sidecar("bun")` resolves the binary as
-          # `bun.exe` (target triple stripped), so ship ONLY bun.exe. The build-time
-          # triple-qualified copy in src-tauri/binaries is not needed at runtime.
           Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun.exe" -Force
-          # Backend bundle + web SPA (consumed by the Bun sidecar at runtime).
           New-Item -ItemType Directory -Force -Path "$rel/backend","$rel/web" | Out-Null
           Copy-Item -Path "dist/*" -Destination "$rel/backend/" -Recurse -Force
           Copy-Item -Path "web/dist/*" -Destination "$rel/web/" -Recurse -Force
-
-          # Stage ONLY the runtime files into one clean app folder. The release dir
-          # also contains Cargo build artifacts (build/, deps/, fingerprint/, *.pdb)
-          # which must not ship.
           $out = "TBAi-windows-x64-portable"
           if (Test-Path $out) { Remove-Item -Recurse -Force $out }
           New-Item -ItemType Directory -Force -Path $out | Out-Null
@@ -107,7 +81,7 @@ jobs:
           Get-ChildItem "$out" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Upload portable app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5 # Updated to v5 for Node 24 support
         with:
           name: tbai-windows-x64-portable
           path: TBAi-windows-x64-portable
