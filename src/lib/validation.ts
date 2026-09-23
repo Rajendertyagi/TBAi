@@ -320,6 +320,10 @@ export const mcpServerCreateSchema = z.object({
 });
 
 // Update allows any subset; transport/name still validated when present.
+//
+// Auth token trichotomy on update: omitted (or null) preserves the stored
+// credential; a non-empty string replaces it; an explicit empty string ""
+// clears it (persists NULL). The UI sends "" from its "Remove auth" action.
 export const mcpServerUpdateSchema = mcpServerCreateSchema.partial();
 
 // Test accepts the same connection shape as create (no id required).

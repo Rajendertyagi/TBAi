@@ -4,9 +4,11 @@ import { Button, Input, Textarea } from "./ui";
 import { useMcpStore } from "../stores/mcpStore";
 import { useChatTabsStore, urlForTab } from "../features/chat/state/chatTabs";
 import { cn } from "../lib/utils";
+import { failureCopy, authPlaceholder } from "../lib/mcpCopy";
 import { SettingsError, SettingsSection } from "./shared/settings";
 import type {
   McpConnectionStatus,
+  McpFailureReason,
   McpServerDraft,
   McpStatus,
   McpTransport,
@@ -71,6 +73,12 @@ interface DraftState {
   headersText: string;
   authType: McpAuthType;
   authToken: string;
+  /** True when the server already stores a credential (presence only, never the value). */
+  authConfigured: boolean;
+  /** Masked hint echoed by the backend (e.g. "Bearer ••••••"). */
+  authHint?: string;
+  /** True after the user clicks "Remove auth": save sends authToken "" to clear. */
+  authClearRequested: boolean;
   rootsText: string;
   enabled: boolean;
   autoConnect: boolean;
@@ -89,6 +97,9 @@ function emptyDraft(): DraftState {
     headersText: "",
     authType: "none",
     authToken: "",
+    authConfigured: false,
+    authHint: undefined,
+    authClearRequested: false,
     rootsText: "",
     enabled: true,
     autoConnect: true,
@@ -100,13 +111,15 @@ const STATUS_STYLES: Record<McpConnectionStatus, string> = {
   connected: "bg-success/15 text-success",
   connecting: "bg-warning/15 text-warning",
   error: "bg-destructive/15 text-destructive",
+  auth_failed: "bg-destructive/15 text-destructive",
   disconnected: "bg-muted text-muted-foreground",
 };
 
 function StatusBadge({ status }: { status: McpConnectionStatus }) {
+  const label = status === "auth_failed" ? "auth required" : status;
   return (
     <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLES[status])}>
-      {status}
+      {label}
     </span>
   );
 }
@@ -116,7 +129,7 @@ export function McpPanel() {
     useMcpStore();
   const [isAdding, setIsAdding] = useState(false);
   const [draft, setDraft] = useState<DraftState>(emptyDraft());
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; reason?: McpFailureReason } | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -152,6 +165,9 @@ export function McpPanel() {
       headersText: formatKV(s.headers),
       authType: s.authType ?? "none",
       authToken: "",
+      authConfigured: s.authConfigured ?? false,
+      authHint: s.authHint,
+      authClearRequested: false,
       rootsText: s.roots ? s.roots.join("\n") : "",
       enabled: s.enabled,
       autoConnect: s.autoConnect ?? true,
@@ -186,7 +202,14 @@ export function McpPanel() {
     } else {
       payload.url = draft.url.trim() || undefined;
       payload.authType = draft.authType;
-      if (draft.authToken.trim()) payload.authToken = draft.authToken.trim();
+      // Replace vs preserve vs clear: a typed value replaces; an explicit
+      // "Remove auth" sends "" (backend clears); otherwise the key is omitted
+      // and the stored credential is preserved.
+      if (draft.authClearRequested) {
+        payload.authToken = "";
+      } else if (draft.authToken.trim()) {
+        payload.authToken = draft.authToken.trim();
+      }
       const headers = parseKV(draft.headersText);
       if (Object.keys(headers).length) payload.headers = headers;
     }
@@ -219,7 +242,12 @@ export function McpPanel() {
           message: `Connection successful — ${res.toolCount} tool(s), ${res.resourceCount} resource(s), ${res.promptCount} prompt(s)`,
         });
       } else {
-        setTestResult({ ok: false, message: res.error || "Connection failed" });
+        const reason = failureCopy(res.failureReason);
+        setTestResult({
+          ok: false,
+          message: reason ? `${reason}. ${res.error || "Connection failed"}` : res.error || "Connection failed",
+          reason: res.failureReason,
+        });
       }
     } catch (e) {
       setTestResult({ ok: false, message: e instanceof Error ? e.message : "Test failed" });
@@ -333,7 +361,7 @@ export function McpPanel() {
                 <span className="text-xs text-muted-foreground w-20 shrink-0">Auth</span>
                 <select
                   value={draft.authType}
-                  onChange={(e) => set({ authType: e.target.value as McpAuthType })}
+                  onChange={(e) => set({ authType: e.target.value as McpAuthType, authClearRequested: false })}
                   className="rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                 >
                   <option value="none">None</option>
@@ -341,14 +369,46 @@ export function McpPanel() {
                   <option value="basic">Basic (user:pass)</option>
                   <option value="oauth">OAuth</option>
                 </select>
+                {draft.id && draft.authConfigured && !draft.authClearRequested && draft.authHint && (
+                  <span className="text-xs text-muted-foreground font-mono">{draft.authHint} stored</span>
+                )}
               </div>
-              {draft.authType !== "none" && (
-                <Input
-                  type="password"
-                  placeholder="Auth token / credentials"
-                  value={draft.authToken}
-                  onChange={(e) => set({ authToken: e.target.value })}
-                />
+              {draft.authType !== "none" && !draft.authClearRequested && (
+                <>
+                  {draft.id && draft.authConfigured && (
+                    <p className="text-xs text-muted-foreground">
+                      A credential is stored. Leave blank to keep it, type a new value to replace it, or remove it.
+                    </p>
+                  )}
+                  {draft.id && !draft.authConfigured && (
+                    <p className="text-xs text-muted-foreground">
+                      No credential is stored — connections will be unauthenticated until you enter one.
+                    </p>
+                  )}
+                  <Input
+                    type="password"
+                    placeholder={draft.id && draft.authConfigured ? "New value (blank keeps stored credential)" : authPlaceholder(draft.authType)}
+                    value={draft.authToken}
+                    onChange={(e) => set({ authToken: e.target.value })}
+                  />
+                </>
+              )}
+              {draft.id && draft.authConfigured && !draft.authClearRequested && draft.authType !== "none" && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => set({ authClearRequested: true, authToken: "" })}
+                  >
+                    <X className="w-3 h-3 mr-1" />
+                    Remove auth
+                  </Button>
+                </div>
+              )}
+              {draft.authClearRequested && (
+                <p className="text-xs text-warning">
+                  Stored credential will be removed on save. Cancel to keep it.
+                </p>
               )}
               <Textarea
                 placeholder={"Extra headers (KEY=VALUE), one per line"}
@@ -466,11 +526,13 @@ function ServerCard({
   onRefresh: () => void;
 }) {
   const isConnected = server.status === "connected";
+  const isFailed = server.status === "error" || server.status === "auth_failed";
+  const reasonLine = isFailed ? failureCopy(server.failureReason) : undefined;
   return (
     <div
       className={cn(
         "rounded-md border p-3",
-        server.status === "error" ? "border-destructive/40" : "border-border",
+        isFailed ? "border-destructive/40" : "border-border",
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -490,7 +552,12 @@ function ServerCard({
           <div className="text-xs text-muted-foreground mt-1">
             {server.toolCount} tool(s) · {server.resourceCount} resource(s) · {server.promptCount} prompt(s)
           </div>
-          {server.status === "error" && server.error && (
+          {isFailed && reasonLine && (
+            <div className="mt-1 text-xs font-medium text-destructive">
+              {reasonLine}
+            </div>
+          )}
+          {isFailed && server.error && (
             <div className="mt-1 flex items-start gap-1 text-xs text-destructive">
               <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
               <span>{server.error}</span>

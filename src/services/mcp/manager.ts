@@ -6,6 +6,9 @@ import { db } from "../../db";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { generateId } from "../../lib/utils";
 import { logger, normalizeError } from "../../lib/logger";
+import { classifyError } from "../../lib/errors";
+import { classifySseFailure, safeEndpointMeta } from "./classify";
+import type { SseProbeOutcome } from "./classify";
 import { encryptSecret, decryptSecret } from "../../services/credentials";
 import { credentialStore } from "../../services/credentials";
 import { getModel } from "../../services/ai";
@@ -17,6 +20,7 @@ import type {
   McpTransport,
   McpAuthType,
   McpConnectionStatus,
+  McpFailureReason,
   McpToolInfo,
   McpResourceInfo,
   McpPromptInfo,
@@ -54,6 +58,8 @@ interface McpConnection {
   transport: Transport;
   status: McpConnectionStatus;
   error?: string;
+  /** Machine-readable failure reason, set on error|auth_failed. */
+  failureReason?: McpFailureReason;
   serverCapabilities?: Record<string, unknown>;
   /** Negotiated protocol era as reported by the v2 SDK (e.g. "legacy"). */
   protocolEra?: string;
@@ -76,6 +82,8 @@ interface McpConnection {
 const MAX_EVENTS = 50;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
+/** Read-only SSE probe budget: 3s, diagnostics only, never the transport. */
+const SSE_PROBE_TIMEOUT_MS = 3000;
 
 function jsonParseSafe<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
@@ -225,8 +233,15 @@ export class McpManager {
     if (input.env !== undefined) set("env", input.env ? JSON.stringify(input.env) : null);
     if (input.headers !== undefined) set("headers", input.headers ? JSON.stringify(input.headers) : null);
     if (input.authType !== undefined) set("auth_type", input.authType);
-    if (input.authToken !== undefined && input.authToken) {
-      set("auth_token", encryptSecret(input.authToken));
+    // Auth token trichotomy: omitted (undefined/null) preserves the stored
+    // credential; a non-empty string replaces it; an explicit empty string
+    // clears it (persists NULL). The UI sends "" from its "Remove auth" action.
+    if (input.authToken !== undefined && input.authToken !== null) {
+      if (input.authToken === "") {
+        set("auth_token", null);
+      } else {
+        set("auth_token", encryptSecret(input.authToken));
+      }
     }
     if (input.roots !== undefined) set("roots", input.roots ? JSON.stringify(input.roots) : null);
     if (input.enabled !== undefined) set("enabled", input.enabled ? 1 : 0);
@@ -408,6 +423,20 @@ export class McpManager {
     this.connections.set(id, conn);
 
     try {
+      // SSE-only diagnostic probe: a short read-only GET against the endpoint
+      // classifies unreachable / auth / non-SSE responses BEFORE the SDK opens
+      // its EventSource. The probe is diagnostic, never the transport itself.
+      if (config.transport === "sse" && config.url) {
+        const probe = await this.probeSseEndpoint(
+          config.url,
+          this.buildHeaders(config, authToken),
+        );
+        const reason = classifySseFailure(probe, undefined, authToken !== undefined);
+        if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
+          this.failConnect(id, conn, config, probe, reason);
+          return;
+        }
+      }
       const transport = this.buildTransport(config, authToken);
       conn.transport = transport;
       this.registerNotificationHandlers(id);
@@ -437,8 +466,24 @@ export class McpManager {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // SSE endpoints get a post-hoc classification too: the probe was
+      // inconclusive, so map the SDK error shape onto a failure reason.
+      // Other transports stay on the coarse error status.
+      if (config.transport === "sse" && config.url) {
+        const reason = classifySseFailure({ kind: "error" }, err, authToken !== undefined);
+        const probe: SseProbeOutcome = { kind: "error" };
+        if (reason === "auth_failed") {
+          this.failConnect(id, conn, config, probe, reason, message);
+          return;
+        }
+        if (reason === "timeout") {
+          this.failConnect(id, conn, config, probe, reason, message);
+          return;
+        }
+      }
       conn.status = "error";
       conn.error = message;
+      conn.failureReason = undefined;
       conn.lastErrorAt = Date.now();
       this.pushEvent(id, "error", `Connection failed: ${message}`);
       logger.error("mcp", "mcp.operation", {
@@ -446,11 +491,82 @@ export class McpManager {
         outcome: "error",
         mcpServer: config.name,
         transport: config.transport,
+        category: classifyError(err).category,
         ...normalizeError(err),
       });
       // Attempt reconnect for enabled servers (capped).
       this.scheduleReconnect(id);
     }
+  }
+
+  /**
+   * Short read-only GET probe of an SSE endpoint. Reads status + content-type
+   * only, consumes and discards the body, never streams. Same auth headers as
+   * the real connection. Timeout: 3s. Never logs headers or the URL query.
+   */
+  private async probeSseEndpoint(url: string, headers: Record<string, string>): Promise<SseProbeOutcome> {
+    try {
+      const res = await fetch(url, {
+        headers: { ...headers, Accept: "text/event-stream" },
+        signal: AbortSignal.timeout(SSE_PROBE_TIMEOUT_MS),
+      });
+      const contentType = res.headers.get("content-type");
+      try {
+        await res.arrayBuffer();
+      } catch {
+        /* body discard is best-effort */
+      }
+      return { kind: "ok", status: res.status, contentType };
+    } catch (err) {
+      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        return { kind: "timeout" };
+      }
+      const text = err instanceof Error ? err.message : String(err);
+      if (/timed out|timeout|aborted/i.test(text)) return { kind: "timeout" };
+      // DNS refusal / connection refused / no listener: the fetch layer
+      // cannot establish the connection at all.
+      return { kind: "unreachable" };
+    }
+  }
+
+  /**
+   * Record a classified SSE connection failure: truthful status
+   * (error vs auth_failed), machine failureReason, diagnostic event, and a
+   * log line with safe endpoint metadata. Reconnect policy unchanged (capped).
+   */
+  private failConnect(
+    id: string,
+    conn: McpConnection,
+    config: McpServerConfig,
+    probe: SseProbeOutcome,
+    reason: McpFailureReason,
+    detail?: string,
+  ): void {
+    const meta = config.url ? safeEndpointMeta(config.url) : { host: "", port: "", path: "" };
+    const probeDetail =
+      probe.kind === "ok"
+        ? `status=${probe.status} content-type=${probe.contentType ?? "none"}`
+        : `probe=${probe.kind}`;
+    const message = sseFailureMessage(reason, meta, detail);
+    const authFailure = reason === "auth_required" || reason === "auth_failed";
+    conn.status = authFailure ? "auth_failed" : "error";
+    conn.error = message;
+    conn.failureReason = reason;
+    conn.lastErrorAt = Date.now();
+    this.pushEvent(id, "error", message);
+    logger.error("mcp", "mcp.operation", {
+      op: "connect",
+      outcome: authFailure ? "auth_failed" : "error",
+      mcpServer: config.name,
+      transport: config.transport,
+      failureReason: reason,
+      host: meta.host,
+      port: meta.port,
+      path: meta.path,
+      message: probeDetail,
+    });
+    // Attempt reconnect for enabled servers (capped, unchanged policy).
+    this.scheduleReconnect(id);
   }
 
   async disconnect(id: string): Promise<void> {
@@ -853,11 +969,23 @@ export class McpManager {
 
   getStatuses(): McpStatus[] {
     const configs = this.loadConfigs();
+    // Credential presence only (never values): one cheap query for the flag
+    // the UI needs to render configured-vs-unconfigured auth.
+    const presence = new Map<string, boolean>();
+    try {
+      const rows = db.query<{ id: string; auth_token: string | null }, []>(
+        "SELECT id, auth_token FROM mcp_servers",
+      ).all();
+      for (const r of rows) presence.set(r.id, r.auth_token !== null);
+    } catch {
+      /* presence unknown — defaults to false below */
+    }
     return configs.map((config) => {
       const conn = this.connections.get(config.id);
       const tools = conn?.tools ?? [];
       const resources = conn?.resources ?? [];
       const prompts = conn?.prompts ?? [];
+      const authConfigured = presence.get(config.id) ?? false;
       return {
         id: config.id,
         name: config.name,
@@ -865,6 +993,7 @@ export class McpManager {
         enabled: config.enabled,
         status: conn?.status ?? "disconnected",
         error: conn?.error,
+        failureReason: conn?.failureReason,
         serverCapabilities: conn?.serverCapabilities,
         protocolEra: conn?.protocolEra,
         tools,
@@ -882,6 +1011,8 @@ export class McpManager {
         env: config.env,
         headers: config.headers,
         authType: config.authType,
+        authConfigured,
+        authHint: authHintFor(config.authType, authConfigured),
         autoConnect: config.autoConnect,
         notes: config.notes,
         roots: config.roots,
@@ -955,6 +1086,53 @@ export class McpManager {
       },
     );
     try {
+      // SSE-only diagnostic probe first (same rules as connect()): definitive
+      // probe failures short-circuit with a classified failureReason.
+      if (config.transport === "sse" && config.url) {
+        const probe = await this.probeSseEndpoint(
+          config.url,
+          this.buildHeaders(config, input.authToken ?? undefined),
+        );
+        const reason = classifySseFailure(
+          probe,
+          undefined,
+          (input.authToken ?? undefined) !== undefined,
+        );
+        if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
+          const meta = safeEndpointMeta(config.url);
+          const probeDetail =
+            probe.kind === "ok"
+              ? `status=${probe.status} content-type=${probe.contentType ?? "none"}`
+              : `probe=${probe.kind}`;
+          logger.warn("mcp", "mcp.operation", {
+            op: "test_connection",
+            outcome: "error",
+            transport: config.transport,
+            failureReason: reason,
+            host: meta.host,
+            port: meta.port,
+            path: meta.path,
+            message: probeDetail,
+          });
+          try {
+            await client.close();
+          } catch {
+            /* ignore */
+          }
+          return {
+            ok: false,
+            transport: input.transport,
+            error: sseFailureMessage(reason, meta),
+            failureReason: reason,
+            toolCount: 0,
+            resourceCount: 0,
+            promptCount: 0,
+            tools: [],
+            resources: [],
+            prompts: [],
+          };
+        }
+      }
       const transport = this.buildTransport(config, input.authToken ?? undefined);
       await client.connect(transport);
       const caps = (client.getServerCapabilities() as Record<string, unknown>) ?? {};
@@ -993,6 +1171,26 @@ export class McpManager {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // SSE: classify the SDK error shape too (probe was inconclusive).
+      let failureReason: McpFailureReason | undefined;
+      if (config.transport === "sse" && config.url) {
+        failureReason = classifySseFailure(
+          { kind: "error" },
+          err,
+          (input.authToken ?? undefined) !== undefined,
+        );
+        const meta = safeEndpointMeta(config.url);
+        logger.warn("mcp", "mcp.operation", {
+          op: "test_connection",
+          outcome: "error",
+          transport: config.transport,
+          category: classifyError(err).category,
+          failureReason,
+          host: meta.host,
+          port: meta.port,
+          path: meta.path,
+        });
+      }
       try {
         await client.close();
       } catch {
@@ -1002,6 +1200,7 @@ export class McpManager {
         ok: false,
         transport: input.transport,
         error: message,
+        failureReason,
         toolCount: 0,
         resourceCount: 0,
         promptCount: 0,
@@ -1013,8 +1212,46 @@ export class McpManager {
   }
 }
 
+/**
+ * Masked, non-secret auth hint for the UI (type + mask). Never the credential.
+ * Returns undefined when no credential is stored or auth is "none".
+ */
+function authHintFor(authType: McpAuthType, authConfigured: boolean): string | undefined {
+  if (!authConfigured || authType === "none") return undefined;
+  const label = authType === "bearer" ? "Bearer" : authType === "basic" ? "Basic" : "OAuth";
+  return `${label} ••••••`;
+}
+
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Human-readable, non-secret detail for a classified SSE failure. Carries
+ * host/port/path only — never query strings, headers, or credentials.
+ */
+function sseFailureMessage(
+  reason: McpFailureReason,
+  meta: { host: string; port: string; path: string },
+  detail?: string,
+): string {
+  const where = meta.host ? `${meta.host}:${meta.port}${meta.path}` : "endpoint";
+  switch (reason) {
+    case "unreachable":
+      return `Cannot reach ${where} — is the service running?`;
+    case "auth_required":
+      return `Authentication required for ${where} — no credential is stored`;
+    case "auth_failed":
+      return `Authentication failed for ${where} — check the stored credential`;
+    case "incompatible_response":
+      return `Endpoint ${where} did not return an SSE stream — confirm the URL points at an MCP SSE endpoint`;
+    case "timeout":
+      return `Connection to ${where} timed out`;
+    case "protocol_error":
+      return detail ? `MCP protocol error: ${detail}` : `MCP protocol error with ${where}`;
+    default:
+      return detail ? `Connection failed: ${detail}` : `Connection to ${where} failed`;
+  }
 }
 
 /** Best-effort text extraction from a v2 sampling/prompt message content block. */

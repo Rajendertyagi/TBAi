@@ -140,7 +140,20 @@ export interface FolderGroup {
 
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpAuthType = "none" | "bearer" | "basic" | "oauth";
-export type McpConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+export type McpConnectionStatus = "disconnected" | "connecting" | "connected" | "error" | "auth_failed";
+
+/**
+ * Machine-readable MCP failure reason (backend-classified). The UI renders a
+ * short sentence per reason above the raw error text.
+ */
+export type McpFailureReason =
+  | "unreachable"
+  | "incompatible_response"
+  | "auth_required"
+  | "auth_failed"
+  | "timeout"
+  | "protocol_error"
+  | "unknown";
 
 export interface McpTool {
   name: string;
@@ -204,6 +217,7 @@ export interface McpStatus {
   enabled: boolean;
   status: McpConnectionStatus;
   error?: string;
+  failureReason?: McpFailureReason;
   serverCapabilities?: Record<string, unknown>;
   tools: McpTool[];
   resources: McpResource[];
@@ -221,6 +235,10 @@ export interface McpStatus {
   env?: Record<string, string>;
   headers?: Record<string, string>;
   authType: McpAuthType;
+  /** True when a credential is stored server-side. Presence only — never a value. */
+  authConfigured?: boolean;
+  /** Masked, non-secret hint (e.g. "Bearer ••••••"). */
+  authHint?: string;
   autoConnect: boolean;
   notes?: string;
   roots?: string[];
@@ -248,6 +266,7 @@ export interface McpTestResult {
   ok: boolean;
   transport: McpTransport;
   error?: string;
+  failureReason?: McpFailureReason;
   serverCapabilities?: Record<string, unknown>;
   toolCount: number;
   resourceCount: number;

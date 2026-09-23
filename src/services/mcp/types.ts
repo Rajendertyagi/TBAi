@@ -13,7 +13,23 @@ export type McpConnectionStatus =
   | "disconnected"
   | "connecting"
   | "connected"
-  | "error";
+  | "error"
+  | "auth_failed";
+
+/**
+ * Machine-readable reason for a failed MCP connection/test. Derived from
+ * SSE probe evidence + the SDK error shape by `classifySseFailure`
+ * (`src/services/mcp/classify.ts`), never fabricated. The UI renders a short
+ * sentence per reason above the raw error text.
+ */
+export type McpFailureReason =
+  | "unreachable"
+  | "incompatible_response"
+  | "auth_required"
+  | "auth_failed"
+  | "timeout"
+  | "protocol_error"
+  | "unknown";
 
 /** Persisted server configuration (one row in the `mcp_servers` table). */
 export interface McpServerConfig {
@@ -122,6 +138,8 @@ export interface McpStatus {
   enabled: boolean;
   status: McpConnectionStatus;
   error?: string;
+  /** Machine-readable failure reason, present when status is error|auth_failed. */
+  failureReason?: McpFailureReason;
   serverCapabilities?: Record<string, unknown>;
   /** Negotiated protocol era (v2 SDK), e.g. "legacy" for 2025-era servers. */
   protocolEra?: string;
@@ -142,6 +160,10 @@ export interface McpStatus {
   env?: Record<string, string>;
   headers?: Record<string, string>;
   authType: McpAuthType;
+  /** True when an encrypted credential is stored. Presence only — never a value. */
+  authConfigured: boolean;
+  /** Masked, non-secret hint (e.g. "Bearer ••••••"). Never contains the credential. */
+  authHint?: string;
   autoConnect: boolean;
   notes?: string;
   roots?: string[];
@@ -154,6 +176,8 @@ export interface McpTestResult {
   ok: boolean;
   transport: McpTransport;
   error?: string;
+  /** Machine-readable failure reason, present when ok is false. */
+  failureReason?: McpFailureReason;
   serverCapabilities?: Record<string, unknown>;
   toolCount: number;
   resourceCount: number;
