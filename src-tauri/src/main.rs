@@ -150,6 +150,8 @@ fn quit_owned(app: &AppHandle) {
             let _ = child.kill();
         }
     }
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     quit_owned(&app);
