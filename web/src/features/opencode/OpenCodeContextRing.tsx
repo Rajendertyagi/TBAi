@@ -1,5 +1,6 @@
 import { useAuiState } from "@assistant-ui/react";
 import { useMemo } from "react";
+import { useParams } from "react-router";
 import {
   ContextDisplayRing as StandaloneRing,
   type TokenUsage,
@@ -7,6 +8,8 @@ import {
 import { resolveContextWindow } from "@/config/modelContext";
 import { useOpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
+import { resolveOpenCodeModel } from "./resolveOpenCodeModel";
+import { useOpenCodeConversationConfig } from "./useOpenCodeConversationConfig";
 import { selectOpenCodeRawTokens, toTokenUsage } from "./contextTokens";
 
 /** Newest assistant message carrying OpenCode `tokens`, if any. */
@@ -24,21 +27,24 @@ function useOpenCodeUsage(): TokenUsage | undefined {
  * Standalone preset driven by the already-projected message tokens
  * (`metadata.custom.tokens`, preserved by the adapter — no second store):
  * newest token-bearing assistant message wins. Resets on session change via
- * `resetKey={sessionId}`; the window prefers the live `model.limit.context`
- * for the session's current model. Renders nothing until usage exists.
+ * `resetKey={sessionId}`. The window prefers the live `model.limit.context`
+ * for the conversation's current model — resolved through the same
+ * conversation-config + capabilities lookup the Model chip uses, so it never
+ * depends on ambient runtime internals. Renders nothing until usage exists.
  */
 export function OpenCodeContextRing() {
   const runtime = useOpenCodeRuntimeContext();
   const usage = useOpenCodeUsage();
+  const { agentId } = useParams();
+  const config = useOpenCodeConversationConfig(agentId);
   const { models } = useOpenCodeCapabilities(true);
-  const current =
-    runtime?.providerID && runtime?.modelID
-      ? models.find(
-          (m) =>
-            m.id === runtime.modelID &&
-            (!runtime.providerID || m.providerID === runtime.providerID),
-        )
-      : undefined;
+  const resolved = resolveOpenCodeModel(config?.opencodeModel, models);
+  const current = resolved
+    ? models.find(
+        (m) =>
+          m.id === resolved.modelID && m.providerID === resolved.providerID,
+      )
+    : undefined;
   return (
     <StandaloneRing
       modelContextWindow={resolveContextWindow({

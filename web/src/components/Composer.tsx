@@ -54,6 +54,8 @@ import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
 import { OpenCodeModelChip } from "../features/opencode/OpenCodeModelChip";
 import { OpenCodeThinkingChip } from "../features/opencode/OpenCodeThinkingChip";
 import { OpenCodeShieldChip } from "../features/opencode/OpenCodeShieldChip";
+import { OpenCodeContextRing } from "../features/opencode/OpenCodeContextRing";
+import { DirectContextRing } from "./context-ring";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -477,6 +479,14 @@ function Composer({
                 <ModelChip />
               </>
             )}
+            {/* Context ring: newest-message token totals against the
+                model window (Direct: route metadata; Code: projected message
+                tokens). Hidden until usage exists; beside send in all modes. */}
+            {isCodeSurface || showOpenCodeDraft ? (
+              <OpenCodeContextRing />
+            ) : (
+              <DirectContextRing />
+            )}
             {/* Voice — always visible, disabled (no DictationAdapter) */}
             <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">
               <Mic className="size-3.5" />
@@ -590,13 +600,3 @@ function Composer({
 }
 
 export { Composer };
-import { OpenCodeContextRing } from "../features/opencode/OpenCodeContextRing";
-import { DirectContextRing } from "./context-ring";
-            {/* Context ring: newest-message token totals against the
-                model window (Direct: route metadata; Code: projected message
-                tokens). Hidden until usage exists; beside send in all modes. */}
-            {isCodeSurface || showOpenCodeDraft ? (
-              <OpenCodeContextRing />
-            ) : (
-              <DirectContextRing />
-            )}
