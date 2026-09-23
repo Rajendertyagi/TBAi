@@ -71,3 +71,37 @@ export async function commentedBodyOf(
   const source = await Bun.file(new URL(relativeFile, base)).text();
   return functionBody(stripComments(source), name);
 }
+
+/**
+ * The body of a `const name = ... => { ... }` arrow function, brace-matched
+ * like `functionBody`. Same scoping rules: comments already stripped, match
+ * must sit inside the arrow's own braces.
+ */
+export function constBody(source: string, name: string): string {
+  const decl = new RegExp(`const\\s+${name}\\s*=`).exec(source);
+  if (decl == null) throw new Error(`${name} is not declared in this source`);
+  const arrow = source.indexOf("=>", decl.index);
+  if (arrow === -1) throw new Error(`${name} is not an arrow function`);
+  const open = source.indexOf("{", arrow);
+  if (open === -1) throw new Error(`${name} has no body`);
+
+  let depth = 0;
+  for (let j = open; j < source.length; j++) {
+    if (source[j] === "{") depth++;
+    else if (source[j] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, j + 1);
+    }
+  }
+  throw new Error(`${name}'s body is unbalanced`);
+}
+
+/** Read a file beside the calling test and return a const-arrow body. */
+export async function commentedConstBodyOf(
+  name: string,
+  relativeFile: string,
+  base: string,
+): Promise<string> {
+  const source = await Bun.file(new URL(relativeFile, base)).text();
+  return constBody(stripComments(source), name);
+}

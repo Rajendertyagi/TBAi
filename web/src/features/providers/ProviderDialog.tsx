@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { formatContextWindow, parseContextWindowInput } from "@/config/modelContext";
 import type { ApiProtocol, ModelOption, ProviderConfig } from "@/types";
 
 type ProviderType = ProviderConfig["type"];
@@ -104,6 +105,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [discovering, setDiscovering] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
+  // Inline context-window editor: which model chip is being edited + draft.
+  const [editingWindow, setEditingWindow] = useState<{
+    id: string;
+    draft: string;
+  } | null>(null);
   const [manualModel, setManualModel] = useState("");
 
   // Reset (add) or prefill (edit) every time the dialog opens.
@@ -294,6 +300,35 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
     setForm({ ...form, models: merged, model: form.model === id ? (merged[0]?.id ?? "") : form.model });
   };
 
+  /**
+   * Commit the inline context-window draft. A valid positive integer is
+   * stored; a blank draft unsets the field (ring falls back to default);
+   * anything else reverts silently. Only valid values ever reach
+   * `form.models`, so the save path needs no extra validation.
+   */
+  const commitWindow = () => {
+    if (!editingWindow) return;
+    const { id, draft } = editingWindow;
+    const parsed = parseContextWindowInput(draft);
+    if (draft.trim() !== "" && parsed === undefined) {
+      setEditingWindow(null);
+      return;
+    }
+    setForm({
+      ...form,
+      models: form.models.map((m) => {
+        if (m.id !== id) return m;
+        if (parsed === undefined) {
+          const next: ModelOption = { ...m };
+          delete next.contextWindow;
+          return next;
+        }
+        return { ...m, contextWindow: parsed };
+      }),
+    });
+    setEditingWindow(null);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md rounded-4xl border-0 shadow-2xl ring-1 ring-border gap-6 sm:max-w-md">
@@ -441,6 +476,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                       {m.label && m.label !== m.id && (
                         <span className="text-xs text-muted-foreground">{m.id}</span>
                       )}
+                      {m.contextWindow ? (
+                        <span className="text-xs text-muted-foreground">
+                          · {formatContextWindow(m.contextWindow)}
+                        </span>
+                      ) : null}
                     </label>
                   ))}
                 </div>
@@ -486,6 +526,43 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                     </button>
                     {m.id === form.model && (
                       <span className="text-[10px] text-muted-foreground">default</span>
+                    )}
+                    {editingWindow?.id === m.id ? (
+                      <Input
+                        autoFocus
+                        value={editingWindow.draft}
+                        onChange={(e) =>
+                          setEditingWindow({ id: m.id, draft: e.target.value })
+                        }
+                        onBlur={commitWindow}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitWindow();
+                          else if (e.key === "Escape") setEditingWindow(null);
+                        }}
+                        placeholder={
+                          m.contextWindow ? String(m.contextWindow) : "tokens"
+                        }
+                        aria-label={`Context window for ${m.id}`}
+                        className="h-5 w-20 px-1 text-[10px]"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingWindow({
+                            id: m.id,
+                            draft: m.contextWindow ? String(m.contextWindow) : "",
+                          })
+                        }
+                        title={
+                          m.contextWindow
+                            ? "Edit context window"
+                            : "Set context window"
+                        }
+                        className="text-[10px] text-muted-foreground hover:text-foreground"
+                      >
+                        {m.contextWindow ? formatContextWindow(m.contextWindow) : "set window"}
+                      </button>
                     )}
                     <button
                       type="button"

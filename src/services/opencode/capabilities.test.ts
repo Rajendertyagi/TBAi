@@ -149,6 +149,33 @@ describe("getOpenCodeCapabilities", () => {
     expect(caps.models).toEqual([]);
   });
 
+  it("passes model limits through, omitting the field when absent or mangled", async () => {
+    setServer(
+      [],
+      [
+        {
+          id: "a/m1",
+          name: "M1",
+          providerID: "a",
+          variants: [],
+          limit: { context: 200_000, output: 32_000 },
+        },
+        { id: "a/m2", name: "M2", providerID: "a", variants: [] },
+        {
+          id: "a/m3",
+          name: "M3",
+          providerID: "a",
+          variants: [],
+          limit: { context: "lots", output: -1 },
+        },
+      ],
+    );
+    const caps = await getOpenCodeCapabilities();
+    expect(caps.models[0]?.limit).toEqual({ context: 200_000, output: 32_000 });
+    expect("limit" in (caps.models[1] ?? {})).toBe(false);
+    expect("limit" in (caps.models[2] ?? {})).toBe(false);
+  });
+
   it("degrades to no variants when `variants` is not an array (edge case)", async () => {
     setServer([], [{ id: "m", name: "M", providerID: "p", variants: "nope" }]);
     const caps = await getOpenCodeCapabilities();

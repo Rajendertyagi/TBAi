@@ -14,6 +14,11 @@ export interface OpenCodeModelOption {
   family?: string;
   /** Thinking levels (OpenCode "variants") the model exposes. Empty = no thinking control. */
   variants: string[];
+  /**
+   * Host-reported context/output limits. Absent when the server omits them —
+   * the context ring falls back to the configured default window.
+   */
+  limit?: { context: number; output: number };
 }
 
 export interface OpenCodeCapabilities {
@@ -82,7 +87,27 @@ export function useOpenCodeCapabilities(enabled = true) {
         if (cancelled) return;
         setAgents(data.agents ?? []);
         // Normalize: older server responses may omit `variants` on model rows.
-        setModels((data.models ?? []).map((m) => ({ ...m, variants: m.variants ?? [] })));
+        setModels(
+          (data.models ?? []).map((m) => ({
+            ...m,
+            variants: m.variants ?? [],
+            // Pass through only well-formed limits; anything else stays
+            // absent so the ring uses the default window.
+            limit:
+              m.limit &&
+              typeof m.limit.context === "number" &&
+              Number.isFinite(m.limit.context) &&
+              m.limit.context > 0 &&
+              typeof m.limit.output === "number" &&
+              Number.isFinite(m.limit.output) &&
+              m.limit.output > 0
+                ? {
+                    context: Math.floor(m.limit.context),
+                    output: Math.floor(m.limit.output),
+                  }
+                : undefined,
+          })),
+        );
       })
       .catch((e: unknown) => {
         if (cancelled) return;

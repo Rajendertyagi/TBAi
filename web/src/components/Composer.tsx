@@ -590,3 +590,13 @@ function Composer({
 }
 
 export { Composer };
+import { OpenCodeContextRing } from "../features/opencode/OpenCodeContextRing";
+import { DirectContextRing } from "./context-ring";
+            {/* Context ring: newest-message token totals against the
+                model window (Direct: route metadata; Code: projected message
+                tokens). Hidden until usage exists; beside send in all modes. */}
+            {isCodeSurface || showOpenCodeDraft ? (
+              <OpenCodeContextRing />
+            ) : (
+              <DirectContextRing />
+            )}

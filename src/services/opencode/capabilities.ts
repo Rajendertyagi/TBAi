@@ -22,11 +22,37 @@ export interface OpenCodeModelInfo {
    * model has none — the composer hides the thinking control in that case.
    */
   variants: string[];
+  /**
+   * Host-reported context/output limits. Absent when the server omits them —
+   * callers fall back to the configured default window rather than guessing.
+   */
+  limit?: { context: number; output: number };
 }
 
 export interface OpenCodeCapabilities {
   agents: OpenCodeAgentInfo[];
   models: OpenCodeModelInfo[];
+}
+
+/**
+ * Maps a model's host-reported limits to the public descriptor shape.
+ * Returns undefined when the server omits or mangles them so the field stays
+ * absent (rather than present-but-garbage) and callers use the default window.
+ */
+function toModelLimit(m: ModelInfo): { context: number; output: number } | undefined {
+  const context = m.limit?.context;
+  const output = m.limit?.output;
+  if (
+    typeof context !== "number" ||
+    !Number.isFinite(context) ||
+    context <= 0 ||
+    typeof output !== "number" ||
+    !Number.isFinite(output) ||
+    output <= 0
+  ) {
+    return undefined;
+  }
+  return { context: Math.floor(context), output: Math.floor(output) };
 }
 
 /**
@@ -97,13 +123,19 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     description: a.description,
   }));
 
-  const models = rawModels.map((m) => ({
-    id: m.id,
-    name: m.name,
-    providerID: m.providerID,
-    family: m.family,
-    variants: toVariantIds(m.variants),
-  }));
+  const models = rawModels.map((m) => {
+    const limit = toModelLimit(m);
+    return {
+      id: m.id,
+      name: m.name,
+      providerID: m.providerID,
+      family: m.family,
+      variants: toVariantIds(m.variants),
+      // Absent (not undefined-valued) when the server omits limits, so older
+      // snapshots and toEqual assertions without the field keep passing.
+      ...(limit ? { limit } : {}),
+    };
+  });
 
   logger.info("opencode", "opencode.capabilities", {
     agents: agents.length,

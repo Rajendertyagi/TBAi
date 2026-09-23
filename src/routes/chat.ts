@@ -17,7 +17,7 @@ import { createProgressTracker } from "../lib/progress-tracker";
 import type { ProgressData } from "../lib/progress-stages";
 import { RESUMABLE_STREAM_ID_HEADER, ResumableStreamError } from "assistant-stream/resumable";
 import { chatRequestSchema } from "../lib/validation";
-import { resolveChatModel, UnknownProviderError } from "./chat-model";
+import { resolveChatModel, buildChatMessageMetadata, UnknownProviderError } from "./chat-model";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService } from "../services/storage";
@@ -351,13 +351,12 @@ app.post("/api/chat", async (c) => {
           // Logged once by the outer onError below (ai.error); no duplicate here.
           return sanitizeStreamError(error);
         },
-        messageMetadata: () => ({
-          custom: {
+        messageMetadata: ({ part }) =>
+          buildChatMessageMetadata(part, {
             providerId: provider.id,
             modelId: modelConfig.model,
             reasoningLevel: reasoning,
-          },
-        }),
+          }),
       }));
     },
     generateId: () => generateId(),

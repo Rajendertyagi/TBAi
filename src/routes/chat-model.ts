@@ -93,3 +93,32 @@ export async function resolveChatModel(opts: {
   if (!provider) return null;
   return withProviderDefaults(provider, model, reasoningLevel);
 }
+
+/** Token usage as reported by the AI SDK `finish` stream part. */
+export interface ChatFinishUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+}
+
+/**
+ * Message metadata for `toUIMessageStream({ messageMetadata })`.
+ *
+ * Pure (exported for unit tests): on the `finish` part it attaches the
+ * provider-reported `totalUsage` as `usage` — this is what the frontend's
+ * `useThreadTokenUsage()` reads for the context ring. The existing `custom`
+ * ids (provider/model/reasoning + modelId on finish-step) are preserved
+ * verbatim on every event; nothing else is added and the chat protocol is
+ * untouched.
+ */
+export function buildChatMessageMetadata(
+  part: { type: string; totalUsage?: ChatFinishUsage },
+  custom: Record<string, string>,
+): Record<string, unknown> {
+  if (part.type === "finish" && part.totalUsage) {
+    return { custom, usage: part.totalUsage };
+  }
+  return { custom };
+}

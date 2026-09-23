@@ -57,3 +57,15 @@ export function resolveModelOwner(
   }
   return null;
 }
+
+/** Find a model option by bare id across groups (first match wins). */
+export function findModelOption(
+  groups: readonly ModelGroup[],
+  modelId: string,
+): ModelOption | undefined {
+  for (const g of groups) {
+    const found = g.models.find((m) => m.id === modelId);
+    if (found) return found;
+  }
+  return undefined;
+}
