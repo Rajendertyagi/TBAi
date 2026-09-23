@@ -9,7 +9,7 @@ import {
   useMessageTiming,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
-import { ArrowDown, Check, Copy, RefreshCw, Loader2 } from "lucide-react";
+import { Check, Copy, RefreshCw, Loader2 } from "lucide-react";
 import { MarkdownText } from "./assistant-ui/elements/markdown-text";
 import {
   Reasoning,
@@ -30,6 +30,7 @@ import { patchToCodeDiffs } from "../lib/patch-to-diffs";
 import { toolsConfig } from "../config/tools";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
+import { ScrollPill } from "./ScrollPill";
 import { ThreadBootSkeleton } from "./assistant-ui/elements/thread-boot-skeleton";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
@@ -123,15 +124,7 @@ export function ChatWindow({
             </ThreadPrimitive.Messages>
           </ThreadPrimitive.Viewport>
 
-          <ThreadPrimitive.ScrollToBottom asChild>
-            <TooltipIconButton
-              tooltip="Scroll to bottom"
-              side="top"
-              className="absolute bottom-24 right-6 rounded-full border border-border bg-background shadow-md"
-            >
-              <ArrowDown />
-            </TooltipIconButton>
-          </ThreadPrimitive.ScrollToBottom>
+          <ScrollPill />
 
           <div className="mx-auto w-full max-w-3xl px-4 pb-4">
             {composer}
