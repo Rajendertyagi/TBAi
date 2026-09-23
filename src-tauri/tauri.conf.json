@@ -30,6 +30,9 @@
   },
   "bundle": {
     "active": false,
+    // Windows x64 only: this project does not support macOS. NSIS needs no
+    // extra toolchain (unlike MSI/WiX), so it is the sole bundle target.
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
