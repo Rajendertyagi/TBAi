@@ -175,7 +175,7 @@ fn render_error(win: &tauri::WebviewWindow, port: u32, state: &str, sidecar: &st
 fn navigate_verified(win: &tauri::WebviewWindow, port: u32, minimized: bool) {
     let origin = format!("http://localhost:{port}");
     if let Some(tray) = win.app_handle().tray_by_id("main") {
-        let _ = tray.set_tooltip(format!("TBAi · port {port}"));
+        let _ = tray.set_tooltip(format!("TBAi · port {port}").into());
     }
     if minimized {
         // Tray-only boot: the window stays hidden until the user Opens it.
