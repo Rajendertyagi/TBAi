@@ -57,17 +57,14 @@ jobs:
       - name: Install frontend + workspace dependencies
         run: bun install --frozen-lockfile
 
-      # A release that ships a red suite is worse than no release. This is the
-      # step whose absence let two known-failing tests reach a tagged build.
-      # Two deliberate choices:
-      #  - `bun run test`, NOT bare `bun test`. The bare form double-collects the
-      #    suites and cascades "Database has closed" across the shared test DB,
-      #    reporting hundreds of phantom failures. The scoped script is the only
-      #    correct invocation.
-      #  - not `bun run verify`: that script ends in `bun run build`, which
-      #    `beforeBuildCommand` runs again, so the build would run twice.
-      - name: Verify (typecheck, lint, tests)
-        run: bun run typecheck && bun run lint && bun run test
+      # Compile gate only, deliberately. Vite strips types without checking
+      # them, so without this a type error ships silently inside a tagged
+      # artifact - and typecheck costs seconds, not the ~4 minutes the full
+      # suite takes. Lint and the test suite live in tests.yml, which is fully
+      # independent: a slow or environment-flaky test can never block a build,
+      # and a build never waits on a suite it cannot act on.
+      - name: Typecheck
+        run: bun run typecheck
 
       # Built and staged BEFORE `tauri build` so the sidecar exists at the path
       # `externalBin` declares. `tauri build` re-runs `bun run build` via

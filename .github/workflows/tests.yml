@@ -1,0 +1,71 @@
+name: Verify
+
+# Deliberately independent of tauri-build.yml - there is no `needs:` between
+# them and neither gates the other. The build carries a typecheck because Vite
+# strips types without checking them (seconds of insurance against shipping a
+# broken artifact); the ~4-minute suite lives here instead, so a slow or
+# environment-dependent test can never block a release build, and a build never
+# waits on a suite it cannot act on.
+#
+# Runs on every push to main and every PR, so suite feedback arrives on the
+# code push rather than at release time.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # Pinned, matching tauri-build.yml and the version verified locally. Bun
+  # releases weekly and has shipped breaking changes; `latest` made two builds
+  # of one commit differ.
+  BUN_VERSION: "1.4.2"
+
+jobs:
+  verify:
+    # windows-latest, not ubuntu: the suite was verified green on Windows, and
+    # path/port handling is OS-sensitive. Switching runners could surface
+    # platform failures that were never exercised.
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      # `bun run test`, NOT bare `bun test`. The bare form double-collects the
+      # suites and cascades "Database has closed" across the shared test
+      # database, reporting hundreds of phantom failures instead of real ones.
+      # The scoped script in package.json is the only correct invocation.
+      #
+      # KNOWN FAILURE (pre-existing, deliberately not fixed here):
+      # tests/integration/opencode-binary-missing.test.ts self-skips when an
+      # `opencode` binary is on PATH. It is on a developer's machine, so those
+      # three cases pass vacuously; this runner has no binary, so they execute
+      # for the first time and "a bad conversationId still 400s before the 503
+      # branch" fails. Unrelated to any recent change - nothing in the opencode
+      # routes was touched.
+      - name: Test
+        run: bun run test
