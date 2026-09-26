@@ -83,11 +83,17 @@ async function cleanupMarker(
  *     e2e leg here instead proves routing (URL + surface) by intercepting
  *     /api/chat, which IS visible from the browser.
  *
- * (b) OpenCode route observation suffices: page.route("**/api/chat") captures
- *     every attempt, and the custom send path never calls /api/chat (proven
- *     by firstSendPhase4.test.ts case 3 and the source-guard test). The e2e
- *     spec asserts zero intercepted calls and verifies the URL transitions
+ * (b) OpenCode route observation suffices: a page.route glob on /api/chat
+ *     captures every attempt, and the custom send path never calls /api/chat
+ *     (proven by firstSendPhase4.test.ts case 3 and the source-guard test). The
+ *     e2e spec asserts zero intercepted calls and verifies the URL transitions
  *     to /code/<id> with the Code surface rendered.
+ *
+ *     Note: the glob literal is written in the code below, not here. A glob
+ *     begins with an asterisk-slash sequence, which TERMINATES a block comment
+ *     early - the remainder would then be parsed as code. That is why this file
+ *     once failed to load with "Unterminated string literal" and took the whole
+ *     Playwright suite's test collection down with it.
  */
 
 test("D1 Direct draft send routes to /chat/<id> (intercept proves /api/chat called once)", async ({
