@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterEach } from "bun:test";
 import type { Subprocess } from "bun";
 import {
   buildOpenCodeServeArgs,
@@ -582,6 +582,35 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
   }
 }
 
+/**
+ * Every fake manager built by a test, torn down unconditionally afterwards.
+ *
+ * These managers run a REAL readiness loop: `waitForHttpReady` polls
+ * `probeOpenCodeInfo` over the genuine `globalThis.fetch` until
+ * `startupTimeoutMs` elapses (5s at `readyPollMs: 5` in the never-serves
+ * cases — up to a thousand live fetches). Cleanup used to be `stopFake()` as
+ * the last line of each test body, so a FAILING assertion skipped it and the
+ * loop kept polling for the rest of the process. Because this file sorts before
+ * `web/src/features/opencode/sessionBootstrap.test.ts`, that leaked poll landed
+ * on an unrelated test's `fetch` stub and made it look like a product race.
+ *
+ * Registering the manager makes teardown independent of the assertions passing.
+ * The explicit `stopFake()` calls are left in place: they are idempotent, and
+ * they keep each test readable on its own.
+ */
+const liveManagers = new Set<FakeOpenCodeServerManager>();
+
+function newFakeManager(config?: OpenCodeConfig): FakeOpenCodeServerManager {
+  const manager = new FakeOpenCodeServerManager(config);
+  liveManagers.add(manager);
+  return manager;
+}
+
+afterEach(() => {
+  for (const manager of liveManagers) manager.stopFake();
+  liveManagers.clear();
+});
+
 /** Polls until `condition` holds or the timeout elapses. */
 async function until(condition: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
@@ -593,7 +622,7 @@ async function until(condition: () => boolean, timeoutMs = 2000): Promise<void> 
 
 describe("OpenCodeServerManager.ensureBaseUrl", () => {
   it("deduplicates concurrent startups into a single server", async () => {
-    const mgr = new FakeOpenCodeServerManager();
+    const mgr = newFakeManager();
     try {
       const results = await Promise.all([
         mgr.ensureBaseUrl(),
@@ -609,7 +638,7 @@ describe("OpenCodeServerManager.ensureBaseUrl", () => {
   });
 
   it("returns a base URL only after authenticated `/api/info` reports V2", async () => {
-    const mgr = new FakeOpenCodeServerManager();
+    const mgr = newFakeManager();
     try {
       const baseUrl = await mgr.ensureBaseUrl();
       expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
@@ -641,7 +670,7 @@ describe("appendTail", () => {
 
 describe("OpenCodeServerManager lifecycle", () => {
   it("kills the child on readiness timeout (no orphan)", async () => {
-    const mgr = new FakeOpenCodeServerManager({
+    const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       startupTimeoutMs: 100,
       readyPollMs: 5,
@@ -656,7 +685,7 @@ describe("OpenCodeServerManager lifecycle", () => {
   });
 
   it("restarts exactly once when the child exits during readiness (no duplicate children)", async () => {
-    const mgr = new FakeOpenCodeServerManager({
+    const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       maxRestartAttempts: 3,
       startupTimeoutMs: 5000,
@@ -676,7 +705,7 @@ describe("OpenCodeServerManager lifecycle", () => {
   });
 
   it("stops restarting after maxRestartAttempts consecutive failures", async () => {
-    const mgr = new FakeOpenCodeServerManager({
+    const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       maxRestartAttempts: 2,
       startupTimeoutMs: 5000,
@@ -698,7 +727,7 @@ describe("OpenCodeServerManager lifecycle", () => {
   });
 
   it("resets the restart budget after a successful restart", async () => {
-    const mgr = new FakeOpenCodeServerManager({
+    const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       maxRestartAttempts: 1,
     });
@@ -715,7 +744,7 @@ describe("OpenCodeServerManager lifecycle", () => {
   });
 
   it("shutdown sends SIGTERM then SIGKILL and suppresses restart", async () => {
-    const mgr = new FakeOpenCodeServerManager({
+    const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       shutdownTimeoutMs: 30,
     });
@@ -730,7 +759,7 @@ describe("OpenCodeServerManager lifecycle", () => {
   });
 
   it("retains a bounded stdout/stderr tail for exit diagnostics", async () => {
-    const mgr = new FakeOpenCodeServerManager({
+    const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       maxRestartAttempts: 1,
     });

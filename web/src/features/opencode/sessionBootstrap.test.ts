@@ -23,8 +23,6 @@ import {
  * 10. Empty or whitespace-only conversationId rejected synchronously without network fetch.
  */
 
-const originalFetch = globalThis.fetch;
-
 /**
  * Installs a fetch stub that answers ONLY the bootstrap endpoint, and counts
  * only those calls.
@@ -57,12 +55,24 @@ function stubBootstrapFetch(
   return { attempts: () => attempts };
 }
 
+/**
+ * The `fetch` that was installed before the currently running test.
+ *
+ * Captured per test rather than once at module load, which is what this file
+ * used to do. `bun test` runs every file in one process, so a load-time capture
+ * records whatever stub an EARLIER file happened to leak — and then restores that
+ * leaked stub after every test here, spreading it further instead of containing
+ * it. Test-time capture puts back exactly what the test found.
+ */
+let fetchBeforeTest: typeof fetch = globalThis.fetch;
+
 beforeEach(() => {
+  fetchBeforeTest = globalThis.fetch;
   clearAllBootstraps();
 });
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  globalThis.fetch = fetchBeforeTest;
   clearAllBootstraps();
 });
 
