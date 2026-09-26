@@ -40,8 +40,19 @@ async function setDraftEngine(
   }
 }
 
-async function rmConv(page: Page, id: string): Promise<void> {
-  await page.request.delete(`/api/conversations/${id}`).catch(() => {});
+async function rmConv(
+  request: import("@playwright/test").APIRequestContext,
+  id: string,
+): Promise<void> {
+  // Takes an APIRequestContext, not a Page. It used to be typed `page: Page`
+  // and read `page.request.delete(...)`, but `cleanupMarker` passed its own
+  // APIRequestContext in — and `APIRequestContext` has no `.request`, so the
+  // cleanup threw `TypeError: undefined is not an object (evaluating
+  // 'page.request.delete')`. The trailing `.catch()` could not absorb it: the
+  // throw happens while evaluating `page.request`, before delete() is called.
+  // Worse, it fired inside a finally, so it replaced whatever the test body
+  // had actually produced.
+  await request.delete(`/api/conversations/${id}`).catch(() => {});
 }
 
 async function probeConvIds(
@@ -131,7 +142,7 @@ test("D1 Direct draft send routes to /chat/<id> (intercept proves /api/chat call
 
     // Cleanup.
     await cleanupMarker(page.request, MARKER);
-    await rmConv(page, convId);
+    await rmConv(page.request, convId);
   } finally {
     await page.unroute("**/api/chat");
     await cleanupMarker(page.request, MARKER);
@@ -188,7 +199,7 @@ test("D2 OpenCode draft send routes to /code/<id> with zero /api/chat calls", as
 
     // Cleanup.
     await cleanupMarker(page.request, MARKER);
-    await rmConv(page, convId);
+    await rmConv(page.request, convId);
   } finally {
     await page.unroute("**/api/chat");
     await cleanupMarker(page.request, MARKER);
