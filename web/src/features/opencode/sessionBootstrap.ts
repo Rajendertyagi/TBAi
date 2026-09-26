@@ -9,6 +9,15 @@ export interface OpenCodeSessionBootstrapResult {
 }
 
 /**
+ * The endpoint that mints/resumes an OpenCode session for a conversation.
+ *
+ * Exported so anything that has to recognise this request — notably tests that
+ * count bootstrap traffic — matches the one canonical value instead of a second
+ * copy of the literal.
+ */
+export const OPENCODE_BOOTSTRAP_PATH = "/api/opencode/session";
+
+/**
  * Conversation-keyed in-flight bootstrap registry.
  *
  * OpenCode session bootstrap is a CONVERSATION-IDENTITY operation.
@@ -61,7 +70,7 @@ export async function bootstrapOpenCodeSession(
     });
 
     try {
-      const res = await fetch("/api/opencode/session", {
+      const res = await fetch(OPENCODE_BOOTSTRAP_PATH, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ conversationId: convId }),

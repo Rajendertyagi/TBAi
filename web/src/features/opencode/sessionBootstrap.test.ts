@@ -4,6 +4,7 @@ import {
   hasInFlightBootstrap,
   invalidateBootstrap,
   clearAllBootstraps,
+  OPENCODE_BOOTSTRAP_PATH,
 } from "./sessionBootstrap";
 
 /**
@@ -24,6 +25,38 @@ import {
 
 const originalFetch = globalThis.fetch;
 
+/**
+ * Installs a fetch stub that answers ONLY the bootstrap endpoint, and counts
+ * only those calls.
+ *
+ * Why the scoping matters: `bun test` runs every file in one process, so a
+ * backend suite can leave the managed OpenCode server's startup probe
+ * (`serverManager.waitForHttpReady` → `probeOpenCodeInfo`) still polling in the
+ * background. That poll is a real, legitimate fetch that has nothing to do with
+ * this module — but an unscoped counter counted it, so these tests failed only
+ * when run with the rest of the suite and passed alone. A background server
+ * probe is not a duplicate bootstrap, and asserting otherwise tested the
+ * runner rather than the code.
+ *
+ * Anything that is not the endpoint under test is delegated to whatever fetch
+ * was installed before the stub, so the probe keeps working and is never handed
+ * a fabricated response.
+ */
+function stubBootstrapFetch(
+  respond: (attempt: number, init?: RequestInit) => unknown,
+): { attempts: () => number } {
+  const previous = globalThis.fetch;
+  let attempts = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).startsWith(OPENCODE_BOOTSTRAP_PATH)) {
+      return previous(input, init);
+    }
+    attempts++;
+    return (await respond(attempts, init)) as Response;
+  }) as unknown as typeof fetch;
+  return { attempts: () => attempts };
+}
+
 beforeEach(() => {
   clearAllBootstraps();
 });
@@ -35,9 +68,7 @@ afterEach(() => {
 
 describe("sessionBootstrap — in-flight singleflight and deduplication", () => {
   it("one conversation ID with concurrent calls issues exactly one fetch", async () => {
-    let fetchCalls = 0;
-    globalThis.fetch = (async () => {
-      fetchCalls++;
+    const stub = stubBootstrapFetch(async () => {
       // Simulate network latency
       await new Promise((r) => setTimeout(r, 15));
       return {
@@ -47,15 +78,15 @@ describe("sessionBootstrap — in-flight singleflight and deduplication", () => 
           sessionId: "ses_concurrent",
           directory: "D:/test/workspace",
         }),
-      } as Response;
-    }) as unknown as typeof fetch;
+      };
+    });
 
     const [res1, res2] = await Promise.all([
       bootstrapOpenCodeSession("conv_1"),
       bootstrapOpenCodeSession("conv_1"),
     ]);
 
-    expect(fetchCalls).toBe(1);
+    expect(stub.attempts()).toBe(1);
     expect(res1.sessionId).toBe("ses_concurrent");
     expect(res2.sessionId).toBe("ses_concurrent");
     expect(res1.directory).toBe("D:/test/workspace");
@@ -63,27 +94,23 @@ describe("sessionBootstrap — in-flight singleflight and deduplication", () => 
   });
 
   it("sequential calls AFTER completion revalidate with backend (no permanent stale cache)", async () => {
-    let fetchCalls = 0;
-    globalThis.fetch = (async () => {
-      fetchCalls++;
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          sessionId: `ses_attempt_${fetchCalls}`,
-          directory: "D:/test/dir",
-        }),
-      } as Response;
-    }) as unknown as typeof fetch;
+    const stub = stubBootstrapFetch((attempt) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sessionId: `ses_attempt_${attempt}`,
+        directory: "D:/test/dir",
+      }),
+    }));
 
     // First call completes and settles
     const res1 = await bootstrapOpenCodeSession("conv_seq");
-    expect(fetchCalls).toBe(1);
+    expect(stub.attempts()).toBe(1);
     expect(res1.sessionId).toBe("ses_attempt_1");
 
     // Later separate visit revalidates with backend (backend is authoritative)
     const res2 = await bootstrapOpenCodeSession("conv_seq");
-    expect(fetchCalls).toBe(2);
+    expect(stub.attempts()).toBe(2);
     expect(res2.sessionId).toBe("ses_attempt_2");
   });
 
@@ -93,7 +120,7 @@ describe("sessionBootstrap — in-flight singleflight and deduplication", () => 
       resolveFetch = resolve;
     });
 
-    globalThis.fetch = (() => fetchPromise) as unknown as typeof fetch;
+    stubBootstrapFetch(() => fetchPromise);
 
     // Consumer A starts bootstrap
     void bootstrapOpenCodeSession("conv_drop");
@@ -118,22 +145,18 @@ describe("sessionBootstrap — in-flight singleflight and deduplication", () => 
   });
 
   it("rejects empty or whitespace-only conversationId synchronously without fetch", async () => {
-    let fetchCalled = false;
-    globalThis.fetch = (async () => {
-      fetchCalled = true;
-      return {} as Response;
-    }) as unknown as typeof fetch;
+    const stub = stubBootstrapFetch(() => ({}) as Response);
 
     expect(bootstrapOpenCodeSession("")).rejects.toThrow("conversationId is required");
     expect(bootstrapOpenCodeSession("   ")).rejects.toThrow("conversationId is required");
-    expect(fetchCalled).toBe(false);
+    expect(stub.attempts()).toBe(0);
   });
 });
 
 describe("sessionBootstrap — conversation isolation", () => {
   it("different conversation IDs create independent bootstraps", async () => {
     const requestedIds: string[] = [];
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    stubBootstrapFetch((_attempt, init) => {
       const body = JSON.parse(String(init?.body)) as { conversationId: string };
       requestedIds.push(body.conversationId);
       return {
@@ -143,8 +166,8 @@ describe("sessionBootstrap — conversation isolation", () => {
           sessionId: `ses_for_${body.conversationId}`,
           directory: `/workspace/${body.conversationId}`,
         }),
-      } as Response;
-    }) as unknown as typeof fetch;
+      };
+    });
 
     const [resA, resB] = await Promise.all([
       bootstrapOpenCodeSession("conv_A"),
@@ -159,9 +182,7 @@ describe("sessionBootstrap — conversation isolation", () => {
   });
 
   it("conversation A in-flight operation does not satisfy conversation B", async () => {
-    let fetchCount = 0;
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-      fetchCount++;
+    const stub = stubBootstrapFetch((_attempt, init) => {
       const body = JSON.parse(String(init?.body)) as { conversationId: string };
       return {
         ok: true,
@@ -170,15 +191,15 @@ describe("sessionBootstrap — conversation isolation", () => {
           sessionId: `ses_${body.conversationId}`,
           directory: null,
         }),
-      } as Response;
-    }) as unknown as typeof fetch;
+      };
+    });
 
     const [resA, resB] = await Promise.all([
       bootstrapOpenCodeSession("conv_A"),
       bootstrapOpenCodeSession("conv_B"),
     ]);
 
-    expect(fetchCount).toBe(2);
+    expect(stub.attempts()).toBe(2);
     expect(resA.sessionId).toBe("ses_conv_A");
     expect(resB.sessionId).toBe("ses_conv_B");
   });
@@ -186,15 +207,13 @@ describe("sessionBootstrap — conversation isolation", () => {
 
 describe("sessionBootstrap — failure, retry, and conservative invalidation", () => {
   it("failed bootstrap throws and cleans up in-flight so it is immediately retryable", async () => {
-    let attempt = 0;
-    globalThis.fetch = (async () => {
-      attempt++;
+    const stub = stubBootstrapFetch((attempt) => {
       if (attempt === 1) {
         return {
           ok: false,
           status: 503,
           json: async () => ({ error: "OpenCode binary missing" }),
-        } as Response;
+        };
       }
       return {
         ok: true,
@@ -203,8 +222,8 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
           sessionId: "ses_recovered",
           directory: "D:/recovered",
         }),
-      } as Response;
-    }) as unknown as typeof fetch;
+      };
+    });
 
     // First attempt fails
     let err: unknown = null;
@@ -222,23 +241,21 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
     // Second attempt succeeds
     const recovered = await bootstrapOpenCodeSession("conv_fail");
     expect(recovered.sessionId).toBe("ses_recovered");
-    expect(attempt).toBe(2);
+    expect(stub.attempts()).toBe(2);
   });
 
   it("conservative invalidation does not delete in-flight promise to prevent concurrent duplicate calls", async () => {
-    let fetchCount = 0;
-    globalThis.fetch = (async () => {
-      fetchCount++;
+    const stub = stubBootstrapFetch(async (attempt) => {
       await new Promise((r) => setTimeout(r, 20));
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          sessionId: `ses_attempt_${fetchCount}`,
+          sessionId: `ses_attempt_${attempt}`,
           directory: null,
         }),
-      } as Response;
-    }) as unknown as typeof fetch;
+      };
+    });
 
     // Start P1
     const p1 = bootstrapOpenCodeSession("conv_conserv");
@@ -251,7 +268,7 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
     const p2 = bootstrapOpenCodeSession("conv_conserv");
 
     const [res1, res2] = await Promise.all([p1, p2]);
-    expect(fetchCount).toBe(1); // exactly 1 network call
+    expect(stub.attempts()).toBe(1); // exactly 1 network call
     expect(res1.sessionId).toBe(res2.sessionId);
   });
 
@@ -259,10 +276,8 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
     let resolveP1: (val: unknown) => void;
     let resolveP2: (val: unknown) => void;
 
-    let callCount = 0;
-    globalThis.fetch = (async () => {
-      callCount++;
-      if (callCount === 1) {
+    stubBootstrapFetch((attempt) => {
+      if (attempt === 1) {
         return new Promise((r) => {
           resolveP1 = r;
         });
@@ -270,7 +285,7 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
       return new Promise((r) => {
         resolveP2 = r;
       });
-    }) as unknown as typeof fetch;
+    });
 
     // P1 starts
     const p1 = bootstrapOpenCodeSession("conv_race");
