@@ -64,6 +64,7 @@ import {
 import {
   buildCompactEntry,
   isCompactCommandText,
+  runCompactSession,
   shouldOfferCompact,
 } from "../features/opencode/compactSession";
 import { useOpenCodeRuntimeContext } from "../features/opencode/opencodeRuntimeContext";
@@ -494,11 +495,20 @@ function Composer({
   const [compacting, setCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
   const runCompact = async () => {
-    if (!openCodeRuntimeContext?.compact || compacting) return;
+    const context = openCodeRuntimeContext;
+    if (!context?.compact || compacting) return;
+    // Narrowed to a plain function: the controller builds `compact` as a
+    // closure over its own state, so it never reads `this` and is safe to
+    // hand to the feature module as a value.
+    const compact: () => Promise<void> = context.compact;
     setCompacting(true);
     setCompactError(null);
     try {
-      await openCodeRuntimeContext.compact();
+      // The lifecycle events live with the feature, not here: the Composer owns
+      // the buttons, `compactSession` owns what a compact run means.
+      await runCompactSession(() => compact(), {
+        sessionId: context.sessionId,
+      });
       setText("");
       clearComposerDraft(threadKey);
     } catch (err) {

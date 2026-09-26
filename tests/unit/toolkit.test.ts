@@ -60,6 +60,8 @@ describe("OpenCode tool-name registration", () => {
     // `question` was added for interactive prompts (and to fix the
     // "Runtime does not support tool results" crash when an unregistered
     // part fell through to ToolFallback).
+    // `shell` is the name the live V2 server actually emits; it shares
+    // `OpenCodeBashToolUI` with `bash` (one renderer, no second execution path).
     expect([...OPENCODE_TOOL_NAMES].sort()).toEqual([
       "bash",
       "edit",
@@ -67,6 +69,7 @@ describe("OpenCode tool-name registration", () => {
       "grep",
       "question",
       "read",
+      "shell",
       "skill",
       "task",
       "todowrite",

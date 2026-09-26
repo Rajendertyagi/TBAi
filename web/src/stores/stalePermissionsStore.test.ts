@@ -249,7 +249,12 @@ describe("approval parity â€” every surface shares the ONE guard", () => {
       new URL("../features/opencode/OpenCodePermissions.tsx", import.meta.url),
     ).text();
     const code = stripComments(source);
-    expect(code).toContain("isPermissionGone");
+    // Via the guard hook, like every other approval surface. This assertion
+    // used to demand a direct `isPermissionGone` call here, which contradicted
+    // the rule the SURFACES block above enforces (a surface must NOT name it —
+    // the hook owns the rule). Naming it directly would have meant rewriting
+    // the hook's own two-line body: the duplication this module exists to stop.
+    expect(code).toContain("useStaleApprovalGuard");
     expect(code).toContain("useStalePermissionsStore");
     expect(code).not.toMatch(/\/permission request not found\/i/);
   });

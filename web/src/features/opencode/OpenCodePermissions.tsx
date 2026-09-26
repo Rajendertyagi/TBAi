@@ -4,6 +4,11 @@ import { useState } from "react";
 import { ApprovalCard, ApprovalActions, useApprovalExit } from "@/components/shared/approval-card";
 import { Button } from "@/components/ui/button";
 import { ShieldCheck } from "lucide-react";
+import {
+  isStaleApproval,
+  useStaleApprovalGuard,
+  useStalePermissionsStore,
+} from "@/stores/stalePermissionsStore";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 import type { V2PermissionView } from "./v2Permissions";
 
@@ -12,7 +17,13 @@ function PermissionCard({ request }: { request: V2PermissionView }) {
   const { leaving, runWithExit, cancelExit } = useApprovalExit();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The SAME guard the tool-card surfaces use — a permission the server has
+  // forgotten can only ever answer "not found", so offering controls here is the
+  // same dead end the guard exists to prevent.
+  const { stale, reportGone } = useStaleApprovalGuard(request.id);
   if (!extras) return null;
+  // Retire rather than offer two buttons that can only fail.
+  if (stale) return null;
   const title = request.message ?? request.action;
   const description = request.resources.join("  ·  ");
   const submit = (decision: "once" | "always" | "reject") => {
@@ -20,7 +31,14 @@ function PermissionCard({ request }: { request: V2PermissionView }) {
     setBusy(true); setError(null);
     runWithExit(async () => {
       try { await extras.replyToPermission(request.id, decision); }
-      catch (cause) { cancelExit(); setError(cause instanceof Error ? cause.message : String(cause)); setBusy(false); }
+      catch (cause) {
+        // Gone for good: the store update unmounts this card, so there is
+        // nothing left to show an error on. Anything else stays retryable.
+        if (reportGone(cause)) return;
+        cancelExit();
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setBusy(false);
+      }
     });
   };
   return <ApprovalCard title={title} leaving={leaving}>
@@ -34,8 +52,13 @@ function PermissionCard({ request }: { request: V2PermissionView }) {
 /** Native permission fallback panel; linked permissions render on their tool cards. */
 export function OpenCodePermissions() {
   const extras = useOptionalV2RuntimeExtras();
+  // Subscribed here (not per card) because this surface is a LIST: a stale
+  // request must stop being listed, not merely render empty.
+  const staleIds = useStalePermissionsStore((state) => state.stale);
   if (!extras) return null;
-  const unlinked = extras.permissions.filter((permission) => permission.toolCallId === null);
+  const unlinked = extras.permissions.filter(
+    (permission) => permission.toolCallId === null && !isStaleApproval(permission.id, staleIds),
+  );
   if (unlinked.length === 0) return null;
   return <div className="flex flex-col gap-2 px-3 py-2">{unlinked.map((request) => <PermissionCard key={request.id} request={request} />)}</div>;
 }
