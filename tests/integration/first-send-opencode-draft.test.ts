@@ -190,6 +190,33 @@ describe("Phase 4 — opencode rows keep the /api/chat backstop (custom path nev
 });
 
 describe("Phase 4 — materialization idempotency (case 6 + replay + no-key)", () => {
+  /**
+   * Chat folders bound to no conversation.
+   *
+   * A create makes its workspace (directory + `folders` row) BEFORE the
+   * conversation INSERT, so a create that then loses the race on the
+   * `client_request_id` unique index leaves an orphan behind. Counting them is
+   * how the duplicate path proves it did not merely answer 200 — it proves the
+   * losers never reached the INSERT at all.
+   */
+  function orphanChatFolderCount(): number {
+    return db
+      .query<{ n: number }, []>(
+        `SELECT COUNT(*) AS n FROM folders f
+          WHERE f.kind = 'chat' AND f.deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.workspace_folder_id = f.id)`,
+      )
+      .get()!.n;
+  }
+
+  function rowsForKey(key: string): number {
+    return db
+      .query<{ n: number }, string[]>(
+        "SELECT COUNT(*) AS n FROM conversations WHERE client_request_id = ?",
+      )
+      .get(key)!.n;
+  }
+
   it("concurrent POSTs with the same clientRequestId resolve to ONE conversation", async () => {
     const key = `p4-concurrent-${Date.now()}`;
     const payload = JSON.stringify({
@@ -209,6 +236,66 @@ describe("Phase 4 — materialization idempotency (case 6 + replay + no-key)", (
       expect(c1.id).toBe(c2.id);
     } finally {
       await conversationService.delete(c1.id);
+    }
+  }, 30000);
+
+  it("many simultaneous duplicates share one create — no second row, no orphan workspace", async () => {
+    // The singleflight reservation has to be taken before the deciding awaits,
+    // or duplicates that arrive inside that window each conclude "no row yet"
+    // and each call create(). The losers then fail on the partial unique index
+    // (a 500 for what the contract calls a replay) and leave an orphaned chat
+    // folder behind, because the folder is created before the INSERT.
+    const key = `p4-many-${Date.now()}`;
+    const payload = JSON.stringify({
+      title: "p4 many duplicates",
+      engine: "direct",
+      clientRequestId: key,
+    });
+    const orphansBefore = orphanChatFolderCount();
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        app.request("/api/conversations", { method: "POST", headers: json, body: payload }),
+      ),
+    );
+
+    let createdId: string | undefined;
+    try {
+      for (const response of responses) expect(response.status).toBe(200);
+      const ids = new Set<string>();
+      for (const response of responses) {
+        ids.add(((await response.json()) as { id: string }).id);
+      }
+      createdId = [...ids][0];
+      expect(ids.size).toBe(1);
+      // Durable state: exactly one row owns the key, and no duplicate create
+      // left a workspace folder that nothing references.
+      expect(rowsForKey(key)).toBe(1);
+      expect(orphanChatFolderCount()).toBe(orphansBefore);
+    } finally {
+      if (createdId) await conversationService.delete(createdId);
+    }
+  }, 30000);
+
+  it("a real storage failure inside the create is still a 5xx, never a replayed 200", async () => {
+    // The duplicate path must prevent the second INSERT, not swallow failures.
+    // If a genuine error were converted into a success, a client would treat a
+    // lost conversation as materialized and never retry.
+    const key = `p4-realerror-${Date.now()}`;
+    const realCreate = conversationService.create;
+    conversationService.create = (async () => {
+      throw new Error("disk is on fire");
+    }) as typeof conversationService.create;
+    try {
+      const res = await app.request("/api/conversations", {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ title: "p4 real error", engine: "direct", clientRequestId: key }),
+      });
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      // And nothing was minted for the key.
+      expect(rowsForKey(key)).toBe(0);
+    } finally {
+      conversationService.create = realCreate;
     }
   }, 30000);
 

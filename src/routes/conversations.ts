@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { registry } from "../config/providers";
 import { ConversationNotFoundError, conversationService, messageService } from "../services/storage";
+import type { Conversation } from "../types";
 import { terminateOpenCodeSession } from "../services/opencode/sessions";
 import { logger, normalizeError } from "../lib/logger";
 import { conversationCreateSchema, conversationUpdateSchema, messageUpsertSchema } from "../lib/validation";
@@ -36,7 +37,20 @@ function conversationNotFound(c: Context) {
 // of minting a second one. The column + partial unique index enforce that a
 // key maps to at most one row across all process lifetimes.
 const CREATE_KEY_TTL_MS = 10 * 60 * 1000;
-const createInFlight = new Map<string, Promise<{ id: string }>>();
+
+/**
+ * What one idempotent create resolved to.
+ *
+ * `row` is the conversation to answer with. `missingId` is the rare case where
+ * the create committed and the row is already unreadable, which is a 404 — kept
+ * distinct from `row` so a vanished row can never be answered with a body that
+ * claims it exists.
+ */
+type CreateOutcome =
+  | { row: Conversation; replayed: boolean }
+  | { missingId: string; replayed: boolean };
+
+const createInFlight = new Map<string, Promise<CreateOutcome>>();
 const createCompleted = new Map<string, { id: string; at: number }>();
 
 function pruneCreateKeys(now: number): void {
@@ -129,27 +143,6 @@ app.post("/api/conversations", async (c) => {
     };
 
     const idempotencyKey = parsed.clientRequestId ?? null;
-    if (idempotencyKey) {
-      const inFlight = createInFlight.get(idempotencyKey);
-      if (inFlight) {
-        const existing = await inFlight;
-        const row = await conversationService.get(existing.id);
-        if (row) return materialized(row, true);
-      } else {
-        const completed = createCompleted.get(idempotencyKey);
-        if (completed && Date.now() - completed.at <= CREATE_KEY_TTL_MS) {
-          const row = await conversationService.get(completed.id);
-          if (row) return materialized(row, true);
-          createCompleted.delete(idempotencyKey);
-        }
-      }
-
-      // Durable replay (Task 3): a restart between the commit and this retry
-      // loses both in-memory maps, so fall back to the SQLite column. If a
-      // row already carries this key, return it — never mint a second row.
-      const durable = await conversationService.findByClientRequestId(idempotencyKey);
-      if (durable) return materialized(durable, true);
-    }
 
     const createOne = async () => {
       return conversationService.create({
@@ -173,15 +166,55 @@ app.post("/api/conversations", async (c) => {
       return materialized(await createOne(), false);
     }
 
-    const creation = createOne().then((conversation) => ({ id: conversation.id }));
-    createInFlight.set(idempotencyKey, creation);
+    // The singleflight reservation is taken SYNCHRONOUSLY, before this handler's
+    // first `await`, and the promise it stores owns the whole decision (completed
+    // map → durable column → create). That ordering is the whole fix.
+    //
+    // Deciding needs awaits, so when the reservation was registered *after* them
+    // (the old order), a duplicate arriving during those awaits also concluded
+    // "no row carries this key" and called createOne() a second time. The loser's
+    // INSERT then hit the partial unique index on `client_request_id` and the
+    // route reported it as a 500 — a request the contract defines as a replay.
+    // The loser had also already created a chat workspace (dir + `folders` row)
+    // before the INSERT, so every rejected duplicate leaked one.
+    //
+    // Nothing is caught here on purpose: a genuine storage failure inside the
+    // creation still propagates (and still answers 5xx) to every request sharing
+    // the key. Only the duplicate INSERT is prevented, never an error.
+    const reserved = createInFlight.get(idempotencyKey);
+    const creation: Promise<CreateOutcome> =
+      reserved ??
+      (async () => {
+        // Replay of a key that already completed in this process.
+        const completed = createCompleted.get(idempotencyKey);
+        if (completed && Date.now() - completed.at <= CREATE_KEY_TTL_MS) {
+          const row = await conversationService.get(completed.id);
+          if (row) return { row, replayed: true };
+          createCompleted.delete(idempotencyKey);
+        }
+
+        // Durable replay (Task 3): a restart between the commit and this retry
+        // loses both in-memory maps, so fall back to the SQLite column. If a
+        // row already carries this key, return it — never mint a second row.
+        const durable = await conversationService.findByClientRequestId(idempotencyKey);
+        if (durable) return { row: durable, replayed: true };
+
+        const created = await createOne();
+        pruneCreateKeys(Date.now());
+        createCompleted.set(idempotencyKey, { id: created.id, at: Date.now() });
+        const row = await conversationService.get(created.id);
+        // The create committed but the row is already unreadable: report the
+        // truth (it is gone) instead of answering with a row that does not exist.
+        if (!row) return { missingId: created.id, replayed: false };
+        return { row, replayed: false };
+      })();
+    // Registered before the first `await` below, so a duplicate that arrives
+    // while this decision is still running joins it instead of starting its own.
+    if (!reserved) createInFlight.set(idempotencyKey, creation);
     try {
-      const created = await creation;
-      pruneCreateKeys(Date.now());
-      createCompleted.set(idempotencyKey, { id: created.id, at: Date.now() });
-      const conversation = await conversationService.get(created.id);
-      if (!conversation) return conversationNotFound(c);
-      return materialized(conversation, false);
+      const outcome = await creation;
+      if ("missingId" in outcome) return conversationNotFound(c);
+      return materialized(outcome.row, outcome.replayed);
     } finally {
       if (createInFlight.get(idempotencyKey) === creation) {
         createInFlight.delete(idempotencyKey);
