@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ResumableStreamError } from "assistant-stream/resumable";
+import type { SQLQueryBindings } from "bun:sqlite";
 import { applyChatStreamsSchema, DEFAULT_CHAT_STREAM_TTL_MS } from "./schema";
 import {
   createSqliteResumableStreamStore,
@@ -775,9 +776,114 @@ describe("sqlite resumable store — latest run for a conversation", () => {
 });
 
 // ── Guarded history finalization ─────────────────────────────────────────────
-describe("sqlite resumable store — history claim", () => {
-  it("allows exactly one claim and records the message id", async () => {
+describe("sqlite resumable store — final message capture", () => {
+  const message = { id: "msg_cap_1", role: "assistant", parts: [{ type: "text", text: "hi" }] };
+
+  it("captures the message verbatim, and only for a pending completed run", async () => {
+    const { store, db } = harness();
+    const id = "run_capture";
+    await producerOf(store, id);
+    store.bindRunContext(id, { conversationId: "conv_cap" });
+    store.recordRunVerdict(id, "completed");
+
+    expect(store.recordFinalMessage(id, { message, parentId: "msg_user" })).toBe(true);
+    const row = db
+      .query<
+        { final_message_json: string; final_parent_id: string },
+        SQLQueryBindings[]
+      >(
+        "SELECT final_message_json, final_parent_id FROM chat_streams WHERE stream_id = ?",
+      )
+      .get(id)!;
+    expect(JSON.parse(row.final_message_json)).toEqual(message);
+    expect(row.final_parent_id).toBe("msg_user");
+
+    // Fill-only: a second capture can never replace the first.
+    expect(store.recordFinalMessage(id, { message: { ...message, id: "other" }, parentId: null })).toBe(
+      false,
+    );
+  });
+
+  it("refuses to capture for a run that is not a pending completed run", async () => {
+    for (const kind of ["failed", "cancelled", "interrupted"] as const) {
+      const { store } = harness();
+      const id = `run_capture_${kind}`;
+      await producerOf(store, id);
+      store.bindRunContext(id, { conversationId: "conv_cap" });
+      store.recordRunVerdict(id, kind);
+
+      // The same two guards as the claim: a run that did not succeed has no reply
+      // to capture, and a settled history state is already resolved.
+      expect(store.recordFinalMessage(id, { message, parentId: null })).toBe(false);
+    }
+
     const { store } = harness();
+    const done = "run_capture_done";
+    await producerOf(store, done);
+    store.recordRunVerdict(done, "completed");
+    store.skipHistory(done);
+    expect(store.recordFinalMessage(done, { message, parentId: null })).toBe(false);
+  });
+
+  it("lists only outstanding completed runs, oldest first and within the grace bound", async () => {
+    const { store, clock } = harness();
+    const settled = async (id: string, kind: "completed" | "failed" | "cancelled") => {
+      const lease = await producerOf(store, id);
+      await store.append(id, enc.encode('{"type":"text"}'), lease);
+      store.bindRunContext(id, { conversationId: "conv_cap" });
+      store.recordRunVerdict(id, kind);
+      await store.settleDurable(id, {
+        status: kind === "completed" ? "done" : "error",
+        terminalKind: kind,
+      });
+      store.recordFinalMessage(id, { message, parentId: "msg_user" });
+    };
+
+    await settled("run_list_old", "completed");
+    clock.now += 5_000;
+    await settled("run_list_new", "completed");
+    await settled("run_list_failed", "failed");
+    await settled("run_list_cancelled", "cancelled");
+
+    // Live stream: completed verdict, but not settled.
+    const live = "run_list_live";
+    await producerOf(store, live);
+    store.bindRunContext(live, { conversationId: "conv_cap" });
+    store.recordRunVerdict(live, "completed");
+    store.recordFinalMessage(live, { message, parentId: "msg_user" });
+
+    // A grace bound that excludes the newer row but not the older one.
+    const rows = store.listPendingCompletedHistory({ before: clock.now - 1_000, limit: 10 });
+    expect(rows.map((r) => r.streamId)).toEqual(["run_list_old"]);
+    expect(rows[0].conversationId).toBe("conv_cap");
+    expect(JSON.parse(rows[0].finalMessageJson!)).toEqual(message);
+
+    // Widening the bound admits the newer completed run, and still nothing else:
+    // never a failed, cancelled, or still-streaming row.
+    const all = store.listPendingCompletedHistory({ before: clock.now, limit: 10 });
+    expect(all.map((r) => r.streamId)).toEqual(["run_list_old", "run_list_new"]);
+
+    // The limit bounds the batch.
+    expect(store.listPendingCompletedHistory({ before: clock.now, limit: 1 })).toHaveLength(1);
+  });
+
+  it("reports a row with no capture as a null message rather than omitting it", async () => {
+    const { store, clock } = harness();
+    const id = "run_list_uncaptured";
+    await producerOf(store, id);
+    store.bindRunContext(id, { conversationId: "conv_cap" });
+    store.recordRunVerdict(id, "completed");
+    await store.settleDurable(id, { status: "done", terminalKind: "completed" });
+
+    const rows = store.listPendingCompletedHistory({ before: clock.now, limit: 10 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].finalMessageJson).toBeNull();
+    expect(rows[0].finalParentId).toBeNull();
+  });
+});
+
+describe("sqlite resumable store — history claim", () => {
+  it("allows exactly one claim and records the message id", async () => {    const { store } = harness();
     const id = "run_claim";
     await producerOf(store, id);
     store.recordRunVerdict(id, "completed");

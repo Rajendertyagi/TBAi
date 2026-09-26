@@ -95,15 +95,34 @@ jobs:
       # would otherwise be discovered very late. `cargo check` does no codegen
       # and fails in about a minute.
       #
-      # It still runs the tauri-build script, which validates BOTH
-      # `build.frontendDist` (committed, so fine on a fresh checkout) AND
-      # `bundle.resources` (web/dist, NOT committed). That second one is why the
-      # previous step must run the full `bun run build` first - see its comment.
+      # It still runs the tauri-build script, which validates EVERYTHING this
+      # step's two predecessors must have produced. All of it is either committed
+      # or created above:
+      #   build.frontendDist  -> src-tauri/frontend-placeholder   (committed)
+      #   bundle.resources    -> web/dist                         (step 8)
+      #   externalBin         -> binaries/tbai-server-<triple>    (step 8)
+      #   Windows resource    -> src-tauri/icons/icon.ico         (icons step)
+      # Getting this list wrong is what broke the build twice, so if a
+      # prerequisite is ever added, add its producer BEFORE this step.
+      # Icons MUST be generated before anything runs the tauri-build script
+      # (cargo check below, and `tauri build` after it). src-tauri/icons/ is
+      # gitignored, so on a fresh checkout it does not exist, and tauri-build
+      # fails with "`icons/icon.ico` not found; required for generating a
+      # Windows Resource file". This step reads only the source PNG, so it has
+      # no prerequisites of its own and is safe to run this early.
+      - name: Generate icon set from source PNG
+        shell: pwsh
+        run: |
+          bunx tauri icon src-tauri/app-icon.png
+          if ($LASTEXITCODE -ne 0) { throw "tauri icon failed" }
+          # Fail here with a clear message rather than letting tauri-build
+          # report a confusing missing-file error three steps later.
+          if (-not (Test-Path "src-tauri/icons/icon.ico")) {
+            throw "src-tauri/icons/icon.ico not produced - tauri-build needs it for the Windows resource file"
+          }
+
       - name: Type-check the Rust shell
         run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
-
-      - name: Generate icon set from source PNG
-        run: bunx tauri icon src-tauri/app-icon.png
 
       - name: Build Tauri (compile, no bundle)
         run: bunx tauri build --target x86_64-pc-windows-msvc

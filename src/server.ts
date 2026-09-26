@@ -11,6 +11,11 @@ import { gcOrphanChatDirs } from "./services/workspace";
 import { applyPersistedLogSettings } from "./services/log-settings";
 import { recoverOrphanedChatStreams } from "./services/chat-streams/boot";
 import { startChatStreamCleanup, stopChatStreamCleanup } from "./services/chat-streams/cleanup";
+import {
+  chatHistoryReconcilerDeps,
+  startHistoryReconciliation,
+  stopHistoryReconciliation,
+} from "./services/chat-streams/historyReconciler";
 import { resolveConfiguredPort, writePortFile } from "./services/server-port";
 import {
   bindBootPort,
@@ -85,6 +90,11 @@ export async function startServer(port = resolveConfiguredPort().port) {
   // boot recovery (which owns orphaned `streaming` rows) and is idempotent, so a
   // repeated startServer never accumulates timers.
   startChatStreamCleanup(db);
+
+  // Reconciliation of completed runs whose client never persisted the reply.
+  // Separate from cleanup on purpose: cleanup owns expiry, this owns an
+  // unfinished history obligation. Both are unref'd and idempotent.
+  startHistoryReconciliation({ deps: chatHistoryReconcilerDeps });
 
   // Transport backstop: Bun kills connections idle for 10s by default, which
   // murders quiet streams (a thinking model, a long tool run). 240s covers
@@ -202,6 +212,15 @@ export async function shutdownServer(
     }
   } catch (err) {
     logger.warn("ai", "shutdown_stream_cleanup_failed", { ...normalizeError(err) });
+  }
+
+  try {
+    // Same reason: no history pass may start against a closing database.
+    if (stopHistoryReconciliation()) {
+      logger.info("chat", "chat_history_reconcile_stopped", { signal: "shutdown" });
+    }
+  } catch (err) {
+    logger.warn("chat", "shutdown_history_reconcile_failed", { ...normalizeError(err) });
   }
 
   try {

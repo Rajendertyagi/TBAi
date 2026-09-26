@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS chat_streams (
   history_message_id      TEXT,
   history_claimed_at      INTEGER,
   finalized_at            INTEGER,
+  final_message_json      TEXT,
+  final_parent_id         TEXT,
   expires_at              INTEGER NOT NULL,
   created_at              INTEGER NOT NULL,
   updated_at              INTEGER NOT NULL
@@ -128,7 +130,43 @@ CREATE INDEX IF NOT EXISTS idx_chat_streams_expires ON chat_streams (expires_at)
 -- stream pointer. Additive and idempotent, like the rest of this DDL.
 CREATE INDEX IF NOT EXISTS idx_chat_streams_conversation
   ON chat_streams (conversation_id, created_at DESC);
+
+-- Serves durable history reconciliation: the bounded scan for runs that settled
+-- as completed while their history obligation was still pending, oldest first so
+-- a bounded batch always drains the oldest backlog. Partial, because a row that
+-- is not a pending completed run is never a reconciliation candidate.
+CREATE INDEX IF NOT EXISTS idx_chat_streams_pending_history
+  ON chat_streams (updated_at)
+  WHERE history_state = 'pending' AND terminal_kind = 'completed';
 `;
+
+/**
+ * Additive columns/indexes for a `chat_streams` table created before durable
+ * history reconciliation existed.
+ *
+ * The `CREATE TABLE` string above only reaches a fresh database, so a pre-existing
+ * install needs the new columns added separately. Idempotent and column-driven
+ * (via `PRAGMA table_info`), so it is safe on every boot and on a database that
+ * already has them.
+ *
+ * `final_message_json` / `final_parent_id` carry the exact assistant message the
+ * AI SDK finalized, captured at settlement. Without them a completed run's reply
+ * exists only in replayable bytes, which is not history and cannot be rebuilt
+ * without fabricating it (ADR decision 3).
+ */
+export function addChatStreamsColumnsIfMissing(db: Database): void {
+  const columns = db.query("PRAGMA table_info(chat_streams)").all() as Array<{ name: string }>;
+  const has = (name: string): boolean => columns.some((c) => c.name === name);
+  if (!has("final_message_json")) {
+    db.run("ALTER TABLE chat_streams ADD COLUMN final_message_json TEXT");
+  }
+  if (!has("final_parent_id")) {
+    db.run("ALTER TABLE chat_streams ADD COLUMN final_parent_id TEXT");
+  }
+  db.run(`CREATE INDEX IF NOT EXISTS idx_chat_streams_pending_history
+            ON chat_streams (updated_at)
+            WHERE history_state = 'pending' AND terminal_kind = 'completed'`);
+}
 
 /** Apply the chat-stream DDL. Idempotent; safe to call on every boot. */
 export function applyChatStreamsSchema(db: Database): void {
@@ -156,6 +194,8 @@ export interface ChatStreamRow {
   history_state: ChatStreamHistoryState;
   history_message_id: string | null;
   history_claimed_at: number | null;
+  final_message_json: string | null;
+  final_parent_id: string | null;
   finalized_at: number | null;
   expires_at: number;
   created_at: number;

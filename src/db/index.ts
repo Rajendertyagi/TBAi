@@ -5,7 +5,7 @@ import { logger } from "../lib/logger";
 // Leaf module (no app imports) that owns the chat-stream DDL, so the boot
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
-import { applyChatStreamsSchema } from "../services/chat-streams/schema";
+import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "../services/chat-streams/schema";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "chat.db");
@@ -85,6 +85,9 @@ sqlite.run(`
 // store itself is not yet wired into the chat route, so nothing writes rows yet;
 // the cleanup worker is a separate, later step.
 applyChatStreamsSchema(sqlite);
+// Columns introduced after the chat-stream DDL was first shipped reach an
+// existing install only through this additive, idempotent pass.
+addChatStreamsColumnsIfMissing(sqlite);
 
 // Durable key/value app settings (runtime log capture level/overrides, ...).
 // Single-row-per-key; values are JSON. Read at boot, written by settings APIs.

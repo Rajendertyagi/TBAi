@@ -392,6 +392,23 @@ export const messageService = {
   },
 
   /**
+   * Whether a stored message id already exists, scoped to its conversation.
+   *
+   * The existence check server-side history finalization needs to tell "nobody
+   * wrote this reply" apart from "the client wrote it and I am merely late". An
+   * id is unique across the table, so the conversation scope is a guard against a
+   * cross-conversation id collision, not a lookup narrowing.
+   */
+  async hasStoredMessage(conversationId: string, messageId: string): Promise<boolean> {
+    const row = db
+      .query<{ id: string }, SQLQueryBindings[]>(
+        "SELECT id FROM messages WHERE conversation_id = ? AND id = ?",
+      )
+      .get(conversationId, messageId);
+    return row !== null && row !== undefined;
+  },
+
+  /**
    * Upserts a single stored message entry (keyed by message id). Called by the
    * ThreadHistoryAdapter's `withFormat` adapter on every append/update during a
    * run. The entry is the runtime's storage format (`{ id, parent_id, format,

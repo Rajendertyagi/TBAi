@@ -22,10 +22,13 @@ import type { SqliteResumableStreamStore } from "./sqliteResumableStore";
  *  - `terminal_kind` stays the route's verdict, and the claim below re-checks it;
  *  - no partial output is ever turned into a message.
  *
- * ADR decision 3 (2026-09-25): no structured final message is persisted and no
- * boot path reconstructs one, so a process that dies between the durable
- * `completed` verdict and this write leaves the reply in the replayable bytes
- * only. That window is documented, not repaired, in this phase.
+ * Scope of the obligation (ADR decision 3, 2026-09-25): persistability is decided
+ * once, here, by `validateFinalMessage`, and the route stores that verdict with
+ * the run. So the only thing that can be left unwritten is a run that never
+ * reached this function at all — it died between the durable `completed` verdict
+ * and the capture. That process-death window remains documented and unrepaired.
+ * A run that *did* settle normally but whose client failed to write is not in
+ * that window: its message is durable, and `historyReconciler` re-offers it here.
  */
 
 /** The store surface this module needs; narrowed so tests can supply a fake. */
@@ -55,6 +58,7 @@ export type HistorySkipReason =
 /** What the finalizer did. `not_claimed` means another finalizer already owned it. */
 export type HistoryFinalizeOutcome =
   | "written"
+  | "already_persisted"
   | "not_claimed"
   | "skipped"
   | "failed";
@@ -80,6 +84,18 @@ export interface HistoryFinalizerInput {
 export interface HistoryFinalizerDeps {
   store: HistoryFinalizerStore;
   upsertStored: typeof messageService.upsertStored;
+  /**
+   * Whether a message id is already in history, optionally scoped to its
+   * conversation.
+   *
+   * This is the race check, and it is what makes writing safe for a run whose
+   * client may have persisted after all. `upsertStored` is `ON CONFLICT(id) DO
+   * UPDATE`, so an unconditional write would silently overwrite a reply the
+   * client legitimately wrote. With this supplied, a finalizer that finds the
+   * message already present closes the obligation without writing and without
+   * touching that content.
+   */
+  messageExists?: (conversationId: string, messageId: string) => boolean | Promise<boolean>;
 }
 
 /**
@@ -110,8 +126,13 @@ export const ASSISTANT_UI_STORAGE_FORMAT = "ai-sdk/v6";
  * Returns the message when it is usable, otherwise a `skipReason`. Modelled as
  * two nullable fields rather than a discriminated union so the call site reads as
  * a plain null check.
+ *
+ * Exported because persistability is decided once, at settlement, and the answer
+ * is stored with the run: a later finalizer must not reach a different verdict
+ * about the same message, and must never be asked to guess whether a run was
+ * aborted.
  */
-function validateFinalMessage(
+export function validateFinalMessage(
   responseMessage: FinalUIMessage | null,
   isAborted: boolean,
 ): { message: FinalUIMessage | null; skipReason: HistorySkipReason | null } {
@@ -165,6 +186,21 @@ export async function finalizeDetachedRunHistory(
       // `upsertStored` is declared async but performs only synchronous SQLite
       // writes, so the row is durable by the time this resolves. No timers, no
       // network, no genuine async work: this runs on the response-close path.
+      //
+      // The client may have persisted the reply after all (it was attached, and
+      // only failed to write by the time this ran). The obligation is then
+      // already satisfied, so it is closed without a write — never an overwrite
+      // of content the client owns.
+      if (await deps.messageExists?.(conversationId, message.id)) {
+        deps.store.completeHistory(streamId);
+        log.info("chat", "chat_history_already_persisted", {
+          streamId,
+          conversationId,
+          messageId: message.id,
+        });
+        return "already_persisted";
+      }
+
       await deps.upsertStored(conversationId, {
         id: message.id,
         parent_id: input.parentId,
@@ -206,4 +242,5 @@ export async function finalizeDetachedRunHistory(
 export const chatHistoryFinalizerDeps: HistoryFinalizerDeps = {
   store: chatStreamStore,
   upsertStored: messageService.upsertStored,
+  messageExists: messageService.hasStoredMessage,
 };

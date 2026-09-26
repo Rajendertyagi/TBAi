@@ -41,6 +41,13 @@ import {
   chatHistoryFinalizerDeps,
   finalizeDetachedRunHistory,
 } from "../../src/services/chat-streams/historyFinalizer";
+import {
+  chatHistoryReconcilerDeps,
+  runHistoryReconciliationOnce,
+  startHistoryReconciliation,
+  stopHistoryReconciliation,
+  type HistoryReconcileReport,
+} from "../../src/services/chat-streams/historyReconciler";
 import { logger, type LogEntry } from "../../src/lib/logger";
 import chatApp from "../../src/routes/chat";
 
@@ -444,6 +451,157 @@ describe("Detached history finalization — detached completion", () => {
   }, 30000);
 });
 
+// ── 3. Reconciliation: an attached client that never persisted ───────────────
+describe("History reconciliation — outstanding completed run", () => {
+  /**
+   * Run one reconciliation pass over the real store and the real message service,
+   * with no grace window so a just-settled row is immediately eligible.
+   */
+  async function reconcileNow(): Promise<HistoryReconcileReport | null> {
+    startHistoryReconciliation({ deps: chatHistoryReconcilerDeps, graceMs: 0, runImmediately: false });
+    try {
+      return await runHistoryReconciliationOnce();
+    } finally {
+      stopHistoryReconciliation();
+    }
+  }
+
+  /** The assistant message id the run minted, read off the wire as a browser would. */
+  function assistantMessageIdIn(body: string): string {
+    for (const line of body.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const raw = line.slice("data:".length).trim();
+      if (!raw || raw === "[DONE]") continue;
+      try {
+        const frame = JSON.parse(raw) as { type?: string; messageId?: string };
+        if (frame.type === "start" && typeof frame.messageId === "string") return frame.messageId;
+      } catch {
+        /* partial frame */
+      }
+    }
+    throw new Error("no start frame in the response body");
+  }
+
+  it("writes the reply the client never did, converging on exactly one row", async () => {
+    await seedControlledProvider();
+    const conversationId = await createDirectConversation("reconcile-orphan");
+    const since = logger.lastSeq;
+
+    try {
+      // The exact production hole: the run completes while the server still sees
+      // the client as attached, so the fast path writes nothing (asserted by the
+      // attached-completion suite above), and this client never persists.
+      const { streamId, body } = await runAttached(conversationId);
+      expect(historyStateOf(streamId)).toBe("pending");
+      expect(await assistantRow(conversationId)).toBeNull();
+
+      const report = await reconcileNow();
+
+      // One write for this conversation. The scan is store-wide, and earlier
+      // tests in this file leave completed+pending rows behind whose
+      // conversations their `finally` deleted — those are reported as `failed`
+      // rather than silently ignored, which is the truthful outcome for a
+      // conversation that no longer exists.
+      expect(report?.written).toBe(1);
+      const assistantRows = (await storedRows(conversationId)).filter(
+        (r) => (r.content as { role?: string })?.role === "assistant",
+      );
+      expect(assistantRows.length).toBe(1);
+      expect(assistantRows[0].id).toBe(assistantMessageIdIn(body));
+      expect(assistantRows[0].parent_id).toBe(USER_MESSAGE_ID);
+      expect(historyStateOf(streamId)).toBe("done");
+
+      const reconciled = logEntriesSince(since).filter((e) => e.event === "chat_history_reconciled");
+      expect(reconciled.length).toBe(1);
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+
+  it("is a no-op on a second pass: the reply is written once, not twice", async () => {
+    await seedControlledProvider();
+    const conversationId = await createDirectConversation("reconcile-idempotent");
+
+    try {
+      const { streamId } = await runAttached(conversationId);
+
+      expect(await reconcileNow()).toMatchObject({ written: 1 });
+      expect(await reconcileNow()).toMatchObject({ scanned: 0, written: 0 });
+
+      const assistantRows = (await storedRows(conversationId)).filter(
+        (r) => (r.content as { role?: string })?.role === "assistant",
+      );
+      expect(assistantRows.length).toBe(1);
+      expect(historyStateOf(streamId)).toBe("done");
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+
+  it("leaves a reply the client did persist completely alone", async () => {
+    await seedControlledProvider();
+    const conversationId = await createDirectConversation("reconcile-clientfirst");
+
+    try {
+      const { streamId, body } = await runAttached(conversationId);
+      const messageId = assistantMessageIdIn(body);
+
+      // The browser got there first through its own history adapter.
+      await messageService.upsertStored(conversationId, {
+        id: messageId,
+        parent_id: USER_MESSAGE_ID,
+        format: "ai-sdk/v6",
+        content: { role: "assistant", parts: [{ type: "text", text: "CLIENT_VERSION" }] },
+      });
+      const clientOrder = orderSeqOf(conversationId, messageId);
+
+      const report = await reconcileNow();
+
+      expect(report).toMatchObject({ alreadyPersisted: 1, written: 0 });
+      const row = await assistantRow(conversationId);
+      // The client's own content and its position in the thread are untouched.
+      expect(JSON.stringify(row!.content)).toContain("CLIENT_VERSION");
+      expect(JSON.stringify(row!.content)).not.toContain(ANSWER_TEXT_MARKER);
+      expect(orderSeqOf(conversationId, messageId)).toBe(clientOrder);
+      expect(historyStateOf(streamId)).toBe("done");
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+
+  it("does not finalize an attached run that failed", async () => {
+    await seedControlledProvider();
+    const conversationId = await createDirectConversation("reconcile-failed");
+
+    try {
+      behavior = "gated-then-error";
+      armGate();
+      const res = await postChat({
+        providerId: PROVIDER_ID,
+        model: MODEL_ID,
+        id: conversationId,
+        messages: [userMessage(USER_TEXT_MARKER)],
+      });
+      expect(res.status).toBe(200);
+      const streamId = streamIdOf(res);
+      await waitFor(() => captured.length >= 1, "the provider request");
+      gate?.open();
+      await res.text();
+      await awaitRunSettled(streamId);
+
+      expect(chatStreamStore.getRunContext(streamId)?.historyState).toBe("pending");
+      const report = await reconcileNow();
+
+      // The failed run is not a reconciliation candidate at all: no candidate, no
+      // write, and the row is not closed as if it had produced a reply.
+      expect(report?.written ?? 0).toBe(0);
+      expect(await assistantRow(conversationId)).toBeNull();
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+});
+
 // ── 6. Resume: unchanged protocol, honest observability ──────────────────────
 describe("Resume endpoint — contract and observability", () => {
   it("replays a finished run and records ai.resume with both axes, without changing the response", async () => {
@@ -691,12 +849,17 @@ describe("History finalization — browser/server convergence", () => {
       await browserWrite(conversationId, messageId, USER_MESSAGE_ID);
       const orderSeqBefore = orderSeqOf(conversationId, messageId);
 
-      expect((await finalize(streamId, messageId, conversationId)).outcome).toBe("written");
+      // The browser already wrote this id, so the obligation is satisfied and the
+      // finalizer closes it WITHOUT a second write. That is stronger than the
+      // `ON CONFLICT(id) DO UPDATE` convergence this test used to rely on: the
+      // browser's row is not rewritten at all, so its content and position are
+      // untouched by construction.
+      expect((await finalize(streamId, messageId, conversationId)).outcome).toBe(
+        "already_persisted",
+      );
 
       const rows = (await storedRows(conversationId)).filter((r) => r.id === messageId);
       expect(rows.length).toBe(1);
-      // `ON CONFLICT(id) DO UPDATE` preserves order_seq, so the server's later
-      // write cannot reorder a thread the browser already placed.
       expect(orderSeqOf(conversationId, messageId)).toBe(orderSeqBefore);
     } finally {
       await conversationService.delete(conversationId);

@@ -89,7 +89,6 @@ function recordingDeps(store: HistoryFinalizerStore, failWith?: Error) {
 }
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {} };
-
 function assistantMessage(overrides: Partial<FinalUIMessage> = {}): FinalUIMessage {
   return {
     id: "msg_assistant_1",
@@ -313,5 +312,91 @@ describe("history finalizer — failure handling", () => {
         log: silentLog,
       }),
     ).resolves.toBe("failed");
+  });
+});
+
+describe("history finalizer — the client may have persisted already", () => {
+  it("closes the obligation without writing when the message is already in history", async () => {
+    const store = fakeStore();
+    const { deps, writes } = recordingDeps(store);
+    deps.messageExists = () => true;
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: "msg_user_1",
+      log: silentLog,
+    });
+
+    expect(outcome).toBe("already_persisted");
+    // No write at all: `upsertStored` is ON CONFLICT DO UPDATE, so writing would
+    // overwrite the client's own row.
+    expect(writes).toHaveLength(0);
+    expect(store.completes).toBe(1);
+    expect(store.historyState).toBe("done");
+  });
+
+  it("asks about the message's own conversation, not the stream's", async () => {
+    const store = fakeStore();
+    const { deps, writes } = recordingDeps(store);
+    const asked: Array<[string, string]> = [];
+    deps.messageExists = (conversationId, messageId) => {
+      asked.push([conversationId, messageId]);
+      return false;
+    };
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: null,
+      log: silentLog,
+    });
+
+    expect(asked).toEqual([["conv_1", "msg_assistant_1"]]);
+    expect(outcome).toBe("written");
+    expect(writes).toHaveLength(1);
+  });
+
+  it("still writes when the check says the message is absent", async () => {
+    const store = fakeStore();
+    const { deps, writes } = recordingDeps(store);
+    deps.messageExists = () => false;
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: null,
+      log: silentLog,
+    });
+
+    expect(outcome).toBe("written");
+    expect(writes).toHaveLength(1);
+  });
+
+  it("checks for the message only after winning the claim", async () => {
+    const store = fakeStore({ historyState: "claimed" });
+    const { deps, writes } = recordingDeps(store);
+    let asked = false;
+    deps.messageExists = () => {
+      asked = true;
+      return true;
+    };
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: null,
+      log: silentLog,
+    });
+
+    // The claim is the authority on who may finalize, so a finalizer that lost it
+    // must not go looking at — or touching — the message at all.
+    expect(outcome).toBe("not_claimed");
+    expect(asked).toBe(false);
+    expect(writes).toHaveLength(0);
   });
 });

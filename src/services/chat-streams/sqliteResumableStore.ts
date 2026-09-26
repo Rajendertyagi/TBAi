@@ -303,6 +303,35 @@ export interface SqliteResumableStreamStore extends ResumableStreamStore {
    */
   skipHistory(streamId: string): boolean;
   /**
+   * Capture the exact assistant message a completed run produced, so the
+   * obligation outlives the process that created it.
+   *
+   * Recorded on the single winning `completed` settlement whether or not a client
+   * was attached, because persistability must not depend on who happened to be
+   * watching: a reply nobody managed to write is still a reply. The message is
+   * stored verbatim; nothing here interprets, repairs, or reconstructs it.
+   *
+   * Fill-only and guarded on `history_state='pending'` AND
+   * `terminal_kind='completed'`, so a failed, cancelled or interrupted run can
+   * never acquire a persistable message, and a second capture (or a re-entrant
+   * one) can never replace the first. Returns false when the row is absent, is
+   * not a pending completed run, or already carries a capture.
+   */
+  recordFinalMessage(
+    streamId: string,
+    payload: { message: unknown; parentId: string | null },
+  ): boolean;
+  /**
+   * Completed runs whose history obligation is still outstanding, oldest first.
+   *
+   * This is the reconciliation candidate set and nothing else: a row qualifies
+   * only when it settled as `completed`, is no longer streaming, and never
+   * reached a `claimed`/`done`/`skipped` history state. The `before` bound is the
+   * grace window — a run that just settled is not yet a candidate, because its
+   * client may still be writing normally.
+   */
+  listPendingCompletedHistory(options: { before: number; limit: number }): PendingHistoryRow[];
+  /**
    * Guarded terminal transition. Returns true only for the single durable
    * winner; a superseded lease or an already-settled row returns false. Throws a
    * plain `Error` only when the stream does not exist (contract parity).
@@ -324,6 +353,21 @@ export interface ChatStreamRunContext {
   historyState: ChatStreamHistoryState;
   historyMessageId: string | null;
   historyClaimedAt: number | null;
+}
+
+/**
+ * One outstanding completed-run history obligation, exactly as stored.
+ *
+ * `finalMessageJson` is the raw captured text, not a parsed message: this store
+ * is a persistence layer and holds no opinion about message validity. Null means
+ * the run either never captured one (it predates reconciliation) or had no
+ * persistable message, and the caller reports that rather than inventing a reply.
+ */
+export interface PendingHistoryRow {
+  streamId: string;
+  conversationId: string | null;
+  finalMessageJson: string | null;
+  finalParentId: string | null;
 }
 
 let leaseCounter = 0;
@@ -711,6 +755,55 @@ export function createSqliteResumableStreamStore(
     );
   };
 
+  const recordFinalMessage = (
+    streamId: string,
+    payload: { message: unknown; parentId: string | null },
+  ): boolean => {
+    assertValidStreamId(streamId);
+    // Same two guards as the claim: a non-completed run has no reply to capture,
+    // and a settled history state means the obligation is already resolved, so
+    // capturing now could only contradict an outcome that already happened.
+    const captured = db.run(
+      `UPDATE chat_streams
+          SET final_message_json = ?, final_parent_id = ?, updated_at = ?
+        WHERE stream_id = ? AND history_state = 'pending'
+          AND terminal_kind = 'completed' AND final_message_json IS NULL`,
+      [JSON.stringify(payload.message), payload.parentId, now(), streamId],
+    );
+    return captured.changes === 1;
+  };
+
+  const listPendingCompletedHistory = (options: {
+    before: number;
+    limit: number;
+  }): PendingHistoryRow[] => {
+    const limit = Math.max(1, Math.trunc(options.limit));
+    return db
+      .query<
+        {
+          stream_id: string;
+          conversation_id: string | null;
+          final_message_json: string | null;
+          final_parent_id: string | null;
+        },
+        SQLQueryBindings[]
+      >(
+        `SELECT stream_id, conversation_id, final_message_json, final_parent_id
+           FROM chat_streams
+          WHERE status = 'done' AND terminal_kind = 'completed'
+            AND history_state = 'pending' AND updated_at <= ?
+          ORDER BY updated_at ASC
+          LIMIT ?`,
+      )
+      .all(options.before, limit)
+      .map((row) => ({
+        streamId: row.stream_id,
+        conversationId: row.conversation_id,
+        finalMessageJson: row.final_message_json,
+        finalParentId: row.final_parent_id,
+      }));
+  };
+
   const countChunks = (streamId: string): number =>
     db
       .query<{ c: number }, SQLQueryBindings[]>(
@@ -902,6 +995,8 @@ export function createSqliteResumableStreamStore(
     claimHistory,
     completeHistory,
     skipHistory,
+    recordFinalMessage,
+    listPendingCompletedHistory,
 
     describe(streamId: string): ChatStreamDescription | null {
       assertValidStreamId(streamId);

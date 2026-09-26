@@ -32,6 +32,7 @@ import { resumableContext, chatStreamStore } from "../lib/resumable";
 import {
   chatHistoryFinalizerDeps,
   finalizeDetachedRunHistory,
+  validateFinalMessage,
 } from "../services/chat-streams/historyFinalizer";
 import type { ChatStreamTerminalKind } from "../services/chat-streams/schema";
 import { createProgressTracker } from "../lib/progress-tracker";
@@ -650,6 +651,27 @@ app.post("/api/chat", async (c) => {
           const wasDetached = (chatRuns.get(streamId)?.detachedAt ?? null) !== null;
           writer.setOutcome(outcome);
           const { settlement, didSettle } = settleFromUiOutcome(outcome, finishReason);
+          // The branch this run continued: the AI SDK hands us
+          // `[...originalMessages (minus the last when continuing), responseMessage]`,
+          // so the previous entry is the same parent the browser's adapter would
+          // record. Not "the last user message", which is wrong on a continuation.
+          const parentId = messages[messages.length - 2]?.id ?? null;
+          // The single winning `completed` transition is the one place a run's
+          // reply is provably whole, so it is the one place the reply is captured
+          // durably — whether or not a client was attached. Persistability is
+          // decided by the finalizer's own validator, not re-guessed here, and an
+          // unusable message is simply not captured: the reconciler reports such a
+          // row as unrecoverable rather than inventing a reply. This is what makes
+          // a completed+pending row repairable instead of stranded.
+          if (didSettle && settlement === "completed") {
+            const captured = validateFinalMessage(responseMessage, isAborted).message;
+            if (captured) {
+              chatStreamStore.recordFinalMessage(streamId, {
+                message: captured,
+                parentId,
+              });
+            }
+          }
           // Server-side history finalization: the connected client persists through
           // the assistant-ui history adapter, so this is only the fallback for a run
           // that completed with nobody there to write it. Gated on the single
@@ -659,11 +681,7 @@ app.post("/api/chat", async (c) => {
             streamId,
             responseMessage,
             isAborted,
-            // The branch the run continued: the AI SDK hands us
-            // `[...originalMessages (minus the last when continuing), responseMessage]`,
-            // so the previous entry is the same parent the browser's adapter would
-            // record. Not "the last user message", which is wrong on a continuation.
-            parentId: messages[messages.length - 2]?.id ?? null,
+            parentId,
             log: chatLog,
           });
         },
