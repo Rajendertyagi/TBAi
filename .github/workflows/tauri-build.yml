@@ -86,6 +86,16 @@ jobs:
           # Tauri resolves sidecars as <base>-<target-triple>.exe
           Copy-Item -Path $src -Destination "$binDir/$env:SIDECAR_NAME-x86_64-pc-windows-msvc.exe" -Force
 
+      # Type-check the shell BEFORE the full build. `tauri build` is a complete
+      # compile with codegen and takes ~10 minutes, so a one-line type error
+      # would otherwise be discovered very late. `cargo check` does no codegen
+      # and fails in about a minute. Safe to run before any build because
+      # tauri-build validates build.frontendDist, which now points at
+      # src-tauri/frontend-placeholder/ - committed, so it exists on a fresh
+      # checkout.
+      - name: Type-check the Rust shell
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
       - name: Generate icon set from source PNG
         run: bunx tauri icon src-tauri/app-icon.png
 

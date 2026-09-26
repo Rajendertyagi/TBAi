@@ -20,7 +20,6 @@
         "minHeight": 360,
         "decorations": false,
         "transparent": false,
-        "url": "http://localhost:3000",
         "visible": false
       }
     ],

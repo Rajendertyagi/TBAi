@@ -256,10 +256,25 @@ Tauri 2 window (no native title bar, decorations:false)
   smoke test is what catches that.
 - **The SPA ships as loose files, not embedded.** `build.frontendDist` points at
   `src-tauri/frontend-placeholder` (a ~1 KB stub), NOT `web/dist`. Tauri requires the key, but
-  embedding 12 MB there was pure dead weight: the window is `visible: false` and both
-  terminal paths (`navigate_verified` / `render_error`) navigate or `eval` to
-  `http://localhost:{port}`, so the embedded assets are never fetched. The loose `web/`
-  folder is the copy Bun actually serves, via `WEB_DIST_DIR`.
+  embedding 12 MB there was pure dead weight: the window is `visible: false` and the
+  verified handshake `eval`s a different origin, so the embedded assets are never the
+  final view. The loose `web/` folder is the copy Bun actually serves, via `WEB_DIST_DIR`.
+- **The window is revealed on page load, never at navigation time.** `app.windows[0]`
+  carries no `url`, so the window opens on the embedded placeholder — an intentional
+  *"Starting the local server…"* state — rather than on a hardcoded `localhost:3000`
+  that is almost never the real port, because the backend self-heals to a free one.
+  `navigate_verified` arms `show_on_load` and navigates but does **not** call `show()`:
+  showing while `location.href` is still resolving paints an intermediate frame that is
+  blank, unpaintable, and unclickable because the webview is mid-navigation. The
+  `on_page_load` handler shows the window on `PageLoadEvent::Finished`, and a
+  `SHOW_FALLBACK` (3 s) thread covers the case where that event never arrives. Both
+  consume the same `AtomicBool` with `swap(false)`, so exactly one of them wins.
+  This is Tauri's documented pattern for a hidden main window, and it pairs with the
+  known WebView2 initial-load flash ([tauri#5170]). `render_error` and both tray-open
+  paths still call `show()` directly — the error page is written with `document.write`
+  (self-contained, nothing to await) and a tray click is an explicit user request.
+  Gating only the verified-success path is the point: it is the only one with a pending
+  navigation.
 
 - **Same React app, two shells.** The browser opens `localhost:3000` directly; the Tauri
   webview loads the same URL. The backend is plain HTTP in both cases, so the assistant-ui

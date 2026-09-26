@@ -17,6 +17,7 @@
 
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,7 @@ use fs2::FileExt;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::webview::PageLoadEvent;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -44,6 +46,11 @@ const MAX_PORT: u32 = 65535;
 const SCAN_FLOOR_PORT: u32 = 1024;
 /// Bounded sidecar diagnostics: forward at most this many stderr lines.
 const STDERR_LINE_CAP: usize = 200;
+/// Grace period before showing the window anyway if the page-load event never
+/// lands. Tauri's own guidance for a hidden main window is to show on
+/// `PageLoadEvent::Finished` OR after a delay; taking both means a missed event
+/// degrades to a slightly-late window rather than an app that never appears.
+const SHOW_FALLBACK: Duration = Duration::from_secs(3);
 
 /// Fixed launch inputs, resolved once per app boot.
 struct StartupConfig {
@@ -62,6 +69,15 @@ struct StartupOwned {
     /// Set once an identity-verified navigation happens; the backstop only
     /// re-attempts while this is false.
     verified: Mutex<bool>,
+    /// Armed by navigate_verified, consumed by whichever of the page-load
+    /// handler or the fallback thread gets there first, so exactly one of them
+    /// shows the window.
+    ///
+    /// An `AtomicBool`, not a `Mutex<bool>`: this is a set-once/consume-once
+    /// flag, `swap(false)` IS the atomic take, and it keeps a lock (and its
+    /// poisoning) out of a UI-thread callback. Showing during the navigation is
+    /// what produced the unpaintable, unclickable microsecond frame.
+    show_on_load: AtomicBool,
     /// Start of the most recent attempt; the backstop never overlaps a
     /// running attempt (attempts budget 25 s, backstop requires 30 s idle).
     last_start: Mutex<Instant>,
@@ -190,11 +206,29 @@ fn navigate_verified(win: &tauri::WebviewWindow, port: u32, minimized: bool) {
     }
     if minimized {
         // Tray-only boot: the window stays hidden until the user Opens it.
+        // Returns BEFORE arming, so neither the page-load handler nor the
+        // fallback can reveal a window the user asked to keep hidden.
         return;
     }
+    // Do NOT show here. The window was created aimed at a different origin, and
+    // showing while `location.href` is still resolving paints that intermediate
+    // frame - blank, unpaintable, and unclickable because the webview is
+    // mid-navigation. Arm instead; the page-load handler shows on Finished, and
+    // the fallback covers the case where that event never arrives.
+    let app = win.app_handle().clone();
+    app.state::<StartupOwned>()
+        .show_on_load
+        .store(true, Ordering::SeqCst);
     let _ = win.eval(format!("location.href='{origin}'"));
-    let _ = win.show();
-    let _ = win.set_focus();
+    std::thread::spawn(move || {
+        std::thread::sleep(SHOW_FALLBACK);
+        if app.state::<StartupOwned>().show_on_load.swap(false, Ordering::SeqCst) {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }
+    });
 }
 
 /// One startup attempt: kill any previous sidecar, hold the folder lock, pick
@@ -406,6 +440,25 @@ fn main() {
         ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        // Tauri's documented pattern for a `visible: false` main window: reveal
+        // it on PageLoadEvent::Finished rather than at navigation time. This is
+        // the half that removes the startup flash. The `swap` is the atomic
+        // take, so this and the SHOW_FALLBACK thread cannot both win - and
+        // because the flag is only armed by navigate_verified, the initial
+        // load of the placeholder correctly does nothing here.
+        .on_page_load(|webview, payload| {
+            if webview.label() != "main" {
+                return;
+            }
+            if !matches!(payload.event(), PageLoadEvent::Finished) {
+                return;
+            }
+            let app = webview.app_handle();
+            if app.state::<StartupOwned>().show_on_load.swap(false, Ordering::SeqCst) {
+                let _ = webview.window().show();
+                let _ = webview.window().set_focus();
+            }
+        })
         .setup(|app| {
             // The backend is the sidecar binary itself, not a script to run, so
             // only the SPA needs resolving here.
@@ -419,6 +472,7 @@ fn main() {
                 child: Mutex::new(None),
                 exited: Mutex::new(None),
                 verified: Mutex::new(false),
+                show_on_load: AtomicBool::new(false),
                 last_start: Mutex::new(Instant::now()),
             });
 
