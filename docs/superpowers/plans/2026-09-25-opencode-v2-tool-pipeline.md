@@ -59,13 +59,15 @@ measurement rather than assumed:
 3. This plan said to preserve the dirty working tree and not commit. The maintainer
    directed that the Task 5 verification work be committed after review (`d85878e`).
 
-### Known failures that predate this work
+### Suite state: `bun run test` is green
 
-`bun run test` is still not green, and was not green before this plan's tasks. Three
-failures that sat inside the V2 boundary have since been fixed; the rest are
-reported rather than fixed here, because they belong to other subsystems:
+`bun run test` is now fully green — 1798 pass, 2 skip, 0 fail, 0 error, confirmed
+across three consecutive runs. It was not green before this plan's tasks, so the
+failures below are recorded as history rather than as current breakage. Most were
+test-side rather than product bugs; the one real product bug is recorded
+separately below.
 
-Fixed (all inside the V2 feature boundary this plan owns):
+Fixed inside the V2 feature boundary this plan owns:
 
 - `tests/unit/toolkit.test.ts` — the expected tool-name list was never updated when
   `shell` was registered alongside `bash` in Task 4, so the registry held a name the
@@ -80,14 +82,53 @@ Fixed (all inside the V2 feature boundary this plan owns):
   `runCompactSession` now records started/completed/failed, and the Composer calls it
   rather than inlining the runtime call.
 
-Still failing, in other subsystems:
+Fixed outside the V2 boundary, in the subsystems that own them:
 
-- `src/services/todo.test.ts` (8) — `FOREIGN KEY constraint failed`; the suite seeds
-  synthetic thread ids that no longer satisfy the schema.
-- `tests/integration/first-send-opencode-draft.test.ts` — duplicate
-  `clientRequestId` POSTs answer 500 instead of 200.
-- `web/src/features/opencode/sessionBootstrap.test.ts` (2) — these PASS in isolation
-  and only fail inside the full run, so this is a test-isolation problem, not a bug.
+- `src/services/todo.test.ts` (8) — not a product bug. `todos.thread_id` carries
+  `FOREIGN KEY (thread_id) REFERENCES conversations(id) ON DELETE CASCADE`
+  deliberately, so an abandoned thread leaves no orphan todos. The suite seeded
+  synthetic thread ids that were never required to exist as conversation rows, so
+  every insert failed with `FOREIGN KEY constraint failed` before reaching an
+  assertion. The parent row is now seeded by a helper named for that side effect.
+- `web/src/features/opencode/sessionBootstrap.test.ts` (2) — also not a product bug.
+  These passed in isolation and failed only inside the full suite, which is what made
+  them look like a race. The counters were unscoped and `bun test` runs every file in
+  one process, so a backend suite can leave the managed OpenCode server's startup
+  probe (`serverManager.waitForHttpReady` → `probeOpenCodeInfo`) still polling: that
+  probe is a real fetch unrelated to this module, and the test counted it. Confirmed
+  by capturing the second call's stack, which pointed at `serverManager.ts` and not at
+  the code under test. The stubs now answer only the bootstrap endpoint and delegate
+  every other URL to the fetch installed before them.
+- `tests/integration/first-send-opencode-draft.test.ts` — a real product bug, and the
+  only one on this list. See below.
+
+### The `clientRequestId` 500 (real product bug, now fixed)
+
+Duplicate `POST /api/conversations` calls sharing a `clientRequestId` answered **500**
+where the contract says a replay. A check-then-act race in the route caused it:
+
+- The in-flight singleflight reservation was registered only *after* the awaits for
+  the durable lookup, so a duplicate arriving inside that window also observed "no
+  row carries this key" and called `createOne()` a second time. The in-flight map
+  could not dedupe a request that had not registered itself yet.
+- Both creates then raced to the INSERT. The loser's violated the partial unique
+  index on `conversations.client_request_id` and surfaced through the route's catch as
+  a 500. The durable invariant itself was never broken — exactly one row ever carried
+  the key — so this was a wrong response, not a duplicate row.
+- Worse, the workspace is created *before* that INSERT (`createChatWorkspace` writes a
+  directory and a `folders` row first), so every rejected duplicate also leaked an
+  orphan chat folder. Measured: 0 → 1 orphan rows per rejected duplicate.
+
+The fix moves the reservation before the first `await` and keeps the existing
+in-flight lookup, `createCompleted` TTL map, and durable `findByClientRequestId`
+replay untouched — same maps, same TTL, same queries, same statuses; only the
+ordering changed. The second INSERT never happens, so the folder leak is gone rather
+than merely logged.
+
+Nothing is caught to achieve this: a genuine storage failure inside the create still
+propagates to every request sharing the key and still answers 5xx. That is asserted
+directly — a test stubs `conversationService.create` to reject and requires `>= 500`
+with no row minted — so only the duplicate INSERT is prevented, never an error.
 
 ## Global Constraints
 
