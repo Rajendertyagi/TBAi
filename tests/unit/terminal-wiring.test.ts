@@ -1,88 +1,117 @@
 /**
  * Chat-route terminal wiring: proves the `run_command` live-output chain the
- * chat route depends on — `withThreadContext` injects `onTerminalOutput` into
- * the toolkit's `run_command` execute (capturing the AI SDK `toolCallId` from
- * the second arg), and `createTerminalBatcher` throttles those events into
+ * chat route depends on — `withTerminalOutput` injects `onTerminalOutput` into
+ * `run_command`'s execute (capturing the AI SDK `toolCallId` from the execute
+ * options), and `createTerminalBatcher` throttles those events into
  * `data-tbai-terminal` parts with a guaranteed final `done` part.
  *
  * These are the two seams `routes/chat.ts` stitches together; testing them in
  * isolation covers the wiring without a full HTTP request. `bun test`.
+ *
+ * Rewritten against the current native-tools API. The per-request rewrapper this
+ * file used to drive (`withThreadContext`) no longer exists: request data now
+ * rides validated Zod tool context (`buildToolsContext`) plus one thin closure
+ * for the terminal tap (`withTerminalOutput`). The behaviours under test are
+ * unchanged, only the seam moved — and while the old `withThreadContext` import
+ * was still here the whole file failed to load, so its two `terminalBatcher`
+ * tests had not been running at all.
  */
-import { describe, it, expect } from "bun:test";
-import { withThreadContext } from "../../src/tools/index";
-import { getWorkspaceDir } from "../../src/services/tools";
-import {
+import { describe, it, expect, mock } from "bun:test";
+import type { TerminalDataPayload } from "../../src/lib/terminal-stream";
+
+/**
+ * The scheduler service is intercepted so the assertions can see the ARGS the
+ * tool resolved. What is under test is the injection in `src/tools/index.ts`,
+ * not the scheduler's own persistence.
+ */
+const schedulerCalls: Array<Record<string, unknown>> = [];
+mock.module("../../src/services/scheduler/schedulerTools", () => ({
+  runScheduler: (args: Record<string, unknown>) => {
+    schedulerCalls.push(args);
+    return { ok: true };
+  },
+}));
+
+const { nativeTools, withTerminalOutput, buildToolsContext } = await import(
+  "../../src/tools/index"
+);
+const { getWorkspaceDir } = await import("../../src/services/tools");
+const {
   createTerminalBatcher,
   TERMINAL_DATA_TYPE,
-  type TerminalDataPayload,
-} from "../../src/lib/terminal-stream";
+} = await import("../../src/lib/terminal-stream");
+
+type ExecuteWith = (
+  args: unknown,
+  opts: { context?: unknown; toolCallId?: string },
+) => Promise<unknown>;
+
+const CREATE_ARGS = {
+  action: "create",
+  name: "n",
+  scheduleType: "once",
+  execAt: 1,
+  timezone: "UTC",
+  prompt: "p",
+};
+
+/**
+ * `buildToolsContext` returns a map KEYED BY TOOL NAME. AI SDK validates each
+ * tool against its own `contextSchema` and hands `execute` only that entry as
+ * `options.context` — so a test must index the tool it is calling. Passing the
+ * whole map is a category error, and `requireWorkspace` rejects it, which is
+ * precisely how that mistake announces itself.
+ */
+function chatContext(tool: "run_command" | "scheduler") {
+  const context = buildToolsContext({
+    workspaceDir: getWorkspaceDir(),
+    threadId: "thread-1",
+    providerId: "p-chat",
+    modelId: "m-chat",
+  });
+  return context[tool];
+}
 
 describe("chat terminal wiring", () => {
-  it("withThreadContext forwards run_command output with the toolCallId", async () => {
+  it("withTerminalOutput forwards run_command output with the toolCallId", async () => {
     const events: Array<[string, unknown]> = [];
-    // Placeholder execute: withThreadContext replaces it with one that calls
-    // the real runBash and injects onOutput → onTerminalOutput(id, event).
-    const tools = withThreadContext(
-      { run_command: { execute: (() => {}) as never } },
-      undefined,
-      (id, ev) => events.push([id, ev]),
-      getWorkspaceDir(),
-    );
-    const res = await (tools.run_command.execute as (
-      args: { command: string },
-      opts: { toolCallId: string },
-    ) => Promise<{ exitCode: number }>)({ command: "Write-Output hi" }, {
-      toolCallId: "call-1",
-    });
+    const runCommand = withTerminalOutput((id, event) => events.push([id, event]));
+
+    const res = (await (runCommand.execute as unknown as ExecuteWith)(
+      { command: "Write-Output hi" },
+      { context: chatContext("run_command"), toolCallId: "call-1" },
+    )) as { exitCode: number };
+
     expect(res.exitCode).toBe(0);
+    // `some` first: `every` is vacuously true on an empty event list, which is
+    // exactly how a silently-unwired tap would slip through.
     expect(events.some(([id]) => id === "call-1")).toBe(true);
     expect(events.every(([id]) => id === "call-1")).toBe(true);
   });
 
-  it("withThreadContext leaves run_command unwired when no callback given", async () => {
-    let called = false;
-    const tools = withThreadContext(
-      {
-        run_command: {
-          execute: async () => {
-            called = true;
-            return { exitCode: 0 };
-          },
-        },
-      },
-      undefined,
-      undefined,
-      getWorkspaceDir(),
-    );
-    await tools.run_command.execute({ command: "Write-Output hi" });
-    expect(called).toBe(true);
+  it("the untapped run_command still executes (the static entry keeps working)", async () => {
+    const res = (await (nativeTools.run_command.execute as unknown as ExecuteWith)(
+      { command: "Write-Output hi" },
+      { context: chatContext("run_command") },
+    )) as { exitCode: number };
+    expect(res.exitCode).toBe(0);
   });
 
-  it("withThreadContext injects chat provider/model/workspace into scheduler creates", async () => {
-    let seen: Record<string, unknown> | null = null;
-    const tools = withThreadContext(
-      {
-        scheduler: {
-          execute: async (args: unknown) => {
-            seen = args as Record<string, unknown>;
-            return { ok: true };
-          },
-        },
-      },
-      "thread-1",
-      undefined,
-      getWorkspaceDir(),
-      { providerId: "p-chat", modelId: "m-chat" },
-    );
-    await tools.scheduler.execute({
-      action: "create",
-      name: "n",
-      scheduleType: "once",
-      execAt: 1,
-      timezone: "UTC",
-      prompt: "p",
+  it("buildToolsContext fails closed without a workspace root", () => {
+    // The guard the old withThreadContext owned: a missing root must fail
+    // during tools assembly, never fall back to the process-wide workspace.
+    expect(() => buildToolsContext({ workspaceDir: undefined })).toThrow();
+  });
+
+  it("injects the conversation's provider/model/workspace into scheduler creates", async () => {
+    schedulerCalls.length = 0;
+
+    await (nativeTools.scheduler.execute as unknown as ExecuteWith)(CREATE_ARGS, {
+      context: chatContext("scheduler"),
     });
-    expect(seen).toMatchObject({
+
+    expect(schedulerCalls).toHaveLength(1);
+    expect(schedulerCalls[0]).toMatchObject({
       action: "create",
       providerId: "p-chat",
       modelId: "m-chat",
@@ -90,71 +119,52 @@ describe("chat terminal wiring", () => {
     });
   });
 
-  it("withThreadContext leaves explicit scheduler IDs alone", async () => {
-    let seen: Record<string, unknown> | null = null;
-    const tools = withThreadContext(
+  it("leaves explicit scheduler IDs alone", async () => {
+    schedulerCalls.length = 0;
+
+    await (nativeTools.scheduler.execute as unknown as ExecuteWith)(
       {
-        scheduler: {
-          execute: async (args: unknown) => {
-            seen = args as Record<string, unknown>;
-            return { ok: true };
-          },
-        },
+        ...CREATE_ARGS,
+        providerId: "p-other",
+        modelId: "m-other",
+        workspacePath: "/elsewhere",
       },
-      "thread-1",
-      undefined,
-      getWorkspaceDir(),
-      { providerId: "p-chat", modelId: "m-chat" },
+      { context: chatContext("scheduler") },
     );
-    await tools.scheduler.execute({
-      action: "create",
-      name: "n",
-      scheduleType: "once",
-      execAt: 1,
-      timezone: "UTC",
-      prompt: "p",
-      providerId: "p-other",
-      modelId: "m-other",
-      workspacePath: "/elsewhere",
-    });
-    expect(seen).toMatchObject({
+
+    expect(schedulerCalls[0]).toMatchObject({
       providerId: "p-other",
       modelId: "m-other",
       workspacePath: "/elsewhere",
     });
   });
 
-  it("withThreadContext forwards the framework options object to the scheduler execute", async () => {
-    // Regression: aiToolkit.tools() returns the framework's
-    // (args, callOptions) wrapper, which throws
-    // "callOptions.toolCallId" when invoked without its second argument.
-    // The scheduler wrapper must forward options untouched.
-    let seenOpts: unknown = "not-called";
-    const tools = withThreadContext(
-      {
-        scheduler: {
-          execute: async (_args: unknown, callOptions?: { toolCallId: string }) => {
-            seenOpts = callOptions;
-            if (callOptions?.toolCallId === undefined) {
-              throw new TypeError(
-                "undefined is not an object (evaluating 'callOptions.toolCallId')",
-              );
-            }
-            return { ok: true };
-          },
-        },
-      },
-      "thread-1",
-      undefined,
-      getWorkspaceDir(),
-      { providerId: "p-chat", modelId: "m-chat" },
-    );
-    const res = await tools.scheduler.execute(
+  it("passes non-create actions through untouched", async () => {
+    schedulerCalls.length = 0;
+
+    // The create-only defaults must not leak onto other actions: the model
+    // cannot be allowed to "inherit" a provider for a delete.
+    await (nativeTools.scheduler.execute as unknown as ExecuteWith)(
       { action: "list" },
-      { toolCallId: "call-9" },
+      { context: chatContext("scheduler") },
     );
+
+    expect(schedulerCalls[0]).toEqual({ action: "list" });
+  });
+
+  it("carries the toolCallId through the instrumented execute options", async () => {
+    // Regression: the framework's (args, callOptions) wrapper throws
+    // "callOptions.toolCallId" when invoked without its second argument, so the
+    // funnel wrapper must forward options rather than swallow them.
+    schedulerCalls.length = 0;
+
+    const res = await (nativeTools.scheduler.execute as unknown as ExecuteWith)(
+      { action: "list" },
+      { context: chatContext("scheduler"), toolCallId: "call-9" },
+    );
+
     expect(res).toEqual({ ok: true });
-    expect(seenOpts).toMatchObject({ toolCallId: "call-9" });
+    expect(schedulerCalls[0]).toEqual({ action: "list" });
   });
 
   it("terminalBatcher emits data-tbai-terminal parts and a final done part", () => {
