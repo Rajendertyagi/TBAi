@@ -83,8 +83,11 @@ function render(
   return renderToStaticMarkup(createElement(Any, props));
 }
 
-// A real OpenCode websearch result: a JSON string of { search_id, results }.
-const REAL_RESULT = JSON.stringify({
+// A real native V2 websearch result: content carries a text part whose text is
+// a JSON string of { search_id, results }.
+const nativeContent = (text: string) => [{ type: "text", text }];
+const nativeResult = (text: string) => ({ content: nativeContent(text) });
+const REAL_RESULT_CONTENT = nativeContent(JSON.stringify({
   search_id: "search_abc",
   results: [
     {
@@ -100,13 +103,14 @@ const REAL_RESULT = JSON.stringify({
       excerpts: [],
     },
   ],
-});
+}));
+const REAL_RESULT = { content: REAL_RESULT_CONTENT };
 
 // ── T3-O24 — mapping: real JSON → { title, domain }[], url hostname, www. off
 
 describe("T3-O24 — websearch mapping", () => {
   it("projects a real payload onto { title, domain }[] with www. stripped", () => {
-    const hits = parseOpenCodeWebSearchHits(REAL_RESULT);
+    const hits = parseOpenCodeWebSearchHits(REAL_RESULT_CONTENT);
     expect(hits).toEqual([
       { title: "Example Title", domain: "example.com" },
       { title: "Docs Guide", domain: "docs.example.org" },
@@ -115,9 +119,9 @@ describe("T3-O24 — websearch mapping", () => {
 
   it("reads domain from the url hostname", () => {
     const hits = parseOpenCodeWebSearchHits(
-      JSON.stringify({
+      nativeContent(JSON.stringify({
         results: [{ url: "https://sub.domain.io/x", title: "S" }],
-      }),
+      })),
     );
     expect(hits).toEqual([{ title: "S", domain: "sub.domain.io" }]);
   });
@@ -148,7 +152,7 @@ describe("T3-O25 — websearch fallback (plain text)", () => {
   });
 
   it("a well-formed payload with zero results maps to [] (not null)", () => {
-    expect(parseOpenCodeWebSearchHits(JSON.stringify({ results: [] }))).toEqual([]);
+    expect(parseOpenCodeWebSearchHits(nativeContent(JSON.stringify({ results: [] })))).toEqual([]);
   });
 
   it("the raw text stays visible beneath the element when hits are absent", () => {
@@ -156,7 +160,7 @@ describe("T3-O25 — websearch fallback (plain text)", () => {
     fakeQuery = "q";
     const html = render(
       OpenCodeWebSearchToolUI,
-      webSearchPart({ query: "q" }, "plain prose result, no structure"),
+      webSearchPart({ query: "q" }, nativeResult("plain prose result, no structure")),
     );
     // The element renders its query + a "Read 0 sources" line; the raw text
     // is shown in the body so no real data is discarded.
@@ -168,31 +172,31 @@ describe("T3-O25 — websearch fallback (plain text)", () => {
 
 describe("T3-O26 — websearch empty/malformed edges", () => {
   it("an empty results array is [] (structured, no usable hits)", () => {
-    expect(parseOpenCodeWebSearchHits(JSON.stringify({ results: [] }))).toEqual([]);
+    expect(parseOpenCodeWebSearchHits(nativeContent(JSON.stringify({ results: [] })))).toEqual([]);
   });
 
   it("a hit missing a usable title is dropped, never given a placeholder", () => {
     const hits = parseOpenCodeWebSearchHits(
-      JSON.stringify({
+      nativeContent(JSON.stringify({
         results: [
           { url: "https://ok.example", title: "Kept" },
           { url: "https://ok.example", title: "" }, // blank title
           { url: "https://ok.example" }, // no title
         ],
-      }),
+      })),
     );
     expect(hits).toEqual([{ title: "Kept", domain: "ok.example" }]);
   });
 
   it("a hit with a bad/missing url is dropped", () => {
     const hits = parseOpenCodeWebSearchHits(
-      JSON.stringify({
+      nativeContent(JSON.stringify({
         results: [
           { url: "not a url", title: "Bad" },
           { title: "NoUrl" },
           { url: "https://good.example", title: "Good" },
         ],
-      }),
+      })),
     );
     expect(hits).toEqual([{ title: "Good", domain: "good.example" }]);
   });
@@ -201,7 +205,7 @@ describe("T3-O26 — websearch empty/malformed edges", () => {
     // The two sentinels must not collapse: `null` means "not a verified
     // payload" (fallback to raw text), `[]` means "verified, zero usable hits".
     expect(parseOpenCodeWebSearchHits("garbage")).toBeNull();
-    expect(parseOpenCodeWebSearchHits(JSON.stringify({ results: [] }))).toEqual([]);
+    expect(parseOpenCodeWebSearchHits(nativeContent(JSON.stringify({ results: [] })))).toEqual([]);
   });
 });
 
@@ -327,7 +331,7 @@ describe("T3-O30 — unrelated OpenCode renderers unchanged", () => {
   it("read still resolves to its own renderer and shows the body", () => {
     const html = render(
       OpenCodeReadToolUI,
-      completed("read", { filePath: "D:\\ws\\n.txt" }, "line1\nline2"),
+      completed("read", { filePath: "D:\\ws\\n.txt" }, { content: nativeContent("line1\nline2") }),
     );
     expect(html).toContain("line1");
     expect(html).toContain("line2");
@@ -337,13 +341,13 @@ describe("T3-O30 — unrelated OpenCode renderers unchanged", () => {
     expect(
       render(
         OpenCodeGlobToolUI,
-        completed("glob", { pattern: "**/*.ts" }, "a.ts"),
+        completed("glob", { pattern: "**/*.ts" }, { content: nativeContent("a.ts") }),
       ),
     ).toContain("glob · **/*.ts");
     expect(
       render(
         OpenCodeGrepToolUI,
-        completed("grep", { pattern: "needle", include: "*.ts" }, "x.ts:1"),
+        completed("grep", { pattern: "needle", include: "*.ts" }, { content: nativeContent("x.ts:1") }),
       ),
     ).toContain("grep · needle");
   });
@@ -352,7 +356,7 @@ describe("T3-O30 — unrelated OpenCode renderers unchanged", () => {
     expect(
       render(
         OpenCodeBashToolUI,
-        completed("bash", { command: "echo hi" }, "hi\n"),
+        completed("bash", { command: "echo hi" }, nativeContent("hi\n")),
       ),
     ).toContain("hi");
   });
@@ -364,7 +368,7 @@ describe("T3-O30 — unrelated OpenCode renderers unchanged", () => {
     expect(
       render(
         OpenCodeWriteToolUI,
-        completed("write", { filePath: "D:\\ws\\w.txt", content: "data" }, "Wrote file successfully."),
+        completed("write", { filePath: "D:\\ws\\w.txt", content: "data" }, { content: nativeContent("Wrote file successfully.") }),
       ),
     ).toContain("write · D:\\ws\\w.txt");
   });

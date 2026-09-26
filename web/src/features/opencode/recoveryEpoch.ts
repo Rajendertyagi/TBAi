@@ -3,11 +3,10 @@
  *
  * Pure decision function behind `AgentRuntime`'s recovery effect: reconnect
  * only on a recovery-epoch CHANGE while mounted (a genuine backend
- * recovery). A normal mount must never rebuild the client merely because the
- * epoch is already non-zero — the client was just created, so rebuilding it
- * would swap the frozen thread-list adapter (client identity change) while
- * the first thread switch/append is still pending, which assistant-ui turns
- * into `ThreadListAdapterChangedError`.
+ * recovery). A normal mount must never rebuild the controller merely because
+ * the epoch is already non-zero — the controller was just created, so replacing
+ * it while the first thread switch or append is pending can invalidate that
+ * operation.
  *
  * Semantics:
  * - mount with epoch 0 → no reconnect.

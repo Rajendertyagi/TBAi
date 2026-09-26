@@ -4,7 +4,7 @@ import { create } from "zustand";
 /**
  * The canonical wording for "the server no longer holds this permission".
  *
- * Exported so the OpenCode permission compatibility layer can turn a V2
+ * Exported so the OpenCode V2 permission projection can turn a
  * not-found response into the failure this module already recognises, instead
  * of inventing a second stale rule. It MUST match {@link PERMISSION_GONE_RE}.
  */
@@ -48,11 +48,10 @@ export function isPermissionGone(error: unknown): boolean {
  * "Permission request not found" — forever, because neither Approve nor Deny
  * can ever succeed against an id the server has forgotten.
  *
- * `@assistant-ui/react-opencode` is pinned at 0.2.23 and exposes no way to
- * force-resolve a permission, so the ids are tracked here and used to drive the
- * OFFICIAL exit condition instead: a tool part whose `approval.approved` is
- * defined renders no approval controls (tool-fallback.tsx), and the sibling
- * permission surface stops listing it.
+ * The generic approval surfaces use this store to drive the official exit
+ * condition: a tool part whose `approval.approved` is defined renders no
+ * approval controls (tool-fallback.tsx), and the sibling permission surface
+ * stops listing it.
  *
  * Only ever populated in Code mode — a normal-chat approval can never produce
  * the OpenCode not-found message that gates the write.

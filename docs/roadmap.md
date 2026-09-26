@@ -11,7 +11,11 @@ Kept intentionally small. Update continuously.
 - Frontend chat migrated to **@assistant-ui/react** (`Thread` / `Composer` / `Message`); removed custom chat store and custom SSE parsing.
 - Security: API keys never sent to the browser; `GET /api/providers` returns only metadata + `credentialConfigured` (no key, no ciphertext); the browser sends only `providerId`. Keys are encrypted at rest with AES-256-GCM under a local per-install DEK (`src/services/credentials.ts`), persisted in the `credential_key` table so the portable app folder is self-contained. No master password / unlock / login, no OS keychain, no `.env` required. `PUT` preserves keys on partial updates; a `Test connection` endpoint validates providers without persisting. Logs/errors are redacted.
 - Input validation with **Zod** on all API routes (`src/lib/validation.ts`).
-- Removed redundant dependencies: dropped the direct `assistant-stream` dependency and its dead custom streaming code (its protocol was incompatible with the assistant-ui transport; `toUIMessageStreamResponse()` is the equivalent). Also removed `drizzle-orm`/`drizzle-kit` (unused). `assistant-stream` now exists only as a transitive dependency of `@assistant-ui/ai-sdk` (used for `toToolsJSONSchema`).
+- Removed redundant custom streaming code while retaining the official
+  `assistant-stream/resumable` utility for resumable byte storage. The direct
+  dependency is pinned to `0.3.43` in both manifests, matching assistant-ui.
+  `toUIMessageStream()` remains the chat protocol; `assistant-stream` is not a
+  second chat runtime. Also removed `drizzle-orm`/`drizzle-kit` (unused).
 - Documentation set created under `docs/` and `/AGENTS.md`.
 - **End-to-end chat path confirmed working (2026-09-08):** typecheck + build pass; a real AI request streams through the vite proxy (5173) → backend (3000) → Google Gemini → assistant-ui renders it. Error handling (400 on invalid body; graceful streamed `error` event on a bad provider) and provider switching (routed to a second OpenAI provider via `providerId`) are both verified.
 - **Navigation is now configuration-driven:** labels, icons, badges, target views, children, ordering, and visibility live in `web/src/config/navigation.ts` as the single source of truth. `Sidebar`/`App` consume it; the Search item is gated by a `features.search` flag. Adding/removing/reordering/hiding/renaming a nav item requires no component change.
@@ -56,6 +60,16 @@ Kept intentionally small. Update continuously.
 
 ## Current
 
+- **Direct AI SDK v7 boundary hardening (2026-09-25):** explicit transport
+  validation, `safeValidateUIMessages`, persisted system instructions, signed
+  tool approvals, producer-side UI-stream outcome settlement, no replay after
+  output starts, sanitized Direct logs, and assistant-stream dependency alignment.
+  Durable SQLite resumable chunks **shipped (2026-09-26)**: `chat_streams` /
+  `chat_stream_chunks` behind the official `ResumableStreamStore` interface, boot
+  recovery, TTL cleanup, detached-run history finalization, and a Composer recovery
+  notice with a guarded Retry. Live-verified against `agnes-2.5-flash` with a
+  mid-stream `SIGKILL`. See `docs/2026-09-25-phase2-durability-design.md` and the
+  Direct Chat durability rows in `docs/phases.md`.
 - The smallest end-to-end chat path is **confirmed working**. Provider-agnostic chat via assistant-ui + AI SDK v7 is operational.
 - Conversation message history is **persisted** via assistant-ui's thread architecture (RemoteThreadListRuntime + ThreadHistoryAdapter) and survives reloads. The history sidebar supports new/open/switch/auto-persist/reload-restore/rename/archive/delete/search.
 - **Native toolkit architecture (2026-09-10):** 11 native tools are one `defineToolkit` registration (render-only backend entries); server executes in `streamText` with `toolApproval` gates for write/edit/delete/run/kill; continuation via official `sendAutomaticallyWhen` helpers. Zero human tools; `/api/tools/*` kept as manual/test surface. See decisions.md ADR.
@@ -66,7 +80,7 @@ Kept intentionally small. Update continuously.
 
 ## Feature options (logged from docs audit — unprompted, unbuilt)
 
-Message action bars + branch picker · suggestions grid · scroll-to-bottom · message editing · slash/mentions/input history · attachments · quote-selection · voice/dictation · LaTeX · MCP App widgets · generative UI · stored-`systemPrompt` wiring (stored but never sent — latent gap) · Streamdown partial modernization (does not replace DiffViewer).
+Message action bars + branch picker · suggestions grid · scroll-to-bottom · message editing · slash/mentions/input history · attachments · quote-selection · voice/dictation · LaTeX · MCP App widgets · generative UI · Streamdown partial modernization (does not replace DiffViewer).
 - **Reconciliation implemented (2026-09-10, NOT yet test-verified — another agent runs tests):**
   abort propagation (route→streamText→MCP tools), ErrorPrimitive + sanitized copy,
   resumable streaming + resume route + per-thread keys, usage/model/finish metadata +

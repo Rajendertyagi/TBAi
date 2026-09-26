@@ -17,11 +17,10 @@ import { AppShell } from "./AppShell";
  * runtime (message/streaming/tool state lives there — never duplicated, never
  * in Zustand) and provides it to the chat chrome (sidebar, tabs, views).
  *
- * This shell must never enclose the Code route: a `useRemoteThreadListRuntime`
- * created under another RemoteThreadListRuntime degrades to a no-op that
- * reads the PARENT thread identity, so the OpenCode adapter lives in its own
- * top-level `CodeShell` instead. Moved verbatim from the former App root —
- * behavior and wiring are unchanged, only the placement is branch-scoped.
+ * This shell must never enclose the Code route: the Direct and native OpenCode
+ * V2 runtimes own independent thread-list and session lifecycles, so Code lives
+ * in its own top-level `CodeShell` instead. Moved verbatim from the former App
+ * root — behavior and wiring are unchanged, only the placement is branch-scoped.
  *
  * Ownership: router → page; chat-tab store → open/active tabs;
  * runtime → threads/messages; SQLite → persistence.

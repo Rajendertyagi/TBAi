@@ -86,7 +86,7 @@ export function useOpenCodeCapabilities(enabled = true) {
       .then((data: OpenCodeCapabilities) => {
         if (cancelled) return;
         setAgents(data.agents ?? []);
-        // Normalize: older server responses may omit `variants` on model rows.
+        // Keep the optional variants field total for the picker contract.
         setModels(
           (data.models ?? []).map((m) => ({
             ...m,

@@ -7,8 +7,8 @@ begun. It exists so the work can be executed phase by phase against a written
 contract, per the maintainer's standing rule (plan on disk first, then implement
 one phase at a time and report back).
 
-Companion docs: `architecture.md`, `security.md`, `decisions.md` (ADR-021 to be
-written when Phase W1 lands), `dual-chat-opencode-plan.md` (engine model).
+Companion docs: `architecture.md`, `security.md`, and `decisions.md` (ADR-021
+will be written when Phase W1 lands).
 
 Revision history:
 - v1 (2026-09-16) — initial plan; goal choice left open.
@@ -362,12 +362,9 @@ side, without touching OpenCode.
 2. **Global placement actually loads.** Confirm `~/.config/opencode/tools/` and
    `~/.config/opencode/plugins/` are read for sessions whose directory is a
    disposable workspace, given the server's `cwd` is `serverHomeDir`.
-3. **`@opencode-ai/plugin` resolves from a global file.** Docs say a
-   `package.json` in the config directory plus startup `bun install` handles it,
-   and the plain-object + direct `zod` import is a fallback — confirm empirically,
-   since a global file sits outside any `node_modules`.
-4. **Which OpenCode build is installed** — config shape differs between versions
-   (`mcp.servers` in V2 vs server names directly under `mcp` in older builds).
+3. **The current V2 plugin contract is explicit.** Confirm the package and hook
+   surface against the installed OpenCode 2.0.x server before authoring a global
+   plugin; do not infer it from an older package namespace.
 5. **BotFather forum topic mode** is required for `sendMessageDraft`; confirm it
    is enabled before W5 uses drafts.
 
@@ -383,13 +380,13 @@ and runs no suites.
 Global checks before any commit:
 - No token in any response body, log line, or frontend bundle (grep the **built**
   output, not just the source).
-- Boundary greps: no `@opencode-ai/*` import outside the global plugin/tool file;
-  no Telegram logic in `src/routes/index.ts` (it composes, it does not implement).
+- Boundary greps: Telegram and OpenCode plugin code stays outside TBAi source;
+  no Telegram logic enters `src/routes/index.ts` (it composes, it does not implement).
 - Direct-chat behavior unchanged when Telegram is disabled.
 - OpenCode sessions and TBAi rows untouched by Telegram config changes.
 - Unknown Telegram sender cannot reach a model call.
 
-## 13. Definition of DONE (mirrors `dual-chat-opencode-plan.md`)
+## 13. Definition of done
 
 1. Planner disk-review ACCEPTED (paths, boundaries, no stale references).
 2. `bun run typecheck` (backend + web) exit 0 AND `bun run build` exit 0,

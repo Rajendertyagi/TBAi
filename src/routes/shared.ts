@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { ZodError } from "zod";
+import { sanitizeStreamError } from "../lib/redact";
 
 /**
  * Disable Bun's idle timeout for the current streaming response.
@@ -45,7 +46,7 @@ export function storageError(c: Context, e: unknown, status = 500) {
     return c.json({ error: "Invalid request", issues: e.issues, requestId }, 400);
   }
   return c.json(
-    { error: e instanceof Error ? e.message : "Unknown error", requestId },
+    { error: sanitizeStreamError(e), requestId },
     status as 500,
   );
 }

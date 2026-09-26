@@ -2,9 +2,9 @@
  * Per-session Auto Approval policy — a synchronous runtime projection.
  *
  * **KEYED BY THE OPENCODE SESSION ID, NOT THE CONVERSATION ID.** The live
- * permission event boundary (`normalizeFrames` in `permissionPayloadCompat.ts`)
- * has no conversation id in scope. What it does have — because the runtime
- * client is built from it — is the OpenCode `sessionId`. Keying by anything the
+ * native permission event boundary has no conversation id in scope. What it
+ * does have — because the runtime client is built from it — is the OpenCode
+ * `sessionId`. Keying by anything the
  * event path cannot read would mean inventing a lookup, so the cache is keyed by
  * the identity the runtime genuinely owns.
  *
@@ -25,8 +25,7 @@
  *
  * FAIL CLOSED. An unknown or absent session reads `false` (manual). A missing
  * entry must never auto-approve anything, so the failure mode is always "ask the
- * user" — and a runtime with no session id can never be armed, which matters
- * because `applyPermissionCompat` does not patch `permission.reply` in that case.
+ * user". A runtime without a session id can never be armed.
  */
 
 /** OpenCode sessionId → shield enabled. Module-level: readable outside React. */

@@ -1,6 +1,8 @@
 import { spawn, type Subprocess } from "bun";
 import fs from "fs";
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../config/opencode";
+import { getOpenCodeAuthHeaders, getOpenCodeAuthMetadata, getOpenCodeAuthPassword, isSupportedOpenCodeVersion, resolveAndValidateManagedBinary } from "./runtime";
+export { OpenCodeBinaryMissingError } from "./runtime";
 import { logger } from "../../lib/logger";
 
 /** Appends a chunk to a bounded tail buffer, keeping only the last `maxBytes`. Pure. */
@@ -10,8 +12,8 @@ export function appendTail(tail: string, chunk: string, maxBytes: number): strin
 }
 
 /** Builds the argv for `opencode serve` on the given port. Pure. */
-export function buildOpenCodeServeArgs(port: number): string[] {
-  return [OPENCODE_CONFIG.binaryName, "serve", "--port", String(port)];
+export function buildOpenCodeServeArgs(port: number, binary: string = OPENCODE_CONFIG.binaryName): string[] {
+  return [binary, "serve", "--port", String(port)];
 }
 
 /** Allocates a free loopback port by binding :0 and releasing it. */
@@ -33,14 +35,6 @@ export function stripOpenCodeProxyPrefix(pathname: string): string {
   if (!pathname.startsWith(prefix)) return pathname;
   const rest = pathname.slice(prefix.length);
   return rest === "" ? "/" : rest;
-}
-
-/** Thrown when the `opencode` binary cannot be resolved before spawning. */
-export class OpenCodeBinaryMissingError extends Error {
-  constructor() {
-    super(OPENCODE_CONFIG.binaryMissingError);
-    this.name = "OpenCodeBinaryMissingError";
-  }
 }
 
 /** Thrown when the managed process exits before the server becomes ready. */
@@ -80,28 +74,30 @@ export function findOpenCodeBinary(
   return which(OPENCODE_CONFIG.binaryName);
 }
 
-/**
- * One HTTP readiness probe. Returns "listening" for ANY HTTP response
- * (including 4xx/5xx) — reaching the server at all proves the listener is
- * bound. Only network-level failures (connection refused, DNS, abort) count
- * as "not_listening". Never streams, never mutates, needs no credentials.
- */
-export async function probeOnce(
+/** One authenticated OpenCode V2 readiness probe. */
+export async function probeOpenCodeInfo(
   baseUrl: string,
   path: string,
   timeoutMs: number,
-): Promise<"listening" | "not_listening"> {
+  authHeaders: Record<string, string>,
+  isSupportedVersion: (version: string) => boolean,
+): Promise<"ready" | "not_ready"> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    await fetch(`${baseUrl}${path}`, {
+    const response = await fetch(`${baseUrl}${path}`, {
       method: "GET",
+      headers: { Accept: "application/json", ...authHeaders },
       signal: controller.signal,
       redirect: "manual",
     });
-    return "listening";
+    if (response.status !== 200) return "not_ready";
+    const payload: unknown = await response.json();
+    if (payload === null || typeof payload !== "object") return "not_ready";
+    const version = Reflect.get(payload, "version");
+    return typeof version === "string" && isSupportedVersion(version) ? "ready" : "not_ready";
   } catch {
-    return "not_listening";
+    return "not_ready";
   } finally {
     clearTimeout(timer);
   }
@@ -111,6 +107,8 @@ export interface ReadinessDeps {
   baseUrl: string;
   port: number | null;
   probePath: string;
+  authHeaders: Record<string, string>;
+  isSupportedVersion: (version: string) => boolean;
   timeoutMs: number;
   pollMs: number;
   getStopping: () => boolean;
@@ -126,7 +124,7 @@ export interface ReadinessDeps {
  * `timeoutMs` with short `pollMs` intervals.
  */
 export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
-  const { baseUrl, port, probePath, timeoutMs, pollMs, getStopping, exited } = deps;
+  const { baseUrl, port, probePath, authHeaders, isSupportedVersion, timeoutMs, pollMs, getStopping, exited } = deps;
   const startMs = Date.now();
   const probeTimeout = Math.min(pollMs * 4, timeoutMs);
   let attempt = 0;
@@ -161,9 +159,13 @@ export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
     });
 
     const outcome = await Promise.race([
-      probeOnce(baseUrl, probePath, probeTimeout).then(
-        (r) => ({ kind: "probe" as const, r }),
-      ),
+      probeOpenCodeInfo(
+        baseUrl,
+        probePath,
+        probeTimeout,
+        authHeaders,
+        isSupportedVersion,
+      ).then((r) => ({ kind: "probe" as const, r })),
       exitRejection,
     ]).catch((err: unknown) => {
       // A process exit must fail readiness immediately — never wait out the
@@ -172,7 +174,7 @@ export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
       throw err;
     });
 
-    if (outcome.r === "listening") {
+    if (outcome.r === "ready") {
       clearTimeout(timer);
       logger.info("opencode", "readiness.ready", {
         elapsedMs: elapsed,
@@ -236,30 +238,33 @@ export class OpenCodeServerManager {
     return `http://127.0.0.1:${port}`;
   }
 
-  /** Resolves the opencode binary path; overridable in tests. */
-  protected resolveBinary(): string | null {
-    return findOpenCodeBinary();
+  /** Resolves and validates the managed V2 binary; overridable in tests. */
+  protected resolveBinary(): string {
+    return resolveAndValidateManagedBinary(this.config).path;
   }
 
   /** Spawns the child process for the given port. Extracted for test seams. */
-  protected createChild(port: number): Subprocess {
-    return spawn(buildOpenCodeServeArgs(port), {
+  protected createChild(port: number, binaryPath: string = OPENCODE_CONFIG.binaryName): Subprocess {
+    return spawn(buildOpenCodeServeArgs(port, binaryPath), {
       cwd: this.config.serverHomeDir,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        OPENCODE_SERVER_PASSWORD: getOpenCodeAuthPassword(this.config),
+      },
       detached: process.platform !== "win32",
     });
   }
 
   private async start(): Promise<string> {
     if (this.stopping) throw new Error("OpenCode server is shutting down");
-    // Preflight before spawning: a missing binary must surface as an
-    // actionable error, never as a spawn failure deep in startup.
-    if (!this.resolveBinary()) throw new OpenCodeBinaryMissingError();
+    // Preflight before spawning: a missing or unsupported binary must surface
+    // as an actionable error, never as a spawn failure deep in startup.
+    const binary = this.resolveBinary();
     fs.mkdirSync(this.config.serverHomeDir, { recursive: true });
     const port = allocateLoopbackPort();
-    const child = this.createChild(port);
+    const child = this.createChild(port, binary);
     this.child = child;
     this.port = port;
     // Drain the child's pipes so a verbose server can never block on a full
@@ -275,6 +280,7 @@ export class OpenCodeServerManager {
       pid: child.pid,
       reused: false,
       baseUrl,
+      managedMode: getOpenCodeAuthMetadata(this.config).source,
     });
 
     try {
@@ -282,6 +288,8 @@ export class OpenCodeServerManager {
         baseUrl,
         port,
         probePath: this.config.readinessProbePath,
+        authHeaders: getOpenCodeAuthHeaders(this.config),
+        isSupportedVersion: (version) => isSupportedOpenCodeVersion(version, this.config),
         timeoutMs: this.config.startupTimeoutMs,
         pollMs: this.config.readyPollMs,
         getStopping: () => this.stopping,

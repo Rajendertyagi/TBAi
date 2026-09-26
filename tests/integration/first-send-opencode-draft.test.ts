@@ -97,7 +97,7 @@ function chatBody(id: string, text: string) {
   return JSON.stringify({
     providerId: PROVIDER_ID,
     id,
-    messages: [{ role: "user", parts: [{ type: "text", text }] }],
+    messages: [{ id: "msg-first-send", role: "user", parts: [{ type: "text", text }] }],
   });
 }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import {
+  InvalidToolApprovalSignatureError,
   streamText,
   stepCountIs,
   tool,
@@ -28,6 +29,7 @@ import { prepareModelMessages } from "../../src/lib/model-messages";
  * through the same prepareModelMessages the chat route uses.)
  */
 
+const APPROVAL_SECRET = "direct-approval-lifecycle-test-secret";
 const usage = {
   inputTokens: { total: 1, noCache: 1 },
   outputTokens: { total: 1, text: 1 },
@@ -78,16 +80,25 @@ async function runChat(model: any, uiMessages: UIMessage[], toolDef: any) {
     // Production history path (prune + convert) — identical to the chat route.
     messages: await prepareModelMessages(uiMessages, tools),
     tools,
+    experimental_toolApprovalSecret: APPROVAL_SECRET,
     toolApproval: { delete_file: "user-approval" },
     stopWhen: stepCountIs(3),
   });
 }
 
-async function collect(result: { toUIMessageStream: () => ReadableStream }) {
+async function collect(result: Awaited<ReturnType<typeof runChat>>) {
   const approvals: any[] = [];
   const outputs: any[] = [];
   const texts: string[] = [];
-  const reader = result.toUIMessageStream().getReader();
+  const errors: unknown[] = [];
+  const reader = result
+    .toUIMessageStream({
+      onError(error) {
+        errors.push(error);
+        return "An error occurred.";
+      },
+    })
+    .getReader();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -97,7 +108,7 @@ async function collect(result: { toUIMessageStream: () => ReadableStream }) {
     if (c.type === "tool-output-denied") outputs.push({ ...c, denied: true });
     if (c.type === "text-delta") texts.push(c.delta ?? "");
   }
-  return { approvals, outputs, texts };
+  return { approvals, outputs, texts, errors };
 }
 
 const userMsg = (text: string): UIMessage => ({
@@ -106,7 +117,15 @@ const userMsg = (text: string): UIMessage => ({
   parts: [{ type: "text", text }],
 });
 
-function decidedFollowUp(approvalId: string, approved: boolean): UIMessage[] {
+type ApprovalRequest = {
+  approvalId: string;
+  signature?: string;
+};
+
+function decidedFollowUp(
+  approvalRequest: ApprovalRequest,
+  approved: boolean,
+): UIMessage[] {
   // Static tool UI parts carry the tool name in `type` (tool-<name>); the
   // runtime emits them this way and convertToModelMessages reads them back.
   return [
@@ -121,8 +140,17 @@ function decidedFollowUp(approvalId: string, approved: boolean): UIMessage[] {
           input: { path: "victim.txt" },
           state: "approval-responded",
           approval: approved
-            ? { id: approvalId, approved: true }
-            : { id: approvalId, approved: false, reason: "Denied by user" },
+            ? {
+                id: approvalRequest.approvalId,
+                approved: true,
+                signature: approvalRequest.signature,
+              }
+            : {
+                id: approvalRequest.approvalId,
+                approved: false,
+                reason: "Denied by user",
+                signature: approvalRequest.signature,
+              },
         } as any,
       ],
     },
@@ -146,13 +174,14 @@ describe("server approval gate lifecycle", () => {
     const firstModel = new MockLanguageModelV4({ doStream: { stream: toolCallStream() } as any });
     const first = await runChat(firstModel, [userMsg("delete victim.txt")], deleteTool(executions));
     const { approvals } = await collect(first);
-    const approvalId = approvals[0].approvalId;
-    expect(approvalId).toBeTruthy();
+    const approvalRequest = approvals[0] as ApprovalRequest;
+    expect(approvalRequest.approvalId).toBeTruthy();
+    expect(approvalRequest.signature).toBeTruthy();
 
     const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("deleted") } as any });
     const second = await runChat(
       secondModel,
-      decidedFollowUp(approvalId, true),
+      decidedFollowUp(approvalRequest, true),
       deleteTool(executions),
     );
     const { outputs, texts } = await collect(second);
@@ -161,17 +190,67 @@ describe("server approval gate lifecycle", () => {
     expect(texts.join("")).toContain("deleted");
   });
 
-  it("deny → never executes → denial reaches the model", async () => {
+  it("unsigned approval response fails closed before tool execution", async () => {
     const executions = { count: 0 };
     const firstModel = new MockLanguageModelV4({ doStream: { stream: toolCallStream() } as any });
     const first = await runChat(firstModel, [userMsg("delete victim.txt")], deleteTool(executions));
     const { approvals } = await collect(first);
-    const approvalId = approvals[0].approvalId;
+    const approvalRequest = approvals[0] as ApprovalRequest;
+
+    const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("unsafe") } as any });
+    const second = await runChat(
+      secondModel,
+      decidedFollowUp({ approvalId: approvalRequest.approvalId }, true),
+      deleteTool(executions),
+    );
+
+    const { errors } = await collect(second);
+    expect(
+      errors.some((error) => error instanceof InvalidToolApprovalSignatureError),
+    ).toBe(true);
+    expect(executions.count).toBe(0);
+  });
+
+  it("invalid approval signature fails closed before tool execution", async () => {
+    const executions = { count: 0 };
+    const firstModel = new MockLanguageModelV4({ doStream: { stream: toolCallStream() } as any });
+    const first = await runChat(firstModel, [userMsg("delete victim.txt")], deleteTool(executions));
+    const { approvals } = await collect(first);
+    const approvalRequest = approvals[0] as ApprovalRequest;
+    expect(approvalRequest.signature).toBeTruthy();
+
+    const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("unsafe") } as any });
+    const second = await runChat(
+      secondModel,
+      decidedFollowUp(
+        {
+          approvalId: approvalRequest.approvalId,
+          signature: `${approvalRequest.signature}x`,
+        },
+        true,
+      ),
+      deleteTool(executions),
+    );
+
+    const { errors } = await collect(second);
+    expect(
+      errors.some((error) => error instanceof InvalidToolApprovalSignatureError),
+    ).toBe(true);
+    expect(executions.count).toBe(0);
+  });
+
+  it("signed deny → never executes → denial reaches the model", async () => {
+    const executions = { count: 0 };
+    const firstModel = new MockLanguageModelV4({ doStream: { stream: toolCallStream() } as any });
+    const first = await runChat(firstModel, [userMsg("delete victim.txt")], deleteTool(executions));
+    const { approvals } = await collect(first);
+    const approvalRequest = approvals[0] as ApprovalRequest;
+    expect(approvalRequest.signature).toBeTruthy();
 
     const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("ok, skipped") } as any });
     const second = await runChat(
       secondModel,
-      decidedFollowUp(approvalId, false),
+      decidedFollowUp(approvalRequest, false),
       deleteTool(executions),
     );
     const { outputs, texts } = await collect(second);

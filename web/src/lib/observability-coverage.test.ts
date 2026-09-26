@@ -59,6 +59,15 @@ const LIFECYCLE_EVENTS: Array<[file: string, events: string[]]> = [
   ]],
   ["../app/layout/ChatShell.tsx", ["runtime.mount", "runtime.unmount"]],
   ["../features/opencode/CodeShell.tsx", ["runtime.mount", "runtime.unmount"]],
+  ["../features/opencode/commandsStore.ts", [
+    "command.feed_loaded",   // the OpenCode command feed arrived
+    "command.feed_failed",   // …or did not (the previous list is retained)
+  ]],
+  ["../features/opencode/compactSession.ts", [
+    "command.compact_started",   // built-in /compact summarize began
+    "command.compact_completed", // the server confirmed compaction
+    "command.compact_failed",    // …or did not (truthful error, nothing sent)
+  ]],
   // ---- Recovery / availability ----
   ["../features/availability/availabilityStore.ts", ["state.change", "recovery"]],
   // ---- Permissions / questions ----

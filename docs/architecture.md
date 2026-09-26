@@ -24,7 +24,7 @@ Backend (Hono + Bun)
   ├─ src/services/credentials.ts → CredentialStore (AES-256-GCM, local DEK; the only place key material lives)
   ├─ src/services/ai.ts        → getModel(config) → provider-specific LanguageModel
    ├─ AI SDK v7 streamText()    → convertToModelMessages() + toUIMessageStreamResponse()
-   ├─ createUIMessageStream()   → wires onToolExecutionStart/End + onFinish into data-tbai-progress parts
+   ├─ createUIMessageStream()   → wires tool progress + AI SDK v7 UI-stream outcome settlement
    ├─ src/lib/progress-tracker.ts → per-request state machine (stage classification + lifecycle)
    ├─ src/lib/progress-stages.ts  → ProgressStage/ProgressData types + TOOL_STAGE_MAP
    ├─ McpManager (src/services/mcp/manager.ts) → generic MCP client (STDIO/HTTP/SSE),
@@ -75,13 +75,13 @@ ai-chat-app/
 │  └─ types/index.ts
 ├─ web/                      # frontend (React + Vite)
 │  ├─ src/
-│  │  ├─ main.tsx, App.tsx   # shell: ThemeProvider → App (runtime) → RouterProvider
+│  │  ├─ main.tsx, App.tsx   # shell: ThemeProvider → App (router) → RouterProvider
 │  │  ├─ app/
 │  │  │  ├─ router.tsx       # createHashRouter: index→chat, /chat/:threadId?,
 │  │  │  │                   #   settings pages under SettingsLayout, * → /
 │  │  │  ├─ adapter.ts       # thread-list adapter singleton
 │  │  │  ├─ TabUrlSync.tsx   # tab-store → URL sync (URL → store lives in views)
-│  │  │  └─ layout/AppShell.tsx # sidebar + tab strip + <Outlet/> (inside the runtime)
+│  │  │  └─ layout/AppShell.tsx # shared chrome; runtime-independent
 │  │  ├─ features/
 │  │  │  ├─ chat/            # ChatView + TabStrip (chats + pages) + chatTabs store
 │  │  │  ├─ providers/       # ProvidersPage (moved from SettingsPanel)
@@ -114,17 +114,20 @@ ai-chat-app/
 2. `AssistantChatTransport` POSTs to `/api/chat` with the `UIMessage[]`, the
    conversation's persisted default (`threadListItem.custom`), and any one-shot
    picker override (the API key is **never** sent to the browser).
-3. The Hono route validates the body with Zod and resolves the effective
-   model + reasoning level via `src/routes/chat-model.ts`
-   (one-shot → conversation default → active provider), then resolves the
-   provider metadata from the registry, and (for keyed providers) fetches the
-   encrypted credential from `CredentialStore`, decrypts it **in memory only**,
-   and builds the model via `getModel(config)`.
-4. `streamText({ messages: convertToModelMessages(uiMessages), providerOptions })`
-   runs on the backend; the key is decrypted server-side and is never placed in a
-   response body.
-5. `result.toUIMessageStreamResponse()` streams the AI SDK UI-message protocol,
-   which `@assistant-ui/react` renders live.
+3. The Hono route validates the transport envelope with Zod, validates message
+   internals with AI SDK v7 `safeValidateUIMessages`, preserves the existing
+   approval-aware pruning/conversion path, and resolves the effective model +
+   reasoning level via `src/routes/chat-model.ts` (one-shot → conversation default
+   → active provider). It rejects client system/tool directives and applies the
+   persisted conversation `systemPrompt` as server-owned `instructions`.
+4. The route resolves the provider metadata from the registry, obtains the
+   encrypted credential from `CredentialStore` **in memory only**, loads the
+   backend-only tool-approval secret, and builds the model via `getModel(config)`.
+5. `streamText({ messages, instructions, tools, providerOptions,
+   experimental_toolApprovalSecret })` runs on the backend. The AI SDK v7
+   UI-message stream carries live data to `@assistant-ui/react`; its producer
+   outcome—not a response drain—settles the server-owned run. The key and
+   approval secret are never placed in a response body or log.
 
 ## Application foundation (routing / tabs / ownership)
 
@@ -136,7 +139,7 @@ Tauri desktop shell). The router owns **pages only**:
 |---|---|---|
 | Router | application surface (`/`, `/chat/:threadId`, settings pages) | `web/src/app/router.tsx` |
 | Chat-tab store | open tabs, active tab, order, `groupId` (split-screen later) | `features/chat/state/chatTabs.ts` (Zustand, UI only) |
-| assistant-ui runtime | threads, messages, streams, tool state (one shared thread-list runtime; background thread runtimes stay cached, so tab switches never abort generation) | `web/src/runtime.ts` + `App.tsx` |
+| Branch runtimes | Direct threads/messages/streams in `ChatShell`; native OpenCode V2 session/events in `CodeShell` | `web/src/runtime.ts` + `web/src/features/opencode/OpenCodeView.tsx` |
 | SQLite | persistence (threads/messages via ThreadHistoryAdapter) | `src/services/storage/` |
 | Navigation config | labels, icons, routes, descriptions, order, visibility | `web/src/config/navigation.ts` |
 
@@ -162,15 +165,15 @@ Search item). `Sidebar` and the `App` shell only *consume* this config — they 
 no hardcoded navigation definitions. To add, remove, reorder, hide, rename, or flag a
 navigation item, edit that config file only; no component change is required.
 
-## Conversation persistence (assistant-ui thread history)
+## Direct conversation persistence (assistant-ui thread history)
 
-Conversation and message history is persisted with assistant-ui's **native thread
-architecture**, not a custom state layer:
+Direct conversation and message history is persisted with assistant-ui's **native
+thread architecture**, not a custom state layer:
 
-- **`RemoteThreadListRuntime`** (`web/src/runtime.ts`) is the top-level runtime. Its
+- **`RemoteThreadListRuntime`** (`web/src/runtime.ts`) is owned by `ChatShell`. Its
   `runtimeHook` builds the per-thread chat runtime (`useChatRuntime` + `AssistantChatTransport`);
-  its `adapter` is the `RemoteThreadListAdapter`; `threadId`/`onThreadIdChange` are held
-  in `App` state so a selected thread survives reload.
+  its `adapter` is the `RemoteThreadListAdapter`; `threadId`/`onThreadIdChange`
+  follow the Direct tab state so a selected thread survives reload.
 - **`RemoteThreadListAdapter`** (`web/src/adapters/remoteThreadListAdapter.tsx`) implements
   `list / initialize / rename / archive / unarchive / delete / fetch` by calling the
   backend `GET|POST /api/conversations` and `PATCH /api/conversations/:id`. `list()`
@@ -191,9 +194,10 @@ architecture**, not a custom state layer:
   the thread list; `GET|POST /api/conversations/:id/messages` load/append messages;
   `PATCH` renames/archives; `DELETE` removes.
 
-The result: a new thread is created on first send, messages stream and persist automatically,
+The Direct result: a new thread is created on first send, messages stream and persist automatically,
 reloading the page restores the thread list, and opening a thread restores its messages —
-all without any application-owned message state.
+all without any application-owned message state. Code conversations follow the native OpenCode V2
+session/history lifecycle instead.
 
 ## Conversation AI config (per-conversation model persistence)
 
@@ -332,8 +336,10 @@ MessagePrimitive.GroupedParts (official groupPartByType)
 - Native tools (11) follow the assistant-ui Toolkit architecture
   (`web/src/tools/toolkit.ts`, one `defineToolkit` registration via
   `AssistantRuntimeProvider config`). All entries are render-only
-  `type: "backend"`: execution lives server-side (`nativeTools` in
-  `src/routes/index.ts`, sandboxed `services/tools.ts`). Privileged tools
+  `type: "backend"`: execution lives server-side (native AI SDK `tool()`
+  defs in `src/tools/index.ts`, sandboxed `services/tools.ts`, request
+  context via per-tool `contextSchema` + the chat route's `toolsContext`).
+  Privileged tools
   pause at a server `toolApproval` gate answered with `respondToApproval()`.
   Tool groups auto-open while running. No human tools, no `useAssistantToolUI`.
   `/api/tools/*` endpoints remain as a manual/test surface only.
@@ -429,7 +435,7 @@ order-preserving visibility into what the agent is doing.
 - **Streaming** (`src/routes/index.ts`): the chat route uses
   `createUIMessageStream` with the tracker's callbacks. Each transition
   emits a transient `data-tbai-progress` part; the final snapshot on
-  `onFinish` is non-transient and persists in message history. On abort,
+  `onEnd` is non-transient and persists in message history. On abort,
   active stages are marked `failed`.
 - **Rendering** (`web/src/components/assistant-ui/elements/todo-list.tsx`):
   registered globally in `App.tsx` via `makeAssistantDataUI` under the
@@ -444,8 +450,7 @@ order-preserving visibility into what the agent is doing.
 TBAi has **one unified frontend presentation layer** over **two independent
 runtimes**. The principle is *unify presentation, isolate execution*: the UI is
 shared where the presentation contract is genuinely engine-neutral; execution
-stays with the runtime that owns it. The detailed audit and evidence live in
-`docs/unified-frontend-plan.md`; this section records the durable boundary.
+stays with the runtime that owns it. This section records the durable boundary.
 
 ```
                     Shared Presentation
@@ -457,7 +462,7 @@ stays with the runtime that owns it. The detailed audit and evidence live in
       AI SDK / providers           OpenCode session
                                      │
                          tools / permissions /
-                         questions / terminal /
+                         forms / terminal /
                          diff / Shield
 ```
 
@@ -474,16 +479,16 @@ The following are intentionally shared across both engines:
 ### Separate runtimes
 
 Direct and OpenCode execution remain independent. Direct runs on the AI SDK /
-provider runtime; OpenCode runs on the OpenCode session/runtime with its own
-tools, permissions, questions, terminal, diffs, Shield, and session behavior.
+provider runtime; OpenCode runs on the native V2 client/controller with its own
+tools, permissions, forms, terminal, diffs, Shield, and session behavior.
 The UI must **not** force these different runtime contracts into one universal
 runtime abstraction.
 
 ### Engine-specific capabilities
 
 OpenCode-only features remain OpenCode-only. The Shield, OpenCode permissions,
-OpenCode Questions, and OpenCode terminal/diff/tool-specific UI must **not**
-leak into Direct Chat. Direct-specific behavior stays isolated as well.
+OpenCode forms, and OpenCode terminal/diff/tool-specific UI must **not** leak
+into Direct Chat. Direct-specific behavior stays isolated as well.
 
 ### Shell boundary
 
@@ -492,11 +497,10 @@ leak into Direct Chat. Direct-specific behavior stays isolated as well.
 /code  → CodeShell
 ```
 
-The shell separation is **intentional**, not accidental duplication: the two
-runtimes have different lifecycle/context requirements (the OpenCode adapter's
-`useRemoteThreadListRuntime` degrades to a no-op when nested under another
-`RemoteThreadListRuntime`, so the shells must never nest). Both shells may use
-the shared `ChatWindow`/presentation layer.
+The shell separation is **intentional**, not accidental duplication: the native
+OpenCode controller owns an independent session/thread-list lifecycle and must
+not be nested beneath the Direct chat runtime. Both shells may use the shared
+`ChatWindow` presentation layer.
 
 ### ChatWindow
 
@@ -563,10 +567,10 @@ orchestration and policy layer around mature runtimes:
 TBAi
   +-- application state/policy -> TBAi SQLite
   +-- Direct runtime ----------> AI SDK
-  +-- Code runtime ------------> OpenCode adapter
+  +-- Code runtime ------------> OpenCode V2 client/controller
   +-- external services -------> official MCP
   +-- durable memory ----------> MemoryService -> ICM
-  +-- chat/tool UI ------------> assistant-ui + small adapters
+  +-- chat/tool UI ------------> assistant-ui + OpenCode feature projections
 ```
 
 This is the target architecture, not a requirement to preserve today's custom
@@ -580,5 +584,5 @@ share the ICM corpus without merging the two databases.
 
 UI/tool rendering is library-first. External tool data is normalized at an adapter boundary
 and then rendered by an official assistant-ui element when possible. TBAi-specific renderers
-exist only for demonstrated capability gaps. Questions are a separate form interaction from
+exist only for demonstrated capability gaps. Forms are a separate interaction from
 permissions/approvals.

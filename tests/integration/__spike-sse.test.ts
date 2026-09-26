@@ -85,7 +85,7 @@ describe("SPIKE — fake Ollama SSE stub drives /api/chat to visible text", () =
           providerId: PROVIDER_ID,
           model: "void-model",
           id: conv.id,
-          messages: [{ role: "user", parts: [{ type: "text", text: "hi" }] }],
+          messages: [{ id: "msg-spike-sse", role: "user", parts: [{ type: "text", text: "hi" }] }],
         }),
       });
       expect(res.status).toBe(200);

@@ -21,6 +21,7 @@ interface ConversationRow {
   opencode_model: string | null;
   opencode_variant: string | null;
   opencode_auto_approve: number | null;
+  client_request_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -76,6 +77,7 @@ function mapConversation(row: ConversationRow): Conversation {
     opencodeModel: row.opencode_model ?? null,
     opencodeVariant: row.opencode_variant ?? null,
     opencodeAutoApprove: row.opencode_auto_approve === 1,
+    clientRequestId: row.client_request_id ?? null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -113,6 +115,7 @@ export const conversationService = {
       | "opencodeModel"
       | "opencodeVariant"
       | "opencodeAutoApprove"
+      | "clientRequestId"
     >,
   ): Promise<Conversation> {
     const now = Date.now();
@@ -131,7 +134,7 @@ export const conversationService = {
     }
 
     db.run(
-      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, client_request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         data.title,
@@ -147,6 +150,7 @@ export const conversationService = {
         data.opencodeModel ?? null,
         data.opencodeVariant ?? null,
         data.opencodeAutoApprove === true ? 1 : 0,
+        data.clientRequestId ?? null,
         now,
         now,
       ],
@@ -154,6 +158,28 @@ export const conversationService = {
     const created = await this.get(id);
     if (!created) throw new Error("Failed to create conversation");
     return created;
+  },
+
+  /**
+   * Look up a conversation by its durable idempotency key (Task 3).
+   *
+   * This is the cross-restart replay path: when a client retries a draft
+   * materialization with the same `clientRequestId` after a server restart,
+   * the in-memory `createCompleted` map is lost, but the column survives in
+   * SQLite. Returns the existing row, or `null` when no row carries the key.
+   *
+   * @param clientRequestId - The client's idempotency key.
+   * @returns The conversation row, or `null` if no row carries the key.
+   */
+  async findByClientRequestId(
+    clientRequestId: string,
+  ): Promise<Conversation | null> {
+    const row = db
+      .query<ConversationRow, SQLQueryBindings[]>(
+        "SELECT * FROM conversations WHERE client_request_id = ?",
+      )
+      .get(clientRequestId);
+    return row ? mapConversation(row) : null;
   },
 
   async list(options: ConversationListOptions = {}): Promise<ConversationListResult> {

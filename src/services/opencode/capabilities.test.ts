@@ -63,12 +63,11 @@ beforeEach(() => {
   setServer([], []);
 });
 
-// Live 1.18.x server shape: `{ location, data: [...] }`, agents carry `id`
-// but NOT `name` (the official AgentInfo type declares it; the server omits it).
+// Native V2 response: every agent row includes the required display name.
 const liveAgents = [
-  { id: "build", description: "The default agent." },
-  { id: "plan", description: "Planning agent." },
-  { id: "compaction" },
+  { id: "build", name: "Build", description: "The default agent." },
+  { id: "plan", name: "Plan", description: "Planning agent." },
+  { id: "compaction", name: "Compaction" },
 ];
 
 const liveModels = [
@@ -96,13 +95,24 @@ const liveModels = [
 ];
 
 describe("getOpenCodeCapabilities", () => {
-  it("maps the live 1.18.x agent shape, falling back to id when name is absent", async () => {
+  it("maps the native V2 agent rows and keeps their required names", async () => {
     setServer(liveAgents, liveModels);
     const caps = await getOpenCodeCapabilities();
     expect(caps.agents).toEqual([
-      { id: "build", name: "build", description: "The default agent." },
-      { id: "plan", name: "plan", description: "Planning agent." },
-      { id: "compaction", name: "compaction", description: undefined },
+      { id: "build", name: "Build", description: "The default agent." },
+      { id: "plan", name: "Plan", description: "Planning agent." },
+      { id: "compaction", name: "Compaction", description: undefined },
+    ]);
+  });
+
+  it("omits an agent row missing its required native V2 name", async () => {
+    setServer([
+      { id: "missing-name", description: "Must not be displayed." },
+      { id: "valid", name: "Valid Agent", description: "Displayed." },
+    ], []);
+    const caps = await getOpenCodeCapabilities();
+    expect(caps.agents).toEqual([
+      { id: "valid", name: "Valid Agent", description: "Displayed." },
     ]);
   });
 
@@ -251,7 +261,7 @@ describe("toOpenCodeError", () => {
   });
 
   it("maps an undeclared HTTP status to http and preserves the status code", () => {
-    // session.interrupt on OpenCode 1.18.x: server answers 204, client wants 200.
+    // Preserve the status code when the official client rejects an undeclared HTTP status.
     const err = toOpenCodeError(
       new ClientError("UnexpectedStatus", { cause: { status: 204 } }),
     );

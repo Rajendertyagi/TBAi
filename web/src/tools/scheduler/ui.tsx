@@ -17,9 +17,9 @@ type AnyProps = ToolCallMessagePartProps<SchedulerArgs, AnyResult>;
 /**
  * Single renderer for the `scheduler` AI tool (action-dispatched: create /
  * list / get / update / delete / run_now). UI-only — execution happens
- * server-side (the AISDKToolkit `execute`), like the filesystem and computer
- * tools. The result is a uniform JSON envelope, so one card covers every
- * action.
+ * server-side (the native `tool()` `execute` in `src/tools/index.ts`), like
+ * the filesystem and computer tools. The result is a uniform JSON envelope,
+ * so one card covers every action.
  */
 export const SchedulerToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
   const action = String(p.args?.action ?? "scheduler");

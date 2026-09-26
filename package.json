@@ -37,11 +37,10 @@
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/core": "2.0.0",
     "@noble/ciphers": "^2.4.0",
-    "@opencode-ai/sdk": "^1.18.31",
-    "@opencode/client": "2.0.4",
+    "@opencode/client": "2.0.16",
     "@paralleldrive/cuid2": "^3.3.0",
     "ai": "^7.0.93",
-    "assistant-stream": "0.3.41",
+    "assistant-stream": "0.3.43",
     "hono": "^4.13.7",
     "zod": "4.5.4"
   }

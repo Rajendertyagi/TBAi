@@ -67,7 +67,7 @@ export const CLIENT_LOG_SCOPES = [
   "composer",
   /** Frontend backend-availability / recovery state machine. */
   "availability",
-  /** Frontend OpenCode adapter + session lifecycle. */
+  /** Frontend OpenCode V2 projection + session lifecycle. */
   "opencode",
   /** Frontend approval decisions + question answers (permission flows). */
   "approval",

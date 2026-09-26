@@ -1,64 +1,35 @@
-# Phases — Single Tracker (Index)
+# Phases — Current Tracker
 
-One row per phase across all tracks. This file is the **index only**: status +
-owner + evidence. Detail lives in the linked doc — never copied here.
+This file records active implementation phases only. Completed migration reports and superseded plans are not retained here; current architecture and decisions live in `docs/architecture.md` and `docs/decisions.md`.
 
-Update protocol: whoever finishes a phase flips its row in the same change
-(coding agent for implementation, test agent for verification). Rows move
-forward only on evidence (actual test/build numbers, observed live behavior),
-never on intent.
+## OpenCode native V2
 
-## Track A — Lifecycle hardening
-
-Source: `docs/superpowers/plans/2026-09-17-lifecycle-hardening.md`.
-Ordering is load-bearing (plan l.604–614): Phases 2–5 independent of each
-other; Phase 1 wires them; Phase 6 independent; Phase 7 always last.
-
-| Phase | Scope | Status | Owner | Evidence / done-criteria |
-|---|---|---|---|---|
-| 0 | Lifecycle contract + target shutdown sequence | Done | — | Plan §0 (invariant + `server.stop()` semantics runtime-verified) |
-| 1 | Shutdown spine (`src/server.ts` rewrite) | Implemented, **verification in progress** | Test agent (`0611a4b`, agnes-3.0-flash) | `tests/integration/shutdown-lifecycle.test.ts`; known test-isolation issue (DB handle vs scheduler tests) being fixed test-side only |
-| 2 | OpenCode process lifecycle | Done, **live-verified** | — | typecheck 0, build 0, `bun test` 743 pass / 0 fail (745 tests, 77 files), `bun run test:shutdown` 1/0 (plan l.635) |
-| 3A | Chat `abortAll()` + settlement + gate | **COMPLETE** (implemented + live-verified + suite-reconciled) | — | Live SIGINT settled=1/timedOut=0; targeted 20/0; full suite zero Phase-3 failures; T3-L01–L04 |
-| 3B | Scheduler `abortAllRuns()` + tracking + gate | **COMPLETE** (implemented + live-verified + suite-reconciled) | — | Live SIGINT aborted=1/settled=1/timedOut=0; targeted 65/0; T3-L05–L10 |
-| 4 | MCP `disconnectAll()` + elicitation cancel + bounded reconnect | **COMPLETE** (implemented + live-verified + suite-reconciled 2026-09-17; re-verified 2026-09-18) | — | All-states disconnect, `{action:"cancel"}` on disconnect + connect-replacement, dead close-handler removed, timers bounded; T3-L14/L15 |
-| 5 | SQLite `busy_timeout=5000` (defensive; not a shutdown fix) | **COMPLETE** (implemented + suite-reconciled) | — | db.test.ts 6/0; full suite zero Phase-5 failures; T3-D03 |
-| 6 | Conversation DELETE → terminate OpenCode session (engine-gated, warn-and-continue) | **COMPLETE** (implemented + live-verified + suite-reconciled) | — | Real interrupt+remove observed live; engine-guards 5 new cases; T3-C01–C05 |
-| 7 | Dead-code cleanup (plan list only) | **COMPLETE** (removed + suite-reconciled) | — | 5 files + 4 code sites gone; typecheck + build green; zero new failures; T3-P7-01–03 |
-
-## Track B — Code-mode tool rendering
-
-Source: `docs/opencode-block-rendering-plan.md`. Live-verification handover:
-`docs/handover-phase-3d-verification.md`.
-
-| Phase | Scope | Status | Owner | Evidence / done-criteria |
-|---|---|---|---|---|
-| 2 | Block structure (flatten group tree, one surface per block) | Implemented + tested | — | Unit/render tests + mutation checks (handover §3) |
-| 3A | Stale-permission guard parity | Implemented + tested | — | Parity test locks it in (plan §4.4.3) |
-| 3B | Argument/result normalization (read/glob/grep/…) | Implemented + tested | — | Same as above |
-| 3C | Permission-gated tools (bash/edit/write + rich mappings) | Implemented + tested | — | Same as above |
-| 4 | Diff routing (`edit` patch via message metadata) | Implemented, gated | — | `openCodePatchFromParts` + `useOpenCodeEditPatch` |
-| 3D | Live verification in a real Code conversation | **Partial** | Coding agent (live run) | `bash` completed → terminal output **verified live**; `read` body, `edit` diff, approval approve/deny + no-wedge **not verified**. Wedge root cause resolved 2026-09-17 (directory-scoped permission/question routes; handover §8.1). Blocker was the `POST /session/{id}/message` 500/hang — repair/restart server, then run write+edit with gate approval |
-
-## Track C — OpenCode V2 client migration
-
-Source: `docs/opencode-v2-backend-migration-report.md`, decisions.md.
-
-| Phase | Scope | Status | Owner | Evidence / done-criteria |
-|---|---|---|---|---|
-| V2-p1 | Migrate to official `@opencode/client@2.0.4` (agent/model/session create+get) | Done | — | Verified live vs OpenCode 1.18.29; `as unknown as X` casts removed |
-| V2-p2 | `session.interrupt` / `session.remove` | **Blocked by server, not our code** | — | interrupt: server returns 204, client hard-codes 200; remove: no DELETE route on 1.18.x. Revisit on newer server |
-
-## Queued (decided or studied, not started)
-
-| Item | Scope | Status | Source |
+| Phase | Scope | Status | Evidence / remaining acceptance |
 |---|---|---|---|
-| Web Service panel | Separate LAN-exposure server + settings page (Option A, auto-start yes, QR no) | Decided, fully spec'd, **prompt never issued** — next single bounded task | `docs/pm-notes.md` §7–8 |
-| Heartbeat chip | CodeG-style connection heart in `OpenCodeStatus.tsx` (extend only) | Study done; **2 open decisions** (inline text, action scope) need maintainer call | `docs/pm-notes.md` §9 |
-| Roadmap Next | Provider-switching UI, `/api/chat` smoke test, SSE live-test, Desktop Commander E2E, sampling/elicitation E2E | Open | `docs/roadmap.md` §Next |
-| Latent gap | Stored `systemPrompt` never sent to model | Flagged, unscoped | `docs/pm-notes.md` §5 |
+| V2 client boundary | Official `@opencode/client@2.0.16` in backend and browser; managed server constrained to `>=2.0.15 <2.1.0` | Complete | Package manifests and canonical root lockfile; proxy/auth boundary unchanged |
+| V2 runtime | Native client, external-store controller, event reduction, history, tools, permissions, forms, cancellation | Complete | Focused native/OpenCode suite and Code-route Playwright |
+| Permission UX | Allow-once and deny flows | Complete | Live terminal success and interrupted execution verified |
+| Form UX | Create, reply, cancel lifecycle | In progress | Real question creation remains blocked by the upstream permission gate; no synthetic form result is claimed |
+| Repository cleanup | Retired client packages, compatibility modules, wire-shape fallbacks, migration plans, and generated reports removed | Implemented; focused verification complete | Forbidden-reference audit: 0 matches; typecheck/build: exit 0; focused V2 regression: 70/0; focused OpenCode web: 194/0; Code-route Playwright: 1/0. Full suite: 1,304 pass / 214 fail / 2 skip / 2 errors, blocked by unrelated shared-database failures |
 
-## Deferred (do not build until basic path confirmed)
+## Direct Chat durability (provider-agnostic Direct path only)
 
-RAG / retrieval, file uploads, advanced persistent memory, auth/multi-user,
-deployment hardening (`docs/roadmap.md` §Deferred).
+| Phase | Scope | Status | Evidence / remaining acceptance |
+|---|---|---|---|
+| 1 — Direct correctness & security | Outcome-based settlement replacing `onFinish`; strict terminal `finishReason` allowlist; `maxRetries`/`streamRetries` = 0; `safeValidateUIMessages`; backend-only approval secret; sanitized Direct logging | Complete | 20 route-level cases in `tests/integration/direct-hardening.test.ts`; live SIGKILL run against `agnes-2.5-flash`. Provider-agnostic — no provider is special-cased |
+| 2 — Durable resumable streams | SQLite `ResumableStreamStore` (`chat_streams`/`chat_stream_chunks`), boot recovery, TTL cleanup, detached-run history finalization, resume observability | Complete | 19 route-level cases in `tests/integration/detached-history-finalization.test.ts`; measured 0.07–0.22 ms/chunk (~14k chunks/s). Design: `docs/2026-09-25-phase2-durability-design.md` |
+| 3 — Recovery UX | Per-thread recovery state, Composer notice with a guarded Retry (gated on `terminalKind === 'interrupted'` **and** a non-empty prompt), conversation-keyed run status | Complete | Verified live: crash → recovery notice → Retry issues exactly one new model request. No auto-retry anywhere |
+| 4 — Gap closure | `invalid_stream` conformance category from SDK error names; billing/transport copy; `length` settlement proven; phantom-shell write guard; orphan-sweep safety guard | Complete | `tests/unit/error-provider-response.test.ts`; 20/20 `direct-hardening`; `tests/integration/phantom-assistant-shell.test.ts`; `tests/unit/workspace-gc-guard.test.ts`. Plan + independent review: `docs/2026-09-26-direct-gap-closure-plan.md` |
+
+**Known limitations, deliberately not repaired:** post-restart finalization of a run
+that completed while the server was down (ADR decision 3 — scoping, not impossibility);
+a malformed provider stream is surfaced, not masked; Anthropic/Ollama live parity is
+untested in this environment for want of credentials.
+
+## Active product work
+
+| Item | Status | Source |
+|---|---|---|
+| Provider-switching UI | Open | `docs/roadmap.md` |
+| Desktop packaged acceptance flows | User acceptance pending | `docs/development-rules.md` |
+| RAG, uploads, persistent memory, auth/multi-user, deployment hardening | Deferred | `docs/roadmap.md` |

@@ -50,12 +50,14 @@ Backend (Hono + Bun)
 The chat route builds the tool set as:
 
 ```ts
-tools: { ...nativeTools, ...mcpManager.getAiTools() }
+tools: { ...nativeTools, run_command: withTerminalOutput(...), ...mcpManager.getAiTools() }
+// plus a matching toolsContext map (native tools only) for streamText
 ```
 
-`nativeTools` are server-executed tools (zod schemas + `execute` in
-`src/routes/index.ts`, sandboxed `services/tools.ts`; privileged ones gated by
-server `toolApproval`, rendered by the client toolkit in `web/src/tools/`).
+`nativeTools` are server-executed tools (native AI SDK `tool()` defs with zod
+schemas + `execute` in `src/tools/index.ts`, sandboxed `services/tools.ts`;
+privileged ones gated by server `toolApproval`, rendered by the client
+toolkit in `web/src/tools/`).
 MCP tools are distinct: they are **server-executed** through the
 `Client.callTool()` call inside each `execute` function. Namespacing
 (`mcp__<serverId>__<toolName>`) prevents collisions between servers and keeps tool names stable

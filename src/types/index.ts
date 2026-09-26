@@ -105,6 +105,12 @@ export interface Conversation {
    * permission requests once automatically; false/absent = manual (ask).
    */
   opencodeAutoApprove?: boolean;
+  /**
+   * Durable idempotency key for draft materialization (Task 3). Set at creation
+   * from the client's `clientRequestId`; a replayed key after a restart
+   * resolves to this existing row instead of minting a duplicate.
+   */
+  clientRequestId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

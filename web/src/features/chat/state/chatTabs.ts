@@ -10,6 +10,12 @@ const DEFAULT_GROUP_ID = "main";
  * - Chat tab: `{ kind: "chat", ref: threadId | "new" }`, key `chat:<ref>`.
  * - Agent tab (OpenCode Code mode): `{ kind: "agent", ref: conversationId }`, key `agent:<ref>`.
  * - Page tab: `{ kind: "page", ref: route }`, key `page:<route>`.
+ *   Page tabs are VESTIGIAL (documented, kept): `loadPersisted` drops any
+ *   `kind: "page"` entry on every reload, so no user can create or restore one.
+ *   `healTab`, `tabForKey`, `urlForTab`, and `openPage` retain the branch for
+ *   backwards compatibility with old persisted localStorage shapes that may
+ *   still carry a `page:` key; they are inert in practice because
+ *   `loadPersisted` filters them out. Do NOT add new page-tab callers.
  * Message/streaming state is NOT here (assistant-ui runtime owns it);
  * this is open-tab layout only. `groupId` is split-screen future-proofing.
  */
@@ -25,7 +31,7 @@ export interface ChatTabsState {
   activeKey: string | undefined;
   groupId: string;
   openChat: (threadId: string) => void;
-  openPage: (route: string) => void;
+  openPage: (route: string) => void; // Vestigial — no production callers; see the Tab doc comment.
   openAgent: (conversationId: string) => void;
   close: (key: string) => void;
   /**

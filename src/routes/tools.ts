@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { newRequestId } from "../lib/logger";
+import { sanitizeStreamError } from "../lib/redact";
 import { runRead, runWrite, runEdit, runBash, runList, runSearch, runStat, runDelete, runProcesses, runKill, runSysinfo, ToolError, WORKSPACE_DIR, inspectTarget } from "../services/tools";
 import { mintGrant } from "../services/grants";
 import { resolveConversationWorkspace, WorkspaceError } from "../services/workspace";
@@ -26,7 +27,7 @@ function toolHandler<T>(schema: z.ZodType<T>, fn: (args: T) => unknown | Promise
       if (e instanceof ToolError)
         return c.json({ error: e.message, requestId }, 400);
       return c.json(
-        { error: e instanceof Error ? e.message : "Tool failed", requestId },
+        { error: sanitizeStreamError(e), requestId },
         500,
       );
     }

@@ -8,6 +8,12 @@
  *   - POST /api/opencode/session: a direct/legacy row is a 422; no OpenCode
  *     session is spawned and the row gains no opencodeSessionId pointer.
  *
+ * The Direct guard also wins over everything that happens AFTER it: an
+ * opencode row whose provider is unknown (or absent) is still an engine
+ * mismatch, never a provider-resolution failure — the row's engine is the
+ * answer to "who owns this conversation", and it is knowable without a
+ * provider.
+ *
  * Positive paths (direct/legacy rows) still pass both guards. The chat
  * positive path is proven hermetically via the black-hole provider
  * technique: the guard (not the model leg) is under test, and the run
@@ -146,6 +152,141 @@ describe("POST /api/chat — engine guard", () => {
   }, 30000);
 });
 
+// ── Guard precedence ─────────────────────────────────────────────────────────
+// The row's engine is the authoritative answer to "who owns this conversation"
+// and it is readable without resolving anything else. So an opencode row whose
+// provider cannot be resolved must still answer 422 ENGINE_MISMATCH: a caller
+// that mistargets a Code conversation at /api/chat must be told the surface is
+// wrong, not sent chasing a provider error that hides the real cause.
+describe("POST /api/chat — engine guard precedence over provider resolution", () => {
+  /** An opencode row that also cannot be resolved to a provider. */
+  async function createUnresolvableOpencodeRow(
+    title: string,
+    providerId: string | null,
+  ): Promise<string> {
+    const conv = await conversationService.create({
+      title,
+      providerId,
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "opencode",
+    });
+    return conv.id;
+  }
+
+  it("answers 422 ENGINE_MISMATCH for an opencode row whose provider id is unknown", async () => {
+    await seedGuardProvider();
+    const UNKNOWN_PROVIDER = "prov-engine-guard-does-not-exist";
+    const convId = await createUnresolvableOpencodeRow(
+      "engine-guard-unknown-provider",
+      UNKNOWN_PROVIDER,
+    );
+
+    try {
+      const countsBefore = chatRuns.counts();
+      const res = await app.request("/api/chat", {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({
+          providerId: UNKNOWN_PROVIDER,
+          model: "void-model",
+          id: convId,
+          messages: [{ id: "msg-engine-unknown", role: "user", parts: [{ type: "text", text: "x" }] }],
+        }),
+      });
+
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as { code?: string; error?: string };
+      // The engine mismatch is the canonical answer...
+      expect(body.code).toBe("ENGINE_MISMATCH");
+      // ...never the provider-resolution failure the row would otherwise cause.
+      expect(body.code).not.toBe("UNKNOWN_PROVIDER");
+
+      const countsAfter = chatRuns.counts();
+      expect(countsAfter.running).toBe(countsBefore.running);
+      expect(countsAfter.completed).toBe(countsBefore.completed);
+      expect(countsAfter.failed).toBe(countsBefore.failed);
+      expect(countsAfter.cancelled).toBe(countsBefore.cancelled);
+    } finally {
+      await conversationService.delete(convId);
+    }
+  }, 30000);
+
+  it("answers 422 ENGINE_MISMATCH for an opencode row with no provider at all", async () => {
+    await seedGuardProvider();
+    const convId = await createUnresolvableOpencodeRow("engine-guard-no-provider", null);
+
+    try {
+      const countsBefore = chatRuns.counts();
+      const res = await app.request("/api/chat", {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({
+          // No providerId in the request either: without the guard this would
+          // silently fall back to the active provider and run.
+          model: "void-model",
+          id: convId,
+          messages: [{ id: "msg-engine-no-provider", role: "user", parts: [{ type: "text", text: "x" }] }],
+        }),
+      });
+
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as { code?: string; error?: string };
+      expect(body.code).toBe("ENGINE_MISMATCH");
+      expect(typeof body.error).toBe("string");
+      expect(body.error?.length).toBeGreaterThan(0);
+
+      const countsAfter = chatRuns.counts();
+      expect(countsAfter.running).toBe(countsBefore.running);
+      expect(countsAfter.completed).toBe(countsBefore.completed);
+      expect(countsAfter.failed).toBe(countsBefore.failed);
+      expect(countsAfter.cancelled).toBe(countsBefore.cancelled);
+    } finally {
+      await conversationService.delete(convId);
+    }
+  }, 30000);
+
+  it("still refuses an unknown provider on a DIRECT row (the guard is not a bypass)", async () => {
+    await seedGuardProvider();
+    const UNKNOWN_PROVIDER = "prov-engine-guard-does-not-exist";
+    const direct = await conversationService.create({
+      title: "engine-guard-direct-unknown-provider",
+      providerId: UNKNOWN_PROVIDER,
+      modelId: null,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    });
+
+    try {
+      const countsBefore = chatRuns.counts();
+      const res = await app.request("/api/chat", {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({
+          providerId: UNKNOWN_PROVIDER,
+          model: "void-model",
+          id: direct.id,
+          messages: [{ id: "msg-engine-direct-unknown", role: "user", parts: [{ type: "text", text: "x" }] }],
+        }),
+      });
+
+      // A direct row passes the engine guard, so the diagnosable
+      // provider-resolution 400 is the correct answer here — proving the
+      // precedence rule above is a reordering, not a blanket 422.
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { code?: string; error?: string };
+      expect(body.code).toBe("UNKNOWN_PROVIDER");
+
+      const countsAfter = chatRuns.counts();
+      expect(countsAfter.running).toBe(countsBefore.running);
+    } finally {
+      await conversationService.delete(direct.id);
+    }
+  }, 30000);
+});
+
 describe("ensureOpenCodeSession — engine guard (service seam)", () => {
   // The guard's canonical home is the service seam (`EngineMismatchError`,
   // `src/services/opencode/sessions.ts`); the opencode route maps it to 422.
@@ -236,7 +377,7 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
           providerId: "prov-engine-guard",
           model: "void-model",
           id: conv.id,
-          messages: [{ role: "user", parts: [{ type: "text", text: "ok" }] }],
+          messages: [{ id: "msg-engine-direct", role: "user", parts: [{ type: "text", text: "ok" }] }],
         }),
       });
 
@@ -278,7 +419,7 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
           providerId: "prov-engine-guard",
           model: "void-model",
           id: conv.id,
-          messages: [{ role: "user", parts: [{ type: "text", text: "legacy" }] }],
+          messages: [{ id: "msg-engine-legacy", role: "user", parts: [{ type: "text", text: "legacy" }] }],
         }),
       });
 

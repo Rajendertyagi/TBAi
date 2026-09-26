@@ -11,6 +11,11 @@ import {
   useOpenCodeConversationConfig,
 } from "./useOpenCodeConversationConfig";
 import { useWelcomeEngineStore } from "../chat/state/welcomeEngine";
+import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
+import {
+  mergeOpenCodeSelectionState,
+  type OpenCodeSelectionPatch,
+} from "./opencodeSelection";
 
 /**
  * Shared state + persist helper for the three OpenCode composer chips.
@@ -21,9 +26,10 @@ import { useWelcomeEngineStore } from "../chat/state/welcomeEngine";
 export function useOpenCodeChipState(conversationId: string) {
   const { agents, models, isLoading, error } = useOpenCodeCapabilities(true);
   const config = useOpenCodeConversationConfig(conversationId);
+  const nativeExtras = useOptionalV2RuntimeExtras();
   // Draft (no bound conversation yet): picks live in the welcome-engine store
-  // and are read by the adapter's initialize() at first-send creation. Bound
-  // threads persist to the conversation record instead.
+  // and seed native session creation. Bound threads persist to the conversation
+  // record instead.
   const draft = !conversationId;
   const welcomeAgent = useWelcomeEngineStore((s) => s.agent);
   const welcomeModel = useWelcomeEngineStore((s) => s.model);
@@ -70,7 +76,9 @@ export function useOpenCodeChipState(conversationId: string) {
       // Publish ONLY server-echoed values: the override map must reflect
       // SQLite, not the request. A mismatch leaves all visible state
       // untouched — a failed write changes nothing visible.
-      const confirmed: Record<string, string | null> = {};
+      const confirmed: {
+        -readonly [K in keyof OpenCodeSelectionPatch]: OpenCodeSelectionPatch[K];
+      } = {};
       for (const [key, sent] of Object.entries(patch)) {
         const echoed = updated?.[key as keyof typeof updated] ?? null;
         if (echoed !== sent) {
@@ -80,13 +88,34 @@ export function useOpenCodeChipState(conversationId: string) {
           });
           return;
         }
-        confirmed[key] = echoed;
+        confirmed[key as keyof OpenCodeSelectionPatch] = echoed;
       }
+      const nextSelection = mergeOpenCodeSelectionState(
+        {
+          agent: currentAgent,
+          model: currentModel,
+          variant: currentVariant,
+        },
+        confirmed,
+      );
       updateConversationConfig(conversationId, {
-        ...(confirmed.opencodeAgent !== undefined ? { opencodeAgent: confirmed.opencodeAgent } : {}),
-        ...(confirmed.opencodeModel !== undefined ? { opencodeModel: confirmed.opencodeModel } : {}),
-        ...(confirmed.opencodeVariant !== undefined ? { opencodeVariant: confirmed.opencodeVariant } : {}),
+        opencodeAgent: nextSelection.agent || null,
+        opencodeModel: nextSelection.model || null,
+        opencodeVariant: nextSelection.variant || null,
       });
+      if (nativeExtras) {
+        const [providerID, ...modelParts] = nextSelection.model.split("/");
+        nativeExtras.setDesiredSelection({
+          model: providerID && modelParts.length > 0
+            ? {
+                providerID,
+                modelID: modelParts.join("/"),
+                ...(nextSelection.variant ? { variant: nextSelection.variant } : {}),
+              }
+            : null,
+          agent: nextSelection.agent || null,
+        });
+      }
     } catch {
       logger.debug("opencode", "config persist error", { conversationId });
     }

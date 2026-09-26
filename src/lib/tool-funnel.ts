@@ -1,5 +1,5 @@
 import { extendRequestContext, logger } from "./logger";
-import { classifyError } from "./errors";
+import { errorLogFields } from "./errors";
 
 /**
  * The tool funnel: every model-invoked tool execute passes through here
@@ -15,6 +15,12 @@ import { classifyError } from "./errors";
 export interface InstrumentedExecuteOptions {
   toolCallId?: string;
   abortSignal?: AbortSignal;
+  /**
+   * Validated per-tool context (the AI SDK `toolsContext` entry for this
+   * tool, checked against its `contextSchema` before `execute` runs).
+   * Absent for tools that declare no `contextSchema`.
+   */
+  context?: unknown;
   [key: string]: unknown;
 }
 
@@ -32,7 +38,23 @@ export function instrumentedExecute<
   const wrapped = async (args: any, opts?: InstrumentedExecuteOptions) => {
     const started = Date.now();
     return extendRequestContext({ toolCallId: opts?.toolCallId }, async () => {
-      const ctx = { tool: toolName, toolCallId: opts?.toolCallId, ...extra };
+      // Tool-funnel correlation: thread identity rides the validated tool
+      // context (`{ threadId }` in the native `contextSchema`s — see
+      // `src/tools/index.ts`), never a static extra, so the funnel stays
+      // correct with no per-request execute rewrapping. Tools whose context
+      // carries no threadId (scheduler, browser, process/system, MCP) emit
+      // no conversationId — identical to the previous explicit `funnelExtra`
+      // wiring, which bound the thread only to fs/run/todo executes.
+      const contextThreadId = (opts?.context as { threadId?: unknown } | undefined)
+        ?.threadId;
+      const ctx = {
+        tool: toolName,
+        toolCallId: opts?.toolCallId,
+        ...(typeof contextThreadId === "string" && contextThreadId.length > 0
+          ? { conversationId: contextThreadId }
+          : {}),
+        ...extra,
+      };
       logger.debug("tool", "tool.start", ctx);
       try {
         const out = await execute(args, opts);
@@ -45,7 +67,7 @@ export function instrumentedExecute<
         logger.warn("tool", "tool.error", {
           ...ctx,
           durationMs: Date.now() - started,
-          ...classifyError(err),
+          ...errorLogFields(err),
         });
         throw err;
       }

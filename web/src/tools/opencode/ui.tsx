@@ -13,14 +13,13 @@ import { resultToLines } from "@/lib/terminal-lines";
 import {
   normalizeOpenCodeArgs,
   normalizeOpenCodeResult,
+  openCodeResultText,
   openCodePatchFromParts,
   parseOpenCodeWebSearchHits,
 } from "./adapt";
 import { WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { CheckCircle2, Circle } from "lucide-react";
-import type { OpenCodeTodo } from "@/features/opencode/todoState";
-import { QuestionFormCard } from "@/components/shared/QuestionFormCard";
-import { useToolLinkedQuestion } from "@/features/opencode/toolLinkedQuestion";
+import type { OpenCodeTodo } from "@/features/opencode/v2Todos";
 import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
@@ -86,17 +85,18 @@ interface OpenCodeViewSpec {
 function openCodeView(spec: OpenCodeViewSpec): ToolCallMessagePartComponent {
   const View = (p: AnyProps) => {
     const args = normalizeOpenCodeArgs(spec.tool, p.args) ?? {};
+    const result = normalizeOpenCodeResult(spec.tool, p.result);
     return (
       <BackendToolView
         title={spec.title(args)}
         args={args}
         {...(spec.argPreview ? { argPreview: spec.argPreview(args) } : {})}
-        result={p.result}
+        result={result}
         status={p.status}
         approval={p.approval}
         respondToApproval={p.respondToApproval}
         runningLabel={spec.runningLabel}
-        summarize={(res, a) => spec.summarize(res, a ?? args)}
+        summarize={(res, a) => spec.summarize(normalizeOpenCodeResult(spec.tool, res), a ?? args)}
         tool={spec.tool}
         {...(spec.targetPath ? { targetPath: spec.targetPath(args) } : {})}
         {...(spec.variant ? { variant: spec.variant } : {})}
@@ -108,7 +108,7 @@ function openCodeView(spec: OpenCodeViewSpec): ToolCallMessagePartComponent {
 }
 
 const body = (result: unknown) => (
-  <TextBody text={typeof result === "string" ? result : ""} />
+  <TextBody text={openCodeResultText(result) ?? ""} />
 );
 
 /**
@@ -203,7 +203,7 @@ export const OpenCodeEditView = ({
       title={`edit · ${str(args.path)}`}
       args={args}
       argPreview={editPreview(args)}
-      result={p.result}
+      result={normalizeOpenCodeResult("edit", p.result)}
       status={p.status}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
@@ -216,7 +216,7 @@ export const OpenCodeEditView = ({
           // No reachable patch (a `write` part has none by data — see
           // `openCodePatchFromParts`), or nothing parseable: show what OpenCode
           // actually returned rather than an empty card.
-          return <TextBody text={typeof p.result === "string" ? p.result : ""} />;
+          return <TextBody text={openCodeResultText(p.result) ?? ""} />;
         }
         return (
           <div className="w-full space-y-2">
@@ -298,11 +298,12 @@ export const OpenCodeWriteToolUI = openCodeView({
 export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (
   p: AnyProps,
 ) => {
-  const args = normalizeOpenCodeArgs("bash", p.args) ?? {};
+  const tool = p.toolName === "shell" ? "shell" : "bash";
+  const args = normalizeOpenCodeArgs(tool, p.args) ?? {};
   const command = str(args.command);
   // `resultToLines` dereferences its argument, so an absent result (a part that
   // is still running, or one with no output at all) must be handled here.
-  const shaped = normalizeOpenCodeResult("bash", p.result);
+  const shaped = normalizeOpenCodeResult(tool, p.result);
   const lines = shaped == null ? [] : resultToLines(shaped as { stdout?: unknown });
 
   // The gate owns the card in every state it renders, so the terminal may only
@@ -330,15 +331,15 @@ export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (
 
   return (
     <BackendToolView
-      title={`bash · ${command}`}
+      title={`${tool} · ${command}`}
       args={args}
-      result={p.result}
+      result={shaped}
       status={p.status}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
       runningLabel={toolsConfig.copy.running.running}
       summarize={body}
-      tool="bash"
+      tool={tool}
       targetPath={str(args.cwd, ".")}
     />
   );
@@ -490,17 +491,18 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
   // model is still emitting the tool call.
   const { propStatus } = useToolArgsStatus<{ query: string }>();
   const args = normalizeOpenCodeArgs("websearch", p.args) ?? {};
+  const result = normalizeOpenCodeResult("websearch", p.result);
   const query = propStatus.query === "streaming" ? toolsConfig.copy.running.searching : str(args.query);
-  const hits = parseOpenCodeWebSearchHits(p.result);
-  const raw = typeof p.result === "string" ? p.result : "";
+  const hits = parseOpenCodeWebSearchHits(result);
+  const raw = openCodeResultText(result) ?? "";
 
   const gateUndecided = p.approval != null && p.approval.approved === undefined;
   const awaitingContinuation =
     p.approval?.approved === true &&
-    p.result === undefined &&
+    result === undefined &&
     p.status?.type !== "running";
-  const failed = p.status?.type === "incomplete";
-  const denied = denialOf(p.result, p.approval) != null;
+  const failed = p.status?.type === "incomplete" || p.isError === true;
+  const denied = denialOf(result, p.approval) != null;
 
   if (!gateUndecided && !awaitingContinuation && !failed && !denied) {
     return (
@@ -523,7 +525,7 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
     <BackendToolView
       title={`websearch · ${str(args.query)}`}
       args={args}
-      result={p.result}
+      result={result}
       status={p.status}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
@@ -560,14 +562,10 @@ function questionList(args: AnyArgs): Record<string, unknown>[] {
 /**
  * `question` — required `{ questions }`.
  *
- * Two mounts, one UI. When the adapter holds a pending question linked to
- * this tool call (`request.tool.callID === toolCallId`), the shared
- * `QuestionFormCard` renders inline and answers through the capability
- * (`replyToQuestion` / `rejectQuestion`) — never `addResult`, which the
- * runtime rejects for tool parts. Otherwise the read-only preview below
- * shows what is being asked; the fallback panel (`OpenCodeQuestions`) owns
- * answering it. This renderer imports no adapter module: the link/answer
- * capability lives in `features/opencode` per the isolation boundary.
+ * A `question` tool call is rendered as a read-only historical tool result.
+ * Interactive native V2 forms use the separate `session.form` lifecycle and
+ * are owned by `OpenCodeQuestions`/`V2FormCard`. The tool renderer never
+ * answers forms or writes a synthetic tool result.
  */
 export const QuestionReadonlyView = openCodeView({
   tool: "question",
@@ -616,19 +614,4 @@ export const QuestionReadonlyView = openCodeView({
   summarize: body,
 });
 
-export const OpenCodeQuestionToolUI: ToolCallMessagePartComponent = (
-  p: AnyProps,
-) => {
-  const linked = useToolLinkedQuestion(p.toolCallId);
-  if (linked) {
-    const { request, answer, skip } = linked;
-    return (
-      <QuestionFormCard
-        questions={request.questions}
-        onSubmit={(answers) => answer(answers)}
-        onDismiss={() => skip()}
-      />
-    );
-  }
-  return <QuestionReadonlyView {...p} />;
-};
+export const OpenCodeQuestionToolUI: ToolCallMessagePartComponent = (p: AnyProps) => <QuestionReadonlyView {...p} />;

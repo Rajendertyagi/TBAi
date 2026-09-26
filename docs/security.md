@@ -39,8 +39,9 @@ used here).
   file), so the portable app folder is self-contained.
 - `GET /api/providers` returns metadata plus `credentialConfigured: true/false` only.
   It **never** returns the API key or any ciphertext.
-- The frontend sends only the selected `providerId` in the chat request. The backend
-  loads the encrypted credential, decrypts it **in memory only**, and builds the model.
+- The frontend sends only the selected `providerId`/`modelId` and transport
+  metadata in the chat request. The backend loads the encrypted credential,
+  decrypts it **in memory only**, and builds the model.
 - `src/services/ai.ts#getModel` reads the key from the transient, in-memory config; it
   is never placed in a response body.
 - All crypto is isolated in `src/services/credentials.ts` (the `CredentialStore`).
@@ -60,10 +61,14 @@ MCP servers reached over HTTP/SSE may require auth. The same rules apply:
 - MCP tools are **server-executed**: the MCP `Client` runs in the backend, so server
   credentials never reach the frontend. See `mcp.md`.
 
-## Input validation (Zod)
+## Input validation (Zod + AI SDK)
 
 All API input is validated with Zod schemas in `src/lib/validation.ts`:
-- `chatRequestSchema` — `/api/chat` (messages required, providerId optional).
+- `chatRequestSchema` — `/api/chat` validates the explicit assistant-ui transport
+  envelope, requires a non-empty message array, accepts the routing `id`, and
+  rejects non-empty client `system`/`tools`/`callSettings`/`config` directives.
+  Message internals are then validated by AI SDK v7 `safeValidateUIMessages`
+  before the existing approval-aware pruning/conversion path.
 - `providerCreateSchema` / `providerUpdateSchema` — provider CRUD (name, type enum,
   model, optional endpoint/apiKey).
 - `providerTestSchema` is `providerCreateSchema` (reused for `/api/providers/test`).
@@ -71,7 +76,22 @@ All API input is validated with Zod schemas in `src/lib/validation.ts`:
   `/api/mcp` server CRUD + test (name, transport enum `stdio|http|sse`, command/args,
   url, env/headers JSON, auth_type enum, optional auth_token).
 
-Invalid input is rejected with `400` before any provider call.
+Invalid input is rejected with `400` before any provider call. A Direct request
+uses the persisted conversation `systemPrompt` as server-owned `instructions`;
+system-role messages and client tool definitions are not accepted as policy
+overrides.
+
+## Direct tool-approval integrity
+
+Direct AI SDK tool approvals use a stable, separately generated 32-byte
+per-install HMAC secret. It is encrypted with the existing local DEK and stored
+in `app_settings` through `CredentialStore`; it is never returned to the browser
+or written to logs. First initialization provisions the setting when absent;
+every later Direct request re-reads and validates it, so deletion or corruption
+fails closed. `experimental_toolApprovalSecret` is passed to Direct
+`streamText` calls, so unsigned or tampered approval responses fail closed.
+Historical unsigned approvals are not silently re-signed and require a fresh
+approval. OpenCode permissions remain owned by the separate OpenCode boundary.
 
 ## Key editing safety
 

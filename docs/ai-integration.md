@@ -10,48 +10,99 @@ There is no custom streaming protocol.
 ```ts
 const transport = new AssistantChatTransport({
   api: "/api/chat",
-  prepareSendMessagesRequest: async ({ body }) => {
-    const { activeProviderId, providers } = useSettingsStore.getState();
-    const provider = providers.find(p => p.id === activeProviderId) ?? providers[0];
-    return { body: { ...body, providerId: provider?.id ?? "" } };
+  prepareSendMessagesRequest: async ({ messages, id, trigger, messageId, requestMetadata }) => {
+    const { providerId, model } = resolveDirectSelection();
+    return {
+      body: {
+        providerId,
+        model,
+        id,
+        messages,
+        trigger,
+        messageId,
+        metadata: requestMetadata,
+      },
+    };
   },
 });
 return useChatRuntime({ transport });
 ```
 
 Key points:
-- The transport sends the **`providerId` only** — never the API key.
+- The browser sends the selected provider/model identifiers and transport metadata,
+  never an API key, system directive, or client tool definition.
+- `src/routes/chat.ts` validates the envelope and UI messages with AI SDK v7,
+  then applies the persisted conversation `systemPrompt` as server-owned
+  `instructions`.
 - `ChatWindow.tsx` renders `AssistantRuntimeProvider` + `ThreadPrimitive` /
   `ComposerPrimitive` / `MessagePrimitive`. No custom message rendering.
 
+## OpenCode V2 Code surface
+
+Code mode uses the official `@opencode/client@2.0.16` behind
+`web/src/features/opencode/v2Client.ts`. The client is scoped to the
+backend-minted session and directory, subscribes before hydration, and exposes
+only generation-bound operations. `v2ThreadController.ts` owns the single event
+loop, authoritative paginated history, prompt admission, cancellation, recovery,
+permissions, forms, and compaction. `v2RuntimeStore.ts` projects that state into
+assistant-ui's external-store repository; OpenCode wire formats never cross into
+`ChatWindow` or generic chat state. The managed server compatibility gate is
+`>=2.0.15 <2.1.0`.
+
 ## Backend
 
-`src/routes/index.ts` (`POST /api/chat`):
+`src/routes/chat.ts` (`POST /api/chat`):
 
 ```ts
 const parsed = chatRequestSchema.safeParse(await c.req.json());
-const { providerId, messages } = parsed.data;
-const provider = (providerId && registry.get(providerId)) || registry.getActive();
-const model = getModel(provider);
-const isLite = /lite|nano/i.test(provider.model || "");
+const validation = await safeValidateUIMessages({ messages: parsed.data.messages });
+if (!validation.success) return invalidMessages();
 
 const result = streamText({
-  model,
-  messages: convertToModelMessages(messages),
-  ...(isLite ? {} : { providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } } }),
+  model: getModel(providerConfig),
+  messages: await prepareModelMessages(validation.data, tools),
+  ...(conversation?.systemPrompt
+    ? { instructions: conversation.systemPrompt }
+    : {}),
+  tools,
+  experimental_toolApprovalSecret: approvalSecret,
+  providerOptions,
 });
-return result.toUIMessageStreamResponse();
+
+return createUIMessageStreamResponse({
+  stream: toUIMessageStream({ stream: result.stream, onEnd: settleRun }),
+});
 ```
 
 Key points:
-- `convertToModelMessages()` turns the assistant-ui `UIMessage[]` (role + parts)
-  into the `ModelMessage[]` that `streamText` expects.
-- `toUIMessageStreamResponse()` emits the UI-message stream protocol that
-  `@assistant-ui/react` consumes. This replaces any hand-rolled SSE loop.
+- `safeValidateUIMessages()` validates the assistant-ui `UIMessage[]` before the
+  existing approval-aware pruning/conversion path.
+- `instructions` comes from the persisted conversation, never from a client
+  system-message/tool override.
+- `toUIMessageStream()` emits the UI-message stream protocol that
+  `@assistant-ui/react` consumes, and its producer `onEnd` outcome settles the
+  server-owned run. This replaces any hand-rolled SSE loop.
 - `getModel(config)` (in `src/services/ai.ts`) is the **provider adapter**: it
   builds the correct `LanguageModel` per provider type using
   `createOpenAI` / `createAnthropic` / `createGoogle`, passing `apiKey` and
   `baseURL` (endpoint) from the server-side config.
+- Direct request/stream retry budgets are explicitly zero. Once any output has
+  arrived, replaying the call can duplicate text, reasoning, or tool effects;
+  recovery is an explicit user action.
+
+## Provider stream conformance
+
+Custom OpenAI-compatible providers must follow the Chat Completions SSE
+contract. A successful response includes a terminal chunk with a non-null
+`choices[0].finish_reason` (`stop`, `length`, `tool_calls`, or `content_filter`)
+followed by the proper `[DONE]` sequence. Reasoning fields such as
+`reasoning_content` must remain available when the provider supports them.
+
+TBAi intentionally does not convert a missing finish reason into success. The
+AI SDK reports a truncated/invalid provider stream as a failure, the Direct route
+records the failed outcome and sanitized error category, and the user can retry
+explicitly. Provider-specific fixes belong at the provider/gateway boundary;
+there is no Agnes- or model-specific fallback in the application.
 
 ## Thinking models
 
@@ -118,10 +169,12 @@ so an easy prompt reports a false negative.
 The reasoning panel renders **expanded** and stays expanded (`ChatWindow.tsx`,
 `ReasoningRoot ... defaultOpen`); a manual toggle still wins.
 
-## Why not `assistant-stream`?
+## `assistant-stream` boundary
 
-`assistant-stream`'s `createAssistantStreamResponse` emits the older *Assistant
-Stream Protocol*, which is **not** what `AssistantChatTransport` consumes (it
-expects the AI SDK UI-message stream). Its only consumer (`createProviderStream`)
-was dead code. It was removed; `toUIMessageStreamResponse()` is the correct,
-library-provided equivalent. See `docs/decisions.md`.
+The old `createAssistantStreamResponse` application path is not used: it emits
+the older Assistant Stream Protocol, while `AssistantChatTransport` consumes the
+AI SDK UI-message stream. The dependency is retained for the official
+`assistant-stream/resumable` context/store used by `/api/chat` and
+`/api/chat/resume`, plus the adapter's no-op `generateTitle` stream. It is not a
+second chat runtime or message protocol. It is aligned to `0.3.43` with the
+assistant-ui packages. See `docs/decisions.md`.

@@ -45,5 +45,16 @@ export const composerConfig = {
     quickMessagesLoading: "Loading...",
     quickMessageUntitled: "Untitled",
     clipboardWriteFailed: "Clipboard write failed — text kept in place",
+    // Dead-run recovery (Phase 3). Two distinct sentences, chosen by the server's
+    // durable verdict and never by matching an error string: the client cannot
+    // see WHY a restored run failed, and claiming "the app restarted" on a
+    // network blip would be a lie. `retry` renders the affordance; it is only
+    // ever passed `true` for a run the server confirmed as `interrupted`, which
+    // is the one terminal kind a live send can never produce.
+    streamInterrupted:
+      "The app restarted while this reply was streaming. Nothing was sent — retry?",
+    streamUnavailable: "Couldn't reconnect this reply.",
+    streamRetry: "Retry",
+    streamRetrying: "Retrying…",
   },
 };

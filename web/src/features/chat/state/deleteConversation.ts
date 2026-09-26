@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { logger } from "@/lib/logger";
 import { useChatTabsStore } from "./chatTabs";
+import { readDirectResumableStreamId } from "./resumable-stream";
 
 /** Authoritative result of server-side conversation teardown. No UI inside. */
 export interface DeleteConversationResult {
@@ -12,23 +13,16 @@ export interface DeleteConversationResult {
 }
 
 /**
- * Issues the explicit server cancel for a thread's resumable run, if this tab
- * tracks one. Key format is owned by `runtime.ts` (`tbai-resume:<threadKey>`).
- * Fire-and-forget safe: returns false when nothing is addressable or the
- * request fails. Shared with the composer stop button so the lookup + endpoint
- * live in exactly one place.
+ * Issues the explicit server cancel for a Direct thread's resumable run, if
+ * this tab tracks one. The storage helper owns the session-storage protocol;
+ * this function only performs the server-side cancellation.
  *
  * @param threadKey - thread remoteId (bound) or runtime id; null when unknown.
  */
 export async function cancelActiveRun(
   threadKey: string | null | undefined,
 ): Promise<boolean> {
-  let streamId: string | null = null;
-  try {
-    streamId = threadKey ? sessionStorage.getItem(`tbai-resume:${threadKey}`) : null;
-  } catch {
-    return false;
-  }
+  const streamId = readDirectResumableStreamId(threadKey);
   if (!streamId) return false;
   try {
     // Cancellation is a lifecycle event, not just cleanup: it ends a run whose

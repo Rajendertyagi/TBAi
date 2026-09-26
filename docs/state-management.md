@@ -28,6 +28,22 @@ runtime already manages. This is the minimum-custom-code choice — the library 
 chat message state; the app only provides thin HTTP adapters. See `architecture.md`
 (Conversation persistence) and `decisions.md`.
 
+## OpenCode V2 runtime state
+
+Code-mode OpenCode state is isolated under `web/src/features/opencode/`.
+`V2ThreadState` is the normalized session model; the controller owns its
+lifecycle and publishes snapshots through `useSyncExternalStore`. The
+assistant-ui external-store repository is a projection, not a second message
+store. Event identity, inbox admission, execution, recovery, permissions, forms,
+and todos remain distinct state dimensions. Prompt admission preserves the
+preallocated local `msg_...` identity when the inbox event arrives before the
+prompt HTTP response; the later response is idempotent. An ambiguous prompt
+remains reconciling until an inbox/history signal or disposal settles it. Inbox,
+permission, and form snapshots are auxiliary hydration: a failure is logged
+with sanitized fields and starts empty, while later events repopulate the
+projection. The browser does not persist OpenCode wire events in Zustand or
+SQLite.
+
 ### Per-conversation AI config (three tiers — do not blur)
 
 The conversation's AI config (provider / model / reasoning level) lives in exactly

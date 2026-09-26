@@ -2,6 +2,10 @@ import { Database } from "bun:sqlite";
 import path from "path";
 import fs from "fs";
 import { logger } from "../lib/logger";
+// Leaf module (no app imports) that owns the chat-stream DDL, so the boot
+// migration and the store's tests apply one definition and cannot drift.
+// Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
+import { applyChatStreamsSchema } from "../services/chat-streams/schema";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "chat.db");
@@ -12,6 +16,31 @@ const sqlite = new Database(DB_PATH);
 
 // Enable WAL mode for better concurrency
 sqlite.run("PRAGMA journal_mode=WAL");
+
+// WAL's standard durability pairing: skips the per-commit fsync (writes stay
+// fast) while remaining corruption-safe — a power loss can drop the most
+// recent commits, never the file structure.
+sqlite.run("PRAGMA synchronous=NORMAL");
+
+// Page-cache budget in KiB (negative values are KiB): 64 MiB of RAM for hot
+// pages, reducing disk I/O on repeated reads.
+const SQLITE_CACHE_KIB = 64 * 1024;
+sqlite.run(`PRAGMA cache_size=-${SQLITE_CACHE_KIB}`);
+
+// Memory-map up to 256 MiB of the DB file so reads bypass the page cache.
+const SQLITE_MMAP_BYTES = 256 * 1024 * 1024;
+sqlite.run(`PRAGMA mmap_size=${SQLITE_MMAP_BYTES}`);
+
+// Temporary tables and indexes (sorts, GROUP BY) stay in RAM instead of
+// spilling to disk.
+sqlite.run("PRAGMA temp_store=MEMORY");
+
+// FK enforcement is OFF by the SQLite default: without this every ON DELETE
+// CASCADE in the schema (todos/messages -> conversations, scheduler_runs ->
+// scheduler_jobs, folder_links -> folders) is decorative. Must run with no
+// transaction open (the pragma is a no-op inside one) — the conversations
+// rebuild below correctly flips it OFF before its own BEGIN.
+sqlite.run("PRAGMA foreign_keys=ON");
 
 // Phase 5: brief busy-wait so a contended lock retries internally instead of
 // throwing SQLITE_BUSY immediately. Defensive only — the single synchronous
@@ -49,6 +78,13 @@ sqlite.run(`
     created_at INTEGER NOT NULL
   )
 `);
+
+// Durable resumable-stream bytes + outcome mirror for Direct chat runs
+// (chat_streams / chat_stream_chunks). Additive: two new tables and one index,
+// applied here so the production database matches what the store expects. The
+// store itself is not yet wired into the chat route, so nothing writes rows yet;
+// the cleanup worker is a separate, later step.
+applyChatStreamsSchema(sqlite);
 
 // Durable key/value app settings (runtime log capture level/overrides, ...).
 // Single-row-per-key; values are JSON. Read at boot, written by settings APIs.
@@ -237,11 +273,26 @@ addColumnIfNotExists("conversations", "engine", "TEXT");
 addColumnIfNotExists("conversations", "opencode_agent", "TEXT");
 addColumnIfNotExists("conversations", "opencode_model", "TEXT");
 // OpenCode thinking level (model variant) chosen at creation, e.g. "low"/"high".
-// Null = Default (omit the variant field on prompt_async).
+// Null = Default (omit the variant from the native V2 prompt model reference).
 addColumnIfNotExists("conversations", "opencode_variant", "TEXT");
 // Per-conversation Auto Approval shield (Phase 6D-B). 0 = manual (ask), 1 = auto
 // (accept once). Fail-closed: absent rows read manual.
 addColumnIfNotExists("conversations", "opencode_auto_approve", "INTEGER NOT NULL DEFAULT 0");
+
+// Durable idempotency for draft materialization (Task 3). The client sends a
+// `clientRequestId` with a draft POST; a server restart between the row commit
+// and the client's retry used to lose the in-memory map and mint a second row.
+// The column carries the identity to SQLite (the source of truth), so a
+// replayed key after any restart resolves to the EXISTING row.
+//
+// Nullable + partial unique index: legacy rows (pre-migration) are NULL and
+// unaffected; multiple NULLs are allowed; a single key maps to at most one row.
+addColumnIfNotExists("conversations", "client_request_id", "TEXT");
+sqlite.run(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_client_request_id
+  ON conversations(client_request_id)
+  WHERE client_request_id IS NOT NULL
+`);
 
 // The original messages table had `role TEXT NOT NULL` and stored a plain-text
 // content format incompatible with the assistant-ui storage format we now
@@ -312,6 +363,10 @@ try {
 
 // Create indexes
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)");
+// Composite index for repairSchedulerThreadChains: its correlated
+// (conversation_id, order_seq) subquery sorts without this and degrades to a
+// per-row scan (O(N^2) over scheduler threads).
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_seq ON messages(conversation_id, order_seq)");
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)");
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_content ON messages(conversation_id, content)");

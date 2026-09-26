@@ -4,7 +4,7 @@ import {
   buildOpenCodeServeArgs,
   stripOpenCodeProxyPrefix,
   allocateLoopbackPort,
-  probeOnce,
+  probeOpenCodeInfo,
   waitForHttpReady,
   appendTail,
   OpenCodeProcessExitedError,
@@ -12,12 +12,36 @@ import {
   OpenCodeReadinessCancelledError,
   OpenCodeServerManager,
 } from "./serverManager";
-import { OPENCODE_CONFIG } from "../../config/opencode";
+import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../config/opencode";
+import { getOpenCodeAuthHeaders, isSupportedOpenCodeVersion } from "./runtime";
+
+const SUPPORTED_VERSION = "2.0.15";
+const CURRENT_SUPPORTED_VERSION = "2.0.16";
+const UNSUPPORTED_VERSION = "2.0.14";
+const UPPER_BOUND_VERSION = "2.1.0";
+const FIXTURE_PASSWORD = "opencode-readiness-fixture-password";
+const FIXTURE_AUTHORIZATION = `Basic ${Buffer.from(
+  `${OPENCODE_CONFIG.authUsername}:${FIXTURE_PASSWORD}`,
+).toString("base64")}`;
+const AUTHENTICATED_READINESS = {
+  authHeaders: { Authorization: FIXTURE_AUTHORIZATION },
+  isSupportedVersion: isSupportedOpenCodeVersion,
+} as const;
+const FAKE_MANAGED_BINARY = "/fake/opencode-v2";
 
 describe("buildOpenCodeServeArgs", () => {
   it("builds the argv for a given port", () => {
     expect(buildOpenCodeServeArgs(4173)).toEqual([
       OPENCODE_CONFIG.binaryName,
+      "serve",
+      "--port",
+      "4173",
+    ]);
+  });
+
+  it("uses an explicit managed binary when provided", () => {
+    expect(buildOpenCodeServeArgs(4173, FAKE_MANAGED_BINARY)).toEqual([
+      FAKE_MANAGED_BINARY,
       "serve",
       "--port",
       "4173",
@@ -56,14 +80,49 @@ describe("allocateLoopbackPort", () => {
   });
 });
 
-/** Starts a trivial HTTP server on the given port; returns a stop function. */
-function listenOn(port: number): () => void {
+type InfoFixture = {
+  readonly baseUrl: string;
+  readonly requests: Array<{ authorization: string | null; method: string; pathname: string }>;
+  readonly stop: () => void;
+};
+
+/** Starts a deterministic OpenCode `/api/info` fixture and captures its requests. */
+function startInfoFixture(
+  respond: (request: Request) => Response | Promise<Response>,
+  port = 0,
+): InfoFixture {
+  const requests: InfoFixture["requests"] = [];
   const server = Bun.serve({
     port,
     hostname: "127.0.0.1",
-    fetch: () => new Response("ok"),
+    fetch(request) {
+      requests.push({
+        authorization: request.headers.get("authorization"),
+        method: request.method,
+        pathname: new URL(request.url).pathname,
+      });
+      return respond(request);
+    },
   });
-  return () => server.stop(true);
+  return {
+    baseUrl: `http://127.0.0.1:${server.port}`,
+    requests,
+    stop: () => server.stop(true),
+  };
+}
+
+/** Starts a valid authenticated V2 readiness fixture on the requested port. */
+function listenOn(port: number): () => void {
+  const fixture = startInfoFixture((request) => {
+    if (new URL(request.url).pathname !== OPENCODE_CONFIG.readinessProbePath) {
+      return new Response("not found", { status: 404 });
+    }
+    if (request.headers.get("authorization") !== FIXTURE_AUTHORIZATION) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    return Response.json({ version: SUPPORTED_VERSION });
+  }, port);
+  return fixture.stop;
 }
 
 /** A port that is allocated then released, so nothing is listening on it. */
@@ -71,30 +130,162 @@ function freePort(): number {
   return allocateLoopbackPort();
 }
 
-describe("probeOnce", () => {
-  it("reports listening when the server responds with any status", async () => {
-    const port = allocateLoopbackPort();
-    const stop = listenOn(port);
+describe("probeOpenCodeInfo", () => {
+  it("reports ready only for an authenticated supported `/api/info` response", async () => {
+    const fixture = startInfoFixture((request) => {
+      if (request.headers.get("authorization") !== FIXTURE_AUTHORIZATION) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return Response.json({ version: SUPPORTED_VERSION });
+    });
+
     try {
-      const outcome = await probeOnce(
-        `http://127.0.0.1:${port}`,
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
         OPENCODE_CONFIG.readinessProbePath,
-        OPENCODE_CONFIG.readyPollMs * 4,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
       );
-      expect(outcome).toBe("listening");
+
+      expect(outcome).toBe("ready");
+      expect(fixture.requests).toEqual([
+        {
+          authorization: FIXTURE_AUTHORIZATION,
+          method: "GET",
+          pathname: "/api/info",
+        },
+      ]);
     } finally {
-      stop();
+      fixture.stop();
     }
   });
 
-  it("reports not_listening when nothing is on the port", async () => {
-    const port = freePort();
-    const outcome = await probeOnce(
-      `http://127.0.0.1:${port}`,
-      OPENCODE_CONFIG.readinessProbePath,
-      OPENCODE_CONFIG.readyPollMs * 4,
+  it("accepts a 2.0.16 server info response within the approved range", async () => {
+    const fixture = startInfoFixture(() =>
+      Response.json({ version: CURRENT_SUPPORTED_VERSION }),
     );
-    expect(outcome).toBe("not_listening");
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+
+      expect(outcome).toBe("ready");
+      expect(fixture.requests).toEqual([
+        {
+          authorization: FIXTURE_AUTHORIZATION,
+          method: "GET",
+          pathname: "/api/info",
+        },
+      ]);
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  it("reports not ready on HTTP 401", async () => {
+    const fixture = startInfoFixture(
+      () => new Response("unauthorized", { status: 401 }),
+    );
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("not_ready");
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  it("reports not ready when the supplied Basic credentials are wrong", async () => {
+    const fixture = startInfoFixture((request) =>
+      request.headers.get("authorization") === FIXTURE_AUTHORIZATION
+        ? Response.json({ version: SUPPORTED_VERSION })
+        : new Response("unauthorized", { status: 401 }),
+    );
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        { Authorization: "Basic deliberately-wrong" },
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("not_ready");
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  it("reports not ready for malformed JSON", async () => {
+    const fixture = startInfoFixture(
+      () =>
+        new Response("{not-json", {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("not_ready");
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  it("reports not ready for an unsupported version", async () => {
+    const fixture = startInfoFixture(
+      () => Response.json({ version: UNSUPPORTED_VERSION }),
+    );
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("not_ready");
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  it("reports not ready at the 2.1.0 upper bound", async () => {
+    const fixture = startInfoFixture(
+      () => Response.json({ version: UPPER_BOUND_VERSION }),
+    );
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("not_ready");
+    } finally {
+      fixture.stop();
+    }
   });
 });
 
@@ -110,6 +301,7 @@ describe("waitForHttpReady", () => {
           baseUrl: `http://127.0.0.1:${port}`,
           port,
           probePath: OPENCODE_CONFIG.readinessProbePath,
+          ...AUTHENTICATED_READINESS,
           timeoutMs: 2000,
           pollMs: 5,
           getStopping: () => false,
@@ -128,6 +320,7 @@ describe("waitForHttpReady", () => {
         baseUrl: `http://127.0.0.1:${port}`,
         port,
         probePath: OPENCODE_CONFIG.readinessProbePath,
+        ...AUTHENTICATED_READINESS,
         timeoutMs: 120,
         pollMs: 5,
         getStopping: () => false,
@@ -143,6 +336,7 @@ describe("waitForHttpReady", () => {
         baseUrl: `http://127.0.0.1:${port}`,
         port,
         probePath: OPENCODE_CONFIG.readinessProbePath,
+        ...AUTHENTICATED_READINESS,
         timeoutMs: 5000,
         pollMs: 5,
         getStopping: () => false,
@@ -158,6 +352,7 @@ describe("waitForHttpReady", () => {
         baseUrl: `http://127.0.0.1:${port}`,
         port,
         probePath: OPENCODE_CONFIG.readinessProbePath,
+        ...AUTHENTICATED_READINESS,
         timeoutMs: 5000,
         pollMs: 5,
         getStopping: () => true,
@@ -178,6 +373,7 @@ describe("waitForHttpReady", () => {
           baseUrl: `http://127.0.0.1:${port}`,
           port,
           probePath: OPENCODE_CONFIG.readinessProbePath,
+          ...AUTHENTICATED_READINESS,
           timeoutMs: 2000,
           pollMs: 5,
           getStopping: () => false,
@@ -201,12 +397,15 @@ describe("waitForHttpReady", () => {
     const server = Bun.serve({
       port,
       hostname: "127.0.0.1",
-      fetch: async () => {
+      fetch: async (request) => {
+        if (request.headers.get("authorization") !== FIXTURE_AUTHORIZATION) {
+          return new Response("unauthorized", { status: 401 });
+        }
         if (first) {
           first = false;
           await new Promise((r) => setTimeout(r, OPENCODE_CONFIG.readyPollMs + 50));
         }
-        return new Response("ok");
+        return Response.json({ version: SUPPORTED_VERSION });
       },
     });
     try {
@@ -216,6 +415,7 @@ describe("waitForHttpReady", () => {
           baseUrl: `http://127.0.0.1:${port}`,
           port,
           probePath: OPENCODE_CONFIG.readinessProbePath,
+          ...AUTHENTICATED_READINESS,
           timeoutMs: 2000,
           pollMs: OPENCODE_CONFIG.readyPollMs,
           getStopping: () => false,
@@ -243,6 +443,7 @@ describe("waitForHttpReady", () => {
         baseUrl: `http://127.0.0.1:${port}`,
         port,
         probePath: OPENCODE_CONFIG.readinessProbePath,
+        ...AUTHENTICATED_READINESS,
         timeoutMs: 200,
         pollMs,
         getStopping: () => false,
@@ -282,13 +483,22 @@ class FakeChild {
     stdoutChunks: string[],
     stderrChunks: string[],
     serial: number,
+    expectedAuthorization: string,
   ) {
     this.pid = 4000 + serial;
     if (mode === "ready") {
       this.server = Bun.serve({
         port,
         hostname: "127.0.0.1",
-        fetch: () => new Response("ok"),
+        fetch(request) {
+          if (new URL(request.url).pathname !== OPENCODE_CONFIG.readinessProbePath) {
+            return new Response("not found", { status: 404 });
+          }
+          if (request.headers.get("authorization") !== expectedAuthorization) {
+            return new Response("unauthorized", { status: 401 });
+          }
+          return Response.json({ version: SUPPORTED_VERSION });
+        },
       });
     }
     this.exited = new Promise<number>((resolve) => {
@@ -318,20 +528,32 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
   public serveMode: "ready" | "never" = "ready";
   public stdoutChunks: string[] = [];
   public stderrChunks: string[] = [];
+  public lastBinaryPath: string | null = null;
   public lastDiagnostics: { stdout: string; stderr: string } | undefined;
+  private readonly testConfig: OpenCodeConfig;
 
-  protected resolveBinary(): string | null {
-    return "/fake/opencode";
+  constructor(config: OpenCodeConfig = OPENCODE_CONFIG) {
+    super(config);
+    this.testConfig = config;
   }
 
-  protected createChild(port: number): Subprocess {
+  protected resolveBinary(): string {
+    return FAKE_MANAGED_BINARY;
+  }
+
+  protected createChild(
+    port: number,
+    binaryPath: string = FAKE_MANAGED_BINARY,
+  ): Subprocess {
     this.createChildCalls += 1;
+    this.lastBinaryPath = binaryPath;
     const child = new FakeChild(
       port,
       this.serveMode,
       this.stdoutChunks,
       this.stderrChunks,
       this.createChildCalls,
+      getOpenCodeAuthHeaders(this.testConfig).Authorization,
     );
     this.children.push(child);
     return child as unknown as Subprocess;
@@ -372,25 +594,34 @@ async function until(condition: () => boolean, timeoutMs = 2000): Promise<void> 
 describe("OpenCodeServerManager.ensureBaseUrl", () => {
   it("deduplicates concurrent startups into a single server", async () => {
     const mgr = new FakeOpenCodeServerManager();
-    const results = await Promise.all([
-      mgr.ensureBaseUrl(),
-      mgr.ensureBaseUrl(),
-      mgr.ensureBaseUrl(),
-    ]);
-    expect(new Set(results).size).toBe(1);
-    expect(mgr.createChildCalls).toBe(1);
-    mgr.stopFake();
+    try {
+      const results = await Promise.all([
+        mgr.ensureBaseUrl(),
+        mgr.ensureBaseUrl(),
+        mgr.ensureBaseUrl(),
+      ]);
+      expect(new Set(results).size).toBe(1);
+      expect(mgr.createChildCalls).toBe(1);
+      expect(mgr.lastBinaryPath).toBe(FAKE_MANAGED_BINARY);
+    } finally {
+      mgr.stopFake();
+    }
   });
 
-  it("returns a ready base URL that actually responds", async () => {
+  it("returns a base URL only after authenticated `/api/info` reports V2", async () => {
     const mgr = new FakeOpenCodeServerManager();
-    const baseUrl = await mgr.ensureBaseUrl();
-    expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    const res = await fetch(`${baseUrl}${OPENCODE_CONFIG.readinessProbePath}`, {
-      method: "GET",
-    });
-    expect(res.status).toBeGreaterThan(0);
-    mgr.stopFake();
+    try {
+      const baseUrl = await mgr.ensureBaseUrl();
+      expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      const response = await fetch(
+        `${baseUrl}${OPENCODE_CONFIG.readinessProbePath}`,
+        { headers: getOpenCodeAuthHeaders() },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ version: SUPPORTED_VERSION });
+    } finally {
+      mgr.stopFake();
+    }
   });
 });
 

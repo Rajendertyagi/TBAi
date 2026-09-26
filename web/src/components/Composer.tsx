@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AuiIf,
   ComposerPrimitive,
   unstable_useComposerInput,
+  unstable_useSlashCommandAdapter,
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
@@ -32,6 +33,7 @@ import {
   materializeDraft,
 } from "../features/chat/state/materializeDraft";
 import { setPendingFirstMessage } from "../features/chat/state/pendingFirstMessage";
+import { useStreamRecoveryStore } from "../features/chat/state/streamRecovery";
 import { useAvailabilityStore } from "../features/availability/availabilityStore";
 import {
   clearComposerDraft,
@@ -54,6 +56,17 @@ import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
 import { OpenCodeModelChip } from "../features/opencode/OpenCodeModelChip";
 import { OpenCodeThinkingChip } from "../features/opencode/OpenCodeThinkingChip";
 import { OpenCodeShieldChip } from "../features/opencode/OpenCodeShieldChip";
+import { useCommandsStore } from "../features/opencode/commandsStore";
+import {
+  applyCommandSelection,
+  toSlashCommands,
+} from "../features/opencode/slashCommands";
+import {
+  buildCompactEntry,
+  isCompactCommandText,
+  shouldOfferCompact,
+} from "../features/opencode/compactSession";
+import { useOpenCodeRuntimeContext } from "../features/opencode/opencodeRuntimeContext";
 import { OpenCodeContextRing } from "../features/opencode/OpenCodeContextRing";
 import { DirectContextRing } from "./context-ring";
 import {
@@ -329,6 +342,13 @@ function Composer({
   /** True on the Code surface (bound OpenCode conversation). */
   isCodeSurface?: boolean;
 }) {
+  // Why BOTH the headless hook and `ComposerPrimitive.Input` (below): the
+  // primitive owns the textarea (auto-resize, submit keys, focus), while this
+  // hook exposes the same composer state as VALUES so the custom send path can
+  // intercept a send before the library performs it — the OpenCode draft first
+  // send must be materialized and handed off, never sent to Direct /api/chat.
+  // The docs present the hook as an alternative to the primitive for owning the
+  // DOM outright; using both is deliberate here, and only for that interception.
   const { value: composerText, setText, send: sendViaRuntime } = unstable_useComposerInput();
   const aui = useAui();
   // Thread identity for draft persistence. Guarded: the composer also mounts
@@ -346,6 +366,41 @@ function Composer({
     }
   })();
   const isOffline = useAvailabilityStore((s) => s.status === "offline");
+
+  // ── Dead-run recovery (Phase 3) ────────────────────────────────────────────
+  // The third inline strip, sibling to `codeSendError` and `compactError`.
+  //
+  // Retry is offered ONLY when the server confirmed the run is `interrupted` AND
+  // the prompt survived (`canRetry`). Those two conditions are the whole safety
+  // story: a run that completed can never satisfy the first, and a run whose
+  // prompt is unknown can never satisfy the second — so Retry can neither
+  // duplicate a finished reply nor send an empty message. Everything else shows
+  // the sentence and no button, which is the honest direction to fail.
+  const recovery = useStreamRecoveryStore((s) => (threadKey ? s.byThread[threadKey] : undefined));
+  const [retrying, setRetrying] = useState(false);
+  const retryInterruptedRun = () => {
+    if (retrying || !recovery?.canRetry || !recovery.prompt.trim()) return;
+    setRetrying(true);
+    try {
+      // A NEW run, never a resume: appending a user turn with `startRun` starts a
+      // fresh run with a new stream id and a new assistant message id. `startRun`
+      // is set explicitly rather than relying on the `role === "user"` default,
+      // because the runtime can be sitting in an error state after the dead
+      // resume and the intent should not be inferred. The interrupted row is left
+      // untouched for its retention window and is never re-driven.
+      aui.thread().append({
+        role: "user",
+        content: [{ type: "text", text: recovery.prompt }],
+        runConfig: aui.composer.getState().runConfig,
+        startRun: true,
+      });
+      clearComposerDraft(threadKey);
+      setText("");
+      if (threadKey) useStreamRecoveryStore.getState().clear(threadKey);
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   // Draft durability (Phase 3.7): restore once on mount when the box is empty
   // and a saved draft exists; persist every non-empty change; drop the key
@@ -367,6 +422,98 @@ function Composer({
   // with the OpenCode engine — never inferred, always explicit.
   const draftEngine = useWelcomeEngineStore((s) => s.engine);
   const showOpenCodeDraft = isWelcomeDraft && draftEngine === "opencode";
+
+  // ── Slash commands (OpenCode surface only) ───────────────────────────────
+  // The commands are OpenCode's own; the Direct runtime cannot execute them, so
+  // the palette is mounted only where an OpenCode session is behind the send —
+  // the bound Code surface or the OpenCode new-chat draft. Showing them on
+  // Direct would offer a command that could never run.
+  const slashCommandsEnabled = isCodeSurface || showOpenCodeDraft;
+  const openCodeCommands = useCommandsStore((s) => s.commands);
+  const loadOpenCodeCommands = useCommandsStore((s) => s.load);
+  useEffect(() => {
+    if (!slashCommandsEnabled) return;
+    void loadOpenCodeCommands();
+  }, [slashCommandsEnabled, loadOpenCodeCommands]);
+
+  // ── Built-in /compact (bound OpenCode session only) ─────────────────────
+  // `/compact` is NOT in the OpenCode `/command` feed, so it is a TBAi-side
+  // built-in appended after the feed entries — never a fake feed entry. The
+  // ambient runtime context is non-null only inside a session-bound Code
+  // surface (null on Direct and on the session-less welcome draft), so gating
+  // on it keeps `/compact` off every surface that has no session to compact.
+  const openCodeRuntimeContext = useOpenCodeRuntimeContext();
+  const canCompact = shouldOfferCompact(isCodeSurface, openCodeRuntimeContext);
+
+  // The library hook owns trigger detection, filtering and keyboard routing;
+  // only the item list and the execute action are ours. Called unconditionally
+  // (hooks may not be conditional) — an empty list simply never opens.
+  const slashEntries = useMemo(
+    () => [
+      ...(slashCommandsEnabled
+        ? toSlashCommands(openCodeCommands, (command) => {
+          // Selection inserts `/name ` and leaves the composer to the user:
+          // the command runs when they send, so arguments stay editable.
+          setText(applyCommandSelection(composerText, command.name));
+          logger.info("opencode", "command.selected", {
+            name: command.name,
+            source: command.source,
+          });
+        })
+        : []),
+      // Built-in compact: selection also only inserts the text — the submit
+      // interception below performs the summarize, so palette and typed input
+      // share one execution path and selection alone never sends anything.
+      ...(canCompact
+        ? [buildCompactEntry((name) => {
+          setText(applyCommandSelection(composerText, name));
+          logger.info("opencode", "command.selected", {
+            name,
+            source: "builtin",
+          });
+        })]
+        : []),
+    ],
+    [slashCommandsEnabled, openCodeCommands, canCompact, composerText, setText],
+  );
+  const slash = unstable_useSlashCommandAdapter({
+    commands: slashEntries,
+    // No directive chip: OpenCode wants the literal `/name args` text, so the
+    // library's trigger text is removed and `onExecute` writes plain text.
+    removeOnExecute: true,
+  });
+
+  // Built-in /compact execution (Code surface only). The submit interception
+  // below (`onSubmit` on the Root form) diverts a `/compact` box here BEFORE
+  // the library's own submit handler runs — `preventDefault` in our handler
+  // skips theirs via the library's composed `onSubmit`, so one guard covers
+  // Enter, the Send button, and touch submit together. The literal text is
+  // never sent as a prompt; completion arrives through the normal
+  // session/message sync (the adapter already projects `compaction` parts).
+  // Failure keeps a truthful error and never claims success.
+  const [compacting, setCompacting] = useState(false);
+  const [compactError, setCompactError] = useState<string | null>(null);
+  const runCompact = async () => {
+    if (!openCodeRuntimeContext?.compact || compacting) return;
+    setCompacting(true);
+    setCompactError(null);
+    try {
+      await openCodeRuntimeContext.compact();
+      setText("");
+      clearComposerDraft(threadKey);
+    } catch (err) {
+      setCompactError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompacting(false);
+    }
+  };
+  const handleComposerSubmit = (e: { preventDefault(): void }) => {
+    if (canCompact && isCompactCommandText(composerText)) {
+      e.preventDefault();
+      void runCompact();
+    }
+  };
+
   const pendingInsert = useMcpStore((s) => s.pendingInsert);
   const clearPendingInsert = useMcpStore((s) => s.clearPendingInsert);
   useEffect(() => {
@@ -414,6 +561,9 @@ function Composer({
 
   return (
     <ComposerContextMenu>
+      {/* The trigger-popover root groups the `/` declaration below and owns the
+          shared input plugin registry. It renders nothing itself. */}
+      <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root
         // Own context menu (not the page menu): stop the event here so the
         // app-shell menu never fires inside the composer. Non-mouse presses
@@ -422,6 +572,11 @@ function Composer({
         onPointerDown={(event) => {
           if (event.pointerType !== "mouse") event.stopPropagation();
         }}
+        // Submit interception for the built-in `/compact`: runs before the
+        // library's own submit handler (composed first), so preventing here
+        // diverts a compact box to `runCompact` and the normal send never
+        // fires. Every other box passes through untouched.
+        onSubmit={handleComposerSubmit}
         className={cn(
           "relative flex flex-col",
           "rounded-2xl border border-border bg-card",
@@ -436,6 +591,11 @@ function Composer({
           <ComposerPrimitive.Input
             autoFocus
             submitMode="enter"
+            // Touch-primary devices get Return = newline instead of send, so a
+            // half-typed message can't be submitted by the on-screen key
+            // (matches ChatGPT / Slack / WhatsApp). Desktop is unchanged: the
+            // flag only downgrades the default "enter" mode.
+            unstable_insertNewlineOnTouchEnter
             placeholder="Send a message…  (Enter to send)"
             rows={1}
             className={cn(
@@ -446,6 +606,66 @@ function Composer({
             )}
           />
         </div>
+
+        {/* Slash-command palette. The library owns trigger detection, filtering
+            and keyboard routing (plugins get first refusal on keydown, so
+            Enter picks an item instead of submitting while the popover is
+            open); this only supplies the items and the execute action. Mounted
+            on the OpenCode surface only — see `slashCommandsEnabled`.
+            The library keeps the popover open whenever the `/` trigger is
+            detected, even when NOTHING matches the query — so an empty result
+            would render as a small empty bordered box. The `:has` rule below
+            hides the box when the item group is empty (Enter then submits the
+            text normally); it depends only on the group being empty, never on
+            library internals beyond the wrapper it renders. */}
+        {slashCommandsEnabled && (
+          <ComposerPrimitive.Unstable_TriggerPopover
+            char="/"
+            adapter={slash.adapter}
+            className={cn(
+              "absolute bottom-full left-0 z-50 mb-1 max-h-72 w-full overflow-y-auto",
+              "rounded-xl border border-border bg-popover p-1 shadow-md",
+              "has-[.slash-command-items:empty]:hidden",
+            )}
+          >
+            <ComposerPrimitive.Unstable_TriggerPopover.Action
+              {...slash.action}
+              removeOnExecute
+            />
+            <ComposerPrimitive.Unstable_TriggerPopoverItems className="slash-command-items">
+              {(items) =>
+                items.length === 0
+                  ? null
+                  : items.map((item, index) => (
+                      // Single-line rows (label + inline truncated description),
+                      // not stacked two-line cards: 24 mixed command/skill rows
+                      // scan as names first. Highlight MUST key on
+                      // `data-highlighted` — that is the attribute the library
+                      // sets on keyboard navigation (`data-selected` is never
+                      // set, so styling it leaves arrow-key movement invisible).
+                      <ComposerPrimitive.Unstable_TriggerPopoverItem
+                        key={item.id}
+                        item={item}
+                        index={index}
+                        className={cn(
+                          "flex cursor-pointer flex-row items-baseline gap-2 rounded-lg px-2 py-1.5",
+                          "text-sm text-popover-foreground",
+                          "hover:bg-accent hover:text-accent-foreground",
+                          "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
+                        )}
+                      >
+                        <span className="shrink-0 font-medium">{item.label}</span>
+                        {item.description ? (
+                          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                            {item.description}
+                          </span>
+                        ) : null}
+                      </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                    ))
+              }
+            </ComposerPrimitive.Unstable_TriggerPopoverItems>
+          </ComposerPrimitive.Unstable_TriggerPopover>
+        )}
 
         {/* Button row: attach on left, thinking/model/voice/send-stop on right */}
         <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
@@ -495,8 +715,14 @@ function Composer({
                 is mounted — arrow when idle, square Stop while generating.
                 Same footprint, so the row never shifts on swap. While the
                 backend is offline the Send primitive is replaced by an inert
-                button (same footprint): the draft is retained, nothing is
-                sent or queued, and recovery never auto-submits. */}
+                button (same footprint) that carries the "you are offline" copy:
+                the draft is retained, nothing is sent or queued, and recovery
+                never auto-submits.
+
+                The BUTTON is not the gate — a disabled button only stops
+                clicks. Enter (which submits the form) and any programmatic
+                `aui.composer.send()` are held shut by `isSendDisabled` on the
+                runtime; this swap exists for the copy and the affordance. */}
             <AuiIf condition={(s) => !s.thread.isRunning}>
               {isOffline ? (
                 <button
@@ -593,8 +819,35 @@ function Composer({
               </p>
             </div>
           )}
+          {compactError && (
+            <div className="px-3 pb-3" role="alert">
+              <p className="text-xs text-destructive">
+                Couldn&apos;t compact the session: {compactError} Nothing was sent.
+              </p>
+            </div>
+          )}
+          {recovery && (
+            <div className="px-3 pb-3" role="alert">
+              <p className="text-xs text-destructive">
+                {recovery.reason === "interrupted"
+                  ? composerConfig.copy.streamInterrupted
+                  : composerConfig.copy.streamUnavailable}
+              </p>
+              {recovery.canRetry && (
+                <button
+                  type="button"
+                  className="mt-1 text-xs font-medium underline underline-offset-2"
+                  onClick={retryInterruptedRun}
+                  disabled={retrying}
+                >
+                  {retrying ? composerConfig.copy.streamRetrying : composerConfig.copy.streamRetry}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </ComposerPrimitive.Root>
+      </ComposerPrimitive.Unstable_TriggerPopoverRoot>
     </ComposerContextMenu>
   );
 }

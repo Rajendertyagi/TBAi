@@ -4,9 +4,9 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { registry } from "../config/providers";
 import { generateId } from "../lib/utils";
 import { credentialStore } from "../services/credentials";
-import { redact } from "../lib/redact";
+import { sanitizeStreamError } from "../lib/redact";
 import { logger } from "../lib/logger";
-import { classifyError } from "../lib/errors";
+import { errorLogFields } from "../lib/errors";
 import { discoverModels } from "../services/modelDiscovery";
 import { providerCreateSchema, providerUpdateSchema, providerTestSchema, providerDiscoverSchema } from "../lib/validation";
 import { storageError } from "./shared";
@@ -161,9 +161,8 @@ app.post("/api/providers/test", async (c) => {
     const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint, apiKey });
     return c.json({ ok: true, modelCount: models.length });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Connection failed";
-    logger.warn("ai", "ai.error", { ...classifyError(e, { provider: cfg.type }) });
-    return c.json({ ok: false, error: redact(msg) }, 200);
+    logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });
+    return c.json({ ok: false, error: sanitizeStreamError(e) }, 200);
   }
 });
 
@@ -192,9 +191,8 @@ app.post("/api/providers/discover", async (c) => {
     const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint, apiKey });
     return c.json({ ok: true, models });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Discovery failed";
-    logger.warn("ai", "ai.error", { ...classifyError(e, { provider: cfg.type }) });
-    return c.json({ ok: false, error: redact(msg) }, 200);
+    logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });
+    return c.json({ ok: false, error: sanitizeStreamError(e) }, 200);
   }
 });
 

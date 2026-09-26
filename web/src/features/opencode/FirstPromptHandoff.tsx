@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect } from "react";
+import type { AppendMessage } from "@assistant-ui/react";
+import { createV2MessageId, attachV2PromptMessageId } from "./v2ThreadController";
 import { useAuiState } from "@assistant-ui/react";
 import {
   claimPendingFirstMessage,
   clearPendingFirstMessage,
+  peekPendingFirstMessage,
+  setPendingFirstMessageIdentity,
   unclaimPendingFirstMessage,
 } from "@/features/chat/state/pendingFirstMessage";
 import { logger } from "@/lib/logger";
@@ -15,11 +19,9 @@ import { startOperation, type OperationHandle } from "@/lib/operation";
  *
  * The stashed draft prompt may only enter the runtime AFTER the runtime's
  * main thread is actually bound to the bootstrapped OpenCode session id.
- * Firing while the main thread is still the TBAi draft thread would invoke
- * the frozen adapter's draft-thread initialize path, which creates a new
- * upstream session (empty session-create body → 400 from the session seam)
- * — or, if the adapter was just replaced, throws
- * `ThreadListAdapterChangedError` for the pending operation.
+ * Firing while the main thread is still the TBAi draft thread would send the
+ * prompt to the wrong conversation and could race the native runtime's first
+ * thread switch or append.
  *
  * Settled boundary (no timers, no polling): the component subscribes to the
  * main thread identity and fires exactly when
@@ -86,8 +88,9 @@ export async function fireFirstPromptHandoff(args: {
   sessionId: string | undefined;
   boundSessionId: string | undefined;
   append: (text: string) => Promise<unknown> | unknown;
+  sendWithId?: (message: AppendMessage) => Promise<unknown> | unknown;
 }): Promise<FirstPromptHandoffOutcome> {
-  const { conversationId, sessionId, boundSessionId, append } = args;
+  const { conversationId, sessionId, boundSessionId, append, sendWithId } = args;
   if (!conversationId || !sessionId) return "skipped";
   if (boundSessionId !== sessionId) {
     // The staged prompt exists but the runtime's main thread is not bound to
@@ -108,8 +111,15 @@ export async function fireFirstPromptHandoff(args: {
   }
   beginHandoffOperation();
   logger.info("opencode", "handoff.start", { conversationId, sessionId });
+  const claimedEntry = peekPendingFirstMessage(conversationId);
+  const messageId = claimedEntry?.messageId ?? createV2MessageId();
+  setPendingFirstMessageIdentity(conversationId, messageId);
   try {
-    await append(text);
+    if (sendWithId) {
+      await sendWithId(attachV2PromptMessageId({ role: "user", content: [{ type: "text", text }], parentId: null, sourceId: null, runConfig: undefined, createdAt: new Date(), metadata: { custom: {} } }, messageId));
+    } else {
+      await append(text);
+    }
   } catch (err) {
     unclaimPendingFirstMessage(conversationId);
     logger.warn("opencode", "handoff.failed", {
@@ -136,6 +146,7 @@ export function FirstPromptHandoff({
   conversationId,
   sessionId,
   runtime,
+  sendWithId,
 }: {
   /** The TBAi conversation that owns the stashed first prompt. */
   conversationId: string | undefined;
@@ -143,6 +154,7 @@ export function FirstPromptHandoff({
   sessionId: string;
   /** The session-bound OpenCode runtime (stable object, never re-created). */
   runtime: { thread: { append: (text: string) => unknown } };
+  sendWithId?: (message: AppendMessage) => Promise<unknown> | unknown;
 }) {
   const boundSessionId = useAuiState(
     (s) => s.threadListItem.externalId ?? s.threadListItem.remoteId,
@@ -155,8 +167,9 @@ export function FirstPromptHandoff({
       sessionId,
       boundSessionId: boundSessionId ?? undefined,
       append: (text) => runtime.thread.append(text),
+      sendWithId,
     });
-  }, [runtime, boundSessionId, conversationId, sessionId]);
+  }, [runtime, sendWithId, boundSessionId, conversationId, sessionId]);
 
   // Bound the handoff operation to the view that owns it, so a run it started
   // stops inheriting the operation once the session surface is gone.

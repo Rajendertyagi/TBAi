@@ -40,12 +40,12 @@ responsibility, protocol gap, compatibility boundary, or safety policy.
 
 ## Runtime architecture
 
-TBAi must keep provider/runtime-specific behavior behind adapter boundaries.
+TBAi must keep provider/runtime-specific behavior behind runtime and feature boundaries.
 
 ```
-Direct Chat  -> Direct runtime adapter  -> AI SDK
-Code Chat    -> OpenCode adapter         -> OpenCode
-External     -> MCP layer                -> MCP servers
+Direct Chat  -> Direct runtime boundary  -> AI SDK
+Code Chat    -> OpenCode V2 feature      -> OpenCode
+External     -> MCP boundary             -> MCP servers
 ```
 
 The rest of TBAi should not depend on provider-specific protocol details.
@@ -58,8 +58,8 @@ Do not create a second streaming protocol or application-owned message runtime.
 
 ### OpenCode
 
-OpenCode-specific compatibility, session handling, events, permissions, questions, and
-provider-specific mappings stay inside the OpenCode feature/adapter boundary.
+OpenCode-specific session handling, events, permissions, forms, and
+provider-specific mappings stay inside the OpenCode feature boundary.
 
 Do not spread OpenCode wire-format assumptions through generic TBAi UI or application code.
 

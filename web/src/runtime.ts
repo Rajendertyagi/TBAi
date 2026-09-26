@@ -1,8 +1,7 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   useChatRuntime,
   AssistantChatTransport,
-  createResumableSessionStorage,
 } from "@assistant-ui/ai-sdk";
 import {
   lastAssistantMessageIsCompleteWithToolCalls,
@@ -21,6 +20,15 @@ import {
 } from "./lib/send-operation";
 import { peekMaterializedEngine } from "./features/chat/state/materializeDraft";
 import { setPendingFirstMessage } from "./features/chat/state/pendingFirstMessage";
+import {
+  createDirectResumableStorage,
+  forgetRememberedStreamId,
+  lastRememberedStreamId,
+  rememberStreamId,
+} from "./features/chat/state/resumable-stream";
+import { resolveStreamRecovery, useStreamRecoveryStore, type StreamRecoveryState } from "./features/chat/state/streamRecovery";
+import { lastUserText } from "./lib/ui-messages";
+import { useAvailabilityStore } from "./features/availability/availabilityStore";
 
 /**
  * Wires the assistant-ui runtime to our backend using the native
@@ -83,26 +91,6 @@ export class OpencodeDraftRedirectError extends Error {
     this.name = "OpencodeDraftRedirectError";
     this.threadId = threadId;
   }
-}
-
-type UIMessageLike = {
-  role?: string;
-  parts?: Array<{ type?: string; text?: string }>;
-};
-
-/** Plain text of the last user message (defensive: non-text parts ignored). */
-function lastUserText(msgs: unknown): string | null {
-  if (!Array.isArray(msgs)) return null;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i] as UIMessageLike;
-    if (m?.role !== "user" || !Array.isArray(m.parts)) continue;
-    const text = m.parts
-      .filter((p) => p?.type === "text" && typeof p.text === "string")
-      .map((p) => p.text as string)
-      .join("\n");
-    if (text) return text;
-  }
-  return null;
 }
 
 /** Detects terminal stream markers so Stop / errors / natural finish clear the
@@ -199,8 +187,8 @@ function diagnosticFetch(
         path,
         durationMs: Date.now() - startedAt,
         threadId,
+        kind: classifyChatError(err),
         errorType: err instanceof Error ? err.name : typeof err,
-        message: err instanceof Error ? err.message : String(err),
       });
       throw err;
     }
@@ -210,18 +198,119 @@ function diagnosticFetch(
 
 function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
   const aui = useAui();
+  // Offline is the only state that gates sending (degraded stays sendable — a
+  // degraded backend may still answer). Read here because the gate belongs to
+  // the runtime, not the button: see the `isSendDisabled` note below.
+  const isOffline = useAvailabilityStore((s) => s.status === "offline");
   // Hoisted so onResumeError can clear the same per-thread key the transport
   // uses (key is derived from current aui thread state in both cases).
   const storage = useMemo(
     () =>
-      createResumableSessionStorage({
-        key: () => {
-          const item = aui.threadListItem.getState();
-          return `tbai-resume:${item.remoteId ?? item.id}`;
-        },
+      createDirectResumableStorage(() => {
+        const item = aui.threadListItem.getState();
+        return item.remoteId ?? item.id;
       }),
     [aui],
   );
+
+  // Mirror every id the transport records, so a failure that arrives AFTER the
+  // transport cleared its pointer can still be attributed to a known run.
+  useEffect(() => {
+    // `subscribe` is optional on the contract; without it the pointer can only be
+    // read at error time, which is the ordering that loses the run.
+    if (!storage.subscribe) return;
+    const currentThread = (): string | null => {
+      const item = aui.threadListItem.getState();
+      return item.remoteId ?? item.id ?? null;
+    };
+    return storage.subscribe(() => {
+      const threadId = currentThread();
+      if (!threadId) return;
+      try {
+        rememberStreamId(threadId, storage.getStreamId(threadId));
+      } catch {
+        /* sessionStorage unavailable — recovery is simply unavailable */
+      }
+    });
+  }, [aui, storage]);
+
+  /**
+   * Ask the server what became of this conversation's last run, publish the
+   * verdict, and drop the resume pointer once the run is terminal.
+   *
+   * Keyed on the CONVERSATION, never on a stream id. The resumable pointer is
+   * transport-owned, is cleared by the transport when a send fails, and does not
+   * survive an app restart — so a client that can only ask "what is stream X?"
+   * with an id it may have lost cannot recognise a dead run at all. Observed live
+   * as a crash that produced no recovery state whatsoever.
+   *
+   * The pointer still has to be dropped by us: the transport clears it only when
+   * `resumeStream()` rejects, and with ai@7 it never rejects, so the library's own
+   * clear never runs and the client re-resumes a dead stream on every state
+   * change. A `streaming` row keeps its pointer — its producer is still alive.
+   */
+  const reconcileRecovery = useCallback(
+    async (threadId: string, prompt: string, assumeRun = false) => {
+      const { status } = await resolveStreamRecovery(threadId, prompt, { assumeRun });
+      if (!status || status.status === "streaming") return;
+      try {
+        storage.clear(threadId);
+        forgetRememberedStreamId(threadId);
+        logger.info("chat", "stream_resume_pointer_cleared", {
+          threadId,
+          streamId: status.streamId,
+          status: status.status,
+          terminalKind: status.terminalKind,
+        });
+      } catch {
+        /* sessionStorage unavailable — the cost is a server-side replay, nothing more */
+      }
+    },
+    [storage],
+  );
+
+  // The prompt for a re-send, read from the live runtime. A crashed run's user
+  // message was never written to history (the server was down when the browser
+  // tried), so this is the only moment it exists anywhere.
+  const promptFor = useCallback((): string => {
+    try {
+      return lastUserText(aui.thread.getState().messages) ?? "";
+    } catch {
+      return "";
+    }
+  }, [aui]);
+
+  // Thread load: a run that died while the tab was closed is recognised here, with
+  // no pointer and no dependency on when the transport happened to clear it.
+  const loadedThreadId = (() => {
+    const item = aui.threadListItem.getState();
+    return item.remoteId ?? item.id ?? null;
+  })();
+  useEffect(() => {
+    if (!loadedThreadId) return;
+    void reconcileRecovery(loadedThreadId, promptFor());
+  }, [reconcileRecovery, promptFor, loadedThreadId]);
+
+  // Re-check pending notices when the backend comes back. This subscribes to the
+  // availability STORE — the app's single readiness poller (Phase 3.1/3.2) — rather
+  // than adding a timer or depending on the central recovery hook, so there is
+  // still exactly one thing deciding when the backend is reachable.
+  //
+  // This is the step that upgrades "couldn't reconnect" to a real Retry: the
+  // failure is always detected while the backend is DOWN, so the first verdict can
+  // never be the durable one.
+  const backendOnline = useAvailabilityStore((s) => s.status === "online");
+  useEffect(() => {
+    if (!backendOnline) return;
+    // A second chance for a notice whose own re-read chain already gave up (it is
+    // bounded on purpose). The chain is the primary mechanism; this is a cheap
+    // catch-up on the app's own reachability signal, not a second poller.
+    const pending = Object.values(useStreamRecoveryStore.getState().byThread).filter(
+      (s): s is StreamRecoveryState => s !== undefined && !s.canRetry,
+    );
+    if (pending.length === 0) return;
+    void Promise.all(pending.map((s) => reconcileRecovery(s.threadId, s.prompt)));
+  }, [backendOnline, reconcileRecovery]);
   const transport = useMemo(
     () =>
       new AssistantChatTransport({
@@ -234,7 +323,6 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
         },
         prepareSendMessagesRequest: async ({
           messages,
-          body,
           id,
           trigger,
           messageId,
@@ -243,6 +331,14 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
           const s = useSettingsStore.getState();
           const item = aui.threadListItem.getState();
           const threadKey = item.remoteId ?? item.id ?? "nothread";
+          // Dead-run recovery (Phase 3): every new send supersedes a previous
+          // recovery notice, exactly as the composer's other strips do. Cleared
+          // here, at the single funnel every send passes through, so no send path
+          // (Enter, button, touch, programmatic) can leave a stale Retry behind.
+          useStreamRecoveryStore.getState().clear(threadKey);
+          // A new send supersedes the previous run: its id must never be reused to
+          // explain a later failure, or a dead old run would be blamed twice.
+          forgetRememberedStreamId(threadKey);
           // Phase 4 backstop: a library-driven send on a thread materialized
           // as opencode (Enter key et al. bypass the Composer custom send)
           // must never reach Direct /api/chat. Stash the text for the Code
@@ -317,9 +413,11 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             // by one operationId instead of splitting into several.
             attachSendOperation(sel.operationId);
           }
+          // Deliberately allowlist the Direct envelope. The transport may
+          // provide system/tools/callSettings/config from its model context, but
+          // those are server-owned policy and must never be forwarded.
           return {
             body: {
-              ...body,
               providerId: sel.providerId,
               model: sel.model,
               ...(sel.reasoningLevel ? { reasoningLevel: sel.reasoningLevel } : {}),
@@ -337,6 +435,15 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
 
   return useChatRuntime({
     transport,
+    // Offline send gate (runtime level). The composer ALSO swaps its Send
+    // button for an inert one while offline, but a disabled button only stops
+    // CLICKS: `ComposerPrimitive.Input` submits the form on Enter via
+    // `form.requestSubmit()`, and `aui.composer.send()` can be called
+    // programmatically. Both land on the composer runtime, where
+    // `canSend = !isEmpty && !isSendDisabled && !isSending` gates `send()` —
+    // so setting the flag here is what actually holds the gate shut, on every
+    // path, while leaving the input usable so the user can keep typing.
+    isSendDisabled: isOffline,
     // A failed run is the terminal event of the send operation, so it is the
     // one that ends it. `kind` distinguishes a transport kill from anything
     // else, which is what tells "the answer never arrived" apart from "the
@@ -345,9 +452,29 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
       const kind = classifyChatError(error);
       logger.warn("chat", "send.failed", {
         kind,
-        message: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.name : typeof error,
       });
       endSendOperation("failed");
+      // Dead-run recognition (Phase 3). This is the only live signal that a run
+      // died: `makeRequest` never rejects, so `onResumeError` is unreachable,
+      // while a failed reconnect (`ai/dist/index.js:19176`) and an errored replayed
+      // stream (`:19273`) both arrive here.
+      //
+      // Recovery is resolved by CONVERSATION, so this needs no resumable pointer
+      // and cannot be defeated by the transport clearing one first.
+      const item = aui.threadListItem.getState();
+      const threadKey = item.remoteId ?? item.id;
+      if (!threadKey) return;
+      logger.info("chat", "stream_error_recovery_check", {
+        threadId: threadKey,
+        streamId: lastRememberedStreamId(threadKey),
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      // `assumeRun`: a send or resume just failed, so a run demonstrably existed
+      // even if the status cannot be read yet (the usual case — the backend is
+      // what just died). The notice is kept unconfirmed so the recovery hook has
+      // something to re-check when it returns.
+      void reconcileRecovery(threadKey, promptFor(), true);
     },
     // Continuation contract (official ai helpers): after a tool result OR an
     // approval decision lands, the runtime automatically resends the thread so
@@ -361,13 +488,19 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     // (restart wiped the in-memory store, or the stream already finalized),
     // drop the stale id so future reloads don't retry it forever. Persisted
     // messages are untouched — only the resume pointer clears.
+    //
+    // NOTE: with the installed AI SDK this hook never fires — `makeRequest` does
+    // not reject (`ai/dist/index.js:19120-19320`), so the `.catch` in
+    // `useChatThread` that calls it is unreachable. It is kept because it is the
+    // documented contract and costs nothing, but the live recovery signal is the
+    // `onError` above.
     onResumeError: (error) => {
       try {
         storage.clear();
         const item = aui.threadListItem.getState();
         logger.debug("chat", "resume_failed_stale_cleared", {
           threadId: item.remoteId ?? item.id,
-          message: error instanceof Error ? error.message : String(error),
+          errorType: error instanceof Error ? error.name : typeof error,
         });
       } catch {
         /* sessionStorage may be unavailable — resume simply won't retry */

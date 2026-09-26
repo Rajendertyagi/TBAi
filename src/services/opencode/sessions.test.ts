@@ -18,8 +18,16 @@ let conversation: Record<string, unknown> | null = null;
 let updates: Array<{ id: string; patch: unknown }> = [];
 
 let getImpl: (args: { sessionID: string }) => Promise<unknown>;
+let createImpl: (args: {
+  location: { directory: string };
+  agent?: string;
+  model?: unknown;
+}) => Promise<unknown>;
 let interruptImpl: () => Promise<unknown>;
 let removeImpl: () => Promise<unknown>;
+
+const SUBMITTED_DIRECTORY = "D:\\ws\\chats\\conv-1";
+const CREATED_SESSION_ID = "ses_created00000000000000000000";
 
 /** Rejection carrying the V2 tagged body the official client throws on a 404. */
 function sessionNotFound(sessionID: string): unknown {
@@ -33,6 +41,10 @@ mock.module("../storage", () => ({
       updates.push({ id, patch });
     },
   },
+}));
+
+mock.module("../workspace", () => ({
+  resolveConversationWorkspace: async () => ({ dir: SUBMITTED_DIRECTORY }),
 }));
 
 mock.module("./client", () => ({
@@ -50,12 +62,21 @@ mock.module("./client", () => ({
         calls.push(`remove:${args.sessionID}`);
         return removeImpl();
       },
+      create: (args: {
+        location: { directory: string };
+        agent?: string;
+        model?: unknown;
+      }) => {
+        calls.push(`create:${args.location.directory}`);
+        return createImpl(args);
+      },
     },
   }),
 }));
 
 const { openCodeServerManager } = await import("./serverManager");
 const { createOpenCodeClient } = await import("./client");
+const { OpenCodeError } = await import("./errors");
 const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } =
   await import("./sessions");
 
@@ -72,6 +93,10 @@ beforeEach(() => {
   updates = [];
   conversation = { engine: "opencode", opencodeSessionId: LIVE_ID };
   getImpl = async () => ({ id: LIVE_ID });
+  createImpl = async () => ({
+    id: CREATED_SESSION_ID,
+    location: { directory: "D:\\ws\\server-recorded" },
+  });
   interruptImpl = async () => ({ interrupted: true });
   removeImpl = async () => undefined;
 });
@@ -154,42 +179,46 @@ describe("isOpenCodeSessionLive — liveness semantics", () => {
     expect(await isOpenCodeSessionLive(stubClient, LIVE_ID)).toBe(false);
   });
 
-  it("G. reads the OpenCode 1.18.29 HTTP 500 (directory gone) as LIVE, not stale", async () => {
-    // Measured: the 500 correlates 100% with the session's bound directory
-    // having been removed from disk, never with the session being absent.
-    // Treating it as dead made TBAi recreate the session on every call.
-    getImpl = async () => {
-      throw new ClientError("UnexpectedStatus", { cause: { status: 500 } });
-    };
-    expect(await isOpenCodeSessionLive(stubClient, LIVE_ID)).toBe(true);
-  });
-
-  it("G. reads a transport failure as dead (unreachable = cannot verify)", async () => {
+  it("G. rejects transport failures as OpenCodeError", async () => {
     getImpl = async () => {
       throw new ClientError("Transport", {
         cause: Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" }),
       });
     };
-    expect(await isOpenCodeSessionLive(stubClient, LIVE_ID)).toBe(false);
+    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).rejects.toBeInstanceOf(OpenCodeError);
   });
 
-  it("reads a malformed response as dead", async () => {
+  it("rejects authentication failures as OpenCodeError", async () => {
+    getImpl = async () => {
+      throw { _tag: "UnauthorizedError", message: "Unauthorized" };
+    };
+    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).rejects.toBeInstanceOf(OpenCodeError);
+  });
+
+  it("rejects malformed responses as OpenCodeError", async () => {
     getImpl = async () => {
       throw new ClientError("UnsupportedContentType");
     };
-    expect(await isOpenCodeSessionLive(stubClient, LIVE_ID)).toBe(false);
+    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).rejects.toBeInstanceOf(OpenCodeError);
   });
 
-  it("never throws — an unknown failure reads as dead", async () => {
+  it("rejects unexpected HTTP 500 responses as OpenCodeError", async () => {
+    getImpl = async () => {
+      throw new ClientError("UnexpectedStatus", { cause: { status: 500 } });
+    };
+    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).rejects.toBeInstanceOf(OpenCodeError);
+  });
+
+  it("rejects unknown failures as OpenCodeError", async () => {
     getImpl = async () => {
       throw new Error("something unexpected");
     };
-    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).resolves.toBe(false);
+    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).rejects.toBeInstanceOf(OpenCodeError);
   });
 
-  it("reads a response with no id as dead", async () => {
+  it("rejects a response with no session id as OpenCodeError", async () => {
     getImpl = async () => ({ id: undefined });
-    expect(await isOpenCodeSessionLive(stubClient, LIVE_ID)).toBe(false);
+    await expect(isOpenCodeSessionLive(stubClient, LIVE_ID)).rejects.toBeInstanceOf(OpenCodeError);
   });
 });
 
@@ -210,25 +239,6 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     });
   });
 
-  it("accepts the V1 wire shape, where the directory is top-level", async () => {
-    // OpenCode 1.18.x answers its V1 session route with a flat `directory`, so
-    // both shapes are read rather than pinning the seam to one server version.
-    getImpl = async () => ({ id: LIVE_ID, directory: "D:\\ws\\chats\\conv-2" });
-    expect(await ensureOpenCodeSession("conv-1")).toEqual({
-      sessionId: LIVE_ID,
-      directory: "D:\\ws\\chats\\conv-2",
-    });
-  });
-
-  it("prefers the V2 location field when both are present", async () => {
-    getImpl = async () => ({
-      id: LIVE_ID,
-      directory: "D:\\stale",
-      location: { directory: "D:\\ws\\current" },
-    });
-    expect((await ensureOpenCodeSession("conv-1")).directory).toBe("D:\\ws\\current");
-  });
-
   it("reports no scope rather than guessing when the server names none", async () => {
     // A null scope is honest: the runtime then leaves its subscription unscoped
     // (the previous behaviour) instead of scoping to an invented path.
@@ -239,25 +249,60 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     });
   });
 
-  it("keeps the 1.18.29 `directory gone` 500 as live, with no scope", async () => {
-    // The session exists; its directory is what is missing, so there is nothing
-    // to scope to — but it must still be resumed, not replaced.
-    getImpl = async () => {
-      throw new ClientError("UnexpectedStatus", { cause: { status: 500 } });
-    };
-    expect(await ensureOpenCodeSession("conv-1")).toEqual({
-      sessionId: LIVE_ID,
-      directory: null,
-    });
+  it("rejects lookup failures without creating a replacement session", async () => {
+    const failures = [
+      new ClientError("Transport", { cause: new Error("offline") }),
+      { _tag: "UnauthorizedError", message: "Unauthorized" },
+      new ClientError("UnsupportedContentType"),
+      new ClientError("UnexpectedStatus", { cause: { status: 500 } }),
+      new Error("unknown failure"),
+    ];
+    for (const failure of failures) {
+      calls = [];
+      getImpl = async () => {
+        throw failure;
+      };
+      await expect(ensureOpenCodeSession("conv-1")).rejects.toBeInstanceOf(OpenCodeError);
+      expect(calls).toEqual([`get:${LIVE_ID}`]);
+      expect(updates).toEqual([]);
+    }
   });
 
-  it("recreates when the session is genuinely gone", async () => {
-    // A definitive not-found must not be handed back as a live binding: the
-    // create path then runs (and throws here, since the stub has no `create`),
-    // which is the documented recreate-rather-than-resume direction.
+  it("recreates when the stored session is gone", async () => {
+    // A definitive not-found must not be handed back as a live binding. The
+    // create path runs instead, using the submitted workspace as its request
+    // location and the native V2 response location as the returned scope.
     getImpl = async () => {
       throw sessionNotFound(LIVE_ID);
     };
-    await expect(ensureOpenCodeSession("conv-1")).rejects.toThrow();
+    createImpl = async () => ({
+      id: CREATED_SESSION_ID,
+      location: { directory: "D:\\ws\\server-recorded" },
+    });
+
+    expect(await ensureOpenCodeSession("conv-1")).toEqual({
+      sessionId: CREATED_SESSION_ID,
+      directory: "D:\\ws\\server-recorded",
+    });
+    expect(calls).toEqual([`get:${LIVE_ID}`, `create:${SUBMITTED_DIRECTORY}`]);
+    expect(updates).toEqual([
+      { id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } },
+    ]);
+  });
+
+  it("falls back to the submitted directory when a create response omits location", async () => {
+    // A partial native V2 response still supplies a session id. When it omits
+    // location, the request's submitted workspace remains the honest fallback.
+    conversation = { engine: "opencode", opencodeSessionId: null };
+    createImpl = async () => ({ id: CREATED_SESSION_ID });
+
+    expect(await ensureOpenCodeSession("conv-1")).toEqual({
+      sessionId: CREATED_SESSION_ID,
+      directory: SUBMITTED_DIRECTORY,
+    });
+    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
+    expect(updates).toEqual([
+      { id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } },
+    ]);
   });
 });

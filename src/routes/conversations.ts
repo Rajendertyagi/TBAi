@@ -5,6 +5,7 @@ import { ConversationNotFoundError, conversationService, messageService } from "
 import { terminateOpenCodeSession } from "../services/opencode/sessions";
 import { logger, normalizeError } from "../lib/logger";
 import { conversationCreateSchema, conversationUpdateSchema, messageUpsertSchema } from "../lib/validation";
+import { isContentlessAssistantMessage } from "../lib/message-persistence-policy";
 import { folderService } from "../services/folders";
 import { storageError } from "./shared";
 
@@ -25,15 +26,15 @@ function conversationNotFound(c: Context) {
 // Phase 4 idempotency for draft materialization: clientRequestId → conversation.
 // Covers two holes the client cannot close alone: concurrent duplicate POSTs
 // (singleflight: latecomers await the same creation) and commit-but-response-
-// lost retries (completed map: replays resolve to the existing row). Plain
-// in-memory maps — no new table, no migration.
+// lost retries (completed map: replays resolve to the existing row).
 //
-// Documented limitation: process lifetime only. A server restart between the
-// commit and the client retry loses the map, and the retry mints a second
-// row. No existing conversations-table field can carry the identity without
-// semantic abuse (every TEXT column owns a feature meaning; title_source is
-// CHECK-constrained), so durable cross-restart idempotency would require a
-// migration — explicitly deferred, not pretended.
+// Durable replay (Task 3): the in-memory maps are the fast path for the
+// process-lifetime case. The `client_request_id` column on `conversations`
+// is the cross-restart source of truth: a server restart between the commit
+// and the client's retry loses the maps, but `findByClientRequestId` finds
+// the row by the column, so a replayed key returns the EXISTING row instead
+// of minting a second one. The column + partial unique index enforce that a
+// key maps to at most one row across all process lifetimes.
 const CREATE_KEY_TTL_MS = 10 * 60 * 1000;
 const createInFlight = new Map<string, Promise<{ id: string }>>();
 const createCompleted = new Map<string, { id: string; at: number }>();
@@ -142,6 +143,12 @@ app.post("/api/conversations", async (c) => {
           createCompleted.delete(idempotencyKey);
         }
       }
+
+      // Durable replay (Task 3): a restart between the commit and this retry
+      // loses both in-memory maps, so fall back to the SQLite column. If a
+      // row already carries this key, return it — never mint a second row.
+      const durable = await conversationService.findByClientRequestId(idempotencyKey);
+      if (durable) return materialized(durable, true);
     }
 
     const createOne = async () => {
@@ -158,6 +165,7 @@ app.post("/api/conversations", async (c) => {
         opencodeModel: parsed.opencodeModel ?? null,
         opencodeVariant: parsed.opencodeVariant ?? null,
         opencodeAutoApprove: parsed.opencodeAutoApprove ?? false,
+        clientRequestId: parsed.clientRequestId ?? null,
       });
     };
 
@@ -231,13 +239,33 @@ app.post("/api/conversations/:id/messages", async (c) => {
     const body = await c.req.json();
     const parsed = messageUpsertSchema.parse(body);
 
+    // A message with nothing renderable in it is not a reply yet. The client
+    // posts an assistant row the moment a run STARTS, when the runtime holds only
+    // the UI-only progress part; if the run then dies, that row would survive
+    // forever as a blank bubble. Refusing the write means the phantom is never
+    // created — no cleanup pass, nothing to race, and a reconnect cannot bring it
+    // back. The real reply arrives seconds later as an update to this same id and
+    // is persisted normally.
+    //
+    // This is the CLIENT boundary only. `messageService.upsertStored` is
+    // untouched, so server-side writers (detached-run finalization, the scheduler)
+    // keep writing whatever they intend.
+    if (isContentlessAssistantMessage(parsed.message.content)) {
+      logger.debug("conversations", "conversation.message_shell_skipped", {
+        conversationId: id,
+        messageId: parsed.message.id,
+        format: parsed.message.format,
+      });
+      return c.json({ success: true, persisted: false });
+    }
+
     await messageService.upsertStored(id, {
       id: parsed.message.id,
       parent_id: parsed.message.parent_id ?? null,
       format: parsed.message.format,
       content: parsed.message.content,
     });
-    return c.json({ success: true });
+    return c.json({ success: true, persisted: true });
   } catch (e) {
     return storageError(c, e);
   }

@@ -57,6 +57,62 @@ const CHAT_DIR = path.join(DATA_DIR, "chat");
 /** New-layout root: conversation-owned workspaces live here. */
 const CHATS_DIR = path.join(WORKSPACE_DIR, "chats");
 
+/** Where the app keeps its data when the operator has relocated nothing. */
+const DEFAULT_DATA_DIR = path.join(process.cwd(), "data");
+
+/** Why the orphan sweep stood down. `null` means it may run. */
+export type OrphanSweepSkipReason = "relocated_data_dir";
+
+export interface OrphanSweepSafety {
+  /** True when the sweep must not touch the filesystem at all. */
+  skip: boolean;
+  /** Machine-readable cause, for the skip diagnostic. */
+  reason: OrphanSweepSkipReason | null;
+  /** True when the data directory is not the default location. */
+  dataDirRelocated: boolean;
+  /** True when the operator explicitly chose a workspace directory. */
+  workspaceDirExplicit: boolean;
+}
+
+/**
+ * Decide whether the destructive orphan sweep may run in this process.
+ *
+ * The sweep answers "is this directory still bound to a chat?" entirely from the
+ * database, then hard-deletes everything that is not. That is only sound when
+ * the database and the workspace belong to the SAME install. Point `DATA_DIR` at
+ * a scratch or verification copy and leave `WORKSPACE_DIR` on the live
+ * workspace, and the sweep compares a foreign database against real directories
+ * — every one of them unbound by definition, so all of them are reclaimable.
+ * This has destroyed real directories twice (11 in one incident, 1 in another).
+ *
+ * The rule: a relocated `DATA_DIR` is only safe if the operator ALSO said where
+ * the workspace is. Without that second statement the pairing is unknowable, so
+ * the sweep stands down.
+ *
+ * Deliberately a degradation, never an outage: the only setup this affects is
+ * "relocated data directory, default workspace", and for that setup the cost is
+ * a leaked scratch directory instead of a deleted one. A normal install (both
+ * paths default) and a deliberately co-located install (both paths set) are
+ * untouched.
+ *
+ * Pure — the caller supplies the facts — so the truth table is testable without
+ * a database or a filesystem.
+ */
+export function evaluateOrphanSweepSafety(
+  dataDir: string,
+  defaultDataDir: string,
+  workspaceDirExplicit: boolean,
+): OrphanSweepSafety {
+  const dataDirRelocated = !samePath(dataDir, defaultDataDir);
+  const skip = dataDirRelocated && !workspaceDirExplicit;
+  return {
+    skip,
+    reason: skip ? "relocated_data_dir" : null,
+    dataDirRelocated,
+    workspaceDirExplicit,
+  };
+}
+
 /** Canonical path for a simple-chat conversation workspace. Stable per id. */
 export function chatWorkspaceDir(conversationId: string): string {
   return canonicalizeRoot(path.join(CHATS_DIR, conversationId));
@@ -119,8 +175,67 @@ function listLiveChatFolderPaths(): Set<string> {
  * NOT bound to a live chat folder AND it is older than `CHAT_SCRATCH_STALE_MS`.
  * Matching codeg's `gc_orphan_chat_dirs_core` logic. Returns the number of
  * dirs removed. Never fatal: every filesystem error is logged and skipped.
+ *
+ * Two guards can stand the sweep down, both logged as `gc_skipped` and both
+ * checked before anything is deleted: a database/workspace pairing this process
+ * cannot vouch for (`evaluateOrphanSweepSafety`), and a database with no
+ * conversation rows at all. Leaking a scratch directory is recoverable;
+ * deleting a user's workspace is not.
  */
+/**
+ * Whether the database holds an established conversation set.
+ *
+ * The orphan sweep answers "is this directory still bound to a chat?" purely
+ * from the `folders` table. On a database with no conversation rows at all,
+ * every directory is therefore unbound by definition — so an empty or
+ * freshly-initialized database would authorise deleting the entire workspace
+ * tree. That is a real hazard, not a theoretical one: any process pointed at a
+ * different `DATA_DIR` than its `WORKSPACE_DIR` (a scratch instance, a test
+ * harness, a misconfigured launch) has exactly that shape, and the sweep is a
+ * hard `rmSync` with no trash.
+ *
+ * Counting every row (including soft-deleted ones) is deliberate: a database
+ * whose conversations were all deleted still has established state, and its
+ * directories are legitimately reclaimable. Only a genuinely empty table means
+ * "this database cannot vouch for any directory".
+ */
+function hasEstablishedConversations(): boolean {
+  const row = db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM conversations").get();
+  return (row?.c ?? 0) > 0;
+}
+
 export function gcOrphanChatDirs(): number {
+  // Checked FIRST, and before any destructive call. Whether the sweep may run at
+  // all is a fact about how this process was launched; it must not depend on
+  // what the database happens to contain, because a scratch database looks
+  // exactly like a healthy one until it has been used to authorise deletions.
+  const safety = evaluateOrphanSweepSafety(
+    DATA_DIR,
+    DEFAULT_DATA_DIR,
+    Boolean(process.env.WORKSPACE_DIR),
+  );
+  if (safety.skip) {
+    logger.warn("workspace", "gc_skipped", {
+      reason: safety.reason,
+      dataDir: DATA_DIR,
+      workspaceDir: CHATS_DIR,
+      dataDirRelocated: safety.dataDirRelocated,
+      workspaceDirExplicit: safety.workspaceDirExplicit,
+    });
+    return 0;
+  }
+
+  // Fail safe before any destructive call: an empty conversation table is
+  // absence of evidence, not evidence that every directory is an orphan.
+  if (!hasEstablishedConversations()) {
+    logger.warn("workspace", "gc_skipped", {
+      reason: "no_established_conversations",
+      conversationCount: 0,
+      roots: [CHAT_DIR, CHATS_DIR],
+    });
+    return 0;
+  }
+
   const live = listLiveChatFolderPaths();
   // Canonical form of every bound path, computed once: bound paths are stored
   // canonical, but a symlinked root or case drift must never make a live dir

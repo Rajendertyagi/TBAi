@@ -14,8 +14,8 @@ import { buildOpenCodeThinkingOptions } from "./useOpenCodeCapabilities";
 /**
  * Code-mode thinking chip: one of three independent OpenCode composer chips.
  * The options are sourced from the selected model's live `variants` array —
- * never a fixed enum. "Default" (= omit the variant field on prompt_async)
- * is always the first entry. The chip hides entirely when the selected model
+ * never a fixed enum. "Default" (= omit the variant from the native V2 prompt
+ * model reference) is always the first entry. The chip hides entirely when the selected model
  * declares no variants.
  */
 export function OpenCodeThinkingChip() {
@@ -43,7 +43,7 @@ export function OpenCodeThinkingChip() {
 
   const toggleVariant = async (id: string) => {
     setOpen(false);
-    // Empty string = Default = omit the variant field on prompt_async.
+    // Empty string = Default = omit the variant from the V2 model reference.
     await persist({ opencodeVariant: id === "" ? null : id });
   };
 

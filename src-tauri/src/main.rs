@@ -35,6 +35,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How far above the configured port the pre-heal scan may go.
 const HEAL_SCAN_LIMIT: u32 = 100;
+/// Highest valid TCP port; the mirror never receives a value above this.
+const MAX_PORT: u32 = 65535;
+/// Floor the pre-heal scan wraps to (below the registered-port range).
+const SCAN_FLOOR_PORT: u32 = 1024;
 /// Bounded sidecar diagnostics: forward at most this many stderr lines.
 const STDERR_LINE_CAP: usize = 200;
 
@@ -93,7 +97,7 @@ fn resolve_data_dir() -> PathBuf {
 fn read_mirror_port(data_dir: &PathBuf) -> u32 {
     if let Ok(raw) = std::fs::read_to_string(data_dir.join("port")) {
         if let Ok(n) = raw.trim().parse::<u32>() {
-            if (1..=65535).contains(&n) {
+            if (1..=MAX_PORT).contains(&n) {
                 return n;
             }
         }
@@ -149,7 +153,12 @@ fn quit_owned(app: &AppHandle) {
         if let Some(child) = owned.child.lock().expect("child lock").take() {
             let _ = child.kill();
         }
+        *owned.exited.lock().expect("exited lock") = Some("user quit".to_string());
     }
+    // End the process itself: without this the app would linger with a dead
+    // backend. Exiting ends all threads with it, so the recovery backstop
+    // cannot respawn anything afterwards.
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -207,32 +216,42 @@ fn attempt(app: &AppHandle) {
     // Held OS file lock on the data dir: a second copy pointed at the same
     // folder fails here instead of sharing one SQLite file. The handle stays
     // in `owned` for the instance lifetime; Windows releases it on crash.
-    let lock_path = cfg.data_dir.join(".lock");
-    let _ = std::fs::create_dir_all(&cfg.data_dir);
-    let lock_file = match OpenOptions::new().create(true).write(true).open(&lock_path) {
-        Ok(file) => file,
-        Err(err) => {
-            render_error(
-                &win,
-                0,
-                "locked",
-                "not started",
-                &format!("Could not open the data lock ({err}). The data folder may not be writable."),
-            );
-            return;
+    // Acquire only if not already held: a second open+lock of the same region
+    // fails in the SAME process too (flock/LockFileEx are per-handle), so
+    // re-locking on Retry/backstop would falsely claim "another copy running"
+    // and brick recovery. Guard is scoped to this block so it never overlaps
+    // the verification poll.
+    {
+        let mut lock_guard = owned.lock.lock().expect("folder lock");
+        if lock_guard.is_none() {
+            let lock_path = cfg.data_dir.join(".lock");
+            let _ = std::fs::create_dir_all(&cfg.data_dir);
+            let lock_file = match OpenOptions::new().create(true).write(true).open(&lock_path) {
+                Ok(file) => file,
+                Err(err) => {
+                    render_error(
+                        &win,
+                        0,
+                        "locked",
+                        "not started",
+                        &format!("Could not open the data lock ({err}). The data folder may not be writable."),
+                    );
+                    return;
+                }
+            };
+            if lock_file.try_lock_exclusive().is_err() {
+                render_error(
+                    &win,
+                    0,
+                    "locked",
+                    "not started",
+                    "Another TBAi copy is already running from this data folder. Duplicate the portable folder for a second copy.",
+                );
+                return;
+            }
+            *lock_guard = Some(lock_file);
         }
-    };
-    if lock_file.try_lock_exclusive().is_err() {
-        render_error(
-            &win,
-            0,
-            "locked",
-            "not started",
-            "Another TBAi copy is already running from this data folder. Duplicate the portable folder for a second copy.",
-        );
-        return;
     }
-    *owned.lock.lock().expect("folder lock") = Some(lock_file);
 
     // Fresh identity for this attempt only — never persisted, never reused.
     let expected = uuid::Uuid::new_v4().to_string();
@@ -247,6 +266,11 @@ fn attempt(app: &AppHandle) {
             break;
         }
         port += 1;
+        // Wrap before the scan runs past the valid range, so the mirror never
+        // receives an out-of-range value the next read would reject.
+        if port > MAX_PORT {
+            port = SCAN_FLOOR_PORT;
+        }
     }
     write_mirror_port(&cfg.data_dir, port);
 
@@ -391,9 +415,18 @@ fn main() {
             });
 
             // System tray: Open restores the window, Quit stops the owned
-            // sidecar and ends the process. Best-effort by design — a missing
-            // icon must never prevent boot, so failures only log.
-            if let Some(icon) = app.default_window_icon().cloned() {
+            // sidecar and ends the process. The icon is embedded at compile
+            // time so the menu never depends on runtime icon discovery; the
+            // framework default is only a fallback. A missing icon must never
+            // prevent boot, but unlike before it is LOUD when it happens.
+            let icon = match tauri::image::Image::from_bytes(include_bytes!("../app-icon.png")) {
+                Ok(icon) => Some(icon),
+                Err(err) => {
+                    eprintln!("[tray] embedded icon decode failed: {err}");
+                    app.default_window_icon().cloned()
+                }
+            };
+            if let Some(icon) = icon {
                 let tray_result: tauri::Result<()> = (|| {
                     let menu = Menu::with_items(
                         app,
@@ -431,6 +464,8 @@ fn main() {
                 if let Err(err) = tray_result {
                     eprintln!("[tray] disabled: {err}");
                 }
+            } else {
+                eprintln!("[tray] disabled: no usable tray icon (embedded decode failed and no default window icon)");
             }
 
             // Close hides to tray — the server keeps running. Full quit is

@@ -27,8 +27,9 @@ import type { QuestionFormItem } from "./QuestionFormCard";
  *      mutual-exclusion / answer-collection semantics fails here rather than
  *      only in a browser.
  *
- * The unbound-runtime-safety and linked/isolated-surface contracts are covered
- * in `features/opencode/toolLinkedQuestion.test.ts`; this file covers the
+ * The native V2 form projection and thread-controller contracts are covered in
+ * `features/opencode/v2Forms.test.ts` and
+ * `features/opencode/v2ThreadController.test.ts`; this file covers the
  * form-card UI itself.
  */
 
@@ -272,8 +273,7 @@ describe("Back/Next state preservation", () => {
 describe("complete submission", () => {
   it("final Submit collects every step's answer into a positional string[][]", () => {
     // `handleSubmit` maps the questions array in order, so `answers[i]` always
-    // corresponds to `questions[i]` — the exact shape `replyToQuestion`
-    // consumes.
+    // corresponds to `questions[i]` — the exact native V2 form answer shape.
     expect(submitBlock).toContain(
       "questions.map((_, idx) => getEffectiveAnswer(idx))",
     );

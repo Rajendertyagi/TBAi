@@ -2,11 +2,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import fs from "fs";
 import path from "path";
-import { redact } from "../lib/redact";
+import { sanitizeStreamError } from "../lib/redact";
 import { db } from "../db";
 import { accountingMiddleware, metricsText, logLossMetricsText } from "../services/http-metrics";
 import { logger, runWithRequestContext, getRequestContext, resolveInboundCorrelation } from "../lib/logger";
-import { classifyError } from "../lib/errors";
+import { errorLogFields } from "../lib/errors";
 import mcpApp from "./mcp";
 import logsApp from "./logs";
 import schedulerApp from "./scheduler";
@@ -123,18 +123,20 @@ app.route("/api/opencode", opencodeApp);
 // Single application server identity + explicit port restart.
 app.route("/api/server", serverApp);
 
-// Error handler — classify once; logging and the safe response consume the
-// same classification. Redact any accidental secret material before responding.
-// The operationId (when the failing request was part of a user action) is
-// echoed so the browser can attach the failure to that action.
+// Error handler — classify once for safe structured fields and user copy.
+// Raw exception text never crosses either boundary.
 app.onError((err, c) => {
   const ctx = getRequestContext();
   const requestId =
     (c.get("requestId") as string | undefined) ?? ctx?.requestId ?? "req_unknown";
-  logger.error("http", "http.error", { ...classifyError(err) });
+  logger.error("http", "http.error", {
+    requestId,
+    ...(ctx?.operationId ? { operationId: ctx.operationId } : {}),
+    ...errorLogFields(err),
+  });
   return c.json(
     {
-      error: redact(err instanceof Error ? err.message : "Unknown error"),
+      error: sanitizeStreamError(err),
       requestId,
       ...(ctx?.operationId ? { operationId: ctx.operationId } : {}),
     },

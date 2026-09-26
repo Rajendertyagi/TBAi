@@ -37,7 +37,7 @@ import {
  *
  * All native tools are `type: "backend"` render-only entries: the
  * model-facing contract AND execution live server-side (src/tools/index.ts,
- * assembled into the assistant-ui AISDKToolkit and executed in streamText).
+ * native AI SDK `tool()` defs executed in streamText).
  * Privileged tools pause at the server `toolApproval` gate, which these
  * renderers answer via `respondToApproval()`. No client-side execution, no
  * fetches, no addResult, no human tools.
@@ -78,13 +78,9 @@ export const NATIVE_TOOL_NAMES = Object.keys(nativeToolkit);
 /**
  * Renderers for OpenCode's OWN tool names (Code mode).
  *
- * These are NOT native TBAi tools and deliberately live in a separate registry
- * so `nativeToolkit` keeps meaning "the native tools": the server
- * (`src/tools/index.ts`) is the single authority for what the model may call,
- * and this registry only answers "which component draws this part". Code mode
- * sends `read`/`glob`/`grep`/`bash`/… — names that match none of our native
- * tools — so without these entries every Code tool call fell through to the
- * generic `ToolFallback`.
+ * sends `read`/`glob`/`grep`/`bash`/`shell`/… — names that match none of our
+ * native tools — so without these entries every Code tool call fell through to
+ * the generic `ToolFallback`.
  *
  * Only tools that are NOT permission-gated are mapped here; the gated ones
  * (`bash`, `edit`, `write`) follow once their approval parity is verified, so
@@ -104,6 +100,7 @@ export const openCodeToolkit = defineToolkit({
   // (Phase 3A); before that, a rich UI here would have re-created the wedge on
   // the very tools that hit it.
   bash: { type: "backend", display: "standalone", render: OpenCodeBashToolUI },
+  shell: { type: "backend", display: "standalone", render: OpenCodeBashToolUI },
   edit: { type: "backend", display: "standalone", render: OpenCodeEditToolUI },
   write: { type: "backend", display: "standalone", render: OpenCodeWriteToolUI },
   // Not permission-gated, so they render inline like read/glob/grep.

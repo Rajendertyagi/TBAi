@@ -5,15 +5,17 @@ import {
   normalizeOpenCodeArgs,
   normalizeOpenCodeResult,
   openCodePatchFromParts,
+  openCodeResultText,
+  parseOpenCodeWebSearchHits,
 } from "./adapt";
 
 /**
  * The argument names below are the AUTHORITY, not a guess.
  *
  * They come from the running OpenCode server's own per-tool JSON schema:
- * `GET /experimental/tool?provider=<p>&model=<m>`. Verified 2026-09-16 against
- * OpenCode 1.18.31. If a test here fails, either the mapping broke or OpenCode
- * renamed a field — both need a human to look.
+ * `GET /experimental/tool?provider=<p>&model=<m>`. These fields are the native
+ * V2 contract used by the current client. If a test here fails, either the
+ * mapping broke or the server contract changed — both need a human to look.
  */
 const OPENCODE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   read: ["filePath", "offset", "limit"],
@@ -22,6 +24,7 @@ const OPENCODE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   glob: ["pattern", "path"],
   grep: ["pattern", "path", "include"],
   bash: ["command", "timeout", "workdir"],
+  shell: ["command", "timeout", "workdir"],
 };
 
 /** Our rich UIs' field names, per the renderers in `tools/filesystem/ui.tsx`. */
@@ -32,6 +35,7 @@ const OUR_FIELDS: Readonly<Record<string, readonly string[]>> = {
   glob: ["query"],
   grep: ["query"],
   bash: ["cwd"],
+  shell: ["cwd"],
 };
 
 describe("normalizeOpenCodeArgs — filePath maps to our path", () => {
@@ -136,57 +140,74 @@ describe("normalizeOpenCodeArgs — edges", () => {
   });
 });
 
-describe("normalizeOpenCodeResult — the result is a plain string", () => {
-  it("wraps `read` output in the envelope the reader UI reads", () => {
-    // ReadFileToolUI summarizes `(r as any).content`; OpenCode returns the file
-    // text itself, so without this the body renders empty.
-    expect(normalizeOpenCodeResult("read", "file text")).toEqual({
-      content: "file text",
-    });
+describe("normalizeOpenCodeResult — native V2 content", () => {
+  it("rejects plain strings instead of reviving a non-native result shape", () => {
+    expect(normalizeOpenCodeResult("read", "file text")).toBe("file text");
+    expect(normalizeOpenCodeResult("bash", "ok\n")).toBe("ok\n");
+    expect(normalizeOpenCodeResult("shell", "boom")).toBe("boom");
   });
 
-  it("maps `bash` output to stdout for the terminal block", () => {
-    // The terminal renders from `{ stdout, stderr }` via `resultToLines`;
-    // OpenCode returns one combined string.
-    expect(normalizeOpenCodeResult("bash", "ok\n")).toEqual({ stdout: "ok\n" });
+  it("maps native V2 text content arrays to rich-UI result shapes", () => {
+    const content = [{ type: "text", text: "native output" }];
+    expect(normalizeOpenCodeResult("read", content)).toEqual({ content: "native output" });
+    expect(normalizeOpenCodeResult("bash", content)).toEqual({ stdout: "native output" });
+    expect(normalizeOpenCodeResult("shell", content)).toEqual({ stdout: "native output" });
+    expect(normalizeOpenCodeResult("glob", content)).toBe("native output");
+  });
+
+  it("accepts native V2 content arrays directly or inside the result object", () => {
+    const content = [{ type: "text", text: "native output" }];
+    const wrapped = { content };
+    expect(openCodeResultText(content)).toBe("native output");
+    expect(openCodeResultText(wrapped)).toBe("native output");
+    expect(normalizeOpenCodeResult("read", wrapped)).toBe(wrapped);
   });
 
   it("does not invent an exit code for `bash`", () => {
-    // `exitCode` lives in the part's `metadata`, which the runtime drops before
-    // our UI sees it. Claiming 0 would report success for a failed command.
-    const shaped = normalizeOpenCodeResult("bash", "boom") as Record<string, unknown>;
+    const shaped = normalizeOpenCodeResult("bash", [{ type: "text", text: "boom" }]) as Record<string, unknown>;
     expect(shaped.exitCode).toBeUndefined();
     expect("exitCode" in shaped).toBe(false);
   });
 
-  it("leaves tools with no shim alone", () => {
-    expect(normalizeOpenCodeResult("glob", "a.ts\nb.ts")).toBe("a.ts\nb.ts");
-    expect(normalizeOpenCodeResult("edit", "applied")).toBe("applied");
-    expect(normalizeOpenCodeResult("write", "wrote 3 lines")).toBe("wrote 3 lines");
+  it("rejects object.content strings and leaves unsupported values untouched", () => {
+    const contentString = { content: "x" };
+    const stdout = { stdout: "already" };
+    expect(normalizeOpenCodeResult("read", contentString)).toBe(contentString);
+    expect(normalizeOpenCodeResult("read", undefined)).toBeUndefined();
+    expect(normalizeOpenCodeResult("bash", stdout)).toBe(stdout);
   });
 
-  it("does not touch a non-string result", () => {
-    const obj = { content: "x" };
-    expect(normalizeOpenCodeResult("read", obj)).toBe(obj);
-    expect(normalizeOpenCodeResult("read", undefined)).toBeUndefined();
-    expect(normalizeOpenCodeResult("bash", { stdout: "already" })).toEqual({
-      stdout: "already",
-    });
+  it("extracts native V2 text content arrays for rich renderers", () => {
+    const content = [{ type: "text", text: "native output" }];
+    expect(openCodeResultText(content)).toBe("native output");
+    expect(normalizeOpenCodeResult("read", content)).toEqual({ content: "native output" });
+    expect(normalizeOpenCodeResult("shell", content)).toEqual({ stdout: "native output" });
+  });
+
+  it("keeps native V2 file content visible in a text result", () => {
+    expect(openCodeResultText([{
+      type: "file",
+      uri: "file:///workspace/report.txt",
+      mime: "text/plain",
+      name: "report.txt",
+    }])).toBe("report.txt");
+  });
+
+  it("parses websearch JSON carried inside native V2 content arrays", () => {
+    const content = [{ type: "text", text: JSON.stringify({
+      results: [{ title: "Native result", url: "https://example.com/result" }],
+    }) }];
+    expect(parseOpenCodeWebSearchHits(content)).toEqual([
+      { title: "Native result", domain: "example.com" },
+    ]);
   });
 });
 
 /**
- * `openCodePatchFromParts` — reading OpenCode's patch out of a raw tool part.
+ * `openCodePatchFromParts` — reading the native V2 patch out of a raw tool part.
  *
- * The fixtures below are the ACTUAL shapes recorded by OpenCode, copied from its
- * local session database. The shape survey that drove this design, over every
- * completed `edit`/`write` part stored locally (253 parts):
- *
- *   - `edit`  : 148/148 have `metadata.diff` AND `metadata.filediff.patch`
- *   - `write` : 0/105 have either — a whole-file write has nothing to diff
- *               against, so it records `metadata.filepath` + `exists` instead
- *   - `state.output` is ALWAYS just "Edit applied successfully." /
- *               "Wrote file successfully." — never a patch
+ * The only accepted patch location is `state.metadata.files[].patch`. The result
+ * text and unrelated metadata fields are deliberately not patch sources.
  */
 const PATCH = "Index: D:\\ws\\a.ts\n--- D:\\ws\\a.ts\n+++ D:\\ws\\a.ts\n@@ -1 +1 @@\n-x\n+y\n";
 
@@ -194,16 +215,13 @@ const PATCH = "Index: D:\\ws\\a.ts\n--- D:\\ws\\a.ts\n+++ D:\\ws\\a.ts\n@@ -1 +1
 const editPart = {
   type: "tool",
   tool: "edit",
-  callID: "call_edit_1",
+  id: "call_edit_1",
   state: {
     status: "completed",
     input: { filePath: "D:\\ws\\a.ts", oldString: "x", newString: "y" },
-    output: "Edit applied successfully.",
+    content: [{ type: "text", text: "Edit applied successfully." }],
     metadata: {
-      diagnostics: {},
-      diff: PATCH,
-      filediff: { file: "D:\\ws\\a.ts", patch: PATCH, additions: 1, deletions: 1 },
-      truncated: false,
+      files: [{ file: "D:\\ws\\a.ts", patch: PATCH, additions: 1, deletions: 1 }],
     },
     title: "ws\\a.ts",
   },
@@ -213,17 +231,12 @@ const editPart = {
 const writePart = {
   type: "tool",
   tool: "write",
-  callID: "call_write_1",
+  id: "call_write_1",
   state: {
     status: "completed",
     input: { filePath: "D:\\ws\\b.ts", content: "hello\n" },
-    output: "Wrote file successfully.",
-    metadata: {
-      diagnostics: {},
-      filepath: "D:\\ws\\b.ts",
-      exists: false,
-      truncated: false,
-    },
+    content: [{ type: "text", text: "Wrote file successfully." }],
+    metadata: {},
     title: "ws\\b.ts",
   },
 };
@@ -231,6 +244,21 @@ const writePart = {
 describe("openCodePatchFromParts — the patch lives in metadata, not the result", () => {
   it("extracts the patch from a completed `edit` part", () => {
     expect(openCodePatchFromParts([editPart], "call_edit_1")).toBe(PATCH);
+  });
+
+  it("extracts a native V2 patch from metadata.files", () => {
+    const part = {
+      type: "tool",
+      id: "call_v2_edit",
+      name: "edit",
+      state: {
+        status: "completed",
+        input: { filePath: "D:\\ws\\a.ts" },
+        content: [{ type: "text", text: "Edit applied successfully." }],
+        metadata: { files: [{ file: "a.ts", patch: PATCH }] },
+      },
+    };
+    expect(openCodePatchFromParts([part], "tbai-v2-tool:msg%3Aedit:call_v2_edit")).toBe(PATCH);
   });
 
   it("finds its own part among many", () => {
@@ -245,12 +273,12 @@ describe("openCodePatchFromParts — the patch lives in metadata, not the result
     expect(openCodePatchFromParts([writePart], "call_write_1")).toBeNull();
   });
 
-  it("falls back to `metadata.diff` when `filediff` is absent", () => {
+  it("rejects metadata fields outside `files[].patch`", () => {
     const part = {
       ...editPart,
       state: { ...editPart.state, metadata: { diff: PATCH } },
     };
-    expect(openCodePatchFromParts([part], "call_edit_1")).toBe(PATCH);
+    expect(openCodePatchFromParts([part], "call_edit_1")).toBeNull();
   });
 
   it("returns null rather than guessing on partial or malformed input", () => {
@@ -261,19 +289,19 @@ describe("openCodePatchFromParts — the patch lives in metadata, not the result
     // A part with no metadata (e.g. still running) must not throw.
     expect(
       openCodePatchFromParts(
-        [{ callID: "call_x", state: { status: "running" } }],
+        [{ id: "call_x", state: { status: "running" } }],
         "call_x",
       ),
     ).toBeNull();
     expect(
-      openCodePatchFromParts([{ callID: "call_y", state: null }], "call_y"),
+      openCodePatchFromParts([{ id: "call_y", state: null }], "call_y"),
     ).toBeNull();
   });
 
-  it("treats a whitespace-only patch as absent", () => {
+  it("treats a whitespace-only `files[].patch` as absent", () => {
     const part = {
       ...editPart,
-      state: { ...editPart.state, metadata: { diff: "   \n  " } },
+      state: { ...editPart.state, metadata: { files: [{ patch: "   \n  " }] } },
     };
     expect(openCodePatchFromParts([part], "call_edit_1")).toBeNull();
   });

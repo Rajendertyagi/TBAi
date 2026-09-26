@@ -4,28 +4,18 @@ import path from "node:path";
 import { OPENCODE_CONFIG } from "../../config/opencode";
 
 /**
- * V2-only source guard.
+ * Native V2 source guard.
  *
- * The architectural invariant for TBAi-owned backend code is: **the official
- * `@opencode/client` V2 API is the only OpenCode API**. The legacy
- * `@opencode-ai/sdk` may survive only as the frozen frontend adapter's
- * transitive dependency — never as something backend code imports or calls.
- *
- * This test is deliberately a *focused* scan, not a broad string search: it
- * reads the backend OpenCode sources, strips comments (so prose may discuss V1
- * freely while code may not use it), and asserts the invariant. The single
- * permitted legacy-looking request is the OpenCode 1.18.29 delete fallback,
- * which lives in exactly one file and is asserted to be there.
+ * Backend OpenCode code must use the official client boundary and the native
+ * readiness endpoint. This focused scan keeps the adapter boundary from being
+ * bypassed by another client implementation or transport.
  */
 
 const OPENCODE_DIR = import.meta.dir;
-const SRC_DIR = path.resolve(import.meta.dir, "..", "..");
+const OFFICIAL_CLIENT_PACKAGE = "@opencode/client";
+const READINESS_ENDPOINT = "/api/info";
 
-/**
- * Removes `//` line comments and `/* *\/` block comments while leaving string
- * and template literals intact, so a `//` inside a URL is not mistaken for a
- * comment and prose in comments cannot trip the guard.
- */
+/** Removes line and block comments while preserving quoted source text. */
 function stripComments(source: string): string {
   let out = "";
   let i = 0;
@@ -69,86 +59,50 @@ function stripComments(source: string): string {
   return out;
 }
 
-/** Every `.ts` file under a directory, recursively, excluding tests. */
+/** Every production TypeScript file under the OpenCode service directory. */
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile())
-    .map((e) => path.join(e.parentPath, e.name))
-    .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts"));
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name))
+    .filter((filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts"));
 }
 
-/** Legacy V1 SDK service calls that must never reappear in backend code. */
-const FORBIDDEN_CALLS: Array<{ pattern: RegExp; why: string }> = [
-  { pattern: /client\.app\./, why: "V1 agent namespace (use agent.list)" },
-  { pattern: /client\.v2\./, why: "the legacy SDK's transitional V2 namespace" },
-  { pattern: /client\.event\./, why: "V1 event namespace (use event.subscribe)" },
-  { pattern: /client\.permission\./, why: "V1 permission namespace" },
-  { pattern: /client\.question\./, why: "V1 question namespace (V2 uses session.form)" },
-  { pattern: /\.session\.abort\(/, why: "V1 abort (V2 uses session.interrupt)" },
-  { pattern: /\.session\.delete\(/, why: "V1 delete (V2 uses session.remove)" },
-];
-
-describe("V2-only guard — backend OpenCode sources", () => {
+describe("native V2 guard — backend OpenCode sources", () => {
   const opencodeSources = sourceFiles(OPENCODE_DIR);
 
   it("finds the backend OpenCode sources to guard", () => {
     expect(opencodeSources.length).toBeGreaterThan(0);
   });
 
-  it("H. no backend source imports the legacy @opencode-ai/sdk", () => {
-    const offenders: string[] = [];
-    for (const file of sourceFiles(SRC_DIR)) {
-      const code = stripComments(readFileSync(file, "utf8"));
-      if (/from\s+["']@opencode-ai\/sdk/.test(code)) {
-        offenders.push(path.relative(SRC_DIR, file));
-      }
-    }
-    expect(offenders).toEqual([]);
+  it("uses the official OpenCode client boundary", () => {
+    const clientSource = stripComments(
+      readFileSync(path.join(OPENCODE_DIR, "client.ts"), "utf8"),
+    );
+    expect(clientSource).toContain(`from "${OFFICIAL_CLIENT_PACKAGE}"`);
+    expect(clientSource).toContain("OpenCode.make");
   });
 
-  it("H. no backend source calls a legacy V1 service method", () => {
+  it("does not import a second OpenCode client package", () => {
     const offenders: string[] = [];
+    const packagePattern = /from\s+["'](@opencode\/[^"']+)["']/g;
     for (const file of opencodeSources) {
-      const code = stripComments(readFileSync(file, "utf8"));
-      for (const { pattern, why } of FORBIDDEN_CALLS) {
-        if (pattern.test(code)) {
-          offenders.push(`${path.basename(file)}: ${pattern} — ${why}`);
+      const imports = stripComments(readFileSync(file, "utf8")).match(packagePattern) ?? [];
+      for (const declaration of imports) {
+        if (!declaration.includes(OFFICIAL_CLIENT_PACKAGE)) {
+          offenders.push(`${path.basename(file)}: ${declaration}`);
         }
       }
     }
     expect(offenders).toEqual([]);
   });
-
-  it("H. the only legacy-looking request is the documented 1.18.29 delete fallback", () => {
-    // Every backend OpenCode source except the transport must be free of V1
-    // paths. `client.ts` owns the one unavoidable exception.
-    const offenders: string[] = [];
-    for (const file of opencodeSources) {
-      if (path.basename(file) === "client.ts") continue;
-      const code = stripComments(readFileSync(file, "utf8"));
-      if (/["'`]\/session\//.test(code) || /\/api\/session\/:/.test(code)) {
-        offenders.push(path.basename(file));
-      }
-    }
-    expect(offenders).toEqual([]);
-  });
-
-  it("H. the fallback is confined to client.ts and is documented there", () => {
-    const raw = readFileSync(path.join(OPENCODE_DIR, "client.ts"), "utf8");
-    expect(raw).toContain("/session/");
-    // The justification must be present, not just the code.
-    expect(raw).toContain("1.18.29");
-    expect(raw.toLowerCase()).toContain("has no route at all");
-  });
 });
 
-describe("F. readiness probe", () => {
-  it("uses a V2-named endpoint, not the V1 /session/status", () => {
-    expect(OPENCODE_CONFIG.readinessProbePath.startsWith("/api/")).toBe(true);
-    expect(OPENCODE_CONFIG.readinessProbePath).not.toContain("/session/");
+describe("native V2 readiness probe", () => {
+  it("uses the native info endpoint", () => {
+    expect(OPENCODE_CONFIG.readinessProbePath).toBe(READINESS_ENDPOINT);
   });
 
-  it("probes the health endpoint", () => {
-    expect(OPENCODE_CONFIG.readinessProbePath).toBe("/api/health");
+  it("requires a readiness path under the API namespace", () => {
+    expect(OPENCODE_CONFIG.readinessProbePath.startsWith("/api/")).toBe(true);
   });
 });

@@ -67,6 +67,9 @@ export function OpenCodeView() {
   const { models } = useOpenCodeCapabilities();
   const defaultModel = useResolvedOpenCodeModel(config?.opencodeModel ?? null, models);
   const defaultAgent = config?.opencodeAgent ?? undefined;
+  const defaultModelWithVariant = defaultModel
+    ? { ...defaultModel, ...(config?.opencodeVariant ? { variant: config.opencodeVariant } : {}) }
+    : undefined;
 
   const retry = useCallback(() => {
     setError(null);
@@ -159,7 +162,7 @@ export function OpenCodeView() {
     <AgentRuntime
       sessionId={sessionId}
       eventDirectory={eventDirectory}
-      defaultModel={defaultModel}
+      defaultModel={defaultModelWithVariant}
       defaultAgent={defaultAgent}
       conversationId={agentId}
     />
@@ -175,7 +178,7 @@ function AgentRuntime({
 }: {
   sessionId: string;
   eventDirectory: string | null;
-  defaultModel?: { providerID: string; modelID: string };
+  defaultModel?: { providerID: string; modelID: string; variant?: string };
   defaultAgent?: string;
   /** The TBAi conversation this session belongs to — the Auto shield's owner. */
   conversationId?: string;
@@ -185,25 +188,20 @@ function AgentRuntime({
   // truth — no store, no context, no global.
   const conversationConfig = useOpenCodeConversationConfig(conversationId);
 
-  const { runtime, reconnect, reconcileAutoApprove } = useOpenCodeRuntime(
+  const { runtime, reconnect, reconcileAutoApprove, controller } = useOpenCodeRuntime(
     sessionId,
+    conversationId ?? null,
     defaultModel,
     defaultAgent,
     eventDirectory,
   );
 
-  // Global backend recovery (Phase 3.10): trigger the EXISTING reconnect
-  // boundary (client-epoch rebuild + hydration/reconcile) — never a second
-  // implementation. Only when a session is actually bound; each recovery
-  // epoch fires exactly once, so no duplicate reconnects.
-  //
-  // Mount-time reconnect is deliberately skipped: the client was just created
-  // for this mount, so rebuilding it immediately would swap the frozen
-  // thread-list adapter (client identity change) while the first thread
-  // switch/append is still pending — the library turns that into
-  // ThreadListAdapterChangedError. A stale non-zero epoch from an old flap
-  // must not trigger this; only an epoch CHANGE while mounted (a genuine
-  // recovery) reconnects.
+  // Global backend recovery triggers the existing native controller rebuild
+  // and state reconciliation. Mount-time reconnect is deliberately skipped:
+  // the controller was just created, so replacing it while the first thread
+  // switch or append is pending can invalidate that operation. A stale
+  // non-zero epoch must not reconnect; only an epoch change while mounted
+  // represents a genuine recovery.
   const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
   const seenRecoveryEpochRef = useRef(recoveryEpoch);
   useEffect(() => {
@@ -226,21 +224,16 @@ function AgentRuntime({
     if (!sessionId || !conversationConfig) return;
     hydrateAutoPolicy(sessionId, conversationConfig.opencodeAutoApprove);
     if (conversationConfig.opencodeAutoApprove) {
-      void reconcileAutoApprove?.();
+      void reconcileAutoApprove?.().catch(() => undefined);
     }
   }, [sessionId, conversationConfig, reconcileAutoApprove]);
 
-  // First-prompt handoff (Phase 4) lives in <FirstPromptHandoff/>, rendered
-  // inside the provider below: it fires the stashed draft prompt exactly
-  // once, and only after the runtime's main thread is actually bound to this
-  // session id. Firing on the draft thread would invoke the frozen adapter's
-  // initialize() (upstream session.create → 400) or race an adapter
-  // replacement (ThreadListAdapterChangedError). Claim-guarded, so remounts
-  // and reconnects (new runtime identity) can never refire it — the claim
-  // persists before the append, and the stash clears right after the runtime
-  // accepts the prompt. Async prompt failures unclaim (retained for a later
-  // settled attempt) and surface in-thread as an error card with the message
-  // already present; the user retries explicitly, never auto-replay.
+  // First-prompt handoff lives in <FirstPromptHandoff/>. It fires the stashed
+  // draft prompt exactly once, and only after the native runtime's main thread
+  // is bound to this session id. Claim-guarded, so remounts and reconnects can
+  // never refire it: the claim persists before the append, and the stash clears
+  // after the runtime accepts the prompt. Async failures unclaim for an explicit
+  // retry and surface in-thread; the prompt is never auto-replayed.
 
   // Code mode needs its OWN tool-renderer registration.
   //
@@ -260,13 +253,23 @@ function AgentRuntime({
     [],
   );
 
-  // The composer's Shield chip reads the session id + reconcile seam from here
-  // (it renders deep inside the runtime provider and cannot call
-  // `useOpenCodeRuntime` itself). Memoized so the provider value is stable for
-  // the life of the client; a reconnect rebuilds the client and updates it.
+  // The composer's session-dependent seams read from here (the Shield chip's
+  // reconcile path, and the built-in `/compact` action's session/directory/
+  // model). Memoized so the provider value is stable for the life of the
+  // client; a reconnect rebuilds the client and updates it.
   const runtimeContext = useMemo(
-    () => ({ sessionId, reconcileAutoApprove }),
-    [sessionId, reconcileAutoApprove],
+    () => ({
+      sessionId,
+      reconcileAutoApprove,
+      directory: eventDirectory,
+      compact: controller.compact,
+      setDesiredSelection: controller.setDesiredSelection,
+      reconcileStagedRevert: controller.reconcileStagedRevert,
+      ...(defaultModel
+        ? { providerID: defaultModel.providerID, modelID: defaultModel.modelID, ...(defaultModel.variant ? { variant: defaultModel.variant } : {}) }
+        : {}),
+    }),
+    [sessionId, reconcileAutoApprove, eventDirectory, defaultModel, controller],
   );
 
   return (
@@ -277,6 +280,7 @@ function AgentRuntime({
             conversationId={conversationId}
             sessionId={sessionId}
             runtime={runtime}
+            sendWithId={controller.sendMessage}
           />
           <div className="flex h-full min-h-0 flex-col">
             <OpenCodeSessionRow />

@@ -11,8 +11,7 @@ import {
   OpenCodeWriteToolUI,
   QuestionReadonlyView,
 } from "./ui";
-import { isLinkedQuestion } from "@/features/opencode/toolLinkedQuestion";
-import type { OpenCodeQuestionRequest } from "@assistant-ui/react-opencode";
+import { openCodeToolkit } from "@/tools/toolkit";
 
 /**
  * Renders the REAL component tree (OpenCode view → BackendToolView → ToolCard)
@@ -23,10 +22,10 @@ import type { OpenCodeQuestionRequest } from "@assistant-ui/react-opencode";
  * `react-dom/server` needs none, and the completed-tool branch of
  * `BackendToolView` is hook-free, so the whole path is exercised.
  *
- * The props below use OpenCode's ACTUAL field names and result type, verified
- * live against OpenCode 1.18.31:
- *   - `read` args are `{ filePath }` (from GET /experimental/tool)
- *   - a completed part's `state.output` is a plain STRING
+ * The props below use the native V2 contract's actual field names and result
+ * type:
+ *   - `read` args are `{ filePath }` (from the server tool schema)
+ *   - a completed tool result carries a native V2 content array
  */
 
 function render(
@@ -49,43 +48,57 @@ const completedRead = (args: Record<string, unknown>, result: unknown) => ({
 });
 
 const PATH = "D:\\ws\\notes.txt";
+const nativeContent = (text: string) => [{ type: "text", text }];
+const nativeResult = (text: string) => ({ content: nativeContent(text) });
 const BODY = "alpha\nbeta\ngamma\n";
 
 describe("OpenCode read — title, path and body all populate", () => {
   it("titles the card with the tool and the requested file path", () => {
-    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, BODY));
+    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, nativeResult(BODY)));
     expect(html).toContain(`read · ${PATH}`);
   });
 
   it("renders the file text as the body", () => {
-    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, BODY));
+    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, nativeResult(BODY)));
     for (const line of ["alpha", "beta", "gamma"]) {
       expect(html, line).toContain(line);
     }
   });
 
+  it("renders an incomplete native V2 tool state as failed", () => {
+    const html = render(
+      OpenCodeReadToolUI,
+      {
+        ...completedRead({ filePath: PATH }, undefined),
+        status: { type: "incomplete", reason: "File not found" },
+      },
+    );
+    expect(html).toContain("Failed");
+    expect(html).not.toContain("No output");
+  });
+
   it("renders no `undefined` anywhere", () => {
     // The exact symptom of an unmapped field: a title reading "read · undefined".
-    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, BODY));
+    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, nativeResult(BODY)));
     expect(html).not.toContain("undefined");
   });
 
   it("takes the path from filePath, not from an absent `path`", () => {
     // Non-vacuity control: with no args there is no path to show, which proves
     // the path above came from OpenCode's `filePath` via normalization.
-    const html = render(OpenCodeReadToolUI, completedRead({}, BODY));
+    const html = render(OpenCodeReadToolUI, completedRead({}, nativeResult(BODY)));
     expect(html).toContain("read · ");
     expect(html).not.toContain(PATH);
   });
 
   it("still works when the args already use our own field name", () => {
     // Normalization must add an alias, not require one.
-    const html = render(OpenCodeReadToolUI, completedRead({ path: PATH }, BODY));
+    const html = render(OpenCodeReadToolUI, completedRead({ path: PATH }, nativeResult(BODY)));
     expect(html).toContain(`read · ${PATH}`);
   });
 
   it("shows a placeholder rather than nothing for an empty body", () => {
-    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, ""));
+    const html = render(OpenCodeReadToolUI, completedRead({ filePath: PATH }, []));
     expect(html).toContain("No output.");
   });
 });
@@ -94,7 +107,7 @@ describe("OpenCode glob / grep — title comes from `pattern`", () => {
   it("titles glob with the pattern", () => {
     const html = render(
       OpenCodeGlobToolUI,
-      completedRead({ pattern: "**/*.tsx", path: "web/src" }, "a.tsx\nb.tsx"),
+      completedRead({ pattern: "**/*.tsx", path: "web/src" }, nativeResult("a.tsx\nb.tsx")),
     );
     expect(html).toContain("glob · **/*.tsx");
     expect(html).not.toContain("undefined");
@@ -103,7 +116,7 @@ describe("OpenCode glob / grep — title comes from `pattern`", () => {
   it("titles grep with the pattern and renders the matches", () => {
     const html = render(
       OpenCodeGrepToolUI,
-      completedRead({ pattern: "useStaleApprovalGuard", include: "*.tsx" }, "a.tsx:12"),
+      completedRead({ pattern: "useStaleApprovalGuard", include: "*.tsx" }, nativeResult("a.tsx:12")),
     );
     expect(html).toContain("grep · useStaleApprovalGuard");
     expect(html).toContain("a.tsx:12");
@@ -137,7 +150,7 @@ const toolPart = (
 });
 
 describe("OpenCode edit / write — title, path and body", () => {
-  it("titles an edit with the file path and falls back to the result string", () => {
+  it("titles an edit with the file path and shows native completion text", () => {
     // Rendered WITHOUT a patch: the card must still say something useful rather
     // than render empty. `OpenCodeEditView` is the pure half — the registered
     // `OpenCodeEditToolUI` adds a hook that needs an AuiProvider, which this
@@ -147,7 +160,7 @@ describe("OpenCode edit / write — title, path and body", () => {
       toolPart(
         "edit",
         { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
-        "Edit applied successfully.",
+        nativeResult("Edit applied successfully."),
       ),
     );
     expect(html).toContain("edit · src/a.ts");
@@ -161,7 +174,7 @@ describe("OpenCode edit / write — title, path and body", () => {
       toolPart(
         "write",
         { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
-        "Wrote file successfully.",
+        nativeResult("Wrote file successfully."),
       ),
     );
     expect(html).toContain("write · src/b.ts");
@@ -220,7 +233,7 @@ describe("OpenCode bash — terminal output and the gate", () => {
   it("renders completed output in the terminal block", () => {
     const html = render(
       OpenCodeBashToolUI,
-      toolPart("bash", { command: "echo TERMINAL_CMD" }, "TERMINAL_OUTPUT\n"),
+      toolPart("bash", { command: "echo TERMINAL_CMD" }, nativeContent("TERMINAL_OUTPUT\n")),
     );
     // The official terminal block shows the command and its output lines.
     expect(html).toContain("TERMINAL_CMD");
@@ -242,10 +255,21 @@ describe("OpenCode bash — terminal output and the gate", () => {
   it("shows no output when the command produced none", () => {
     const html = render(
       OpenCodeBashToolUI,
-      toolPart("bash", { command: "true" }, ""),
+      toolPart("bash", { command: "true" }, []),
     );
     expect(html).toContain("bash · true");
     expect(html).toContain("No output.");
+  });
+
+  it("renders an incomplete native V2 shell state as failed", () => {
+    const html = render(
+      OpenCodeBashToolUI,
+      toolPart("shell", { command: "bun --version" }, undefined, {
+        status: { type: "incomplete", reason: "Command failed" },
+      }),
+    );
+    expect(html).toContain("Failed");
+    expect(html).not.toContain("No output");
   });
 
   it("does not let the terminal fast-path replace a gate awaiting an answer", () => {
@@ -256,12 +280,24 @@ describe("OpenCode bash — terminal output and the gate", () => {
     // gate must win.
     const html = render(
       OpenCodeBashToolUI,
-      toolPart("bash", { command: "rm -rf build" }, "GATED_OUTPUT", {
+      toolPart("bash", { command: "rm -rf build" }, nativeContent("GATED_OUTPUT"), {
         approval: { id: "per_bash_1", options: [] },
       }),
     );
     expect(html).toContain("Approve");
     expect(html).not.toContain("GATED_OUTPUT");
+  });
+
+  it("renders the linked approval gate for the observed V2 shell name", () => {
+    const html = render(
+      OpenCodeBashToolUI,
+      toolPart("shell", { command: "bun --version" }, undefined, {
+        approval: { id: "per_shell_1", options: [] },
+      }),
+    );
+    expect(html).toContain("shell · bun --version");
+    expect(html).toContain("Approve");
+    expect(html).toContain("Deny");
   });
 
   it("does not let the terminal fast-path replace a closed-gate message", () => {
@@ -271,7 +307,7 @@ describe("OpenCode bash — terminal output and the gate", () => {
     // too, not just in the awaiting case.
     const html = render(
       OpenCodeBashToolUI,
-      toolPart("bash", { command: "rm -rf build" }, "STALE_OUTPUT", {
+      toolPart("bash", { command: "rm -rf build" }, nativeContent("STALE_OUTPUT"), {
         approval: { id: "per_bash_2", options: [], resolution: "expired" },
       }),
     );
@@ -284,10 +320,10 @@ describe("OpenCode bash — terminal output and the gate", () => {
 /**
  * Phase 4 — an `edit` renders as a DIFF.
  *
- * The patch does not come from the result: OpenCode's `edit` result is the
- * string "Edit applied successfully.", and the patch lives in the part's
- * `metadata` (see `openCodePatchFromParts`). These tests cover the render half —
- * given a patch, the card shows a diff instead of that string.
+ * The patch does not come from the result: native V2 keeps the completed text
+ * in a content array, while the patch lives in `state.metadata.files[].patch`.
+ * These tests cover the render half — given a patch, the card shows a diff
+ * instead of the completion text.
  *
  * The patch below is a REAL one recorded by OpenCode, including its git-style
  * `Index:` / `===` header, because that header is exactly what a naive parser
@@ -304,47 +340,12 @@ const REAL_EDIT_PATCH =
   '+- "ADDED_BY_EDIT/**"\n' +
   '+- "ALSO_ADDED/**"\n';
 
-describe("OpenCode question — linked bridge (Phase B)", () => {
-  // The linked half of `OpenCodeQuestionToolUI` (shared `QuestionCard` via
-  // `useToolLinkedQuestion`) is hook-based and needs a live provider, so it is
-  // not static-renderable here. The bridge's *decisions* are proven instead:
-  // which question is linked (callID match), which stay panel-answerable
-  // (unlinked only), and how answer/skip forward (covered in
-  // toolLinkedQuestion.test.ts). This block pins the panel-exclusion split and
-  // the unlinked read-only fallback that renders without a provider.
-
-  it("a tool-linked question is excluded from the fallback panel", () => {
-    const linked = {
-      id: "que_linked",
-      tool: { callID: "call_linked" },
-      questions: [{ question: "Pick one" }],
-    } as unknown as OpenCodeQuestionRequest;
-    // The panel keeps only unlinked questions; a tool-linked one is answered
-    // on its own tool card, so it must not also appear in the panel.
-    expect(isLinkedQuestion(linked)).toBe(true);
-    const unlinked = [linked].filter((req) => !isLinkedQuestion(req));
-    expect(unlinked).toEqual([]);
+describe("OpenCode question — read-only history rendering", () => {
+  it("registers the observed V2 shell name with the same terminal renderer", () => {
+    expect(openCodeToolkit.shell).toEqual(openCodeToolkit.bash);
   });
 
-  it("a question without a tool.callID stays panel-answerable", () => {
-    const unlinked = {
-      id: "que_plain",
-      questions: [{ question: "Which file?" }],
-    } as unknown as OpenCodeQuestionRequest;
-    expect(isLinkedQuestion(unlinked)).toBe(false);
-    const panel = [unlinked].filter((req) => !isLinkedQuestion(req));
-    expect(panel.map((r) => r.id)).toEqual(["que_plain"]);
-  });
-
-  it("answered/rejected questions leave no pending entry to answer", () => {
-    // Once the adapter resolves a question it drops out of the pending list,
-    // so there is nothing for the panel to offer — the split is by pending
-    // state, not by request id, and a resolved request simply is not present.
-    const afterAnswer: OpenCodeQuestionRequest[] = [];
-    expect(afterAnswer.filter((req) => !isLinkedQuestion(req))).toEqual([]);
-  });
-
-  it("the unlinked question renders the read-only fallback preview", () => {
+  it("the question tool renders its read-only fallback preview", () => {
     // With no linked question, `OpenCodeQuestionToolUI` falls back to the
     // read-only view, which is the hook-free branch and static-renderable.
     // The argPreview (question text + option list) shows once the part is no
@@ -354,7 +355,7 @@ describe("OpenCode question — linked bridge (Phase B)", () => {
       toolPart(
         "question",
         { questions: [{ question: "Which file should we edit?", options: [{ label: "a.ts" }] }] },
-        "answered: a.ts",
+        nativeResult("answered: a.ts"),
       ),
     );
     expect(html).toContain("Which file should we edit?");
@@ -364,12 +365,12 @@ describe("OpenCode question — linked bridge (Phase B)", () => {
 });
 
 describe("OpenCode edit — the patch renders as a diff", () => {
-  it("shows the diff instead of the result string", () => {
+  it("shows the diff instead of native completion text", () => {
     const html = render(OpenCodeEditView, {
       ...toolPart(
         "edit",
         { filePath: "src/a.ts", oldString: "x", newString: "y" },
-        "Edit applied successfully.",
+        nativeResult("Edit applied successfully."),
       ),
       diffPatch: REAL_EDIT_PATCH,
     });
@@ -385,7 +386,7 @@ describe("OpenCode edit — the patch renders as a diff", () => {
     // A parser that failed on `Index:` would fall back to showing the raw patch,
     // header and all. The `===` rule must not survive into the rendered diff.
     const html = render(OpenCodeEditView, {
-      ...toolPart("edit", { filePath: "src/a.ts" }, "Edit applied successfully."),
+      ...toolPart("edit", { filePath: "src/a.ts" }, nativeResult("Edit applied successfully.")),
       diffPatch: REAL_EDIT_PATCH,
     });
     expect(html).not.toContain("======");
@@ -394,17 +395,17 @@ describe("OpenCode edit — the patch renders as a diff", () => {
 
   it("keeps the title from the file path, not from the patch header", () => {
     const html = render(OpenCodeEditView, {
-      ...toolPart("edit", { filePath: "src/a.ts" }, "Edit applied successfully."),
+      ...toolPart("edit", { filePath: "src/a.ts" }, nativeResult("Edit applied successfully.")),
       diffPatch: REAL_EDIT_PATCH,
     });
     expect(html).toContain("edit · src/a.ts");
   });
 
-  it("falls back to the result string when there is no patch", () => {
+  it("falls back to native completion text when there is no patch", () => {
     // Every `write` part lands here by data: a whole-file write has nothing to
     // diff against, so OpenCode records no patch for it.
     const html = render(OpenCodeEditView, {
-      ...toolPart("edit", { filePath: "src/a.ts" }, "Edit applied successfully."),
+      ...toolPart("edit", { filePath: "src/a.ts" }, nativeResult("Edit applied successfully.")),
       diffPatch: null,
     });
     expect(html).toContain("Edit applied successfully.");

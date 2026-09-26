@@ -7,7 +7,7 @@
  * the new labels AND the frozen legacy outcomes.
  */
 import { describe, it, expect } from "bun:test";
-import { classifyError } from "../../src/lib/errors";
+import { classifyError, errorLogFields } from "../../src/lib/errors";
 import { sanitizeStreamError } from "../../src/lib/redact";
 import { isRetryableError } from "../../src/services/scheduler/schedulerExecution";
 
@@ -122,5 +122,68 @@ describe("billing distinction", () => {
   it("omits the flag for ordinary failures", () => {
     expect(classifyError(errWith("fetch failed")).billing).toBeUndefined();
     expect(classifyError(errWith("bad", { status: 400 })).billing).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The log-safe projection. `errorLogFields` is what every log line spreads, so
+// it is the single place where a raw provider/tool message could leak into the
+// structured logs and the console. It must be the classification WITHOUT the
+// message — the same classification the user-facing sanitizer consumes.
+// ---------------------------------------------------------------------------
+
+/** Deliberately un-redactable: no secret-shaped value, so a leak is visible. */
+const RAW_MESSAGE_MARKER = "RAWFIELDMARKER7b41d9";
+
+describe("errorLogFields — log-safe projection", () => {
+  it("returns exactly the classification fields and never the message", () => {
+    const err = errWith(`${RAW_MESSAGE_MARKER} upstream refused the request`);
+    const fields = errorLogFields(err);
+
+    // The raw text IS classified (so the category is not fabricated)...
+    expect(classifyError(err).message).toContain(RAW_MESSAGE_MARKER);
+    // ...but it is not part of what may be logged.
+    expect("message" in fields).toBe(false);
+    expect(Object.keys(fields).sort()).toEqual([
+      "category",
+      "errorType",
+      "provider",
+      "retryable",
+      "statusCode",
+    ]);
+    expect(JSON.stringify(fields)).not.toContain(RAW_MESSAGE_MARKER);
+  });
+
+  it("carries the classification the logger needs, unchanged", () => {
+    const err = errWith("overloaded", { status: 503 });
+    const fields = errorLogFields(err, { provider: "anthropic" });
+    const full = classifyError(err, { provider: "anthropic" });
+
+    expect(fields.category).toBe(full.category);
+    expect(fields.statusCode).toBe(503);
+    expect(fields.provider).toBe("anthropic");
+    expect(fields.retryable).toBe(full.retryable);
+    expect(fields.errorType).toBe("Error");
+    // Sanitized copy stays available to the user-facing boundary only.
+    expect(sanitizeStreamError(err)).not.toContain(RAW_MESSAGE_MARKER);
+  });
+
+  it("adds the billing flag only when the failure is a credit condition", () => {
+    expect("billing" in errorLogFields(errWith("fetch failed"))).toBe(false);
+    expect(errorLogFields(errWith("insufficient balance")).billing).toBe(true);
+  });
+
+  it("never echoes a raw message for non-Error throwables either", () => {
+    for (const thrown of [
+      `${RAW_MESSAGE_MARKER} plain string failure`,
+      { detail: `${RAW_MESSAGE_MARKER} object failure` },
+      { message: `${RAW_MESSAGE_MARKER} shaped failure`, status: 500 },
+    ]) {
+      const fields = errorLogFields(thrown);
+      expect(JSON.stringify(fields)).not.toContain(RAW_MESSAGE_MARKER);
+      expect("message" in fields).toBe(false);
+      expect(typeof fields.category).toBe("string");
+      expect(typeof fields.retryable).toBe("boolean");
+    }
   });
 });

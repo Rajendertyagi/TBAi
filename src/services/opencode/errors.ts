@@ -59,33 +59,6 @@ function bodyDetail(value: unknown): string {
   return messageOf(value) ?? "no detail";
 }
 
-/**
- * Reads OpenCode's **V1** error envelope — `{ name, data: { message } }` — if
- * the thrown value is one. Requires both a `name` and a `data.message`, which
- * keeps it from matching `ClientError` (which has a `name` but no `data`).
- *
- * This shape reaches TBAi through exactly one path: the documented OpenCode
- * 1.18.29 delete fallback in `./client`, whose V1 route answers errors in the
- * older envelope instead of the V2 tagged shape.
- */
-function readV1Envelope(value: unknown): { name: string; message: string } | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const name = readString(value, "name");
-  if (!name) return undefined;
-  const data: unknown = Reflect.get(value, "data");
-  const message = messageOf(data);
-  return message ? { name, message } : undefined;
-}
-
-/** HTTP status the V1 error envelope implies for each error name. */
-const V1_ENVELOPE_STATUS: Record<string, number> = {
-  NotFoundError: 404,
-  UnauthorizedError: 401,
-  ForbiddenError: 403,
-  BadRequestError: 400,
-  ServiceUnavailableError: 503,
-};
-
 /** Extracts the HTTP status the client stashed on `ClientError.cause`. */
 function statusFromCause(cause: unknown): number | undefined {
   if (cause === null || typeof cause !== "object") return undefined;
@@ -114,8 +87,6 @@ function transportDetail(err: Error): string {
  *    plain object, **not** an `Error`, thrown for HTTP statuses the endpoint
  *    declares in its contract. The package's own type guards are the supported
  *    way to detect these.
- *  - **The V1 error envelope** (`{ name: "NotFoundError", data: { message } }`)
- *    — see `readV1Envelope`.
  *
  * Anything unrecognised still yields a readable message rather than a bare
  * `[object Object]`.
@@ -182,27 +153,6 @@ export function toOpenCodeError(err: unknown): OpenCodeError {
           { cause: err },
         );
     }
-  }
-
-  const envelope = readV1Envelope(err);
-  if (envelope) {
-    const status = V1_ENVELOPE_STATUS[envelope.name];
-    // A session-scoped 404 must keep its own kind so callers can tell
-    // "already gone" apart from a generic request failure.
-    if (status === 404 && /session/i.test(envelope.message)) {
-      return new OpenCodeError(
-        "session_not_found",
-        `OpenCode session not found: ${envelope.message}`,
-        404,
-        { cause: err },
-      );
-    }
-    return new OpenCodeError(
-      "http",
-      `OpenCode request failed (${envelope.name}): ${envelope.message}`,
-      status,
-      { cause: err },
-    );
   }
 
   return new OpenCodeError(

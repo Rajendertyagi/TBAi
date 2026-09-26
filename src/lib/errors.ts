@@ -21,6 +21,7 @@ export type ErrorCategory =
   | "config"
   | "tool"
   | "provider"
+  | "invalid_stream"
   | "database"
   | "lifecycle"
   | "runtime"
@@ -80,7 +81,50 @@ const TRANSPORT_RE =
   /incomplete chunked|err_incomplete|controller is already closed|premature close|stream (closed|error|aborted)|socket hang up|other side closed|econnreset/i;
 /** Provider-side billing/credit exhaustion. */
 const BILLING_RE =
-  /insufficient balance|insufficient credit|out of credit|credit balance|insufficient_quota|billing|payment required|402|exceeded your current quota|quota exceeded/i;
+  /insufficient balance|insufficient credit|out of credit|credit balance|insufficient_quota|billing|payment required|\b402\b|exceeded your current quota|quota exceeded/i;
+
+// ---------------------------------------------------------------------------
+// Provider-response conformance.
+//
+// A provider that answers 200 with a body the SDK cannot use (unparseable JSON,
+// a payload that fails schema validation, a stream part of an unknown shape) is a
+// DISTINCT failure from a transport hiccup, and the two need different user copy
+// and different retry advice. It is recognised by the AI SDK's own error NAME —
+// an authoritative signal — never by matching prose, which is how the coarse
+// buckets below would misread it ("Type validation failed" is not a validation
+// rejection of *our* request; a malformed `tool-call` delta is not a tool failure).
+//
+// Deliberately a COARSE base, not a `refineCategory` refinement: a refinement is
+// unreachable once a prose heuristic has claimed the bucket, and the whole point is
+// that these names win over the prose. See `classifyError` for the precedence.
+// ---------------------------------------------------------------------------
+
+/** SDK error names meaning "the provider's response was unusable". */
+const PROVIDER_RESPONSE_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "AI_InvalidStreamPartError",
+  "AI_StreamProviderError",
+  "AI_InvalidResponseDataError",
+  "AI_TypeValidationError",
+  "AI_JSONParseError",
+  "AI_EmptyResponseBodyError",
+]);
+
+/**
+ * True when this SDK error means the provider's response was unusable.
+ *
+ * `AI_APICallError` is deliberately NOT in the set: it is how every 401, 429 and
+ * 5xx arrives, and treating it as a conformance fault would swallow `auth` and
+ * `rate_limit`. It qualifies only in the one case that is genuinely a conformance
+ * problem — a call that reported success but returned an unusable body. In
+ * practice providers surface that as a parse/validation error instead, so this
+ * branch is defence rather than a hot path.
+ */
+function isProviderResponseError(errorType: string, status: number | undefined): boolean {
+  if (errorType === "AI_APICallError") {
+    return status !== undefined && status >= 200 && status < 300;
+  }
+  return PROVIDER_RESPONSE_ERROR_NAMES.has(errorType);
+}
 
 /**
  * Narrows a coarse category into a more actionable one. Only `config` and
@@ -98,6 +142,28 @@ function refineCategory(base: ErrorCategory, text: string): ErrorCategory {
   return base;
 }
 
+export type ErrorLogFields = Omit<ClassifiedError, "message">;
+
+/**
+ * Return only classification fields that are safe to emit through a logger.
+ * The raw provider/tool message remains available to user-facing sanitizers
+ * but never crosses the structured logging boundary.
+ */
+export function errorLogFields(
+  err: unknown,
+  opts?: { provider?: string },
+): ErrorLogFields {
+  const classified = classifyError(err, opts);
+  return {
+    category: classified.category,
+    statusCode: classified.statusCode,
+    provider: classified.provider,
+    retryable: classified.retryable,
+    errorType: classified.errorType,
+    ...(classified.billing ? { billing: true } : {}),
+  };
+}
+
 export function classifyError(err: unknown, opts?: { provider?: string }): ClassifiedError {
   const norm = normalizeError(err, false);
   const text = `${norm.errorType} ${norm.message} ${norm.code ?? ""}`;
@@ -107,6 +173,10 @@ export function classifyError(err: unknown, opts?: { provider?: string }): Class
   if (CANCELLED_RE.test(text)) base = "cancelled";
   else if (status === 401 || status === 403 || AUTH_RE.test(text)) base = "auth";
   else if (status === 429 || RATE_RE.test(text)) base = "rate_limit";
+  // Ahead of every prose heuristic below, and behind only the two facts the
+  // display layer is entitled to trust: the user cancelled, or the provider
+  // returned a status that already names the condition.
+  else if (isProviderResponseError(norm.errorType, status)) base = "invalid_stream";
   else if (NETWORK_RE.test(text)) base = "network";
   else if (status === 408 || TIMEOUT_RE.test(text)) base = "timeout";
   else if (
@@ -122,7 +192,14 @@ export function classifyError(err: unknown, opts?: { provider?: string }): Class
 
   // Retryability comes from the COARSE category — the pre-existing policy.
   // Deriving it here (rather than from the refined label) is what guarantees
-  // that widening the taxonomy cannot change retry behavior anywhere.
+  // that widening the REFINEMENT vocabulary cannot change retry behavior.
+  //
+  // `invalid_stream` is deliberately absent from that list. A response the SDK
+  // could not parse is not a transient fault: retrying re-sends a request that
+  // produced garbage, which is the same reasoning behind `DIRECT_MAX_RETRIES = 0`
+  // on the Direct route. One behaviour changes as a result — a malformed stream
+  // part whose text mentions a fetch failure used to read as a retryable network
+  // error, and is now correctly non-retryable.
   const retryable =
     base === "rate_limit" ||
     base === "network" ||

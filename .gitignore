@@ -39,3 +39,20 @@ src-tauri/binaries/
 src-tauri/icons/
 dev.out
 dev.err
+
+# Scratch artifacts from throwaway harnesses and test runs. These are
+# regenerable, carry no information, and are easy to create by accident: a
+# verification run that points DATA_DIR at a relative path silently builds its
+# whole database inside the repo root instead of a temp directory, one
+# `tmp-cri-<pid>/` per run. 11 of them had accumulated here untracked, each
+# containing a stray `chat/` tree.
+tmp-cri-*/
+data-verify-tmp*/
+web/test-results/
+playwright-report/
+
+# Local agent tooling state, not project source. `.superpowers/` holds per-task
+# progress notes for work still in flight; `prompt.txt` is a scratch task brief.
+# Neither belongs in history, and both are worth keeping on disk.
+.superpowers/
+prompt.txt

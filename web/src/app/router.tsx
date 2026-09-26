@@ -25,11 +25,10 @@ import { CodeShell } from "../features/opencode/CodeShell";
  *
  * Branch/shell split (structural, not stylistic): the chat branch renders
  * inside `ChatShell` (normal TBAi thread-list runtime + full chrome) while
- * the Code branch renders inside `CodeShell` (OpenCode runtime at its top,
- * focused chrome). The OpenCode adapter's `useRemoteThreadListRuntime`
- * degrades to a parent-context no-op when nested inside another
- * RemoteThreadListRuntime, so the two shells must never nest — paths are
- * unchanged, only the grouping.
+ * the Code branch renders inside `CodeShell` (native OpenCode V2 runtime at its
+ * top, focused chrome). The two independent runtimes must never nest because
+ * each owns its own thread-list and session lifecycle; paths are unchanged,
+ * only the grouping.
  */
 export const router = createHashRouter([
   {

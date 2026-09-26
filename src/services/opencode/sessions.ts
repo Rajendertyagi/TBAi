@@ -1,5 +1,5 @@
 import { createOpenCodeClient, type OpenCodeClient } from "./client";
-import { toOpenCodeError } from "./errors";
+import { OpenCodeError, toOpenCodeError } from "./errors";
 import { conversationService } from "../storage";
 import { resolveConversationWorkspace } from "../workspace";
 import { openCodeServerManager } from "./serverManager";
@@ -73,26 +73,13 @@ function asDirectory(value: unknown): string | undefined {
  * and the server's own record is its authoritative source — reading it from
  * TBAi's folder table instead would go stale the moment a workspace migrates.
  *
- * The directory is read from the V2 location field first (`location.directory`,
- * the shape `@opencode/client` types) and from a top-level `directory` second
- * (the shape OpenCode 1.18.x returns on its V1 session route). Which one is
- * present depends on the route the server answers, so both are accepted rather
- * than pinning this code to one server version.
+ * The directory is read from the V2 `location.directory` field exposed by the
+ * official client. A missing location is reported as `null`; the seam does not
+ * infer a path from fields outside the V2 contract.
  *
- * Liveness semantics are unchanged from the probe this replaces: only a
- * **definitive "not found"** reads as absent. Everything else reads as present,
- * including the HTTP 500 that OpenCode 1.18.29 returns for a session whose
- * bound directory has been removed from disk: measured across 50 live
- * sessions, that 500 correlated 100% with "directory missing" (server log:
- * `PlatformError: NotFound: FileSystem.realPath … ENOENT`) and never with
- * absence — every session whose directory existed answered 200. Reading that
- * 500 as dead made TBAi abandon a live session and create a fresh one on every
- * call, for 46 of those 50 sessions. This is an OpenCode 1.18.29 defect, not an
- * absence signal, so it must not be treated as one. Such a session reads as
- * present with no directory, since its directory is precisely what is gone.
- *
- * Never throws — an unreachable server reads as absent, which is the safe
- * direction (the caller recreates rather than handing out an unverified id).
+ * Liveness follows the V2 session contract. Only the official missing-session
+ * response reads as absent; transport, auth, malformed, and server failures
+ * propagate so a transient error cannot orphan the existing session.
  *
  * @param client - Client bound to the managed server's base URL.
  * @param sessionId - The persisted OpenCode session id to look up.
@@ -104,26 +91,22 @@ async function fetchOpenCodeSession(
 ): Promise<{ id: string; directory: string | null } | null> {
   try {
     const session = await client.session.get({ sessionID: sessionId });
-    if (typeof session?.id !== "string" || session.id.length === 0) return null;
-    const wire = session as unknown as {
-      directory?: unknown;
-      location?: { directory?: unknown };
-    };
+    if (typeof session?.id !== "string" || session.id.length === 0) {
+      throw new OpenCodeError(
+        "malformed",
+        "OpenCode session response carried no session id",
+      );
+    }
     return {
       id: session.id,
-      directory:
-        asDirectory(wire.location?.directory) ??
-        asDirectory(wire.directory) ??
-        null,
+      directory: asDirectory(session.location?.directory) ?? null,
     };
-  } catch (err) {
-    const failure = toOpenCodeError(err);
-    // OpenCode 1.18.29 answers 500 when the session's bound directory is gone.
-    // The session itself still exists, so it is live. See the doc comment.
-    if (failure.kind === "http" && failure.statusCode === 500) {
-      return { id: sessionId, directory: null };
+  } catch (error) {
+    const failure = toOpenCodeError(error);
+    if (failure.kind === "session_not_found" || failure.statusCode === 404) {
+      return null;
     }
-    return null;
+    throw failure;
   }
 }
 
@@ -132,12 +115,13 @@ async function fetchOpenCodeSession(
  * this session? The id is only a pointer — the server restarts independently,
  * so a persisted id may reference a session that no longer exists.
  *
- * A thin predicate over `fetchOpenCodeSession`, so the liveness rules (and the
- * OpenCode 1.18.29 500 defect documented there) live in exactly one place.
+ * A thin predicate over `fetchOpenCodeSession`, so the V2 liveness rules live
+ * in exactly one place.
  *
  * @param client - Client bound to the managed server's base URL.
  * @param sessionId - The persisted OpenCode session id to verify.
  * @returns True when the server still has the session.
+ * @throws {OpenCodeError} When lookup fails for a reason other than missing session.
  */
 export async function isOpenCodeSessionLive(
   client: OpenCodeClient,
@@ -201,8 +185,10 @@ async function ensureOpenCodeSessionInner(
     );
   }
 
+  const resolved = await resolveConversationWorkspace(conversationId);
+  const directory = resolved.dir;
   const baseUrl = await openCodeServerManager.ensureBaseUrl();
-  const client = createOpenCodeClient(baseUrl);
+  const client = createOpenCodeClient(baseUrl, { directory });
   if (conversation.opencodeSessionId) {
     const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
     if (live) {
@@ -216,8 +202,6 @@ async function ensureOpenCodeSessionInner(
     });
   }
 
-  const resolved = await resolveConversationWorkspace(conversationId);
-  const directory = resolved.dir;
   // `session.create` posts to `POST /api/session` and accepts a flat
   // `{ location: { directory }, agent?, model? }` body — `location.directory`
   // is what roots the session in the conversation's workspace (it is NOT a
@@ -242,20 +226,12 @@ async function ensureOpenCodeSessionInner(
   }
 
   let sessionId: string | undefined;
-  let createdDirectory: string | null = null;
+  let createdDirectory: string;
   try {
     const session = await client.session.create(params);
     sessionId = session?.id;
-    // Prefer the server's own echo of the bound directory over the path we
-    // sent: it is what the session is actually scoped to.
-    const wire = session as unknown as {
-      directory?: unknown;
-      location?: { directory?: unknown };
-    };
-    createdDirectory =
-      asDirectory(wire.location?.directory) ??
-      asDirectory(wire.directory) ??
-      null;
+    // Prefer the V2 response's authoritative location over the submitted path.
+    createdDirectory = asDirectory(session.location?.directory) ?? directory;
   } catch (err) {
     throw toOpenCodeError(err);
   }
@@ -265,9 +241,7 @@ async function ensureOpenCodeSessionInner(
 
   await conversationService.update(conversationId, { opencodeSessionId: sessionId });
   logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
-  // Fall back to the directory we created the session in when the server's
-  // response omits it (older servers do): that path is still its scope.
-  return { sessionId, directory: createdDirectory ?? directory };
+  return { sessionId, directory: createdDirectory };
 }
 
 /**
@@ -277,9 +251,7 @@ async function ensureOpenCodeSessionInner(
  * session, dead server) so the call is idempotent and safe to repeat — the
  * deletion coordinator relies on this to never block conversation teardown.
  *
- * Uses the official V2 `session.interrupt` then `session.remove`. On OpenCode
- * 1.18.29 those two endpoints do not match the V2 contract, which is absorbed
- * by the transport in `./client` rather than by any caller here.
+ * Uses the official V2 `session.interrupt` then `session.remove` contract.
  *
  * @param conversationId - TBAi conversation whose session should end.
  * @returns Whether a live session was terminated (false = nothing to do).
@@ -293,8 +265,9 @@ export async function terminateOpenCodeSession(
     return { terminated: false };
   }
   try {
+    const resolved = await resolveConversationWorkspace(conversationId);
     const baseUrl = await openCodeServerManager.ensureBaseUrl();
-    const client = createOpenCodeClient(baseUrl);
+    const client = createOpenCodeClient(baseUrl, { directory: resolved.dir });
     // Interrupt first, then remove: stop live work before dropping the session
     // out from under it. Each step is individually best-effort — an idle run
     // has nothing to interrupt and a restarted server has nothing to remove.

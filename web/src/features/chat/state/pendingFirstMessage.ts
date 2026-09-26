@@ -23,6 +23,8 @@ export interface PendingFirstPrompt {
   text: string;
   createdAt: number;
   claimed: boolean;
+  /** Stable native V2 message id, allocated before the append is dispatched. */
+  messageId?: string;
 }
 
 const KEY_PREFIX = "tbai:pending-first-prompt:";
@@ -41,6 +43,7 @@ function readEntry(conversationId: string): PendingFirstPrompt | null {
       text: parsed.text,
       createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
       claimed: parsed.claimed === true,
+      ...(typeof parsed.messageId === "string" ? { messageId: parsed.messageId } : {}),
     };
   } catch {
     return null;
@@ -63,6 +66,14 @@ function writeEntry(conversationId: string, entry: PendingFirstPrompt): void {
 export function setPendingFirstMessage(conversationId: string, text: string): void {
   if (!conversationId || !text) return;
   writeEntry(conversationId, { text, createdAt: Date.now(), claimed: false });
+}
+
+/** Persists the native message id before dispatching the claimed handoff. */
+export function setPendingFirstMessageIdentity(conversationId: string, messageId: string): void {
+  if (!conversationId || !messageId) return;
+  const entry = readEntry(conversationId);
+  if (!entry) return;
+  writeEntry(conversationId, { ...entry, messageId });
 }
 
 /** Inspect without consuming (null when none/corrupt/empty). */

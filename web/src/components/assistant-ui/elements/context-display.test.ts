@@ -172,16 +172,15 @@ describe("pin wiring (additional source-guard proof)", () => {
 });
 
 describe("OpenCode ring source", () => {
-  it("selects the stable store reference and memoizes the mapping", () => {
-    expect(openCodeRing).toContain("selectOpenCodeRawTokens");
-    expect(openCodeRing).toContain("useMemo(() => toTokenUsage(raw), [raw])");
-    // The mapping must never run inside the external-store selector: that
-    // allocation-per-read was the React #185 infinite loop.
-    expect(openCodeRing).not.toContain("toTokenUsage(custom");
+  it("reads native V2 extras usage and memoizes the token mapping", () => {
+    expect(openCodeRing).toContain("extras?.state.usage?.tokens");
+    expect(openCodeRing).toContain("toTokenUsage(extras?.state.usage?.tokens)");
+    expect(openCodeRing).not.toContain("state.thread.messages");
+    expect(openCodeRing).not.toContain("metadata.custom.tokens");
   });
 
   it("resets on session change and prefers the live model limit", () => {
-    expect(openCodeRing).toContain("resetKey={runtime?.sessionId}");
+    expect(openCodeRing).toContain("resetKey={extras.sessionId}");
     expect(openCodeRing).toContain("limit?.context");
   });
 });

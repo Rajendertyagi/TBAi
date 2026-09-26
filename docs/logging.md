@@ -73,9 +73,12 @@ naming styles.
 | `http.request_start` | `http` | a meaningful request begins (assets, health/metrics probes, high-frequency polls, and the log viewer's own stream are excluded) | method/path in `message` |
 | `http.request` | `http` | request completes < 400 | method/path in `message`, `statusCode`, `durationMs` |
 | `http.error` | `http` | response ≥ 400 or thrown error | `statusCode`, `category`, `retryable`, `message` |
-| `ai.request` | `ai` | stream starts | `provider`, `model` |
-| `ai.response` | `ai` | stream finishes | `provider`, `model`, `durationMs` |
-| `ai.error` | `ai` | stream/provider/test fails | classification fields + `provider` |
+| `ai.request` | `ai` | stream starts | `provider`, `model`, `endpointConfigured`, `protocol`, `maxRetries`, `streamRetries` |
+| `ai.run_detached` | `ai` | client connection dropped, run continues | `streamId`, `threadId`, `reason`, `elapsedMs`, `chunkCount` |
+| `ai.stream_recovered` | `ai` | boot settles resumable streams orphaned by a previous process | `signal`, `scanned`, `interrupted`, `streamIds` (ids only — never chunk bytes or provider text) |
+| `ai.stream_cleanup` / `ai.stream_cleanup_failed` / `ai.stream_cleanup_stopped` | `ai` | periodic reclamation of expired terminal resumable streams | `signal`, `scanned`, `deleted`, `skippedStreaming`, `failures`, `deletedChunks` (counts only) |
+| `ai.response` | `ai` | stream finishes successfully | `provider`, `model`, `outcome`, `runStatus`, `finishReason`, `durationMs`, `chunkCount`, `totalTokens` |
+| `ai.error` | `ai` | stream/provider/test fails | classification fields + `provider`; never raw provider text |
 | `ai.run_detached` | `ai` | connection dropped while the server run continues | `streamId`, `reason` (`connection-closed`/`read-error`), timings |
 | `tool.start` | `tool` | tool call begins | `tool`, `conversationId`, + `mcpServer` for remote tools |
 | `tool.finish` | `tool` | tool call succeeds | `tool`, `durationMs` |
@@ -99,12 +102,16 @@ there) and never carry prompt text, model output, or answer content.
 
 | Event | Scope | When | Key fields |
 |---|---|---|---|
-| `send.start` / `send.stream_end` / `send.failed` | `chat` | a chat send opens / ends / errors | `trigger`, `threadId`, `providerId`, `model`, `outcome`, `kind` |
+| `send.start` / `send.stream_end` / `send.failed` | `chat` | a chat send opens / ends / errors | lifecycle fields plus `kind`/`errorType` on failure; never raw error text |
 | `send.redirected_to_opencode` | `chat` | a first send is routed to the Code surface instead | `threadId` |
 | `request_sent` / `request_completed` / `request_failed` | `chat` | browser half of the request pair | `path` (never the query string), `status`, `durationMs` |
+| `chat_request_rejected` | `chat` | Direct envelope/message boundary rejects a request | `requestId`, `conversationId`, `reason`, safe classification fields |
 | `draft.snapshot` / `draft.materialize_start` / `draft.materialized` / `draft.materialize_failed` | `chat` | engine decision → row created (or not) | `engine`, `workspaceMode`, `clientRequestId`, `conversationId` |
 | `run.cancel_requested` / `run.cancel_rejected` | `chat` | explicit cancel of a server-owned run | `streamId`, `status` |
 | `handoff.start` / `handoff.accepted` / `handoff.failed` / `handoff.not_bound` | `opencode` | first-prompt handoff lifecycle | `conversationId`, `sessionId`, `boundSessionId` |
+| `command.feed_loaded` / `command.feed_failed` | `opencode` | the OpenCode command feed arrived / did not (the previous list is retained on failure) | `count`, `skills`, `status`, `retained` |
+| `command.selected` | `opencode` | a `/` command was picked from the composer palette | `name`, `source` (NAMES only — never the template or arguments) |
+| `command.compact_started` / `command.compact_completed` / `command.compact_failed` | `opencode` | built-in `/compact` summarize lifecycle (server confirms; failure never claims success) | `ocSession`, `provider`, `model`, `hasDirectory`, `status`, `elapsedMs` (ids/metadata only — never prompt text or message content) |
 | `route.change` | `app` | the active surface changed | `from`, `to` (pathname only) |
 | `runtime.mount` / `runtime.unmount` | `app` | a shell's runtime came up / went away | `shell` (`chat`/`code`) |
 | `runtime.bind` | `app` | the runtime reported the thread it bound | `threadId` |
@@ -224,7 +231,10 @@ behavior, which is not an observability change.
   sampling**: a deterministic 1-in-N gate drops evidence unconditionally and
   silently, which is the opposite of what reconstruction needs.
 - Never log: secrets/token material (defense in depth — sinks redact anyway),
-  raw user text, full prompts, huge objects. Fields carry ids + small scalars.
+  raw user text, full prompts, system prompts, provider endpoint URLs, raw
+  provider error messages, approval signatures, or huge objects. Sanitized
+  structural diagnostics (lengths, counts, schema keys, ids) are allowed. Fields
+  carry ids + small scalars.
 - One canonical line per request/poll-cycle (Stripe-style), not N lines per
   step. The one deliberate exception is `http.request_start` + the completion
   line: a request that hangs never emits its completion, so without a start

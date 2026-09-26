@@ -1,12 +1,11 @@
 import { z } from "zod";
 
-// The chat message format is owned by @assistant-ui/react + AI SDK v7
-// (UIMessage with `parts`). We validate the request structure only — presence
-// of a non-empty messages array and an optional providerId — and let the AI SDK
-// parse the message internals via `convertToModelMessages`.
-const uiMessageSchema = z
-  .object({ role: z.string() })
-  .passthrough();
+/**
+ * Message metadata is intentionally opaque to the Direct route. The runtime
+ * owns its shape; the server only needs to ensure it is a JSON object before
+ * handing it to the AI SDK validator.
+ */
+export const chatMessageMetadataSchema = z.record(z.string(), z.unknown()).optional();
 
 export const reasoningCapabilitySchema = z.object({
   support: z.enum(["supported", "unsupported", "unknown"]),
@@ -25,14 +24,31 @@ export const modelOptionSchema = z.object({
   capabilities: modelCapabilitiesSchema.optional(),
 });
 
+/**
+ * Direct `/api/chat` request envelope.
+ *
+ * `AssistantChatTransport` owns the envelope, while AI SDK v7 owns UI-message
+ * internals. Keep the transport fields explicit here; the route validates the
+ * actual messages with `safeValidateUIMessages` after the Direct engine guard.
+ * Client model-policy/tool directives are rejected rather than silently ignored.
+ */
 export const chatRequestSchema = z
   .object({
-    providerId: z.string().optional(),
-    model: z.string().optional(),
+    id: z.string().max(200).optional(),
+    providerId: z.string().max(200).optional(),
+    model: z.string().max(200).optional(),
     reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional(),
-    messages: z.array(uiMessageSchema).min(1, "messages are required"),
-  })
-  .passthrough();
+    messages: z.array(z.unknown()).min(1, "messages are required"),
+    trigger: z.enum(["submit-message", "regenerate-message"]).optional(),
+    messageId: z.string().max(200).optional(),
+    metadata: z.unknown().optional(),
+    // These fields are emitted by AssistantChatTransport as empty placeholders.
+    // Non-empty values are rejected because the Direct server owns policy/tools.
+    system: z.unknown().optional(),
+    tools: z.unknown().optional(),
+    callSettings: z.unknown().optional(),
+    config: z.unknown().optional(),
+  }).strict();
 
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(120),
@@ -136,6 +152,20 @@ export const storedMessageSchema = z
     content: z.any(),
   })
   .passthrough();
+
+// Durable Direct-run status (Phase 3). Exactly one selector is required:
+// `streamId` for a caller that already holds a resumable id, `conversationId` for
+// the durable form the UI actually uses — "what became of the last thing I asked
+// in this conversation?" — which needs no client-held pointer and so survives both
+// a transport-cleared pointer and an app restart.
+export const streamStatusQuerySchema = z
+  .object({
+    streamId: z.string().min(1).max(256).optional(),
+    conversationId: z.string().min(1).max(64).optional(),
+  })
+  .refine((query) => Boolean(query.streamId) !== Boolean(query.conversationId), {
+    message: "provide exactly one of streamId or conversationId",
+  });
 
 export const messageUpsertSchema = z.object({
   message: storedMessageSchema,

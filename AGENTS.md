@@ -67,7 +67,7 @@ library that provides React context, runtime state, or provider infrastructure:
 9. Test the error/loading/provider paths, not only the normal happy path,
    because duplicate-context bugs may remain hidden until a conditional
    component mounts.
-10. Keep isolated feature adapters (e.g. OpenCode) from consuming the main
+10. Keep isolated feature boundaries (e.g. OpenCode) from consuming the main
     application's context unless explicitly designed to share it.
 
 ### Mandatory acceptance rule
@@ -87,7 +87,8 @@ explicit compatibility review and approval.
 ## Architecture boundaries
 
 - `web/src/runtime.ts` — only place that wires the chat transport to `/api/chat`
-  (sends `providerId` only).
+  (sends the selected provider/model identifiers and transport metadata, never
+  secrets or client model directives).
 - `web/src/components/ChatWindow.tsx` — assistant-ui primitives only; no custom
   rendering of messages.
 - `src/services/ai.ts#getModel` — only place that maps provider type → model.
@@ -130,20 +131,21 @@ explicit compatibility review and approval.
   feature code, never log secrets/tokens/message text. Every request carries a
   `requestId` (AsyncLocalStorage) — include it when adding new boundaries.
   `AI_DEBUG_REQUESTS=true` enables sanitized outbound-request diagnostics.
-- OpenCode isolation boundary (adapter/service, never inline):
+- OpenCode isolation boundary (service/feature, never inline):
   `src/services/opencode/` is the ONLY backend code that talks to the managed
-  `opencode serve` process or the `@opencode-ai/sdk` — process ownership in
-  `serverManager.ts`, session lifecycle in `session.ts`. The rest of the
-  backend (chat route, workspace, tools, scheduler) never imports the SDK;
-  the OpenCode module receives `conversationId` + the already-resolved dir
-  via existing entry points (`resolveConversationWorkspace`).
+  `opencode serve` process or the official `@opencode/client` — process
+  ownership in `serverManager.ts`, session lifecycle in `sessions.ts`. The
+  rest of the backend (chat route, workspace, tools, scheduler) never imports
+  the client; the OpenCode module receives `conversationId` + the already-resolved
+  dir via existing entry points (`resolveConversationWorkspace`).
   `web/src/features/opencode/` is the ONLY frontend code that imports
-  `@assistant-ui/react-opencode` (runtime, session/question/permission hooks,
-  status). `ChatWindow.tsx`, the chat runtime, and all other UI never import
-  the adapter — Code mode composes through the shared `mode="agent"` prop.
-  New OpenCode capability (permissions, questions, models, agents) → new
-  module under the owning `opencode/` dir, called through a small named
-  function — never inline OpenCode logic in TBAi core files.
+  `@opencode/client`; it owns the native V2 client, event reduction, history,
+  permissions, forms, cancellation, and external-store controller.
+  `ChatWindow.tsx`, the chat runtime, and all other UI never import the
+  OpenCode client or feature internals — Code mode composes through the shared
+  `mode="agent"` prop. New OpenCode capability (permissions, forms, models,
+  agents) → new module under the owning `opencode/` dir, called through a small
+  named function — never inline OpenCode logic in TBAi core files.
 - `web/src/config/tools.ts` — single source of truth for TBAi-owned tool UI copy
   (running labels, empty states, summary notices, decisions). Individual tool
   renderers import copy from this module; vendored assistant-ui elements retain
@@ -165,7 +167,7 @@ changes. It is the forward-looking contract for the system. Key non-negotiables:
   execution/continuation contract. No second streaming protocol, no
   application-owned message runtime.
 - **OpenCode** owns coding-agent sessions/tools/execution behind the OpenCode
-  adapter boundary. Do not spread OpenCode wire-format assumptions through
+  feature boundary. Do not spread OpenCode wire-format assumptions through
   generic TBAi code.
 - **MCP** uses the official `@modelcontextprotocol/sdk`. No hand-rolled
   JSON-RPC, no second MCP client.
@@ -181,7 +183,8 @@ changes. It is the forward-looking contract for the system. Key non-negotiables:
   QuestionForm and returns `answers[][]`; it must not use ApprovalGate,
   `respondToApproval`, or permission APIs. Permissions remain a separate
   allow/deny contract.
-- **Provider/vendor protocols stay behind adapters** (AI SDK, OpenCode, MCP).
+- **Provider/vendor protocols stay behind runtime or feature boundaries** (AI SDK,
+  OpenCode, MCP).
 - **No framework multiplication.** No second chat runtime, state framework,
   router, or MCP implementation.
 - **Prefer deleting obsolete custom code** when upstream capability becomes

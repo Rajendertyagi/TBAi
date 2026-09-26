@@ -19,7 +19,7 @@
  *
  * WHAT IT DOES NOT DO, on purpose:
  *  - render UI (the composer shield is a control surface, Phase 6E)
- *  - send a response (the existing `permissionCompat` boundary is the ONLY
+ *  - send a response (the native controller is the only
  *    response path — Phase 6C)
  *  - persist (the conversation-config path identified in Q4 is authoritative —
  *    Phase 6J)

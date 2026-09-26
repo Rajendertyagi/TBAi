@@ -34,7 +34,8 @@ import {
   toolStatSchema,
 } from "../../lib/validation";
 import { logger, normalizeError, newRequestId } from "../../lib/logger";
-import { classifyError } from "../../lib/errors";
+import { classifyError, errorLogFields } from "../../lib/errors";
+import { sanitizeStreamError } from "../../lib/redact";
 import { instrumentedExecute } from "../../lib/tool-funnel";
 import { generateId } from "../../lib/utils";
 import type { SchedulerJob, SchedulerRun } from "./schedulerTypes";
@@ -402,7 +403,7 @@ export async function executeJobRun(
         /abort|aborted|timeout|timed out/i.test(norm.message);
       const message = aborted
         ? `Run timed out after ${job.timeoutSeconds}s`
-        : norm.message.slice(0, 1000);
+        : sanitizeStreamError(err);
       lastError = message;
       // Best-effort: persist an error message so the thread shows why it failed.
       if (conversationId) {
@@ -421,7 +422,7 @@ export async function executeJobRun(
       const retryable = !aborted ? isRetryableError(err) : true;
       log.warn("scheduler", "scheduler.run", {
         outcome: "failed",
-        ...classifyError(err),
+        ...errorLogFields(err),
         message,
         attempt,
         retryable,

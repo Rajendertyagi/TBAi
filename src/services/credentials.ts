@@ -2,7 +2,7 @@ import { gcm } from "@noble/ciphers/aes.js";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { db } from "../db";
 import { logger } from "../lib/logger";
-import { classifyError } from "../lib/errors";
+import { errorLogFields } from "../lib/errors";
 
 // Local, portable credential encryption for a personal-use app.
 //
@@ -20,6 +20,9 @@ import { classifyError } from "../lib/errors";
 const CREDENTIAL_VERSION = 1;
 const KEY_VERSION = 1;
 const NONCE_BYTES = 12;
+const TOOL_APPROVAL_SECRET_SETTING_KEY = "security.tool_approval_secret";
+const TOOL_APPROVAL_SECRET_BYTES = 32;
+const TOOL_APPROVAL_SECRET_HEX_RE = /^[0-9a-f]{64}$/;
 
 export class CredentialError extends Error {
   constructor(message: string) {
@@ -60,22 +63,111 @@ function utf8Decode(bytes: Uint8Array): string {
  */
 export class CredentialStore {
   private key: Uint8Array | null = null;
+  private toolApprovalSecretReady = false;
 
   /** Load the local DEK, generating and persisting it on first use. Call at startup. */
   initialize(): void {
-    const row = db
-      .query<{ key_hex: string }, SQLQueryBindings[]>("SELECT key_hex FROM credential_key WHERE id = 1")
-      .get();
-    if (row) {
-      this.key = hexToBytes(row.key_hex);
-      return;
+    if (!this.key) {
+      const row = db
+        .query<{ key_hex: string }, SQLQueryBindings[]>("SELECT key_hex FROM credential_key WHERE id = 1")
+        .get();
+      if (row) {
+        this.key = hexToBytes(row.key_hex);
+      } else {
+        const newKey = randomBytes(32);
+        db.run(
+          "INSERT INTO credential_key (id, key_hex, version, created_at) VALUES (1, ?, ?, ?)",
+          [bytesToHex(newKey), KEY_VERSION, Date.now()],
+        );
+        this.key = newKey;
+      }
     }
-    const newKey = randomBytes(32);
+
+    if (!this.toolApprovalSecretReady) {
+      this.loadOrCreateToolApprovalSecret();
+      this.toolApprovalSecretReady = true;
+    }
+  }
+
+  /** Return the stable per-install HMAC secret used for Direct tool approvals. */
+  getToolApprovalSecret(): string {
+    // Route-level tests and embedded callers may reach the boundary before the
+    // server startup task. Initialization is idempotent; after bootstrap we
+    // re-read the encrypted setting on every request so deletion/corruption
+    // cannot be hidden by an in-memory cache.
+    if (!this.key) this.initialize();
+    const row = db
+      .query<{ value: string }, SQLQueryBindings[]>(
+        "SELECT value FROM app_settings WHERE key = ?",
+      )
+      .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
+    if (!row) {
+      this.toolApprovalSecretReady = false;
+      throw new CredentialError("Tool approval secret is unavailable");
+    }
+    try {
+      const secret = this.decryptToolApprovalSecret(row.value);
+      this.toolApprovalSecretReady = true;
+      return secret;
+    } catch (error) {
+      this.toolApprovalSecretReady = false;
+      throw error;
+    }
+  }
+
+  private loadOrCreateToolApprovalSecret(): string {
+    const row = db
+      .query<{ value: string }, SQLQueryBindings[]>(
+        "SELECT value FROM app_settings WHERE key = ?",
+      )
+      .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
+
+    if (row) {
+      return this.decryptToolApprovalSecret(row.value);
+    }
+
+    const secret = bytesToHex(randomBytes(TOOL_APPROVAL_SECRET_BYTES));
+    const encrypted = this.encryptValue(secret);
     db.run(
-      "INSERT INTO credential_key (id, key_hex, version, created_at) VALUES (1, ?, ?, ?)",
-      [bytesToHex(newKey), KEY_VERSION, Date.now()],
+      `INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
+      [TOOL_APPROVAL_SECRET_SETTING_KEY, encrypted, Date.now()],
     );
-    this.key = newKey;
+
+    // INSERT OR IGNORE makes startup safe if another local initialization wins
+    // the race. Always read back the persisted value rather than trusting the
+    // candidate in memory.
+    const persisted = db
+      .query<{ value: string }, SQLQueryBindings[]>(
+        "SELECT value FROM app_settings WHERE key = ?",
+      )
+      .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
+    if (!persisted) {
+      throw new CredentialError("Failed to persist tool approval secret");
+    }
+    return this.decryptToolApprovalSecret(persisted.value);
+  }
+
+  private decryptToolApprovalSecret(envelopeJson: string): string {
+    let secret: string;
+    try {
+      secret = this.decryptValue(envelopeJson);
+    } catch {
+      // decryptValue already emits the credential funnel line with safe fields.
+      throw new CredentialError(
+        "Failed to load tool approval secret (data may be corrupted)",
+      );
+    }
+    if (!TOOL_APPROVAL_SECRET_HEX_RE.test(secret)) {
+      logger.error("credential", "credential.error", {
+        category: "config",
+        retryable: false,
+        errorType: "CredentialError",
+      });
+      throw new CredentialError(
+        "Failed to load tool approval secret (data may be corrupted)",
+      );
+    }
+    return secret;
   }
 
   private requireKey(): Uint8Array {
@@ -118,7 +210,7 @@ export class CredentialStore {
       // Logged here (not just at the HTTP edge) with the provider identity.
       logger.error("credential", "credential.error", {
         providerId,
-        ...classifyError(err),
+        ...errorLogFields(err),
       });
       throw new CredentialError(
         "Failed to decrypt credential (data may be corrupted)",
@@ -163,7 +255,9 @@ export class CredentialStore {
       const envelope = JSON.parse(envelopeJson) as EncryptedEnvelope;
       return utf8Decode(gcm(key, hexToBytes(envelope.nonce)).decrypt(hexToBytes(envelope.ct)));
     } catch (err) {
-      logger.error("credential", "credential.error", { ...classifyError(err) });
+      logger.error("credential", "credential.error", {
+        ...errorLogFields(err),
+      });
       throw err instanceof Error ? err : new CredentialError("Failed to decrypt value");
     }
   }

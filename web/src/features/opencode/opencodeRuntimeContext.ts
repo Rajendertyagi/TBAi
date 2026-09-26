@@ -19,6 +19,26 @@ export interface OpenCodeRuntimeContextValue {
   sessionId: string;
   /** The runtime's reconcile seam (from `useOpenCodeRuntime`). */
   reconcileAutoApprove?: () => Promise<number>;
+  /**
+   * The session's directory scope (from the backend session seam), or null
+   * when the server did not report one. Directory-scoped calls omit it
+   * rather than guessing a path.
+   */
+  directory?: string | null;
+  /**
+   * The session's current provider/model (the runtime's prompt-level
+   * defaults). Absent while unresolved — callers then let the server
+   * default apply rather than guessing.
+   */
+  providerID?: string;
+  modelID?: string;
+  /** Native V2 compaction admission seam. */
+  compact?: () => Promise<void>;
+  /** Native V2 selection and recovery seams. */
+  setDesiredSelection?: (selection: { model: { providerID: string; modelID: string; variant?: string } | null; agent: string | null }) => void;
+  reconcileStagedRevert?: () => Promise<void>;
+  /** The optional live model variant selected by the native runtime. */
+  variant?: string;
 }
 
 export const OpenCodeRuntimeContext = createContext<OpenCodeRuntimeContextValue | null>(null);

@@ -20,7 +20,7 @@ export const CLIENT_LOG_SCOPES = [
   "composer",
   /** Backend availability / recovery state machine. */
   "availability",
-  /** OpenCode adapter + session lifecycle. */
+  /** OpenCode V2 client/controller and session lifecycle. */
   "opencode",
   /** Approval decisions + question answers (permission flows). */
   "approval",

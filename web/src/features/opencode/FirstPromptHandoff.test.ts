@@ -12,12 +12,10 @@ import {
 /**
  * Settled-boundary first-prompt handoff.
  *
- * The stashed draft prompt must enter the runtime ONLY after the runtime's
- * main thread is bound to the bootstrapped OpenCode session id. Firing on
- * the draft thread invokes the frozen adapter's
- * `onNew → threadListItem.initialize()` path (upstream `session.create` →
- * `POST /api/opencode/session` with `{}` → 400), or races an adapter
- * replacement (`ThreadListAdapterChangedError`).
+ * The stashed draft prompt must enter the runtime only after the runtime's
+ * main thread is bound to the bootstrapped native V2 session id. Firing on
+ * the draft thread can target the wrong session during a thread switch and
+ * race the settled handoff boundary.
  *
  * Deterministic: controllable deferred promises as barriers, no sleeps.
  */
@@ -221,8 +219,9 @@ describe("FirstPromptHandoff — structural boundary pins", () => {
     // Settled boundary: externalId wins, remoteId is the fallback.
     expect(source).toContain("threadListItem.externalId ??");
     expect(source).toContain("boundSessionId !== sessionId");
-    // The handoff never drives thread-list initialization itself (that is
-    // the frozen adapter's 400 path on draft threads).
+    // The handoff never drives thread-list initialization itself; a
+    // wrong-thread or switch race leaves the prompt staged for the bound
+    // native V2 session.
     expect(source).not.toContain(".initialize(");
     expect(source).not.toContain("/api/opencode/session");
     expect(source).not.toContain("session.create");

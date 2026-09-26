@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { chatErrorCopy, classifyChatError } from "./transport-errors";
+import { chatErrorCopy, classifyChatError, TRANSPORT_ERROR_COPY } from "./transport-errors";
 
 describe("classifyChatError", () => {
   it("maps raw transport kills", () => {
@@ -63,9 +63,17 @@ describe("classifyChatError", () => {
   });
 
   it("renders the specified copy only for transport kills", () => {
-    expect(chatErrorCopy("transport")).toBe(
-      "Connection interrupted. The AI run could not be resumed.",
-    );
+    expect(chatErrorCopy("transport")).toBe(TRANSPORT_ERROR_COPY);
     expect(chatErrorCopy("other")).toBeNull();
+  });
+
+  it("claims nothing about what became of the run", () => {
+    // The durable verdict ("interrupted", resumable or not) belongs to the
+    // server and reaches the user through the composer recovery strip. This layer
+    // matches transport signatures with a regex, so any outcome claim here is a
+    // guess — and it used to restate the strip's news as a second notice.
+    expect(TRANSPORT_ERROR_COPY).not.toMatch(/resume/i);
+    expect(TRANSPORT_ERROR_COPY).not.toMatch(/interrupted/i);
+    expect(TRANSPORT_ERROR_COPY).not.toMatch(/restart/i);
   });
 });

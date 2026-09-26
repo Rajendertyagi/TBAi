@@ -7,6 +7,7 @@ import {
 } from "../services/opencode/sessions";
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
 import { OpenCodeBinaryMissingError, openCodeServerManager, stripOpenCodeProxyPrefix } from "../services/opencode/serverManager";
+import { getOpenCodeAuthHeaders } from "../services/opencode/runtime";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
 
@@ -136,7 +137,10 @@ app.all("*", async (c) => {
     return c.json({ error: mapped.message }, mapped.status);
   }
   const targetPath = stripOpenCodeProxyPrefix(c.req.path);
-  const url = new URL(targetPath, baseUrl);
+  const upstreamPath = targetPath === "/api" || targetPath.startsWith("/api/")
+    ? targetPath
+    : `/api${targetPath}`;
+  const url = new URL(upstreamPath, baseUrl);
   url.search = new URL(c.req.url).search;
 
   const method = c.req.method;
@@ -159,7 +163,23 @@ app.all("*", async (c) => {
   });
 
   const headers = new Headers(reqHeaders);
-  headers.delete("host");
+  for (const hop of [
+    "authorization",
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    headers.delete(hop);
+  }
+  for (const [key, value] of Object.entries(getOpenCodeAuthHeaders())) {
+    headers.set(key, value);
+  }
 
   const init: RequestInit = { method, headers, redirect: "manual" };
   if (method !== "GET" && method !== "HEAD") {

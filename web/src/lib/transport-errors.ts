@@ -15,6 +15,20 @@
 
 export type ChatErrorKind = "transport" | "other";
 
+/**
+ * Copy for a transport kill.
+ *
+ * It states ONLY what this layer can actually observe — the connection dropped.
+ * It deliberately does not claim what became of the run ("could not be resumed"):
+ * that is a durable verdict the **server** owns, and it is surfaced separately by
+ * the composer recovery strip, which is driven by the run's terminal kind. A
+ * regex over transport signatures cannot know the difference between a run that
+ * finished, one that was never resumable, and one that is resuming right now — so
+ * claiming an outcome here was a guess dressed as a fact, and it made one event
+ * read as two notices saying the same thing.
+ */
+export const TRANSPORT_ERROR_COPY = "Connection lost.";
+
 // Raw browser/proxy transport signatures. Anchored or specific enough to never
 // collide with our server-side sanitized copies ("Network error reaching the
 // provider. Retry when online." etc. must keep rendering verbatim).
@@ -45,7 +59,5 @@ export function classifyChatError(error: unknown): ChatErrorKind {
 
 /** User copy for transport kills, or null to render the original error. */
 export function chatErrorCopy(kind: ChatErrorKind): string | null {
-  return kind === "transport"
-    ? "Connection interrupted. The AI run could not be resumed."
-    : null;
+  return kind === "transport" ? TRANSPORT_ERROR_COPY : null;
 }

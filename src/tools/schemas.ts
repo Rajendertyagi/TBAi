@@ -1,14 +1,14 @@
 /**
  * Single source of truth for every native tool's Zod input schema.
  *
- * The server toolkit (`src/tools/index.ts`, consumed by `AISDKToolkit`) and the
+ * The server toolkit (`src/tools/index.ts`, native AI SDK `tool()` defs) and the
  * client `defineToolkit` both derive from these. Schemas are pure (no server
  * imports) so they are safe to share across the Bun backend and the Vite
  * frontend. The 11 filesystem/computer schemas are re-exported from
  * `lib/validation.ts` (the API boundary); the scheduler schemas mirror the
  * REST job schemas so a model-driven job and a UI-created job validate alike.
  * The todo and browser schemas are likewise re-exported here as the single
- * source of truth for both the server `AISDKToolkit` and the client
+ * source of truth for both the server `tool()` defs and the client
  * `defineToolkit`.
  */
 import { z } from "zod";

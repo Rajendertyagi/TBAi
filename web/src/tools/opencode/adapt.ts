@@ -1,11 +1,11 @@
+import type { ToolContent } from "@opencode/client";
+
 /**
  * Explicit OpenCode → rich-UI normalization.
  *
  * WHY THIS EXISTS
- * OpenCode's tool arguments are NOT our native tool arguments, and the pinned
- * `@assistant-ui/react-opencode` runtime passes the raw OpenCode `state.input`
- * straight through as `part.args` (`openCodeMessageProjection.js`:
- * `const args = isRecord(state?.input) ? state.input : {}`). So a rich UI
+ * OpenCode's tool arguments are NOT our native tool arguments, and the V2
+ * message projection passes raw tool input through as `part.args`. So a rich UI
  * written against our own schema renders an empty title, an empty target path
  * and an empty body — strictly worse than the generic fallback, which at least
  * shows the raw JSON.
@@ -14,19 +14,9 @@
  *   - Arguments: `GET /experimental/tool?provider=<p>&model=<m>` on the
  *     OpenCode server returns each tool's JSON schema. That is the authority
  *     for the names in `OPENCODE_ARGS` below.
- *   - Result: a completed part's `state` was observed live (a real `bash`
- *     completion) and is
- *     `{ status, input, output: string, title: string, metadata, time }`.
- *     `output` is a plain STRING. The runtime maps `result: state.output`, so
- *     `part.result` is that string.
- *
- * Version note: this deployment runs OpenCode **1.18.31**, whose
- * `ToolStateCompleted` declares `output` as a REQUIRED string. The installed
- * `@opencode/schema` package is 2.0.4 and describes a *newer, different* shape
- * (no `output` at all), so it must NOT be used as the reference here. Reading
- * it first produced a wrong conclusion; the live probe corrected it.
- *
- * Verified 2026-09-16 against OpenCode 1.18.31.
+ *   - Result: native V2 completed tool state exposes `content` as an array of
+ *     `{ type: "text", text }` parts. That V2 content array is normalized only
+ *     at the renderer boundary for the shared rich-UI contracts.
  */
 
 /**
@@ -49,9 +39,10 @@ export const OPENCODE_ARGS: Readonly<Record<string, Readonly<Record<string, stri
   //                                                    -> search_files titles on `query`
   glob: { pattern: "query" },
   grep: { pattern: "query" },
-  // OpenCode `bash` : { command, timeout?, workdir? }
-  //                                                    -> run_command wants `cwd`
+  // OpenCode `bash`/`shell` : { command, timeout?, workdir? }
+  //                                                        -> run_command wants `cwd`
   bash: { workdir: "cwd" },
+  shell: { workdir: "cwd" },
 };
 
 /**
@@ -81,27 +72,66 @@ export function normalizeOpenCodeArgs(
   return out ?? args;
 }
 
+function isToolContent(value: unknown): value is ToolContent {
+  if (value === null || typeof value !== "object") return false;
+  const record = value as { type?: unknown; text?: unknown; uri?: unknown; mime?: unknown; name?: unknown };
+  if (record.type === "text") return typeof record.text === "string";
+  if (record.type !== "file") return false;
+  return (
+    typeof record.uri === "string" &&
+    typeof record.mime === "string" &&
+    (record.name === undefined || record.name === null || typeof record.name === "string")
+  );
+}
+
+function toolContentArray(value: unknown): ToolContent[] | null {
+  const content = Array.isArray(value)
+    ? value
+    : value !== null && typeof value === "object" && "content" in value
+      ? (value as { content: unknown }).content
+      : null;
+  if (!Array.isArray(content) || content.length === 0 || !content.every(isToolContent)) {
+    return null;
+  }
+  return content;
+}
+
+/** Extracts display text from a native V2 tool content array. */
+export function openCodeResultText(result: unknown): string | null {
+  const content = toolContentArray(result);
+  if (content === null) return null;
+  const text = content
+    .flatMap((item) => {
+      if (item.type === "text") return [item.text];
+      if (item.name && item.name.length > 0) return [item.name];
+      return [item.uri];
+    })
+    .join("\n");
+  return text.length > 0 ? text : null;
+}
+
 /**
  * Result normalization.
  *
  * Only needed where a rich UI reads a structured field out of the result.
- * OpenCode returns a plain string for every tool observed, so a UI expecting
- * an envelope needs one built here; everything else passes through so the
- * generic string rendering stays intact.
+ * Native V2 content arrays are normalized at this boundary; every other value
+ * passes through so the generic renderer keeps the original structured value.
  */
 export function normalizeOpenCodeResult(tool: string, result: unknown): unknown {
-  if (typeof result !== "string") return result;
+  if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+    const record = result as Readonly<Record<string, unknown>>;
+    if (toolContentArray(record.content) !== null) return result;
+  }
+  const text = openCodeResultText(result);
+  if (text === null) return result;
   // `ReadFileToolUI` summarizes `(r as any).content`, and OpenCode's `read`
   // returns the file text itself — so wrap it in the envelope the UI reads.
-  if (tool === "read") return { content: result };
+  if (tool === "read") return { content: text };
   // The terminal block renders from `{ stdout, stderr }` (`resultToLines`),
-  // while OpenCode's `bash` returns one combined string. Map it to stdout —
-  // OpenCode does not separate the two, so splitting them here would be a
-  // guess. `exitCode` is left absent on purpose: it lives in the part's
-  // `metadata`, which the runtime drops before our UI sees it, and inventing
-  // `0` would claim success for a command that failed.
-  if (tool === "bash") return { stdout: result };
-  return result;
+  // while OpenCode returns one combined string. Map it to stdout — OpenCode
+  // does not separate the two, so splitting them here would be a guess.
+  if (tool === "bash" || tool === "shell") return { stdout: text };
+  return text;
 }
 
 /** True when this tool has any normalization at all (used by the guard test). */
@@ -112,26 +142,16 @@ export function isNormalizedOpenCodeTool(tool: string): boolean {
 /**
  * Pull OpenCode's own patch out of the raw tool part for `callId`.
  *
- * WHY THIS READS METADATA, NOT THE RESULT. The plan assumed an `edit` result
- * carries a patch. It does not. Verified across every completed `edit`/`write`
- * part in the local OpenCode database (253 parts):
+ *   - the patch lives in native V2 `state.metadata.files[].patch`
+ *   - **`write` has NO patch at all** (a whole-file write has nothing to diff
+ *     against), so this returns null for `write` by data, not by special-case.
  *
- *   - `state.output` is ALWAYS one of two human strings —
- *     "Edit applied successfully." / "Wrote file successfully."
- *   - the patch lives in `state.metadata.diff` and `state.metadata.filediff.patch`
- *     (identical strings), alongside `filediff.{file,additions,deletions}`
- *   - **`write` has NO patch at all** (148/148 `edit` parts have one; 0/105
- *     `write` parts do). A whole-file write has nothing to diff against — it
- *     carries `metadata.filepath` + `exists` instead. So this returns null for
- *     `write` by data, not by special-casing.
+ * The V2 projection preserves the official assistant content parts in
+ * `metadata.custom.opencode.parts`, so the renderer reads the official V2 tool
+ * state without accepting alternate metadata shapes.
  *
- * The runtime projection drops `state.metadata` (`mapToolState` maps only
- * `input`→args and `output`→result), but it forwards the untouched parts as
- * message metadata (`metadata.custom.opencode.parts`), so the patch is still
- * reachable from a renderer. `useOpenCodeEditPatch` is that reach.
- *
- * `callId` is the part's `toolCallId`, which the projection derives from
- * OpenCode's `callID` — hence the match on `callID` here.
+ * `callId` is the assistant-ui tool-call id derived from the native V2 tool
+ * part's `id`; the suffix comparison recovers that official id.
  */
 export function openCodePatchFromParts(
   rawParts: unknown,
@@ -141,15 +161,22 @@ export function openCodePatchFromParts(
   for (const part of rawParts) {
     if (part == null || typeof part !== "object") continue;
     const p = part as Record<string, unknown>;
-    if (p.callID !== callId) continue;
-    const metadata = (p.state as Record<string, unknown> | undefined)?.metadata;
+    const sourceId = typeof p.id === "string" ? p.id : null;
+    const suffix = callId.startsWith("tbai-v2-tool:")
+      ? decodeURIComponent(callId.slice(callId.lastIndexOf(":") + 1))
+      : callId;
+    if (sourceId !== suffix) continue;
+    const state = p.state as Record<string, unknown> | undefined;
+    const metadata = state?.metadata;
     if (metadata == null || typeof metadata !== "object") return null;
-    const m = metadata as Record<string, unknown>;
-    const filediff = m.filediff as Record<string, unknown> | undefined;
-    // `filediff.patch` first: it is the same string as `diff` where both
-    // exist, but it is the one that also carries `additions`/`deletions`.
-    const patch = filediff?.patch ?? m.diff;
-    return typeof patch === "string" && patch.trim() ? patch : null;
+    const files = (metadata as { files?: unknown }).files;
+    if (!Array.isArray(files)) return null;
+    const file = files.find((entry): entry is { patch: string } =>
+      entry !== null &&
+      typeof entry === "object" &&
+      typeof (entry as { patch?: unknown }).patch === "string",
+    );
+    return typeof file?.patch === "string" && file.patch.trim() ? file.patch : null;
   }
   return null;
 }
@@ -174,8 +201,8 @@ function domainOf(url: string): string | undefined {
  * Projects OpenCode's `websearch` result onto the official `WebSearch`
  * element's `{ title, domain }` shape.
  *
- * **PROVEN payload** — live probe 2026-09-19 against the managed 1.18.31
- * server. `state.output` is a JSON **string**, not an object:
+ * **Observed V2 payload** — the tool `content` array contains a text part whose
+ * `text` is a JSON **string**, not an object:
  *
  *   { "search_id": "search_…",
  *     "results": [ { "url": "https://…", "title": "…",
@@ -198,11 +225,12 @@ function domainOf(url: string): string | undefined {
 export function parseOpenCodeWebSearchHits(
   result: unknown,
 ): OpenCodeWebSearchHit[] | null {
-  if (typeof result !== "string" || !result.trim()) return null;
+  const text = openCodeResultText(result);
+  if (text === null || !text.trim()) return null;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(result);
+    parsed = JSON.parse(text);
   } catch {
     return null;
   }

@@ -20,6 +20,7 @@ import {
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { toolsConfig } from "@/config/tools";
 import { logger } from "@/lib/logger";
+import { resolveThreadConversationId } from "@/lib/thread-conversation-id";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -124,11 +125,9 @@ export function ApprovalGate({
     let cancelled = false;
     (async () => {
       try {
-        const item = aui.threadListItem.getState() as {
-          remoteId?: string | null;
-          id?: string | null;
-        };
-        const conversationId = item.remoteId ?? item.id;
+        const conversationId = resolveThreadConversationId(
+          aui.threadListItem.getState(),
+        );
         if (!conversationId) return;
         const res = await fetch("/api/tools/check", {
           method: "POST",
@@ -229,11 +228,9 @@ export function ApprovalGate({
     setError(null);
     runWithExit(async () => {
       try {
-        const item = aui.threadListItem.getState() as {
-          remoteId?: string | null;
-          id?: string | null;
-        };
-        const conversationId = item.remoteId ?? item.id;
+        const conversationId = resolveThreadConversationId(
+          aui.threadListItem.getState(),
+        );
         if (!conversationId || !tool || !targetPath) {
           throw new Error("No conversation for this approval");
         }
@@ -422,11 +419,7 @@ function failureOf(result: AnyResult): string | null {
 function useConversationId(): string | null {
   const aui = useAui();
   try {
-    const item = aui.threadListItem.getState() as {
-      remoteId?: string | null;
-      id?: string | null;
-    };
-    return item.remoteId ?? item.id ?? null;
+    return resolveThreadConversationId(aui.threadListItem.getState());
   } catch {
     return null;
   }

@@ -1,23 +1,14 @@
 /** Centralized OpenCode frontend configuration. No magic paths inline. */
 export const OPENCODE_PROXY_BASE_URL = "/api/opencode";
+export const OPENCODE_DIRECTORY_HEADER = "x-opencode-directory";
 /** Bounded wait for session init before surfacing a retry affordance. */
 export const OPENCODE_INIT_TIMEOUT_MS = 15_000;
-
-/**
- * How often to re-check pending permissions while a card is outstanding.
- * Permissions are rare and short-lived, so this is a handful of requests per
- * card and stops the moment the set empties.
- */
-export const OPENCODE_PERMISSION_RECONCILE_MS = 5_000;
-
-/**
- * Same-origin path of the **directory-scoped** pending-permission list, as the
- * managed server exposes it (`GET /permission?directory=<dir>`).
- *
- * The location is mandatory in practice: OpenCode's pending-permission store is
- * directory-scoped, so the same route answers `[]` without it. Measured live on
- * 1.18.31 while a request was genuinely pending.
- */
-export function openCodePermissionPath(directory: string): string {
-  return `${OPENCODE_PROXY_BASE_URL}/permission?directory=${encodeURIComponent(directory)}`;
-}
+export const OPENCODE_V2_HISTORY_PAGE_SIZE = 100;
+export const OPENCODE_V2_EVENT_BUFFER_LIMIT = 512;
+export const OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256;
+export const OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS = 250;
+export const OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000;
+export const OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP = 4;
+export const OPENCODE_V2_DIAGNOSTIC_COUNT_CAP = 256;
+export const OPENCODE_V2_FORM_FIELD_LIMIT = 100;
+export const OPENCODE_V2_FORM_OPTION_LIMIT = 100;

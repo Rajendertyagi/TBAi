@@ -186,6 +186,12 @@ Phase 1 (spine exists and calls `openCodeServerManager.shutdown()`).
 
 ## Phase 3 — Chat + scheduler cancellation AND settlement
 
+> Historical audit note (2026-09-25): the settlement authority described below is
+> superseded. Current Direct chat settlement is owned by the producer-side
+> `toUIMessageStream.onEnd` outcome; response-body drain is observational only,
+> and run setup/teardown paths settle explicitly. See `docs/decisions.md` and
+> `docs/ai-integration.md` for the current contract.
+
 ### Goal
 Cancel in-flight chat runs and scheduler runs during shutdown, and for scheduler runs, **await their settlement** (not just their cancellation).
 
@@ -364,7 +370,7 @@ shutdown window test (no real async seam exists at that boundary).
   - **Spine** (`src/server.ts`): `beginSchedulerShutdown()` first (before `server.stop(true)`), then server.stop → opencode.shutdown → mcp.disconnectAll → `chatRuns.abortAll()` → `await chatRuns.awaitSettled()` (log `shutdown_chat_settled`) → `await abortAllRuns()` (log `shutdown_runs_settled`) → drainInflightRequests → stopPromise → `db.close()` last.
   - **Integration** (`tests/integration/shutdown-lifecycle.test.ts`, runs only via `bun run test:shutdown`): real server on ephemeral port, blackhole provider, real HTTP seeding + chat run + run-now, both runs in-flight, `shutdownServer` → elapsed < 8000ms, chat run `"cancelled"`, `db.query("SELECT 1").get()` throws after close. **1 pass / 0 fail (1019ms)** — logs `shutdown_chat_settled settled=1 timedOut=0`, `shutdown_runs_settled aborted=1 settled=1 timedOut=0`.
   - **Gates (coding agent, re-run 2026-09-17, no code changed):** `bun run typecheck` exit 0; `bun run build` exit 0.
-- **Automated suite — RECONCILED 2026-09-17 (test agent):** targeted `bun test tests/unit/chat-runs.test.ts tests/unit/scheduler.test.ts` → **85 pass / 0 fail** (20 chat-runs incl. 5 new Phase 3 race tests, 65 scheduler incl. 3 new gate/repeat/write-ordering tests); `bun run test:shutdown` **1/0**. Full `bun test` (771 tests, 88 files): Run A **758 pass / 2 skip / 11 fail**, Run B **757 / 2 / 12** — every failure is the known flaky set (4 CredentialStore, 3 todo, 3–4 process-spawn 5s timeouts; the 12th is a flaky swap within the same set), all pass in isolation (credentials 8/0, todo 9/0, runbash 5/0, wiring 7/0, scheduler 65/0, chat-runs 20/0). **Zero Phase-3-related failures.** No tests weakened. Earlier "750/0 fail" line was already corrected above; row-by-row status in `docs/test-tracker.md`.
+- **Automated suite — RECONCILED 2026-09-17 (test agent):** targeted `bun test tests/unit/chat-runs.test.ts tests/unit/scheduler.test.ts` → **85 pass / 0 fail** (20 chat-runs incl. 5 new Phase 3 race tests, 65 scheduler incl. 3 new gate/repeat/write-ordering tests); `bun run test:shutdown` **1/0**. Full `bun test` (771 tests, 88 files): Run A **758 pass / 2 skip / 11 fail**, Run B **757 / 2 / 12** — every failure is the known flaky set (4 CredentialStore, 3 todo, 3–4 process-spawn 5s timeouts; the 12th is a flaky swap within the same set), all pass in isolation (credentials 8/0, todo 9/0, runbash 5/0, wiring 7/0, scheduler 65/0, chat-runs 20/0). **Zero Phase-3-related failures.** No tests were weakened. Earlier "750/0 fail" line was already corrected above.
 - **PHASE 3 VERDICT: COMPLETE.** Implementation COMPLETE (no code changes required — all gaps already closed), typecheck/build VERIFIED, live lifecycle VERIFIED (R4-equivalent run above), automated suite RECONCILED with zero Phase-3 failures. Carve-outs (pre-existing, tracked, not hidden): full-suite flaky set T3-F01–F03; repeated-SIGINT unit test still MISSING (T3-L12); DB busy/locked still Phase 5 (T3-D03). Do NOT reopen without concrete regression evidence.
 - **KEY FINDING (retry semantics):** a 500-returning provider does NOT trigger the scheduler retry — the AI SDK converts 500s to `AI_NoOutputGeneratedError` (no status → `classifyError` retryable=false), and `attempt` increments even on terminal failure. The reliable retry path is the scheduler's OWN timeout (blackhole + `timeoutSeconds:5` → controller abort → `retryable=true`). Reliable "in retry sleep" signal: `run.status === "running" && run.attempt >= 1`. Adding `maxRetries: 0` to the scheduler's `streamText` was tried then REVERTED (changes retry semantics, not cancellation — out of scope).
 - **FLAKY (pre-existing, unrelated):** `tests/unit/tools.test.ts` "computer tools > lists processes with pid + name" failed once under full-suite load (`runProcesses()` returned empty); passes in isolation (15/0) and on full-suite re-run. Not caused by Phase 3.
@@ -530,7 +536,7 @@ if (conv?.engine === "opencode") {
 - **Audit:** DELETE (conversations.ts:164-181) orphaned the server-side session — PROVEN. `terminateOpenCodeSession` (sessions.ts:266) is idempotent, reads the conversation row (must run BEFORE deletes), interrupt-then-remove, clears pointer, never throws for absent session; transport failures → warn + `{terminated:false}`. Engine comes from the authoritative record (`conv.engine`, default `"direct"`). Active generation: interrupt cancels it first, then remove. Failure semantics: cleanup can never fail the DELETE (route warns and continues).
 - **IMPLEMENTED:** engine-gated `terminateOpenCodeSession(id)` after row capture, before the deletes (conversations.ts), warn-and-continue on unexpected throw. Direct conversations untouched by construction.
 - **Gates:** `bun run typecheck` exit 0; full `bun run build` exit 0.
-- **LIVE VERIFIED (2026-09-18):** isolated server, real managed OpenCode server (binary on PATH). Owned opencode conversation → session created (`ses_f4ec86d7…`) → DELETE → `session.interrupt` 204 → `session.remove` (V2-missing → V1-fallback 200) → `opencode.session_terminate` → DELETE 200 → conversation 404 after. Direct conversation DELETE → 200 with zero terminate/session traffic (engine gate proven). No orphan sessions touched.
+- **LIVE VERIFIED (2026-09-18):** isolated server, real managed OpenCode server. Owned OpenCode conversation → native V2 session created → conversation DELETE → `session.interrupt` → `session.remove` → `opencode.session_terminate` → conversation DELETE 200 → conversation 404 afterward. Direct conversation DELETE produced zero terminate/session traffic, proving the engine gate. No orphan sessions were touched.
 - **Automated suite — RECONCILED 2026-09-18 (test agent):** engine-guards.test.ts +5 DELETE cases ("DELETE /api/conversations/:id — OpenCode session termination": direct/opencode/no-session/not-found/transport-failure, service-seamed) → combined `bun test engine-guards + db` **17/0**; full suite (above) zero Phase-6 failures. Incidental fix by test agent: toolkit.test.ts stale `OPENCODE_TOOL_NAMES` expected list (6 renderers missing) — test-staleness, source verified registering them (toolkit.ts:113-122); now 8/0. No tests weakened.
 - **PHASE 6 VERDICT: COMPLETE.** Termination ordering, engine boundary, and error semantics proven live (above) and automated.
 
@@ -550,10 +556,9 @@ Remove confirmed-dead code and unused exports.
 - `INTERRUPTED_FROM` (`schedulerTypes.ts:81`, never used)
 - `events.ts`, `permissions.ts`, `workspace.ts`, `types.ts` placeholders in `src/services/opencode/` (comment-only, never imported)
 
-### NOT dead (verified, do NOT remove)
-- `@opencode-ai/sdk` — frontend imports it (`eventScope.ts:1`), web declares it, frozen adapter depends on it
-- `src/services/opencode/session.test.ts` — covers a distinct error path not in `sessions.test.ts`
-- Root `package.json:33` `@opencode-ai/sdk` declaration is redundant but low-value to remove alone
+### Retained modules
+- `src/services/opencode/session.test.ts` covers a distinct error path not in `sessions.test.ts`.
+- The native V2 client remains a direct dependency of both OpenCode consumers.
 
 ### Files
 - Delete: `src/services/opencode/index.ts`, `src/services/opencode/events.ts`, `src/services/opencode/permissions.ts`, `src/services/opencode/workspace.ts`, `src/services/opencode/types.ts`
@@ -579,7 +584,7 @@ Full `bun test` green. `v2-only.test.ts` unaffected.
 |---|---|---|
 | Stream tracking in inflight counter (old Task 6) | **REMOVED** | `body.getReader()` consumes the body (single-reader). Safe passthrough unnecessary: chat streams don't write to DB; `server.stop()` is graceful; DB-close race fixed by Phase 3 settlement. |
 | Frontend store error handling (old Task 9) | **MOVED to future-hardening** | Real gap but not lifecycle-related. |
-| `@opencode-ai/sdk` removal (old Task 10) | **DROPPED** | Not dead — frontend + frozen adapter depend on it. |
+| Native OpenCode client ownership | **KEPT** | The backend and browser each use the official generated client behind their existing isolation boundaries. |
 | `session.test.ts` deletion (old Task 10) | **DROPPED** | Covers a distinct error path. |
 | Loopback binding | **DROPPED** | Maintainer decision: server stays `0.0.0.0`. |
 
@@ -612,7 +617,7 @@ Phases 2-5 are independent of each other; Phase 1 wires them together and should
 - Encryption architecture
 - `docs/decisions.md` as the architectural decision record
 - Server binding stays `0.0.0.0`
-- `@opencode-ai/sdk` (frontend + frozen adapter depend on it)
+- The official OpenCode client remains pinned at `2.0.16`.
 - `src/services/opencode/session.test.ts` (distinct error path)
 
 ---

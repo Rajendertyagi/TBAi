@@ -14,8 +14,13 @@ if (!process.env.DATA_DIR) {
 }
 const tmp = process.env.DATA_DIR;
 
-const { credentialStore, CredentialError } = await import("../services/credentials");
+const { credentialStore, CredentialStore, CredentialError } = await import(
+  "../services/credentials"
+);
 const { db } = await import("../db");
+
+const TOOL_APPROVAL_SECRET_SETTING_KEY = "security.tool_approval_secret";
+const CORRUPTED_TOOL_APPROVAL_SECRET = "not-an-encrypted-envelope";
 
 function seedProvider(id: string, type = "openai") {
   // INSERT OR REPLACE: the suite shares one DB per process with other suites
@@ -28,6 +33,32 @@ function seedProvider(id: string, type = "openai") {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, id, type, null, "gpt-4o", 0, Date.now(), Date.now()],
   );
+}
+
+function readToolApprovalSecretSetting():
+  | { value: string; updated_at: number }
+  | undefined {
+  return db
+    .query<{ value: string; updated_at: number }, SQLQueryBindings[]>(
+      "SELECT value, updated_at FROM app_settings WHERE key = ?",
+    )
+    .get(TOOL_APPROVAL_SECRET_SETTING_KEY);
+}
+
+function restoreToolApprovalSecretSetting(
+  original: { value: string; updated_at: number } | undefined,
+): void {
+  if (!original) {
+    db.run("DELETE FROM app_settings WHERE key = ?", [
+      TOOL_APPROVAL_SECRET_SETTING_KEY,
+    ]);
+    return;
+  }
+  db.run("UPDATE app_settings SET value = ?, updated_at = ? WHERE key = ?", [
+    original.value,
+    original.updated_at,
+    TOOL_APPROVAL_SECRET_SETTING_KEY,
+  ]);
 }
 
 beforeAll(() => {
@@ -117,5 +148,53 @@ describe("CredentialStore (local DEK encryption)", () => {
     expect(row!.encrypted_api_key ?? "").not.toContain("sk-plaintext-must-not-appear");
     // The stored envelope must not be valid plaintext JSON containing the secret.
     expect(row!.encrypted_api_key ?? "").not.toContain("must-not-appear");
+  });
+
+  it("returns a stable non-empty Direct approval secret across calls and store reinitialization", () => {
+    const firstStore = new CredentialStore();
+    const firstSecret = firstStore.getToolApprovalSecret();
+
+    expect(firstSecret.length).toBeGreaterThan(0);
+    expect(firstStore.getToolApprovalSecret()).toBe(firstSecret);
+
+    const reinitializedStore = new CredentialStore();
+    expect(reinitializedStore.getToolApprovalSecret()).toBe(firstSecret);
+    reinitializedStore.initialize();
+    expect(reinitializedStore.getToolApprovalSecret()).toBe(firstSecret);
+  });
+
+  it("persists the Direct approval secret without plaintext in app_settings", () => {
+    const secret = new CredentialStore().getToolApprovalSecret();
+    const row = readToolApprovalSecretSetting();
+
+    expect(row).toBeDefined();
+    expect(row!.value).not.toBe(secret);
+    expect(row!.value).not.toContain(secret);
+  });
+
+  it("fails closed without replacing a corrupted Direct approval secret setting", () => {
+    const originalRow = readToolApprovalSecretSetting();
+    if (!originalRow) throw new Error("Tool approval secret setting was not initialized");
+    const originalSecret = new CredentialStore().getToolApprovalSecret();
+
+    try {
+      db.run("UPDATE app_settings SET value = ? WHERE key = ?", [
+        CORRUPTED_TOOL_APPROVAL_SECRET,
+        TOOL_APPROVAL_SECRET_SETTING_KEY,
+      ]);
+
+      const restartedStore = new CredentialStore();
+      expect(() => restartedStore.getToolApprovalSecret()).toThrow(CredentialError);
+      expect(() => restartedStore.getToolApprovalSecret()).toThrow(
+        /data may be corrupted/i,
+      );
+      expect(readToolApprovalSecretSetting()?.value).toBe(
+        CORRUPTED_TOOL_APPROVAL_SECRET,
+      );
+    } finally {
+      restoreToolApprovalSecretSetting(originalRow);
+    }
+
+    expect(new CredentialStore().getToolApprovalSecret()).toBe(originalSecret);
   });
 });

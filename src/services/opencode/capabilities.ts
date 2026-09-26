@@ -69,9 +69,8 @@ function toVariantIds(entries: ModelInfo["variants"]): string[] {
 
 /**
  * Lists the models the managed server currently offers. Starts the server on
- * first call (via the server manager). No directory is passed, matching the
- * server's own default location — the same scope the previous implementation
- * used.
+ * first call (via the server manager). No directory is passed because model
+ * discovery is session-independent.
  *
  * @returns The live model list, or an empty list if the server reports none.
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
@@ -113,15 +112,21 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     throw toOpenCodeError(err);
   }
 
-  const agents = rawAgents.map((a) => ({
-    id: a.id,
-    // The official `AgentInfo` type declares `name`, but the OpenCode 1.18.x
-    // server returns only `id` (verified live against 1.18.29). Fall back to
-    // the id so the picker always has a label; a server that does supply
-    // `name` still wins.
-    name: typeof a.name === "string" && a.name.length > 0 ? a.name : a.id,
-    description: a.description,
-  }));
+  const agents = rawAgents.flatMap((agent) => {
+    if (
+      typeof agent.id !== "string" ||
+      agent.id.length === 0 ||
+      typeof agent.name !== "string" ||
+      agent.name.length === 0
+    ) {
+      return [];
+    }
+    return [{
+      id: agent.id,
+      name: agent.name,
+      description: agent.description,
+    }];
+  });
 
   const models = rawModels.map((m) => {
     const limit = toModelLimit(m);
@@ -131,8 +136,7 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
       providerID: m.providerID,
       family: m.family,
       variants: toVariantIds(m.variants),
-      // Absent (not undefined-valued) when the server omits limits, so older
-      // snapshots and toEqual assertions without the field keep passing.
+      // Keep the optional limit field absent when the server omits it.
       ...(limit ? { limit } : {}),
     };
   });
