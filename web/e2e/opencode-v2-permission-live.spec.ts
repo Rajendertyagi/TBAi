@@ -1,4 +1,12 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import {
+  createCodeConversation,
+  deleteCodeConversation,
+  LIVE_MODEL,
+  LIVE_TIMEOUT_MS,
+  openCodeConversation,
+  sendPrompt,
+} from "./opencode-live-fixtures";
 
 /**
  * Task 5 — the native V2 approval path against the REAL managed OpenCode server.
@@ -18,49 +26,11 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * `permission.asked` anywhere.
  */
 
-const ROUTE_TIMEOUT_MS = 180_000;
 const PROBE_COMMAND = "echo TBAI_V2_APPROVAL_PROBE";
 const PROMPT_PROBE = `Use the shell tool to run exactly this command: ${PROBE_COMMAND}`;
 const PROBE_OUTPUT = "TBAI_V2_APPROVAL_PROBE";
-
-/** A conversation the model answers. Verified live in this environment. */
-const WORKING_MODEL = "agnes/agnes-3.0-flash";
 /** A route the provider answers with a quota rejection (HTTP 402). */
 const FAILING_MODEL = "openrouter/qwen/qwen3.8-flash";
-
-async function createCodeConversation(
-  request: APIRequestContext,
-  model: string,
-): Promise<string> {
-  const response = await request.post("/api/conversations", {
-    data: {
-      title: "V2 permission live probe",
-      workspaceMode: "simple",
-      engine: "opencode",
-      opencodeAgent: "build",
-      opencodeModel: model,
-      opencodeVariant: "high",
-    },
-  });
-  expect(response.ok()).toBe(true);
-  const created = (await response.json()) as { id: string };
-  expect(created.id).toBeTruthy();
-  return created.id;
-}
-
-async function sendPrompt(page: Page, text: string): Promise<void> {
-  const composer = page.getByRole("textbox", { name: /Send a message/ });
-  await expect(composer).toBeVisible({ timeout: ROUTE_TIMEOUT_MS });
-  await composer.fill(text);
-  await page.getByRole("button", { name: "Send message" }).click();
-}
-
-async function openCodeConversation(page: Page, conversationId: string): Promise<void> {
-  await page.goto(`/#/code/${conversationId}`);
-  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
-    timeout: ROUTE_TIMEOUT_MS,
-  });
-}
 
 test.describe("native V2 permission approval against the real server", () => {
   test("a real gated shell call renders Approve/Deny and replies natively", async ({
@@ -68,7 +38,7 @@ test.describe("native V2 permission approval against the real server", () => {
     request,
   }) => {
     test.setTimeout(300_000);
-    const conversationId = await createCodeConversation(request, WORKING_MODEL);
+    const conversationId = await createCodeConversation(request, LIVE_MODEL);
 
     try {
       await openCodeConversation(page, conversationId);
@@ -80,12 +50,12 @@ test.describe("native V2 permission approval against the real server", () => {
       // has no options. Both spellings are accepted, so the assertion is about
       // the gate existing rather than about its copy.
       const approve = page.getByRole("button", { name: /^(Allow|Approve)\b/ });
-      await expect(approve).toBeVisible({ timeout: ROUTE_TIMEOUT_MS });
+      await expect(approve).toBeVisible({ timeout: LIVE_TIMEOUT_MS });
       await expect(page.getByRole("button", { name: /^Deny\b/ })).toBeVisible({
-        timeout: ROUTE_TIMEOUT_MS,
+        timeout: LIVE_TIMEOUT_MS,
       });
       await expect(page.getByText(PROBE_COMMAND, { exact: false }).first()).toBeVisible({
-        timeout: ROUTE_TIMEOUT_MS,
+        timeout: LIVE_TIMEOUT_MS,
       });
 
       // Answering must go back over the native permission endpoint, not a
@@ -96,17 +66,17 @@ test.describe("native V2 permission approval against the real server", () => {
           /\/api\/opencode\/(?:api\/)?session\/[^/]+\/permission\/[^/]+\/reply$/.test(
             new URL(response.url()).pathname,
           ),
-        { timeout: ROUTE_TIMEOUT_MS },
+        { timeout: LIVE_TIMEOUT_MS },
       );
       await approve.click();
       expect((await reply).ok()).toBe(true);
 
       // Approving actually lets the gated command run and its real output land.
       await expect(page.getByText(PROBE_OUTPUT).first()).toBeVisible({
-        timeout: ROUTE_TIMEOUT_MS,
+        timeout: LIVE_TIMEOUT_MS,
       });
     } finally {
-      await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);
+      await deleteCodeConversation(request, conversationId);
     }
   });
 
@@ -124,14 +94,14 @@ test.describe("native V2 permission approval against the real server", () => {
       // The turn fails for a provider reason, so the runtime must surface the
       // failure and must NOT offer a decision the server never requested.
       await expect(page.getByRole("button", { name: "OpenCode status: Error" })).toBeVisible({
-        timeout: ROUTE_TIMEOUT_MS,
+        timeout: LIVE_TIMEOUT_MS,
       });
       // Both gate spellings are checked, so an option-backed gate could not slip
       // through this negative.
       await expect(page.getByRole("button", { name: /^(Allow|Approve)\b/ })).toHaveCount(0);
       await expect(page.getByRole("button", { name: /^Deny\b/ })).toHaveCount(0);
     } finally {
-      await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);
+      await deleteCodeConversation(request, conversationId);
     }
   });
 });
