@@ -240,10 +240,26 @@ transport abstraction, no new backend event architecture. The flow is:
 ```
 Tauri 2 window (no native title bar, decorations:false)
   └─ loads http://localhost:3000
-       └─ Bun sidecar (src-tauri/binaries/bun-*.exe, spawned in src-tauri/src/main.rs)
-            └─ runs the bundled backend (dist/index.js = `bun build src/index.ts`)
+       └─ sidecar = the backend itself (src-tauri/binaries/tbai-server-*.exe,
+          spawned via app.shell().sidecar("tbai-server") in src-tauri/src/main.rs)
+            └─ self-contained executable = `bun build src/index.ts --compile`
+               (the Bun runtime is EMBEDDED - no separate runtime file ships)
                  └─ Hono server serves /api/* AND the SPA (web/dist) on :3000
 ```
+
+- **The sidecar IS the backend.** `bun build --compile` produces one self-contained
+  executable, so there is no `bun.exe` to ship, download, or version-match against the
+  bundle. It is the same size as the old `bun.exe` + `dist/index.js` pair (~85 MB) - the win
+  is one artifact instead of two, not bytes. Declared as `externalBin` so the name is owned
+  by `tauri.conf.json`; the `sidecar("tbai-server")` string in `main.rs` must match it
+  exactly, because a mismatch fails at RUNTIME, not build time. The release workflow's
+  smoke test is what catches that.
+- **The SPA ships as loose files, not embedded.** `build.frontendDist` points at
+  `src-tauri/frontend-placeholder` (a ~1 KB stub), NOT `web/dist`. Tauri requires the key, but
+  embedding 12 MB there was pure dead weight: the window is `visible: false` and both
+  terminal paths (`navigate_verified` / `render_error`) navigate or `eval` to
+  `http://localhost:{port}`, so the embedded assets are never fetched. The loose `web/`
+  folder is the copy Bun actually serves, via `WEB_DIST_DIR`.
 
 - **Same React app, two shells.** The browser opens `localhost:3000` directly; the Tauri
   webview loads the same URL. The backend is plain HTTP in both cases, so the assistant-ui

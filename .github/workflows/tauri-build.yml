@@ -6,11 +6,26 @@ on:
     tags:
       - "v*"
 
+env:
+  CARGO_TERM_COLOR: always
+  # Single source of truth for the sidecar's base name. It MUST match all three
+  # of: tauri.conf.json `externalBin`, `sidecar("...")` in main.rs, and the
+  # triple-suffixed copy staged into src-tauri/binaries below. Changing it in one
+  # place only is a runtime spawn failure, not a build failure — which is why
+  # the smoke test after the build exists.
+  SIDECAR_NAME: tbai-server
+  # Pinned, not floating. Bun releases weekly and has shipped breaking changes;
+  # `latest` made two different builds of the same commit differ. Must match the
+  # version used locally (verified 1.4.2).
+  BUN_VERSION: "1.4.2"
+  # Current stable at the time of writing. Frozen so a Rust point release cannot
+  # change the artifact under the same tag. Not an MSRV: Cargo.toml's
+  # `rust-version` is a floor, this is the exact toolchain.
+  RUST_VERSION: "1.98.1"
+
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -18,11 +33,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Setup Rust (x86_64-pc-windows-msvc)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust (${{ env.RUST_VERSION }}, x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust build
@@ -41,18 +57,32 @@ jobs:
       - name: Install frontend + workspace dependencies
         run: bun install --frozen-lockfile
 
-      - name: Download portable Bun sidecar
+      # A release that ships a red suite is worse than no release. This is the
+      # step whose absence let two known-failing tests reach a tagged build.
+      # Two deliberate choices:
+      #  - `bun run test`, NOT bare `bun test`. The bare form double-collects the
+      #    suites and cascades "Database has closed" across the shared test DB,
+      #    reporting hundreds of phantom failures. The scoped script is the only
+      #    correct invocation.
+      #  - not `bun run verify`: that script ends in `bun run build`, which
+      #    `beforeBuildCommand` runs again, so the build would run twice.
+      - name: Verify (typecheck, lint, tests)
+        run: bun run typecheck && bun run lint && bun run test
+
+      # Built and staged BEFORE `tauri build` so the sidecar exists at the path
+      # `externalBin` declares. `tauri build` re-runs `bun run build` via
+      # beforeBuildCommand, so this is a ~1s duplicate, paid for correctness.
+      - name: Build sidecar and stage it for externalBin
         shell: pwsh
         run: |
-          $url = "https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile bun-windows-x64.zip
-          Expand-Archive -Path bun-windows-x64.zip -DestinationPath bun-extract -Force
+          bun run build:backend
+          if ($LASTEXITCODE -ne 0) { throw "build:backend failed" }
+          $src = "dist/$env:SIDECAR_NAME.exe"
+          if (-not (Test-Path $src)) { throw "$src not produced" }
           $binDir = "src-tauri/binaries"
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-          $bunExe = Get-ChildItem -Path bun-extract -Recurse -Filter bun.exe | Select-Object -First 1
-          if (-not $bunExe) { throw "bun.exe not found in downloaded archive" }
-          Copy-Item -Path $bunExe.FullName -Destination "$binDir/bun-x86_64-pc-windows-msvc.exe" -Force
-          Remove-Item -Recurse -Force bun-extract, bun-windows-x64.zip
+          # Tauri resolves sidecars as <base>-<target-triple>.exe
+          Copy-Item -Path $src -Destination "$binDir/$env:SIDECAR_NAME-x86_64-pc-windows-msvc.exe" -Force
 
       - name: Generate icon set from source PNG
         run: bunx tauri icon src-tauri/app-icon.png
@@ -60,25 +90,96 @@ jobs:
       - name: Build Tauri (compile, no bundle)
         run: bunx tauri build --target x86_64-pc-windows-msvc
 
+      # The only automated proof that the SHIPPED backend actually boots.
+      # `externalBin` naming and `--compile` both fail at RUNTIME, not build
+      # time, so typecheck and cargo cannot see them. Readiness is an exact
+      # instance-id match, never "something is listening on the port" — the same
+      # invariant main.rs enforces.
+      - name: Smoke test the compiled sidecar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $smoke = Join-Path $env:RUNNER_TEMP "smoke"
+          Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$smoke\data", "$smoke\ws" | Out-Null
+
+          # The backend self-heals a taken port and records the real one in
+          # DATA_DIR/port, so poll the mirror rather than assuming $port.
+          $env:DATA_DIR = "$smoke\data"
+          $env:WORKSPACE_DIR = "$smoke\ws"
+          $env:PORT = "39731"
+          $env:WEB_DIST_DIR = (Resolve-Path "web\dist").Path
+          $mirror = Join-Path $env:DATA_DIR "port"
+
+          $proc = Start-Process -FilePath "dist/$env:SIDECAR_NAME.exe" -PassThru -NoNewWindow `
+            -RedirectStandardOutput "$smoke\out.log" -RedirectStandardError "$smoke\err.log"
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Milliseconds 500
+              if ($proc.HasExited) { break }
+              if (-not (Test-Path $mirror)) { continue }
+              $port = (Get-Content $mirror -Raw).Trim()
+              if (-not $port) { continue }
+              try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/server/instance" -TimeoutSec 2
+                if ($r.instanceId) {
+                  Write-Output "smoke OK on port $port, instanceId=$($r.instanceId)"
+                  $ready = $true
+                  break
+                }
+              } catch { }
+            }
+            if (-not $ready) {
+              Write-Output "--- stdout ---"; Get-Content "$smoke\out.log" -ErrorAction SilentlyContinue
+              Write-Output "--- stderr ---"; Get-Content "$smoke\err.log" -ErrorAction SilentlyContinue
+              throw "Sidecar smoke test failed: no instance id (exited=$($proc.HasExited))"
+            }
+            # bun:sqlite must have initialised, or the endpoint above would not answer.
+            if (-not (Test-Path (Join-Path $env:DATA_DIR "chat.db"))) {
+              throw "chat.db missing: bun:sqlite did not initialise in the compiled binary"
+            }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
+
       - name: Assemble portable app folder
         shell: pwsh
         run: |
           $rel = "src-tauri/target/x86_64-pc-windows-msvc/release"
           $app = "$rel/tbai-desktop.exe"
           if (-not (Test-Path $app)) { throw "tbai-desktop.exe not found at $rel" }
-          Copy-Item -Path $app -Destination "$rel/TBAi.exe" -Force
-          Copy-Item -Path "src-tauri/binaries/bun-x86_64-pc-windows-msvc.exe" -Destination "$rel/bun.exe" -Force
-          New-Item -ItemType Directory -Force -Path "$rel/backend","$rel/web" | Out-Null
-          Copy-Item -Path "dist/*" -Destination "$rel/backend/" -Recurse -Force
-          Copy-Item -Path "web/dist/*" -Destination "$rel/web/" -Recurse -Force
+
           $out = "TBAi-windows-x64-portable"
           if (Test-Path $out) { Remove-Item -Recurse -Force $out }
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item -Path "$rel/TBAi.exe" -Destination "$out/" -Force
-          Copy-Item -Path "$rel/bun.exe" -Destination "$out/" -Force
-          Copy-Item -Path "$rel/backend" -Destination "$out/backend" -Recurse -Force
-          Copy-Item -Path "$rel/web" -Destination "$out/web" -Recurse -Force
-          Get-ChildItem "$out" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+
+          Copy-Item -Path $app -Destination "$out/TBAi.exe" -Force
+          # The backend is ONE self-contained binary. No bun.exe, no backend/
+          # directory: `bun build --compile` embeds the runtime.
+          Copy-Item -Path "dist/$env:SIDECAR_NAME.exe" -Destination "$out/$env:SIDECAR_NAME.exe" -Force
+          # The SPA stays loose: the backend serves it over WEB_DIST_DIR, so the
+          # shell must not be asked to embed it.
+          New-Item -ItemType Directory -Force -Path "$out\web" | Out-Null
+          Copy-Item -Path "web/dist/*" -Destination "$out/web/" -Recurse -Force
+
+          # Which build is this? Answerable from a user's folder without a rebuild.
+          $sha = (git rev-parse --short HEAD).Trim()
+          @{
+            product = "TBAi"
+            commit = $sha
+            builtAt = (Get-Date).ToUniversalTime().ToString("o")
+            bun = $env:BUN_VERSION
+            rust = $env:RUST_VERSION
+            target = "x86_64-pc-windows-msvc"
+          } | ConvertTo-Json | Out-File -FilePath "$out/build-info.json" -Encoding utf8
+
+          Get-ChildItem $out -Recurse -File |
+            Select-Object @{n='File';e={$_.FullName.Substring((Resolve-Path $out).Path.Length + 1)}},
+                          @{n='MB';e={[math]::Round($_.Length / 1MB, 2)}} |
+            Sort-Object MB -Descending | Select-Object -First 12 | Format-Table -AutoSize
+          $total = (Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Output ("portable total: {0:N1} MB" -f ($total / 1MB))
 
       - name: Upload portable app artifact
         uses: actions/upload-artifact@v6

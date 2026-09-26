@@ -1,8 +1,11 @@
 // Tauri 2 desktop shell for TBAi.
 //
 // Architecture: Tauri window (no system title bar) -> loads the origin of the
-// verified web port, served by a bundled Bun sidecar running the existing
-// Hono API + SPA.
+// verified web port, served by a sidecar that IS the backend: a single
+// self-contained executable from `bun build src/index.ts --compile` (the Bun
+// runtime is embedded, so there is no separate runtime file to ship or
+// version-match). It runs the existing Hono API + SPA. Declared as
+// `externalBin` so the name stays in step with tauri.conf.json.
 //
 // Startup invariant (hard): a listening TCP port is NEVER sufficient
 // readiness evidence. Every boot mints a fresh UUID, the sidecar serves it
@@ -45,7 +48,6 @@ const STDERR_LINE_CAP: usize = 200;
 /// Fixed launch inputs, resolved once per app boot.
 struct StartupConfig {
     data_dir: PathBuf,
-    backend: PathBuf,
     web_dist: PathBuf,
 }
 
@@ -274,7 +276,14 @@ fn attempt(app: &AppHandle) {
     }
     write_mirror_port(&cfg.data_dir, port);
 
-    let sidecar = match app.shell().sidecar("bun") {
+    // `externalBin: ["binaries/tbai-server"]` in tauri.conf.json owns the name;
+    // this string is the matching lookup and MUST stay identical to it. No args
+    // are passed: the compiled binary IS the server (it used to be spawned as
+    // `bun run backend/index.js`). `Command` already defaults to an empty arg
+    // list, so there is deliberately no `.args()` call here - an explicit
+    // `.args([])` would not compile, because the empty array leaves the
+    // `AsRef<OsStr>` element type ambiguous.
+    let sidecar = match app.shell().sidecar("tbai-server") {
         Ok(sidecar) => sidecar,
         Err(err) => {
             render_error(&win, port, "spawn_failed", "not started",
@@ -283,7 +292,6 @@ fn attempt(app: &AppHandle) {
         }
     };
     let (mut rx, child) = match sidecar
-        .args(["run", &cfg.backend.to_string_lossy()])
         .env("TBAI_INSTANCE_ID", &expected)
         .env("WEB_DIST_DIR", cfg.web_dist.to_string_lossy().to_string())
         .env("DATA_DIR", cfg.data_dir.to_string_lossy().to_string())
@@ -307,9 +315,9 @@ fn attempt(app: &AppHandle) {
                 CommandEvent::Stderr(line) => {
                     lines += 1;
                     if lines <= STDERR_LINE_CAP {
-                        eprintln!("[bun] {}", String::from_utf8_lossy(&line));
+                        eprintln!("[server] {}", String::from_utf8_lossy(&line));
                     } else if lines == STDERR_LINE_CAP + 1 {
-                        eprintln!("[bun] (further sidecar output suppressed)");
+                        eprintln!("[server] (further sidecar output suppressed)");
                     }
                 }
                 CommandEvent::Terminated(payload) => {
@@ -399,13 +407,13 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let backend = resolve_resource("backend/index.js")
-                .expect("backend bundle (dist/index.js) not found in resources");
+            // The backend is the sidecar binary itself, not a script to run, so
+            // only the SPA needs resolving here.
             let web_dist = resolve_resource("web")
                 .expect("web/dist not found in resources");
             let data_dir = resolve_data_dir();
 
-            app.manage(StartupConfig { data_dir, backend, web_dist });
+            app.manage(StartupConfig { data_dir, web_dist });
             app.manage(StartupOwned {
                 lock: Mutex::new(None),
                 child: Mutex::new(None),

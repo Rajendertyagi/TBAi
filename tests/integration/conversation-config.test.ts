@@ -291,7 +291,25 @@ describe("conversation status lifecycle (regular/archived)", () => {
     for (const t of data.threads as Array<{ status: string }>) {
       expect(t.status).toBe("archived");
     }
+    // `status=all` is a declared query sentinel meaning "no status clause". It
+    // must NOT be rejected: the live assistant-ui thread-list adapter requests
+    // it and splits regular from archived itself.
+    const all = await appFetch("/api/conversations?status=all&limit=5");
+    expect(all.status).toBe(200);
+  });
+
+  it("rejects an unrecognised ?status= instead of silently ignoring it", async () => {
+    // Previously an unknown enum value was coerced to "no filter" and answered
+    // 200, so a typo silently widened the result set. The query is now
+    // Zod-validated and fails truthfully with the standard issue shape.
     const unknown = await appFetch("/api/conversations?status=completed&limit=5");
-    expect(unknown.status).toBe(200);
+    expect(unknown.status).toBe(400);
+    const body = (await unknown.json()) as {
+      error: string;
+      issues: Array<{ path?: unknown }>;
+    };
+    expect(body.error).toBe("Invalid query");
+    expect(Array.isArray(body.issues)).toBe(true);
+    expect(body.issues.length).toBeGreaterThan(0);
   });
 });

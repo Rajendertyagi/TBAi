@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun run build:backend && bun run build:web",
-    "build:backend": "bun build src/index.ts --target bun --outdir dist",
+    "build:backend": "bun build src/index.ts --compile --outfile dist/tbai-server",
     "build:web": "cd web && bun run build",
     "typecheck": "tsc --noEmit -p tsconfig.json && cd web && tsc --noEmit",
     "lint": "bunx --bun @biomejs/biome check .",
