@@ -49,6 +49,38 @@ assistant-ui's external-store repository; OpenCode wire formats never cross into
 `ChatWindow` or generic chat state. The managed server compatibility gate is
 `>=2.0.15 <2.1.0`.
 
+### Native V2 model-switch verification
+
+Live acceptance run (2026-09-25, disposable conversation, deleted afterwards)
+proved one successful assistant execution *after* a native model switch. Baseline
+was `tokenharbor/qwen3.8-flash:free` variant `high`; the Code composer switched
+to `agnes/agnes-3.0-flash` variant `high` on the same session, and the following
+prompt completed.
+
+The switch is `officialClient.session.switchModel(...)` proxied as
+`POST /api/session/<id>/model` (observed `204`, request
+`req_ueg5nu0pw2prnxz2c6vu7yhe`), immediately followed by
+`POST /api/session/<id>/prompt` (`200`). The native event stream carried the
+authoritative proof — prompt `200` alone is not treated as success:
+
+```
+session.model.selected -> session.inbox.enqueued -> session.execution.started
+-> session.inbox.delivered -> session.step.started (reports the *new* model)
+-> session.reasoning.* / session.text.* -> session.step.streamed
+-> session.step.ended (finish=stop) -> session.execution.succeeded
+```
+
+After a page reload the same conversation and native session were restored with
+the switched model still selected, both exchanges present, and exactly one user
+and one assistant message per exchange.
+
+Provider-side limits observed during that run, so future probes do not re-test
+them: OpenRouter answers `402 provider.quota` ("insufficient credits") for paid
+models, Token Harbor `:free` routes report an exhausted rolling free allowance,
+and OpenRouter `:free` routes may enqueue without ever starting execution. These
+are credential/quota conditions, not native-switch defects; verify with
+`agnes/*` (or another funded route) rather than retrying exhausted free routes.
+
 ## Backend
 
 `src/routes/chat.ts` (`POST /api/chat`):
