@@ -26,7 +26,7 @@ export interface HistoryConfig {
 
 export const historyConfig: HistoryConfig = {
   pageSize: 20,
-  dateGrouping: true,
+  dateGrouping: false,
   searchEnabled: true,
   archiveEnabled: true,
   renameEnabled: true,

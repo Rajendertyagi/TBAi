@@ -158,7 +158,6 @@ export function Sidebar() {
                     search={searchQuery}
                     showCompleted={showCompleted}
                     onOpenThread={openThread}
-                    onOpenArchive={() => navigate("/archived")}
                     onClearSearch={() => setSearchQuery("")}
                   />
                 )}
@@ -209,13 +208,11 @@ function ChatsItems({
   search,
   showCompleted,
   onOpenThread,
-  onOpenArchive,
   onClearSearch,
 }: {
   search: string;
   showCompleted: boolean;
   onOpenThread: (remoteId: string, engine?: string | null) => void;
-  onOpenArchive: () => void;
   onClearSearch: () => void;
 }) {
   const copy = sidebarConfig.copy;
@@ -274,20 +271,6 @@ function ChatsItems({
         </div>
       )}
 
-      {!isLoading && items.length === 0 && !query && (
-        <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-          {copy.noConversations}
-          {historyConfig.archiveEnabled && (
-            <button
-              type="button"
-              onClick={onOpenArchive}
-              className="mx-auto mt-1 block text-foreground underline"
-            >
-              {copy.browseArchived}
-            </button>
-          )}
-        </div>
-      )}
 
       {!isLoading && query && items.length === 0 && (
         <div className="px-3 py-6 text-center text-xs text-muted-foreground">

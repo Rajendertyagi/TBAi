@@ -17,7 +17,7 @@ export function SidebarNavButton({
       aria-current={active ? "page" : undefined}
       className={cn(
         "group flex h-8 w-full items-center gap-2 rounded-full py-0 pl-2 pr-1.5",
-        "text-sm text-sidebar-foreground outline-none",
+        "text-sm font-semibold text-sidebar-foreground outline-none",
         "transition-colors duration-150 hover:bg-sidebar-accent",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
         active && "bg-sidebar-primary/10",

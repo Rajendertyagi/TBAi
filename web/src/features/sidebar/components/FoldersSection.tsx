@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
-import { FolderPlus } from "lucide-react";
 import { useFoldersStore } from "@/stores/foldersStore";
 import { FolderHeader } from "./FolderHeader";
 import { conversationIdFromPath } from "@/features/chat/state/chatTabs";import { FolderConversationRow } from "./FolderConversationRow";
@@ -35,18 +34,7 @@ export function FoldersSection() {
 
   return (
     <>
-      {folders.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
-          <FolderPlus className="size-5 text-muted-foreground/50" />
-          <p className="text-xs text-muted-foreground">
-            No folders registered.
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Hover the &ldquo;Folders&rdquo; header and click the folder icon to
-            add one.
-          </p>
-        </div>
-      ) : (
+      {folders.length === 0 ? null : (
         folders.map((folder) => {
           const expanded = folderExpanded[folder.id] ?? true;
           return (
