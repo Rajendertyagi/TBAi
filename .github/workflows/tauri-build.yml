@@ -26,11 +26,6 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-    # Job-scoped, not workflow-scoped, so nothing else widens. Needed only to
-    # commit the resolved Cargo.lock; artifact upload goes through the Actions
-    # service rather than the token, so it needs no extra scope.
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -154,33 +149,6 @@ jobs:
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
           }
-
-      # Placed AFTER the smoke test on purpose: cargo writes the lock either way,
-      # so committing only from a build that actually booted keeps a known-good
-      # dependency tree. An application should pin its tree - without this,
-      # every run resolves fresh versions, so two builds of one tag can differ
-      # and a transitive crate can break the build with no code change on our
-      # side. Same reproducibility hazard as the Bun `latest` case, one side over.
-      - name: Commit the resolved Cargo.lock
-        shell: pwsh
-        run: |
-          $lock = "src-tauri/Cargo.lock"
-          # Assert rather than skip: if cargo ever relocates the lock, this must
-          # be one obvious error, not a silent no-op that leaves the tree unpinned.
-          if (-not (Test-Path $lock)) { throw "$lock not generated - expected it next to src-tauri/Cargo.toml" }
-          # `git status --porcelain`, not `git diff`: on the first run the file
-          # is untracked (??), which `git diff` would not report at all.
-          if (-not (git status --porcelain -- $lock)) {
-            Write-Output "Cargo.lock unchanged - nothing to commit"
-            exit 0
-          }
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add $lock
-          git commit -m "chore(deps): pin Cargo.lock from CI"
-          # A push race (someone committed to main mid-build) rejects here and
-          # fails the step. Nothing is lost - the next run re-resolves and retries.
-          git push
 
       - name: Assemble portable app folder
         shell: pwsh
