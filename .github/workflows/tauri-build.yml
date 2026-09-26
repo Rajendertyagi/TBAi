@@ -66,14 +66,23 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # Built and staged BEFORE `tauri build` so the sidecar exists at the path
-      # `externalBin` declares. `tauri build` re-runs `bun run build` via
-      # beforeBuildCommand, so this is a ~1s duplicate, paid for correctness.
-      - name: Build sidecar and stage it for externalBin
+      # Builds BOTH the backend and the web assets, and stages the sidecar before
+      # `tauri build` so it exists at the path `externalBin` declares.
+      #
+      # The web build is not optional here and not just for the sidecar:
+      # tauri-build validates `bundle.resources` ("../web/dist/*"), and web/dist
+      # is a build output (gitignored) that does not exist on a fresh checkout.
+      # Building only the backend made the `cargo check` step below fail with
+      # "glob pattern ../web/dist/* path not found". `tauri build` re-runs
+      # `bun run build` via beforeBuildCommand, so the web build happens twice -
+      # ~15s, and cheaper than the alternative of not having web/dist for the
+      # steps in between.
+      - name: Build assets and stage the sidecar for externalBin
         shell: pwsh
         run: |
-          bun run build:backend
-          if ($LASTEXITCODE -ne 0) { throw "build:backend failed" }
+          bun run build
+          if ($LASTEXITCODE -ne 0) { throw "bun run build failed" }
+          if (-not (Test-Path "web/dist")) { throw "web/dist not produced - tauri-build requires it for bundle.resources" }
           $src = "dist/$env:SIDECAR_NAME.exe"
           if (-not (Test-Path $src)) { throw "$src not produced" }
           $binDir = "src-tauri/binaries"
@@ -84,10 +93,12 @@ jobs:
       # Type-check the shell BEFORE the full build. `tauri build` is a complete
       # compile with codegen and takes ~10 minutes, so a one-line type error
       # would otherwise be discovered very late. `cargo check` does no codegen
-      # and fails in about a minute. Safe to run before any build because
-      # tauri-build validates build.frontendDist, which now points at
-      # src-tauri/frontend-placeholder/ - committed, so it exists on a fresh
-      # checkout.
+      # and fails in about a minute.
+      #
+      # It still runs the tauri-build script, which validates BOTH
+      # `build.frontendDist` (committed, so fine on a fresh checkout) AND
+      # `bundle.resources` (web/dist, NOT committed). That second one is why the
+      # previous step must run the full `bun run build` first - see its comment.
       - name: Type-check the Rust shell
         run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
