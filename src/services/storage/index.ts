@@ -52,6 +52,21 @@ export interface ConversationListOptions {
   offset?: number;
   /** Newest-first key. Defaults to `updated` (last activity). */
   order?: "updated" | "created";
+  /**
+   * Sidebar scope. `simple` = non-folder chats; `project` = folder-bound chats.
+   * Omit for no scope clause (every conversation).
+   *
+   * This is the discriminator, NOT `workspace_folder_id IS NULL`: every
+   * conversation carries a folder id because simple chats are bound to an
+   * auto-created hidden `kind='chat'` folder (see `create`).
+   */
+  workspaceMode?: "simple" | "project";
+  /**
+   * Restrict to one folder's project chats. Implies `workspace_mode = 'project'`
+   * so a hidden chat folder id can never match. Combine with `workspaceMode` only
+   * as `"project"`; the route's Zod schema rejects the contradictory pairing.
+   */
+  folderId?: string;
 }
 
 export interface ConversationListResult {
@@ -183,12 +198,34 @@ export const conversationService = {
   },
 
   async list(options: ConversationListOptions = {}): Promise<ConversationListResult> {
-    const { status, search, limit = 50, offset = 0, order = "updated" } = options;
+    const {
+      status,
+      search,
+      limit = 50,
+      offset = 0,
+      order = "updated",
+      workspaceMode,
+      folderId,
+    } = options;
     const clauses: string[] = [];
     const params: SQLQueryBindings[] = [];
     if (status) {
       clauses.push("c.status = ?");
       params.push(status);
+    }
+    // Scope clauses are AND-ed with status/search below, so the sidebar's
+    // section filter, the archived toggle, and the search term all narrow the
+    // same query and paging (total/nextCursor) stays honest.
+    if (workspaceMode) {
+      clauses.push("c.workspace_mode = ?");
+      params.push(workspaceMode);
+    }
+    if (folderId) {
+      // `workspace_mode = 'project'` mirrors the folder-membership subquery in
+      // folders.ts: a conversation only counts as "in" a visible folder when it
+      // is project-scoped, so a hidden `kind='chat'` folder id never matches.
+      clauses.push("(c.workspace_folder_id = ? AND c.workspace_mode = 'project')");
+      params.push(folderId);
     }
     if (search) {
       // Server-side content search: FTS5 sidecar over title + message content,

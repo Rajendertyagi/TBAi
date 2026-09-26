@@ -34,8 +34,16 @@ export interface SidebarConfig {
   showRecentByDefault: boolean;
   /** Flat item cap for the Recent section (Chats paginates via the runtime). */
   recentSectionLimit: number;
-  /** Anti-flood page size for the Chats date-grouped list (session-only). */
-  chatsPageSize: number;
+  /** Initial page size for the global search results list (grows via Load more). */
+  searchResultLimit: number;
+  /**
+   * Hard ceiling on rows a single sidebar list request may ask for. The lists
+   * grow `limit` with each "Load more" (offset stays 0), so without a ceiling a
+   * long session eventually asks for more than the server accepts and gets a
+   * 400. MUST stay <= the `limit` maximum in the server's
+   * `conversationsListQuerySchema`.
+   */
+  maxListPageSize: number;
   /** Debounce for the chrome search box before hitting the server. */
   searchDebounceMs: number;
   /** Minimum query length before server-side search fires. */
@@ -55,6 +63,7 @@ export interface SidebarConfig {
     chats: string;
     folders: string;
     recent: string;
+    searchResults: string;
     archived: string;
     viewOptions: string;
     listOptions: string;
@@ -71,6 +80,9 @@ export interface SidebarConfig {
     expandAll: string;
     collapseAll: string;
     noConversations: string;
+    /** Chats section is scoped to non-folder chats, so its empty copy must not
+     *  claim the user has never had a conversation. */
+    noNonFolderChats: string;
     browseArchived: string;
     noMatches: string;
     clearSearch: string;
@@ -96,7 +108,8 @@ export const sidebarConfig: SidebarConfig = {
   defaultSort: DEFAULT_SORT_MODE,
     showRecentByDefault: true,
   recentSectionLimit: 10,
-  chatsPageSize: 20,
+  searchResultLimit: 20,
+  maxListPageSize: 500,
   searchDebounceMs: 300,
   searchMinLength: 1,
   copy: {
@@ -113,6 +126,7 @@ export const sidebarConfig: SidebarConfig = {
     chats: "Chats",
     folders: "Folders",
     recent: "Recent",
+    searchResults: "Search results",
     archived: "Archived",
     viewOptions: "View options",
     listOptions: "List",
@@ -129,6 +143,7 @@ export const sidebarConfig: SidebarConfig = {
     expandAll: "Expand all sections",
     collapseAll: "Collapse all sections",
     noConversations: "No conversations yet.",
+    noNonFolderChats: "No chats outside folders yet.",
     browseArchived: "Browse archived",
     noMatches: "No conversations match your search.",
     clearSearch: "Clear search",

@@ -23,8 +23,9 @@ export function LeftEdgeChrome() {
   const toggleSidebar = useDesktopLayout((s) => s.toggleSidebar);
   const setSidebar = useDesktopLayout((s) => s.setSidebar);
   const searchOpen = useDesktopLayout((s) => s.searchOpen);
-  const searchQuery = useDesktopLayout((s) => s.searchQuery);
+  const searchInput = useDesktopLayout((s) => s.searchInput);
   const searchFocusRequest = useDesktopLayout((s) => s.searchFocusRequest);
+  const setSearchInput = useDesktopLayout((s) => s.setSearchInput);
   const setSearchQuery = useDesktopLayout((s) => s.setSearchQuery);
   const setSearchOpen = useDesktopLayout((s) => s.setSearchOpen);
   const requestSearchFocus = useDesktopLayout((s) => s.requestSearchFocus);
@@ -86,8 +87,8 @@ export function LeftEdgeChrome() {
           <>
             <Input
               ref={inputRef}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") closeSearch();
               }}

@@ -5,7 +5,12 @@ import { ConversationNotFoundError, conversationService, messageService } from "
 import type { Conversation } from "../types";
 import { terminateOpenCodeSession } from "../services/opencode/sessions";
 import { logger, normalizeError } from "../lib/logger";
-import { conversationCreateSchema, conversationUpdateSchema, messageUpsertSchema } from "../lib/validation";
+import {
+  conversationsListQuerySchema,
+  conversationCreateSchema,
+  conversationUpdateSchema,
+  messageUpsertSchema,
+} from "../lib/validation";
 import { isContentlessAssistantMessage } from "../lib/message-persistence-policy";
 import { folderService } from "../services/folders";
 import { storageError } from "./shared";
@@ -62,16 +67,23 @@ function pruneCreateKeys(now: number): void {
 
 // Conversation routes
 app.get("/api/conversations", async (c) => {
+  const parsed = conversationsListQuerySchema.safeParse(
+    Object.fromEntries(new URL(c.req.url).searchParams),
+  );
+  if (!parsed.success) {
+    return c.json({ error: "Invalid query", issues: parsed.error.issues }, 400);
+  }
   try {
-    const statusQuery = c.req.query("status");
-    const status = statusQuery === "regular" || statusQuery === "archived" ? statusQuery : undefined;
-    const search = c.req.query("search") || undefined;
-    const orderQuery = c.req.query("order");
-    const order = orderQuery === "created" ? "created" : "updated";
-    const limit = Number(c.req.query("limit") ?? 200);
-    const offset = Number(c.req.query("offset") ?? 0);
-    const result = await conversationService.list({ status, search, limit, offset, order });
-    return c.json(result);
+    const { status, ...scope } = parsed.data;
+    // `"all"` is a query sentinel, not a stored status: it means "no status
+    // clause". Mapping it here keeps `ConversationStatus` (the row vocabulary)
+    // free of a value SQLite never holds.
+    return c.json(
+      await conversationService.list({
+        ...scope,
+        status: status === "all" ? undefined : status,
+      }),
+    );
   } catch (e) {
     return storageError(c, e);
   }

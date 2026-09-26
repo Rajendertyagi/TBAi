@@ -141,6 +141,53 @@ export const conversationUpdateSchema = z.object({
   opencodeAutoApprove: z.boolean().optional(),
 });
 
+/**
+ * `GET /api/conversations` query envelope.
+ *
+ * `workspaceMode` / `folderId` are the sidebar's SCOPE params, and they are
+ * deliberately separate from `search` so the two compose as AND-ed SQL clauses
+ * instead of a client-side filter:
+ *
+ *   - absent          -> no scope clause (every conversation)
+ *   - `simple`        -> non-folder chats (the sidebar "Chats" section)
+ *   - `folderId=<id>` -> that folder's project chats (one sidebar folder)
+ *
+ * `workspaceMode` - never `workspace_folder_id IS NULL` - is the discriminator
+ * because EVERY conversation carries a folder id: simple chats are bound to an
+ * auto-created hidden `kind='chat'` folder at creation (see
+ * `storage.create`), so a NULL test would match nothing.
+ *
+ * A `folderId` filter always pins `workspace_mode = 'project'` in SQL (mirroring
+ * the membership subquery in `folders.ts`) so a hidden chat folder can never be
+ * addressed as a project folder. `workspaceMode: "simple"` combined with a
+ * `folderId` is therefore a contradiction and is rejected here rather than
+ * silently resolved downstream.
+ *
+ * `status` accepts the query-only sentinel `"all"` (meaning: no status clause).
+ * The assistant-ui thread-list adapter requests `status=all` and splits regular
+ * from archived itself, so the sentinel is part of the contract and is declared
+ * here instead of depending on an unknown value being silently dropped.
+ */
+export const conversationsListQuerySchema = z
+  .object({
+    status: z.enum(["regular", "archived", "all"]).default("all"),
+    search: z.string().max(256).optional(),
+    /** Newest-first key: `updated` = last activity, `created` = creation. */
+    order: z.enum(["created", "updated"]).default("updated"),
+    workspaceMode: z.enum(["simple", "project"]).optional(),
+    folderId: z.string().min(1).max(200).optional(),
+    limit: z.coerce.number().int().min(1).max(500).default(200),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .superRefine((value, ctx) => {
+    if (value.folderId !== undefined && value.workspaceMode === "simple") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "folderId cannot be combined with workspaceMode=simple",
+      });
+    }
+  });
+
 // A persisted message entry in the runtime's storage format (produced by the
 // ThreadHistoryAdapter's `withFormat` adapter). The `content` field is an opaque
 // serialized object we store verbatim; we validate only the envelope.

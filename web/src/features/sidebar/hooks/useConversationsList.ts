@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAvailabilityStore } from "../../availability/availabilityStore";
+import { sidebarConfig } from "../../../config/sidebar";
 
 export interface ConversationItem {
   remoteId: string;
@@ -11,9 +12,22 @@ export interface ConversationItem {
 
 export interface UseConversationsListOptions {
   search?: string;
-  order?: "newest" | "oldest" | "title";
+  /**
+   * Newest-first key. Mirrors `SidebarSortMode` and the server's `order` param
+   * one-for-one — no client-side translation, so "Newest first" actually sorts
+   * by creation instead of collapsing into "last activity".
+   */
+  order?: "updated" | "created";
   status?: "regular" | "archived";
   limit?: number;
+  /**
+   * Sidebar scope. `"simple"` = non-folder chats; `"project"` = folder-bound.
+   * Omit for no scope (every conversation) — which is what Recent, the archived
+   * page, and global search want.
+   */
+  workspaceMode?: "simple" | "project";
+  /** One folder's project chats. Pairs with `workspaceMode: "project"`. */
+  folderId?: string;
 }
 
 export interface UseConversationsListResult {
@@ -32,7 +46,14 @@ export interface UseConversationsListResult {
 export function useConversationsList(
   options: UseConversationsListOptions = {},
 ): UseConversationsListResult {
-  const { search = "", order = "newest", status, limit = 20 } = options;
+  const {
+    search = "",
+    order = "updated",
+    status,
+    limit = 20,
+    workspaceMode,
+    folderId,
+  } = options;
 
   const [items, setItems] = useState<ConversationItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -66,12 +87,20 @@ export function useConversationsList(
     setError(null);
 
     const queryOffset = 0;
-    const queryLimit = (page + 1) * limit;
+    // `limit` grows with each "Load more" (offset stays 0), so clamp to the
+    // server's accepted maximum instead of letting a long session request a
+    // size the API rejects with a 400.
+    const queryLimit = Math.min((page + 1) * limit, sidebarConfig.maxListPageSize);
 
     const params = new URLSearchParams();
     if (search.trim()) params.set("search", search.trim());
     if (status) params.set("status", status);
     if (order) params.set("order", order);
+    // Scope is sent (never filtered client-side) so the server's WHERE clause —
+    // and therefore `hasMore`/`loadMore` below — describes the rows actually
+    // shown. Filtering after the fact would make paging permanently wrong.
+    if (workspaceMode) params.set("workspaceMode", workspaceMode);
+    if (folderId) params.set("folderId", folderId);
     params.set("limit", String(queryLimit));
     params.set("offset", String(queryOffset));
 
@@ -99,7 +128,13 @@ export function useConversationsList(
           engine: t.engine ?? null,
         }));
         setItems(fetchedItems);
-        setHasMore(rawThreads.length >= queryLimit);
+        // At the request ceiling there may be more rows, but we will not ask
+        // for them — hide the button rather than offer a click that changes
+        // nothing.
+        setHasMore(
+          rawThreads.length >= queryLimit &&
+            queryLimit < sidebarConfig.maxListPageSize,
+        );
         setIsLoading(false);
       })
       .catch((err: unknown) => {
@@ -111,7 +146,7 @@ export function useConversationsList(
     return () => {
       cancelled = true;
     };
-  }, [search, order, status, limit, page, refreshTrigger]);
+  }, [search, order, status, limit, page, refreshTrigger, workspaceMode, folderId]);
 
   return {
     items,

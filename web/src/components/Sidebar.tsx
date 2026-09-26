@@ -11,8 +11,6 @@ import {
   SIDEBAR_SECTION_IDS,
   type SidebarSectionId,
 } from "../config/sidebar";
-import { historyConfig } from "../config/history";
-import { dateGroupLabel } from "../lib/sidebar-sections";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useThreadListQuerySync } from "../features/sidebar/hooks/useThreadListQuerySync";
 import { useConversationsList } from "../features/sidebar/hooks/useConversationsList";
@@ -23,6 +21,7 @@ import {
   SidebarThreadRow,
 } from "../features/sidebar/components/SidebarThreadRow";
 import { FoldersSection } from "../features/sidebar/components/FoldersSection";
+import { SearchResults } from "../features/sidebar/components/SearchResults";
 import { NewProjectChatDialog } from "./NewProjectChatDialog";
 import { WorkspaceFolderDialog } from "../features/folders/WorkspaceFolderDialog";
 import { shouldNavigateToThread, threadUrl } from "../features/chat/state/chatTabs";
@@ -33,6 +32,12 @@ import { shouldNavigateToThread, threadUrl } from "../features/chat/state/chatTa
  * persisted `Folders / Chats / Recent` sections. Search lives in the
  * top-left chrome overlay (`LeftEdgeChrome`), never here — the sidebar
  * unmounts on collapse. Data is loaded via `useConversationsList`.
+ *
+ * Each section is SCOPED server-side and they do not overlap:
+ *   Folders -> that folder's project chats
+ *   Chats   -> non-folder chats (`workspaceMode: "simple"`)
+ *   Recent  -> newest N of everything (no scope)
+ * An active search term replaces all three with one global result list.
  */
 export function Sidebar() {
   const copy = sidebarConfig.copy;
@@ -83,6 +88,11 @@ export function Sidebar() {
     )
     .filter(isVisible);
   const allExpanded = visibleSections.every(isExpanded);
+  // `searchQuery` is already debounced in the store, so the sections stay put
+  // for the settle window instead of collapsing out from under the user
+  // mid-keystroke. Searching swaps the whole section area for one global list.
+  const isSearching =
+    searchQuery.trim().length >= sidebarConfig.searchMinLength;
 
   return (
     <div className="relative flex w-[var(--sidebar-width,224px)] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground select-none">
@@ -108,65 +118,71 @@ export function Sidebar() {
 
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
         <div className="flex flex-col gap-2">
-          {order.map((id) => {
-            if (!isVisible(id)) return null;
-            const expanded = isExpanded(id);
-            const setExpanded = (v: boolean) => {
-              setSectionCollapsed(id, !v);
-            };
-            return (
-              <SidebarSection
-                key={id}
-                id={id}
-                label={
-                  id === "folders"
-                    ? copy.folders
-                    : id === "chats"
-                      ? copy.chats
-                      : copy.recent
-                }
-                expanded={expanded}
-                onExpandedChange={setExpanded}
-                actions={
-                  id === "folders" ? (
-                    <div className="flex items-center">
-                      <button
-                        type="button"
-                        onClick={() => setNewProjectOpen(true)}
-                        title={copy.newProjectChat}
-                        aria-label={copy.newProjectChat}
-                        className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                      >
-                        <MessageSquarePlus className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAddFolderOpen(true)}
-                        title="Open folder"
-                        aria-label="Open folder"
-                        className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                      >
-                        <FolderOpenDot className="size-3.5" />
-                      </button>
-                    </div>
-                  ) : undefined
-                }
-              >
-                {id === "folders" && <FoldersSection />}
-                {id === "chats" && (
-                  <ChatsItems
-                    search={searchQuery}
-                    showCompleted={showCompleted}
-                    onOpenThread={openThread}
-                    onClearSearch={() => setSearchQuery("")}
-                  />
-                )}
-                {id === "recent" && (
-                  <RecentItems search={searchQuery} showCompleted={showCompleted} onOpenThread={openThread} />
-                )}
-              </SidebarSection>
-            );
-          })}
+          {isSearching ? (
+            <SearchResults
+              search={searchQuery}
+              onOpenThread={openThread}
+              onClearSearch={() => setSearchQuery("")}
+            />
+          ) : (
+            order.map((id) => {
+              if (!isVisible(id)) return null;
+              const expanded = isExpanded(id);
+              const setExpanded = (v: boolean) => {
+                setSectionCollapsed(id, !v);
+              };
+              return (
+                <SidebarSection
+                  key={id}
+                  id={id}
+                  label={
+                    id === "folders"
+                      ? copy.folders
+                      : id === "chats"
+                        ? copy.chats
+                        : copy.recent
+                  }
+                  expanded={expanded}
+                  onExpandedChange={setExpanded}
+                  actions={
+                    id === "folders" ? (
+                      <div className="flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => setNewProjectOpen(true)}
+                          title={copy.newProjectChat}
+                          aria-label={copy.newProjectChat}
+                          className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        >
+                          <MessageSquarePlus className="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAddFolderOpen(true)}
+                          title="Open folder"
+                          aria-label="Open folder"
+                          className="flex size-6 items-center justify-end rounded-[0.375rem] cursor-pointer text-muted-foreground/90 outline-none transition-[color] duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        >
+                          <FolderOpenDot className="size-3.5" />
+                        </button>
+                      </div>
+                    ) : undefined
+                  }
+                >
+                  {id === "folders" && <FoldersSection />}
+                  {id === "chats" && (
+                    <ChatsItems
+                      showCompleted={showCompleted}
+                      onOpenThread={openThread}
+                    />
+                  )}
+                  {id === "recent" && (
+                    <RecentItems showCompleted={showCompleted} onOpenThread={openThread} />
+                  )}
+                </SidebarSection>
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -203,55 +219,40 @@ function SidebarResizeHandle() {
   );
 }
 
-/** Date-grouped regular threads with session paging + empty/error states. */
+/**
+ * Non-folder ("simple") threads with session paging + empty state.
+ *
+ * Scoped server-side to `workspaceMode: "simple"` so a project chat can never
+ * appear here — folder chats belong to their folder, and Recent covers both.
+ */
 function ChatsItems({
-  search,
   showCompleted,
   onOpenThread,
-  onClearSearch,
 }: {
-  search: string;
   showCompleted: boolean;
   onOpenThread: (remoteId: string, engine?: string | null) => void;
-  onClearSearch: () => void;
 }) {
   const copy = sidebarConfig.copy;
   const sidebarSort = useDesktopLayout((s) => s.sidebarSort);
-  const order = sidebarSort === "created" ? "oldest" : "newest";
 
   const { items, isLoading, hasMore, loadMore, refetch } = useConversationsList({
-    search,
-    order,
+    // `sidebarSort` is already "updated" | "created" — the same values the
+    // server accepts — so it passes straight through with no translation.
+    order: sidebarSort,
     status: showCompleted ? undefined : "regular",
+    workspaceMode: "simple",
   });
-
-  const query = search.trim().toLowerCase();
-  let lastGroup: string | null = null;
 
   return (
     <>
-      {items.map((item) => {
-        const group = historyConfig.dateGrouping
-          ? dateGroupLabel(item.lastMessageAt)
-          : null;
-        const showHeader = group !== null && group !== lastGroup;
-        if (showHeader) lastGroup = group;
-
-        return (
-          <div key={item.remoteId}>
-            {showHeader && (
-              <div className="px-3 pt-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {group}
-              </div>
-            )}
-            <SidebarThreadRow
-              item={item}
-              onOpenThread={onOpenThread}
-              onMutate={refetch}
-            />
-          </div>
-        );
-      })}
+      {items.map((item) => (
+        <SidebarThreadRow
+          key={item.remoteId}
+          item={item}
+          onOpenThread={onOpenThread}
+          onMutate={refetch}
+        />
+      ))}
 
       {hasMore && (
         <button
@@ -271,17 +272,9 @@ function ChatsItems({
         </div>
       )}
 
-
-      {!isLoading && query && items.length === 0 && (
+      {!isLoading && items.length === 0 && (
         <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-          {copy.noMatches}
-          <button
-            type="button"
-            onClick={onClearSearch}
-            className="mx-auto mt-1 block text-foreground underline"
-          >
-            {copy.clearSearch}
-          </button>
+          {copy.noNonFolderChats}
         </div>
       )}
     </>
@@ -289,20 +282,20 @@ function ChatsItems({
 }
 
 /**
- * Flat newest-first regular threads, capped at `recentSectionLimit`.
+ * Newest N threads of ALL kinds — folder and non-folder, both engines — capped
+ * at `recentSectionLimit`. Unscoped on purpose: this is the one section that
+ * answers "what did I touch lately", regardless of where it lives.
  */
 function RecentItems({
-  search,
   showCompleted,
   onOpenThread,
 }: {
-  search: string;
   showCompleted: boolean;
   onOpenThread: (remoteId: string, engine?: string | null) => void;
 }) {
+  const sidebarSort = useDesktopLayout((s) => s.sidebarSort);
   const { items, refetch } = useConversationsList({
-    search,
-    order: "newest",
+    order: sidebarSort,
     status: showCompleted ? undefined : "regular",
     limit: sidebarConfig.recentSectionLimit,
   });

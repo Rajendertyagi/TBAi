@@ -12,7 +12,10 @@ import {
   type SidebarSectionId,
   type SidebarSortMode,
 } from "../../../config/sidebar";
-import { normalizeSectionOrder } from "../../../lib/sidebar-sections";
+import {
+  moveSectionInOrder,
+  normalizeSectionOrder,
+} from "../../../lib/sidebar-sections";
 
 /**
  * Desktop chrome layout + sidebar view preferences (VS Code–like). UI-only
@@ -42,7 +45,18 @@ interface DesktopLayoutState {
   showRecent: boolean;
   /** Whether archived conversations are shown in the sidebar lists. */
   showCompleted: boolean;
-  /** Live conversation-search query (transient, never persisted). */
+  /**
+   * Raw search box contents, one write per keystroke (transient). Consumers must
+   * read `searchQuery` instead — this exists only so the controlled input stays
+   * responsive while the query is still settling.
+   */
+  searchInput: string;
+  /**
+   * Settled conversation-search query (transient, never persisted). Written
+   * `sidebarConfig.searchDebounceMs` after `searchInput` stops changing, so one
+   * keystroke burst produces ONE list request instead of one per keystroke per
+   * sidebar section (the folder list alone fetches once per registered folder).
+   */
   searchQuery: string;
   /** Whether the chrome search input is expanded (transient). */
   searchOpen: boolean;
@@ -59,6 +73,9 @@ interface DesktopLayoutState {
   setAllSectionsCollapsed: (collapsed: boolean) => void;
   setShowRecent: (v: boolean) => void;
   setShowCompleted: (v: boolean) => void;
+  /** Record a keystroke; `searchQuery` settles after the debounce. */
+  setSearchInput: (q: string) => void;
+  /** Set input + query together, cancelling any pending settle. */
   setSearchQuery: (q: string) => void;
   setSearchOpen: (open: boolean) => void;
   requestSearchFocus: () => void;
@@ -77,6 +94,19 @@ interface PersistedLayout {
 }
 
 const STORE_VERSION = 1;
+
+/**
+ * Pending `searchInput` -> `searchQuery` settle. Module scope (not state) so it
+ * never reaches persistence or triggers a render on its own.
+ */
+let searchSettleTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Cancel a pending settle so an immediate `setSearchQuery` wins the race. */
+function cancelSearchSettle(): void {
+  if (searchSettleTimer === null) return;
+  clearTimeout(searchSettleTimer);
+  searchSettleTimer = null;
+}
 
 function defaultPersisted(): PersistedLayout {
   return {
@@ -98,7 +128,12 @@ function isSortMode(value: unknown): value is SidebarSortMode {
 /** Merge an unknown persisted payload over defaults, field by field. */
 function migratePersisted(persisted: unknown): DesktopLayoutState {
   const defaults = defaultPersisted();
-  const transient = { searchQuery: "", searchOpen: false, searchFocusRequest: 0 };
+  const transient = {
+    searchInput: "",
+    searchQuery: "",
+    searchOpen: false,
+    searchFocusRequest: 0,
+  };
   if (typeof persisted !== "object" || persisted === null) {
     return { ...defaults, ...transient } as DesktopLayoutState;
   }
@@ -139,6 +174,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
   persist<DesktopLayoutState, [], [], PersistedLayout>(
     (set) => ({
       ...defaultPersisted(),
+      searchInput: "",
       searchQuery: "",
       searchOpen: false,
       searchFocusRequest: 0,
@@ -150,16 +186,14 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
       setSidebarWidth: (w) =>
         set({ sidebarWidth: clamp(w, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
       setSidebarSort: (sort) => set({ sidebarSort: sort }),
+      // Reorder through the shared pure helper so the store and the sidebar
+      // cannot drift on edge cases (out-of-range delta, unknown id). The helper
+      // returns the SAME array on a no-op, so returning `s` there keeps zustand
+      // from notifying subscribers for a move that changed nothing.
       moveSection: (id, delta) =>
         set((s) => {
-          const order = s.sectionOrder.slice();
-          const from = order.indexOf(id);
-          if (from < 0) return s;
-          const to = from + delta;
-          if (to < 0 || to >= order.length || to === from) return s;
-          order.splice(from, 1);
-          order.splice(to, 0, id);
-          return { sectionOrder: order };
+          const sectionOrder = moveSectionInOrder(s.sectionOrder, id, delta);
+          return sectionOrder === s.sectionOrder ? s : { sectionOrder };
         }),
       setSectionCollapsed: (id, collapsed) =>
         set((s) => ({
@@ -173,7 +207,25 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         }),
       setShowRecent: (v) => set({ showRecent: v }),
       setShowCompleted: (v) => set({ showCompleted: v }),
-      setSearchQuery: (q) => set({ searchQuery: q }),
+      setSearchInput: (q) => {
+        set({ searchInput: q });
+        // Clearing is not a search — settle it now so the sections come back
+        // immediately instead of lingering for the debounce window.
+        if (q === "") {
+          cancelSearchSettle();
+          set({ searchQuery: "" });
+          return;
+        }
+        cancelSearchSettle();
+        searchSettleTimer = setTimeout(() => {
+          searchSettleTimer = null;
+          set({ searchQuery: q });
+        }, sidebarConfig.searchDebounceMs);
+      },
+      setSearchQuery: (q) => {
+        cancelSearchSettle();
+        set({ searchInput: q, searchQuery: q });
+      },
       setSearchOpen: (open) => set({ searchOpen: open }),
       requestSearchFocus: () =>
         set((s) => ({ searchFocusRequest: s.searchFocusRequest + 1 })),

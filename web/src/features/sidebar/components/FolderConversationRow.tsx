@@ -54,23 +54,31 @@ const ROW_CLASS =
 
 /**
  * Standalone conversation row rendered under a folder header in the sidebar's
- * "Folders" section. Reads via useConversationsList. Full conversation management:
- * context menu (rename, archive/unarchive, delete, copy ID), hover actions,
- * live running dot (runtime state), rename dialog.
+ * "Folders" section. Reads via useConversationsList, scoped to THIS folder's
+ * project chats only. Full conversation management: context menu (rename,
+ * archive/unarchive, delete, copy ID), hover actions, live running dot (runtime
+ * state), rename dialog.
  */
 export const FolderConversationRow = memo(function FolderConversationRow({
-  folderId: _folderId,
+  folderId,
   activeId,
 }: {
   folderId: string;
   activeId: string | null;
 }) {
-  const { items, refetch } = useConversationsList({ status: "regular" });
+  // `workspaceMode: "project"` pairs with `folderId` so the server pins the
+  // membership test to project-scoped rows; a hidden `kind='chat'` folder can
+  // never leak another folder's chats into this list.
+  const { items, refetch } = useConversationsList({
+    status: "regular",
+    workspaceMode: "project",
+    folderId,
+  });
 
   if (items.length === 0) {
     return (
       <div className="flex h-8 items-center pl-6 pr-1 text-xs text-muted-foreground">
-        No conversations
+        {sidebarConfig.copy.noConversations}
       </div>
     );
   }

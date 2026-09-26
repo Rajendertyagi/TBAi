@@ -8,6 +8,11 @@ import { useDesktopLayout } from "../../desktop/state/desktopLayout";
 
 /**
  * Syncs the store-owned search query + sort mode into the thread-list adapter.
+ *
+ * No debounce here on purpose: `desktopLayout.searchQuery` has already settled
+ * (`searchDebounceMs` is applied once, at the input boundary in the store), so a
+ * timer in this hook would only add a second, redundant delay before the
+ * adapter sees the same value.
  */
 export function useThreadListQuerySync(): void {
   const searchQuery = useDesktopLayout((s) => s.searchQuery);
@@ -18,12 +23,10 @@ export function useThreadListQuerySync(): void {
   }, [sidebarSort]);
 
   useEffect(() => {
-    const query = searchQuery.trim();
-    if (query.length > 0 && query.length < sidebarConfig.searchMinLength) return;
-    const t = setTimeout(() => {
-      setThreadListSearchQuery(searchQuery);
-    }, sidebarConfig.searchDebounceMs);
-    return () => clearTimeout(t);
+    if (searchQuery.trim().length < sidebarConfig.searchMinLength) {
+      setThreadListSearchQuery("");
+      return;
+    }
+    setThreadListSearchQuery(searchQuery);
   }, [searchQuery]);
 }
-

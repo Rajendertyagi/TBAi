@@ -6,8 +6,6 @@
 export interface HistoryConfig {
   /** Page size requested from the backend list endpoint. */
   pageSize: number;
-  /** Group the regular conversation list by date (Today / Yesterday / Older). */
-  dateGrouping: boolean;
   /** Show the search box. */
   searchEnabled: boolean;
   /** Show archive / unarchive actions and an Archived section. */
@@ -26,7 +24,6 @@ export interface HistoryConfig {
 
 export const historyConfig: HistoryConfig = {
   pageSize: 20,
-  dateGrouping: false,
   searchEnabled: true,
   archiveEnabled: true,
   renameEnabled: true,
