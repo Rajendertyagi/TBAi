@@ -7,7 +7,10 @@
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "bun run build",
-    "frontendDist": "./frontend-placeholder"
+    "frontendDist": "./frontend-placeholder",
+    "windows": {
+      "staticVCRuntime": true
+    }
   },
   "app": {
     "windows": [
