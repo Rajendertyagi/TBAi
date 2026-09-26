@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { AppendMessage } from "@assistant-ui/react";
 import type {
   FormInfo,
@@ -17,6 +19,7 @@ import type {
   SessionPromptInput,
   V2Event,
 } from "@opencode/client";
+import { OpenCodeBashToolUI } from "@/tools/opencode/ui";
 import {
   V2_GENERATION_BRAND,
   V2_HISTORY_READER_BRAND,
@@ -25,6 +28,7 @@ import {
   type OpenCodeV2GenerationOperations,
   type V2ConnectionSignals,
 } from "./v2Client";
+import { projectV2RepositoryItems } from "./v2MessageProjection";
 import {
   createV2ThreadController,
   type V2ThreadController,
@@ -763,5 +767,160 @@ describe("native V2 controller replies and disposal", () => {
     controller.setDesiredSelection({ model: null, agent: null });
     expect(controller.getState()).toBe(disposedState);
     expect(notifications).toBe(0);
+  });
+});
+
+/**
+ * The two approval paths that only exist once native events, the reducer, and
+ * the assistant-ui projection run together. Each half is proven elsewhere:
+ * `v2Events.test.ts` covers the reducers, `v2MessageProjection.test.ts` covers
+ * linkage, and `ui.test.ts` covers what a given `approval` renders. What no test
+ * held was the seam — that a real `permission.asked` reaches the shell card as
+ * Approve/Deny, and that a failed execution with no permission reaches it as
+ * nothing at all.
+ */
+const LIVE_SHELL_MESSAGE_ID = "assistant_live_shell";
+const LIVE_SHELL_TOOL_ID = "tool_live_shell";
+const LIVE_SHELL_PERMISSION_ID = "permission_live_shell";
+
+const LIVE_SHELL_PERMISSION = {
+  id: LIVE_SHELL_PERMISSION_ID,
+  sessionID: SESSION_ID,
+  action: "bash",
+  resources: ["bun --version"],
+  save: [],
+  source: { type: "tool", messageID: LIVE_SHELL_MESSAGE_ID, id: LIVE_SHELL_TOOL_ID },
+} as const satisfies PermissionRequest;
+
+function shellToolStarted(): V2Event {
+  return {
+    id: "evt_live_shell_tool_started",
+    created: 20,
+    type: "session.tool.input.started",
+    durable: { aggregateID: SESSION_ID, seq: 3, version: 1 },
+    data: {
+      sessionID: SESSION_ID,
+      assistantMessageID: LIVE_SHELL_MESSAGE_ID,
+      id: LIVE_SHELL_TOOL_ID,
+      name: "shell",
+    },
+  };
+}
+
+function shellToolCalled(): V2Event {
+  // `input.started` only opens the part with an empty `input`; the real args
+  // arrive with `called`, which is what the card titles itself from.
+  return {
+    id: "evt_live_shell_tool_called",
+    created: 21,
+    type: "session.tool.called",
+    durable: { aggregateID: SESSION_ID, seq: 4, version: 1 },
+    data: {
+      sessionID: SESSION_ID,
+      assistantMessageID: LIVE_SHELL_MESSAGE_ID,
+      id: LIVE_SHELL_TOOL_ID,
+      input: { command: "bun --version" },
+      executed: false,
+    },
+  };
+}
+
+function permissionAsked(): V2Event {
+  return {
+    id: "evt_live_permission_asked",
+    created: 22,
+    type: "permission.asked",
+    // No `durable` here: the official `PermissionAsked` type carries none.
+    data: LIVE_SHELL_PERMISSION,
+  };
+}
+
+function executionFailed(): V2Event {
+  return {
+    id: "evt_live_execution_failed",
+    created: 22,
+    type: "session.execution.failed",
+    durable: { aggregateID: SESSION_ID, seq: 5, version: 1 },
+    data: {
+      sessionID: SESSION_ID,
+      error: { type: "provider.quota", message: "provider rejected the request", status: 429 },
+    },
+  };
+}
+
+function projectedToolCalls(controller: V2ThreadController) {
+  return projectV2RepositoryItems(controller.getState()).flatMap((item) =>
+    Array.isArray(item.message.content)
+      ? item.message.content.filter(
+        (part): part is Extract<typeof part, { readonly type: "tool-call" }> =>
+          part.type === "tool-call",
+      )
+      : [],
+  );
+}
+
+describe("native V2 approval seams", () => {
+  it("links a live permission.asked to its shell tool and renders Approve/Deny", async () => {
+    // No hydrated permission: the ONLY source is the native event, so this
+    // proves the live event path rather than the reload path.
+    const generation = createGeneration(1);
+    const controller = createV2ThreadController(createClient([generation]));
+
+    try {
+      await controller.awaitReady();
+      generation.events.emit(shellToolStarted());
+      generation.events.emit(shellToolCalled());
+      generation.events.emit(permissionAsked());
+      await waitForState(
+        controller,
+        (state) => state.permissions.some((entry) => entry.id === LIVE_SHELL_PERMISSION_ID),
+      );
+
+      const shell = projectedToolCalls(controller).find((part) => part.toolName === "shell");
+      expect(shell).toBeDefined();
+      // The linkage itself: the native source ids resolved to this exact part.
+      expect(shell?.approval).toMatchObject({ id: LIVE_SHELL_PERMISSION_ID });
+
+      // And the user-facing half, through the real renderer the toolkit maps
+      // `shell` to — the same component `bash` uses.
+      const html = renderToStaticMarkup(
+        createElement(OpenCodeBashToolUI, shell),
+      );
+      expect(html).toContain("shell · bun --version");
+      expect(html).toContain("Approve");
+      expect(html).toContain("Deny");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("exposes no approval card when an execution fails without permission.asked", async () => {
+    // A tool part is on screen and the run then fails provider-side. Nothing
+    // asked for permission, so nothing may render one: an approval card here
+    // would offer the user a decision the server never requested.
+    const generation = createGeneration(1, {
+      historyList: async () => ({ data: [ASSISTANT_TOOL_MESSAGE], cursor: {} }),
+      permissionList: async () => [],
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+
+    try {
+      await controller.awaitReady();
+      generation.events.emit(executionFailed());
+      await waitForState(controller, (state) => state.execution.type === "error");
+
+      // The failure really landed, so the assertions below are not vacuous.
+      expect(controller.getState().execution).toMatchObject({
+        type: "error",
+        error: { message: "provider rejected the request", status: 429 },
+      });
+      expect(controller.getState().permissions).toEqual([]);
+
+      const shell = projectedToolCalls(controller).find((part) => part.toolName === "shell");
+      expect(shell).toBeDefined();
+      expect(shell?.approval).toBeUndefined();
+    } finally {
+      controller.dispose();
+    }
   });
 });
