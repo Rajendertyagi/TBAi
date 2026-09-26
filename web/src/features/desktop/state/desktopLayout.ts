@@ -46,6 +46,15 @@ interface DesktopLayoutState {
   /** Whether archived conversations are shown in the sidebar lists. */
   showCompleted: boolean;
   /**
+   * Browser-native spell check on the message composer.
+   *
+   * This is the platform's own checker (the `spellcheck` attribute) — no
+   * bundled dictionary and no spell-check library. Defaults to true because
+   * that is what a textarea already does in every browser; the switch exists
+   * to turn it OFF, not to turn it on.
+   */
+  spellCheck: boolean;
+  /**
    * Raw search box contents, one write per keystroke (transient). Consumers must
    * read `searchQuery` instead — this exists only so the controlled input stays
    * responsive while the query is still settling.
@@ -73,6 +82,7 @@ interface DesktopLayoutState {
   setAllSectionsCollapsed: (collapsed: boolean) => void;
   setShowRecent: (v: boolean) => void;
   setShowCompleted: (v: boolean) => void;
+  setSpellCheck: (v: boolean) => void;
   /** Record a keystroke; `searchQuery` settles after the debounce. */
   setSearchInput: (q: string) => void;
   /** Set input + query together, cancelling any pending settle. */
@@ -91,6 +101,7 @@ interface PersistedLayout {
   sectionCollapsed: SidebarSectionCollapsed;
   showRecent: boolean;
   showCompleted: boolean;
+  spellCheck: boolean;
 }
 
 const STORE_VERSION = 1;
@@ -118,6 +129,9 @@ function defaultPersisted(): PersistedLayout {
     sectionCollapsed: {},
     showRecent: sidebarConfig.showRecentByDefault,
     showCompleted: false,
+    // Matches the platform default for a textarea, so adding the setting
+    // changes nothing until the user turns it off.
+    spellCheck: true,
   };
 }
 
@@ -167,6 +181,8 @@ function migratePersisted(persisted: unknown): DesktopLayoutState {
       typeof p.showCompleted === "boolean"
         ? p.showCompleted
         : defaults.showCompleted,
+    spellCheck:
+      typeof p.spellCheck === "boolean" ? p.spellCheck : defaults.spellCheck,
   } as DesktopLayoutState;
 }
 
@@ -207,6 +223,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         }),
       setShowRecent: (v) => set({ showRecent: v }),
       setShowCompleted: (v) => set({ showCompleted: v }),
+      setSpellCheck: (v) => set({ spellCheck: v }),
       setSearchInput: (q) => {
         set({ searchInput: q });
         // Clearing is not a search — settle it now so the sections come back
@@ -244,6 +261,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         sectionCollapsed: s.sectionCollapsed,
         showRecent: s.showRecent,
         showCompleted: s.showCompleted,
+        spellCheck: s.spellCheck,
       }),
     },
   ),

@@ -68,6 +68,7 @@ import {
   shouldOfferCompact,
 } from "../features/opencode/compactSession";
 import { useOpenCodeRuntimeContext } from "../features/opencode/opencodeRuntimeContext";
+import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { OpenCodeContextRing } from "../features/opencode/OpenCodeContextRing";
 import { DirectContextRing } from "./context-ring";
 import {
@@ -526,6 +527,8 @@ function Composer({
 
   const pendingInsert = useMcpStore((s) => s.pendingInsert);
   const clearPendingInsert = useMcpStore((s) => s.clearPendingInsert);
+  // Browser-native spell check, toggled in Settings > Appearance.
+  const spellCheckEnabled = useDesktopLayout((s) => s.spellCheck);
   useEffect(() => {
     if (pendingInsert) {
       setText(pendingInsert);
@@ -575,10 +578,14 @@ function Composer({
           shared input plugin registry. It renders nothing itself. */}
       <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root
-        // Own context menu (not the page menu): stop the event here so the
-        // app-shell menu never fires inside the composer. Non-mouse presses
-        // keep bubbling so panel selection bookkeeping is untouched.
-        onContextMenu={(event) => event.stopPropagation()}
+        // No onContextMenu guard here on purpose. The composer's own right-click
+        // menu is triggered by `ComposerContextMenu`, which wraps this form -
+        // so a stopPropagation() on this inner element ran FIRST and killed the
+        // event before it could ever reach that trigger. The page-menu guard
+        // lives on the trigger instead (see ComposerContextMenu), where it still
+        // suppresses the app-shell menu without eating the composer's own.
+        // Non-mouse presses keep bubbling so panel selection bookkeeping is
+        // untouched.
         onPointerDown={(event) => {
           if (event.pointerType !== "mouse") event.stopPropagation();
         }}
@@ -606,6 +613,11 @@ function Composer({
             // (matches ChatGPT / Slack / WhatsApp). Desktop is unchanged: the
             // flag only downgrades the default "enter" mode.
             unstable_insertNewlineOnTouchEnter
+            // The platform's own spell checker — no bundled dictionary, no
+            // library. User-controlled from Settings > Appearance, and on by
+            // default (which is also the bare-textarea default, so omitting
+            // the attribute would behave identically).
+            spellCheck={spellCheckEnabled}
             placeholder="Send a message…  (Enter to send)"
             rows={1}
             className={cn(
