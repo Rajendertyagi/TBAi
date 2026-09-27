@@ -22,7 +22,7 @@ import {
   Paperclip,
   Square,
 } from "lucide-react";
-import { composerConfig } from "../config/composer";
+import { composerConfig, streamRecoveryCopy } from "../config/composer";
 import { logger } from "../lib/logger";
 import { useSettingsStore } from "../stores";
 import type { ReasoningLevel } from "../types";
@@ -851,9 +851,7 @@ function Composer({
           {recovery && (
             <div className="px-3 pb-3" role="alert">
               <p className="text-xs text-destructive">
-                {recovery.reason === "interrupted"
-                  ? composerConfig.copy.streamInterrupted
-                  : composerConfig.copy.streamUnavailable}
+                {streamRecoveryCopy(recovery.reason)}
               </p>
               {recovery.canRetry && (
                 <button

@@ -23,8 +23,21 @@
 
 import { create } from "zustand";
 
-/** Why a run cannot be shown as finished. Mirrors the server's terminal axis. */
-export type StreamRecoveryReason = "interrupted" | "unavailable";
+/**
+ * Why a run cannot be shown as finished.
+ *
+ * One value per honest outcome. The old two-value shape could not be worded
+ * truthfully: every terminal kind that was not `interrupted` collapsed into
+ * `unavailable` and was rendered as "Couldn't reconnect this reply", which is
+ * simply false for a request that failed, was cancelled, or is sitting there in
+ * the thread where the user can read it.
+ */
+export type StreamRecoveryReason =
+  | "interrupted"
+  | "reply_lost"
+  | "request_failed"
+  | "auth_failed"
+  | "cancelled";
 
 export interface StreamRecoveryState {
   threadId: string;
@@ -162,6 +175,23 @@ export interface StreamStatus {
   byteLen: number;
   ageMs: number;
   finalizedAgeMs: number | null;
+  /**
+   * Whether the conversation currently ends with an assistant reply.
+   *
+   * The notice is gated on this, because "the run finished" is the normal
+   * outcome and not an incident — only a finished run with no reply is. Optional
+   * because an older server does not send it; absent means unknown, and unknown
+   * falls back to the honest per-kind wording rather than the old misleading one.
+   */
+  endsWithReply?: boolean;
+  /**
+   * The server's shared error classifier category (`src/lib/errors.ts`).
+   *
+   * Consumed, never re-derived: a client-side regex would be a second classifier
+   * disagreeing with the server's, and would eventually label a generic provider
+   * failure as an auth failure.
+   */
+  errorCategory?: string | null;
 }
 
 /** The endpoint's envelope: `run` is null for a conversation that has none. */
@@ -170,16 +200,30 @@ interface StreamStatusEnvelope {
 }
 
 /**
- * Decide what the user is offered, from the server's answer alone.
+ * Decide what the user is told, from the server's answer alone.
  *
  * `interrupted` is the only reason that permits a Retry: the process died
  * mid-run, so the reply is genuinely unfinished and a NEW run cannot duplicate a
  * finished one. Everything else — including every failure to read the status —
  * is reported without a Retry, because offering one on an unconfirmed run is the
  * one failure mode that creates a duplicate assistant message.
+ *
+ * Every other terminal kind gets its OWN reason, because they are different
+ * events with different remedies. Collapsing them into one bucket is what
+ * produced "Couldn't reconnect this reply" on a healthy conversation.
  */
+/**
+ * The part of a status verdict this decision needs.
+ *
+ * `errorCategory` is optional so a caller holding only the terminal kind (a test,
+ * or an older server response) can still classify honestly.
+ */
+export type StreamStatusVerdict = Pick<StreamStatus, "terminalKind"> & {
+  errorCategory?: string | null;
+};
+
 export function classifyStreamStatus(
-  status: Pick<StreamStatus, "terminalKind"> | null,
+  status: StreamStatusVerdict | null,
   prompt = "",
 ): { reason: StreamRecoveryReason; canRetry: boolean } {
   // `interrupted` alone is not enough: without the prompt there is nothing to
@@ -188,10 +232,23 @@ export function classifyStreamStatus(
   if (status?.terminalKind === "interrupted" && prompt.trim().length > 0) {
     return { reason: "interrupted", canRetry: true };
   }
-  return {
-    reason: status?.terminalKind === "interrupted" ? "interrupted" : "unavailable",
-    canRetry: false,
-  };
+  if (!status) {
+    // Unreadable. Truthfully "we could not find out", not "it broke".
+    return { reason: "reply_lost", canRetry: false };
+  }
+  if (status.terminalKind === "interrupted") return { reason: "interrupted", canRetry: false };
+  if (status.terminalKind === "cancelled") return { reason: "cancelled", canRetry: false };
+  if (status.terminalKind === "failed") {
+    // Only the server's own `auth` category triggers auth wording. A generic
+    // provider/unknown failure must never be dressed up as a credential problem.
+    return {
+      reason: status.errorCategory === "auth" ? "auth_failed" : "request_failed",
+      canRetry: false,
+    };
+  }
+  // `completed` reaching here means the run finished and no reply is present:
+  // the reply was lost. Reported as a loss, never as a connection failure.
+  return { reason: "reply_lost", canRetry: false };
 }
 
 /**
@@ -270,9 +327,23 @@ export async function resolveStreamRecovery(
   };
 
   if (status && status.status !== "streaming") {
-    // The durable answer: this conversation's last run is terminal, and the user
-    // needs to know how it ended.
-    useStreamRecoveryStore.getState().report(state);
+    // A finished run is the NORMAL outcome, not an incident. It only becomes
+    // something to report when the reply it produced is not in the conversation —
+    // which is the one condition this whole feature exists for.
+    //
+    // Gating on the server's `endsWithReply` (rather than on client state) keeps
+    // the module's rule that the answer is never guessed locally, and it
+    // evaluates only the CURRENT state: a reply lost several turns ago, in a
+    // thread that has since been answered, is not re-reported on every load.
+    //
+    // An absent field means "unknown", and unknown must not be read as "missing"
+    // either — it falls through to the honest per-kind wording, never to the old
+    // misleading reconnect message.
+    if (status.endsWithReply === true) {
+      useStreamRecoveryStore.getState().clear(threadId);
+    } else {
+      useStreamRecoveryStore.getState().report(state);
+    }
   } else if (status) {
     // A `streaming` run is a healthy run in progress — not a recovery, and the
     // strip must not appear over a reply that is still arriving.

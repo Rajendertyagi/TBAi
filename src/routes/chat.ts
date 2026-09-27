@@ -42,7 +42,7 @@ import { chatMessageMetadataSchema, chatRequestSchema } from "../lib/validation"
 import { resolveChatModel, buildChatMessageMetadata, UnknownProviderError } from "./chat-model";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
-import { conversationService } from "../services/storage";
+import { conversationService, messageService } from "../services/storage";
 import { resolveConversationWorkspace, WorkspaceError } from "../services/workspace";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
@@ -933,10 +933,27 @@ type StreamStatusBody = {
   byteLen: number;
   ageMs: number;
   finalizedAgeMs: number | null;
+  /**
+   * Whether the conversation currently ends with an assistant reply.
+   *
+   * The client's run-recovery notice is gated on this: a finished run whose reply
+   * is present is a healthy conversation, not an incident. Absent (older server)
+   * means "unknown", never "broken".
+   */
+  endsWithReply: boolean;
+  /**
+   * The shared classifier's category for a failed run (`src/lib/errors.ts`).
+   *
+   * Projected, never re-derived: the client branches on this so auth wording
+   * stays scoped to evidence-backed authentication failures instead of a second
+   * regex disagreeing with the server's. Null for a completed run.
+   */
+  errorCategory: string | null;
 };
 
 function projectStreamStatus(
   description: NonNullable<ReturnType<typeof chatStreamStore.describe>>,
+  endsWithReply: boolean,
 ): StreamStatusBody {
   const now = Date.now();
   return {
@@ -952,10 +969,14 @@ function projectStreamStatus(
     ageMs: Math.max(0, now - description.createdAt),
     finalizedAgeMs:
       description.finalizedAt === null ? null : Math.max(0, now - description.finalizedAt),
+    endsWithReply,
+    // Already stored on the row by `mirrorRunToDurableStream`, from the one
+    // shared classifier. Never re-classified here.
+    errorCategory: description.errorCategory ?? null,
   };
 }
 
-app.get("/api/chat/stream-status", (c) => {
+app.get("/api/chat/stream-status", async (c) => {
   disableIdleTimeout(c);
   const requestId = (c.get("requestId") as string | undefined) ?? newRequestId();
   const parsed = streamStatusQuerySchema.safeParse(c.req.query());
@@ -992,7 +1013,16 @@ app.get("/api/chat/stream-status", (c) => {
     });
     return c.json({ run: null, requestId }, 200);
   }
-  const run = projectStreamStatus(description);
+  // The conversation is the durable key, but this endpoint also accepts a bare
+  // stream id, so fall back to the run's own bound conversation. A stream with
+  // neither reports `endsWithReply: false` — "unknown" to the client, which must
+  // never be read as "the reply is missing".
+  const runConversationId =
+    conversationId ?? chatStreamStore.getRunContext(description.streamId)?.conversationId ?? null;
+  const run = projectStreamStatus(
+    description,
+    runConversationId ? await messageService.endsWithReply(runConversationId) : false,
+  );
   // Scalars only — never chunk bytes, provider text, or the prompt.
   logger.debug("chat", "chat_stream_status", {
     requestId,
@@ -1004,6 +1034,8 @@ app.get("/api/chat/stream-status", (c) => {
     restarted: run.restarted,
     historyState: run.historyState,
     ageMs: run.ageMs,
+    endsWithReply: run.endsWithReply,
+    errorCategory: run.errorCategory,
   });
   return c.json({ run, requestId }, 200);
 });

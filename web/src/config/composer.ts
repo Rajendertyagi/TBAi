@@ -4,6 +4,8 @@
  * `Composer.tsx`. Thinking level labels stay here (not in the store);
  * provider/model names come from settings data, never literals.
  */
+import type { StreamRecoveryReason } from "@/features/chat/state/streamRecovery";
+
 export const composerConfig = {
   copy: {
     selectModel: "Select model",
@@ -45,16 +47,50 @@ export const composerConfig = {
     quickMessagesLoading: "Loading...",
     quickMessageUntitled: "Untitled",
     clipboardWriteFailed: "Clipboard write failed — text kept in place",
-    // Dead-run recovery (Phase 3). Two distinct sentences, chosen by the server's
-    // durable verdict and never by matching an error string: the client cannot
-    // see WHY a restored run failed, and claiming "the app restarted" on a
+    // Dead-run recovery (Phase 3). One sentence per honest outcome, chosen by the
+    // server's durable verdict and never by matching an error string: the client
+    // cannot see WHY a restored run failed, and claiming "the app restarted" on a
     // network blip would be a lie. `retry` renders the affordance; it is only
     // ever passed `true` for a run the server confirmed as `interrupted`, which
     // is the one terminal kind a live send can never produce.
+    //
+    // Every one of these is shown ONLY when a finished run has no reply in the
+    // conversation. A healthy thread shows nothing at all.
     streamInterrupted:
       "The app restarted while this reply was streaming. Nothing was sent — retry?",
-    streamUnavailable: "Couldn't reconnect this reply.",
+    /** The run finished but its answer is not in the conversation. */
+    streamReplyLost: "This reply could not be recovered.",
+    /** The request itself failed (provider, network, rate limit, unknown). */
+    streamRequestFailed: "The request failed.",
+    /** The server classified the failure as an authentication failure. */
+    streamAuthFailed:
+      "Authentication failed for this provider. Check the API key in Settings, then try again.",
+    /** The user stopped the run, or it was cut short deliberately. */
+    streamCancelled: "This reply was cancelled.",
     streamRetry: "Retry",
     streamRetrying: "Retrying…",
   },
-};
+} as const;
+
+/**
+ * The one place a run-recovery reason becomes a sentence.
+ *
+ * Kept beside the copy so a new reason cannot be added without its wording, and
+ * so a component can never pick a string literal for a reason. Exhaustive by
+ * construction: a new `StreamRecoveryReason` is a type error here, not a silent
+ * fallthrough to something misleading.
+ */
+export function streamRecoveryCopy(reason: StreamRecoveryReason): string {
+  switch (reason) {
+    case "interrupted":
+      return composerConfig.copy.streamInterrupted;
+    case "reply_lost":
+      return composerConfig.copy.streamReplyLost;
+    case "request_failed":
+      return composerConfig.copy.streamRequestFailed;
+    case "auth_failed":
+      return composerConfig.copy.streamAuthFailed;
+    case "cancelled":
+      return composerConfig.copy.streamCancelled;
+  }
+}

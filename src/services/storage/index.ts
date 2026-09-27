@@ -409,6 +409,33 @@ export const messageService = {
   },
 
   /**
+   * Whether the conversation currently ENDS with an assistant reply.
+   *
+   * This is the one fact that separates "this thread is fine" from "this thread is
+   * missing its answer", and it is deliberately NOT read off `chat_streams`:
+   * in the normal path the BROWSER persists the reply and the server never claims
+   * the history obligation, so `history_state` stays `pending` for a perfectly
+   * healthy conversation and cannot distinguish the two cases. The message list
+   * itself is the authority on whether a reply is there.
+   *
+   * The `role` column is never populated (it is NULL on every row); the role lives
+   * inside the assistant-ui storage payload, so it is read from the JSON body.
+   *
+   * Scoped to the newest message on purpose: it answers "is the user looking at a
+   * complete conversation right now", and never re-litigates a reply lost several
+   * turns ago, which is unrecoverable and un-actionable.
+   */
+  async endsWithReply(conversationId: string): Promise<boolean> {
+    const row = db
+      .query<{ role: string | null }, SQLQueryBindings[]>(
+        `SELECT json_extract(content, '$.role') AS role
+           FROM messages WHERE conversation_id = ? ORDER BY order_seq DESC LIMIT 1`,
+      )
+      .get(conversationId);
+    return row?.role === "assistant";
+  },
+
+  /**
    * Upserts a single stored message entry (keyed by message id). Called by the
    * ThreadHistoryAdapter's `withFormat` adapter on every append/update during a
    * run. The entry is the runtime's storage format (`{ id, parent_id, format,

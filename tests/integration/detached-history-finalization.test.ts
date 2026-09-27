@@ -696,6 +696,8 @@ describe("Stream status endpoint — the client's durable question", () => {
     restarted: boolean;
     historyState: string | null;
     chunkCount: number;
+    endsWithReply: boolean;
+    errorCategory: string | null;
   }
   const readByConversation = async (conversationId: string) => {
     const res = await app.request(
@@ -755,8 +757,74 @@ describe("Stream status endpoint — the client's durable question", () => {
     }
   }, 30000);
 
-  it("still answers by stream id for a caller that holds one", async () => {
+  // ── endsWithReply: the fact the client's recovery notice is gated on ──────────
+  it("reports a reply as present once the conversation ends with one", async () => {
     await seedControlledProvider();
+    const conversationId = await createDirectConversation("status-ends-with-reply");
+    try {
+      await runDetached(conversationId, "gated-then-complete");
+      const { body } = await readByConversation(conversationId);
+      // The detached run was finalized into history, so the thread ends with the
+      // assistant reply and the client must show NO notice.
+      expect(body.run!.endsWithReply).toBe(true);
+      expect(body.run!.errorCategory).toBeNull();
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+
+  it("reports a reply as absent when the thread does not end with one", async () => {
+    const conversationId = await createDirectConversation("status-no-reply");
+    const empty = await createDirectConversation("status-ends-with-user");
+    try {
+      // A conversation whose newest message is the USER's has no reply to
+      // reconnect to — the exact state the notice exists for.
+      await messageService.upsertStored(conversationId, {
+        id: `seed-useronly-${empty}`,
+        parent_id: null,
+        format: "ai-sdk/v6",
+        content: { role: "user", parts: [{ type: "text", text: "unanswered" }] },
+      });
+      expect(await messageService.endsWithReply(empty)).toBe(false);
+
+      // And a conversation that ends with an assistant reply reports true. Built
+      // through the real service so the stored shape is the production one.
+      await messageService.upsertStored(conversationId, {
+        id: `seed-reply-${conversationId}`,
+        parent_id: null,
+        format: "ai-sdk/v6",
+        content: { role: "assistant", parts: [{ type: "text", text: ANSWER_TEXT_MARKER }] },
+      });
+      expect(await messageService.endsWithReply(conversationId)).toBe(true);
+
+      // An empty conversation is not "missing a reply" in any useful sense, but it
+      // is certainly not a reply, and the client treats absent as unknown.
+      expect(await messageService.endsWithReply(await createDirectConversation("status-empty")))
+        .toBe(false);
+    } finally {
+      await conversationService.delete(conversationId);
+      await conversationService.delete(empty);
+    }
+  }, 30000);
+
+  it("projects the server's own error category on a failed run", async () => {
+    await seedControlledProvider();
+    const conversationId = await createDirectConversation("status-error-category");
+    try {
+      await runDetached(conversationId, "gated-then-error");
+      const { body } = await readByConversation(conversationId);
+      expect(body.run!.terminalKind).toBe("failed");
+      // A provider failure is NOT auth: the client must not dress it up as a
+      // credential problem. Whatever the category, it comes from the one shared
+      // classifier rather than a second regex on the client.
+      expect(body.run!.errorCategory).not.toBe("auth");
+      expect(typeof body.run!.errorCategory).toBe("string");
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+
+  it("still answers by stream id for a caller that holds one", async () => {    await seedControlledProvider();
     const conversationId = await createDirectConversation("status-by-stream");
     try {
       const { streamId } = await runAttached(conversationId);

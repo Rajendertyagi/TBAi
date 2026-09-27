@@ -7,6 +7,7 @@ import {
   useStreamRecoveryStore,
   type StreamStatus,
 } from "./streamRecovery";
+import { streamRecoveryCopy } from "@/config/composer";
 
 /**
  * The recovery decision is the one place in Phase 3 where a wrong answer creates
@@ -70,7 +71,7 @@ describe("stream recovery — the Retry safety gate", () => {
   it("refuses Retry when the terminal state cannot be read at all", () => {
     // Failing toward "no button" is the only safe direction: an unconfirmed run
     // might be a completed one.
-    expect(classifyStreamStatus(null, "hi")).toEqual({ reason: "unavailable", canRetry: false });
+    expect(classifyStreamStatus(null, "hi")).toEqual({ reason: "reply_lost", canRetry: false });
   });
 
   it("refuses Retry while a run is still streaming", () => {
@@ -128,7 +129,7 @@ describe("stream recovery — published state", () => {
       prompt: "hello",
       streamId: "s1",
     });
-    expect(byThread.thread_b).toMatchObject({ reason: "unavailable", canRetry: false });
+    expect(byThread.thread_b).toMatchObject({ reason: "reply_lost", canRetry: false });
 
     useStreamRecoveryStore.getState().clear("thread_a");
     expect(useStreamRecoveryStore.getState().byThread.thread_a).toBeUndefined();
@@ -165,13 +166,13 @@ describe("stream recovery — published state", () => {
       ...offline,
       assumeRun: true,
     });
-    expect(failed.state.reason).toBe("unavailable");
+    expect(failed.state.reason).toBe("reply_lost");
     expect(failed.state.canRetry).toBe(false);
     expect(failed.status).toBeNull();
     // The notice survives, carrying the prompt, so the recovery check can upgrade
     // it once the server can answer.
     expect(useStreamRecoveryStore.getState().byThread.thread_g).toMatchObject({
-      reason: "unavailable",
+      reason: "reply_lost",
       canRetry: false,
       prompt: "the prompt",
     });
@@ -267,5 +268,144 @@ describe("stream recovery — published state", () => {
     // stops the client re-resuming a dead stream forever while never cutting off a
     // run that is genuinely still going.
     expect(live.status?.status).toBe("streaming");
+  });
+});
+
+// ── The false-alarm fix ───────────────────────────────────────────────────────
+// A finished run is the NORMAL outcome. The notice exists for the one case where
+// the run finished and its answer is not in the conversation, so that is the only
+// condition that may publish one.
+describe("stream recovery — a finished run is not an incident", () => {
+  beforeEach(() => {
+    setRecheckDelaysForTests(null);
+    useStreamRecoveryStore.getState().clearAll();
+  });
+
+  it("publishes NOTHING when the run finished and the reply is present", async () => {
+    // THE REGRESSION. Before the fix this reported a notice for every finished
+    // run, so a healthy conversation showed "Couldn't reconnect this reply" on
+    // every page load.
+    await resolveStreamRecovery("thread_ok", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: true },
+        }),
+    });
+
+    expect(useStreamRecoveryStore.getState().byThread.thread_ok).toBeUndefined();
+  });
+
+  it("still reports a finished run whose reply is missing", async () => {
+    const { state } = await resolveStreamRecovery("thread_lost", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: false },
+        }),
+    });
+
+    expect(state.reason).toBe("reply_lost");
+    expect(state.canRetry).toBe(false);
+    expect(useStreamRecoveryStore.getState().byThread.thread_lost).toBeDefined();
+  });
+
+  it("clears a stale notice once the reply shows up", async () => {
+    await resolveStreamRecovery("thread_rec", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: false },
+        }),
+    });
+    expect(useStreamRecoveryStore.getState().byThread.thread_rec).toBeDefined();
+
+    await resolveStreamRecovery("thread_rec", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: true },
+        }),
+    });
+    expect(useStreamRecoveryStore.getState().byThread.thread_rec).toBeUndefined();
+  });
+
+  it("never re-litigates an old loss: a thread answered since keeps no notice", async () => {
+    // `endsWithReply` describes the CURRENT state only, so a reply lost several
+    // turns ago is not re-reported on every load.
+    await resolveStreamRecovery("thread_old", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: true },
+        }),
+    });
+    expect(useStreamRecoveryStore.getState().byThread.thread_old).toBeUndefined();
+  });
+});
+
+// ── Honest wording, one per real outcome ──────────────────────────────────────
+describe("stream recovery — the wording tells the truth", () => {
+  it("does not call a lost reply a connection failure", () => {
+    const { reason, canRetry } = classifyStreamStatus(
+      { terminalKind: "completed", errorCategory: null },
+      "",
+    );
+    expect(reason).toBe("reply_lost");
+    expect(canRetry).toBe(false);
+    // The old sentence claimed a reconnection problem that did not happen.
+    expect(streamRecoveryCopy(reason)).toBe("This reply could not be recovered.");
+    expect(streamRecoveryCopy(reason)).not.toMatch(/reconnect/i);
+  });
+
+  it("reports an authentication failure as one, on the server's own category", () => {
+    expect(classifyStreamStatus({ terminalKind: "failed", errorCategory: "auth" }, "").reason).toBe(
+      "auth_failed",
+    );
+    expect(streamRecoveryCopy("auth_failed")).toMatch(/authentication failed/i);
+  });
+
+  it("does NOT dress a generic provider failure up as an auth failure", () => {
+    // The narrow scoping that keeps the auth wording honest.
+    for (const category of ["provider", "unknown", "network", "rate_limit", "timeout", null]) {
+      const { reason, canRetry } = classifyStreamStatus(
+        { terminalKind: "failed", errorCategory: category },
+        "",
+      );
+      expect(reason).toBe("request_failed");
+      expect(canRetry).toBe(false);
+    }
+    expect(streamRecoveryCopy("request_failed")).toBe("The request failed.");
+  });
+
+  it("reports a cancelled run as cancelled", () => {
+    expect(classifyStreamStatus({ terminalKind: "cancelled" }, "").reason).toBe("cancelled");
+    expect(streamRecoveryCopy("cancelled")).toMatch(/cancelled/i);
+  });
+
+  it("keeps the restart case and its Retry exactly as they were", () => {
+    const withPrompt = classifyStreamStatus({ terminalKind: "interrupted" }, "hello");
+    expect(withPrompt).toEqual({ reason: "interrupted", canRetry: true });
+    // No prompt means nothing to re-send, so no button.
+    expect(classifyStreamStatus({ terminalKind: "interrupted" }, "  ")).toEqual({
+      reason: "interrupted",
+      canRetry: false,
+    });
+    expect(streamRecoveryCopy("interrupted")).toMatch(/app restarted/i);
+  });
+
+  it("falls back to honest wording on version skew, never the old message", () => {
+    // An older server sends no `endsWithReply`. Unknown must not read as "broken",
+    // and must never resurface the misleading sentence.
+    const { reason } = classifyStreamStatus({ terminalKind: "completed" }, "");
+    expect(reason).toBe("reply_lost");
+    expect(streamRecoveryCopy(reason)).not.toMatch(/reconnect/i);
+  });
+
+  it("gives every reason a distinct sentence", () => {
+    const reasons = [
+      "interrupted",
+      "reply_lost",
+      "request_failed",
+      "auth_failed",
+      "cancelled",
+    ] as const;
+    const sentences = reasons.map((r) => streamRecoveryCopy(r));
+    expect(new Set(sentences).size).toBe(reasons.length);
   });
 });
