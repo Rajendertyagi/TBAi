@@ -27,6 +27,13 @@ async function cleanup(
 }
 
 test("quick messages page manages snippets end to end", async ({ page }) => {
+  // This is a long end-to-end flow on Playwright's default 30s budget: cleanup,
+  // create, two fills, save, search, edit, save again, reload, a persist check, a
+  // grip-drag reorder and a delete. On msedge that overruns the default, and the
+  // failure surfaced as a click stuck in the actionability retry loop rather than
+  // as anything wrong with the app. Same reason phase-ua-d D1 needed a budget.
+  // The assertion budgets inside are unchanged; only the ceiling moves.
+  test.setTimeout(180_000);
   // Idempotent: clear leftovers from aborted runs before starting.
   await cleanup(page.request);
   await page.goto("/#/quick-messages");

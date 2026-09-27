@@ -79,12 +79,23 @@ export default defineConfig({
         },
       }),
   projects: [
-    // Headed msedge is the default (matches how the app is developed on the
-    // desktop); the headless chromium project keeps the suite runnable
-    // unattended / in CI where no display exists.
+    // Two browsers, each runnable with and without a window.
+    //
+    // The headed msedge project matches how the app is developed on the desktop
+    // and is the one to use when you want to WATCH a run. The headless projects
+    // are the ones to use otherwise: no window appears, focus is never stolen,
+    // and they work on a machine with no display at all, which is what makes the
+    // suite runnable unattended / in CI.
+    //
+    // Edge coverage matters and is not optional: bugs routinely appear in one
+    // engine and not the other, so a Chromium-only run would not catch them.
     {
       name: "edge-headed",
       use: { channel: "msedge", headless: false },
+    },
+    {
+      name: "edge-headless",
+      use: { channel: "msedge", headless: true },
     },
     {
       name: "chromium-headless",
