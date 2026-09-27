@@ -100,64 +100,81 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div ref={boxRef}>
-      <ContextMenu
-        onOpenChange={(open) => {
-          if (open) void loadQuickMessages({ silent: true });
-        }}
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) void loadQuickMessages({ silent: true });
+      }}
+    >
+      {/* The trigger adopts THIS div, not `children`.
+          `children` is assistant-ui's `Unstable_TriggerPopoverRoot`, which
+          renders no DOM and forwards no props - so `asChild` on it silently
+          dropped every prop Radix injects (ref, onContextMenu, data-slot) and
+          the composer's menu had no trigger in the DOM at all. Adopting a real
+          element is what makes the menu openable.
+
+          The `onContextMenu` guard lives here, on the outermost composer
+          element, and NOT on `ComposerPrimitive.Root` inside it. A
+          stopPropagation on an inner element runs first and kills the event
+          before it ever reaches this trigger - the menu could not open while
+          the page menu was correctly suppressed. Radix composes this handler
+          ahead of its own on the same element, so stopping here still opens
+          THIS menu and still keeps the app-shell page menu from firing. */}
+      <ContextMenuTrigger
+        asChild
+        onContextMenu={(event) => event.stopPropagation()}
       >
-        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onSelect={() => void handleCut()}>
-            <Scissors aria-hidden="true" className="size-4" />
-            {copy.cut}
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => void handleCopy()}>
-            <Copy aria-hidden="true" className="size-4" />
-            {copy.copy}
-          </ContextMenuItem>
-          <ContextMenuItem
-            disabled={!clipboardReadSupported}
-            onSelect={() => void handlePaste()}
-          >
-            <ClipboardPaste aria-hidden="true" className="size-4" />
-            {copy.pasteAsPlainText}
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={handleSelectAll}>
-            <TextSelect aria-hidden="true" className="size-4" />
-            {copy.selectAll}
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <MessageSquareText aria-hidden="true" className="size-4" />
-              {copy.quickMessages}
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="min-w-40 overflow-y-auto">
-              {quickItems.length === 0 ? (
-                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                  {quickLoading ? copy.quickMessagesLoading : copy.quickMessagesEmpty}
-                </div>
-              ) : (
-                quickItems.map((item) => (
-                  <ContextMenuItem
-                    key={item.id}
-                    onSelect={() => handleInsertSnippet(item.content)}
-                  >
-                    <span className="truncate">
-                      {item.title || (
-                        <span className="italic text-muted-foreground">
-                          {copy.quickMessageUntitled}
-                        </span>
-                      )}
-                    </span>
-                  </ContextMenuItem>
-                ))
-              )}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        </ContextMenuContent>
-      </ContextMenu>
-    </div>
+        <div ref={boxRef}>{children}</div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => void handleCut()}>
+          <Scissors aria-hidden="true" className="size-4" />
+          {copy.cut}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => void handleCopy()}>
+          <Copy aria-hidden="true" className="size-4" />
+          {copy.copy}
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!clipboardReadSupported}
+          onSelect={() => void handlePaste()}
+        >
+          <ClipboardPaste aria-hidden="true" className="size-4" />
+          {copy.pasteAsPlainText}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={handleSelectAll}>
+          <TextSelect aria-hidden="true" className="size-4" />
+          {copy.selectAll}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <MessageSquareText aria-hidden="true" className="size-4" />
+            {copy.quickMessages}
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="min-w-40 overflow-y-auto">
+            {quickItems.length === 0 ? (
+              <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                {quickLoading ? copy.quickMessagesLoading : copy.quickMessagesEmpty}
+              </div>
+            ) : (
+              quickItems.map((item) => (
+                <ContextMenuItem
+                  key={item.id}
+                  onSelect={() => handleInsertSnippet(item.content)}
+                >
+                  <span className="truncate">
+                    {item.title || (
+                      <span className="italic text-muted-foreground">
+                        {copy.quickMessageUntitled}
+                      </span>
+                    )}
+                  </span>
+                </ContextMenuItem>
+              ))
+            )}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
