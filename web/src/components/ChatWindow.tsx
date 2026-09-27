@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Check, Copy, RefreshCw, Loader2 } from "lucide-react";
 import { MarkdownText } from "./assistant-ui/elements/markdown-text";
+import { SessionTimeline } from "./assistant-ui/elements/session-timeline";
 import {
   Reasoning,
   ReasoningContent,
@@ -280,6 +281,17 @@ function AssistantMessage() {
           bubble so the column width is unchanged — only the shared background
           and padding are gone. */}
       <div className="flex w-full max-w-[85%] min-w-0 flex-col gap-2 text-sm text-foreground">
+        {/* One-line summary of the turn's tool work, above the parts.
+            Upstream's guidance is to silence the per-part tool renderers so the
+            steps are not shown twice. This app deliberately does NOT: it has
+            real per-tool UIs (`part.toolUI`, `AutoOpenToolGroup`, a terminal
+            block for shell calls) that carry output a verb/chip row cannot, and
+            dropping them would delete working capability to avoid a cosmetic
+            overlap. So the timeline is a COLLAPSED summary and the detailed
+            cards stay below it — summary on top, detail underneath, which is the
+            same shape as any log viewer. It renders nothing for a message with no
+            tool calls, so ordinary replies are untouched. */}
+        <SessionTimeline />
         <MessagePrimitive.GroupedParts groupBy={groupedBy}>
           {({ part, children }) => {
             switch (part.type) {
