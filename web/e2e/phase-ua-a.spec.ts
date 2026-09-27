@@ -39,8 +39,16 @@ async function createFolder(page: Page): Promise<{ id: string; name: string; dir
   return { id: folder.id, name: folder.name ?? name, dir };
 }
 
-async function deleteFolder(page: Page, id: string): Promise<void> {
-  await page.request.delete(`/api/folders/${id}`);
+async function deleteFolder(
+  page: Page,
+  folder: { id: string; dir: string },
+): Promise<void> {
+  await page.request.delete(`/api/folders/${folder.id}`).catch(() => {});
+  // Removing the row is NOT enough: createFolder made this directory on disk, so
+  // without this every run left a scratch dir behind forever. 25 had piled up
+  // under D:\PM, and a spec that cannot clean up after itself is not hermetic.
+  const fs = await import("node:fs");
+  fs.rmSync(folder.dir, { recursive: true, force: true });
 }
 
 async function createConversation(
@@ -143,7 +151,7 @@ test("(a) folder + button opens /chat/new with the folder preset in scope", asyn
     );
     await expect(scopeChip).toBeVisible({ timeout: 20000 });
   } finally {
-    await deleteFolder(page, folder.id);
+    await deleteFolder(page, folder);
   }
 });
 
@@ -221,7 +229,7 @@ test("(b) New Project dialog shows Direct/Code switch and routes engine-correct"
     if (convId) {
       await deleteConversation(page, convId);
     }
-    await deleteFolder(page, folder.id);
+    await deleteFolder(page, folder);
   }
 });
 
@@ -294,7 +302,7 @@ test("(c) a folder conversation opened via /code/<id> highlights in its folder",
     if (convId) {
       await deleteConversation(page, convId);
     }
-    await deleteFolder(page, folder.id);
+    await deleteFolder(page, folder);
   }
 });
 

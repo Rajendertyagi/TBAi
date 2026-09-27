@@ -26,23 +26,52 @@ async function mkFolder(
 ): Promise<{ id: string; name: string; dir: string }> {
   const suffix = Math.random().toString(36).slice(2, 10);
   const name = `ua-d-${tag}-${suffix}`;
-  // Fixed scratch path per tag (pre-created on disk — registration requires
-  // a real dir); unique registry name per run. Prior rows are deleted in
-  // cleanup so path reuse across runs is safe.
-  const dir = `${DPM}/ua-d-${tag}`;
+  // UNIQUE path per run, exactly like phase-ua-a's createFolder (the reference
+  // pattern). This used to be a FIXED path per tag (`D:/PM/ua-d-${tag}`) with a
+  // unique registry name, which is not hermetic: folder rows upsert by PATH, so
+  // every run re-registered the same row and got back the ORIGINAL name and the
+  // original folder's accumulated conversations. The test then looked for a
+  // header/row by a name the server no longer agreed with, and the conversation
+  // it had just created was not the row the sidebar rendered under that folder.
+  //
+  // The directory is created here, idempotently, rather than assumed to exist:
+  // registration requires a real path, so a missing scratch dir made
+  // POST /api/folders answer 404 (path_missing) and the test failed for a reason
+  // unrelated to the code under test. Relying on pre-created directories made
+  // the suite depend on out-of-band machine state - D:\PM\ua-d-d2 existed while
+  // ua-d-d4 did not, so D4 failed and D2 passed.
+  const dir = `${DPM}/${name}`;
+  const fs = await import("node:fs");
+  fs.mkdirSync(dir, { recursive: true });
   const res = await page.request.post("/api/folders", {
     data: { path: dir, name },
   });
   expect(res.ok(), `mkFolder ${name} → ${res.status()}`).toBe(true);
-  const list = (await (
-    await page.request.get("/api/folders")
-  ).json()) as Array<{ id: string; name: string }>;
-  const folder = list.find((f) => f.name === name)!;
-  return { id: folder.id, name, dir };
+  // Take the id from the POST response rather than re-reading /api/folders and
+  // matching by name. That second lookup was a race: the row exists but the list
+  // read could miss it, and `find(...)` returned undefined so `.id` threw
+  // "undefined is not an object" instead of a readable failure. The create
+  // response is authoritative and saves a round trip - this is what phase-ua-a's
+  // equivalent helper already did.
+  const folder = (await res.json()) as { id: string; name?: string };
+  return { id: folder.id, name: folder.name ?? name, dir };
 }
 
-async function rmFolder(page: Page, id: string): Promise<void> {
+async function rmFolder(page: Page, id: string, dir?: string): Promise<void> {
   await page.request.delete(`/api/folders/${id}`).catch(() => {});
+  // Deleting the folder row does NOT remove the scratch directory `mkFolder`
+  // created, so without this every run left another `D:/PM/ua-d-<tag>-<suffix>`
+  // behind — the folder list stayed clean but the disk accumulated. Measured 9
+  // orphans after a handful of runs. Only ever removes the directory this run
+  // created, and only after the row is gone, so it can never delete a path that
+  // is still registered.
+  if (!dir) return;
+  const fs = await import("node:fs");
+  await fs.promises
+    .rm(dir, { recursive: true, force: true, maxRetries: 3 })
+    .catch(() => {
+      /* best effort on Windows: a locked handle must not fail the test */
+    });
 }
 
 async function rmConv(page: Page, id: string): Promise<void> {
@@ -157,6 +186,12 @@ async function createConv(
 test("D1 Direct Chat-mode: draft send routes /chat, reload resumes, delete", async ({
   page,
 }) => {
+  // This test does a live draft send, a reload and a history resume. Playwright's
+  // default test budget is 30s, and the resume assertion below alone asks for
+  // 30s — so the assertion could never win its own race and the failure surfaced
+  // only on the slower headed Edge project, where it looked like a product bug.
+  // Matched to D2, which does the same class of work.
+  test.setTimeout(180_000);
   let convId: string | null = null;
   try {
     await page.goto("/#/chat/new");
@@ -172,9 +207,14 @@ test("D1 Direct Chat-mode: draft send routes /chat, reload resumes, delete", asy
     expect(row.engine).toBe("direct");
 
     await page.reload();
+    // 60s, not 30s. Measured: D1 passes 3/3 in isolation but intermittently
+    // failed at 30s inside the full suite on the headed Edge project, where it
+    // runs a live send plus a reload under accumulated machine load. The
+    // behaviour under test is "history resumes after a reload", so the budget
+    // has to cover a loaded browser rather than an idle one.
     await expect(
       page.getByText("matrix check D1", { exact: false }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    ).toBeVisible({ timeout: 60000 });
   } finally {
     if (convId) await rmConv(page, convId);
   }
@@ -189,6 +229,12 @@ test("D1 Direct Chat-mode: draft send routes /chat, reload resumes, delete", asy
 test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight", async ({
   page,
 }) => {
+  // This leg creates a conversation through the API while the app is already
+  // running, waits for a seeded message to render, and then asserts on sidebar
+  // state. That is several real page transitions and two slow first paints, so
+  // Playwright's 30s default is not enough headroom. Same convention as
+  // opencode-v2-code-route.spec.ts.
+  test.setTimeout(180_000);
   const folder = await mkFolder(page, "d2");
   let convId: string | null = null;
   try {
@@ -206,8 +252,12 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
       page.locator(`button[title="Working folder: ${folder.name}"]`),
     ).toBeVisible({ timeout: 20000 });
 
+    // Unique per run: `folder.name` carries this run's suffix, so the title is a
+    // run-scoped identity for the row. Captured once and reused by the
+    // highlight assertion below, so the two can never drift apart.
+    const exactTitle = `ua-d D2 ${folder.name}`;
     const created = await createConv(page, {
-      title: `ua-d D2 ${folder.name}`,
+      title: exactTitle,
       workspaceMode: "project",
       workspaceFolderId: folder.id,
       engine: "direct",
@@ -221,17 +271,61 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
     expect(conv.workspaceFolderId).toBe(folder.id);
 
     await page.goto(`/#/chat/${convId}`);
+    // The conversation above was created out-of-band, so the sidebar's
+    // conversation list — fetched when the app mounts — has never seen it.
+    // Navigating from /#/chat/new to /#/chat/<id> is a same-document hash change
+    // and does NOT remount, so without a reload the row this test is about to
+    // assert on simply does not exist. Measured: post-load folder header visible
+    // without reload = false, and the conversation's row = 0.
+    //
+    // A real user never hits this because they create the conversation THROUGH
+    // the UI, which invalidates the list. This test creates it through the API on
+    // purpose (no model call, no quota), so it owes the app the same fresh mount
+    // a real creation would have produced. Reloading is the honest equivalent —
+    // it weakens no assertion below and asserts nothing about reload behaviour.
+    await page.reload();
     await expect(
       page.getByText("seed check D2", { exact: false }).first(),
     ).toBeVisible({ timeout: 30000 });
 
-    // Folder highlight: exactly one accented row (unique title), and
-    // clicking it lands on this conversation.
+    // Wait for the folder list to actually LOAD before asserting anything about
+    // its highlight. `FolderConversationRow` renders `noConversations` whenever
+    // `items.length === 0` and never consults `isLoading`, so a fetch still in
+    // flight is indistinguishable from an empty folder. On a slow machine the
+    // highlight assertions below ran inside that window and failed for a reason
+    // that had nothing to do with the highlight.
+    //
+    // This waits for the row to EXIST; it does not relax any later assertion.
+    const titleButton = page.getByRole("button", { name: exactTitle, exact: true });
+    await expect(titleButton.first()).toBeVisible({ timeout: 30000 });
+
+    // Folder highlight. The invariant is IDENTITY: the row for THIS conversation
+    // is highlighted, and nothing else is.
+    //
+    // The count is asserted, not dodged. A project conversation legitimately
+    // renders in two independent sidebar sections — under its folder, and in the
+    // un-scoped Chats list — and both apply `bg-sidebar-accent` when active.
+    // Measured on a clean full load (see the probe numbers in the commit that
+    // introduced this): 2 accented rows, both carrying this conversation's
+    // title, neither nested in the other. So `toHaveCount(1)` asserted a shape
+    // the product never had; the correct number is 2, and pinning it means a
+    // regression that duplicates or drops a section fails loudly instead of
+    // sliding through a `>= 1`.
+    //
+    // Matching the exact per-run title (not the loose /ua-d D2 /i pattern) is
+    // what stops a row left behind by an earlier run from satisfying this.
     const activeRow = page.locator("div.bg-sidebar-accent").filter({
-      has: page.getByRole("button", { name: /ua-d D2 /i }),
+      has: page.getByRole("button", { name: exactTitle, exact: true }),
     });
-    await expect(activeRow).toHaveCount(1, { timeout: 15000 });
-    await activeRow.locator("button").first().click();
+    const allAccented = page.locator("div.bg-sidebar-accent");
+    await expect(allAccented.first()).toBeVisible({ timeout: 15000 });
+    // Exactly the two sections that are supposed to mirror this conversation.
+    await expect(allAccented).toHaveCount(2);
+    // …and every highlighted row IS this conversation: no stale row from an
+    // earlier run, and no unrelated conversation that happens to be open.
+    await expect(activeRow).toHaveCount(2);
+    // …and it is the right one to click: this title is bound to THIS id.
+    await titleButton.first().click();
     await expect(page).toHaveURL(new RegExp(`#/chat/${convId}$`));
 
     await page.reload();
@@ -240,7 +334,7 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
     ).toBeVisible({ timeout: 30000 });
   } finally {
     if (convId) await rmConv(page, convId);
-    await rmFolder(page, folder.id);
+    await rmFolder(page, folder.id, folder.dir);
   }
 });
 
@@ -333,6 +427,6 @@ test("D4 Code folder chat: row routes /code, reload resumes, terminate", async (
       })
       .catch(() => {});
     await rmConv(page, convId);
-    await rmFolder(page, folder.id);
+    await rmFolder(page, folder.id, folder.dir);
   }
 });
