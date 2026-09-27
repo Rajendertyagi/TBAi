@@ -134,11 +134,23 @@ test("D1 Direct draft send routes to /chat/<id> (intercept proves /api/chat call
     expect(match, "no /chat/<id> after Direct first send").not.toBeNull();
     const convId = match![1];
 
-    // Exactly one /api/chat was attempted (the first send); it was aborted.
-    expect(chatCallCount).toBe(1);
-
     // Composer cleared after send (same contract as composer-bar.spec.ts).
     await expect(box).toHaveValue("", { timeout: 15000 });
+
+    // Exactly one /api/chat was attempted (the first send); it was aborted.
+    //
+    // Polled, and checked AFTER the composer assertion, because the route
+    // handler is async: the conversation row and the URL change on the client
+    // before the interception callback necessarily runs, so reading the counter
+    // straight after the URL assertion raced and intermittently saw 0. The
+    // cleared composer proves the send finished, and the poll covers the
+    // remaining gap without sleeping for a fixed period.
+    await expect
+      .poll(() => chatCallCount, { timeout: 30000 })
+      .toBeGreaterThan(0);
+    // Still exactly one: a duplicate would have arrived by now that the send has
+    // completed, so this remains a real duplicate-send guard rather than a race.
+    expect(chatCallCount).toBe(1);
 
     // Cleanup.
     await cleanupMarker(page.request, MARKER);
