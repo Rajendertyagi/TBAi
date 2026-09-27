@@ -1,4 +1,8 @@
 import { expect, test } from "@playwright/test";
+import {
+  removeConversation,
+  seedConversation,
+} from "./helpers/seedConversation";
 
 test("new-chat screen has exactly one composer", async ({ page }, testInfo) => {
   await page.goto("/#/chat/new");
@@ -35,18 +39,22 @@ test("welcome and docked composers share one box size", async ({ page }) => {
   const welcomeBox = await page.getByRole("textbox", { name: /Send a message/ }).boundingBox();
   expect(welcomeBox).not.toBeNull();
 
-  const list = await page.request.get("/api/conversations?status=all&limit=5");
-  expect(list.ok()).toBe(true);
-  const data = (await list.json()) as { threads: Array<{ id: string }> };
-  test.skip(data.threads.length === 0, "no existing thread in this database");
-  await page.goto(`/#/chat/${data.threads[0].id}`);
-  await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
-  const dockedBox = await page.getByRole("textbox", { name: /Send a message/ }).boundingBox();
-  expect(dockedBox).not.toBeNull();
-  console.log(
-    "BOXES:" +
-      JSON.stringify({ welcome: welcomeBox, docked: dockedBox }),
-  );
-  expect(Math.round(dockedBox!.width)).toBe(Math.round(welcomeBox!.width));
+  // Seeded rather than borrowed: this used to skip when the conversation list
+  // was empty, which under per-spec isolation was every run.
+  const { id: conversationId } = await seedConversation(page.request);
+
+  try {
+    await page.goto(`/#/chat/${conversationId}`);
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    const dockedBox = await page.getByRole("textbox", { name: /Send a message/ }).boundingBox();
+    expect(dockedBox).not.toBeNull();
+    console.log(
+      "BOXES:" +
+        JSON.stringify({ welcome: welcomeBox, docked: dockedBox }),
+    );
+    expect(Math.round(dockedBox!.width)).toBe(Math.round(welcomeBox!.width));
+  } finally {
+    await removeConversation(page.request, conversationId);
+  }
 });
 

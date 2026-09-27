@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import {
+  DEFAULT_SEED_TITLE,
+  removeConversation,
+  seedConversation,
+} from "./helpers/seedConversation";
 
 /**
  * Regression specs for the single-screen new-chat flow:
@@ -12,27 +17,35 @@ import { expect, test } from "@playwright/test";
 test("sidebar thread click from a settings route keeps /chat/<id>", async ({
   page,
 }) => {
-  const list = await page.request.get("/api/conversations?status=all&limit=5");
-  expect(list.ok()).toBe(true);
-  const data = (await list.json()) as { threads: Array<{ id: string }> };
-  test.skip(data.threads.length === 0, "no existing thread in this database");
-  const target = data.threads[0].id;
+  // Seeded rather than borrowed. This used to read the conversation list and
+  // skip when it was empty, which only worked because an earlier spec had left
+  // a conversation behind. Under per-spec isolation the list is always empty, so
+  // the spec skipped on every run while still reporting green.
+  const { id: target, title } = await seedConversation(page.request);
 
-  // Start somewhere the chat tab is NOT active, so a lagging TabUrlSync
-  // would previously have bounced the navigation to /chat/new.
-  await page.goto("/#/providers");
-  await expect(page).toHaveURL(/#\/providers/);
+  try {
+    // Start somewhere the chat tab is NOT active, so a lagging TabUrlSync
+    // would previously have bounced the navigation to /chat/new.
+    await page.goto("/#/providers");
+    await expect(page).toHaveURL(/#\/providers/);
 
-  const row = page.getByRole("button", { name: "New Conversation" }).first();
-  await expect(row).toBeVisible({ timeout: 15000 });
-  await row.click();
+    // Scoped to the seeded conversation by its exact title, so the assertion
+    // cannot be satisfied by an unrelated row.
+    const row = page
+      .getByRole("button", { name: title || DEFAULT_SEED_TITLE })
+      .first();
+    await expect(row).toBeVisible({ timeout: 15000 });
+    await row.click();
 
-  await expect(page).toHaveURL(new RegExp(`#/chat/${target}$`), {
-    timeout: 15000,
-  });
-  await expect(
-    page.getByRole("textbox", { name: /Send a message/ }),
-  ).toBeVisible({ timeout: 15000 });
+    await expect(page).toHaveURL(new RegExp(`#/chat/${target}$`), {
+      timeout: 15000,
+    });
+    await expect(
+      page.getByRole("textbox", { name: /Send a message/ }),
+    ).toBeVisible({ timeout: 15000 });
+  } finally {
+    await removeConversation(page.request, target);
+  }
 });
 
 test("welcome draft engine switch swaps Direct chips for the Agent chip", async ({
