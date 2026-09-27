@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { holdStubStream, releaseStubStream } from "./helpers/stubProvider";
 
 /** Return ids of threads whose messages contain the probe marker. */
 async function probeThreadIds(
@@ -53,6 +54,7 @@ test("model picker searches and selects via keyboard", async ({ page }) => {
 
 test("send/stop share one slot and the composer shrinks back after send", async ({
   page,
+  request,
 }) => {
   const MARKER = "composer bar probe alpha";
   await page.goto("/#/chat/new");
@@ -60,15 +62,11 @@ test("send/stop share one slot and the composer shrinks back after send", async 
     page.getByRole("heading", { name: /what do you want to build/i }),
   ).toBeVisible({ timeout: 15000 });
 
-  // Hold the chat stream so the run stays in flight for assertions.
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route("**/api/chat", async (route) => {
-    await gate;
-    await route.abort();
-  });
+  // Hold the PROVIDER's stream so the run really stays in flight. Intercepting
+  // the browser request instead would deliver zero bytes, so the thread would
+  // never enter a running state and the Stop assertions below would be testing
+  // nothing.
+  await holdStubStream(request);
 
   const box = page.getByRole("textbox", { name: /Send a message/ });
   await box.click();
@@ -102,7 +100,7 @@ test("send/stop share one slot and the composer shrinks back after send", async 
   const shrunk = await box.boundingBox();
   expect(shrunk!.height).toBeLessThanOrEqual(45);
 
-  release();
+  await releaseStubStream(request);
   await expect(stop).toHaveCount(0, { timeout: 15000 });
   await expect(
     page.getByRole("button", { name: "Send message" }),
@@ -114,6 +112,8 @@ test("send/stop share one slot and the composer shrinks back after send", async 
   expect(Math.abs(sendBox!.y - stopBox!.y)).toBeLessThanOrEqual(2);
 
   await cleanupProbeThreads(page.request, MARKER);
+  // Leave the shared stub unheld for the next spec.
+  await releaseStubStream(request);
 });
 
 test("composer right-click shows its own menu, not the page menu", async ({

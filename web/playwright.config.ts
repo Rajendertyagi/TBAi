@@ -1,44 +1,83 @@
-import fs from "node:fs";
-import path from "node:path";
 import { defineConfig } from "@playwright/test";
 
 /**
- * The app's port drifts across restarts (3000/3003/3004 seen — the server
- * falls back to the next free port when the default is occupied), so a
- * hardcoded baseURL breaks whenever it lands elsewhere. Resolution:
- *   1. `TBAI_E2E_BASE_URL` — explicit pin (CI, a fixed test port).
- *   2. `data/port` — the Tauri mirror the app itself writes on every boot /
- *      rebind; read from the repo root (this config lives in `web/`).
- *   3. `http://localhost:3000` — the default the server binds when 3000 is
- *      free, used only when neither override nor mirror is available.
+ * E2E suite configuration.
  *
- * To run against a drifted/occupied port explicitly:
- *   $env:TBAI_E2E_BASE_URL="http://localhost:3003"; bun run test:e2e
+ * The suite runs against ITS OWN server and its OWN database by default. That is
+ * the whole reason `scripts/start-e2e-server.ts` exists: the suite used to have
+ * no `webServer`, so every run attached to whatever server was already up —
+ * normally the maintainer's live app — and both polluted real conversations and
+ * let specs corrupt each other through a shared database.
+ *
+ * The port is fixed (not read from `data/port`, which the live server rewrites on
+ * every boot) and the data/workspace dirs are private, so a run neither reads nor
+ * writes anything the maintainer cares about.
+ *
+ * To point the suite at a server you manage yourself — a live instance with real
+ * providers, for the acceptance specs that need one — set `TBAI_E2E_BASE_URL`.
+ * The managed server is then skipped entirely and nothing is reset.
  */
+const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
+const E2E_URL = `http://localhost:${E2E_PORT}`;
+
+/** Set by the maintainer to opt out of the managed server entirely. */
+const externalBaseUrl = process.env.TBAI_E2E_BASE_URL;
+
+/**
+ * Set by `scripts/run-e2e.ts`, which starts (and resets) the server itself
+ * between spec files. Without this the config's own `webServer` would race the
+ * runner's server for the same port.
+ */
+const serverAlreadyManaged = process.env.TBAI_E2E_EXTERNAL_SERVER === "1";
+
+/**
+ * Specs that need a REAL model, and therefore real credentials.
+ *
+ * These are acceptance tests, not hermetic tests: their own docblocks say
+ * "nothing mocked" and "verified in this environment to answer real requests".
+ * The isolated server deliberately has no provider credentials, so running them
+ * by default only produces failures that say nothing about the code.
+ *
+ * Run them explicitly, against a server you trust:
+ *   TBAI_E2E_LIVE=1 TBAI_E2E_BASE_URL=http://localhost:3001 bunx playwright test
+ */
+const liveSpecs = "**/*-live.spec.ts";
+const runLive = process.env.TBAI_E2E_LIVE === "1";
+
 function resolveBaseUrl(): string {
-  if (process.env.TBAI_E2E_BASE_URL) return process.env.TBAI_E2E_BASE_URL;
-  try {
-    const raw = fs.readFileSync(
-      path.join(__dirname, "..", "data", "port"),
-      "utf8",
-    ).trim();
-    const port = Number.parseInt(raw, 10);
-    if (Number.isInteger(port) && port >= 1 && port <= 65535) {
-      return `http://localhost:${port}`;
-    }
-  } catch {
-    /* no mirror file — fall through to the default */
-  }
-  return "http://localhost:3000";
+  // An explicit override wins: that is the "point me at my own server" escape hatch.
+  if (externalBaseUrl) return externalBaseUrl;
+  // Otherwise the suite talks to the server Playwright starts, on the fixed E2E
+  // port. It must NOT read data/port here: that file belongs to whichever server
+  // the maintainer happens to be running, and following it silently points the
+  // whole suite back at the live app — which is exactly the isolation this
+  // config exists to provide.
+  return E2E_URL;
 }
 
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
   reporter: "line",
+  // Live acceptance specs are opt-in; see `liveSpecs` above.
+  testIgnore: runLive ? [] : [liveSpecs],
   use: {
     baseURL: resolveBaseUrl(),
   },
+  ...(externalBaseUrl || serverAlreadyManaged
+    ? {}
+    : {
+        webServer: {
+          command: "bun run ../scripts/start-e2e-server.ts",
+          url: `${E2E_URL}/readyz`,
+          // Never adopt an already-running server: adopting one is precisely how
+          // this suite ended up writing to the maintainer's database.
+          reuseExistingServer: false,
+          timeout: 120_000,
+          stdout: "pipe" as const,
+          stderr: "pipe" as const,
+        },
+      }),
   projects: [
     // Headed msedge is the default (matches how the app is developed on the
     // desktop); the headless chromium project keeps the suite runnable

@@ -51,6 +51,12 @@ data-verify-tmp*/
 web/test-results/
 playwright-report/
 
+# The Playwright suite's OWN server data and workspace (scripts/start-e2e-server.ts).
+# Separate from `data/` on purpose: the suite must never read or write the
+# maintainer's live database, and these two dirs are deleted and recreated on
+# every e2e start. Never commit either.
+.e2e-data/
+.e2e-workspace/
 # Local agent tooling state, not project source. `.superpowers/` holds per-task
 # progress notes for work still in flight; `prompt.txt` is a scratch task brief.
 # Neither belongs in history, and both are worth keeping on disk.
