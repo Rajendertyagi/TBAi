@@ -24,17 +24,19 @@ import { expect, test } from "@playwright/test";
  * NOTE: no backticks in this comment - the spec transform mis-parses them and
  * reports the file as unbuildable.
  *
- * SYNTAX CAVEAT, measured not assumed: the element renders through
- * beautiful-mermaid, which accepts a SUBSET of mermaid and rejects a trailing
- * semicolon on the header. Probed directly against the installed package:
+ * SYNTAX CAVEAT, measured not assumed and now handled: the element renders
+ * through beautiful-mermaid, which accepts a SUBSET of mermaid and validates the
+ * diagram header strictly. Probed directly against the installed package:
  *
- *   graph TD;                     -> Invalid mermaid header
- *   flowchart TD\n  A --> B      -> renders (2808 bytes of SVG)
+ *   graph TD                     -> renders
+ *   graph TD;                    -> Invalid mermaid header
+ *   graph TD\n  A --> B;         -> renders (semicolons in the BODY are fine)
+ *   sequenceDiagram;             -> renders (only graph/flowchart are strict)
  *
- * The happy-path case below therefore uses the accepted form. The last test
- * pins the rejected form as characterised behaviour rather than leaving it
- * unknown, because a model emitting "graph TD;" is common and the user-visible
- * result is the fallback panel.
+ * mermaid-source.tsx normalises the header before it reaches the renderer, so
+ * the semicolon form models commonly emit now renders. The last test is the
+ * regression guard for that. The one form still not handled is a body sharing
+ * the header line, which the renderer rejects outright.
  */
 const FENCE = "```";
 const MERMAID_BLOCK = [
@@ -175,16 +177,19 @@ test("malformed mermaid falls back to the source instead of blanking", async ({
   }
 });
 
-test("a semicolon-terminated header falls back (renderer subset, pinned)", async ({
+test("a semicolon-terminated header renders (normalised, not rejected)", async ({
   page,
   request,
 }) => {
   test.setTimeout(120_000);
 
-  // Characterisation test, not a wish. It records what the installed renderer
-  // actually does with a syntactically fine mermaid diagram that its subset
-  // rejects, so the behaviour is visible and a future renderer upgrade (which
-  // would make this pass differently) is caught rather than silent.
+  // Previously this asserted the FALLBACK: the renderer rejects a "graph TD;"
+  // header and models emit that form constantly, so the user saw the fallback
+  // panel for a perfectly valid diagram. mermaid-source.tsx now normalises the
+  // header before it reaches the renderer, so the same input must render.
+  //
+  // This is the regression guard for that fix: if the normaliser is removed or
+  // narrowed too far, this goes back to the fallback and fails here.
   const label = `mermaid semicolon ${Date.now()}`;
   const conversationId = await seedConversation(request, label);
 
@@ -196,10 +201,11 @@ test("a semicolon-terminated header falls back (renderer subset, pinned)", async
       page.getByRole("textbox", { name: /Send a message/i }).first(),
     ).toBeVisible({ timeout: 30000 });
 
-    await expect(page.locator('[data-slot="mermaid-fallback"]')).toBeVisible({
-      timeout: 30000,
-    });
-    await expect(page.getByText("diagram could not be rendered")).toBeVisible();
+    const diagram = page.locator('[data-slot="mermaid-diagram"]');
+    await expect(diagram).toBeVisible({ timeout: 30000 });
+    await expect(diagram.locator("svg")).toHaveCount(1, { timeout: 30000 });
+    // And it must NOT have degraded on the way through.
+    await expect(page.locator('[data-slot="mermaid-fallback"]')).toHaveCount(0);
   } finally {
     await request.delete(`/api/conversations/${conversationId}`).catch(() => {});
   }

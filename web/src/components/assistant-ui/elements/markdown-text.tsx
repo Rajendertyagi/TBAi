@@ -14,12 +14,13 @@ import type { TextMessagePartProps } from "@assistant-ui/react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
-// The `.aui` module, NOT the base: upstream exports `MermaidDiagram` from BOTH.
-// `mermaid-diagram.tsx` is the base (props: code / streaming), while
-// `mermaid-diagram.aui.tsx` is the `SyntaxHighlighter` wrapper the
-// `componentsByLanguage` slot needs. Importing the base here type-checks as a
-// React component but silently receives the wrong props at runtime.
-import { MermaidDiagram } from "@/components/assistant-ui/elements/mermaid-diagram.aui";
+// Wraps the vendored element rather than editing it. See mermaid-source.tsx:
+// beautiful-mermaid rejects a `graph TD;` header, which models emit constantly,
+// and normalising it here keeps the upstream file byte-identical to the registry
+// instead of forking it. The `.aui` module is the `SyntaxHighlighter` wrapper the
+// componentsByLanguage slot needs; the base `mermaid-diagram.tsx` is not, even
+// though it type-checks in the same position.
+import { MermaidSyntaxHighlighter } from "@/components/assistant-ui/elements/mermaid-source";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 
@@ -70,7 +71,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
       // is the integration point for BOTH chat surfaces: Direct chat and Code
       // chat both render through this one `MarkdownText`, so the diagram lands
       // in each with no per-engine wiring and no second copy.
-      componentsByLanguage={{ mermaid: { SyntaxHighlighter: MermaidDiagram } }}
+      componentsByLanguage={{ mermaid: { SyntaxHighlighter: MermaidSyntaxHighlighter } }}
       smooth={false}
       defer
     />
