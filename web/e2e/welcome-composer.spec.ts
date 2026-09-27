@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("new-chat screen has exactly one composer", async ({ page }) => {
+test("new-chat screen has exactly one composer", async ({ page }, testInfo) => {
   await page.goto("/#/chat/new");
   await expect(
     page.getByRole("heading", { name: /what do you want to build/i }),
@@ -22,7 +22,9 @@ test("new-chat screen has exactly one composer", async ({ page }) => {
     }),
   );
   console.log("TEXTAREAS:" + JSON.stringify(detail));
-  await page.screenshot({ path: "e2e/welcome.png" });
+  // Debug capture into Playwright's gitignored artifact dir rather than beside
+  // the spec, so running the suite leaves no trace in the working tree.
+  await page.screenshot({ path: testInfo.outputPath("welcome.png") });
 });
 
 test("welcome and docked composers share one box size", async ({ page }) => {

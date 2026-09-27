@@ -34,7 +34,16 @@ test("logs match codeg layout: capture, viewer, files", async ({ page, request }
     await expect(seeded).toBeVisible({ timeout: 15000 });
 
     // Rows expand to a structured detail grid.
-    const expander = main.getByRole("button", { name: "Toggle details" }).first();
+    //
+    // Scoped to the row we identified, NOT `.first()`. The list live-tails, so a
+    // fresh entry can land above it between the click and the assertion; a
+    // positional locator then re-resolves to a different row and reports
+    // "aria-expanded=false" for a row that was never clicked. The expanded set is
+    // keyed by record seq and is stable across refreshes, so scoping is a pure
+    // fix to the locator, not a workaround for a product bug.
+    const expander = seeded
+      .locator('xpath=ancestor::*[.//button[@aria-label="Toggle details"]][1]')
+      .getByRole("button", { name: "Toggle details" });
     await expander.click();
     await expect(expander).toHaveAttribute("aria-expanded", "true");
     await expect(main.locator("div.grid.grid-cols-\\[auto_1fr\\]").first()).toBeVisible();

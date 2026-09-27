@@ -8,7 +8,7 @@ import { expect, test } from "@playwright/test";
  */
 test("persisted thread shows boot skeleton while history loads", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/#/chat/new");
   await expect(
     page.getByRole("heading", { name: /what do you want to build/i }),
@@ -50,6 +50,9 @@ test("persisted thread shows boot skeleton while history loads", async ({
   await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1);
   const body = await page.locator("main").innerText();
   expect(body.length).toBeGreaterThan(0);
-  await page.screenshot({ path: "e2e/boot-resolved.png" });
+  // Written into Playwright's own (gitignored) artifact dir, not next to the
+  // spec: these are debug captures that nothing asserts on, and saving them
+  // beside the test dirtied the working tree on every run.
+  await page.screenshot({ path: testInfo.outputPath("boot-resolved.png") });
 });
 

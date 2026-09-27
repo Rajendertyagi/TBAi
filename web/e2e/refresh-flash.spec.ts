@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
  * mount the welcome screen — not even transiently while history loads —
  * and exactly one composer must exist at every instant.
  */
-test("refresh of a started thread never flashes welcome", async ({ page }) => {
+test("refresh of a started thread never flashes welcome", async ({ page }, testInfo) => {
   await page.goto("/#/chat/new");
   await expect(
     page.getByRole("heading", { name: /what do you want to build/i }),
@@ -63,6 +63,10 @@ test("refresh of a started thread never flashes welcome", async ({ page }) => {
     seen.counts.every((c) => c === 1),
     `textarea counts observed: ${seen.counts.join(",")}`,
   ).toBe(true);
-  await page.screenshot({ path: "e2e/refresh-thread.png" });
+  // Debug capture into Playwright's gitignored artifact dir rather than beside
+  // the spec. This file was tracked at web/e2e/refresh-thread.png, and because
+  // an entry in .gitignore cannot suppress an already-tracked path, any pixel
+  // difference between runs dirtied the working tree.
+  await page.screenshot({ path: testInfo.outputPath("refresh-thread.png") });
 });
 

@@ -62,3 +62,6 @@ playwright-report/
 # Neither belongs in history, and both are worth keeping on disk.
 .superpowers/
 prompt.txt
+
+# Debug screenshots written by the E2E suite belong in Playwright's artifact dir.
+web/e2e/*.png
