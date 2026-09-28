@@ -16,8 +16,9 @@ import {
  * OpenCode in `state.metadata.files[].patch` while the tool runs, and the
  * renderer can only reach it by reading the message metadata that a *reloaded*
  * history rebuild produces. Unit tests stop one link short: they inject
- * `diffPatch` as a prop, because `useOpenCodeEditPatch` needs an `AuiProvider`
- * and `web/` has no DOM harness.
+ * `diffPatch` as a prop, because `useOpenCodeEditPatch` reads live state through
+ * `useAuiState` and a `react-dom/server` snapshot never runs the subscription
+ * that would surface the reloaded metadata.
  *
  * So the test drives the real thing: the model creates a file, edits it, and
  * the assertion is made after a full page reload — which forces the history
