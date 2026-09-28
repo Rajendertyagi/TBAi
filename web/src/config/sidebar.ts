@@ -52,6 +52,11 @@ export interface SidebarConfig {
   copy: {
     newChat: string;
     newProjectChat: string;
+    /**
+     * Copies the captured page selection. Present because the page menu
+     * replaced the browser's own, which used to provide this.
+     */
+    copy: string;
     toggleSidebar: string;
     toggleStatusBar: string;
     openSettings: string;
@@ -115,6 +120,7 @@ export const sidebarConfig: SidebarConfig = {
   copy: {
     newChat: "New Chat",
     newProjectChat: "New Project Chat",
+    copy: "Copy",
     toggleSidebar: "Toggle Sidebar",
     toggleStatusBar: "Toggle Status Bar",
     openSettings: "Open Settings",

@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
+import { Copy } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -10,6 +11,9 @@ import {
 import { sidebarConfig } from "../config/sidebar";
 import { lastSettingsRoute } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
+import { copyTextFromMenu } from "../lib/clipboard";
+import { canCopySelection, readPageSelection } from "../lib/page-selection";
+import { logger } from "../lib/logger";
 
 /**
  * Page-level (right-click on the content area) context menu. A desktop-chrome
@@ -17,6 +21,14 @@ import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
  * implements a feature's menu markup. Radix suppresses the native browser menu
  * itself, so no manual `preventDefault` is needed (and adding one would set
  * `defaultPrevented` before Radix's handler and stop the menu from opening).
+ *
+ * The menu replaced the browser's own, which used to offer Copy for a page
+ * selection, so that item is restored here. The selection is captured on open
+ * rather than read on click: opening a Radix menu moves focus and collapses the
+ * browser selection, so a click-time read would find nothing. Radix's
+ * `onOpenChange` runs before that focus shift, which makes it the right capture
+ * point. Copy is disabled when nothing was highlighted, rather than hidden, so
+ * the menu's shape does not change depending on where the user right-clicked.
  *
  * Labels come from `sidebarConfig.copy`, the settings target from
  * `appConfig.settingsIndexRoute` — no literals live here.
@@ -26,9 +38,36 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   const toggleSidebar = useDesktopLayout((s) => s.toggleSidebar);
   const toggleStatusBar = useDesktopLayout((s) => s.toggleStatusBar);
   const navigate = useNavigate();
+  const [selectedText, setSelectedText] = useState("");
+
+  /**
+   * Captures the page selection at the moment the menu opens.
+   *
+   * This must not be deferred to click time: Radix takes focus when the menu
+   * opens, which collapses the browser selection, so a later read would find
+   * nothing to copy. `onOpenChange` fires before that focus shift, which makes
+   * it the only point where the text is still available.
+   */
+  const handleOpenChange = (open: boolean) => {
+    if (!open) return;
+    setSelectedText(readPageSelection(window.getSelection()));
+  };
 
   const handleNewChat = () => {
     navigate("/chat/new");
+  };
+
+  /**
+   * Copies the selection captured at menu-open, never a re-read of the live one.
+   */
+  const handleCopySelection = async () => {
+    if (!canCopySelection(selectedText)) return;
+    const ok = await copyTextFromMenu(selectedText);
+    if (!ok) {
+      logger.warn("page_menu", "clipboard_write_failed", {
+        message: copy.copy,
+      });
+    }
   };
 
   const handleOpenSettings = () => {
@@ -36,7 +75,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   };
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={handleOpenChange}>
       <ContextMenuTrigger asChild>
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           {children}
@@ -44,6 +83,13 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={handleNewChat}>{copy.newChat}</ContextMenuItem>
+        <ContextMenuItem
+          disabled={!canCopySelection(selectedText)}
+          onSelect={() => void handleCopySelection()}
+        >
+          <Copy aria-hidden="true" className="size-4" />
+          {copy.copy}
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => toggleSidebar()}>
           {copy.toggleSidebar}

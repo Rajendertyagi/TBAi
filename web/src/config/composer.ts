@@ -42,6 +42,12 @@ export const composerConfig = {
     copy: "Copy",
     pasteAsPlainText: "Paste as plain text",
     selectAll: "Select all",
+    /**
+     * Header for the optional spelling block. It is a disabled item rather
+     * than a submenu, because a submenu would add a hover-and-wait step
+     * between right-clicking a typo and fixing it.
+     */
+    spellingSuggestions: "Spelling suggestions",
     quickMessages: "Quick messages",
     quickMessagesEmpty: "No quick messages yet",
     quickMessagesLoading: "Loading...",
