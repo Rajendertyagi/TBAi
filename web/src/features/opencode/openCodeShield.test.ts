@@ -3,7 +3,12 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { OpenCodeShieldButton, runShieldToggle } from "./OpenCodeShieldChip";
 import { persistAutoApprove } from "./autoApproveWrite";
-import { stripComments, functionBody } from "@/testing/source-scope";
+import { ApprovalGate, Json } from "@/tools/filesystem/ui";
+import {
+  stripComments,
+  functionBody,
+  commentedBodyOf,
+} from "@/testing/source-scope";
 
 /**
  * The Auto Approval Shield UI.
@@ -199,6 +204,124 @@ describe("runShieldToggle — draft", () => {
   });
 });
 
+// ── The approval card the Code engine renders ──────────────────────────────
+
+/**
+ * `ApprovalGate` is the card every permission-gated tool ends up on, including
+ * the OpenCode/Code engine. It renders a `prompt` (the engine's question text)
+ * and the tool arguments.
+ *
+ * The regression this pins: the two used to be mutually exclusive — the prompt
+ * was the if-branch and the argument preview the else-branch. Because the V2
+ * bridge always set a prompt (falling back to the action name, `"shell"`, which
+ * is truthy), the arguments were discarded and the card read `shell` instead of
+ * `{"command":"echo CARD-TEST-1"}`. The arguments ARE the substance of a
+ * permission, so a prompt may sit above them but must never stand in for them.
+ *
+ * This IS a genuine render, not a source-text assertion: `web/` has no DOM, but
+ * `react-dom/server` needs none, and the open-gate branch of `ApprovalGate` is
+ * renderable without an `AuiProvider` (its only runtime hook, `useAui`, is
+ * consumed inside a `useEffect`, which static rendering does not run).
+ */
+const GATE_TITLE = "shell · echo CARD-TEST-1";
+const GATE_ARGS = { command: "echo CARD-TEST-1" };
+/** The exact argument JSON the live card showed after the fix. */
+const RENDERED_ARGS = '"command": "echo CARD-TEST-1"';
+
+function renderGate(prompt?: string): string {
+  const Gate = ApprovalGate as unknown as (p: Record<string, unknown>) => ReactElement;
+  return renderToStaticMarkup(
+    createElement(Gate, {
+      title: GATE_TITLE,
+      // The real argument preview, exactly as `BackendToolView` supplies it.
+      details: createElement(Json, { value: GATE_ARGS }),
+      approval: {
+        id: "per_gate_1",
+        // `approved: undefined` is what "awaiting a decision" looks like.
+        approved: undefined,
+        options: [],
+        // Spread, not assigned: "no prompt" means the key is ABSENT, which is
+        // what the V2 bridge now produces and what the card must handle.
+        ...(prompt === undefined ? {} : { prompt }),
+      },
+      respondToApproval: async () => {},
+    }),
+  );
+}
+
+/** React escapes text nodes, so decode the entities it emits for readability. */
+function decodeEntities(html: string): string {
+  return html
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * The text of every paragraph the gate emitted, trimmed.
+ *
+ * Tag-scoped, so it does not care how the prompt line is styled. It is exact
+ * for this fixture because the minimal gate renders no other paragraph: the
+ * card title is a `div`, and with no declared options there is no confirm block,
+ * no freeform answer row, no outside-workspace note and no error line.
+ */
+function paragraphTexts(html: string): string[] {
+  return [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g)].map((match) =>
+    decodeEntities(match[1] ?? "").trim(),
+  );
+}
+
+describe("ApprovalGate — the prompt never replaces the argument preview", () => {
+  it("shows the prompt AND the arguments when the engine attaches a prompt", () => {
+    // The exact regression input: prompt `"shell"`, real arguments attached.
+    const html = renderGate("shell");
+
+    expect(paragraphTexts(html)).toEqual(["shell"]);
+    // The arguments survive alongside it — this is what was being thrown away.
+    expect(decodeEntities(html)).toContain(RENDERED_ARGS);
+  });
+
+  it("shows the arguments with no prompt at all, and emits no prompt line", () => {
+    const html = renderGate();
+
+    expect(decodeEntities(html)).toContain(RENDERED_ARGS);
+    // No empty paragraph standing in for the absent prompt.
+    expect(paragraphTexts(html)).toEqual([]);
+  });
+
+  it("treats a whitespace-only prompt as absent and still shows the arguments", () => {
+    // A blank prompt is not a question; rendering it would put a blank line
+    // where the arguments should start.
+    const html = renderGate("   ");
+
+    expect(paragraphTexts(html)).toEqual([]);
+    expect(decodeEntities(html)).toContain(RENDERED_ARGS);
+  });
+
+  it("places the prompt above the arguments, not after or instead of them", () => {
+    const html = renderGate("Which database?");
+
+    expect(paragraphTexts(html)).toEqual(["Which database?"]);
+    const promptAt = html.indexOf("Which database?");
+    const argsAt = html.indexOf("&quot;command&quot;");
+    expect(promptAt).toBeGreaterThan(-1);
+    expect(argsAt).toBeGreaterThan(-1);
+    expect(promptAt).toBeLessThan(argsAt);
+  });
+
+  it("still offers the decision on every one of those paths", () => {
+    // The gate is a decision surface: a fix to what it shows must not cost the
+    // user the ability to answer.
+    for (const prompt of ["shell", undefined, "   "]) {
+      const html = renderGate(prompt);
+      expect(html, String(prompt)).toContain("Approve");
+      expect(html, String(prompt)).toContain("Deny");
+    }
+  });
+});
+
 // ── Source guards: the chip's wiring ───────────────────────────────────────
 
 let chipSource = "";
@@ -255,5 +378,42 @@ describe("OpenCodeShieldChip — source guards", () => {
     expect(questionsSource).not.toContain("OpenCodeShieldChip");
     expect(questionsSource).not.toContain("persistAutoApprove");
     expect(questionsSource).not.toContain("sessionAutoPolicy");
+  });
+});
+
+/**
+ * The structural half of the same contract, scoped to `ApprovalGate`'s own body
+ * with comments stripped — so prose describing the rule can never satisfy it.
+ *
+ * The render cases above prove the behaviour; these prove the shape that made
+ * the behaviour possible, and would catch a re-introduction of the either/or
+ * even if some future gate happened to render the same markup by accident.
+ */
+describe("ApprovalGate — source guards", () => {
+  let gateBody = "";
+
+  beforeAll(async () => {
+    gateBody = await commentedBodyOf(
+      "ApprovalGate",
+      "../../tools/filesystem/ui.tsx",
+      import.meta.url,
+    );
+  });
+
+  it("renders the argument preview unconditionally, never as the prompt's alternative", () => {
+    // The old shape was `{prompt ? <p>{prompt}</p> : details}` — the preview was
+    // the else-branch, so any truthy prompt discarded it entirely.
+    expect(gateBody).not.toMatch(/: details\b/);
+    expect(gateBody).not.toMatch(
+      /\?\s*<p[^>]*>\s*\{prompt\}\s*<\/p>\s*:\s*details/,
+    );
+    // And the preview is still a plain child on every branch that renders it
+    // (the auto-decision row and the open gate).
+    expect(gateBody).toContain("{details}");
+  });
+
+  it("normalises a blank prompt away instead of rendering an empty line", () => {
+    // The source half of "a whitespace-only prompt is treated as absent".
+    expect(gateBody).toContain("approval.prompt.trim().length > 0");
   });
 });

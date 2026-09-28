@@ -17,9 +17,17 @@ import type { ToolApprovalOption } from "@assistant-ui/react";
  * normal input, never an exception.
  */
 
+/**
+ * The kind that is the PRIMARY decision: approve this one call, change nothing
+ * afterwards. It is the only kind whose button may be rendered as the ink
+ * (default-variant) action — "Always allow" edits future behaviour, so it stays
+ * a secondary action no matter which order the host listed it in.
+ */
+const PRIMARY_OPTION_KIND = "allow-once";
+
 /** Kinds that allow the request. */
 const ALLOW_OPTION_KINDS: ReadonlySet<string> = new Set([
-  "allow-once",
+  PRIMARY_OPTION_KIND,
   "allow-always",
 ]);
 
@@ -31,7 +39,7 @@ const REJECT_OPTION_KINDS: ReadonlySet<string> = new Set([
 
 /** Human labels for the kinds the runtime documents. */
 const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
-  ["allow-once", "Allow"],
+  [PRIMARY_OPTION_KIND, "Allow"],
   ["allow-always", "Always allow"],
   ["reject-once", "Deny"],
   ["reject-always", "Always deny"],
@@ -83,4 +91,30 @@ export function approvalOptionLabel(option: ToolApprovalOption): string {
  */
 export function approvalOptionApproves(option: ToolApprovalOption): boolean {
   return !REJECT_OPTION_KINDS.has(option.kind);
+}
+
+/**
+ * The option a renderer should present as the PRIMARY (ink) button; every other
+ * option is a secondary action beside it.
+ *
+ * Preference order: the documented one-time allow, then the first documented
+ * allow kind, then the first option of all. The one-time approval wins because
+ * it is the reversible choice — a persistent grant is never the action the eye
+ * should land on first. Total by construction: any non-empty list yields a
+ * primary, so a card can never come out with every button demoted.
+ *
+ * Selection is by `id` at the call site, not by object identity, because the
+ * option array a renderer holds is a copy the host sent.
+ *
+ * @param options - The options the request declares, in the host's own order.
+ * @returns The primary option, or `undefined` when the request declares none.
+ */
+export function primaryApprovalOption(
+  options: readonly ToolApprovalOption[],
+): ToolApprovalOption | undefined {
+  return (
+    options.find((option) => option.kind === PRIMARY_OPTION_KIND) ??
+    options.find((option) => isAllowApprovalOptionKind(option.kind)) ??
+    options[0]
+  );
 }

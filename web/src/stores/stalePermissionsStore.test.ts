@@ -233,6 +233,25 @@ describe("approval parity — every surface shares the ONE guard", () => {
     });
   }
 
+  it("ApprovalGate bails out before it renders the prompt or the arguments", () => {
+    // Presence is asserted above; this is the ORDER, and it is what the rich
+    // surface needs: `ApprovalGate` grew a prompt line and an always-rendered
+    // argument preview, and neither may end up above the bail-out. A request
+    // the server has forgotten can never be answered, so nothing about it —
+    // not even read-only context — may reach the screen.
+    //
+    // `tool-fallback.test.ts` owns the same ordering question for the generic
+    // surface; this file owns it for `ApprovalGate`, which is the body it
+    // already loads.
+    const body = bodyOf("ApprovalGate");
+    const guard = body.indexOf("if (stale) return null;");
+    const promptSlot = body.indexOf("approval.prompt.trim().length > 0");
+
+    expect(guard).toBeGreaterThan(-1);
+    expect(promptSlot).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(promptSlot);
+  });
+
   it("keeps the server's wording as code in exactly one place", async () => {
     // If a second copy of the wording appears, a surface has grown its own
     // rule again — which is the bug 3A closes.

@@ -14,6 +14,13 @@ import {
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
 } from "@/config/opencode";
+import {
+  AUTO,
+  AUTO_RESPONSE,
+  MANUAL,
+  shouldAutoApprove,
+} from "@/features/permissions/permissionPolicy";
+import { getAutoPolicy } from "./sessionAutoPolicy";
 import { loadV2History, projectV2History } from "./v2History";
 import {
   createInitialV2ThreadState,
@@ -221,6 +228,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
   const listeners = new Set<() => void>();
   const admissions = new Map<string, AdmissionRecord>();
   const answeredPermissions = new Set<string>();
+  const autoApproveAttempted = new Set<string>();
   const formReplies = new Set<string>();
 
   function notify(): void {
@@ -302,6 +310,54 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     }
   }
 
+  /**
+   * Arms the Auto shield for a permission request the moment it arrives.
+   *
+   * `reconcileAutoApprove` answers requests that were *already* pending when the
+   * shield was switched on; this answers the ones that arrive while it is
+   * already on. It lives here, beside `dispatch`/`applyEvent`, because answering
+   * is an async transport call and `v2Events.ts` is a pure reducer.
+   *
+   * Deliberately NOT awaited: the event loop must never block on a permission
+   * round-trip. Unlike the drain, this also covers requests with no linked tool
+   * card — those render only in the fallback panel, so a user may have no other
+   * way to answer them.
+   *
+   * **FAILS CLOSED.** The policy is read live on every event, never captured, so
+   * switching the shield off stops arming at once and an unknown or unreadable
+   * policy does not arm at all. The request's own action is passed to the policy
+   * so an action that needs no approval (`question`) is answered even with the
+   * shield off; an unknown or malformed action falls back to the shield.
+   * Nothing here throws: an automatic acceptance must never break the event
+   * stream or escape as an unhandled rejection.
+   */
+  function applyAutoApproveEvent(event: V2Event): void {
+    if (event.type !== "permission.asked") return;
+    if (disposed || autoApproveAttempted.has(event.data.id)) return;
+    let eligible = false;
+    try {
+      // The one place the boolean policy cache meets the policy module's own
+      // vocabulary; the decision itself belongs to `shouldAutoApprove`, which
+      // reads the action as well as the shield.
+      eligible = shouldAutoApprove(
+        getAutoPolicy(client.sessionId) ? AUTO : MANUAL,
+        event.data.action,
+      );
+    } catch (error) {
+      logger.warn("opencode", "runtime.auto_approve_policy_unreadable", { errorType: error instanceof Error ? error.name : typeof error });
+      return;
+    }
+    if (!eligible) return;
+    // Claimed before the send and never released: one attempt per request id
+    // stops a redelivered event from sending a second reply, and a failed send
+    // leaves the request pending for the user or the drain rather than looping.
+    autoApproveAttempted.add(event.data.id);
+    void replyToPermission(event.data.id, AUTO_RESPONSE).catch((error: unknown) => {
+      if (disposed) return;
+      logger.warn("opencode", "runtime.auto_approve_reply_failed", { errorType: error instanceof Error ? error.name : typeof error });
+    });
+  }
+
   function applyEvent(event: V2Event, eventOrdinal: number): void {
     dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-only" });
     if (isAssistantMessageEvent(event)) {
@@ -317,6 +373,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     }
     dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-and-apply" });
     applyAdmissionEvent(event);
+    applyAutoApproveEvent(event);
   }
 
   async function consumeEvents(currentGeneration: OpenCodeV2Generation): Promise<void> {
@@ -650,13 +707,22 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     }
   }
 
+  /**
+   * Answers the requests that were already pending when the shield came on.
+   *
+   * The drain is the other automatic path, so it asks the SAME single predicate
+   * the arm path asks, with the shield read live: answering is not implied by
+   * being called. A request whose action needs no approval is therefore drained
+   * even if the shield is off, and nothing else is drained when it is.
+   */
   async function reconcileAutoApprove(): Promise<number> {
     await awaitReady();
     let count = 0;
     for (const request of state.permissions) {
       const projected = projectV2Permission(request);
       if (projected === null || projected.toolCallId === null || answeredPermissions.has(request.id)) continue;
-      await replyToPermission(request.id, "once");
+      if (!shouldAutoApprove(getAutoPolicy(client.sessionId) ? AUTO : MANUAL, projected.action)) continue;
+      await replyToPermission(request.id, AUTO_RESPONSE);
       count += 1;
     }
     return count;

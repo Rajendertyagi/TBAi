@@ -112,7 +112,12 @@ export function projectV2PermissionApproval(
 ): ToolCallMessagePart["approval"] {
   const approval: ToolCallMessagePart["approval"] = {
     id: request.id,
-    prompt: request.message ?? request.action,
+    // `prompt` is the library's slot for the question put to the user. Only
+    // real prose qualifies: falling back to the action name ("shell") made the
+    // permission card render that word INSTEAD of the tool arguments, because
+    // the card shows the prompt in place of the args. With no message, the
+    // card falls back to its own args preview, which is what the user needs.
+    ...(request.message !== null ? { prompt: request.message } : {}),
     ...(request.savePatterns.length > 0
       ? { options: permissionOptions(request.savePatterns) }
       : {}),
