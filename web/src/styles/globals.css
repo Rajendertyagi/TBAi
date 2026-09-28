@@ -60,6 +60,16 @@
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
   --radius-4xl: calc(var(--radius) * 2.6);
+  /* Card surface family — the lighter, BORDERLESS card treatment shared by
+     the tool / permission cards (`components/shared/approval-card.tsx`). A soft
+     fill plus a very low-contrast ring replaces the hard 1px border: no edge,
+     but still clearly a card, because the approve/deny buttons need a surface
+     to sit on. Each step is its own token so a theme can move the fill and the
+     outline independently. Light mode steps DOWN from white; .dark steps UP
+     from near-black (see below), which keeps the same relative silhouette in
+     both schemes instead of one of them carrying a heavier card. */
+  --card-soft: oklch(0 0 0 / 2.5%);
+  --card-outline: oklch(0 0 0 / 6%);
   color-scheme: light;
 }
 
@@ -100,6 +110,13 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
   --statusbar: #262626;
+  /* The :root card surface family, in the dark direction. The card is a few
+     percent OFF the background in both schemes, not a solid step: translucent
+     white here, translucent black in :root. Both stay far below `--border`
+     (10% white), which is what makes the edge read as a hint rather than an
+     outline. */
+  --card-soft: oklch(1 0 0 / 4%);
+  --card-outline: oklch(1 0 0 / 6%);
   color-scheme: dark;
 }
 
@@ -109,6 +126,8 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-card-soft: var(--card-soft);
+  --color-card-outline: var(--card-outline);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);

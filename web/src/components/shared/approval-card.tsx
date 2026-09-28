@@ -12,19 +12,52 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
+ * The card surface both decision states share: the open gate
+ * ({@link ApprovalCard}) and the decided row ({@link CollapsedDecisionRow}).
+ * One class list, so a card cannot look one way while it is asking for a
+ * decision and another way once it has one. Both colour steps are theme
+ * tokens (`--card-soft`, `--card-outline` in `globals.css`), never literals.
+ *
+ * Exported so any TBAi-owned surface that waits on the reader uses this exact
+ * treatment rather than restating the classes — the OpenCode question dock is
+ * the other owner. Restating it is how two cards drift apart.
+ */
+export const CARD_SURFACE = "rounded-2xl bg-card-soft ring-1 ring-card-outline";
+
+/**
  * Shared approval-card shell (native backend gates + MCP fallback gates).
  *
- * Visual contract (our tokens only, no new ones): flat card, 1px border,
- * inner-panel radius — the same `rounded-2xl / border-border / bg-card`
- * step the composer and Select content already use. Dark mode falls out of
- * the CSS vars; no hardcoded colors.
+ * Visual contract (theme tokens only, no literals): a soft fill
+ * (`--card-soft`) plus a very low-contrast ring (`--card-outline`) in place of
+ * a hard 1px border — borderless, but still unmistakably a card, which matters
+ * because the approve/deny buttons need something to sit on. Dark mode falls
+ * out of the CSS vars; no hardcoded colors.
  *
- * Sizing: the card is `w-full` inside the message column (max-w-3xl), so
- * width is inherited and stable. Height is content-driven with a floor and
- * a viewport guard: `min-h-[140px]` stops layout jumps when the gate swaps
- * to spinner/result, `max-h-[60vh]` (with internal scroll) keeps pathological
- * previews from blowing the card up. Preview bodies keep their own tighter
- * caps; the submit buttons always stay visible below the scroll region.
+ * Sizing: the card is `w-full` inside the message column (max-w-3xl), so width
+ * is inherited and stable, and height is content-driven. The `min-h-[140px]`
+ * floor that used to hold the box steady when the gate swapped to a
+ * spinner/result is GONE (2026-09-27): it reserved ~140px of dead space under
+ * a one-line result, which the maintainer called out as a defect. The
+ * remaining guard is the `max-h-[60vh]` cap with internal scroll, which keeps
+ * a pathological preview from blowing the card up; the gate→result swap
+ * therefore shifts the layout, and that shift is accepted. Preview bodies keep
+ * their own tighter caps; the submit buttons always stay visible below the
+ * scroll region.
+ *
+ * Bulk comes from `p-5` rather than a height floor: a gated call is a decision,
+ * and the box should feel like it has room to make one. Padding grows with the
+ * content instead of reserving space under it, so a one-line result still
+ * collapses (what `min-h-[140px]` broke). `p-6` was rejected — past this the
+ * args preview stops reading as the substance of the request and the card reads
+ * as mostly margin.
+ *
+ * Buttons (see {@link ApprovalActions}): the approve/deny pair is `sm` on a
+ * SOLID surface, never `outline`. The card fill is a few percent off the page
+ * (`--card-soft`), so an outline button's 10% border and 15% fill land almost
+ * on top of it — the button vanishes into the card and its label reads as dim
+ * grey. `secondary` is a solid step away from the fill with full-strength
+ * `text-secondary-foreground`, and `default` (ink) is reserved for the action a
+ * reader should commit to. Existing shadcn variants only; no new colour.
  *
  * Motion (tw-animate-css only, no JS animation lib): 150ms enter
  * (fade + slight zoom, runs on mount) and a 100ms fade-out. The fade-out
@@ -51,7 +84,8 @@ export function ApprovalCard({
   return (
     <div
       className={cn(
-        "my-1 max-h-[60vh] w-full min-h-[140px] overflow-y-auto rounded-2xl border border-border bg-card p-4 text-sm",
+        "my-1 max-h-[60vh] w-full overflow-y-auto p-5 text-sm",
+        CARD_SURFACE,
         leaving
           ? "animate-out fade-out-0 duration-100"
           : "animate-in fade-in-0 zoom-in-95 duration-150",
@@ -119,8 +153,10 @@ function ApprovalSpinner() {
 }
 
 /**
- * Approve / Deny footer: primary Approve with Check icon, outline Deny with
- * X icon (muted, never danger-red). Stacks vertically on narrow viewports,
+ * Approve / Deny footer: primary Approve with Check icon, Deny with X icon on
+ * the solid `secondary` surface (muted, never danger-red). Both are `sm`, so
+ * the pair matches the declared-option buttons in `ApprovalGate` and one card
+ * never mixes three button treatments. Stacks vertically on narrow viewports,
  * rows on sm+. While `busy`, Approve shows an in-place spinner and both
  * disable.
  */
@@ -162,7 +198,7 @@ export function ApprovalActions({
       </Button>
       <Button
         size="sm"
-        variant="outline"
+        variant="secondary"
         disabled={busy}
         onClick={onDeny}
         aria-label={denyAria ?? denyLabel}
@@ -214,7 +250,12 @@ export function CollapsedDecisionRow({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="my-2 w-full rounded-2xl border border-border bg-card px-3 py-2 text-sm animate-in fade-in-0 duration-150">
+    <div
+      className={cn(
+        "my-2 w-full px-3 py-2 text-sm animate-in fade-in-0 duration-150",
+        CARD_SURFACE,
+      )}
+    >
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger asChild>
           <button

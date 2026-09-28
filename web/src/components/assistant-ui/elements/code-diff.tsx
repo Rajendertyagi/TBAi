@@ -27,6 +27,14 @@
  *    change a single visible character, and it keeps the existing
  *    `rendering.test.tsx` assertions true as written.
  *
+ * 3. **`max-w-md` dropped (2026-09-27).** The 28rem cap meant a diff was half
+ *    the width of the permission card for the same edit, so approving visibly
+ *    narrowed it. `w-full` was already present and both call sites wrap the
+ *    element in a `w-full` div inside the bounded message column, so the block
+ *    now fills that column. Widening is safe here specifically because the rows
+ *    live in a `codeScroll` (`overflow-x-auto`) region: a long line scrolls
+ *    inside the card instead of pushing it wider.
+ *
  * No prop, field or behaviour was added or removed.
  */
 
@@ -94,7 +102,7 @@ export function CodeDiff({
       data-slot="code-diff"
       className={cn(
         paper,
-        "w-full max-w-md overflow-hidden rounded-2xl font-mono text-xs",
+        "w-full overflow-hidden rounded-2xl font-mono text-xs",
         className,
       )}
       {...props}

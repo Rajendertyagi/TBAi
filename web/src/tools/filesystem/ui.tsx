@@ -16,6 +16,7 @@ import {
 import {
   approvalOptionApproves,
   approvalOptionLabel,
+  primaryApprovalOption,
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { toolsConfig } from "@/config/tools";
@@ -75,9 +76,9 @@ type ApprovalOption = NonNullable<ApprovalState["options"]>[number];
 /**
  * Approval card for server-gated tools. Renders only while the gate is open
  * (`approval.approved === undefined`); automatic decisions render as a badge.
- * If a future server ever attaches decision `options` or a `prompt`, they
- * render via the documented `optionId`/freeform response shapes (today's
- * server only emits plain boolean gates).
+ * A `prompt` (the OpenCode engine's question text) renders above the argument
+ * preview; decision `options` and freeform answers render via the documented
+ * `optionId`/`text` response shapes. The argument preview always renders.
  *
  * Exported for the terminal adapter (run_command reuses the gate chrome
  * around the official Terminal Block instead of duplicating it).
@@ -254,13 +255,26 @@ export function ApprovalGate({
   };
 
   const options = approval.options ?? [];
-  const prompt = approval.prompt;
+  // The prompt is optional prose shown ABOVE the arguments, never a stand-in for
+  // them: the args preview IS the substance of the request, so an engine that
+  // attaches a prompt (OpenCode's question text, or a Direct approval reason)
+  // must not be able to hide it. A blank prompt is treated as no prompt.
+  const prompt: string | undefined =
+    approval.prompt !== undefined && approval.prompt.trim().length > 0
+      ? approval.prompt
+      : undefined;
   const display = approval.display;
   const allowFreeform = approval.allowFreeform;
   // A gate that declares its choices renders ONLY those choices. The generic
   // approve/deny pair cannot express "always allow", and drawing both put two
   // decision surfaces on one card.
   const hasDeclaredOptions = options.length > 0;
+  // Which choice reads as THE action. Every decision button on this card is
+  // `sm` (a decision, not a chip) and the primary is the ink `default` variant
+  // while the rest sit on solid `secondary` — the card's own fill is a few
+  // percent off the background, so an `outline` button (10% border, 15% fill)
+  // disappears into it and its label reads as dim grey.
+  const primaryOptionId = primaryApprovalOption(options)?.id;
   const confirmingOption =
     confirmingOptionId === null
       ? undefined
@@ -274,7 +288,10 @@ export function ApprovalGate({
 
   return (
     <ToolCard title={title} leaving={leaving}>
-      {prompt ? <p className="mb-1 font-medium text-foreground">{prompt}</p> : details}
+      {prompt !== undefined && (
+        <p className="mb-1 font-medium text-foreground">{prompt}</p>
+      )}
+      {details}
       {confirmingOption !== undefined ? (
         <div className="mt-2 rounded-xl border border-border bg-muted/40 px-3 py-2">
           <p className="font-medium text-foreground">
@@ -297,15 +314,15 @@ export function ApprovalGate({
             )}
           <div className="mt-3 flex items-center gap-2">
             <Button
-              size="xs"
+              size="sm"
               disabled={busy}
               onClick={() => void chooseOption(confirmingOption)}
             >
               Confirm
             </Button>
             <Button
-              size="xs"
-              variant="outline"
+              size="sm"
+              variant="secondary"
               disabled={busy}
               onClick={() => setConfirmingOptionId(null)}
             >
@@ -319,8 +336,8 @@ export function ApprovalGate({
             {options.map((option) => (
               <Button
                 key={option.id}
-                size="xs"
-                variant="outline"
+                size="sm"
+                variant={option.id === primaryOptionId ? "default" : "secondary"}
                 disabled={busy}
                 aria-label={approvalOptionLabel(option)}
                 title={option.description}
@@ -348,7 +365,7 @@ export function ApprovalGate({
             className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-1 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           <Button
-            size="xs"
+            size="sm"
             disabled={busy || !freeform.trim()}
             onClick={() => void answer({ approved: true, text: freeform.trim() })}
             aria-label="Submit answer"
@@ -413,6 +430,43 @@ function failureOf(result: AnyResult): string | null {
   const r = result as { error?: unknown } | null | undefined;
   if (r && typeof r === "object" && typeof r.error === "string") return r.error;
   return null;
+}
+
+/**
+ * The copy a settled part's failure row shows, or `null` when it did not fail.
+ *
+ * `isError` is the RUNTIME's own verdict on the part and is authoritative; the
+ * result's `error` string is the reason whenever there is one. Both are
+ * consulted, and neither replaces the other:
+ *
+ *   - a part the runtime called failed but which carries no readable `error` is
+ *     still a failure, and says so in words
+ *     (`toolsConfig.copy.status.failedWithoutReason`) instead of falling through
+ *     to a body that reads as success;
+ *   - a result carrying an `error` string is a failure even when `isError` was
+ *     not set — a denial reloaded from pruned history reaches this only after
+ *     {@link denialOf} has already ruled it out.
+ *
+ * Exported, like {@link denialOf}, so the decision is assertable directly. It
+ * has to be: the reason lives inside a collapsed `CollapsedDecisionRow`, whose
+ * content Radix does not render to static markup, so a `renderToStaticMarkup`
+ * assertion could only ever see the badge and never the words.
+ *
+ * @param result - The settled part's result, in whatever shape it arrived.
+ * @param isError - The runtime's own "this call failed" flag.
+ * @returns The failure copy, or `null` when the part did not fail.
+ */
+export function failureCopyOf(
+  result: AnyResult,
+  isError: boolean,
+): { readonly reason: string | null; readonly copy: string } | null {
+  const reason = failureOf(result);
+  if (reason !== null) {
+    return { reason, copy: toolsConfig.copy.status.failedWithReason(reason) };
+  }
+  return isError
+    ? { reason: null, copy: toolsConfig.copy.status.failedWithoutReason }
+    : null;
 }
 
 /** Active thread's conversation id (same pattern as the Composer Stop handler). */
@@ -530,6 +584,14 @@ export function ClosedGateMessage({ resolution }: { resolution: string }) {
  * requires-action (open gate) → approval card; closed gate without decision →
  * closed message (never a spinner); running → progress; incomplete → error
  * message with reason; complete/result → summary.
+ *
+ * `isError` is the RUNTIME's own verdict on the part, and it is treated as
+ * authoritative over the shape of `result`. Before this, failure was inferred
+ * only from `result.error` being a string, so a part the runtime marked failed
+ * but whose result carried no `error` string fell through to the success body
+ * and read as an ordinary result. On the OpenCode engine that envelope is
+ * `{ error, type }` (see `tools/opencode/adapt.ts`), and on the Direct engine
+ * the AI SDK produces `{ error }` for both `output-error` and `output-denied`.
  */
 export function BackendToolView({
   title,
@@ -543,6 +605,7 @@ export function BackendToolView({
   summarize,
   tool,
   targetPath,
+  isError = false,
   variant = "card",
 }: {
   title: string;
@@ -558,6 +621,8 @@ export function BackendToolView({
   tool?: string;
   /** Requested path (or cwd) — resolved server-side for the pre-check display. */
   targetPath?: string;
+  /** The runtime's own "this call failed" verdict. Authoritative. */
+  isError?: boolean;
   /** Presentation variant: standard full card or lightweight compact row. */
   variant?: "card" | "compact";
 }) {
@@ -645,7 +710,11 @@ export function BackendToolView({
         </CollapsedDecisionRow>
       );
     }
-    const failed = failureOf(result);
+    // The whole decision lives in `failureCopyOf`, so the card and the tests
+    // read the same rule: `isError` (the runtime's verdict) counts even when the
+    // result carries no `error` string, and a readable `error` counts even when
+    // `isError` was not set.
+    const failed = failureCopyOf(result, isError);
     if (failed) {
       return (
         <CollapsedDecisionRow
@@ -654,9 +723,14 @@ export function BackendToolView({
           badge={<DecisionBadge tone="denied">Failed</DecisionBadge>}
         >
           <span className="text-destructive" role="alert">
-            {toolsConfig.copy.status.failedWithReason(failed)}
+            {failed.copy}
           </span>
-          <FailedOutsideRetry title={title} failed={failed} tool={tool} args={args} />
+          {/* The one-shot retry matches on the failure REASON (an
+              outside-workspace refusal), so it is offered only when there is
+              one to match. */}
+          {failed.reason !== null && (
+            <FailedOutsideRetry title={title} failed={failed.reason} tool={tool} args={args} />
+          )}
         </CollapsedDecisionRow>
       );
     }
@@ -743,6 +817,7 @@ export const ReadFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.reading}
@@ -758,6 +833,7 @@ export const ListDirToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.listing}
@@ -773,6 +849,7 @@ export const SearchFilesToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.searching}
@@ -788,6 +865,7 @@ export const FileInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.reading}
@@ -808,6 +886,7 @@ export const WriteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     }
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.writing}
@@ -835,6 +914,7 @@ export const EditFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     }
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.editing}
@@ -850,6 +930,7 @@ export const DeleteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.deleting}
