@@ -61,6 +61,52 @@ describe("useOpenCodeConversationConfig — override merge", () => {
   });
 });
 
+// ── OpenCodeChipShared: the chip's display source is the native session ─────
+
+describe("OpenCodeChipShared — model chip display source", () => {
+  it("reads the model through resolveChipModelSource, not the stored column alone", () => {
+    // THE REGRESSION. The chip previously read `config?.opencodeModel ?? ""`,
+    // so a session bound through the server-default path (which never writes
+    // that column) rendered "Select a model" while running a real model.
+    const currentModel = chipSharedSource.match(/const currentModel = [^;]+;/)?.[0] ?? "";
+    expect(currentModel, "currentModel must be computed by the resolver").toContain(
+      "resolveChipModelSource",
+    );
+    expect(currentModel, "must not read the stored column directly").not.toContain(
+      "config?.opencodeModel ??",
+    );
+  });
+
+  it("feeds the native session's model into the resolver", () => {
+    // `nativeExtras.model` is the server-reported bound model. Without this the
+    // resolver has no Case-B input and the fix silently does nothing.
+    const call = chipSharedSource.match(/resolveChipModelSource\(\{[\s\S]*?\}\)/)?.[0] ?? "";
+    expect(call, "resolver call must exist").toContain("nativeModel:");
+    expect(call, "native model must come from the runtime extras").toContain(
+      "nativeExtras?.model",
+    );
+    expect(call, "stored column must still be an input, as the authority").toContain(
+      "storedModel:",
+    );
+  });
+
+  it("resolves the displayed label through the shared catalogue lookup", () => {
+    // The chip's own `models.find(...)` was moved into `findChipModelInfo` so
+    // the resolution is testable and the hook cannot drift from the tests.
+    const info = chipSharedSource.match(/const currentModelInfo = [^;]+;/)?.[0] ?? "";
+    expect(info, "currentModelInfo must use the shared lookup").toContain(
+      "findChipModelInfo",
+    );
+    expect(chipSharedSource).toContain('from "./chipModelSource"');
+  });
+
+  it("still reads the runtime extras for the model-switch path", () => {
+    // Manual selection must keep reaching setDesiredSelection: the display fix
+    // must not disturb how a pick is applied to the live session.
+    expect(chipSharedSource).toContain("nativeExtras.setDesiredSelection");
+  });
+});
+
 // ── OpenCodeChipShared: persist publishes only on res.ok ──────────────────
 
 describe("OpenCodeChipShared.persist — publish-on-success only", () => {

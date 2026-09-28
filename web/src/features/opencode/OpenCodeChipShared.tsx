@@ -16,6 +16,7 @@ import {
   mergeOpenCodeSelectionState,
   type OpenCodeSelectionPatch,
 } from "./opencodeSelection";
+import { findChipModelInfo, resolveChipModelSource } from "./chipModelSource";
 
 /**
  * Shared state + persist helper for the three OpenCode composer chips.
@@ -40,12 +41,28 @@ export function useOpenCodeChipState(conversationId: string) {
   const [open, setOpen] = useState(false);
 
   const currentAgent = draft ? welcomeAgent : (config?.opencodeAgent ?? "");
-  const currentModel = draft ? welcomeModel : (config?.opencodeModel ?? "");
+  // Display source, and the whole point of `chipModelSource`: a stored choice
+  // wins, but with no stored choice the chip must show what the session is
+  // ACTUALLY bound to. A session bound via the server default never wrote the
+  // `opencodeModel` column, so reading only that column showed "Select a model"
+  // for a session that was running a real model on every turn.
+  //
+  // `nativeExtras.model` is the server-reported bound model (set from the real
+  // `SessionInfo` and updated by `session.model.selected`), so it is read state
+  // rather than a local guess — and it is display-only, never written back to
+  // the conversation, so observing it cannot become a stored preference.
+  const currentModel = resolveChipModelSource({
+    draft,
+    storedModel: config?.opencodeModel,
+    nativeModel: nativeExtras?.model,
+    draftModel: welcomeModel,
+  });
   const currentVariant = draft ? welcomeVariant : (config?.opencodeVariant ?? "");
 
-  const currentModelInfo =
-    models.find((m) => `${m.providerID}/${m.id}` === currentModel) ??
-    models.find((m) => m.id === currentModel);
+  // The catalogue entry for whatever is displayed, resolved through the same
+  // lookup the picker uses. `null` for an id this install does not carry, so
+  // the chip falls back to showing the raw id instead of inventing a label.
+  const currentModelInfo = findChipModelInfo(models, currentModel);
 
   const persist = async (patch: Record<string, string | null>) => {
     if (draft) {

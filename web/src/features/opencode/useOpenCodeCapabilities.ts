@@ -56,7 +56,11 @@ export interface OpenCodeThinkingOption {
  * Returns an empty list when the model has no variants — the chip hides.
  */
 export function buildOpenCodeThinkingOptions(
-  model: OpenCodeModelOption | undefined,
+  // `null` is accepted as well as `undefined`: the guard below already treats a
+  // missing model identically, and the model chip's catalogue lookup returns
+  // `null` for an id this install does not carry. The body has always handled
+  // it; only the declared type was narrower than the behaviour.
+  model: OpenCodeModelOption | null | undefined,
 ): OpenCodeThinkingOption[] {
   if (!model || model.variants.length === 0) return [];
   return [
