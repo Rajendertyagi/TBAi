@@ -31,6 +31,7 @@ export const SchedulerToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
       args={p.args}
       result={p.result}
       status={p.status}
+      isError={p.isError}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
       runningLabel={toolsConfig.copy.running.working}

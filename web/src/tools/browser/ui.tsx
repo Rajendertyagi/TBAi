@@ -67,6 +67,7 @@ export const BrowserToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.browsing}
@@ -80,6 +81,7 @@ export const BrowserActionToolUI: ToolCallMessagePartComponent = (p: AnyProps) =
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.acting}

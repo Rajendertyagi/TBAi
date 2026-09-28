@@ -11,10 +11,13 @@ import { patchToCodeDiffs } from "@/lib/patch-to-diffs";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { resultToLines } from "@/lib/terminal-lines";
 import {
+  classifyOpenCodeResultBody,
   normalizeOpenCodeArgs,
   normalizeOpenCodeResult,
   openCodeResultText,
   openCodePatchFromParts,
+  openCodeQuestionAnswersFromParts,
+  openCodeWebSearchProviderFromParts,
   parseOpenCodeWebSearchHits,
 } from "./adapt";
 import { WebSearch } from "@/components/assistant-ui/elements/web-search";
@@ -42,6 +45,36 @@ type AnyProps = ToolCallMessagePartProps<AnyArgs, unknown>;
 
 const str = (value: unknown, fallback = ""): string =>
   typeof value === "string" ? value : value == null ? fallback : String(value);
+
+/**
+ * Monospace body for a tool result, told apart by what the result IS.
+ *
+ * The three states come from `classifyOpenCodeResultBody`, which encodes the
+ * shapes the live server actually sends (see `adapt.ts` for the capture):
+ *
+ *   - `text`       paint it.
+ *   - `empty`      the tool ran and produced nothing → "No output." is honest.
+ *   - `unreadable` the tool produced something this card cannot decode. The
+ *     old code collapsed that into `""` and printed "No output." — which is how
+ *     a FAILED tool (the `{ error, type }` envelope, which carries no text
+ *     field) came to read as a successful empty one. It now says so instead.
+ */
+function ResultBody({ result }: { result: unknown }) {
+  const body = classifyOpenCodeResultBody(result);
+  if (body.kind === "unreadable") {
+    return (
+      <span className="text-muted-foreground">{toolsConfig.copy.status.resultUnreadable}</span>
+    );
+  }
+  if (body.kind === "empty") {
+    return <span className="text-muted-foreground">{toolsConfig.copy.status.noOutput}</span>;
+  }
+  return (
+    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/90">
+      {textPreview(body.text)}
+    </pre>
+  );
+}
 
 /** Monospace body for a plain-text tool result (OpenCode's result is a string). */
 function TextBody({ text }: { text: string }) {
@@ -75,7 +108,10 @@ interface OpenCodeViewSpec {
  * Bind one OpenCode tool to the shared shell.
  *
  * Normalization happens exactly once, here, so every mapped tool gets it and
- * no renderer has to remember to ask for it.
+ * no renderer has to remember to ask for it. `BackendToolView` hands `summarize`
+ * back the very `result` passed in here, and `normalizeOpenCodeResult` is
+ * idempotent, so `summarize` receives it unchanged — normalizing again could
+ * only re-wrap an already-normalized value.
  *
  * Every renderer this produces routes its approval state through
  * `BackendToolView` — the single dispatcher that reaches `ApprovalGate`, which
@@ -93,10 +129,11 @@ function openCodeView(spec: OpenCodeViewSpec): ToolCallMessagePartComponent {
         {...(spec.argPreview ? { argPreview: spec.argPreview(args) } : {})}
         result={result}
         status={p.status}
+        isError={p.isError}
         approval={p.approval}
         respondToApproval={p.respondToApproval}
         runningLabel={spec.runningLabel}
-        summarize={(res, a) => spec.summarize(normalizeOpenCodeResult(spec.tool, res), a ?? args)}
+        summarize={(res, a) => spec.summarize(res, a ?? args)}
         tool={spec.tool}
         {...(spec.targetPath ? { targetPath: spec.targetPath(args) } : {})}
         {...(spec.variant ? { variant: spec.variant } : {})}
@@ -107,9 +144,7 @@ function openCodeView(spec: OpenCodeViewSpec): ToolCallMessagePartComponent {
   return View as ToolCallMessagePartComponent;
 }
 
-const body = (result: unknown) => (
-  <TextBody text={openCodeResultText(result) ?? ""} />
-);
+const body = (result: unknown) => <ResultBody result={result} />;
 
 /**
  * `read` — OpenCode args are `{ filePath, offset?, limit? }`; our rich UI's
@@ -205,6 +240,7 @@ export const OpenCodeEditView = ({
       argPreview={editPreview(args)}
       result={normalizeOpenCodeResult("edit", p.result)}
       status={p.status}
+      isError={p.isError}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
       runningLabel={toolsConfig.copy.running.editing}
@@ -243,16 +279,19 @@ export const OpenCodeEditView = ({
 OpenCodeEditView.displayName = "OpenCodeEditView";
 
 /**
- * Read the patch OpenCode recorded for this tool call.
+ * The raw official V2 tool parts of the message this part belongs to.
  *
  * `state.metadata` is dropped by the runtime projection, but the untouched parts
  * survive as message metadata (`metadata.custom.opencode.parts`) — the same
- * reach `ChatWindow` already uses for its provenance chips. Returns null
- * whenever the patch is absent, which includes every `write` part (a whole-file
- * write has nothing to diff against) and every not-yet-completed part.
+ * reach `ChatWindow` already uses for its provenance chips.
+ *
+ * ONE selector for the whole message, shared by every reader below: the `edit`
+ * diff and the `websearch` provider both need this exact array, and two
+ * `useAuiState` calls with the same selector would be two places to keep in
+ * step with the projection's metadata key rather than one.
  */
-function useOpenCodeEditPatch(callId: string | undefined): string | null {
-  const rawParts = useAuiState(
+function useOpenCodeRawParts(): unknown {
+  return useAuiState(
     (s) =>
       (
         s.message.metadata?.custom as
@@ -260,7 +299,17 @@ function useOpenCodeEditPatch(callId: string | undefined): string | null {
           | undefined
       )?.opencode?.parts,
   );
-  return openCodePatchFromParts(rawParts, callId);
+}
+
+/**
+ * Read the patch OpenCode recorded for this tool call.
+ *
+ * Returns null whenever the patch is absent, which includes every `write` part
+ * (a whole-file write has nothing to diff against) and every not-yet-completed
+ * part.
+ */
+function useOpenCodeEditPatch(callId: string | undefined): string | null {
+  return openCodePatchFromParts(useOpenCodeRawParts(), callId);
 }
 
 /** `edit` — OpenCode args are `{ filePath, oldString, newString, replaceAll }`. */
@@ -314,8 +363,16 @@ export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (
   // to only the awaiting case would let a closed gate's message be replaced by
   // stale output.
   const gateOwnsCard = p.approval != null && p.approval.approved === undefined;
+  // A FAILED call must not be able to reach the fast path either, for the same
+  // reason: this branch never goes through `BackendToolView`, so it never sees
+  // the failure row. Today the captured error envelope (`{ error, type }`, no
+  // `content` — see `adapt.ts`) carries no `stdout`, so `lines` is empty and
+  // the branch cannot fire; this states the rule rather than relying on that, and
+  // matches the guard the Direct `RunCommandTerminalUI` already applies to its
+  // own equivalent branch.
+  const failed = p.isError === true || p.status?.type === "incomplete";
 
-  if (!gateOwnsCard && p.status?.type !== "running" && lines.length > 0) {
+  if (!gateOwnsCard && !failed && p.status?.type !== "running" && lines.length > 0) {
     return (
       <div className="my-1 w-full">
         <TerminalBlock
@@ -335,6 +392,7 @@ export const OpenCodeBashToolUI: ToolCallMessagePartComponent = (
       args={args}
       result={shaped}
       status={p.status}
+      isError={p.isError}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
       runningLabel={toolsConfig.copy.running.running}
@@ -468,7 +526,7 @@ export const OpenCodeWebFetchToolUI = openCodeView({
  * not for the whole lifetime of the part. This deployment gates nearly every
  * tool (the catch-all `{"permission":"*","action":"ask"}` rule), so an
  * `approval != null` test would route every *approved* search to the fallback
- * and the element would never render at all. The four conditions below mirror
+ * and the element would never render at all. The conditions below mirror
  * `BackendToolView`'s own branches, so no state it handles is lost:
  *
  *   1. `gateUndecided`        — awaiting an answer, or the request is gone
@@ -476,10 +534,28 @@ export const OpenCodeWebFetchToolUI = openCodeView({
  *   3. `failed`               — cancelled / incomplete
  *   4. `denied`               — a denial, via the shared `denialOf` rule
  *
- * Otherwise the element renders. The raw result stays visible beneath it on
- * purpose: the element shows only `title` + `domain`, while the payload also
- * carries `url` and `excerpts`, and discarding those to fit the element would
- * lose real information.
+ * The element additionally owns a settled call whose payload IS the verified
+ * document, and a still-running one (for its shimmer). A settled call the
+ * parser could NOT read stays with the shared shell: the element derives its
+ * status line from `results.length`, so handing it nothing would print
+ * "Read 0 sources" beside a result the model then answers from — the exact
+ * symptom of the zero-results bug. The shared shell shows the same real payload
+ * as its body, so nothing is invented and nothing is lost.
+ *
+ * The raw document stays visible beneath the element on purpose: the element
+ * shows only `title` + `domain`, while the payload also carries every hit's full
+ * `url`, its `Published:` date and the provider's snippet, and discarding those
+ * to fit the element would lose real information.
+ *
+ * THE PROVIDER CAPTION. Which search engine answered is the one fact a reader
+ * cannot get from the card otherwise, and it exists in exactly one place —
+ * `state.metadata.provider` on the raw part (see
+ * `openCodeWebSearchProviderFromParts`). The element is a frozen vendored file
+ * with no prop, slot or footer for it, so the caption is a TBAi-owned line in
+ * the block this renderer already owns, placed between the element and the raw
+ * document: nearest the rows it qualifies, and above the document that is
+ * reference material rather than the summary. It renders only when the payload
+ * states a provider.
  */
 export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
   p: AnyProps,
@@ -495,6 +571,14 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
   const query = propStatus.query === "streaming" ? toolsConfig.copy.running.searching : str(args.query);
   const hits = parseOpenCodeWebSearchHits(result);
   const raw = openCodeResultText(result) ?? "";
+  const running = p.status?.type === "running";
+  // Which search provider answered. `null` when the payload does not say — the
+  // element branch then simply has no caption rather than an empty label, so a
+  // search whose provider is unknown reads as "not stated", never as "unknown".
+  const provider = openCodeWebSearchProviderFromParts(
+    useOpenCodeRawParts(),
+    p.toolCallId,
+  );
 
   const gateUndecided = p.approval != null && p.approval.approved === undefined;
   const awaitingContinuation =
@@ -503,19 +587,24 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
     p.status?.type !== "running";
   const failed = p.status?.type === "incomplete" || p.isError === true;
   const denied = denialOf(result, p.approval) != null;
+  // `null` means "not the verified document" — see the header comment.
+  const elementOwnsCard = hits !== null || running;
 
-  if (!gateUndecided && !awaitingContinuation && !failed && !denied) {
+  if (!gateUndecided && !awaitingContinuation && !failed && !denied && elementOwnsCard) {
     return (
       <div className="my-1 w-full space-y-2">
         <WebSearch
           query={query}
-          // `null` means "not the verified shape" — the element still renders
-          // its query and status, with no result rows and nothing invented.
           results={hits ?? []}
-          visibleResults={hits?.length ?? 0}
-          searching={p.status?.type === "running"}
+          visibleResults={toolsConfig.limits.webSearchMaxResults}
+          searching={running}
           cycle={0}
         />
+        {provider ? (
+          <div className="text-muted-foreground text-xs">
+            {toolsConfig.copy.webSearch.searchedVia(provider)}
+          </div>
+        ) : null}
         {raw ? <TextBody text={raw} /> : null}
       </div>
     );
@@ -527,6 +616,7 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
       args={args}
       result={result}
       status={p.status}
+      isError={p.isError}
       approval={p.approval}
       respondToApproval={p.respondToApproval}
       runningLabel={toolsConfig.copy.running.searchingWeb}
@@ -560,58 +650,189 @@ function questionList(args: AnyArgs): Record<string, unknown>[] {
 }
 
 /**
+ * The asked questions, and the answer once there is one.
+ *
+ * ## Why the options are NOT listed while the question is open
+ *
+ * They used to be, as `· label` bullets. That is the defect this card had: it
+ * printed three clickable-looking options on a surface with no controls on them,
+ * then told the reader to answer somewhere else. The only place a question is
+ * answered is the dock above the composer, so that is all this card says while
+ * it is open. Printing the options here bought nothing and invited a click that
+ * could never do anything.
+ *
+ * ## Why the pointer is suppressed once the question is settled
+ *
+ * `cancelled` is a FORM state, not a tool state — a tool part is only `pending`,
+ * `running`, `completed` or `error`. So a question the reader dismissed and a
+ * question that genuinely failed arrive here identically: `error`, with no
+ * `answers`. The card must therefore not distinguish them, and must not send
+ * either of them to the dock. Telling a settled question to "answer this in the
+ * question box just above the text field" points at a box that is never coming
+ * back — the same dead end the open-question pointer used to create, reached
+ * by cancelling instead of by reading.
+ *
+ * So the pointer is printed for exactly one case: a question that is still
+ * live, where a form genuinely exists and can genuinely be answered. Everything
+ * else is described by what it is.
+ *
+ * ## What the settled card shows
+ *
+ * The answer, and the description of the option it came from — which is the
+ * reason it was chosen, and the part a reader looking back wants. The
+ * alternatives are not re-listed to highlight one of them; that turned a
+ * receipt back into a menu.
+ *
+ * `answers` is the completed part's own `state.metadata.answers`
+ * (`openCodeQuestionAnswersFromParts`) — `string[][]`, outer array indexed by
+ * question.
+ */
+function questionBody(
+  args: AnyArgs,
+  answers: readonly (readonly string[])[] | null,
+  state: QuestionCardState,
+): ReactNode {
+  const questions = questionList(args);
+  if (questions.length === 0) {
+    return <span className="text-muted-foreground">{toolsConfig.copy.status.noQuestionText}</span>;
+  }
+  return (
+    <div className="space-y-3">
+      {questions.map((q, i) => {
+        const answer = answers?.[i] ?? null;
+        const settled = state === "answered" && answer !== null && answer.length > 0;
+        // The option the answer names, so its description can follow it. The
+        // answer holds the option's LABEL, not its value, on a `question` call.
+        const chosen = settled
+          ? (Array.isArray(q.options) ? q.options : [])
+            .map(asQuestion)
+            .find((option) => option !== undefined && answer.includes(str(option.label)))
+          : undefined;
+        return (
+          <div key={i}>
+            {typeof q.header === "string" && q.header ? (
+              <p className="text-xs font-medium text-muted-foreground">{q.header}</p>
+            ) : null}
+            <p className="text-foreground">{str(q.question)}</p>
+            {settled ? (
+              <div className="mt-1 text-xs">
+                <p>
+                  <span className="text-muted-foreground">{toolsConfig.copy.status.yourAnswer}: </span>
+                  <span className="font-medium text-foreground">{answer.join(", ")}</span>
+                </p>
+                {chosen?.description ? (
+                  <p className="mt-0.5 text-muted-foreground">{str(chosen.description)}</p>
+                ) : null}
+              </div>
+            ) : null}
+            {state === "closed" ? (
+              <p className="mt-1 text-xs text-muted-foreground">{toolsConfig.copy.status.questionClosedNoAnswer}</p>
+            ) : null}
+          </div>
+        );
+      })}
+      {state === "open" ? (
+        <p className="text-xs text-muted-foreground">
+          {toolsConfig.copy.status.answerInQuestionDock}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** The `question` card title: the first question's header, else its text. */
+function questionTitle(args: AnyArgs): string {
+  const first = questionList(args)[0];
+  return `question · ${str(first?.header) || str(first?.question) || "asked"}`;
+}
+
+/**
  * `question` — required `{ questions }`.
  *
  * A `question` tool call is rendered as a read-only historical tool result.
  * Interactive native V2 forms use the separate `session.form` lifecycle and
  * are owned by `OpenCodeQuestions`/`V2FormCard`. The tool renderer never
- * answers forms or writes a synthetic tool result.
+ * answers forms or writes a synthetic tool result — it only shows what the
+ * reader already answered, from the completed part's own metadata.
+ *
+ * Hand-written rather than built by `openCodeView` for the same reason `edit`
+ * is: the answer lives in `state.metadata`, which the runtime projection drops,
+ * so the card needs `useOpenCodeRawParts()` and therefore a provider. The
+ * answer arrives as a PROP instead, which keeps this half static-renderable in
+ * a unit test with no `AuiProvider`.
  */
-export const QuestionReadonlyView = openCodeView({
-  tool: "question",
-  title: (args) => {
-    const first = questionList(args)[0];
-    return `question · ${str(first?.header) || str(first?.question) || "asked"}`;
-  },
-  argPreview: (args) => {
-    const questions = questionList(args);
-    if (questions.length === 0) {
-      return <span className="text-muted-foreground">{toolsConfig.copy.status.noQuestionText}</span>;
-    }
-    return (
-      <div className="space-y-3">
-        {questions.map((q, i) => {
-          const options = Array.isArray(q.options) ? q.options : [];
-          return (
-            <div key={i}>
-              {typeof q.header === "string" && q.header ? (
-                <p className="text-xs font-medium text-muted-foreground">{q.header}</p>
-              ) : null}
-              <p className="text-foreground">{str(q.question)}</p>
-              {options.length > 0 ? (
-                <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                  {options.map((option, j) => {
-                    const opt = asQuestion(option);
-                    return (
-                      <li key={j}>
-                        · {str(opt?.label)}
-                        {opt?.description ? ` — ${str(opt.description)}` : ""}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
-            </div>
-          );
-        })}
-        <p className="text-xs text-muted-foreground">
-          {toolsConfig.copy.status.answerOnCardAbove}
-        </p>
-      </div>
-    );
-  },
-  runningLabel: toolsConfig.copy.running.waitingForAnswer,
-  summarize: body,
-});
+export const QuestionReadonlyView = (
+  p: AnyProps & { readonly answers?: readonly (readonly string[])[] | null },
+) => {
+  const args = normalizeOpenCodeArgs("question", p.args) ?? {};
+  const answers = p.answers ?? null;
+  const state = questionCardState(p, answers);
+  return (
+    <BackendToolView
+      title={questionTitle(args)}
+      args={args}
+      argPreview={questionBody(args, answers, state)}
+      result={normalizeOpenCodeResult("question", p.result)}
+      status={p.status}
+      isError={p.isError}
+      approval={p.approval}
+      respondToApproval={p.respondToApproval}
+      runningLabel={toolsConfig.copy.running.waitingForAnswer}
+      summarize={(result) => (
+        <div className="space-y-2">
+          {questionBody(args, answers, state)}
+          {body(result)}
+        </div>
+      )}
+      tool="question"
+    />
+  );
+};
 
-export const OpenCodeQuestionToolUI: ToolCallMessagePartComponent = (p: AnyProps) => <QuestionReadonlyView {...p} />;
+/** What a question card can honestly say about itself. */
+type QuestionCardState = "open" | "answered" | "closed";
+
+/**
+ * Whether the question is still answerable, already answered, or closed.
+ *
+ * ## Why "closed" covers both a dismissal and a failure
+ *
+ * The server's only tool statuses are `pending | running | complete | error`, and
+ * `cancelled` exists only on the FORM, not on the tool call. A question the
+ * reader dismissed therefore arrives exactly like one that genuinely failed:
+ * `error`, with no `answers` in its metadata. Nothing in the payload separates
+ * them, so the card does not claim to separate them — it says the question is
+ * closed, which is true either way, and leaves the reason to the failure chip
+ * that `BackendToolView` already renders from the real error.
+ *
+ * Inventing a distinction here would mean matching on the server's error prose,
+ * which is precisely the fragility that makes OpenChamber's answer receipt
+ * fragile. Refusing to guess is the correct behaviour, not a missing feature.
+ *
+ * ## Why "open" is the only state that points at the dock
+ *
+ * The dock exists only while a form is pending. Pointing a settled question at
+ * it is the dead end this card used to have, and cancelling used to walk
+ * straight back into it.
+ */
+function questionCardState(
+  p: AnyProps,
+  answers: readonly (readonly string[])[] | null,
+): QuestionCardState {
+  if (answers !== null && answers.length > 0) return "answered";
+  const type = p.status?.type;
+  if (type === "running" || type === "requires-action") return "open";
+  // A settled part: `complete`, `incomplete` (any reason), or an explicit error.
+  // An absent status is treated as settled rather than open, because the safe
+  // mistake is silence — never sending a reader to a dock that cannot be there.
+  return "closed";
+}
+QuestionReadonlyView.displayName = "OpenCodeToolUI(question)";
+
+/** Reads the answers off the raw parts and hands them to `QuestionReadonlyView`. */
+export const OpenCodeQuestionToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
+  <QuestionReadonlyView
+    {...p}
+    answers={openCodeQuestionAnswersFromParts(useOpenCodeRawParts(), p.toolCallId)}
+  />
+);

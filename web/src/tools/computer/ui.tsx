@@ -43,6 +43,7 @@ export const ProcessListToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.listingProcesses}
@@ -56,6 +57,7 @@ export const ProcessKillToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.stoppingProcess}
@@ -69,6 +71,7 @@ export const SystemInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     args={p.args}
     result={p.result}
     status={p.status}
+    isError={p.isError}
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.readingSystemInfo}
