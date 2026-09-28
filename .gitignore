@@ -63,6 +63,21 @@ playwright-report/
 # Neither belongs in history, and both are worth keeping on disk.
 .superpowers/
 prompt.txt
+# Same class, newer tooling: the browser panel writes verification screenshots
+# here. They are per-run artifacts with timestamps in their names, so committing
+# them would add hundreds of near-duplicate binaries that never match on a
+# re-run.
+.openchamber/
+
+# Visual QA evidence, not shipped documentation. `docs/tool-ui-atlas.html` is a
+# design-review page whose value is in comparing screenshots against mockups, and
+# it pulls in ~3.8 MB of JPEGs to do so. This is the same reasoning that took the
+# E2E debug PNGs out of history (see ab8b380): a screenshot is evidence for a
+# decision already made, and once the decision is in the code and its tests, the
+# pixels are dead weight in every future clone. Kept on disk for whoever wants to
+# re-read the evidence; not part of the repository.
+docs/tool-ui-atlas/
+docs/tool-ui-atlas.html
 
 # Debug screenshots written by the E2E suite belong in Playwright's artifact dir.
 web/e2e/*.png
