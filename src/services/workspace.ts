@@ -491,9 +491,37 @@ export async function resolveConversationWorkspace(
       folderName: row.alias || row.name,
     };
   }
+  // A simple chat's directory is conversation-owned scratch space, and this
+  // process is the only thing that creates and reclaims it. `createChatWorkspace`
+  // creates it, and `gcOrphanChatDirs` deletes it whenever its folder row is no
+  // longer bound to a live chat. So by the time a conversation is resolved again
+  // the path can legitimately not exist — and a caller that hands that path to
+  // the OpenCode server as a session location binds the session to a directory
+  // that is not there. OpenCode then answers 500 to every per-session request
+  // for it (`/form`, `/permission`, `POST /model`), which leaves the Code chat
+  // permanently unable to select a model or run a turn.
+  //
+  // So the directory is ensured here, at the one boundary every consumer goes
+  // through. A project folder is deliberately NOT touched: a registered project
+  // whose directory vanished is an explicit unavailable state, handled above.
+  const dir = chatWorkspaceDir(conversationId);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    logger.error("workspace", "workspace.ensure_dir_failed", {
+      conversationId,
+      folderId: row.id,
+      path: dir,
+      error: String(err),
+    });
+    throw new WorkspaceError(
+      "folder_unavailable",
+      `Chat workspace is unavailable: ${row.alias || row.name}`,
+    );
+  }
   return {
     mode,
-    dir: chatWorkspaceDir(conversationId),
+    dir,
     folderId: row.id,
     folderName: row.alias || row.name,
   };
