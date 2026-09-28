@@ -5,6 +5,13 @@
  * POST /check-port) through the real Hono sub-app, with `getActivePort` and
  * `restartListener` mocked so no live server is needed. DB is the real
  * hermetic test DB; the `server.port` row is cleaned up per test.
+ *
+ * The `check-port` cases deliberately never assert that some FIXED port number
+ * is free. That is a property of the machine, not of the route, and the route
+ * really does `fetch` the port — so a listener anywhere on it (another test
+ * file in the same process, a machine service) silently flips the result. The
+ * occupied case holds a listener this file OWNS, which is deterministic and
+ * pins the branch that matters.
  */
 import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { Hono } from "hono";
@@ -29,6 +36,17 @@ const serverRoutes = (serverRoutesModule as { default: unknown }).default as nev
 import { db } from "../../src/db";
 
 const PORT_SETTING_KEY = "server.port";
+
+/** The fallback `resolveConfiguredPort()` reports with nothing persisted. */
+const DEFAULT_CONFIGURED_PORT = 3000;
+
+/**
+ * Offset from a listener's own port to the value the fake `getActivePort`
+ * reports, so a probed port is never mistaken for the active one. Any value
+ * that is not the port under test works; a small constant keeps it obvious.
+ */
+const PORT_OFFSET_FOR_ACTIVE = 10_000;
+
 function clearPersistedPort(): void {
   db.run("DELETE FROM app_settings WHERE key = ?", [PORT_SETTING_KEY]);
 }
@@ -65,6 +83,9 @@ async function req(
 beforeEach(() => {
   clearPersistedPort();
   delete process.env.PORT;
+  // Each case starts from the same active port, so a case that changes it
+  // cannot leak that value into the next one.
+  activePort = DEFAULT_CONFIGURED_PORT;
 });
 
 // ── GET / — identity shape ───────────────────────────────────────────────────
@@ -178,17 +199,46 @@ describe("POST /api/server/check-port — probe", () => {
     expect(r.json.port).toBe(4999);
     expect(r.json.available).toBe(false);
     expect(r.json.reason).toBe("active_port");
-    activePort = 3000;
   });
 
-  it("reports a free port as available", async () => {
-    // A port that is not the active port and has no listener → available:true.
-    activePort = 4999;
-    const r = await req("POST", "/api/server/check-port", { port: 4998 });
-    expect(r.status).toBe(200);
-    expect(r.json.port).toBe(4998);
-    expect(r.json.available).toBe(true);
-    expect(r.json.reason).toBeUndefined();
-    activePort = 3000;
+  it("reports a port a real listener holds as in_use", async () => {
+    // This case replaced a hard-coded "port 4998 is free" probe, which was not a
+    // property of the code under test: it was a property of the machine. 4998
+    // was genuinely free most of the time, so the case passed — until another
+    // test file in the same process leaked a listener onto it (which
+    // `server-port-routes.test.ts` sorted after and inherited), or a machine
+    // service happened to use it. The route really does
+    // `fetch("http://127.0.0.1:<port>/healthz")`, so ANY listener flips the
+    // result.
+    //
+    // Holding a listener we own is the deterministic inversion: instead of
+    // asking "is this port free?" on a machine whose ports we do not control,
+    // it asks "does the probe detect a listener we put there?" — which is the
+    // branch that actually matters (a false "available" would let the UI send
+    // the user into a port that cannot bind).
+    const listener = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Response("held"),
+    });
+    try {
+      const heldPort = listener.port;
+      // Not the active port, so the `active_port` short-circuit cannot be what
+      // produced the answer.
+      activePort = heldPort + PORT_OFFSET_FOR_ACTIVE;
+
+      const r = await req("POST", "/api/server/check-port", { port: heldPort });
+
+      expect(r.status).toBe(200);
+      expect(r.json.port).toBe(heldPort);
+      expect(r.json.available).toBe(false);
+      expect(r.json.reason).toBe("in_use");
+      // The reason is the PROBE's, not the active-port short-circuit's: it
+      // proves the fetch really reached a listener and was classified.
+      expect(r.json.reason).not.toBe("active_port");
+    } finally {
+      await listener.stop(true);
+      activePort = DEFAULT_CONFIGURED_PORT;
+    }
   });
 });
