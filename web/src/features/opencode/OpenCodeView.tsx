@@ -63,9 +63,15 @@ export function OpenCodeView() {
   // agent/model to every new turn, so a session never depends on the OpenCode
   // server's implicit default. Both come from the live config + capabilities
   // (never the Direct-chat provider state).
+  //
+  // `defaultModel` is the RESOLVED reference actually sent. `serverDefault` is
+  // what the OpenCode catalogue advertises for a reader who has never chosen a
+  // model — without it a brand-new Code conversation resolves to nothing, and a
+  // turn sent with no model does nothing at all. Named apart because they are
+  // different things and conflating them is how the blank state reappears.
   const config = useOpenCodeConversationConfig(agentId);
-  const { models } = useOpenCodeCapabilities();
-  const defaultModel = useResolvedOpenCodeModel(config?.opencodeModel ?? null, models);
+  const { models, defaultModel: serverDefault } = useOpenCodeCapabilities();
+  const defaultModel = useResolvedOpenCodeModel(config?.opencodeModel ?? null, models, serverDefault);
   const defaultAgent = config?.opencodeAgent ?? undefined;
   const defaultModelWithVariant = defaultModel
     ? { ...defaultModel, ...(config?.opencodeVariant ? { variant: config.opencodeVariant } : {}) }
@@ -285,11 +291,11 @@ function AgentRuntime({
           <div className="flex h-full min-h-0 flex-col">
             <OpenCodeSessionRow />
             <OpenCodePermissions />
-            <OpenCodeQuestions />
             <OpenCodeTodoTracker sessionId={sessionId} />
             <div className="min-h-0 flex-1">
               <ChatWindow
                 mode="agent"
+                aboveComposerExtra={<OpenCodeQuestions />}
                 belowComposerExtra={
                   <OpenCodeStatus compact onReconnect={reconnect} />
                 }

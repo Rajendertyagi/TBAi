@@ -21,9 +21,24 @@ export interface OpenCodeModelOption {
   limit?: { context: number; output: number };
 }
 
+/**
+ * The model the server offers when the reader has not chosen one.
+ *
+ * Descriptor only. The server's own default response carries the provider's
+ * credentials in `settings`; the backend projects those out before this point,
+ * and nothing re-adds them.
+ */
+export interface OpenCodeDefaultModel {
+  readonly providerID: string;
+  readonly modelID: string;
+  readonly name: string;
+}
+
 export interface OpenCodeCapabilities {
   agents: OpenCodeAgentOption[];
   models: OpenCodeModelOption[];
+  /** Absent when the server advertises no default. */
+  defaultModel?: OpenCodeDefaultModel;
 }
 
 /**
@@ -59,6 +74,7 @@ export function buildOpenCodeThinkingOptions(
 export function useOpenCodeCapabilities(enabled = true) {
   const [agents, setAgents] = useState<OpenCodeAgentOption[]>([]);
   const [models, setModels] = useState<OpenCodeModelOption[]>([]);
+  const [defaultModel, setDefaultModel] = useState<OpenCodeDefaultModel | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,6 +86,7 @@ export function useOpenCodeCapabilities(enabled = true) {
     if (!enabled) {
       setAgents([]);
       setModels([]);
+      setDefaultModel(undefined);
       setIsLoading(false);
       setError(null);
       return;
@@ -86,6 +103,22 @@ export function useOpenCodeCapabilities(enabled = true) {
       .then((data: OpenCodeCapabilities) => {
         if (cancelled) return;
         setAgents(data.agents ?? []);
+        // Only a well-formed descriptor is carried forward. A malformed one would
+        // become a model reference that the server rejects on the first turn,
+        // which is the exact failure this default exists to prevent.
+        setDefaultModel(
+          data.defaultModel
+            && typeof data.defaultModel.providerID === "string" && data.defaultModel.providerID.length > 0
+            && typeof data.defaultModel.modelID === "string" && data.defaultModel.modelID.length > 0
+            ? {
+              providerID: data.defaultModel.providerID,
+              modelID: data.defaultModel.modelID,
+              name: typeof data.defaultModel.name === "string" && data.defaultModel.name.length > 0
+                ? data.defaultModel.name
+                : data.defaultModel.modelID,
+            }
+            : undefined,
+        );
         // Keep the optional variants field total for the picker contract.
         setModels(
           (data.models ?? []).map((m) => ({
@@ -125,5 +158,5 @@ export function useOpenCodeCapabilities(enabled = true) {
     };
   }, [enabled, recoveryEpoch]);
 
-  return { agents, models, isLoading, error };
+  return { agents, models, defaultModel, isLoading, error };
 }

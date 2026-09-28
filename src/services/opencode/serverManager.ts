@@ -216,6 +216,12 @@ export class OpenCodeServerManager {
   private child: Subprocess | null = null;
   private port: number | null = null;
   private readyPromise: Promise<string> | null = null;
+  /**
+   * When the readiness gate last resolved for the current process, or null when
+   * no process is ready. Exposed as {@link msSinceReady} rather than a raw
+   * timestamp so a consumer cannot accidentally treat 0 as "just ready".
+   */
+  private readyAtMs: number | null = null;
   private stopping = false;
   private restartAttempts = 0;
   /** Bounded stdout/stderr tails per child, retained for exit diagnostics. */
@@ -224,6 +230,22 @@ export class OpenCodeServerManager {
   constructor(private readonly config: OpenCodeConfig = OPENCODE_CONFIG) {}
 
   /** Returns the base URL of a running, ready server, starting one if needed. */
+  /**
+   * Milliseconds since the managed server became reachable, or null when no
+   * process is ready.
+   *
+   * The catalogue window: a server that answered `/api/info` is listening, but
+   * OpenCode loads its provider catalogue asynchronously, so for a short while
+   * after this clock starts there is legitimately nothing to list. Callers that
+   * must not mistake that for "this install has no models" bound their wait on
+   * this rather than inventing their own startup heuristic.
+   *
+   * @returns Milliseconds since readiness, or null when not ready.
+   */
+  msSinceReady(): number | null {
+    return this.readyAtMs === null ? null : Date.now() - this.readyAtMs;
+  }
+
   async ensureBaseUrl(): Promise<string> {
     // Single in-flight startup/readiness operation: every caller (concurrent or
     // repeated) shares this promise, so we never spawn multiple servers or run
@@ -295,6 +317,12 @@ export class OpenCodeServerManager {
         getStopping: () => this.stopping,
         exited: child.exited,
       });
+      // The moment this process became reachable. `waitForHttpReady` proves the
+      // server is LISTENING — not that its provider catalogue has finished
+      // loading — and the two are seconds apart. Consumers that need the
+      // catalogue (rather than just a URL) use this to tell "still starting"
+      // from "genuinely empty", instead of guessing with their own heuristic.
+      this.readyAtMs = Date.now();
     } catch (err) {
       // Only clear state we own. A restart may already have replaced this.child
       // with a newer attempt (the child exited during readiness); never clobber it.

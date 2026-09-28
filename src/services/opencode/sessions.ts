@@ -1,9 +1,14 @@
-import { createOpenCodeClient, type OpenCodeClient } from "./client";
+import { createOpenCodeClient, lastStatusForSessionLookup, type OpenCodeClient } from "./client";
 import { OpenCodeError, toOpenCodeError } from "./errors";
 import { conversationService } from "../storage";
 import { resolveConversationWorkspace } from "../workspace";
 import { openCodeServerManager } from "./serverManager";
 import { resolveOpenCodeModelRef } from "./capabilities";
+import {
+  fetchServerDefaultModel,
+  pickSessionModel,
+  resolveStoredModel,
+} from "./sessionModel";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 
@@ -67,6 +72,14 @@ function asDirectory(value: unknown): string | undefined {
 }
 
 /**
+ * The status OpenCode returns for a session that does not exist.
+ *
+ * Named rather than inlined because it is load-bearing: it is the one signal that
+ * authorises replacing a stale binding, so it must never be widened by accident.
+ */
+const SESSION_NOT_FOUND_STATUS = 404;
+
+/**
  * Fetches the server's record for a session, or `null` when the server
  * definitively does not have it. Returns the session's **directory** as well,
  * because that value is the scope every directory-keyed OpenCode route needs
@@ -77,18 +90,23 @@ function asDirectory(value: unknown): string | undefined {
  * official client. A missing location is reported as `null`; the seam does not
  * infer a path from fields outside the V2 contract.
  *
- * Liveness follows the V2 session contract. Only the official missing-session
- * response reads as absent; transport, auth, malformed, and server failures
- * propagate so a transient error cannot orphan the existing session.
+ * Liveness is decided by the HTTP status, read off the response the official
+ * client itself received. A `404` means the session is definitively gone and a
+ * replacement is safe. **Everything else propagates.** That asymmetry is the
+ * whole point: minting a replacement for a session that may still exist would
+ * break history continuity, so a transport failure, an auth failure, a
+ * malformed body or a server fault must all surface as the real error rather than
+ * be read as "gone". A session is only ever declared absent on positive evidence.
  *
  * @param client - Client bound to the managed server's base URL.
  * @param sessionId - The persisted OpenCode session id to look up.
  * @returns The session id + directory, or null when the server has no such session.
+ * @throws {OpenCodeError} When absence could not be established either way.
  */
 async function fetchOpenCodeSession(
   client: OpenCodeClient,
   sessionId: string,
-): Promise<{ id: string; directory: string | null } | null> {
+): Promise<{ id: string; directory: string | null; model: string | null } | null> {
   try {
     const session = await client.session.get({ sessionID: sessionId });
     if (typeof session?.id !== "string" || session.id.length === 0) {
@@ -100,13 +118,67 @@ async function fetchOpenCodeSession(
     return {
       id: session.id,
       directory: asDirectory(session.location?.directory) ?? null,
+      // The session's current model, so adopting it can tell "already has one"
+      // from "has none" without a second request. OpenCode reports an unset
+      // model as an empty/absent field, so anything non-string is "none".
+      model: typeof session.model?.id === "string" && session.model.id.length > 0
+        ? session.model.id
+        : null,
     };
   } catch (error) {
+    // The status is the evidence, and it is checked BEFORE the thrown error is
+    // interpreted: for the real missing-session response the client cannot
+    // report the status at all, so the classification below would only ever say
+    // "malformed" and the stale binding would never be detected.
+    if (lastStatusForSessionLookup(client, sessionId) === SESSION_NOT_FOUND_STATUS) {
+      return null;
+    }
+    // No 404 means absence was never established, whatever the client thought it
+    // saw. `null` here would authorise a replacement on no evidence, so the real
+    // failure is surfaced instead.
     const failure = toOpenCodeError(error);
-    if (failure.kind === "session_not_found" || failure.statusCode === 404) {
+    if (failure.kind === "session_not_found" || failure.statusCode === SESSION_NOT_FOUND_STATUS) {
       return null;
     }
     throw failure;
+  }
+}
+
+/**
+ * Gives an adopted session a model when it has none, and only then.
+ *
+ * Never throws and never blocks adoption: a session that cannot be given a
+ * model is still returned, because refusing to hand back a live session would
+ * be strictly worse than handing one back that will be repaired on the next
+ * turn. The failure is logged, so it is never silent.
+ */
+async function assignSessionModelIfMissing(
+  client: OpenCodeClient,
+  conversationId: string,
+  storedModelId: string | null | undefined,
+  sessionId: string,
+  boundModel: string | null,
+): Promise<void> {
+  try {
+    const storedModel = await resolveStoredModel(storedModelId);
+    const serverDefault = await fetchServerDefaultModel();
+    const target = pickSessionModel({ boundModel, storedModel, serverDefault });
+    if (!target) return;
+    await client.session.switchModel({
+      sessionID: sessionId,
+      model: { id: target.id, providerID: target.providerID },
+    });
+    logger.info("opencode", "opencode.session_model_assigned", {
+      conversationId,
+      sessionId,
+      source: storedModel ? "stored" : "server_default",
+    });
+  } catch (error) {
+    logger.warn("opencode", "opencode.session_model_assign_failed", {
+      conversationId,
+      sessionId,
+      ...classifyError(error),
+    });
   }
 }
 
@@ -192,6 +264,18 @@ async function ensureOpenCodeSessionInner(
   if (conversation.opencodeSessionId) {
     const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
     if (live) {
+      // A live session that carries no model cannot select one, and a turn sent
+      // to it does nothing. This is reached by sessions bound before the server
+      // default was ever consulted, so it is a real lifecycle state and not a
+      // hypothetical. Adopting a session and creating one must obey the same
+      // rule, so both go through `pickSessionModel`.
+      await assignSessionModelIfMissing(
+        client,
+        conversationId,
+        conversation.opencodeModel,
+        live.id,
+        live.model,
+      );
       return { sessionId: live.id, directory: live.directory };
     }
     // Stale pointer (e.g. server restarted since the session was stored):
@@ -223,6 +307,20 @@ async function ensureOpenCodeSessionInner(
         params.model.variant = conversation.opencodeVariant;
       }
     }
+  }
+
+  // A conversation with no stored choice still gets a model, from the server's
+  // own default. Without this the session is created unbound, the composer sits
+  // at "Select a model", and a turn sent to it does nothing at all. It is the
+  // same rule the adopt path applies, so a session ends up bound however it came
+  // into being — and it only runs when the stored branch above did not, so a
+  // reader's explicit choice can never be overridden here.
+  if (!params.model) {
+    const target = pickSessionModel({
+      storedModel: await resolveStoredModel(conversation.opencodeModel),
+      serverDefault: await fetchServerDefaultModel(),
+    });
+    if (target) params.model = { id: target.id, providerID: target.providerID };
   }
 
   let sessionId: string | undefined;
