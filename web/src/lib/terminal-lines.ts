@@ -1,11 +1,13 @@
 /**
- * Terminal output normalization for live command display. Pure, framework-free
+ * Terminal output normalization for command display. Pure, framework-free
  * (NOT assistant-ui-specific): strips ANSI escapes, normalizes line endings,
- * folds carriage-return progress output, and keeps a bounded rolling buffer
- * so a noisy process cannot grow messages or React state without limit.
+ * folds carriage-return progress output, and bounds the retained lines
+ * (`TERMINAL_MAX_LINES`) so a noisy process cannot grow messages or React
+ * state without limit — for the live stream ({@link TerminalBuffer}) and for
+ * the completed result ({@link resultToLines}) alike.
  *
  * Display-only: the durable tool result still carries the complete stdout /
- * stderr. This shapes what the Terminal Block paints incrementally.
+ * stderr. This shapes what the Terminal Block paints.
  */
 
 /** Conservative retained-line cap (tune only with measured need). */
@@ -202,13 +204,23 @@ export function mergeTerminalParts(
 
 /**
  * Final-result lines for a completed run: stdout followed by stderr (matches the
- * legacy display order). The durable tool result is the authoritative source
- * once a run finishes; live parts are only a progressive preview.
+ * legacy display order), bounded exactly as the live stream is. The durable tool
+ * result is the authoritative source once a run finishes; live parts are only a
+ * progressive preview — so dropping rows here loses display, never data.
+ *
+ * Over the cap the OLDEST rows go, the same rule {@link TerminalBuffer} applies
+ * to a live stream: the tail of a finished run is what a reader needs (it is
+ * where stderr and the outcome live). `maxLines` defaults to the live cap, so a
+ * command that streams 50 000 lines cannot paint more rows once it completes
+ * than it did while running.
  */
-export function resultToLines(result: {
-  stdout?: unknown;
-  stderr?: unknown;
-}): string[] {
+export function resultToLines(
+  result: {
+    stdout?: unknown;
+    stderr?: unknown;
+  },
+  maxLines: number = TERMINAL_MAX_LINES,
+): string[] {
   const out =
     typeof result.stdout === "string" && result.stdout
       ? splitTerminalLines(result.stdout)
@@ -217,5 +229,7 @@ export function resultToLines(result: {
     typeof result.stderr === "string" && result.stderr
       ? splitTerminalLines(result.stderr)
       : [];
-  return [...out, ...err];
+  const lines = [...out, ...err];
+  const limit = Math.max(1, Math.floor(maxLines));
+  return lines.length > limit ? lines.slice(lines.length - limit) : lines;
 }

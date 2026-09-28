@@ -167,6 +167,10 @@ describe("mergeTerminalParts (live terminal adapter logic)", () => {
 });
 
 describe("resultToLines (completed-result adapter logic)", () => {
+  /** `count` newline-joined rows named `<prefix>-<i>`, no trailing newline. */
+  const range = (count: number, prefix: string) =>
+    Array.from({ length: count }, (_, i) => `${prefix}-${i}`).join("\n");
+
   it("returns stdout lines then stderr lines", () => {
     expect(
       resultToLines({ stdout: "a\nb\n", stderr: "e1\ne2\n" }),
@@ -180,5 +184,53 @@ describe("resultToLines (completed-result adapter logic)", () => {
 
   it("ignores non-string output", () => {
     expect(resultToLines({ stdout: 42, stderr: null })).toEqual([]);
+  });
+
+  it("caps the completed result at TERMINAL_MAX_LINES, dropping the oldest rows", () => {
+    expect(TERMINAL_MAX_LINES).toBe(2000);
+    const stdout = range(2500, "out");
+    const lines = resultToLines({ stdout });
+
+    expect(lines).toHaveLength(2000);
+    // The OLDEST rows are what go, so the first row returned is the oldest
+    // survivor — 2500 - 2000 = 500 rows dropped.
+    expect(lines[0]).toBe("out-500");
+    expect(lines[1999]).toBe("out-2499");
+    expect(lines).not.toContain("out-499");
+    expect(lines).not.toContain("out-0");
+  });
+
+  it("keeps stderr, which is the tail, over the earliest stdout rows", () => {
+    const stdout = range(1500, "out");
+    const stderr = range(1000, "err");
+    const lines = resultToLines({ stdout, stderr });
+
+    expect(lines).toHaveLength(2000);
+    // stdout rows 0..499 are dropped; everything from stdout-500 onwards
+    // survives, and all of stderr is at the end of the buffer.
+    expect(lines[0]).toBe("out-500");
+    expect(lines).not.toContain("out-499");
+    expect(lines[1000]).toBe("err-0");
+    expect(lines[1999]).toBe("err-999");
+  });
+
+  it("honours an explicit maxLines", () => {
+    const stdout = range(10, "line");
+    expect(resultToLines({ stdout }, 3)).toEqual([
+      "line-7",
+      "line-8",
+      "line-9",
+    ]);
+  });
+
+  it("floors a zero or fractional cap to exactly one row", () => {
+    const stdout = "a\nb\nc";
+    // Never zero rows: a result always shows at least the last line, so a
+    // mis-tuned cap cannot blank the card.
+    expect(resultToLines({ stdout }, 0)).toEqual(["c"]);
+    expect(resultToLines({ stdout }, 0.4)).toEqual(["c"]);
+    expect(resultToLines({ stdout }, -5)).toEqual(["c"]);
+    // A fractional cap floors rather than rounding up.
+    expect(resultToLines({ stdout }, 2.9)).toEqual(["b", "c"]);
   });
 });

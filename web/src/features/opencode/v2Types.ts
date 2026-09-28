@@ -38,6 +38,17 @@ export interface V2UsageSnapshot {
   readonly tokens: TokenUsageInfo;
 }
 
+/**
+ * A tool part's lifecycle, as the server reports it.
+ *
+ * Named so the projection's mapping has one place to read the vocabulary from.
+ * Note there is NO cancelled state: a question the reader dismisses arrives as
+ * `error`, indistinguishable from one that genuinely failed. See
+ * `projectV2ToolStatus`, which maps this without inventing a distinction the
+ * server does not make.
+ */
+export type V2ToolStatus = "pending" | "running" | "complete" | "error";
+
 export type V2MessagePartState =
   | {
       readonly kind: "text";
@@ -61,7 +72,7 @@ export type V2MessagePartState =
       readonly input: Readonly<Record<string, unknown>>;
       readonly output: unknown;
        readonly metadata?: Readonly<Record<string, unknown>>;
-      readonly status: "pending" | "running" | "complete" | "error";
+      readonly status: V2ToolStatus;
       readonly permissionId: string | null;
     }
   | {

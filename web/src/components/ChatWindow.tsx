@@ -64,14 +64,55 @@ export function shouldShowThreadBoot({
   return mode === "chat" && isHistoryLoading;
 }
 
+/**
+ * Whether the per-message tool timeline renders. Pure (no hooks) so the
+ * engine gate is unit-testable without a DOM runner.
+ *
+ * The timeline speaks the OpenCode vocabulary — "N steps", "M files changed" —
+ * because a coding session is a sequence of steps that change files. The Direct
+ * engine has neither concept: a Direct message is one model turn whose tool
+ * calls are the model's own decisions, and its `edit_file` / `write_file`
+ * results carry `{ path, occurrences, diff }` / `{ path, bytes, created }`,
+ * which carry no line counts. So the summary could only ever print
+ * "0 files changed" there, and the defect it reports ("the tool summary in the
+ * Direct transcript is meaningless") is exactly what a reader sees.
+ *
+ * The gate is the OWNING ENGINE, not a tool-name test: the same renderer serves
+ * both surfaces, and which engine a message belongs to is already the `mode`
+ * prop the rest of this component branches on. Gating on names would have to
+ * re-derive the engine from data the runtime already states.
+ */
+export function shouldShowSessionTimeline({
+  mode,
+}: {
+  /** chat = TBAi chat; agent = OpenCode Code mode (separate runtime). */
+  mode: "chat" | "agent";
+}): boolean {
+  return mode === "agent";
+}
+
 export function ChatWindow({
   isDraft = false,
   mode = "chat",
+  aboveComposerExtra,
   belowComposerExtra,
 }: {
   /** chat = TBAi chat; agent = OpenCode Code mode (separate runtime). */
   mode?: "chat" | "agent";
   isDraft?: boolean;
+  /**
+   * Opaque node rendered in the composer folder, directly ABOVE the composer
+   * box. Same contract and the same reason as {@link belowComposerExtra}: kept
+   * opaque so this file stays free of engine-specific imports, with the owner
+   * (e.g. OpenCodeView) supplying whatever belongs there.
+   *
+   * Above rather than below because the surfaces that belong here are things
+   * the reader must act on before composing — the Code-mode question dock is
+   * the current owner. The transcript viewport is `flex-1` and the folder is
+   * auto-height, so a node placed here shrinks the transcript rather than
+   * covering it, and no measured height or floating panel is needed.
+   */
+  aboveComposerExtra?: ReactNode;
   /**
    * Opaque node rendered in the composer folder row (agent mode only).
    * Kept opaque so this file stays free of engine-specific imports —
@@ -120,7 +161,7 @@ export function ChatWindow({
             {showBoot ? <ThreadBootSkeleton /> : null}
             <ThreadPrimitive.Messages>
               {({ message }) =>
-                message.role === "user" ? <UserMessage /> : <AssistantMessage />
+                message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />
               }
             </ThreadPrimitive.Messages>
           </ThreadPrimitive.Viewport>
@@ -128,6 +169,10 @@ export function ChatWindow({
           <ScrollPill />
 
           <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+            {/* In flow, between the transcript and the composer, so the
+                viewport's `flex-1` absorbs the height and the last rows stay
+                reachable. No absolute positioning, no measurement. */}
+            {aboveComposerExtra ? <div className="pt-2">{aboveComposerExtra}</div> : null}
             {composer}
             {showScopePicker && (
               <div className="px-1 pt-1">
@@ -205,7 +250,7 @@ const groupedBy = groupPartByType({
   "standalone-tool-call": [],
 });
 
-function AssistantMessage() {
+function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   const timing = useMessageTiming();
   const createdAt = useAuiState((s) => s.message.createdAt);
   // Live-stream detection must ALSO require a running thread: restored
@@ -290,8 +335,17 @@ function AssistantMessage() {
             overlap. So the timeline is a COLLAPSED summary and the detailed
             cards stay below it — summary on top, detail underneath, which is the
             same shape as any log viewer. It renders nothing for a message with no
-            tool calls, so ordinary replies are untouched. */}
-        <SessionTimeline />
+            tool calls, so ordinary replies are untouched.
+
+            AGENT MODE ONLY. "N steps · M files changed" is the OpenCode
+            session's vocabulary, and only that runtime produces the data it
+            counts: OpenCode's `edit` / `write` results carry per-file line counts
+            in `state.metadata.files[]`, while the Direct engine's
+            `write_file` / `edit_file` results carry none (`{ path, bytes,
+            created }`, `{ path, occurrences, diff }`) — so on the Direct surface
+            the count is structurally always 0 and the line reads as a bug. See
+            {@link shouldShowSessionTimeline}. */}
+        {shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
         <MessagePrimitive.GroupedParts groupBy={groupedBy}>
           {({ part, children }) => {
             switch (part.type) {
