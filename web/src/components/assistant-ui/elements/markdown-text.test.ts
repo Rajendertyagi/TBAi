@@ -3,11 +3,11 @@ import { describe, it, expect, beforeAll } from "bun:test";
 /**
  * Source-level guard for the reply renderer's smoothing contract.
  *
- * This is NOT a behavioural test. `web/` has no component-test runner (no
- * vitest/jest/testing-library and no DOM harness) — its tests are pure logic
- * under `bun test`, so the primitive cannot be rendered here and its props
- * cannot be inspected at runtime. The contract is therefore asserted against
- * the source, and the behaviour is confirmed by the browser run instead.
+ * This is NOT a behavioural test. There is no DOM, so a render here would be a
+ * `react-dom/server` static snapshot — and the contract below is about a prop
+ * that must be PASSED to a third-party primitive, which no snapshot can
+ * distinguish from its default. The contract is therefore asserted against the
+ * source, and the behaviour is confirmed by the browser run instead.
  *
  * Why it matters: @assistant-ui/react-markdown defaults `smooth` to `true`,
  * which re-animates arriving text as a client-side typewriter (useSmooth) and

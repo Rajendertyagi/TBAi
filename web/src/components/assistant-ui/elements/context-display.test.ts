@@ -14,10 +14,12 @@ import {
  * Source-level guards for the vendored context-display element and its
  * composer wiring — the ADDITIONAL wiring proof.
  *
- * `web/` has no component-test runner (no DOM under `bun test`), so — like
- * `tool-fallback.test.ts` — these assert scoped structure, not rendered
- * pixels: comments are stripped first so prose can never satisfy a test, and
- * matches must sit inside the named component's own body. The PRIMARY proof
+ * A render IS possible here via `react-dom/server`, but these contracts are
+ * about *scoped structure* — a hook read, a handler, a prop threaded through a
+ * specific component's body — and a static snapshot cannot distinguish those.
+ * So — like `tool-fallback.test.ts` — comments are stripped first so prose can
+ * never satisfy a test, and matches must sit inside the named component's own
+ * body. The PRIMARY proof
  * for behavior is runtime execution: the pure pin transitions below run for
  * real, as do the behavioural-math suites (`modelContext.test.ts`,
  * `contextTokens.test.ts`, `chat-message-metadata.test.ts`); end-to-end

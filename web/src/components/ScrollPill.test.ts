@@ -5,7 +5,8 @@ import { unseenCount } from "./ScrollPill";
 /**
  * Primary proof for the scroll pill is runtime execution of its count math
  * (pure, no DOM needed). Mount wiring is guarded at source level below —
- * additional proof only, since `web/` has no component-test runner.
+ * additional proof only, since a static `react-dom/server` render cannot show
+ * that the wiring reaches the assistant-ui scroll primitive.
  */
 describe("unseenCount", () => {
   it("counts messages arrived since last seen at bottom", () => {

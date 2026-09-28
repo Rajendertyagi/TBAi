@@ -5,11 +5,12 @@ import { commentedBodyOf } from "@/testing/source-scope";
  * Source-level guard for the approval surface's dead-request contract.
  *
  * This is NOT a behavioural test, for the same reason as
- * `markdown-text.test.ts`: `web/` has no component-test runner, so the
- * component cannot be rendered here. The store's own logic is covered
- * behaviourally in `stores/stalePermissionsStore.test.ts`; this file guards
- * the *ordering* inside the surface, and the end-to-end behaviour is confirmed
- * in the browser.
+ * `markdown-text.test.ts`: the contract is about *ordering* — that the guard
+ * precedes the controls it suppresses — and a static `react-dom/server` render
+ * produces identical markup whether the guard runs first or not, so it cannot
+ * prove this. The store's own logic is covered behaviourally in
+ * `stores/stalePermissionsStore.test.ts`; this file guards the placement, and
+ * the end-to-end behaviour is confirmed in the browser.
  *
  * Division of labour, so the two guard files do not drift:
  * - `stores/stalePermissionsStore.test.ts` owns "is the shared guard applied

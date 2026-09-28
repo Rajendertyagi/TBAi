@@ -4,10 +4,12 @@ import { describe, it, expect, beforeAll } from "bun:test";
  * Source-level guard for the assistant message's block structure.
  *
  * Not behavioural, for the same reason as `markdown-text.test.ts` and
- * `tool-fallback.test.ts`: `web/` has no component-test runner, so the message
- * cannot be rendered here. The behaviour is confirmed in the browser; this file
- * only makes sure the structure that fixes the reported defects cannot quietly
- * regress.
+ * `tool-fallback.test.ts`: the contract is about nested *structure* — which
+ * wrapper each part sits in, and what a group path prefixes — and a static
+ * `react-dom/server` render of a message needs the assistant-ui runtime
+ * provider and cannot be mounted under `bun test`. The behaviour is confirmed in
+ * the browser; this file only makes sure the structure that fixes the reported
+ * defects cannot quietly regress.
  *
  * The defects being guarded:
  *  - "other block are also in one big block": every part lived inside ONE

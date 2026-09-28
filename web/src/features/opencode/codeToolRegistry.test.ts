@@ -14,11 +14,13 @@ import { functionBody, stripComments } from "@/testing/source-scope";
  * Verified in the browser after the fix: the same real part renders
  * `read · D:\Temp\ai-chat-app`.
  *
- * This is a source-level guard because the component cannot be rendered here:
- * `AgentRuntime` needs a live OpenCode runtime, and `web/` has no DOM harness.
- * Assertions are scoped to the component's own body with comments stripped, so
- * a match has to be real code — not an import line, and not a comment that
- * merely describes the wiring.
+ * This is a source-level guard because the contract cannot be rendered here:
+ * `AgentRuntime` needs a live OpenCode runtime and the assistant-ui provider,
+ * neither of which a `react-dom/server` snapshot supplies — the whole failure
+ * mode was an EMPTY tools scope inside a config that renders fine. Assertions
+ * are scoped to the component's own body with comments stripped, so a match has
+ * to be real code — not an import line, and not a comment that merely describes
+ * the wiring.
  */
 let body = "";
 let source = "";

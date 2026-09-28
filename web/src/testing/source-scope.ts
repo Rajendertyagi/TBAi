@@ -1,11 +1,18 @@
 /**
  * Source-scoping helpers for the source-level guard tests.
  *
- * `web/` has no component-test runner (no DOM under `bun test`, and jsdom /
- * happy-dom are not dependencies), so a few contracts can only be asserted
- * against the source text. Those assertions must be *scoped*, because a
- * whole-file `toContain` also matches the import line, a doc comment, or a
- * passing mention — none of which prove the component itself does the thing.
+ * Render tests DO exist here: `react-dom/server`'s `renderToStaticMarkup` runs
+ * components under `bun test` with no DOM (see `web/tests/rendering.test.tsx`,
+ * `terminal-block.test.ts`, `openCodeShield.test.ts`). What that cannot do is
+ * run effects, interaction, or live state, so these helpers exist for the
+ * contracts a static snapshot cannot prove — above all *ordering* and
+ * *absence*: a static render cannot show that a guard runs BEFORE the controls
+ * it suppresses, nor that a prop was never forwarded, because both render
+ * identically either way. jsdom / happy-dom are deliberately not dependencies.
+ *
+ * Those assertions must be *scoped*, because a whole-file `toContain` also
+ * matches the import line, a doc comment, or a passing mention — none of which
+ * prove the component itself does the thing.
  *
  * Two rules follow, and both are enforced by the helpers here:
  *  1. Strip comments first, so prose describing a rule can never satisfy a
