@@ -3,9 +3,33 @@
 import { V2FormCard } from "./V2FormCard";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 
-/** Typed native V2 forms rendered in the fallback panel, separate from permissions. */
+/**
+ * The question dock: every OpenCode form still waiting on an answer, docked
+ * directly above the composer.
+ *
+ * ## Why only the first form is drawn
+ *
+ * OpenCode can hold several pending forms at once. Rendering all of them stacks
+ * a column of docks above the composer, which is the tall-block problem the
+ * stepper exists to solve — moved one level up instead of solved. So the oldest
+ * is shown and the rest are counted, and answering it brings the next one.
+ * They stay in arrival order, so a form that has been waiting longest is the
+ * one being asked.
+ *
+ * ## Why nothing is here when there are no forms
+ *
+ * An empty dock is worse than none: it would hold a slot above the composer
+ * forever. `extras.forms` empties as soon as a reply is accepted, because the
+ * controller retires the form on success.
+ */
 export function OpenCodeQuestions() {
   const extras = useOptionalV2RuntimeExtras();
   if (!extras || extras.forms.length === 0) return null;
-  return <div className="flex flex-col gap-2 px-3 py-2">{extras.forms.map((form) => <V2FormCard key={form.id} form={form} onSubmit={(answer) => extras.replyToForm(form.id, answer)} onCancel={() => extras.rejectForm(form.id)} />)}</div>;
+  const [form] = extras.forms;
+  return <V2FormCard
+    form={form}
+    queuedBehind={extras.forms.length - 1}
+    onSubmit={(answer) => extras.replyToForm(form.id, answer)}
+    onCancel={() => extras.rejectForm(form.id)}
+  />;
 }

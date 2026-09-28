@@ -1,164 +1,78 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import {
-  copyTextFromMenu,
-  cutTextareaSelection,
-  pastePlainTextInto,
-  type TextareaLike,
-} from "./clipboard";
+import { afterEach, describe, expect, it } from "bun:test";
+import { writeClipboardText } from "./clipboard";
 
-function fakeTextarea(value: string, selection?: [number, number]): TextareaLike & {
-  events: string[];
-} {
-  let text = value;
-  const events: string[] = [];
-  const [start, end] = selection ?? [0, 0];
-  return {
-    events,
-    get value() {
-      return text;
-    },
-    selectionStart: start,
-    selectionEnd: end,
-    focus: () => {},
-    setRangeText: (replacement: string, s = 0, e = text.length) => {
-      text = text.slice(0, s) + replacement + text.slice(e);
-    },
-    dispatchEvent: (event: Event) => {
-      events.push(event.type);
-      return true;
-    },
-  };
-}
+/**
+ * The three outcomes of a plain clipboard write.
+ *
+ * These are the branches the question dock's copy buttons turn into reader-facing
+ * copy, so an untested branch here is a button that can fail silently. The
+ * helper was moved out of the component for exactly this reason: as a private
+ * function it had coverage only in its author's head.
+ *
+ * `globalThis.navigator` is stubbed per test because the check is deliberately
+ * capability-based — it reads the same global the browser would.
+ */
 
 const realNavigator = globalThis.navigator;
 
-function stubClipboard(stub: unknown): void {
+function stubClipboard(writeText: unknown): void {
   Object.defineProperty(globalThis, "navigator", {
-    value: { clipboard: stub },
+    value: writeText === undefined ? {} : { clipboard: { writeText } },
     configurable: true,
+    writable: true,
   });
 }
 
-describe("copyTextFromMenu", () => {
-  afterEach(() => {
-    Object.defineProperty(globalThis, "navigator", {
-      value: realNavigator,
-      configurable: true,
-    });
-  });
-
-  it("returns false for empty text without touching the clipboard", async () => {
-    let calls = 0;
-    stubClipboard({ writeText: async () => void calls++ });
-    await expect(copyTextFromMenu("")).resolves.toBe(false);
-    expect(calls).toBe(0);
-  });
-
-  it("writes via the async Clipboard API", async () => {
-    let written = "";
-    stubClipboard({ writeText: async (t: string) => void (written = t) });
-    await expect(copyTextFromMenu("hello")).resolves.toBe(true);
-    expect(written).toBe("hello");
-  });
-
-  it("returns false when the clipboard write rejects", async () => {
-    stubClipboard({
-      writeText: async () => {
-        throw new Error("blocked");
-      },
-    });
-    await expect(copyTextFromMenu("hello")).resolves.toBe(false);
-  });
+afterEach(() => {
+  Object.defineProperty(globalThis, "navigator", { value: realNavigator, configurable: true, writable: true });
 });
 
-describe("cutTextareaSelection (atomic: copy first, remove on success only)", () => {
-  beforeEach(() => {
-    stubClipboard({ writeText: async () => {} });
+describe("writeClipboardText", () => {
+  it("reports a confirmed write", async () => {
+    const written: string[] = [];
+    stubClipboard(async (text: string) => { written.push(text); });
+    expect(await writeClipboardText("hello")).toBe("copied");
+    // Non-vacuity: the text must actually have reached the clipboard, not merely
+    // resolved without throwing.
+    expect(written).toEqual(["hello"]);
   });
 
-  afterEach(() => {
-    Object.defineProperty(globalThis, "navigator", {
-      value: realNavigator,
-      configurable: true,
-    });
+  it("reports a refusal distinctly from an absent API", async () => {
+    stubClipboard(async () => { throw new Error("denied"); });
+    expect(await writeClipboardText("hello")).toBe("refused");
   });
 
-  it("copies then removes the selection on success", async () => {
-    let written = "";
-    stubClipboard({ writeText: async (t: string) => void (written = t) });
-    const ta = fakeTextarea("hello world", [0, 5]);
-    let failed = 0;
-    await expect(cutTextareaSelection(ta, () => void failed++)).resolves.toBe(true);
-    expect(written).toBe("hello");
-    expect(ta.value).toBe(" world");
-    expect(ta.events).toContain("input");
-    expect(failed).toBe(0);
+  it("reports unavailable when there is no clipboard at all", async () => {
+    stubClipboard(undefined);
+    expect(await writeClipboardText("hello")).toBe("unavailable");
   });
 
-  it("keeps the text intact and reports when the write fails", async () => {
-    stubClipboard({
-      writeText: async () => {
-        throw new Error("blocked");
-      },
-    });
-    const ta = fakeTextarea("hello world", [0, 5]);
-    let failed = 0;
-    await expect(cutTextareaSelection(ta, () => void failed++)).resolves.toBe(false);
-    expect(ta.value).toBe("hello world");
-    expect(failed).toBe(1);
+  it("reports unavailable when the clipboard exists but ships no writeText", async () => {
+    // The shape some browsers expose: a `clipboard` object that is present but
+    // cannot write. Treating this as "copied" would be a lie the reader cannot
+    // detect, because nothing would be on the clipboard.
+    stubClipboard(undefined);
+    Object.defineProperty(globalThis, "navigator", { value: { clipboard: {} }, configurable: true, writable: true });
+    expect(await writeClipboardText("hello")).toBe("unavailable");
   });
 
-  it("does nothing on an empty selection", async () => {
-    const ta = fakeTextarea("hello", [2, 2]);
-    let failed = 0;
-    await expect(cutTextareaSelection(ta, () => void failed++)).resolves.toBe(false);
-    expect(ta.value).toBe("hello");
-    expect(failed).toBe(0);
-  });
-});
-
-describe("insertTextAtCursor", () => {
-  it("inserts at the caret without touching surrounding text", async () => {
-    const { insertTextAtCursor } = await import("./clipboard");
-    const ta = fakeTextarea("hello world", [5, 5]);
-    expect(insertTextAtCursor(ta, " brave")).toBe(true);
-    expect(ta.value).toBe("hello brave world");
-    expect(ta.events).toContain("input");
+  it("reports unavailable when writeText is present but not callable", async () => {
+    Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: "nope" } }, configurable: true, writable: true });
+    expect(await writeClipboardText("hello")).toBe("unavailable");
   });
 
-  it("replaces the selection and ignores empty inserts", async () => {
-    const { insertTextAtCursor } = await import("./clipboard");
-    const ta = fakeTextarea("hello world", [0, 5]);
-    expect(insertTextAtCursor(ta, "hi")).toBe(true);
-    expect(ta.value).toBe("hi world");
-    expect(insertTextAtCursor(ta, "")).toBe(false);
-  });
-});
-
-describe("pastePlainTextInto", () => {
-  afterEach(() => {
-    Object.defineProperty(globalThis, "navigator", {
-      value: realNavigator,
-      configurable: true,
-    });
+  it("never rejects, whatever the browser does", async () => {
+    // The contract the dock relies on: it awaits this to set a status, so a
+    // rejection here would be an unhandled rejection in the click handler.
+    stubClipboard(async () => { throw new TypeError("boom"); });
+    await expect(writeClipboardText("hello")).resolves.toBe("refused");
   });
 
-  it("inserts clipboard text at the cursor", async () => {
-    stubClipboard({ readText: async () => "pasted" });
-    const ta = fakeTextarea("ab", [1, 1]);
-    let failed = 0;
-    await expect(pastePlainTextInto(ta, () => void failed++)).resolves.toBe(true);
-    expect(ta.value).toBe("apastedb");
-    expect(ta.events).toContain("input");
-    expect(failed).toBe(0);
-  });
-
-  it("reports failure when clipboard read is unavailable", async () => {
-    stubClipboard({});
-    const ta = fakeTextarea("ab", [0, 0]);
-    let failed = 0;
-    await expect(pastePlainTextInto(ta, () => void failed++)).resolves.toBe(false);
-    expect(ta.value).toBe("ab");
-    expect(failed).toBe(1);
+  it("distinguishes an empty string from a refused write", async () => {
+    // Unlike the menu helper, an empty string is still a real write here: the
+    // dock never emits one, but if it did, "copied nothing" must not be
+    // reported as "the browser refused".
+    stubClipboard(async () => { /* resolves without writing */ });
+    expect(await writeClipboardText("")).toBe("copied");
   });
 });

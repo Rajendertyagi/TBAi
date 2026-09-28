@@ -1,5 +1,67 @@
 ﻿"use client";
 
+/**
+ * Official assistant-ui "Tool fallback" element, vendored into this repo — the
+ * element every tool WITHOUT a purpose-built renderer lands on (MCP tools, an
+ * unknown tool name). Same vendoring convention and provenance as the sibling
+ * `code-diff.tsx` / `approval-card.tsx`, which carry the registry URL.
+ *
+ * TBAi adaptations already in this file (predating the cap below): the approval
+ * surface is the shared `components/shared/approval-card.tsx` shell with TBAi's
+ * own decision copy, the decision path is logged through `@/lib/logger`, and the
+ * card retires itself when `useStaleApprovalGuard` reports the server has
+ * forgotten the request.
+ *
+ * ONE deviation added 2026-09-27, on top of those: **the args and result bodies
+ * are capped and scrollable.** Upstream renders both `<pre>` blocks in full, so a
+ * tool called with a huge argument — or an MCP tool answering with a page of HTML
+ * — pushes an unbounded string through `JSON.stringify` and the DOM, and the card
+ * grows until the transcript stops being usable. Both now:
+ *
+ *   1. pass their text through the app's existing `textPreview` helper, which
+ *      keeps the head and appends its `…(N more chars)` marker, so a truncated
+ *      body SAYS it is truncated; and
+ *   2. carry `max-h-64 overflow-auto` — the same treatment `tools/filesystem/
+ *      ui.tsx`'s `Json` block already gives an opaque payload.
+ *
+ * `ToolFallbackError` is deliberately untouched: it is a short one-line reason
+ * (a message or a status), not a tool body.
+ *
+ * The cap bounds what the DOM receives. `formatUnknownValue` still serialises the
+ * whole result first, so a non-string payload costs one transient string before
+ * the trim — this is a transcript guard, not a parser budget.
+ *
+ * No prop, API or behaviour was added, removed or changed beyond that cap.
+ *
+ * TWO deviations added 2026-09-28, on top of the above, and they are the SAME
+ * two the rich `ApprovalGate` already made in `tools/filesystem/ui.tsx` — this
+ * fallback card is the surface an MCP tool lands on, so it sits directly beside
+ * the approval cards and a difference between them reads as a bug:
+ *
+ *   1. **The decision buttons left `variant="outline"` for `secondary`.** The
+ *      card fill is a few percent off the page (`--card-soft`), so an outline
+ *      button's 10% border and 15% fill land almost on top of it: the button
+ *      disappears into the card and its label reads as dim grey. `secondary` is
+ *      a solid step away from the fill, and the primary option keeps the ink
+ *      `default`. Applied to the non-primary options, the synthesised `Deny`
+ *      (drawn when the request declares no reject option), and the confirm
+ *      step's `Back`. No new Button variant, no literal colour and no inline
+ *      `style` — the change re-SELECTS among treatments that already exist,
+ *      exactly as `approval-card.tsx` documents.
+ *
+ *   2. **The primary option is chosen by the shared policy, not by position.**
+ *      Upstream picked `option === allowOptions[0]` — the first ALLOW option in
+ *      the host's order. That is the same rule written a second time, and it
+ *      gets the ordering wrong: a host listing `allow-always` before
+ *      `allow-once` would lead with the persistent grant instead of the
+ *      reversible one. `primaryApprovalOption` (in
+ *      `components/shared/approval-options.ts`) is the ONE definition of that
+ *      choice, so this file calls it rather than restating it.
+ *
+ * Both changes are presentation only: which option is sent, and when, is
+ * untouched.
+ */
+
 import { memo, useCallback, useRef, useState } from "react";
 import {
   AlertCircleIcon,
@@ -35,8 +97,10 @@ import {
   approvalOptionLabel,
   isAllowApprovalOptionKind,
   isKnownApprovalOptionKind,
+  primaryApprovalOption,
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
+import { textPreview } from "@/tools/filesystem/ui";
 import { logger } from "@/lib/logger";
 
 const ANIMATION_DURATION = 200;
@@ -246,8 +310,8 @@ function ToolFallbackArgs({
       className={cn("aui-tool-fallback-args", className)}
       {...props}
     >
-      <pre className="aui-tool-fallback-args-value bg-muted/50 text-foreground/90 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-        {argsText}
+      <pre className="aui-tool-fallback-args-value bg-muted/50 text-foreground/90 max-h-64 overflow-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+        {textPreview(argsText)}
       </pre>
     </div>
   );
@@ -288,8 +352,8 @@ function ToolFallbackResult({
       <p className="aui-tool-fallback-result-header text-muted-foreground text-xs font-medium">
         Result:
       </p>
-      <pre className="aui-tool-fallback-result-content bg-muted/50 text-foreground/90 mt-1 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-        {formatUnknownValue(result, 2)}
+      <pre className="aui-tool-fallback-result-content bg-muted/50 text-foreground/90 mt-1 max-h-64 overflow-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+        {textPreview(formatUnknownValue(result, 2))}
       </pre>
     </div>
   );
@@ -580,7 +644,7 @@ function ToolFallbackApproval({
           </Button>
           <Button
             size="sm"
-            variant="outline"
+            variant="secondary"
             className={pressable}
             onClick={() => setConfirmingId(null)}
             disabled={submitted}
@@ -604,6 +668,12 @@ function ToolFallbackApproval({
       (o) =>
         isKnownApprovalOptionKind(o.kind) && !isAllowApprovalOptionKind(o.kind),
     );
+    // The SAME primary the rich `ApprovalGate` picks, from the SAME shared
+    // policy — see the 2026-09-28 deviation in the header. Upstream picked
+    // "the first allow option" (`option === allowOptions[0]`), which both
+    // duplicated the rule in a second place and got it wrong: "Always allow"
+    // listed before "Allow" would lead with the persistent grant.
+    const primaryOptionId = primaryApprovalOption(declaredOptions)?.id;
     return (
       <div
         data-slot="tool-fallback-approval"
@@ -621,7 +691,7 @@ function ToolFallbackApproval({
               <Button
                 key={option.id}
                 size="sm"
-                variant={option === allowOptions[0] ? "default" : "outline"}
+                variant={option.id === primaryOptionId ? "default" : "secondary"}
                 className={pressable}
                 onClick={() => handleOption(option)}
                 disabled={submitted}
@@ -633,7 +703,7 @@ function ToolFallbackApproval({
           {rejectOptions.length === 0 && !question && (
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               className={pressable}
               onClick={() => respond(false)}
               disabled={submitted}

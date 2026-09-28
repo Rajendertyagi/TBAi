@@ -1,5 +1,5 @@
 /**
- * Clipboard helpers for the composer's own context menu.
+ * Clipboard helpers.
  *
  * Copy-first discipline (Codeg `clipboard-actions` parity): the Radix menu
  * traps focus until it closes, so writes are deferred and may fail (notably
@@ -7,6 +7,43 @@
  * `execCommand` fallback). Every remover therefore copies first and mutates
  * the textarea only on a confirmed write — never delete-then-hope.
  */
+
+/**
+ * How a plain clipboard write ended.
+ *
+ * Three outcomes, not two, because "refused" and "unavailable" are different
+ * problems with different advice: one is a permission the reader can grant, the
+ * other is a context that will never grant it. A caller that receives a bare
+ * `false` — as {@link copyTextFromMenu} still does, because its contract is
+ * "did the menu's copy succeed" — cannot tell the reader anything actionable,
+ * so a caller that must say something useful uses this instead.
+ */
+export type ClipboardWrite = "copied" | "refused" | "unavailable";
+
+/**
+ * Writes text to the clipboard and reports which of the three outcomes occurred.
+ *
+ * Lives here rather than inside a component so the three branches are
+ * executable behaviour under test, not prose: a component-private helper is
+ * coverage that exists only in the author's head.
+ *
+ * @param text - The text to place on the clipboard.
+ * @returns `"copied"` on a confirmed write, `"refused"` when the browser
+ *   denied it, `"unavailable"` when there is no async clipboard at all.
+ */
+export async function writeClipboardText(text: string): Promise<ClipboardWrite> {
+  // The async Clipboard API is absent entirely in an insecure context and in
+  // browsers that never shipped it; `writeText` rejects when permission is
+  // denied. Both are checked, and neither is swallowed.
+  const clipboard = (globalThis as { navigator?: { clipboard?: { writeText?: (t: string) => Promise<void> } } }).navigator?.clipboard;
+  if (typeof clipboard?.writeText !== "function") return "unavailable";
+  try {
+    await clipboard.writeText(text);
+    return "copied";
+  } catch {
+    return "refused";
+  }
+}
 
 export interface TextareaLike {
   value: string;
