@@ -285,3 +285,63 @@ describe("native V2 edit metadata through a reload", () => {
     expect(html).not.toContain("Edit applied successfully.");
   });
 });
+
+/**
+ * The last link in the chain: the projected `timing` must actually reach the
+ * assistant-ui tool-call part, because that is the object
+ * `useToolCallElapsed` reads. A timing that stopped at `V2MessagePartState`
+ * would look correct in every projection test and render nothing in the app.
+ */
+describe("tool timing reaches the assistant-ui part", () => {
+  function projected(timing: { startedAt: number; completedAt?: number } | undefined) {
+    const initial = createInitialV2ThreadState(SESSION_ID);
+    const withMessage = {
+      ...initial,
+      messages: {
+        [MESSAGE_ID]: {
+          id: MESSAGE_ID,
+          parentId: null,
+          role: "assistant" as const,
+          createdAt: 1,
+          parts: [
+            {
+              kind: "tool" as const,
+              id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+              order: 0,
+              name: "shell",
+              input: { command: "bun --version" },
+              output: "ok",
+              status: "complete" as const,
+              permissionId: null,
+              ...(timing === undefined ? {} : { timing }),
+            },
+          ],
+          source: null,
+        },
+      },
+      messageOrder: [MESSAGE_ID],
+      permissions: [],
+    };
+    return projectV2RepositoryItems(withMessage)[0]?.message.content[0];
+  }
+
+  it("forwards a completed call's timing onto the tool-call part", () => {
+    expect(projected({ startedAt: 1000, completedAt: 2600 })).toMatchObject({
+      type: "tool-call",
+      timing: { startedAt: 1000, completedAt: 2600 },
+    });
+  });
+
+  it("forwards an in-flight call with no completion, which is what makes it tick", () => {
+    const part = projected({ startedAt: 1000 }) as { timing?: { completedAt?: number } };
+    expect(part.timing?.completedAt).toBeUndefined();
+  });
+
+  it("omits the key entirely when there is no timing, rather than sending undefined", () => {
+    // An explicit `timing: undefined` is not the same as an absent key to a
+    // consumer that checks `'timing' in part`.
+    const part = projected(undefined);
+    expect(part).toBeTypeOf("object");
+    expect(Object.hasOwn(part as object, "timing")).toBe(false);
+  });
+});

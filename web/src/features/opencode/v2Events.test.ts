@@ -627,3 +627,182 @@ describe("V2 unknown events", () => {
     expect(reduced.diagnosticCount).toBe(1);
   });
 });
+
+/**
+ * Tool-part timing, so assistant-ui's own `useToolCallElapsed` has a clock to
+ * read on the Code surface.
+ *
+ * The Code runtime is an external-store runtime, which records no timing of its
+ * own, so without this the duration badge renders nothing here while working
+ * on the Direct surface. The values are the SERVER's: `durableEvent` sets
+ * `created = 100 + seq`, so every expectation below is an exact epoch value
+ * rather than "roughly now" — a timing test that cannot assert exact numbers is
+ * not testing timing.
+ */
+describe("V2 tool timing", () => {
+  const MESSAGE = "msg_tool_timing";
+  const TOOL = "call_tool_timing";
+
+  /** The projected tool part for TOOL, or undefined when absent. */
+  function toolPart(state: ReturnType<typeof initialReadyState>) {
+    const part = state.messages[MESSAGE]?.parts[0];
+    return part?.kind === "tool" ? part : undefined;
+  }
+
+  it("stamps the start from input.started, the first event for a tool part", () => {
+    const state = reduceV2Event(
+      initialReadyState(),
+      durableEvent({
+        id: "evt_timing_started",
+        type: "session.tool.input.started",
+        aggregateID: SESSION_ID,
+        seq: 1,
+        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
+      }),
+      1,
+      "observe-and-apply",
+    );
+    // seq 1 -> created 101.
+    expect(toolPart(state)?.timing).toEqual({ startedAt: 101 });
+  });
+
+  it("settles completedAt on success and keeps the start it already had", () => {
+    let state = initialReadyState();
+    state = reduceV2Event(
+      state,
+      durableEvent({
+        id: "evt_timing_start",
+        type: "session.tool.input.started",
+        aggregateID: SESSION_ID,
+        seq: 1,
+        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
+      }),
+      1,
+      "observe-and-apply",
+    );
+    state = reduceV2Event(
+      state,
+      durableEvent({
+        id: "evt_timing_success",
+        type: "session.tool.success",
+        aggregateID: SESSION_ID,
+        seq: 4,
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: MESSAGE,
+          id: TOOL,
+          content: [{ type: "text", text: "done" }],
+          executed: true,
+        },
+      }),
+      4,
+      "observe-and-apply",
+    );
+    // seq 4 -> created 104, and the start is untouched: the number a reader
+    // watched tick is the number the card settles on.
+    expect(toolPart(state)?.timing).toEqual({ startedAt: 101, completedAt: 104 });
+  });
+
+  it("settles on failure too, because a failed call also ended", () => {
+    let state = initialReadyState();
+    state = reduceV2Event(
+      state,
+      durableEvent({
+        id: "evt_timing_fail_start",
+        type: "session.tool.input.started",
+        aggregateID: SESSION_ID,
+        seq: 1,
+        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
+      }),
+      1,
+      "observe-and-apply",
+    );
+    state = reduceV2Event(
+      state,
+      durableEvent({
+        id: "evt_timing_failed",
+        type: "session.tool.failed",
+        aggregateID: SESSION_ID,
+        seq: 2,
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: MESSAGE,
+          id: TOOL,
+          error: { type: "ToolError", message: "boom" },
+          executed: true,
+        },
+      }),
+      2,
+      "observe-and-apply",
+    );
+    expect(toolPart(state)?.timing).toEqual({ startedAt: 101, completedAt: 102 });
+  });
+
+  it("records no duration for a call whose start was never observed", () => {
+    // A reload landing mid-run, or a dropped event. Inventing a start here
+    // would produce a duration measured from an origin nobody recorded, so the
+    // part keeps no timing and the badge renders nothing.
+    const state = reduceV2Event(
+      initialReadyState(),
+      durableEvent({
+        id: "evt_timing_orphan_success",
+        type: "session.tool.success",
+        aggregateID: SESSION_ID,
+        seq: 9,
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: MESSAGE,
+          id: TOOL,
+          content: [{ type: "text", text: "done" }],
+          executed: true,
+        },
+      }),
+      9,
+      "observe-and-apply",
+    );
+    expect(toolPart(state)?.timing).toBeUndefined();
+  });
+
+  it("leaves timing alone across the intermediate events", () => {
+    // `input.delta`, `input.ended`, `called` and `progress` all describe a call
+    // still in flight, so none of them may move the clock.
+    let state = initialReadyState();
+    state = reduceV2Event(
+      state,
+      durableEvent({
+        id: "evt_timing_s",
+        type: "session.tool.input.started",
+        aggregateID: SESSION_ID,
+        seq: 1,
+        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
+      }),
+      1,
+      "observe-and-apply",
+    );
+    for (const [seq, event] of [
+      [2, durableEvent({
+        id: "evt_timing_d",
+        type: "session.tool.input.delta",
+        aggregateID: SESSION_ID,
+        seq: 2,
+        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, delta: "{" },
+      })],
+      [3, durableEvent({
+        id: "evt_timing_c",
+        type: "session.tool.called",
+        aggregateID: SESSION_ID,
+        seq: 3,
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: MESSAGE,
+          id: TOOL,
+          input: { command: "bun" },
+          executed: false,
+        },
+      })],
+    ] as const) {
+      state = reduceV2Event(state, event, seq, "observe-and-apply");
+      expect(toolPart(state)?.timing).toEqual({ startedAt: 101 });
+    }
+  });
+});

@@ -235,3 +235,69 @@ describe("native V2 history projection", () => {
     ]))).rejects.toThrow("repeated cursor");
   });
 });
+
+/**
+ * Timing read from a REFRESHED history, which is the path that decides whether
+ * a card keeps the number a reader already saw.
+ *
+ * The source is the tool part's own `time` block, not anything derived here, so
+ * a reloaded card and a live one agree. `time.ran` (execution start, i.e. after
+ * an approval gate) is deliberately not used as the start: the live event path
+ * cannot see it, so preferring it here would make a duration change on reload.
+ */
+describe("tool timing from refreshed history", () => {
+  function assistantWithTool(time: unknown) {
+    return {
+      id: "assistant-timing",
+      type: "assistant",
+      agent: "build",
+      model: { id: "test-model", providerID: "test-provider" },
+      time: { created: 1 },
+      content: [
+        {
+          type: "tool",
+          id: "tool-timing",
+          name: "edit",
+          ...(time === undefined ? {} : { time }),
+          state: {
+            status: "completed",
+            input: { filePath: "a.txt" },
+            content: [{ type: "text", text: "ok" }],
+          },
+        },
+      ],
+    } as unknown as SessionMessageInfo;
+  }
+
+  function firstPart(projection: ReturnType<typeof projectV2History>) {
+    return projection.messages[0]?.parts[0] as
+      | { readonly timing?: { readonly startedAt: number; readonly completedAt?: number } }
+      | undefined;
+  }
+
+  it("maps the tool part's own clock onto the projected timing", () => {
+    const projection = projectV2History(
+      { messages: [assistantWithTool({ created: 1000, ran: 1500, completed: 2600 })], pages: 1 },
+      [],
+    );
+    // created, NOT ran: a gated tool's approval wait is part of what the reader saw.
+    expect(firstPart(projection)?.timing).toEqual({ startedAt: 1000, completedAt: 2600 });
+  });
+
+  it("leaves completedAt off while the call is still running", () => {
+    // An absent completion is what makes the library tick rather than freeze.
+    const projection = projectV2History(
+      { messages: [assistantWithTool({ created: 1000 })], pages: 1 },
+      [],
+    );
+    expect(firstPart(projection)?.timing).toEqual({ startedAt: 1000 });
+  });
+
+  it("records no timing when the server reported no time at all", () => {
+    const projection = projectV2History(
+      { messages: [assistantWithTool(undefined)], pages: 1 },
+      [],
+    );
+    expect(firstPart(projection)?.timing).toBeUndefined();
+  });
+});

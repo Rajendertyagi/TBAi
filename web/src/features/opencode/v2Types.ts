@@ -49,6 +49,24 @@ export interface V2UsageSnapshot {
  */
 export type V2ToolStatus = "pending" | "running" | "complete" | "error";
 
+/**
+ * When a tool part started, and when it finished, in epoch milliseconds.
+ *
+ * This is the one piece of per-part timing in the projection, and it exists so
+ * assistant-ui's own `useToolCallElapsed` has something to read. The field names
+ * are the library's (`startedAt` / `completedAt`), not OpenCode's — OpenCode
+ * calls them `time.created` / `time.completed` — because the value is handed
+ * straight to the library and renaming it at the boundary would be a
+ * translation with no reader.
+ *
+ * `completedAt` is absent while the call is still in flight, which is what makes
+ * the library tick rather than show a frozen number.
+ */
+export interface V2ToolTiming {
+  readonly startedAt: number;
+  readonly completedAt?: number;
+}
+
 export type V2MessagePartState =
   | {
       readonly kind: "text";
@@ -74,6 +92,12 @@ export type V2MessagePartState =
        readonly metadata?: Readonly<Record<string, unknown>>;
       readonly status: V2ToolStatus;
       readonly permissionId: string | null;
+      /**
+       * Absent when the server never reported a time for this part. The
+       * duration badge renders nothing in that case rather than showing a
+       * fabricated zero.
+       */
+      readonly timing?: V2ToolTiming;
     }
   | {
       readonly kind: "retry";

@@ -309,6 +309,33 @@ function updateAssistantTool(
   });
 }
 
+/**
+ * Settles a tool part's duration when the server reports it finished.
+ *
+ * The completion time is MERGED onto whatever start the part already carries,
+ * never written as a whole new `timing`. Two consequences, both deliberate:
+ *
+ * - A part whose `session.tool.input.started` was never observed (a reload
+ *   that landed mid-run, a dropped event) keeps NO timing, rather than gaining
+ *   a duration measured from an origin nobody recorded. `useToolCallElapsed`
+ *   then renders nothing, which is the honest outcome.
+ * - A part that already has a start keeps exactly that start, so the number
+ *   does not change as the call finishes.
+ */
+function settleAssistantToolTiming(
+  state: V2ThreadState,
+  assistantMessageId: string,
+  toolId: string,
+  completedAt: number,
+): V2ThreadState {
+  const current = assistantToolPart(state, assistantMessageId, toolId);
+  if (current.timing === undefined) return state;
+  return applyAssistantEvent(state, assistantMessageId, {
+    ...current,
+    timing: { ...current.timing, completedAt },
+  });
+}
+
 function updateAssistantPart(
   state: V2ThreadState,
   assistantMessageId: string,
@@ -493,6 +520,11 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         output: undefined,
         status: "running",
         permissionId: null,
+        // The call has begun, so this is the start. `input.started` is the FIRST
+        // event OpenCode emits for a tool part, which makes it the only
+        // defensible live start marker: `session.tool.called` arrives after the
+        // arguments finish streaming, and the later events are all end markers.
+        timing: { startedAt: event.created },
       });
     case "session.tool.input.delta": {
       const current = assistantToolPart(state, event.data.assistantMessageID, event.data.id);
@@ -521,14 +553,22 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         output: undefined,
         status: "running",
       });
-    case "session.tool.success":
-      return updateAssistantTool(state, event.data.assistantMessageID, event.data.id, {
+    case "session.tool.success": {
+      const next = updateAssistantTool(state, event.data.assistantMessageID, event.data.id, {
         output: event.data.content,
         ...(event.data.metadata === undefined ? {} : { metadata: event.data.metadata }),
         status: "complete",
       });
-    case "session.tool.failed":
-      return updateAssistantTool(state, event.data.assistantMessageID, event.data.id, {
+      // A failure and a success both END the call, so both settle the clock.
+      return settleAssistantToolTiming(
+        next,
+        event.data.assistantMessageID,
+        event.data.id,
+        event.created,
+      );
+    }
+    case "session.tool.failed": {
+      const next = updateAssistantTool(state, event.data.assistantMessageID, event.data.id, {
         output: {
           error: event.data.error.message,
           type: event.data.error.type,
@@ -537,6 +577,13 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         ...(event.data.metadata === undefined ? {} : { metadata: event.data.metadata }),
         status: "error",
       });
+      return settleAssistantToolTiming(
+        next,
+        event.data.assistantMessageID,
+        event.data.id,
+        event.created,
+      );
+    }
     case "session.step.started":
       return applyAssistantEvent(state, event.data.assistantMessageID, {
         kind: "step",

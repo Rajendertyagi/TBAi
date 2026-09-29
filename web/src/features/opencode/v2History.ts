@@ -125,6 +125,27 @@ function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartSta
          ...(metadata === undefined ? {} : { metadata }),
         status,
         permissionId: null,
+        // The tool part carries its OWN clock: `time.created` is when the call
+        // began, `time.completed` when it finished. This is the server's record
+        // rather than anything TBAi derived, so a reloaded card shows the same
+        // duration the live one did.
+        //
+        // `time.ran` — when execution actually started, i.e. AFTER any approval
+        // gate — is deliberately NOT used as the start. The live path cannot see
+        // it, so using it here would make a card's number change on reload. The
+        // start is `time.created` in both paths, which means a permission-gated
+        // tool's duration includes the time the card spent waiting to be
+        // approved — the span the reader actually experienced.
+        ...(typeof content.time?.created === "number"
+          ? {
+              timing: {
+                startedAt: content.time.created,
+                ...(typeof content.time.completed === "number"
+                  ? { completedAt: content.time.completed }
+                  : {}),
+              },
+            }
+          : {}),
       });
     }
   });

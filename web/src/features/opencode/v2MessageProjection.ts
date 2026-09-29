@@ -169,6 +169,10 @@ function partToAssistantContent(
     argsText: JSON.stringify(part.input),
     result: part.status === "running" || part.status === "pending" ? undefined : part.output,
     isError: part.status === "error",
+    // Handed to assistant-ui so its own `useToolCallElapsed` can read it. TBAi
+    // never formats a duration itself — the library owns the ticking and the
+    // `X.Xs` rendering, exactly as it does on the Direct surface.
+    ...(part.timing === undefined ? {} : { timing: part.timing }),
     ...(permission ? { approval: projectV2PermissionApproval(permission) } : {}),
   };
 }
