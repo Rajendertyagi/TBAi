@@ -9,7 +9,7 @@ import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngin
 import { peekMaterializedEngine } from "../../features/chat/state/materializeDraft";
 import { appToolkit } from "../../tools/toolkit";
 import { logger } from "../../lib/logger";
-import { TodoList } from "../../components/assistant-ui/elements/todo-list";
+import { ProgressStages } from "../../components/assistant-ui/elements/progress-stages";
 import { AppShell } from "./AppShell";
 
 /**
@@ -93,7 +93,7 @@ export function ChatShell() {
   // Register the TBAi progress data-part renderer globally via AuiConfig.
   const TbaiProgressDataUI = makeAssistantDataUI({
     name: "tbai-progress",
-    render: TodoList,
+    render: ProgressStages,
   });
 
   return (

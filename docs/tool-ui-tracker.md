@@ -42,7 +42,9 @@ row without one is not done.
 | **Direct-chat edit gate shows a diff** | The gate that answers "allow this?" showed the model's Find/Replace text. It now shows the change, with surrounding context, from a read-only endpoint that is `runEdit` minus the write. No diff library added — the edit *is* the diff. Pair kept as the fallback. | `93ecc8b` |
 | **`scheduler` is approvable** | A tool that creates and fires jobs unattended was ungated. Now gated per call: `list`/`get` answer freely, `create`/`update`/`delete`/`run_now` ask, and anything unrecognised asks. | this commit |
 | **Question observability moved to the live card** | Four `question.*` events were logged only by a component nothing renders, so the contract passed while every real question was unloggable. Events moved to the live dock; 686 lines of dead code deleted. | `3fa4800` |
-| **The timeline counts real files** | "N steps · 0 files changed" on every coding turn. The count was a missing *shape*, not a wrong number: the tool results carry no line counts, but the patch on every call does. Counts derived from the patch and published on the library's own `artifact` slot. | this commit |
+| **The timeline counts real files** | "N steps · 0 files changed" on every coding turn. The count was a missing *shape*, not a wrong number: the tool results carry no line counts, but the patch on every call does. Counts derived from the patch and published on the library's own `artifact` slot. | `288c263` |
+| **`TodoList` was not a todo list** | The "three designs for one feature" finding counted a progress renderer as a todo renderer. It renders server-aggregated stages, not a plan. Renamed to `progress-stages` / `ProgressStages`. | this commit |
+| **index-in-`key` refuted** | Re-derived per site: 10 candidates, 3 vendored (frozen), 4 skeletons with no identity, 3 stateless, 1 append-only log. The single real candidate is safe today for a specific, recorded reason. Nothing changed. | this commit |
 | OpenCode configuration page | Read/edit permission rules, file-driven, no invented permission system. | `c371fc7`, `440a39d`, `f7a59f6` |
 
 ### How each was verified
@@ -67,6 +69,12 @@ row without one is not done.
   - the timeline's file count, broken at **both** ends — removing the published
     artifact, and making the reader ignore it. A test on either half alone would
     have passed while the number stayed at zero, which is how the bug survived.
+- **Two of the carried-over findings were refuted by re-deriving them** rather
+  than by acting on them: the "three todo renderers" and the "six index-in-`key`
+  sites" items. Both had been corroborated only by a grep. Two of this audit's
+  findings being wrong is itself the reason the rest were treated as claims to
+  check instead of work to do — one of them (`R1` in the original audit) had
+  already turned out to be wrong too.
 - **Live browser verification for the edit gate**, with the test confirmed to
   fail when the gate is reverted.
 - **Where a surface could not be reached, the gap is named rather than implied.**
@@ -181,13 +189,123 @@ designs, one feature, still true.
 
 | Item | State | Note |
 |---|---|---|
-| **Todo list** | Unreachable — partly corroborated | Three renderers for one feature exist, and none can be seen: the tool depends on does not exist in this OpenCode build. |
-| **A gap on the right** | Waiting on a call | Messages end 170px further right than the assistant's, in every exchange. May well be deliberate. |
+| **Todo list** | **Refuted — one name was lying** | "Three designs for one feature" counted a progress renderer as a todo renderer. Renamed. See below. |
+| **A gap on the right** | **Measured, root-caused, unchanged on purpose** | 174px, and it is a design difference rather than a stray value. Your call, and it is now a one-line decision. See below. |
 | **Dead code** | **Resolved — but not the way it looked** | The 376-line question form *was* dead, and deleting it exposed a bigger problem. See below. |
 | **`0 files changed` in the coding chat** | **Fixed** | Structurally zero, and not because the count was wrong. See below. |
 | **MCP tool output** | Unexercised | Buttons match the reference; a real MCP tool has never been run here. |
 | **Focus does not follow the questions** | Matches reference | Stepping to the next question does not move the cursor into it. The reference app has the same gap, so we match rather than lead. |
 | **Thinking / reasoning block** | Works | Only appears at thinking level `high`; at the default there is nothing, which looks broken but is not. |
+
+### Three todo renderers — the third was not one, and it was named `TodoList`
+
+The atlas said "three separate designs for one feature", and the tool inventory
+corroborated it without checking: a native `todo` checkbox list, OpenCode's
+`todowrite` compact row, and `elements/todo-list.tsx`. **One of those three does
+not exist, and it was the one that broke the finding.**
+
+`elements/todo-list.tsx` renders the `data-tbai-progress` stream part. It is not a
+todo list and never was:
+
+- The stages are **derived server-side by aggregating tool calls into semantic
+  categories** — `list_dir` + `search_files` + `file_info` all collapse into one
+  "Inspecting workspace" row, per `TOOL_STAGE_MAP` in `src/lib/progress-stages.ts`.
+- Nothing in it is a plan the model authored.
+- The **Direct** surface has no todo tool at all, so a component called
+  `TodoList` implied a task list the engine never produces.
+
+So the real shape is **one progress renderer and two todo renderers**, over two
+data sources on two surfaces. Renamed to `progress-stages.tsx` / `ProgressStages`,
+with the reason recorded in the file so the misnomer cannot come back as a finding.
+
+The atlas also claimed none of the three "can be seen", because "the tool depends
+on does not exist in this OpenCode build". That is right about OpenCode's
+`todowrite` and **wrong about the progress renderer**, which is emitted from
+`src/routes/chat.ts` and is live on the Direct surface. Worth stating plainly,
+because "unreachable" is the kind of note that stops anyone from looking — and it
+was wrong about the one renderer that is reachable.
+
+**What was left alone, deliberately.** The two genuine todo renderers do overlap:
+the Code transcript's `OpenCodeTodoWriteToolUI` and the Code dock's
+`OpenCodeTodoTracker` both read the latest `todowrite` input. That is not
+duplication, it is the same distinction already drawn for diffs: a tool card is
+the **historical record** of a call, the dock is **current state**. Collapsing them
+would delete one or the other, and the record is the more valuable of the pair.
+
+#### An unresolved question found on the way: does the progress panel survive a reload?
+
+While confirming the rename had not broken anything, the progress panel could not
+be made to render from a **seeded** history message. What is established:
+
+- The server **stores and returns it correctly** —
+  `GET /api/conversations/{id}/messages` returns the `data-tbai-progress` part with
+  its stages intact. Persistence is not the problem.
+- The browser does not paint it. The message loads (its text renders), the part
+  does not.
+- **This is not caused by the rename.** The pre-rename component was checked out
+  of git and registered in place of the new one, and it does not render either.
+  That control is the reason this is reported as an open question rather than a
+  regression.
+
+What is **not** established, and why it matters: the real persistence flow is
+"the client persists what the runtime holds at run start", so the shape a genuine
+run stores may differ from a hand-written seed. I have been wrong before in this
+exact shape of assumption — a seeded message cannot open a Direct-chat approval
+gate, because that gate is produced by the AI SDK's approval flow during a real
+turn. **Reporting "the progress panel disappears on reload" off a hand-written
+seed would repeat that mistake.** The e2e stub provider streams text only and
+issues no tool calls, so it cannot produce a run with stages either.
+
+To settle it: one real turn against a real provider that makes a tool call, then
+reload the thread. That is the test, and it is not written yet because it cannot
+pass in this environment. Recorded rather than guessed.
+
+### The 170px gap: measured, root-caused, and deliberately not changed
+
+The atlas reported "your messages end 170px further right than the assistant's, in
+every single exchange" and said "may well be deliberate". It was deliberate, and
+the cause is a design difference rather than a stray number.
+
+**Measured**, at a 1440px viewport, with text long enough that neither side is
+width-limited by its own content:
+
+| | width | aligned |
+|---|---|---|
+| message column | 1168px | — |
+| message root | 1136px | — |
+| both message inners | 966px | **opposite** |
+
+966 is exactly 85% of 1136. Both sides carry `max-w-[85%]`; the user root is
+`items-end` and the assistant root is `items-start`. So the two inners are the
+*same width* and 15% of the root is empty on the assistant's right — 170px, plus
+the column padding, measured at 174px. The gap is not a bug in a value. It is what
+`85%` means when you apply it to two sides that face opposite directions.
+
+**Why the reference app does not have it.** OpenChamber caps the **column** once —
+`width: min(100%, 48rem)` (and `64rem` in wide mode), centred — and applies
+`max-w-[85%]` to the **user bubble only** (`ChatMessage.tsx`). Both sides then
+share one measure, so there is nothing to be asymmetric about.
+
+**So there are two things here, and only one of them is the 170px.**
+
+1. The gap. Cosmetically it is defensible — a filled card on one side, plain prose
+   on the other, which is the pattern every chat app uses, and it is invisible on
+   short messages because each side hugs its own edge.
+2. The **measure**, which is the real problem and the one the gap was a symptom
+   of. 966px of 14px text is roughly 120 characters per line. Comfortable prose is
+   45–90. The reference's 48rem column is 768px, and it applies to both sides.
+
+**Recommendation: adopt the reference's single column cap.** One cap, centred,
+`max-w-[85%]` kept on the user bubble only. It removes the asymmetry and fixes the
+measure in the same change, and it copies a decision rather than inventing one.
+
+**Not changed, and this one is genuinely your call rather than a blocker.** It
+narrows the whole transcript — on a 1440px screen the conversation goes from 1168px
+to 768px, with visibly wider empty margins. That is a real cost, it is a taste
+question with two defensible answers, and unlike the edit preview there is no
+technical unknown hiding behind it. The investigation is finished; the decision
+is one line: *narrow the column to 48rem, or keep the wide transcript and the
+asymmetry?*
 
 ### "0 files changed" was a missing shape, not a wrong number
 
@@ -273,7 +391,6 @@ feature, it was guarding a **file path**.
 ## Needs a decision — do not start without one
 
 These are not fixes. Each needs a judgement call first.
-
 ### ~~Direct-chat edit preview~~ — DONE (`93ecc8b`), and the reasoning was wrong
 
 This was parked here as needing a maintainer decision, on the grounds that it
@@ -340,11 +457,44 @@ on two lines of `useState` in front of a pure function. Stated rather than impli
 A subagent call shows nothing of what it did. A real information gap, but a
 feature rather than a defect.
 
-### index-in-`key`
+### index-in-`key` — re-derived, and the finding as stated does not hold
 
-Six app-owned sites, mechanically fixable **if** the finding is real. It was
-never independently re-derived, and one of the original audit's findings turned
-out to be wrong. Premise unverified — re-derive before touching it.
+This was carried as "six app-owned sites, mechanically fixable **if** the finding
+is real", with a note that it had never been independently re-derived and that
+another finding from the same audit had turned out wrong. Re-derived now. The
+audit found 10 sites; **one** is worth a comment and **none** is worth a change.
+
+| Site | Verdict |
+|---|---|
+| `surfaces.tsx`, `terminal-block.tsx`, `code-diff.tsx`, `web-search.tsx` | **Vendored.** The assistant-ui train is frozen, so these are not ours to change. Two of them already key on content (`${i}-${line}`, `${cycle}-${result.domain}`). |
+| `Sidebar.tsx`, `JobDetail.tsx`, `SearchResults.tsx` | **Skeleton placeholders** — fixed-length `animate-pulse` divs. There is no identity to key on; the index *is* the identity. |
+| `LogsPanel.tsx:731` (other) | **Append-only log lines.** Never reordered or removed, so an index is not merely acceptable but correct. |
+| `directory-browser.tsx:62` | **Stateless breadcrumb spans.** Navigation changes the list, but each row holds no state, so React reusing a node by index produces correct output. |
+| `ChatWindow.tsx:466` | **Stateless metadata chips** (`12t`, provider, model, `thinking:high`). The chip list grows as data arrives; the rows carry no state, only text and a `title` attribute. |
+| `McpPanel.tsx:617` | **The one genuinely live list** — recent MCP events, reversed, growing as events arrive, so every index shifts. Still correct output: stateless rows. |
+| **`LogsPanel.tsx:731` (targets)** | **The only real candidate.** See below. |
+
+**Why the candidate is still safe today.** It is the one row that is not
+stateless: a controlled `<Input>` and a Radix `<Select>` per target override, in a
+list whose remove button filters by index — so removal from the middle is
+possible, and Radix `Select` carries meaningful internal state (open, highlighted).
+
+It does not misbehave for one specific reason: **removal is click-driven.** To
+drop a row you must click that row's ✕, which moves focus to the ✕ first, so
+focus is never sitting in a *different* row when the indices shift underneath it.
+Both children are controlled, so React writes the new `value` correctly.
+
+What would make it unsafe, and is worth knowing before writing any of it:
+reordering the rows, removing a row from *above* the focused one, or making
+either child uncontrolled. If that ever happens, the fix is a stable id on the
+target — **not** a content-derived key, since the key would change as you type
+and remount the input mid-keystroke. Adding an id means a settings migration, and
+it is not worth paying for a bug that cannot currently occur.
+
+**Nothing changed.** Six of the ten are not ours or have no identity, three render
+correctly, and the last would need a data-model migration to guard against a
+future edit. Recording the reasoning is worth more than a mechanical sweep — the
+sweep would have churned a frozen dependency and a settings schema to fix nothing.
 
 ---
 
@@ -429,7 +579,7 @@ the tool part as an assistant-ui `approval` with `allow-once` / `allow-always` /
 | `code-budget` | Bounding a fence before Shiki tokenises it; no upstream option |
 | `mermaid-source` | Repairs the `graph TD;` header models emit, without forking |
 | `session-timeline` | Maps all 28 tool names to verb+icon for `ToolTimeline` |
-| `todo-list` | Renders TBAi's own `data-tbai-progress` contract |
+| `progress-stages` | Renders TBAi's own `data-tbai-progress` contract. **Was `todo-list` / `TodoList`, and the old name was wrong** — see *Three todo renderers* below. |
 | `thread-boot-skeleton` | Shared history-pending placeholder, both surfaces |
 
 ### Coverage verdicts
