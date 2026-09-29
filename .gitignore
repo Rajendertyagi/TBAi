@@ -2,6 +2,10 @@ node_modules/
 .web/package-lock.json
 dist/
 .web/dist/
+# Unminified CPU-profiling artifact (bun run build:web:profile). Build output,
+# never committed; listed explicitly because it is a sibling of dist/ and the
+# `dist/` rule does not match it.
+web/dist-profile/
 .env
 .env.local
 *.db
@@ -76,6 +80,18 @@ prompt.txt
 # decision already made, and once the decision is in the code and its tests, the
 # pixels are dead weight in every future clone. Kept on disk for whoever wants to
 # re-read the evidence; not part of the repository.
+#
+# NOTE (2026-09-30): this rule was right about the images and wrong about the
+# page. The JPEGs stay out - they are the 3.8 MB. The HTML was excluded with
+# them, and it carries the *prose*: the `done:` / `Open:` lines and the "Not
+# looked at yet" list, which is live state about work still to do, not evidence
+# for a decision already taken. The consequence was concrete: the one document
+# tracking tool-card work was unversioned, so its findings could not be
+# reviewed, diffed, or acted on by anyone else, and they rotted on one machine.
+#
+# So the status prose is versioned in `docs/tool-ui-tracker.md`, which is the
+# file that must change in the same commit as a tool-UI change. The atlas stays
+# ignored as the visual evidence it is.
 docs/tool-ui-atlas/
 docs/tool-ui-atlas.html
 
