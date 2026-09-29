@@ -39,16 +39,47 @@ interface ConfigSnapshot {
   editable?: boolean;
 }
 
-/** One `edit` rule's current effect, or null when the config cannot be read. */
-async function readEditEffect(request: APIRequestContext): Promise<string | null> {
+/**
+ * Why this one is NOT skipped, and the one that is.
+ *
+ * `seedConversation.ts` records the trap this file nearly fell into: specs used to
+ * `test.skip` when a precondition was missing and "still reported green. A skipped
+ * test proves nothing." A skip on *setup* is the worst version of that, because
+ * the setup is the part this spec is responsible for.
+ *
+ * So the causes are kept apart rather than collapsed into one `null`:
+ *
+ *   - **no OpenCode server at all** (`GET` does not answer) → skip. The feature
+ *     genuinely does not exist in that environment; there is nothing to assert.
+ *   - **the server is there but the config is not editable**, or carries no
+ *     `edit`/`*` rule → **fail**. That is a regression in the permissions API, or
+ *     a config the app can no longer write — precisely the machinery this spec
+ *     depends on, and exactly what a silent skip would have hidden.
+ *   - **the write is refused** → **fail**, for the same reason.
+ *
+ * An earlier version returned `null` for all three and skipped on any of them,
+ * which is how this spec could report green on a run where it had tested nothing.
+ */
+type ConfigState =
+  | { readonly kind: "no-server" }
+  | { readonly kind: "readable"; readonly effect: string }
+  | { readonly kind: "broken"; readonly reason: string };
+
+/** The `edit` rule's current effect, and whether this environment can test at all. */
+async function readEditState(request: APIRequestContext): Promise<ConfigState> {
   const response = await request.get("/api/opencode/config");
-  if (!response.ok()) return null;
+  // No server, or the route is absent because OpenCode is not running here.
+  if (!response.ok()) return { kind: "no-server" };
   const snapshot = (await response.json()) as ConfigSnapshot;
-  if (snapshot.editable !== true) return null;
-  for (const rule of snapshot.permissions ?? []) {
-    if (rule.action === "edit" && rule.resource === "*") return rule.effect;
+  if (snapshot.editable !== true) {
+    return { kind: "broken", reason: "the OpenCode config is not editable" };
   }
-  return null;
+  for (const rule of snapshot.permissions ?? []) {
+    if (rule.action === "edit" && rule.resource === "*") {
+      return { kind: "readable", effect: rule.effect };
+    }
+  }
+  return { kind: "broken", reason: "the config has no edit/* rule to arm" };
 }
 
 async function setEditEffect(
@@ -68,10 +99,19 @@ test.describe("edit approval shows the resulting change (live)", () => {
   }) => {
     test.setTimeout(300_000);
 
-    const previous = await readEditEffect(request);
-    test.skip(previous === null, "the OpenCode config is not readable here");
+    const state = await readEditState(request);
+    // The one legitimate skip: there is no OpenCode server here, so the gate this
+    // spec exists to inspect cannot come into existence.
+    test.skip(state.kind === "no-server", "no OpenCode server in this environment");
+    // Anything else is a failure, not a skip. See ConfigState. Thrown rather than
+    // asserted, so the union narrows instead of being cast past the compiler.
+    if (state.kind !== "readable") {
+      throw new Error(`the OpenCode permissions API is not usable: ${state.reason}`);
+    }
+    const previous = state.effect;
+
     const armed = await setEditEffect(request, "ask");
-    test.skip(armed === false, "the edit permission could not be set to ask");
+    expect(armed, "the edit permission could not be set to ask").toBe(true);
 
     const conversationId = await createCodeConversation(request);
     // The file has to exist. A prompt asking a model to edit a missing file

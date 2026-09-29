@@ -76,7 +76,17 @@ row without one is not done.
   check instead of work to do — one of them (`R1` in the original audit) had
   already turned out to be wrong too.
 - **Live browser verification for the edit gate**, with the test confirmed to
-  fail when the gate is reverted.
+  fail when the gate is reverted. Re-confirmed 2026-09-30: the live Code-surface
+  gate spec passes against a real server and a real model, and the real OpenCode
+  config was verified restored afterwards.
+- **A skip on setup is a skip on the test.** `seedConversation.ts` records the
+  trap — specs that "skipped on every run while still reporting green". The live
+  edit-gate spec had it in a subtler form: three distinct causes (no OpenCode
+  server, config not editable, no `edit/*` rule) were collapsed into one `null`
+  and skipped on any of them. Now only "no OpenCode server" skips; the other two
+  **fail**, because they are regressions in the very API the spec depends on. The
+  sibling config spec was checked and is already correct — it asserts the server
+  responds, and skips only on genuine data conditions.
 - **Where a surface could not be reached, the gap is named rather than implied.**
   Two live claims are not browser-verified and are called out where they are
   recorded: the Direct-chat gate's fetch-and-swap transition (a Direct gate needs
@@ -444,13 +454,22 @@ which captures only the first paint. A transition cannot be asserted that way,
 so the decision that drives it was pulled out as a function rather than shipping
 a DOM dependency to test three lines of branching.
 
-**Not browser-verified:** that the request actually fires and the state actually
-swaps. A Direct-chat gate is produced by the AI SDK's approval flow during a
-real model turn, so it cannot be opened from a seeded message. The rendered
-result was captured and inspected (context lines, red removal, green addition,
-`+1 -1`, Approve/Deny), the endpoint is covered by five e2e tests against the
-running server, and the decision is unit-tested — but the transition itself rests
-on two lines of `useState` in front of a pure function. Stated rather than implied.
+**Live verification, 2026-09-30: the Code-surface gate spec PASSES.** Run with
+`TBAI_E2E_LIVE=1` against a real OpenCode server and a real model — the log shows
+the session form, the model selection, the prompt, the permission round-trip, and
+the config write and restore. The real config was checked afterwards and `edit/*`
+is back to `allow` with every deny rule intact, which is the one thing that had to
+be true afterwards. An earlier run in this session appeared to skip because the
+config arm had not taken; the cause was environmental, not the spec.
+
+**What is NOT browser-verified:** the **Direct-chat** gate's fetch-and-swap
+transition. A Direct-chat gate is produced by the AI SDK's approval flow during a
+real model turn, so it cannot be opened from a seeded message — the same trap as
+every other seeded attempt in this file. The Direct rendered result was captured
+and inspected (context lines, red removal, green addition, `+1 -1`, Approve/Deny),
+the endpoint is covered by five e2e tests against the running server, and the
+diff-or-fallback decision is unit-tested — but the transition itself rests on two
+lines of `useState` in front of a pure function. Stated rather than implied.
 
 ### Subagent transparency
 
