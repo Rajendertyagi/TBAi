@@ -119,6 +119,15 @@ export const openCodeConfigCopy = {
       `${count} rule${count === 1 ? "" : "s"} could not be read and ${count === 1 ? "is" : "are"} not shown. Nothing was changed.`,
     notConfigurable: (action: string) =>
       `No rule matches "${action}", so OpenCode is using its default for it. Add a rule to the configuration to control it.`,
+    /**
+     * The honest description of what the table contains. Stated here so the
+     * page can never imply it is showing OpenCode's full permission surface:
+     * it shows the rules in the file, and nothing else. A tool with no rule
+     * here is not absent from OpenCode — it is simply not configured, so OpenCode
+     * applies its own default.
+     */
+    fileDriven:
+      "These are the rules in the file, in the order OpenCode reads them. A tool that is not listed has no rule, so OpenCode decides it with its own default — add a rule below to control it.",
   },
   json: {
     description:
@@ -131,6 +140,30 @@ export const openCodeConfigCopy = {
     saved: "Saved to the OpenCode configuration.",
     unchanged: "Already set to this effect. Nothing was written.",
     dirty: "Unsaved change",
+  },
+  add: {
+    title: "Add a rule",
+    description:
+      "Gates something OpenCode would otherwise decide on its own. The action is the tool name OpenCode uses; a resource is the pattern it matches, and * matches everything.",
+    action: "Action",
+    resource: "Resource",
+    effect: "Effect",
+    submit: "Add rule",
+    submitting: "Adding…",
+    /** The position consequence, stated up front rather than discovered later. */
+    position:
+      "The new rule goes last, so it takes priority over every rule above it. OpenCode uses the last matching rule.",
+    examples: "Actions already in this configuration",
+    added: "Rule added.",
+  },
+  remove: {
+    label: "Remove",
+    confirm: (subject: string) =>
+      `Remove the rule "${subject}"? Everything else keeps its position.`,
+    removing: "Removing…",
+    removed: "Rule removed.",
+    backToDefault:
+      "With the rule gone, OpenCode decides this one using its own default.",
   },
   states: {
     loading: "Reading the OpenCode configuration…",

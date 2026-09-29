@@ -414,6 +414,98 @@ export function setOpenCodePermissionEffect(
   return next;
 }
 
+/**
+ * Appends one rule to the end of the array.
+ *
+ * ## Why append, and why that is stated to the user
+ *
+ * OpenCode resolves this array last-match-wins, so a rule's INDEX is part of its
+ * meaning. Appending gives the new rule the highest precedence — it can narrow
+ * anything above it, and nothing above it can narrow it. Inserting elsewhere
+ * would need a position the user chose, and a position picker is a policy
+ * decision the reference implementations do not make on the user's behalf
+ * either. So the rule goes last and the UI says so plainly.
+ *
+ * An exact duplicate (same action AND resource) is refused rather than appended:
+ * a second rule for the same pair is always dead, because the earlier one is
+ * shadowed by it, and a file carrying a rule that can never fire is worse than
+ * an error the user can act on.
+ *
+ * @param current - The document's `permissions` value, of unknown shape.
+ * @param rule - The rule to append.
+ * @returns The new array.
+ * @throws {OpenCodeConfigUnreadableError} When the value is not an array, or the
+ *   rule is a duplicate.
+ */
+export function appendOpenCodePermissionRule(
+  current: unknown,
+  rule: { readonly action: string; readonly resource: string; readonly effect: "allow" | "ask" | "deny" },
+): unknown {
+  if (!Array.isArray(current)) {
+    throw new OpenCodeConfigUnreadableError(
+      "OpenCode permissions are not an array of rules",
+    );
+  }
+  const duplicate = current.some(
+    (entry) =>
+      entry !== null &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>).action === rule.action &&
+      (entry as Record<string, unknown>).resource === rule.resource,
+  );
+  if (duplicate) {
+    throw new OpenCodeConfigUnreadableError(
+      `A rule for "${rule.action}" on "${rule.resource}" already exists; change its effect instead`,
+    );
+  }
+  return [...current, { action: rule.action, resource: rule.resource, effect: rule.effect }];
+}
+
+/**
+ * Removes the rule at `index`, but only if it is still the one the caller saw.
+ *
+ * The index is re-checked against the caller's expected identity immediately
+ * before the removal. A stale index is the one way this could delete the wrong
+ * rule — the file can change under us, and "remove rule 7" is otherwise a
+ * positional instruction against a list whose positions just moved.
+ *
+ * @param current - The document's `permissions` value, of unknown shape.
+ * @param index - The position the caller read.
+ * @param expected - The identity the caller saw at that position.
+ * @returns The new array.
+ * @throws {OpenCodeConfigUnreadableError} When the value is not an array, the
+ *   index is out of range, or the rule there is no longer the expected one.
+ */
+export function removeOpenCodePermissionRule(
+  current: unknown,
+  index: number,
+  expected: { readonly action: string; readonly resource: string; readonly effect: string },
+): unknown {
+  if (!Array.isArray(current)) {
+    throw new OpenCodeConfigUnreadableError(
+      "OpenCode permissions are not an array of rules",
+    );
+  }
+  const at = current[index];
+  if (at === null || typeof at !== "object" || Array.isArray(at)) {
+    throw new OpenCodeConfigUnreadableError(
+      "That rule is no longer at the position it was read from",
+    );
+  }
+  const rule = at as Record<string, unknown>;
+  if (
+    rule.action !== expected.action ||
+    rule.resource !== expected.resource ||
+    rule.effect !== expected.effect
+  ) {
+    throw new OpenCodeConfigUnreadableError(
+      "That rule changed on disk since it was read; reload and try again",
+    );
+  }
+  return current.filter((_, at2) => at2 !== index);
+}
+
 /** Parses config text, throwing the typed refusal when it is not an object. */
 function parseConfigObjectOrThrow(trimmed: string): Record<string, unknown> {
   let parsed: unknown;

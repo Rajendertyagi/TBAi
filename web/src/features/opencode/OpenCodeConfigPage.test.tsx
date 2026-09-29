@@ -73,6 +73,21 @@ describe("config copy and metadata", () => {
     expect(openCodeConfigCopy.permissions.description).toMatch(/in order/);
     expect(openCodeConfigCopy.permissions.description).toMatch(/last matching rule wins/);
   });
+
+  it("says the table is file-driven, so a missing tool is not read as no policy", () => {
+    // The page renders the file's rules and nothing else. Without this line a
+    // tool absent from the table reads as "OpenCode has no opinion about it",
+    // which is the opposite of what absence means.
+    expect(openCodeConfigCopy.permissions.fileDriven).toMatch(/rules in the file/);
+    expect(openCodeConfigCopy.permissions.fileDriven).toMatch(/its own default/);
+  });
+
+  it("states that a new rule goes last, and that last wins", () => {
+    // The position is the one thing chosen on the user's behalf, so it is
+    // printed on the button rather than discovered after the fact.
+    expect(openCodeConfigCopy.add.position).toMatch(/goes last/);
+    expect(openCodeConfigCopy.add.position).toMatch(/last matching rule/);
+  });
 });
 
 describe("permission rule narrowing (what the table would render)", () => {

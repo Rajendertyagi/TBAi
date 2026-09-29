@@ -6,6 +6,8 @@ import {
   serializeOpenCodeConfig,
   setOpenCodeConfigValue,
   setOpenCodePermissionEffect,
+  appendOpenCodePermissionRule,
+  removeOpenCodePermissionRule,
   readOpenCodeConfigDocument,
   writeOpenCodeConfigDocument,
 } from "./configDocument";
@@ -317,8 +319,191 @@ describe("writeOpenCodeConfigDocument", () => {
   });
 });
 
+describe("appendOpenCodePermissionRule", () => {
+  const base = () => JSON.parse(REAL_CONFIG).permissions as Array<Record<string, unknown>>;
+
+  it("appends, so the new rule has the highest precedence", () => {
+    const next = appendOpenCodePermissionRule(base(), {
+      action: "todowrite",
+      resource: "*",
+      effect: "deny",
+    }) as Array<Record<string, unknown>>;
+    // Last position is the whole point: OpenCode resolves last-match-wins, so a
+    // rule appended at the end overrides every rule above it.
+    expect(next[next.length - 1]).toEqual({
+      action: "todowrite",
+      resource: "*",
+      effect: "deny",
+    });
+    expect(next).toHaveLength(base().length + 1);
+  });
+
+  it("leaves every existing rule at its original index", () => {
+    const before = base();
+    const next = appendOpenCodePermissionRule(before, {
+      action: "todowrite",
+      resource: "*",
+      effect: "deny",
+    }) as Array<Record<string, unknown>>;
+    before.forEach((rule, index) => {
+      expect(next[index]).toEqual(rule);
+    });
+  });
+
+  it("keeps the protected denies when appending", () => {
+    const next = appendOpenCodePermissionRule(base(), {
+      action: "todowrite",
+      resource: "*",
+      effect: "allow",
+    }) as Array<Record<string, unknown>>;
+    for (const [action, resource] of PROTECTED) {
+      const rule = next.find((r) => r.action === action && r.resource === resource);
+      expect(rule?.effect).toBe("deny");
+    }
+  });
+
+  it("does not mutate the input array", () => {
+    const before = base();
+    const snapshot = JSON.stringify(before);
+    appendOpenCodePermissionRule(before, { action: "x", resource: "*", effect: "ask" });
+    expect(JSON.stringify(before)).toBe(snapshot);
+  });
+
+  it("refuses a duplicate action+resource, which could never fire", () => {
+    // A second rule for the same pair is always shadowed by the first, so it is
+    // dead on arrival. Refusing is better than writing a rule that lies.
+    expect(() =>
+      appendOpenCodePermissionRule(base(), {
+        action: "question",
+        resource: "*",
+        effect: "deny",
+      }),
+    ).toThrow(/already exists/);
+  });
+
+  it("accepts the same action on a different resource", () => {
+    // Not a duplicate: the pairs differ, so both can be in force.
+    const next = appendOpenCodePermissionRule(base(), {
+      action: "question",
+      resource: "*.secret",
+      effect: "deny",
+    }) as Array<Record<string, unknown>>;
+    expect(next).toHaveLength(base().length + 1);
+  });
+
+  it("accepts a `*` global-default rule, which the installed server does", () => {
+    // Probed live: the server keeps a `{action:"*"}` rule rather than rejecting
+    // it, so the page may offer one.
+    const next = appendOpenCodePermissionRule(base(), {
+      action: "*",
+      resource: "*",
+      effect: "allow",
+    }) as Array<Record<string, unknown>>;
+    expect(next[next.length - 1].action).toBe("*");
+  });
+
+  it("refuses when permissions is not an array", () => {
+    expect(() =>
+      appendOpenCodePermissionRule({ question: "ask" }, { action: "a", resource: "*", effect: "ask" }),
+    ).toThrow(OpenCodeConfigUnreadableError);
+  });
+});
+
+describe("removeOpenCodePermissionRule", () => {
+  const base = () => JSON.parse(REAL_CONFIG).permissions as Array<Record<string, unknown>>;
+
+  it("removes exactly the addressed rule and keeps every position after it", () => {
+    const before = base();
+    const target = before[0];
+    const next = removeOpenCodePermissionRule(before, 0, {
+      action: target.action as string,
+      resource: target.resource as string,
+      effect: target.effect as "allow" | "ask" | "deny",
+    }) as Array<Record<string, unknown>>;
+    expect(next).toHaveLength(before.length - 1);
+    // Everything after the removed one shifts up by one, and this is asserted
+    // explicitly because a positional removal is exactly where an off-by-one
+    // would silently delete the wrong rule.
+    before.slice(1).forEach((rule, index) => {
+      expect(next[index]).toEqual(rule);
+    });
+  });
+
+  it("returns a tool to OpenCode's own default by removing its only rule", () => {
+    const before = base();
+    const index = before.findIndex((r) => r.action === "question");
+    const target = before[index];
+    const next = removeOpenCodePermissionRule(before, index, {
+      action: "question",
+      resource: "*",
+      effect: "ask",
+    }) as Array<Record<string, unknown>>;
+    expect(next.some((r) => r.action === "question")).toBe(false);
+    expect(target.effect).toBe("ask");
+  });
+
+  it("refuses when the position no longer holds the rule the page read", () => {
+    // The stale-index guard. Without it, "remove row 7" is a positional
+    // instruction against a list whose positions may just have moved.
+    expect(() =>
+      removeOpenCodePermissionRule(base(), 0, {
+        action: "question",
+        resource: "*",
+        effect: "ask",
+      }),
+    ).toThrow(/changed on disk since it was read/);
+  });
+
+  it("refuses when the rule at that position changed effect", () => {
+    const before = base();
+    expect(() =>
+      removeOpenCodePermissionRule(before, 0, {
+        action: "shell",
+        resource: "*",
+        effect: "deny",
+      }),
+    ).toThrow(/changed on disk since it was read/);
+  });
+
+  it("refuses when the position holds something that is not a rule at all", () => {
+    // The other half of the guard: a slot that is not an object never reaches
+    // the identity comparison, so it needs its own refusal.
+    expect(() =>
+      removeOpenCodePermissionRule([null, "nonsense"], 0, {
+        action: "shell",
+        resource: "*",
+        effect: "ask",
+      }),
+    ).toThrow(/no longer at the position/);
+  });
+
+  it("refuses an out-of-range index", () => {
+    expect(() =>
+      removeOpenCodePermissionRule(base(), 99, {
+        action: "shell",
+        resource: "*",
+        effect: "ask",
+      }),
+    ).toThrow(OpenCodeConfigUnreadableError);
+  });
+
+  it("keeps the protected denies when removing an unrelated rule", () => {
+    const before = base();
+    const index = before.findIndex((r) => r.action === "question");
+    const next = removeOpenCodePermissionRule(before, index, {
+      action: "question",
+      resource: "*",
+      effect: "ask",
+    }) as Array<Record<string, unknown>>;
+    for (const [action, resource] of PROTECTED) {
+      expect(
+        next.find((r) => r.action === action && r.resource === resource)?.effect,
+      ).toBe("deny");
+    }
+  });
+});
+
 describe("readOpenCodeConfigDocument", () => {
-  /** Minimal stand-in for the managed server's `GET /api/config`. */
   function stubServer(payload: unknown, ok = true) {
     return (input: string | URL | Request) => {
       void input;

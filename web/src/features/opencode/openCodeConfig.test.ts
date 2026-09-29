@@ -2,7 +2,9 @@ import { describe, expect, it } from "bun:test";
 import {
   toPermissionRules,
   OpenCodeConfigError,
+  addOpenCodePermissionRule,
   fetchOpenCodeConfig,
+  removeOpenCodePermissionRule,
   saveOpenCodePermissionEffect,
   type OpenCodePermissionRule,
 } from "./openCodeConfig";
@@ -203,6 +205,98 @@ describe("saveOpenCodePermissionEffect", () => {
       async () => {
         await expect(saveOpenCodePermissionEffect(QUESTION_RULE, "allow")).rejects.toThrow(
           /refusing to write/,
+        );
+      },
+    );
+  });
+});
+
+describe("addOpenCodePermissionRule", () => {
+  it("POSTs the rule and nothing else — no document, no ruleset", async () => {
+    // Preservation is structural: the add request has no room to carry a
+    // ruleset, so it cannot overwrite one.
+    let sent: { url: string; init?: RequestInit } | null = null;
+    await withFetch(
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        sent = { url: String(url), init };
+        return new Response(JSON.stringify({ path: "C:/cfg/opencode.json", changed: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+      async () => {
+        const result = await addOpenCodePermissionRule({
+          action: "todowrite",
+          resource: "*",
+          effect: "deny",
+        });
+        expect(result.changed).toBe(true);
+        expect(sent?.init?.method).toBe("POST");
+        expect(JSON.parse(String(sent?.init?.body))).toEqual({
+          action: "todowrite",
+          resource: "*",
+          effect: "deny",
+        });
+      },
+    );
+  });
+
+  it("surfaces a duplicate refusal", async () => {
+    await withFetch(
+      (async () =>
+        new Response(
+          JSON.stringify({
+            error: 'A rule for "question" on "*" already exists; change its effect instead',
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } },
+        )) as unknown as typeof fetch,
+      async () => {
+        await expect(addOpenCodePermissionRule(QUESTION_RULE)).rejects.toThrow(
+          /already exists/,
+        );
+      },
+    );
+  });
+});
+
+describe("removeOpenCodePermissionRule", () => {
+  it("DELETEs with both the position and the identity", async () => {
+    // The identity is what makes a stale index safe: without it the request
+    // would be a bare positional delete.
+    let sent: { init?: RequestInit } | null = null;
+    await withFetch(
+      (async (_url: string | URL | Request, init?: RequestInit) => {
+        sent = { init };
+        return new Response(JSON.stringify({ path: "C:/cfg/opencode.json", changed: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+      async () => {
+        await removeOpenCodePermissionRule(7, QUESTION_RULE);
+        expect(sent?.init?.method).toBe("DELETE");
+        expect(JSON.parse(String(sent?.init?.body))).toEqual({
+          action: "question",
+          resource: "*",
+          effect: "ask",
+          index: 7,
+        });
+      },
+    );
+  });
+
+  it("surfaces the stale-position refusal rather than reporting success", async () => {
+    await withFetch(
+      (async () =>
+        new Response(
+          JSON.stringify({
+            error: "That rule changed on disk since it was read; reload and try again",
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } },
+        )) as unknown as typeof fetch,
+      async () => {
+        await expect(removeOpenCodePermissionRule(3, QUESTION_RULE)).rejects.toThrow(
+          /changed on disk/,
         );
       },
     );

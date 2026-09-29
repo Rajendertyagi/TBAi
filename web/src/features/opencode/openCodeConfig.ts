@@ -136,8 +136,71 @@ export async function fetchOpenCodeConfig(): Promise<OpenCodeConfigSnapshot> {
 /** What a successful or refused permission write reports back. */
 export interface OpenCodePermissionWriteResult {
   readonly path: string;
-  /** False when the rule was already at that effect; nothing was written. */
+  /** False when the change was a no-op; nothing was written. */
   readonly changed: boolean;
+}
+
+/**
+ * Adds one rule to the END of the array.
+ *
+ * End means highest precedence, because OpenCode resolves the array
+ * last-match-wins. The page says so on the button rather than hiding it — a
+ * rule whose position silently decides what it overrides is not something to
+ * discover afterwards.
+ *
+ * @param rule - The action, resource and effect to append.
+ * @returns Whether the file was rewritten.
+ * @throws {OpenCodeConfigError} When the rule is a duplicate or the write is refused.
+ */
+export async function addOpenCodePermissionRule(
+  rule: OpenCodePermissionRule,
+): Promise<OpenCodePermissionWriteResult> {
+  return postPermissionChange("/api/opencode/config/permissions", { ...rule });
+}
+
+/**
+ * Removes one rule, addressed by the position the page rendered it at AND its
+ * identity. The backend re-checks both against the file, so a rule that moved
+ * or changed on disk is refused rather than deleted by position alone.
+ *
+ * @param index - The position the page rendered the rule at.
+ * @param rule - The rule as rendered, used to detect a stale position.
+ * @returns Whether the file was rewritten.
+ * @throws {OpenCodeConfigError} When the rule moved or the write is refused.
+ */
+export async function removeOpenCodePermissionRule(
+  index: number,
+  rule: OpenCodePermissionRule,
+): Promise<OpenCodePermissionWriteResult> {
+  return postPermissionChange("/api/opencode/config/permissions", { ...rule, index }, "DELETE");
+}
+
+/** Shared request helper for the add/remove routes. */
+async function postPermissionChange(
+  url: string,
+  body: Record<string, unknown>,
+  method: "POST" | "DELETE" = "POST",
+): Promise<OpenCodePermissionWriteResult> {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const parsed: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      parsed !== null &&
+      typeof parsed === "object" &&
+      typeof (parsed as { error?: unknown }).error === "string"
+        ? (parsed as { error: string }).error
+        : `Request failed (${response.status})`;
+    throw new OpenCodeConfigError(message);
+  }
+  const record = (parsed ?? {}) as Record<string, unknown>;
+  return {
+    path: typeof record.path === "string" ? record.path : "",
+    changed: record.changed === true,
+  };
 }
 
 /**

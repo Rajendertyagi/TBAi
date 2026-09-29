@@ -9,9 +9,11 @@ import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
 import { OpenCodeBinaryMissingError, openCodeServerManager, stripOpenCodeProxyPrefix } from "../services/opencode/serverManager";
 import { getOpenCodeAuthHeaders } from "../services/opencode/runtime";
 import {
+  appendOpenCodePermissionRule,
   OpenCodeConfigNotFoundError,
   OpenCodeConfigUnreadableError,
   readOpenCodeConfigDocument,
+  removeOpenCodePermissionRule,
   setOpenCodeConfigValue,
   setOpenCodePermissionEffect,
   writeOpenCodeConfigDocument,
@@ -139,6 +141,44 @@ async function configServerTarget(): Promise<{
   };
 }
 
+/**
+ * The ONE write path for permission rules, shared by edit / add / remove.
+ *
+ * All three take a function that maps the current rules to the next ones, and
+ * all three get the same guarantees for free: the document is re-read here
+ * rather than trusting the browser's copy (a stale base is exactly how an
+ * unrelated rule gets dropped), a malformed document is refused, and a
+ * transform that returns the identical array writes nothing at all.
+ *
+ * Returns the Hono response so each route is a single call plus its own error
+ * mapping — a duplicated read-refuse-write sequence is how the three operations
+ * would drift apart.
+ */
+async function applyPermissionChange(
+  transform: (current: unknown) => unknown,
+): Promise<
+  | Response
+  | { readonly path: string; readonly changed: boolean }
+> {
+  const target = await configServerTarget();
+  const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
+  if (document.malformed) {
+    throw new OpenCodeConfigUnreadableError(
+      "OpenCode configuration is not valid JSON; refusing to write",
+    );
+  }
+  const nextPermissions = transform(document.doc.permissions);
+  // An identity result means the change was a no-op (the effect already
+  // matched). Writing it would still rewrite the file, so it is reported
+  // without touching disk.
+  if (nextPermissions === document.doc.permissions) {
+    return { path: document.path, changed: false };
+  }
+  const nextText = setOpenCodeConfigValue(document.raw, "permissions", nextPermissions);
+  await writeOpenCodeConfigDocument(document.path, nextText, document.doc);
+  return { path: document.path, changed: true };
+}
+
 app.get("/config", async (c) => {
   try {
     const target = await configServerTarget();
@@ -164,6 +204,86 @@ app.get("/config", async (c) => {
   }
 });
 
+/** Adds one rule to the END of the array, where it has the highest precedence. */
+app.post("/config/permissions", async (c) => {
+  const parsed = z
+    .object({
+      action: z.string().trim().min(1),
+      resource: z.string().trim().min(1),
+      effect: z.enum(["allow", "ask", "deny"]),
+    })
+    .safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return c.json({ error: "action, resource and effect are required" }, 400);
+  }
+  const { action, resource, effect } = parsed.data;
+  try {
+    const result = await applyPermissionChange((current) =>
+      appendOpenCodePermissionRule(current, { action, resource, effect }),
+    );
+    return c.json(result);
+  } catch (err) {
+    logger.error("opencode", "opencode.config_rule_add_error", {
+      ...classifyError(err),
+      action,
+      resource,
+      effect,
+    });
+    if (err instanceof OpenCodeConfigUnreadableError) {
+      return c.json({ error: err.message }, 422);
+    }
+    if (err instanceof OpenCodeConfigNotFoundError) {
+      return c.json({ error: err.message }, 404);
+    }
+    const mapped = openCodeError(err, "Failed to add the rule");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
+ * Removes one rule, addressed by the position AND identity the page read.
+ *
+ * The identity is re-checked against the file immediately before the removal,
+ * so a rule that moved or changed since the page was rendered is refused rather
+ * than deleted by position alone.
+ */
+app.delete("/config/permissions", async (c) => {
+  const parsed = z
+    .object({
+      index: z.number().int().min(0),
+      action: z.string().min(1),
+      resource: z.string().min(1),
+      effect: z.enum(["allow", "ask", "deny"]),
+    })
+    .safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return c.json({ error: "index, action, resource and effect are required" }, 400);
+  }
+  const { index, action, resource, effect } = parsed.data;
+  try {
+    const result = await applyPermissionChange((current) =>
+      removeOpenCodePermissionRule(current, index, { action, resource, effect }),
+    );
+    return c.json(result);
+  } catch (err) {
+    logger.error("opencode", "opencode.config_rule_remove_error", {
+      ...classifyError(err),
+      index,
+      action,
+      resource,
+      effect,
+    });
+    if (err instanceof OpenCodeConfigUnreadableError) {
+      return c.json({ error: err.message }, 422);
+    }
+    if (err instanceof OpenCodeConfigNotFoundError) {
+      return c.json({ error: err.message }, 404);
+    }
+    const mapped = openCodeError(err, "Failed to remove the rule");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
 app.put("/config/permissions", async (c) => {
   const parsed = permissionEffectSchema.safeParse(
     await c.req.json().catch(() => ({})),
@@ -173,33 +293,10 @@ app.put("/config/permissions", async (c) => {
   }
   const { action, resource, effect } = parsed.data;
   try {
-    const target = await configServerTarget();
-    // Re-read inside the write. The browser's copy is never trusted for the
-    // base document: it may be stale, and a stale base is exactly how an
-    // unrelated rule gets dropped.
-    const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
-    if (document.malformed) {
-      throw new OpenCodeConfigUnreadableError(
-        "OpenCode configuration is not valid JSON; refusing to write",
-      );
-    }
-    const nextPermissions = setOpenCodePermissionEffect(
-      document.doc.permissions,
-      { action, resource },
-      effect,
+    const result = await applyPermissionChange((current) =>
+      setOpenCodePermissionEffect(current, { action, resource }, effect),
     );
-    // A no-op edit returns the identical array; writing it would still
-    // rewrite the file, so it is reported without touching disk.
-    if (nextPermissions === document.doc.permissions) {
-      return c.json({ path: document.path, changed: false });
-    }
-    const nextText = setOpenCodeConfigValue(
-      document.raw,
-      "permissions",
-      nextPermissions,
-    );
-    await writeOpenCodeConfigDocument(document.path, nextText, document.doc);
-    return c.json({ path: document.path, changed: true });
+    return c.json(result);
   } catch (err) {
     logger.error("opencode", "opencode.config_write_error", {
       ...classifyError(err),
