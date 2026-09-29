@@ -15,6 +15,7 @@
  * `tool-timeline.tsx` beside this file is upstream's, unmodified.
  */
 import { useMemo, useState } from "react";
+import { readTimelineFiles } from "@/lib/timeline-files";
 import { useAuiState, type ToolCallMessagePart } from "@assistant-ui/react";
 import {
   FilePlusIcon,
@@ -97,9 +98,24 @@ function firstString(value: unknown): string | undefined {
 export function toStats(parts: readonly ToolCallMessagePart[]): TimelineStat[] {
   const stats: TimelineStat[] = [];
   for (const part of parts) {
-    if (part.toolName !== "edit_file" && part.toolName !== "edit" && part.toolName !== "write_file" && part.toolName !== "write") {
+    if (
+      part.toolName !== "edit_file" &&
+      part.toolName !== "edit" &&
+      part.toolName !== "write_file" &&
+      part.toolName !== "write"
+    ) {
       continue;
     }
+    // The part's own artifact first: it is computed from the tool's actual patch,
+    // so it is right even for a tool whose result object reports no line counts.
+    // On the Code surface this is the ONLY source, and before it existed the
+    // label read "0 files changed" on every single turn.
+    const published = readTimelineFiles(part.artifact);
+    if (published.length > 0) {
+      stats.push(...published);
+      continue;
+    }
+    // A tool that reports its own counts still gets them; nothing is lost.
     const result = part.result as
       | { file?: unknown; filePath?: unknown; path?: unknown; added?: unknown; removed?: unknown; linesAdded?: unknown; linesRemoved?: unknown }
       | undefined;

@@ -1,4 +1,5 @@
 import type { ToolContent } from "@opencode/client";
+import { patchFromToolMetadata } from "@/lib/tool-patch";
 
 /**
  * Explicit OpenCode → rich-UI normalization.
@@ -292,8 +293,14 @@ const DERIVED_CALL_ID_PREFIX = "tbai-v2-tool:";
  * Pull OpenCode's own patch out of the raw tool part for `callId`.
  *
  *   - the patch lives in native V2 `state.metadata.files[].patch`
- *   - **`write` has NO patch at all** (a whole-file write has nothing to diff
- *     against), so this returns null for `write` by data, not by special-case.
+ *   - `write` carries one too — `@@ -0,0 +1,N @@`, every line an addition. An
+ *     earlier version of this comment claimed it had none, on the reasoning that
+ *     a whole-file write has nothing to diff against; verified against the live
+ *     server, that is wrong, and a new file is the *easiest* case to diff.
+ *
+ * The extraction itself is `patchFromToolMetadata` in `@/lib/tool-patch`, shared
+ * with the V2 projection, which has to answer the same question while building
+ * the part and cannot import this file without a cycle.
  *
  * The V2 projection preserves the official assistant content parts in
  * `metadata.custom.opencode.parts`, so the renderer reads the official V2 tool
@@ -306,16 +313,7 @@ export function openCodePatchFromParts(
   rawParts: unknown,
   callId: string | undefined,
 ): string | null {
-  const metadata = rawPartMetadata(rawPartForCallId(rawParts, callId));
-  if (metadata === null) return null;
-  const files = metadata.files;
-  if (!Array.isArray(files)) return null;
-  const file = files.find((entry): entry is { patch: string } =>
-    entry !== null &&
-    typeof entry === "object" &&
-    typeof (entry as { patch?: unknown }).patch === "string",
-  );
-  return typeof file?.patch === "string" && file.patch.trim() ? file.patch : null;
+  return patchFromToolMetadata(rawPartMetadata(rawPartForCallId(rawParts, callId)));
 }
 
 /**

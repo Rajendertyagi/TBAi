@@ -41,7 +41,8 @@ row without one is not done.
 | Flat results render as rows | Six tools painted a JSON envelope for small flat objects. `FieldsOrJson` renders rows, falls back to bounded JSON when nested. | `b303dcd` |
 | **Direct-chat edit gate shows a diff** | The gate that answers "allow this?" showed the model's Find/Replace text. It now shows the change, with surrounding context, from a read-only endpoint that is `runEdit` minus the write. No diff library added — the edit *is* the diff. Pair kept as the fallback. | `93ecc8b` |
 | **`scheduler` is approvable** | A tool that creates and fires jobs unattended was ungated. Now gated per call: `list`/`get` answer freely, `create`/`update`/`delete`/`run_now` ask, and anything unrecognised asks. | this commit |
-| **Question observability moved to the live card** | Four `question.*` events were logged only by a component nothing renders, so the contract passed while every real question was unloggable. Events moved to the live dock; 686 lines of dead code deleted. | this commit |
+| **Question observability moved to the live card** | Four `question.*` events were logged only by a component nothing renders, so the contract passed while every real question was unloggable. Events moved to the live dock; 686 lines of dead code deleted. | `3fa4800` |
+| **The timeline counts real files** | "N steps · 0 files changed" on every coding turn. The count was a missing *shape*, not a wrong number: the tool results carry no line counts, but the patch on every call does. Counts derived from the patch and published on the library's own `artifact` slot. | this commit |
 | OpenCode configuration page | Read/edit permission rules, file-driven, no invented permission system. | `c371fc7`, `440a39d`, `f7a59f6` |
 
 ### How each was verified
@@ -62,9 +63,18 @@ row without one is not done.
     the single-source guard caught after `textPreview` moved;
   - emptying the scheduler read-action set, and separately deleting
     `question.accepted` — both caught, confirming the policy and the
-    observability contract are pinned to *behaviour* and not to a file path.
+    observability contract are pinned to *behaviour* and not to a file path;
+  - the timeline's file count, broken at **both** ends — removing the published
+    artifact, and making the reader ignore it. A test on either half alone would
+    have passed while the number stayed at zero, which is how the bug survived.
 - **Live browser verification for the edit gate**, with the test confirmed to
   fail when the gate is reverted.
+- **Where a surface could not be reached, the gap is named rather than implied.**
+  Two live claims are not browser-verified and are called out where they are
+  recorded: the Direct-chat gate's fetch-and-swap transition (a Direct gate needs
+  a real model turn to exist), and the timeline's rendered label (it needs a live
+  OpenCode session with a completed edit). Both are covered end to end in tests
+  across the real modules instead.
 
 ---
 
@@ -174,10 +184,61 @@ designs, one feature, still true.
 | **Todo list** | Unreachable — partly corroborated | Three renderers for one feature exist, and none can be seen: the tool depends on does not exist in this OpenCode build. |
 | **A gap on the right** | Waiting on a call | Messages end 170px further right than the assistant's, in every exchange. May well be deliberate. |
 | **Dead code** | **Resolved — but not the way it looked** | The 376-line question form *was* dead, and deleting it exposed a bigger problem. See below. |
-| **`0 files changed` in the coding chat** | Real, small, unfixed | The same count that was always zero in the normal chat, structurally zero for a *different* reason. |
+| **`0 files changed` in the coding chat** | **Fixed** | Structurally zero, and not because the count was wrong. See below. |
 | **MCP tool output** | Unexercised | Buttons match the reference; a real MCP tool has never been run here. |
 | **Focus does not follow the questions** | Matches reference | Stepping to the next question does not move the cursor into it. The reference app has the same gap, so we match rather than lead. |
 | **Thinking / reasoning block** | Works | Only appears at thinking level `high`; at the default there is nothing, which looks broken but is not. |
+
+### "0 files changed" was a missing shape, not a wrong number
+
+The timeline label said `0 files changed` on every single turn of a coding
+session. The atlas recorded it as "structurally zero for a *different* reason"
+than the Direct-chat case, and it was right that the reasons differ — but it
+never said what the other reason was, so the item sat unfixed.
+
+**The cause.** `toStats` reads `added` / `removed` off each tool's own result
+object. OpenCode's `edit` and `write` outputs carry neither, and nothing in the
+OpenCode path ever produced them. So the arithmetic was correct and the input was
+always empty. A correct answer to an empty question is indistinguishable from a
+lie, which is why it read as one.
+
+The Direct-chat half of this was already fixed, and *correctly* — by gating the
+timeline off in Direct mode entirely (`shouldShowSessionTimeline`), on the
+reasoning that "M files changed" is OpenCode vocabulary and Direct results carry
+no line counts at all. That left the coding surface, the only one that shows the
+label, as the only place it could still be wrong.
+
+**The data was never missing.** Every one of those calls already carries a
+unified diff — the same patch the approval gate shows *before* the edit runs and
+the completed card shows after. It has `+`/`-` rows, so it is countable, and the
+app already has the counter (`patchToCodeDiffs`) because every diff on screen goes
+through it. The number was simply never wired to the label.
+
+**Where it now lives, and why `artifact`.** assistant-ui's `ToolCallMessagePart`
+carries `artifact?: unknown`, documented as "UI-only artifact associated with the
+tool result" — part of the official library type, and unused in this repo. That is
+exactly this data: derived in the browser, never sent to the model, read only by a
+renderer. No cast, no app-specific metadata channel. The alternative, writing the
+counts into the tool's `result`, would have been a different kind of dishonesty:
+inventing fields on a payload the tool never returned, in an object the card may
+itself render.
+
+**A stale comment, corrected.** `adapt.ts` claimed "`write` has NO patch at all
+(a whole-file write has nothing to diff against)". The live payload says
+otherwise — `write` sends `@@ -0,0 +1,N @@`, every line an addition, and a new
+file is the *easiest* case to diff. The claim had been used as a reason not to
+build this. Corrected in place, because a wrong comment that reads as a verified
+finding is worse than no comment.
+
+**The tests are a chain, deliberately.** They run the real projection and then the
+real timeline reader, and assert on the label. A test on either half alone would
+have passed while the number stayed at zero — which is precisely how this bug
+survived. Both halves were mutation-checked: removing the `artifact` from the
+producer, and making the consumer ignore it, each fail the suite.
+
+Not browser-verified: the rendered label needs a live OpenCode session with a
+completed edit, which is not seedable from the conversations API. The chain is
+covered end to end in tests; the pixels are not claimed.
 
 ### The dead question form was hiding a live gap
 

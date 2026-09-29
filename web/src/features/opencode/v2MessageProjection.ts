@@ -14,6 +14,22 @@ import {
 } from "./v2Permissions";
 import type { V2MessagePartState, V2MessageState, V2ThreadState } from "./v2Types";
 
+import { patchFromToolMetadata } from "@/lib/tool-patch";
+import {
+  timelineFilesFromPatch,
+  timelinePathFromInput,
+  type TimelineArtifact,
+} from "@/lib/timeline-files";
+
+/**
+ * The tool names whose calls change files, and so can be counted.
+ *
+ * Read off the OpenCode tool set rather than the native one: this projection only
+ * ever produces OpenCode parts, and a name that never reaches it would be dead
+ * weight in the set that still has to be reasoned about.
+ */
+const FILE_CHANGING_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "patch"]);
+
 /** A branchable assistant-ui message item with its explicit parent. */
 export interface V2BranchableMessageItem {
   readonly message: ThreadMessageLike;
@@ -161,6 +177,7 @@ function partToAssistantContent(
     ? part.id
     : deriveV2ToolCallId(message.id, officialToolId);
   const permission = permissions.find((candidate) => candidate.toolCallId === toolCallId);
+  const timeline = timelineArtifactFor(part);
   return {
     type: "tool-call",
     toolCallId,
@@ -169,12 +186,42 @@ function partToAssistantContent(
     argsText: JSON.stringify(part.input),
     result: part.status === "running" || part.status === "pending" ? undefined : part.output,
     isError: part.status === "error",
+    // The file counts the session timeline prints. Published on `artifact`, the
+    // library's own "UI-only artifact" slot, because the counts are derived in the
+    // browser from the patch and must never reach the model. See
+    // `@/lib/timeline-files` for why this is not read off the tool's result.
+    ...(timeline === null ? {} : { artifact: timeline }),
     // Handed to assistant-ui so its own `useToolCallElapsed` can read it. TBAi
     // never formats a duration itself — the library owns the ticking and the
     // `X.Xs` rendering, exactly as it does on the Direct surface.
     ...(part.timing === undefined ? {} : { timing: part.timing }),
     ...(permission ? { approval: projectV2PermissionApproval(permission) } : {}),
   };
+}
+
+/**
+ * The changed-file counts for a file-changing tool call, or `null`.
+ *
+ * `null` — rather than an empty list — is the "say nothing" signal, so a tool that
+ * changed no file gets no `artifact` key at all instead of an empty one that a
+ * reader would have to distinguish from a real zero.
+ *
+ * Only tools that change files are considered, and only once they have finished:
+ * a running edit has not changed anything yet, and counting it would put a
+ * number on screen that the next event overwrites.
+ *
+ * @param part - The projected V2 tool part.
+ * @returns A timeline artifact, or null when there is nothing to count.
+ */
+function timelineArtifactFor(part: V2MessagePartState): TimelineArtifact | null {
+  if (part.kind !== "tool") return null;
+  if (!FILE_CHANGING_TOOLS.has(part.name)) return null;
+  if (part.status !== "complete") return null;
+  const patch = patchFromToolMetadata(part.metadata);
+  if (patch === null) return null;
+  const path = timelinePathFromInput(part.input);
+  const files = timelineFilesFromPatch(patch, path);
+  return files.length === 0 ? null : { files };
 }
 
 function openCodePartsForMessage(message: V2MessageState): readonly unknown[] {
