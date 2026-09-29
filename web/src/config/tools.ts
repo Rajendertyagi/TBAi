@@ -9,6 +9,40 @@
  */
 export const toolsConfig = {
   copy: {
+    /**
+     * How a tool card's title is written: the tool's name, and the subject it
+     * is about when there is one.
+     *
+     * Every renderer formats its title through this. The tool names and the
+     * separator used to be written inline in each renderer, which put
+     * user-facing copy in nine files and made a wording change a nine-file edit.
+     */
+    toolTitle: (name: string, subject?: string | null): string =>
+      subject && subject.trim().length > 0 ? `${name} · ${subject}` : name,
+
+    /**
+     * Tool names as the reader sees them. Kept beside the title formatter so a
+     * tool cannot be renamed in one renderer and not another.
+     */
+    tool: {
+      read: "read",
+      glob: "glob",
+      grep: "grep",
+      edit: "edit",
+      write: "write",
+      bash: "bash",
+      task: "task",
+      todowrite: "todowrite",
+      todo: "todo",
+      skill: "skill",
+      question: "question",
+      webfetch: "webfetch",
+      websearch: "websearch",
+      subagent: "subagent",
+      asked: "asked",
+      empty: "empty",
+    } as const,
+
     running: {
       reading: "Reading…",
       listing: "Listing…",
@@ -34,6 +68,12 @@ export const toolsConfig = {
       approvedExecuting: "Approved — executing…",
     },
     status: {
+      /**
+       * How many of a task list are done, as the reader is shown it. Lives here
+       * so no renderer spells the ratio out for itself.
+       */
+      completedOf: (completed: number, total: number): string =>
+        `${completed}/${total} completed`,
       /**
        * A tool that succeeded and produced nothing. ONLY for a result that is
        * genuinely empty — see `status.resultUnreadable` for the case this must

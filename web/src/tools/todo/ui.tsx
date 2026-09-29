@@ -40,7 +40,10 @@ function todoSummary(result: AnyResult) {
 
 export const TodoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
   <BackendToolView
-    title={`todo · ${String(p.args.action ?? "")}`}
+    title={toolsConfig.copy.toolTitle(
+    toolsConfig.copy.tool.todo,
+    typeof p.args.action === "string" ? p.args.action : null,
+  )}
     args={p.args}
     result={p.result}
     status={p.status}

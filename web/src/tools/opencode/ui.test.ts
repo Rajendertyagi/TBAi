@@ -107,7 +107,12 @@ describe("OpenCode read — title, path and body all populate", () => {
     // Non-vacuity control: with no args there is no path to show, which proves
     // the path above came from OpenCode's `filePath` via normalization.
     const html = render(OpenCodeReadToolUI, completedRead({}, nativeContent(BODY)));
-    expect(html).toContain("read · ");
+    // The title falls back to the bare tool name, with no dangling separator:
+    // the formatter lives in toolsConfig and omits it when there is no subject.
+    // What this case proves is the assertion below it — the path really is
+    // absent, which is what makes the sibling case non-vacuous.
+    expect(html).toContain("read");
+    expect(html).not.toContain("read ·");
     expect(html).not.toContain(PATH);
   });
 

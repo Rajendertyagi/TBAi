@@ -184,7 +184,7 @@ const body = (result: unknown) => <ResultBody result={result} />;
  */
 export const OpenCodeReadToolUI = openCodeView({
   tool: "read",
-  title: (args) => `read · ${str(args.path)}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.read, str(args.path)),
   targetPath: (args) => str(args.path),
   runningLabel: toolsConfig.copy.running.reading,
   summarize: body,
@@ -196,7 +196,7 @@ export const OpenCodeReadToolUI = openCodeView({
  */
 export const OpenCodeGlobToolUI = openCodeView({
   tool: "glob",
-  title: (args) => `glob · ${str(args.query)}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.glob, str(args.query)),
   targetPath: (args) => str(args.path, "."),
   runningLabel: toolsConfig.copy.running.findingFiles,
   summarize: body,
@@ -205,7 +205,7 @@ export const OpenCodeGlobToolUI = openCodeView({
 /** `grep` — OpenCode args are `{ pattern, path?, include? }`. */
 export const OpenCodeGrepToolUI = openCodeView({
   tool: "grep",
-  title: (args) => `grep · ${str(args.query)}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.grep, str(args.query)),
   targetPath: (args) => str(args.path, "."),
   runningLabel: toolsConfig.copy.running.searching,
   summarize: body,
@@ -267,7 +267,7 @@ export const OpenCodeEditView = ({
   const args = normalizeOpenCodeArgs("edit", p.args) ?? {};
   return (
     <BackendToolView
-      title={`edit · ${str(args.path)}`}
+      title={toolsConfig.copy.toolTitle(toolsConfig.copy.tool.edit, str(args.path))}
       args={args}
       argPreview={editPreview(args)}
       result={normalizeOpenCodeResult("edit", p.result)}
@@ -357,7 +357,7 @@ OpenCodeEditToolUI.displayName = "OpenCodeToolUI(edit)";
 /** `write` — OpenCode args are `{ content, filePath }`. */
 export const OpenCodeWriteToolUI = openCodeView({
   tool: "write",
-  title: (args) => `write · ${str(args.path)}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.write, str(args.path)),
   targetPath: (args) => str(args.path),
   argPreview: contentPreview,
   runningLabel: toolsConfig.copy.running.writing,
@@ -456,7 +456,7 @@ OpenCodeBashToolUI.displayName = "OpenCodeToolUI(bash)";
 /** `task` — required `{ description, prompt, subagent_type }` (+ `task_id?`, `command?`). */
 export const OpenCodeTaskToolUI = openCodeView({
   tool: "task",
-  title: (args) => `task · ${str(args.subagent_type, "subagent")}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.task, str(args.subagent_type, toolsConfig.copy.tool.subagent)),
   argPreview: (args) => <TextBody text={str(args.prompt)} />,
   runningLabel: toolsConfig.copy.running.runningSubagent,
   summarize: body,
@@ -494,8 +494,8 @@ export const OpenCodeTodoWriteToolUI = openCodeView({
     const list = asTodoList(args.todos);
     const completed = list.filter((t) => t.status === "completed").length;
     return list.length > 0
-      ? `todowrite · ${completed}/${list.length} completed`
-      : "todowrite · empty";
+      ? toolsConfig.copy.toolTitle(toolsConfig.copy.tool.todowrite, toolsConfig.copy.status.completedOf(completed, list.length))
+      : toolsConfig.copy.toolTitle(toolsConfig.copy.tool.todowrite, toolsConfig.copy.tool.empty);
   },
   argPreview: (args) => {
     const list = asTodoList(args.todos);
@@ -537,7 +537,7 @@ export const OpenCodeTodoWriteToolUI = openCodeView({
 /** `webfetch` — required `{ url }` (+ `format?`, `timeout?`). */
 export const OpenCodeWebFetchToolUI = openCodeView({
   tool: "webfetch",
-  title: (args) => `webfetch · ${str(args.url)}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.webfetch, str(args.url)),
   runningLabel: toolsConfig.copy.running.fetching,
   summarize: body,
 });
@@ -645,7 +645,7 @@ export const OpenCodeWebSearchToolUI: ToolCallMessagePartComponent = (
 
   return (
     <BackendToolView
-      title={`websearch · ${str(args.query)}`}
+      title={toolsConfig.copy.toolTitle(toolsConfig.copy.tool.websearch, str(args.query))}
       args={args}
       result={result}
       status={p.status}
@@ -663,7 +663,7 @@ OpenCodeWebSearchToolUI.displayName = "OpenCodeToolUI(websearch)";
 /** `skill` — required `{ name }`. */
 export const OpenCodeSkillToolUI = openCodeView({
   tool: "skill",
-  title: (args) => `skill · ${str(args.name)}`,
+  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.skill, str(args.name)),
   runningLabel: toolsConfig.copy.running.loadingSkill,
   summarize: body,
 });
@@ -777,7 +777,10 @@ function questionBody(
 /** The `question` card title: the first question's header, else its text. */
 function questionTitle(args: AnyArgs): string {
   const first = questionList(args)[0];
-  return `question · ${str(first?.header) || str(first?.question) || "asked"}`;
+  return toolsConfig.copy.toolTitle(
+      toolsConfig.copy.tool.question,
+      str(first?.header) || str(first?.question) || toolsConfig.copy.tool.asked,
+    );
 }
 
 /**
