@@ -9,10 +9,28 @@ import {
   windowToggleMaximize,
 } from "../lib/platform";
 import { chromeConfig } from "../config/chrome";
+import { logger } from "../lib/logger";
 import { cn } from "../lib/utils";
 
 const BTN_CLASS =
   "flex h-full w-[var(--caption-button-width)] items-center justify-center text-muted-foreground transition-colors hover:bg-muted";
+
+/** Native window actions whose failure must be reported rather than discarded. */
+type WindowAction = "minimize" | "toggle_maximize" | "close";
+
+/**
+ * Runs a native window action, logging a rejected IPC call instead of
+ * discarding it: a missing `core:window:*` permission rejects the invoke, and
+ * a bare `void` left that rejection invisible.
+ */
+function runWindowAction(action: WindowAction, run: () => Promise<void>): void {
+  void run().catch((error: unknown) => {
+    logger.error("window-controls", "window_action_failed", {
+      action,
+      error: String(error),
+    });
+  });
+}
 
 /**
  * Native window controls (minimize / maximize-restore / close) for the
@@ -63,7 +81,7 @@ export function WindowControls() {
         className={BTN_CLASS}
         title={copy.minimize}
         aria-label={copy.minimize}
-        onClick={() => void windowMinimize()}
+        onClick={() => runWindowAction("minimize", windowMinimize)}
       >
         <Minus className="h-3.5 w-3.5" />
       </button>
@@ -73,7 +91,7 @@ export function WindowControls() {
         title={isMaximized ? copy.restore : copy.maximize}
         aria-label={isMaximized ? copy.restore : copy.maximize}
         aria-pressed={isMaximized}
-        onClick={() => void windowToggleMaximize()}
+        onClick={() => runWindowAction("toggle_maximize", windowToggleMaximize)}
       >
         {isMaximized ? (
           <Copy className="h-3 w-3" aria-hidden="true" />
@@ -89,7 +107,7 @@ export function WindowControls() {
         )}
         title={copy.close}
         aria-label={copy.close}
-        onClick={() => void windowClose()}
+        onClick={() => runWindowAction("close", windowClose)}
       >
         <X className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
