@@ -207,14 +207,20 @@ describe("OpenCode edit / write — title, path and body", () => {
     expect(html).not.toContain("undefined");
   });
 
-  it("shows what will be replaced in the approval card, not the result", () => {
-    // The preview belongs to the decision: it is what the user approves. The
-    // same split the native writer/editor use (`argPreview` reaches the gate,
-    // not the completed body).
+  it("shows the actual change in the approval card, not the model's find/replace pair", () => {
+    // The preview belongs to the decision: it is what the user approves, and a
+    // change that has NOT happened is precisely what a gate exists to ask about.
     //
-    // A patch is passed IN as well, deliberately: the gate must still show the
-    // find/replace pair. If the diff leaked into the gate, the user would be
-    // approving a change that has not happened yet.
+    // This test previously asserted the opposite - that the gate must show the
+    // find/replace pair and must NOT show a diff - on the reasoning that
+    // "the user would be approving a change that has not happened yet". That had
+    // it backwards. The find/replace pair omits the surrounding context, so it
+    // cannot show whether the replacement lands where the author meant, which is
+    // the thing a reviewer is actually judging.
+    //
+    // `pendingPatch` is what OpenCode computed BEFORE running the edit and sent
+    // with the permission request. The payload below is the real shape, captured
+    // from the live server.
     const html = render(
       OpenCodeEditView,
       {
@@ -227,13 +233,98 @@ describe("OpenCode edit / write — title, path and body", () => {
             approval: { id: "per_edit_1", options: [] },
           },
         ),
-        diffPatch: "@@ -1 +1 @@\n-GATE_MUST_NOT_SHOW_THIS\n",
+        pendingPatch:
+          "Index: src/a.ts\n" +
+          "===================================================================\n" +
+          "--- src/a.ts\n" +
+          "+++ src/a.ts\n" +
+          "@@ -1,3 +1,3 @@\n" +
+          " const before = 1;\n" +
+          "-const target = BEFORE_TOKEN;\n" +
+          "+const target = AFTER_TOKEN;\n" +
+          " export { before };\n",
+      },
+    );
+    // The resulting change, as a diff: the file, and both sides of it.
+    expect(html).toContain("src/a.ts");
+    expect(html).toContain("BEFORE_TOKEN");
+    expect(html).toContain("AFTER_TOKEN");
+    // The find/replace labels are what the diff replaces. If they survive here,
+    // the reader is being shown the model's description alongside - rather than
+    // instead of - the change.
+    expect(html).not.toContain("Replace with:");
+  });
+
+  it("falls back to the find/replace pair when the server sends no patch", () => {
+    // The fallback is load-bearing, not decoration: `metadata.files` is optional
+    // on the wire, and a gate with no preview at all would be worse than one
+    // showing what the model proposed. Also the path a `write` takes, which has
+    // no patch by data.
+    const html = render(
+      OpenCodeEditView,
+      {
+        ...toolPart(
+          "edit",
+          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+          undefined,
+          {
+            status: { type: "requires-action", reason: "interrupt" },
+            approval: { id: "per_edit_1", options: [] },
+          },
+        ),
+        pendingPatch: null,
       },
     );
     expect(html).toContain("edit · src/a.ts");
     expect(html).toContain("BEFORE_TOKEN");
     expect(html).toContain("AFTER_TOKEN");
-    expect(html).not.toContain("GATE_MUST_NOT_SHOW_THIS");
+    expect(html).toContain("Replace with:");
+  });
+
+  it("falls back when a patch arrives but is not parseable as a diff", () => {
+    // A patch the diff parser cannot read must not leave the gate empty. This is
+    // the same guard the completed card has: unparseable means "show what we
+    // have", never "show nothing".
+    const html = render(
+      OpenCodeEditView,
+      {
+        ...toolPart(
+          "edit",
+          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+          undefined,
+          {
+            status: { type: "requires-action", reason: "interrupt" },
+            approval: { id: "per_edit_1", options: [] },
+          },
+        ),
+        pendingPatch: "not a diff at all",
+      },
+    );
+    expect(html).toContain("BEFORE_TOKEN");
+    expect(html).toContain("Replace with:");
+  });
+
+  it("still shows the find/replace pair on a DECIDED edit, where the diff is the past", () => {
+    // Two patches, two jobs. The one the server recorded after the edit ran
+    // belongs to the completed card; the gate's own patch must not leak into it
+    // as a second, competing preview.
+    const html = render(
+      OpenCodeEditView,
+      {
+        ...toolPart(
+          "edit",
+          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+          "Edit applied successfully.",
+          { status: { type: "complete" } },
+        ),
+        diffPatch:
+          "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-BEFORE_TOKEN\n+AFTER_TOKEN\n",
+        pendingPatch:
+          "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-OLD_PREVIEW\n+NEW_PREVIEW\n",
+      },
+    );
+    expect(html).toContain("BEFORE_TOKEN");
+    expect(html).not.toContain("OLD_PREVIEW");
   });
 
   it("shows the file content in the write approval card", () => {

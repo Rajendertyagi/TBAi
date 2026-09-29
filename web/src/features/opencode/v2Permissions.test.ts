@@ -154,3 +154,78 @@ describe("V2 approval prompt — only a real message qualifies", () => {
     ).toBe("always");
   });
 });
+
+/**
+ * The precomputed change on a pending request, read from `metadata.files`.
+ *
+ * `metadata` is free-form on the wire, so these cases are the ones that decide
+ * whether a reviewer sees a diff or silently gets the find/replace pair. The
+ * good case is the payload captured from the live server.
+ */
+describe("native V2 permission file diffs", () => {
+  const PATCH = [
+    "Index: src/a.ts",
+    "===================================================================",
+    "--- src/a.ts",
+    "+++ src/a.ts",
+    "@@ -1,3 +1,3 @@",
+    " const before = 1;",
+    "-const target = 1;",
+    "+const target = 2;",
+    " export { before };",
+    "",
+  ].join("\n");
+
+  const edit = (metadata?: PermissionRequest["metadata"]): PermissionRequest => ({
+    id: "per_edit_1",
+    sessionID: "session-1",
+    action: "edit",
+    resources: ["src/a.ts"],
+    source: { type: "tool", messageID: "assistant-1", id: "tool-1" },
+    ...(metadata === undefined ? {} : { metadata }),
+  });
+
+  it("reads the patch the server precomputed, with its file", () => {
+    const view = projectV2Permission(
+      edit({ files: [{ file: "src/a.ts", patch: PATCH, status: "modified", additions: 1, deletions: 1 }] }),
+    );
+    expect(view?.fileDiffs).toEqual([{ file: "src/a.ts", patch: PATCH }]);
+  });
+
+  it("is empty when the request carries no metadata at all", () => {
+    expect(projectV2Permission(edit())?.fileDiffs).toEqual([]);
+  });
+
+  it("is empty when metadata has no files key", () => {
+    expect(projectV2Permission(edit({ somethingElse: true }))?.fileDiffs).toEqual([]);
+  });
+
+  it("skips an entry that is not a usable file diff", () => {
+    // Every one of these can arrive: metadata is typed `{ [x: string]: JsonValue }`,
+    // so nothing about the shape is guaranteed.
+    const view = projectV2Permission(
+      edit({
+        files: [null, "junk", 42, {}, { file: "src/a.ts" }, { patch: PATCH }, { file: "src/a.ts", patch: "   " }],
+      }),
+    );
+    expect(view?.fileDiffs).toEqual([]);
+  });
+
+  it("keeps the good entries and drops the broken ones", () => {
+    const view = projectV2Permission(
+      edit({ files: [null, { file: "src/a.ts", patch: PATCH }, { file: "b.ts" }] }),
+    );
+    expect(view?.fileDiffs).toEqual([{ file: "src/a.ts", patch: PATCH }]);
+  });
+
+  it("is empty for a non-edit action that happens to carry files", () => {
+    // The field is read on its own merits, never on the action name: an action
+    // that sends a patch is showing something real, and guessing at intent here
+    // would be the kind of cleverness that hides a real payload.
+    const view = projectV2Permission({
+      ...edit({ files: [{ file: "src/a.ts", patch: PATCH }] }),
+      action: "patch",
+    });
+    expect(view?.fileDiffs).toHaveLength(1);
+  });
+});

@@ -213,15 +213,56 @@ function messageToAssistant(
     const projected = partToAssistantContent(part, message, permissions);
     return Array.isArray(projected) ? projected : [projected];
   });
+  const pendingPatches = pendingPatchMap(permissions);
   return {
     id: message.id,
     role: message.role,
     content,
     createdAt: new Date(message.createdAt),
     ...(message.role === "assistant" && openCodeParts.length > 0
-      ? { metadata: { custom: { opencode: { parts: openCodeParts } } } }
+      ? {
+          metadata: {
+            custom: {
+              opencode: {
+                parts: openCodeParts,
+                // The change a pending permission is asking to be allowed, keyed
+                // by the tool call it belongs to. The renderer reads it from here
+                // for the same reason it reads `parts` from here: this is TBAi's
+                // own metadata, so nothing has to be bolted onto assistant-ui's
+                // tool-part type, which has no slot for it.
+                ...(Object.keys(pendingPatches).length > 0 ? { pendingPatches } : {}),
+              },
+            },
+          },
+        }
       : {}),
   };
+}
+
+/**
+ * `toolCallId -> the patch that tool's permission is asking to be allowed`.
+ *
+ * Only the FIRST file's patch is kept per request, and only when the request
+ * carries exactly one file. An `edit` names one file, so that is the whole
+ * case; a multi-file request is left to the find/replace preview rather than
+ * half-previewed, which would read as "this is all that will change" when it is
+ * not.
+ *
+ * Exported so the reader half - `openCodePendingPatchFor` - can be tested against
+ * the key this actually writes. The two live a file apart, and a silent
+ * disagreement between them is a gate that falls back forever with every test
+ * green.
+ */
+export function pendingPatchMap(
+  permissions: readonly V2PermissionView[],
+): Readonly<Record<string, string>> {
+  const patches: Record<string, string> = {};
+  for (const permission of permissions) {
+    const { toolCallId, fileDiffs } = permission;
+    if (toolCallId === null || fileDiffs.length !== 1) continue;
+    patches[toolCallId] = fileDiffs[0].patch;
+  }
+  return patches;
 }
 
 /** Projects the current state into branchable assistant-ui repository items. */

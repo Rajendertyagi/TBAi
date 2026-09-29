@@ -175,6 +175,28 @@ function trimOversizeFile(file: CodeDiffFile): CodeDiffFile {
 }
 
 /**
+ * Whether `text` is a unified diff, judged on its structure rather than on what
+ * the parser makes of it.
+ *
+ * `patchToCodeDiffs` is deliberately lenient: given a line of prose it still
+ * returns one file carrying that line as a context row. That leniency is right
+ * for the COMPLETED card, where the fallback is to show the tool's own output.
+ * It is wrong for a decision, where a preview that is not a change must not be
+ * dressed up as one - a diff header reading `+0 -0` beside a sentence of prose
+ * claims a change that does not exist, and a reviewer is being asked to allow it.
+ *
+ * A hunk header is what makes a unified diff a unified diff, so that is the
+ * test. A real patch always has at least one; the `Index:`/`===` preamble
+ * OpenCode prepends does not change that.
+ *
+ * @param text - Candidate patch text.
+ * @returns True when the text carries at least one `@@` hunk header.
+ */
+export function isUnifiedDiff(text: string): boolean {
+  return /^@@ /m.test(text);
+}
+
+/**
  * Converts a unified-diff string into one structured diff per file, each file
  * held to the diff render budget (`toolsConfig.limits`).
  *

@@ -7,7 +7,7 @@ import {
 } from "@assistant-ui/react";
 import { BackendToolView, denialOf, textPreview } from "@/tools/filesystem/ui";
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
-import { patchToCodeDiffs } from "@/lib/patch-to-diffs";
+import { isUnifiedDiff, patchToCodeDiffs, type CodeDiffFile } from "@/lib/patch-to-diffs";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { resultToLines } from "@/lib/terminal-lines";
 import {
@@ -245,31 +245,101 @@ const editPreview = (args: AnyArgs) => (
   </div>
 );
 
+/** The parsed files of a usable patch, rendered with the card's diff element. */
+function PatchFiles({ files, fallbackName }: { files: readonly CodeDiffFile[]; fallbackName: string }) {
+  if (files.length === 0) return null;
+  return (
+    <div data-slot="opencode-pending-diff" className="w-full space-y-2">
+      {files.map((file) => {
+        const name = patchFileName(file.filename, fallbackName);
+        return (
+          <CodeDiff
+            key={name}
+            filename={name}
+            additions={file.additions}
+            deletions={file.deletions}
+            lines={file.lines}
+            cycle={0}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The files a patch actually shows as a change, or `[]` when it is not a diff.
+ *
+ * `patchToCodeDiffs` is lenient by design - it turns a line of prose into a
+ * one-row "file" - which is right for the completed card, where the fallback is
+ * to show the tool's own output. It is wrong for a decision: a diff header
+ * reading `+0 -0` next to a sentence claims a change that does not exist, and
+ * someone is being asked to allow it. So the gate checks for a real hunk header
+ * first, and an unusable patch falls back to the find/replace pair rather than
+ * rendering as a phantom edit.
+ */
+function usableDiffFiles(patch: string | null | undefined): readonly CodeDiffFile[] {
+  if (typeof patch !== "string" || !isUnifiedDiff(patch)) return [];
+  return patchToCodeDiffs(patch);
+}
+
 /**
  * `edit` — the completed body is a DIFF, not the result string.
  *
  * OpenCode's `edit` result is the literal string "Edit applied successfully.";
  * the actual patch lives in the part's `metadata` (see
  * `openCodePatchFromParts`). A diff is what a reader needs to review an edit, so
- * when the patch is reachable it replaces the string entirely. The approval gate
- * is unaffected — it renders `argPreview` (the find/replace pair), because
- * `BackendToolView` only reaches `summarize` once the part is decided.
+ * when the patch is reachable it replaces the string entirely.
  *
- * Pure on purpose: the patch arrives as a PROP so this stays renderable in a
+ * ## The approval gate shows the diff too
+ *
+ * Two patches reach this component and they are not interchangeable:
+ *
+ * - `pendingPatch` is what OpenCode computed BEFORE running the edit and sent
+ *   with the permission request. It describes a change that has NOT happened -
+ *   which is exactly what a reviewer is being asked to allow, so it is what the
+ *   gate renders.
+ * - `diffPatch` is what the server recorded once the edit ran. It can only ever
+ *   describe the past, so it is what the completed card renders.
+ *
+ * The earlier version of this file deliberately kept the diff OUT of the gate and
+ * showed the find/replace pair instead, on the reasoning that "the user would be
+ * approving a change that has not happened yet". That reasoning had it backwards:
+ * the change not having happened is the entire reason a gate exists. What the
+ * reviewer needs before answering is the resulting change, not the model's
+ * description of it - the find/replace pair omits the surrounding context, so it
+ * cannot show whether the replacement lands where the author meant.
+ *
+ * The find/replace pair is kept, but only as the FALLBACK for when the server
+ * sends no patch. Verified live: a gated `edit` arrives with
+ * `metadata.files[0].patch` carrying a real `@@` hunk, so this is the rare path -
+ * and a gate with no preview at all would be worse than one showing the pair.
+ *
+ * Pure on purpose: the patches arrive as PROPS so this stays renderable in a
  * unit test, where there is no `AuiProvider` — and `useAuiState` throws without
  * one ("requires an AuiProvider"), which would take the whole render down.
  * `OpenCodeEditToolUI` below is the thin, provider-aware wrapper.
  */
 export const OpenCodeEditView = ({
   diffPatch,
+  pendingPatch,
   ...p
-}: AnyProps & { diffPatch?: string | null }) => {
+}: AnyProps & { diffPatch?: string | null; pendingPatch?: string | null }) => {
   const args = normalizeOpenCodeArgs("edit", p.args) ?? {};
+  const path = str(args.path);
+  const pendingFiles = usableDiffFiles(pendingPatch);
+  const recordedFiles = usableDiffFiles(diffPatch);
   return (
     <BackendToolView
-      title={toolsConfig.copy.toolTitle(toolsConfig.copy.tool.edit, str(args.path))}
+      title={toolsConfig.copy.toolTitle(toolsConfig.copy.tool.edit, path)}
       args={args}
-      argPreview={editPreview(args)}
+      argPreview={
+        pendingFiles.length > 0 ? (
+          <PatchFiles files={pendingFiles} fallbackName={path} />
+        ) : (
+          editPreview(args)
+        )
+      }
       result={normalizeOpenCodeResult("edit", p.result)}
       status={p.status}
       isError={p.isError}
@@ -278,31 +348,17 @@ export const OpenCodeEditView = ({
       runningLabel={toolsConfig.copy.running.editing}
       summarize={() => {
         // Same shared conversion as the chat's ```diff fences, so an OpenCode
-        // patch and a model-written patch render identically.
-        const files = diffPatch ? patchToCodeDiffs(diffPatch) : [];
-        if (files.length === 0) {
+        // patch and a model-written patch render identically. This is the
+        // RECORDED patch — the one the server kept once the edit ran. The
+        // leniency question does not arise here: when there is nothing to show,
+        // the fallback is OpenCode's own result text, not a decision.
+        if (recordedFiles.length === 0) {
           // No reachable patch (a `write` part has none by data — see
           // `openCodePatchFromParts`), or nothing parseable: show what OpenCode
           // actually returned rather than an empty card.
           return <TextBody text={openCodeResultText(p.result) ?? ""} />;
         }
-        return (
-          <div className="w-full space-y-2">
-            {files.map((file) => {
-              const name = patchFileName(file.filename, str(args.path));
-              return (
-                <CodeDiff
-                  key={name}
-                  filename={name}
-                  additions={file.additions}
-                  deletions={file.deletions}
-                  lines={file.lines}
-                  cycle={0}
-                />
-              );
-            })}
-          </div>
-        );
+        return <PatchFiles files={recordedFiles} fallbackName={path} />;
       }}
       tool="edit"
       targetPath={str(args.path)}
@@ -345,12 +401,57 @@ function useOpenCodeEditPatch(callId: string | undefined): string | null {
   return openCodePatchFromParts(useOpenCodeRawParts(), callId);
 }
 
+/**
+ * Read the patch a pending permission is asking to be allowed, out of the
+ * message's own metadata.
+ *
+ * Pure, and a module-level export, for the same reason `openCodePatchFromParts`
+ * is: the hook around it needs an `AuiProvider` and so cannot be rendered in a
+ * unit test, but the part that can actually be wrong - the key path, the shape
+ * check, the empty-string case, a call id that is not in the map - is all here.
+ * Testing the reader is therefore testing the seam rather than a proxy for it.
+ *
+ * @param metadata - The message's `metadata.custom` value, or undefined.
+ * @param callId - The tool call to look up; undefined yields null.
+ * @returns The patch, or null when the call has no usable one.
+ */
+export function openCodePendingPatchFor(
+  metadata: unknown,
+  callId: string | undefined,
+): string | null {
+  if (metadata === null || typeof metadata !== "object" || callId === undefined) {
+    return null;
+  }
+  const patches = (metadata as { opencode?: { pendingPatches?: unknown } }).opencode
+    ?.pendingPatches;
+  if (patches === null || typeof patches !== "object") return null;
+  const patch = (patches as Record<string, unknown>)[callId];
+  return typeof patch === "string" && patch.trim() !== "" ? patch : null;
+}
+
+/**
+ * Read the patch the PENDING permission for this tool call is asking to be
+ * allowed.
+ *
+ * Distinct from {@link useOpenCodeEditPatch}, and the distinction is the whole
+ * point: that one reads the patch the server recorded on the tool part, which
+ * only exists once the edit has run, so it can only ever describe a change that
+ * has already happened. This one reads the patch OpenCode computed BEFORE
+ * running the edit and sent with the question, so it is available while the
+ * gate is still open - which is the only moment it is worth showing.
+ */
+function useOpenCodePendingPatch(callId: string | undefined): string | null {
+  const custom = useAuiState((s) => s.message.metadata?.custom);
+  return openCodePendingPatchFor(custom, callId);
+}
+
 /** `edit` — OpenCode args are `{ filePath, oldString, newString, replaceAll }`. */
 export const OpenCodeEditToolUI: ToolCallMessagePartComponent = (
   p: AnyProps,
 ) => {
   const diffPatch = useOpenCodeEditPatch(p.toolCallId);
-  return <OpenCodeEditView {...p} diffPatch={diffPatch} />;
+  const pendingPatch = useOpenCodePendingPatch(p.toolCallId);
+  return <OpenCodeEditView {...p} diffPatch={diffPatch} pendingPatch={pendingPatch} />;
 };
 OpenCodeEditToolUI.displayName = "OpenCodeToolUI(edit)";
 

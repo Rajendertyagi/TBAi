@@ -19,6 +19,14 @@ export const V2_PERMISSION_OPTION_IDS = {
 /** Prefix for assistant-ui tool-call ids derived from official OpenCode identities. */
 export const V2_TOOL_CALL_ID_PREFIX = "tbai-v2-tool:";
 
+/** One file's precomputed change, as OpenCode sends it on a pending permission. */
+export interface V2PermissionFileDiff {
+  /** The path OpenCode is asking about, relative to the project root. */
+  readonly file: string;
+  /** A unified diff of the change, computed by the server BEFORE the tool runs. */
+  readonly patch: string;
+}
+
 /** A permission projected into the fields consumed by the Code surfaces. */
 export interface V2PermissionView {
   readonly id: string;
@@ -30,6 +38,13 @@ export interface V2PermissionView {
   readonly resources: readonly string[];
   readonly savePatterns: readonly string[];
   readonly message: string | null;
+  /**
+   * The change OpenCode has already computed for this request, when it sent one.
+   *
+   * Empty for every action but `edit`/`write`, and empty whenever the server
+   * omits the field - the reader never assumes it is there.
+   */
+  readonly fileDiffs: readonly V2PermissionFileDiff[];
 }
 
 /** Error raised when assistant-ui approval state is inconsistent with the wire request. */
@@ -50,6 +65,43 @@ export function deriveV2ToolCallId(
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/**
+ * The change the server precomputed for a pending request, from
+ * `metadata.files[]`.
+ *
+ * OpenCode asks for permission BEFORE the edit runs, and it ships the resulting
+ * unified diff with the question - `metadata.files[].patch`, the same field the
+ * completed tool part carries and the same one `openCodePatchFromParts` reads
+ * for the finished card. Verified against the live server: an `edit` request
+ * arrived as
+ *
+ *     metadata.files[0] = { file, patch, status: "modified", additions, deletions }
+ *
+ * with a real `@@` hunk. That is what makes it possible to show a reviewer the
+ * actual change they are being asked to allow, rather than the find/replace
+ * pair the model proposed.
+ *
+ * `metadata` is free-form on the wire (`{ [x: string]: JsonValue }`), so every
+ * field is narrowed here rather than trusted. An entry missing a usable `patch`
+ * is skipped, and an absent or malformed list yields `[]` - the caller must
+ * treat this as "no preview available", never as an error.
+ */
+function permissionFileDiffs(
+  metadata: PermissionRequest["metadata"],
+): readonly V2PermissionFileDiff[] {
+  const files = metadata?.files;
+  if (!Array.isArray(files)) return [];
+  const diffs: V2PermissionFileDiff[] = [];
+  for (const entry of files) {
+    if (entry === null || typeof entry !== "object") continue;
+    const { file, patch } = entry as { file?: unknown; patch?: unknown };
+    if (typeof file !== "string" || typeof patch !== "string") continue;
+    if (patch.trim() === "") continue;
+    diffs.push({ file, patch });
+  }
+  return diffs;
 }
 
 /** Projects a valid official permission, preserving linked tool identity. */
@@ -82,6 +134,7 @@ export function projectV2Permission(
     resources: [...request.resources],
     savePatterns: request.save ? [...request.save] : [],
     message: request.message ?? null,
+    fileDiffs: permissionFileDiffs(request.metadata),
   };
 }
 

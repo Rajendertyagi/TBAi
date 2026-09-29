@@ -1,4 +1,6 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import fs from "fs";
+import path from "path";
 
 /**
  * Shared fixtures for the specs that run against the REAL managed OpenCode
@@ -17,6 +19,9 @@ export const LIVE_TIMEOUT_MS = 180_000;
 
 /** Verified in this environment to answer real requests and make real tool calls. */
 export const LIVE_MODEL = "agnes/agnes-3.0-flash";
+
+/** The file the edit-approval spec seeds and then asks a model to change. */
+export const TARGET_FILE = "probe-target.md";
 
 /** Creates a disposable Code-mode conversation in its own throwaway workspace. */
 export async function createCodeConversation(
@@ -64,4 +69,36 @@ export async function sendPrompt(page: Page, text: string): Promise<void> {
   await expect(composer).toBeVisible({ timeout: LIVE_TIMEOUT_MS });
   await composer.fill(text);
   await page.getByRole("button", { name: "Send message" }).click();
+}
+
+/**
+ * Writes a file into a conversation's throwaway workspace, creating it if needed.
+ *
+ * The e2e server gives each conversation its own workspace under
+ * `.e2e-workspace/chats/<conversationId>` - the layout `scripts/start-e2e-server.ts`
+ * sets up, and the same one the running server reports in its own logs. This
+ * mirrors that layout rather than asking the app for it, because a spec that
+ * seeds a file is a spec about TOOL BEHAVIOUR, and making it wait on workspace
+ * resolution first would add a second moving part to every such test.
+ *
+ * Seeding matters for edit specs specifically: a prompt that asks a model to edit
+ * a file which does not exist sends it looking for the file instead, and the turn
+ * ends in a glob and a directory read with no edit ever proposed - which looks
+ * exactly like the feature being broken.
+ */
+export function seedWorkspaceFile(
+  conversationId: string,
+  relativePath: string,
+  contents: string,
+): string {
+  const workspace = path.join(
+    path.resolve(__dirname, "..", ".."),
+    ".e2e-workspace",
+    "chats",
+    conversationId,
+  );
+  const target = path.join(workspace, relativePath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, contents, "utf8");
+  return target;
 }
