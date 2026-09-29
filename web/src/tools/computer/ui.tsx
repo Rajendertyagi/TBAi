@@ -2,7 +2,8 @@ import type {
   ToolCallMessagePartComponent,
   ToolCallMessagePartProps,
 } from "@assistant-ui/react";
-import { BackendToolView, Json } from "../filesystem/ui";
+import { BackendToolView } from "../filesystem/ui";
+import { FieldsOrJson } from "@/tools/result-fields";
 import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
@@ -62,7 +63,7 @@ export const ProcessKillToolUI: ToolCallMessagePartComponent = (p: AnyProps) => 
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.stoppingProcess}
-    summarize={(r) => <Json value={r} />}
+    summarize={(r) => <FieldsOrJson value={r} />}
   />
 );
 
@@ -76,6 +77,6 @@ export const SystemInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.readingSystemInfo}
-    summarize={(r) => <Json value={r} />}
+    summarize={(r) => <FieldsOrJson value={r} />}
   />
 );

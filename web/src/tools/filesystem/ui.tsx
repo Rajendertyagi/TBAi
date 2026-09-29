@@ -21,6 +21,7 @@ import {
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { ToolElapsed } from "@/tools/elapsed";
 import { BoundedBody } from "@/tools/body-budget";
+import { FieldsOrJson } from "@/tools/result-fields";
 import { boundText } from "@/lib/text-budget";
 import { toolsConfig } from "@/config/tools";
 import { logger } from "@/lib/logger";
@@ -915,7 +916,7 @@ export const FileInfoToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.reading}
-    summarize={(r) => <Json value={r} />}
+    summarize={(r) => <FieldsOrJson value={r} />}
   />
 );
 
@@ -936,7 +937,7 @@ export const WriteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.writing}
-    summarize={(r) => <Json value={r} />}
+    summarize={(r) => <FieldsOrJson value={r} />}
   />
 );
 
@@ -964,7 +965,7 @@ export const EditFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.editing}
-    summarize={(r) => <Json value={r} />}
+    summarize={(r) => <FieldsOrJson value={r} />}
   />
 );
 
@@ -980,6 +981,6 @@ export const DeleteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     approval={p.approval}
     respondToApproval={p.respondToApproval}
     runningLabel={toolsConfig.copy.running.deleting}
-    summarize={(r) => <Json value={r} />}
+    summarize={(r) => <FieldsOrJson value={r} />}
   />
 );

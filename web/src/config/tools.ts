@@ -104,6 +104,13 @@ export const toolsConfig = {
       noItems: "No items.",
       noMatchesInFiles: (count: number) => `No matches in ${count} files.`,
       moreMatchesOmitted: "…more matches omitted",
+      /**
+       * A flat result rendered as rows, with fields left out. Distinct from
+       * `toolBodyTruncated`, which is about a *body* being cut short; this is
+       * about a field list being capped, and the fields are still in the result.
+       */
+      resultFieldsOmitted: (count: number) =>
+        `…${count} more field${count === 1 ? "" : "s"} not shown`,
       diffRowsOmitted: (count: number) => `…${count} more diff lines omitted`,
       /**
        * A code fence that was cut before highlighting. Says what is missing AND
@@ -384,5 +391,11 @@ export const toolsConfig = {
      * name - which is only findable in a short list or the system's own viewer.
      */
     processRowMaxRows: 30,
+    /**
+     * Rows a flat tool RESULT may paint as labelled fields. These results are
+     * small objects - `{ path, deleted, wasDir }` - so the cap is generous and
+     * exists only so a pathological flat object cannot become a very long card.
+     */
+    resultFieldMaxRows: 40,
   },
 };
