@@ -19,6 +19,7 @@ import {
   primaryApprovalOption,
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
+import { ToolElapsed } from "@/tools/elapsed";
 import { toolsConfig } from "@/config/tools";
 import { logger } from "@/lib/logger";
 import { resolveThreadConversationId } from "@/lib/thread-conversation-id";
@@ -46,7 +47,7 @@ export function ToolCard({
   children: ReactNode;
 }) {
   return (
-    <ApprovalCard title={title} leaving={leaving}>
+    <ApprovalCard title={title} trailing={<ToolElapsed />} leaving={leaving}>
       {children}
     </ApprovalCard>
   );

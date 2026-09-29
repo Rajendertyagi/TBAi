@@ -71,12 +71,20 @@ export const APPROVAL_EXIT_MS = 100;
 export function ApprovalCard({
   title,
   description,
+  trailing,
   leaving = false,
   className,
   children,
 }: {
   title?: ReactNode;
   description?: ReactNode;
+  /**
+   * Optional slot on the title row's trailing edge, for card-level metadata
+   * that belongs beside the title rather than inside the body — the elapsed
+   * time of the call being shown. Additive and optional: every existing caller
+   * is unaffected, and the approval gate passes nothing so its row is unchanged.
+   */
+  trailing?: ReactNode;
   leaving?: boolean;
   className?: string;
   children: ReactNode;
@@ -92,8 +100,13 @@ export function ApprovalCard({
         className,
       )}
     >
-      {title != null && (
-        <div className="mb-1 font-medium text-foreground">{title}</div>
+      {(title != null || trailing != null) && (
+        <div className="mb-1 flex items-baseline justify-between gap-3">
+          {title != null && (
+            <div className="min-w-0 font-medium text-foreground">{title}</div>
+          )}
+          {trailing}
+        </div>
       )}
       {description != null && (
         <p className="mb-1 text-muted-foreground">{description}</p>
