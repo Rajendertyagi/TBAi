@@ -21,6 +21,9 @@ import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-ic
 // componentsByLanguage slot needs; the base `mermaid-diagram.tsx` is not, even
 // though it type-checks in the same position.
 import { MermaidSyntaxHighlighter } from "@/components/assistant-ui/elements/mermaid-source";
+// The universal code-fence budget. Separate from the comment above, which
+// explains only the mermaid wrapper.
+import { BoundedSyntaxHighlighter } from "@/components/assistant-ui/elements/code-budget";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 
@@ -105,6 +108,22 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
 };
 
 const defaultComponents = memoizeMarkdownComponents({
+  /**
+   * The universal code-block highlighter, bounded before it can tokenize.
+   *
+   * This is the `components.SyntaxHighlighter` slot, which the library falls
+   * back to for EVERY language - `componentsByLanguage[language] ??
+   * components.SyntaxHighlighter` (`CodeOverride.js:28`). Registering here is
+   * what makes the bound universal: `componentsByLanguage` is keyed by the
+   * exact parsed language and has no catch-all, so an entry there would leave
+   * every other fence unbounded. Mermaid is unaffected - it arrives through
+   * `componentsByLanguage` and therefore still wins.
+   *
+   * Only the highlighter is bounded, never the `code` the library hands to
+   * `CodeHeader` (`CodeBlock.js:9-18`), so the language label and the copy
+   * button keep working on the complete fence. See `code-budget.tsx`.
+   */
+  SyntaxHighlighter: BoundedSyntaxHighlighter,
   h1: ({ className, ...props }) => (
     <h1
       className={cn(

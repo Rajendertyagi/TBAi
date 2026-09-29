@@ -105,6 +105,45 @@ export const toolsConfig = {
       noMatchesInFiles: (count: number) => `No matches in ${count} files.`,
       moreMatchesOmitted: "…more matches omitted",
       diffRowsOmitted: (count: number) => `…${count} more diff lines omitted`,
+      /**
+       * A code fence that was cut before highlighting. Says what is missing AND
+       * that the copy button is unaffected, because it is: only the rendered
+       * prefix is bounded, so a reader who copies still gets the whole fence.
+       * Without the second half the note reads as data loss, which would be
+       * untrue, and would teach readers to distrust the copy button.
+       *
+       * Two shapes, because the bound removes two different things. Whole lines
+       * go missing when a file is too long; a single minified line instead gets
+       * cut mid-line with no line missing at all. Reporting the second case as
+       * "0 more lines not shown" would be a visible lie on a visibly cut block,
+       * so the wording follows what was actually dropped.
+       */
+      codeFenceTruncated: ({ lines, chars }: { lines: number; chars: number }) =>
+        lines > 0
+          ? `…${lines} more line${lines === 1 ? "" : "s"} not shown${
+              chars > 0 ? ", and the last line is cut short" : ""
+            } — this block was cut for display. Copying still gives the full code.`
+          : `…that line was cut short — this block was cut for display. Copying still gives the full code.`,
+      /**
+       * A tool RESULT body that was cut before it was painted. Deliberately
+       * says nothing about copying: unlike a code fence, a result body has no
+       * copy button, and promising a copy that does not exist would be the same
+       * class of dishonesty the rest of this note exists to avoid.
+       */
+      toolBodyTruncated: ({ lines, chars }: { lines: number; chars: number }) =>
+        lines > 0
+          ? `…${lines} more line${lines === 1 ? "" : "s"} not shown${
+              chars > 0 ? ", and the last line is cut short" : ""
+            } — this result was shortened to fit the card.`
+          : `…that line was cut short — this result was shortened to fit the card.`,
+      /**
+       * An ARGUMENT preview that was shortened. Carries the exact number of
+       * dropped characters, which the structured body note above deliberately
+       * does not: an argument preview is capped on characters only, so the
+       * caller can state precisely what it left out.
+       */
+      argPreviewTruncated: (dropped: number) =>
+        `…${dropped} more character${dropped === 1 ? "" : "s"} not shown`,
       andMoreCount: (count: number) => `…and ${count} more`,
       approvedWillExecute:
         "Approved — will execute with your next message in this conversation.",
@@ -281,5 +320,69 @@ export const toolsConfig = {
      * in the body beneath, so a display cap costs no data.
      */
     webSearchMaxResults: 5,
+    /**
+     * Rows ONE settled Markdown code fence may send to the highlighter.
+     * Answers the same question as `diffPreviewMaxLines` - how many rows one
+     * rendered body may paint - and is deliberately a sibling rather than a
+     * reuse of that name, because a reply's code block is not a diff preview
+     * and calling it one would be a lie in a config file people read.
+     */
+    codeBlockMaxLines: 2000,
+    /**
+     * Characters ONE settled Markdown code fence may send to the highlighter.
+     * The counterpart to `codeBlockMaxLines`, and the only one of the pair that
+     * bounds a single enormous line - a minified bundle, a base64 payload, a
+     * one-line JSON body - which a line count cannot see. Same reasoning and
+     * same value as `diffPreviewMaxChars` for the same reason.
+     */
+    codeBlockMaxChars: 256 * 1024,
+    /**
+     * Characters ONE tool result body may paint. The third member of this family
+     * and the same value on purpose: `diffPreviewMaxChars`,
+     * `codeBlockMaxChars` and this all answer "characters may one rendered body
+     * paint", so they share a number and differ only in what they are painting.
+     * A tool result is the least bounded of the three - it is whatever the tool
+     * decided to return - and `read_file` on a large file is the case that
+     * motivated it: the whole file went into the DOM.
+     *
+     * Unlike the code fence, a body is a single text node, so this bounds
+     * serialisation and layout rather than DOM node count. See
+     * `lib/text-budget.ts`.
+     */
+    toolBodyMaxChars: 256 * 1024,
+    /**
+     * Rows ONE tool result body may paint. The row counterpart of
+     * `toolBodyMaxChars`, and what catches a body of a quarter-million newlines,
+     * which the character budget alone would let through as a very tall block.
+     */
+    toolBodyMaxLines: 2000,
+    /**
+     * Characters a tool's ARGUMENT preview may paint before it is shortened.
+     * Smaller than a result body on purpose: an argument is something the reader
+     * is checking ("did it target the right file?"), and past a couple of
+     * thousand characters they are not reading it, they are scrolling past it.
+     * The result is the part worth showing in full.
+     */
+    toolArgPreviewMaxChars: 2000,
+    /**
+     * The same cap for the before/after previews on an edit argument, which are
+     * two bodies shown side by side in one card. Lower than
+     * `toolArgPreviewMaxChars` because the card has to fit both halves at once,
+     * and a diff-shaped argument is judged by its edges, not its middle.
+     */
+    toolArgEditPreviewMaxChars: 500,
+    /**
+     * Rows a directory listing paints before it collapses to a count. A folder
+     * is a navigation aid, not a document; past this many entries the reader is
+     * looking for one name, and the list is no longer helping them find it.
+     */
+    dirEntryMaxRows: 100,
+    /**
+     * Rows a process listing paints before it collapses to a count. Same
+     * reasoning as `dirEntryMaxRows` and much lower, because a busy machine
+     * runs hundreds of processes and the interesting one is identified by its
+     * name - which is only findable in a short list or the system's own viewer.
+     */
+    processRowMaxRows: 30,
   },
 };

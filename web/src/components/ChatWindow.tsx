@@ -25,7 +25,7 @@ import {
   ToolGroupRoot,
   ToolGroupTrigger,
 } from "./assistant-ui/elements/tool-group";
-import { SyntaxHighlighter } from "./assistant-ui/elements/shiki-highlighter.aui";
+import { BoundedSyntaxHighlighter } from "./assistant-ui/elements/code-budget";
 import { CodeDiff } from "./assistant-ui/elements/code-diff";
 import { patchToCodeDiffs } from "../lib/patch-to-diffs";
 import { toolsConfig } from "../config/tools";
@@ -565,7 +565,18 @@ function HighlightingSyntax(props: {
       </div>
     );
   }
-  return <SyntaxHighlighter code={props.code} language={props.language} />;
+  // Bounded before highlighting. This is the registration the Direct chat
+  // surface actually uses, and it OVERRIDES the `SyntaxHighlighter` entry in
+  // `markdown-text.tsx`'s `defaultComponents` - a caller's `components` prop is
+  // spread last - so the budget has to be applied here as well, or this branch
+  // would remain the one unbounded path in the app.
+  //
+  // The `diff` branch above deliberately does NOT go through the code-fence
+  // budget: `patchToCodeDiffs` applies `diffPreviewMaxLines` /
+  // `diffPreviewMaxChars` and renders its own `diffRowsOmitted` marker, so
+  // bounding it twice would produce two markers and cut a payload that was
+  // already cut.
+  return <BoundedSyntaxHighlighter code={props.code} language={props.language} />;
 }
 
 function AssistantError() {
