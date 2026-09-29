@@ -39,6 +39,9 @@ row without one is not done.
 | `write` gates show the diff | Verified live that a `write` permission carries a new-file unified diff, so no synthesis was needed. Content preview remains the fallback. | `b2e48e5` |
 | One canonical `ApprovalCard` | Two components shared a name and one was dead. Documented which is canonical, plus a guard test — the vendored file is kept, because the train is frozen. | `b2e48e5` |
 | Flat results render as rows | Six tools painted a JSON envelope for small flat objects. `FieldsOrJson` renders rows, falls back to bounded JSON when nested. | `b303dcd` |
+| **Direct-chat edit gate shows a diff** | The gate that answers "allow this?" showed the model's Find/Replace text. It now shows the change, with surrounding context, from a read-only endpoint that is `runEdit` minus the write. No diff library added — the edit *is* the diff. Pair kept as the fallback. | `93ecc8b` |
+| **`scheduler` is approvable** | A tool that creates and fires jobs unattended was ungated. Now gated per call: `list`/`get` answer freely, `create`/`update`/`delete`/`run_now` ask, and anything unrecognised asks. | this commit |
+| **Question observability moved to the live card** | Four `question.*` events were logged only by a component nothing renders, so the contract passed while every real question was unloggable. Events moved to the live dock; 686 lines of dead code deleted. | this commit |
 | OpenCode configuration page | Read/edit permission rules, file-driven, no invented permission system. | `c371fc7`, `440a39d`, `f7a59f6` |
 
 ### How each was verified
@@ -48,13 +51,18 @@ row without one is not done.
   session-model, 4 load-sensitive spellcheck timeouts). Still 12, same set,
   verified by diffing the failure lists — zero introduced.
 - **Every guard was tested by deliberately breaking it.** A test that has never
-  failed has not been shown to work. Three real defects were caught this way,
+  failed has not been shown to work. Five real defects were caught this way,
   two of them introduced by the same change that shipped with them:
   - a `children` prop that let a caller render unbounded text beside a correctly
     computed bound;
   - a character-budget window one unit too large, which dropped the last row of
     every over-budget body in full;
-  - the lenient diff parser claiming a change that did not exist, as `+0 -0`.
+  - the lenient diff parser claiming a change that did not exist, as `+0 -0`;
+  - a private copy of the character cap reintroduced into a tool module, which
+    the single-source guard caught after `textPreview` moved;
+  - emptying the scheduler read-action set, and separately deleting
+    `question.accepted` — both caught, confirming the policy and the
+    observability contract are pinned to *behaviour* and not to a file path.
 - **Live browser verification for the edit gate**, with the test confirmed to
   fail when the gate is reverted.
 
@@ -64,7 +72,7 @@ row without one is not done.
 
 Ordered. Nothing here needs investigation — that is the point.
 
-### 0. ~~The two open questions from Tool coverage~~ — one done, one still open
+### 0. ~~The two open questions from Tool coverage~~ — both done
 
 - **The dead vendored `ApprovalCard` — DONE (`b2e48e5`).** An upstream element
   nobody imports, while an app-owned component of the same name carries every
@@ -73,11 +81,30 @@ Ordered. Nothing here needs investigation — that is the point.
   successor, and a guard test proves it has no importers, names the shared card,
   and that the tool fallback imports the shared one. Verified by redirecting an
   import and watching the guard fail.
-- **Is `scheduler` meant to be approvable? — STILL OPEN, your call.** It is
-  `display: "standalone"` but absent from `toolApproval`, with no comment
-  explaining either. A tool that creates and runs scheduled jobs is a reasonable
-  thing to gate. **Not changed** — this is a policy decision, and the conservative
-  default (no new gate on a working surface) was kept rather than imposing one.
+- **Is `scheduler` meant to be approvable? — DONE.** It was `display:
+  "standalone"` but absent from `toolApproval`, with no comment explaining
+  either, and a tool that creates and *fires* jobs unattended with the
+  conversation's provider credentials is a real privilege. Gated now, per
+  **call** rather than per tool, because `scheduler` is one tool with six
+  actions and `toolApproval` is keyed by tool name — gating the whole tool would
+  have prompted the reader to approve `list`, the call a model makes to answer
+  *"what jobs are there?"*. The schema is a discriminated union on `action`, and
+  AI SDK v7's tool-level `needsApproval` receives the input, so the decision is
+  made where the discriminant is.
+
+  - `list`, `get` — ungated. A read that changes nothing is not a privilege.
+  - `create`, `update`, `delete`, `run_now` — gated. `run_now` is included even
+    though nothing persistent changes: it executes a stored prompt immediately,
+    on this machine, with those credentials.
+  - **anything unknown is gated**, including an unreadable `action`. A new action
+    added to the schema without a decision here stops and asks rather than
+    inheriting the read-only trust. Validation rejects the call immediately
+    afterwards either way, so gating costs nothing.
+
+  Policy lives in `schedulerActionNeedsApproval` (`src/tools/index.ts`), exported
+  so it is testable without a runtime — the alternative failure, silently
+  ungating a new action, is invisible until a job fires on its own. Verified by
+  emptying the read-action set and watching the test fail.
 
 ### 1. ~~Look at the three new surfaces~~ — DONE, no defects
 
@@ -146,11 +173,39 @@ designs, one feature, still true.
 |---|---|---|
 | **Todo list** | Unreachable — partly corroborated | Three renderers for one feature exist, and none can be seen: the tool depends on does not exist in this OpenCode build. |
 | **A gap on the right** | Waiting on a call | Messages end 170px further right than the assistant's, in every exchange. May well be deliberate. |
-| **Dead code** | Your decision | A 376-line question form nothing uses. Safe to delete. |
+| **Dead code** | **Resolved — but not the way it looked** | The 376-line question form *was* dead, and deleting it exposed a bigger problem. See below. |
 | **`0 files changed` in the coding chat** | Real, small, unfixed | The same count that was always zero in the normal chat, structurally zero for a *different* reason. |
 | **MCP tool output** | Unexercised | Buttons match the reference; a real MCP tool has never been run here. |
 | **Focus does not follow the questions** | Matches reference | Stepping to the next question does not move the cursor into it. The reference app has the same gap, so we match rather than lead. |
 | **Thinking / reasoning block** | Works | Only appears at thinking level `high`; at the default there is nothing, which looks broken but is not. |
+
+### The dead question form was hiding a live gap
+
+The atlas recorded `shared/QuestionFormCard` (376 lines) as dead code, "safe to
+delete, but deleting is your decision". It was dead: imported by nothing but its
+own test, while the question dock above the composer draws
+`features/opencode/V2FormCard`.
+
+Before deleting, the `question.*` observability contract was checked, because
+`observability-coverage.test.ts` pinned four events to that file. Two findings:
+
+1. Those four events — `question.submitted` / `.accepted` / `.failed` /
+   `.dismissed` — were logged **only by the dead component**. The live card
+   logged none of them. So the contract was satisfied by a file nothing renders,
+   and **every real question was unanswerable from the logs** — you could not
+   tell a question the user skipped from one that failed to send.
+2. Deleting the file without moving the events would have made the contract
+   vacuous rather than honest.
+
+So the events moved to `V2FormCard` (submit, accept, fail, and dismiss — a
+dismissal is a decision, and it is the outcome an operator most often needs to
+tell apart from a failure), the test now points at the file with the behaviour,
+and the 686 lines of dead component and dead test were deleted. The guard was
+verified to bite by removing `question.accepted` and watching it fail.
+
+This is the general lesson, and it is why deleting "obviously dead" code deserves
+the same suspicion as writing new code: the test pinning it was not guarding the
+feature, it was guarding a **file path**.
 
 ---
 
@@ -158,23 +213,66 @@ designs, one feature, still true.
 
 These are not fixes. Each needs a judgement call first.
 
-### Direct-chat edit preview
+### ~~Direct-chat edit preview~~ — DONE (`93ecc8b`), and the reasoning was wrong
 
-Direct chat's `edit_file` is gated (`chat.ts`, AI SDK v7 `toolApproval`), but
-**none of the OpenCode work transfers to it**:
+This was parked here as needing a maintainer decision, on the grounds that it
+required a new dependency or hand-written diff code. **Both parts of that were
+wrong, and the error is worth recording so it is not repeated.**
 
-- AI SDK v7's `ToolApprovalRequestOutput` carries only `toolCall`, `reason`, and
-  an HMAC `signature` that binds the payload. **There is no slot for a
-  server-supplied preview**, and the signature cannot be extended.
-- The browser must never read the file, so the diff has to come from the server.
+What was *right*: AI SDK v7's `ToolApprovalRequestOutput` carries only
+`toolCall`, `reason`, and an HMAC `signature` binding them. There is no slot for
+server-supplied data and the payload cannot be extended.
 
-So it needs a read-only preview endpoint plus backend unified-diff generation.
-That is either **a new dependency** (ADR required) or **hand-written diff code** —
-and there is a honesty problem on top: the diff becomes a *prediction*, because
-`runEdit` re-reads the file at execution and the file may have changed since.
+What was *wrong* is the conclusion drawn from it. It rules out putting the diff
+**in the approval request**. It does not rule out the gate **asking the server
+for it** — which is a thing the browser may do freely, and which the gate
+already does for the outside-workspace check.
 
-Estimate is unknown until the approach is chosen. This is why it was deferred
-rather than bundled with the OpenCode fix.
+The second error was assuming a diff must be *computed*. It need not be.
+`edit_file` is a contiguous string replacement, so the change is not something to
+be discovered — it is already known. Which lines the match occupies and which
+lines replace them were *handed to the function*. `previewEdit` emits a standard
+unified patch from that, and the gate parses it with the existing
+`patchToCodeDiffs`, exactly like every other diff in the app.
+
+**No diff library was added, and none was needed.** An LCS diff would have
+recovered information the function was given, and it is the riskier half:
+quadratic on a large file, a new dependency, and for `replaceAll` a hunk whose
+line numbers are only correct *after* the earlier matches are applied. So the
+preview shows the **first** match exactly and reports the count, and the card
+says how many places repeat. A plausible-but-wrong line number is precisely the
+kind of lie this change exists to remove.
+
+**The honesty problem I worried about did not materialise**, because the preview
+is `runEdit` minus the write: same `resolveSafe` path check, same read, same
+"`oldText` not found" failure. That parity is the property, and the tests assert
+it directly — preview, then apply with the real `runEdit`, then confirm the
+patch's added lines are what the file now says. The file is byte-identical after
+a preview.
+
+The Find/Replace pair is now the **fallback**, not the answer: endpoint refused,
+file moved, text no longer matching, network down, unparseable patch — all of
+them show the pair, because a gate must always show something the reader can
+judge and a blank card is worse than the pair. What the pair cannot show, and
+the reason the endpoint exists, is the surrounding context: it cannot show
+whether the replacement lands where the author meant.
+
+Also fixed here: `textPreview` moved out of `tools/filesystem/ui.tsx` into its
+own module, because three modules use it and importing it back from a sibling
+tool would have closed a cycle. And `previewFiles` is a pure function, so
+"usable diff or fall back" is testable without a DOM — this repo has none under
+`bun test`, and every component test renders through `renderToStaticMarkup`,
+which captures only the first paint. A transition cannot be asserted that way,
+so the decision that drives it was pulled out as a function rather than shipping
+a DOM dependency to test three lines of branching.
+
+**Not browser-verified:** that the request actually fires and the state actually
+swaps. A Direct-chat gate is produced by the AI SDK's approval flow during a
+real model turn, so it cannot be opened from a seeded message. The rendered
+result was captured and inspected (context lines, red removal, green addition,
+`+1 -1`, Approve/Deny), the endpoint is covered by five e2e tests against the
+running server, and the decision is unit-tested — but the transition itself rests
+on two lines of `useState` in front of a pure function. Stated rather than implied.
 
 ### Subagent transparency
 
@@ -302,9 +400,20 @@ layouts, and this change is additive.
 
 2. **`scheduler` is `display: "standalone"` but is not in the `toolApproval`
    map.** No comment explains it, and standalone normally means the card manages
-   its own layout. Worth a deliberate decision: should a tool that creates and
-   runs scheduled jobs be approvable? **STILL OPEN** - left unchanged, because
-   adding a gate to a working surface is a policy decision, not a cleanup.
+   its own layout. **RESOLVED** — it is now gated per *call*, not per tool, via
+   the tool-level `needsApproval` and the schema's `action` discriminant, so
+   `list`/`get` answer without a prompt and `create`/`update`/`delete`/`run_now`
+   do not. See *Fix next* item 0 for the full policy and why the per-tool option
+   was rejected.
+
+3. **A `question.*` observability contract was pinned to a file nothing
+   rendered.** `observability-coverage.test.ts` required four lifecycle events
+   from `shared/QuestionFormCard`, which no production code imports; the live
+   question dock draws `features/opencode/V2FormCard`, which emitted none of
+   them. The guard passed and the behaviour was absent. **RESOLVED** — the events
+   moved to the live card, the test points there, and the dead component is
+   deleted. The lesson is in *Open questions* below: a test that pins a **file
+   path** is not guarding a feature.
 
 ---
 
@@ -361,6 +470,43 @@ mode enum (`"decision" | "select" | "text"`), not content. Bolting an extra
 property onto a closed library type would need a cast, which the repo forbids.
 TBAi's own metadata is free, already read by the renderer for the completed
 patch, and keeps the library type untouched.
+
+### The edit gate asks the server for the change; it does not compute it
+
+`previewEdit` (server) is `runEdit` minus the write, and the Direct-chat gate
+fetches it from `/api/tools/edit-preview` when the gate opens. It renders
+through the app's existing `patchToCodeDiffs` + `CodeDiff`. **No diff library was
+added and no diff algorithm was written**, on either side of the wire.
+
+**Why not a diff dependency.** This was the decision that blocked the work for
+several sessions, and it was decided on a false premise. The constraint was real
+— AI SDK v7's `ToolApprovalRequestOutput` is HMAC-signed with no metadata slot —
+but that rules out the diff travelling *in the approval request*, not the gate
+*requesting* it. A second error compounded it: assuming the diff had to be
+computed. For a contiguous string replacement the change is already known, so an
+LCS diff would have re-derived what it was handed, at quadratic cost and with a
+new dependency.
+
+**Why the preview is honest where a "prediction" would not be.** The concern was
+that `runEdit` re-reads the file at execution, so a preview could describe a
+change that no longer applies. That is real for any preview, and it is why the
+preview is defined as *the same function with the write removed*: same
+`resolveSafe` check, same read, same failure conditions. The tests assert the
+parity against the real `runEdit` rather than against expected patch text, so a
+divergence between "what is shown" and "what will happen" is a test failure
+rather than a surprise.
+
+**Why only the first match, for `replaceAll`.** Occurrence *n* sits at line
+numbers shifted by the edits before it, so a hunk for the fifth match would
+carry a location that is only correct once the first four are applied. Printing
+it would be a plausible-looking lie in the exact place the user is asked to
+trust. So the preview shows the first match and reports the count.
+
+**The general lesson, recorded because it generalises.** When a step is blocked,
+check *which* step. Here the real block was "the browser may not receive
+server-computed data inside a signed envelope", and the thing being built was
+"the browser may receive server-computed data". Those are different problems, and
+conflating them cost more than the work did.
 
 **Verified against the live server before any of it was built.** The question —
 does OpenCode send a precomputed patch on a *pending* permission — was the whole

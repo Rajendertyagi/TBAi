@@ -795,7 +795,7 @@ describe("OpenCode edit — the patch renders as a diff", () => {
 
 const REAL_GREP_TEXT =
   "Found 12 matches\n" +
-  "D:\\Temp\\ai-chat-app\\web\\src\\components\\shared\\QuestionFormCard.tsx:\n" +
+  "D:\\Temp\\ai-chat-app\\web\\src\\features\\opencode\\V2FormCard.tsx:\n" +
   "  Line 39:  * - Actions: Dismiss, Back, Next, Submit. (No approval/permission metaphors).\n";
 
 const REAL_READ_TEXT =
@@ -833,7 +833,7 @@ describe("OpenCode bodies — a real V2 result is rendered, not replaced by 'No 
       toolPart("grep", { pattern: "approval", path: "D:\\Temp\\ai-chat-app\\web\\src" }, nativeContent(REAL_GREP_TEXT)),
     );
     expect(html).toContain("grep · approval");
-    expect(html).toContain("QuestionFormCard.tsx");
+    expect(html).toContain("V2FormCard.tsx");
     expect(html).toContain("Line 39");
   });
 

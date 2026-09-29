@@ -15,7 +15,7 @@ import {
  *
  * `web/` has no DOM runner (bun test, no jsdom / testing-library), so the
  * contracts are pinned through three seams, following the established pattern
- * (`QuestionFormCard.test.tsx`):
+ * (`V2FormCard` + `questionSerializers.test.ts`):
  *
  *   1. **Static render** (`renderToStaticMarkup`) of the REAL presentational
  *      `OpenCodeShieldButton` — the OFF/ON structure, `aria-pressed`, the

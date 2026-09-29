@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { CARD_SURFACE } from "@/components/shared/approval-card";
 import { toolsConfig } from "@/config/tools";
 import { writeClipboardText } from "@/lib/clipboard";
+import { logger } from "@/lib/logger";
 import { isIMECompositionEvent } from "@/lib/ime";
 import {
   isV2FormFieldVisible,
@@ -220,12 +221,35 @@ export function V2FormCard({
       return;
     }
     setBusy(true); setError(null);
-    try { await onSubmit(result.answer); } catch (cause) { setError(cause instanceof Error ? cause.message : toolsConfig.copy.form.submitFailed); setBusy(false); }
+    // The question lifecycle, on the card the reader actually uses.
+    //
+    // These four events used to be logged only by `shared/QuestionFormCard`,
+    // which nothing renders — the live dock draws this component. So the
+    // observability contract was satisfied by a dead file while every real
+    // question was unanswerable from the logs. `observability-coverage.test.ts`
+    // now points here, where the behaviour is.
+    logger.info("approval", "question.submitted", {
+      fieldCount: visible.length,
+      answeredCount: Object.values(effective).filter((value) => String(value ?? "").length > 0).length,
+    });
+    try {
+      await onSubmit(result.answer);
+      logger.info("approval", "question.accepted", { fieldCount: visible.length });
+    } catch (cause) {
+      logger.warn("approval", "question.failed", {
+        errorType: cause instanceof Error ? cause.name : typeof cause,
+      });
+      setError(cause instanceof Error ? cause.message : toolsConfig.copy.form.submitFailed);
+      setBusy(false);
+    }
   };
 
   /** Cancels the form, surfacing a refusal instead of failing silently. */
   const cancel = async () => {
     setBusy(true); setError(null);
+    // A dismissal is a decision too: the reader chose not to answer, and that is
+    // the outcome an operator most often needs to tell apart from a failure.
+    logger.info("approval", "question.dismissed", { fieldCount: visible.length });
     try { await onCancel(); } catch (cause) { setError(cause instanceof Error ? cause.message : toolsConfig.copy.form.cancelFailed); setBusy(false); }
   };
 

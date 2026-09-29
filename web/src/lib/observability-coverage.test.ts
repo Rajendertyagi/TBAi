@@ -81,7 +81,7 @@ const LIFECYCLE_EVENTS: Array<[file: string, events: string[]]> = [
     "decision.accepted",
     "decision.failed",
   ]],
-  ["../components/shared/QuestionFormCard.tsx", [
+  ["../features/opencode/V2FormCard.tsx", [
     "question.submitted",
     "question.accepted",
     "question.failed",

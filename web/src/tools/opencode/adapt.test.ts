@@ -235,7 +235,7 @@ const REAL_GREP_CONTENT = [
     type: "text",
     text:
       "Found 12 matches\n" +
-      "D:\\Temp\\ai-chat-app\\web\\src\\components\\shared\\QuestionFormCard.tsx:\n" +
+      "D:\\Temp\\ai-chat-app\\web\\src\\features\\opencode\\V2FormCard.tsx:\n" +
       "  Line 39:  * - Actions: Dismiss, Back, Next, Submit. (No approval/permission metaphors).\n" +
       "\n" +
       "  Line 156:       logger.info(\"approval\", \"question.submitted\", {\n",

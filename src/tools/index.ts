@@ -156,6 +156,51 @@ function runCommandExecute(
 }
 
 /**
+ * Actions that change something and therefore need a person to say yes.
+ *
+ * `scheduler` is one tool with six actions, so gating the tool as a whole would
+ * prompt the reader to approve `list` — the call a model makes to answer "what
+ * jobs are there?" — which is both annoying and backwards: a read that changes
+ * nothing is not a privilege. The schema is a discriminated union on `action`,
+ * so the decision can be made per call rather than per tool.
+ *
+ * `run_now` is gated even though it touches nothing persistent: it executes a
+ * stored prompt immediately, on this machine, with the conversation's provider
+ * credentials. Firing a job on demand is exactly what a person should be asked
+ * about.
+ */
+/** The two actions that only read. */
+const SCHEDULER_READ_ACTIONS: ReadonlySet<string> = new Set(["list", "get"]);
+
+/**
+ * Whether one scheduler call needs approval.
+ *
+ * Exported so the policy is testable without a runtime, which matters because
+ * the alternative failure — silently ungating a new action — is invisible until
+ * a job fires on its own.
+ *
+ * An unknown or unreadable action is GATED, not waved through. A new action
+ * added to the schema without a decision here should stop and ask rather than
+ * quietly inherit the read-only trust; validation rejects the call immediately
+ * afterwards either way, so gating costs nothing and is the safe default.
+ *
+ * @param input - The tool call input.
+ * @returns True when a person must approve the call.
+ */
+export function schedulerActionNeedsApproval(input: unknown): boolean {
+  const action =
+    input !== null && typeof input === "object"
+      ? (input as { action?: unknown }).action
+      : undefined;
+  if (typeof action !== "string") return true;
+  if (SCHEDULER_READ_ACTIONS.has(action)) return false;
+  // Every remaining action either changes a job or fires one. An action added to
+  // the schema later lands here too, which is the point: it is gated until
+  // someone decides otherwise, rather than inheriting the read-only default.
+  return true;
+}
+
+/**
  * The canonical server toolkit: one native AI SDK `tool()` per native tool,
  * instantiated once at module scope. The chat route merges these with the
  * MCP `tool()` set and supplies `toolsContext` per request (see
@@ -326,6 +371,9 @@ export const nativeTools = {
       "get / update / delete / run_now require jobId. list accepts an optional status filter (active|paused|failed|all).",
     inputSchema: toolSchemas.scheduler,
     contextSchema: schedulerContext,
+    // Read-only actions answer a question and change nothing, so they do not
+    // ask. Everything that creates, changes, removes or FIRES a job does.
+    needsApproval: (input) => schedulerActionNeedsApproval(input),
     execute: instrumentedExecute(
       "scheduler",
       (
