@@ -111,6 +111,13 @@ export const toolsConfig = {
        */
       resultFieldsOmitted: (count: number) =>
         `…${count} more field${count === 1 ? "" : "s"} not shown`,
+      /**
+       * A Direct-chat edit preview that matched more than once. The diff shows the
+       * FIRST match exactly; this says how many there are, which is the part that
+       * matters about a replace-all and the part the diff cannot show honestly.
+       */
+      editPreviewMoreOccurrences: (count: number) =>
+        `…repeats at ${count} places; the first is shown above.`,
       diffRowsOmitted: (count: number) => `…${count} more diff lines omitted`,
       /**
        * A code fence that was cut before highlighting. Says what is missing AND

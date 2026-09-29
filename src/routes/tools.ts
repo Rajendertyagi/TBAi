@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { newRequestId } from "../lib/logger";
 import { sanitizeStreamError } from "../lib/redact";
-import { runRead, runWrite, runEdit, runBash, runList, runSearch, runStat, runDelete, runProcesses, runKill, runSysinfo, ToolError, WORKSPACE_DIR, inspectTarget } from "../services/tools";
+import { runRead, runWrite, runEdit, previewEdit, runBash, runList, runSearch, runStat, runDelete, runProcesses, runKill, runSysinfo, ToolError, WORKSPACE_DIR, inspectTarget } from "../services/tools";
 import { mintGrant } from "../services/grants";
 import { resolveConversationWorkspace, WorkspaceError } from "../services/workspace";
 import { toolReadSchema, toolWriteSchema, toolEditSchema, toolBashSchema, toolListSchema, toolSearchSchema, toolStatSchema, toolDeleteSchema, toolKillSchema, outsideCheckSchema, outsideGrantSchema, outsideRunGrantedSchema } from "../lib/validation";
@@ -37,6 +37,18 @@ function toolHandler<T>(schema: z.ZodType<T>, fn: (args: T) => unknown | Promise
 app.post("/api/tools/read", toolHandler(toolReadSchema, (args) => runRead(args, WORKSPACE_DIR)));
 app.post("/api/tools/write", toolHandler(toolWriteSchema, (args) => runWrite(args, WORKSPACE_DIR)));
 app.post("/api/tools/edit", toolHandler(toolEditSchema, (args) => runEdit(args, WORKSPACE_DIR)));
+// Read-only. Shows the change an `edit` WOULD make, so the approval gate can
+// render a diff instead of the model's find/replace pair - the same thing the
+// Code surface gets for free, because OpenCode precomputes the patch and ships
+// it with the permission request. This is the Direct-chat equivalent.
+//
+// It writes nothing under any input: `previewEdit` is `runEdit` minus the
+// write, and it fails on exactly the conditions `runEdit` fails on, so it cannot
+// promise a change that could not happen.
+app.post(
+  "/api/tools/edit-preview",
+  toolHandler(toolEditSchema, (args) => previewEdit(args, WORKSPACE_DIR)),
+);
 app.post("/api/tools/bash", toolHandler(toolBashSchema, (args) => runBash(args, WORKSPACE_DIR)));
 app.post("/api/tools/list", toolHandler(toolListSchema, (args) => runList(args, WORKSPACE_DIR)));
 app.post("/api/tools/search", toolHandler(toolSearchSchema, (args) => runSearch(args, WORKSPACE_DIR)));

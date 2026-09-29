@@ -253,6 +253,80 @@ export function runEdit({ path: p, oldText, newText, replaceAll = true }: EditAr
   return { path: p, occurrences: count, diff };
 }
 
+/** Context rows kept either side of the change in a preview hunk. */
+const EDIT_PREVIEW_CONTEXT_LINES = 3;
+
+/**
+ * The unified diff `runEdit` WOULD produce, without writing anything.
+ *
+ * ## Why this needs no diff algorithm
+ *
+ * `runEdit` is a contiguous string replacement, so the change is not something
+ * to be discovered — it is already known. We know which lines the match occupies,
+ * which lines replace them, and how many times it repeats. A general LCS diff
+ * would recover information this function was handed, and it would be the riskier
+ * half: quadratic on a large file, and a new dependency for arithmetic that is
+ * already done. There is no diff library in this tree today and this keeps it
+ * that way.
+ *
+ * ## Why the first occurrence only, when `replaceAll` is set
+ *
+ * Later occurrences sit at line numbers shifted by the edits before them, so a
+ * hunk for the fifth match would carry a location that is only correct once the
+ * first four have been applied. Rather than print a plausible but wrong line
+ * number, the preview shows the first match exactly and reports `occurrences`,
+ * so the card can say "and N more" — which is the fact that actually matters
+ * about a replace-all.
+ *
+ * ## It mirrors `runEdit` exactly
+ *
+ * Same `resolveSafe` path check, same read, same "oldText not found" failure. A
+ * preview that resolved differently, or succeeded where the edit would fail,
+ * would be worse than no preview: it would promise a change that cannot happen.
+ * The ONLY difference is that nothing is written.
+ *
+ * @returns A unified patch, the match count, and the path as the tool names it.
+ * @throws ToolError on the same conditions `runEdit` throws, for the same reasons.
+ */
+export function previewEdit(
+  { path: p, oldText, newText }: EditArgs,
+  workspaceDir: string,
+  grantScope?: GrantScope,
+) {
+  const abs = resolveSafe(p, workspaceDir, grantScope);
+  if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${p}`);
+  const original = fs.readFileSync(abs, "utf8");
+
+  const count = original.split(oldText).length - 1;
+  if (count === 0) throw new ToolError(`oldText not found in ${p}`);
+
+  const lines = original.split("\n");
+  const idx = original.indexOf(oldText);
+  const endIdx = idx + oldText.length;
+
+  // 1-based line the match starts on, and the 0-based line it ends on.
+  const firstLine = original.slice(0, idx).split("\n").length;
+  const lastLine = original.slice(0, endIdx).split("\n").length;
+
+  const contextStart = Math.max(0, firstLine - 1 - EDIT_PREVIEW_CONTEXT_LINES);
+  const contextEnd = Math.min(lines.length, lastLine + EDIT_PREVIEW_CONTEXT_LINES);
+  const before = lines.slice(contextStart, firstLine - 1);
+  const after = lines.slice(lastLine, contextEnd);
+  const removed = oldText.split("\n");
+  const added = newText.split("\n");
+
+  const hunk = [
+    `@@ -${contextStart + 1},${before.length + removed.length + after.length}` +
+      ` +${contextStart + 1},${before.length + added.length + after.length} @@`,
+    ...before.map((line) => ` ${line}`),
+    ...removed.map((line) => `-${line}`),
+    ...added.map((line) => `+${line}`),
+    ...after.map((line) => ` ${line}`),
+  ];
+
+  return { path: p, occurrences: count, patch: [`--- ${p}`, `+++ ${p}`, ...hunk].join("\n") };
+}
+
 export async function runBash(
   { command, cwd, onOutput }: BashArgs & {
     onOutput?: (event: BashOutputEvent) => void;

@@ -22,7 +22,8 @@ import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { ToolElapsed } from "@/tools/elapsed";
 import { BoundedBody } from "@/tools/body-budget";
 import { FieldsOrJson } from "@/tools/result-fields";
-import { boundText } from "@/lib/text-budget";
+import { EditPreviewBody } from "@/tools/edit-preview";
+import { textPreview } from "@/tools/text-preview";
 import { toolsConfig } from "@/config/tools";
 import { logger } from "@/lib/logger";
 import { resolveThreadConversationId } from "@/lib/thread-conversation-id";
@@ -830,32 +831,6 @@ export function searchSummary(result: AnyResult) {
   );
 }
 
-/**
- * Cap a long argument or result preview so a big body cannot blow up the
- * transcript.
- *
- * The limit and the wording both come from the shared budget config, so this is
- * one more consumer of the app's single answer to "how much may one rendered
- * body paint" rather than a private rule. It returns a plain string because every
- * caller pastes it inline into an argument preview where there is no room for a
- * separate element; the note is therefore part of the text, which is acceptable
- * for an ARGUMENT (a scannable summary) and would not be for a result body -
- * that is what `BoundedBody` is for.
- *
- * Character-only, which is why the note can name the exact number dropped -
- * something `BoundedBody` cannot do, because its budget may cut whole rows
- * instead. The row cap is effectively disabled here for the same reason: a
- * caller-supplied character limit is a preview choice, and a preview that also
- * silently dropped rows would be reporting two different kinds of loss.
- */
-export function textPreview(text: string, max = toolsConfig.limits.toolArgPreviewMaxChars) {
-  const bounded = boundText(text, { maxLines: Number.MAX_SAFE_INTEGER, maxChars: max });
-  if (!bounded.truncated) return text;
-  return `${bounded.text}\n${toolsConfig.copy.status.argPreviewTruncated(
-    text.length - bounded.text.length,
-  )}`;
-}
-
 export const ReadFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
   <BackendToolView
     title={`read_file · ${String(p.args.path ?? "")}`}
@@ -947,17 +922,13 @@ export const EditFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     tool="edit_file"
     targetPath={String(p.args.path ?? "")}
     args={p.args}
+    // The gate shows the change this edit would make, not the model's
+    // description of it. The Find/Replace pair omits the surrounding context, so
+    // it cannot show whether the replacement lands where the author meant — which
+    // is what the reader is being asked to judge. The pair is kept as the
+    // fallback for when the server cannot produce a patch; see `edit-preview`.
     argPreview={
-      <div className="space-y-1 text-xs">
-        <div className="text-muted-foreground">Find:</div>
-        <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-          {typeof p.args.oldText === "string" ? textPreview(p.args.oldText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
-        </pre>
-        <div className="text-muted-foreground">Replace with:</div>
-        <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-          {typeof p.args.newText === "string" ? textPreview(p.args.newText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
-        </pre>
-      </div>
+      <EditPreviewBody args={p.args} fallbackName={String(p.args.path ?? "")} />
     }
     result={p.result}
     status={p.status}
@@ -984,3 +955,6 @@ export const DeleteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     summarize={(r) => <FieldsOrJson value={r} />}
   />
 );
+
+/** Moved to `./text-preview` so modules that use it do not depend on this file. */
+

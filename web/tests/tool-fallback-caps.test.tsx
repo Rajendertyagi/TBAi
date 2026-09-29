@@ -181,9 +181,30 @@ describe("the cap has exactly one implementation", () => {
   });
 
   it("imports the shared helper rather than re-implementing a cap", () => {
+    // The helper moved to `@/tools/text-preview` when `edit-preview` needed it
+    // without depending on this tool's UI file — importing `filesystem/ui` back
+    // would have closed a module cycle between the two. The single-source rule
+    // is unchanged; only the path is, and the guard follows it so a second
+    // implementation still cannot creep in unnoticed.
     expect(source).toMatch(
-      /import\s*\{\s*textPreview\s*\}\s*from\s*"@\/tools\/filesystem\/ui"/,
+      /import\s*\{\s*textPreview\s*\}\s*from\s*"@\/tools\/text-preview"/,
     );
+  });
+
+  it("keeps the helper reachable from the tool UIs that use it", async () => {
+    // Three modules render argument previews through this one function, so the
+    // extract must not have stranded any of them on a second copy.
+    for (const importer of [
+      "../src/tools/filesystem/ui.tsx",
+      "../src/tools/opencode/ui.tsx",
+      "../src/tools/edit-preview.tsx",
+    ]) {
+      const text = stripComments(await Bun.file(new URL(importer, import.meta.url)).text());
+      expect(text, importer).toMatch(/textPreview/);
+      expect(text, importer).not.toMatch(
+        /(?:function|const|let|var)\s+textPreview\b/,
+      );
+    }
   });
 
   it("routes both bodies through that helper", () => {

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 /**
  * Official assistant-ui "Tool fallback" element, vendored into this repo — the
@@ -100,7 +100,7 @@ import {
   primaryApprovalOption,
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
-import { textPreview } from "@/tools/filesystem/ui";
+import { textPreview } from "@/tools/text-preview";
 import { logger } from "@/lib/logger";
 
 const ANIMATION_DURATION = 200;

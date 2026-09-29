@@ -5,7 +5,8 @@ import {
   type ToolCallMessagePartComponent,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
-import { BackendToolView, denialOf, textPreview } from "@/tools/filesystem/ui";
+import { BackendToolView, denialOf } from "@/tools/filesystem/ui";
+import { textPreview } from "@/tools/text-preview";
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
 import { isUnifiedDiff, patchToCodeDiffs, type CodeDiffFile } from "@/lib/patch-to-diffs";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
