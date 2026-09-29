@@ -236,11 +236,11 @@ const editPreview = (args: AnyArgs) => (
   <div className="space-y-1 text-xs">
     <div className="text-muted-foreground">Find:</div>
     <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-      {typeof args.oldText === "string" ? textPreview(args.oldText, 500) : ""}
+      {typeof args.oldText === "string" ? textPreview(args.oldText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
     </pre>
     <div className="text-muted-foreground">Replace with:</div>
     <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-      {typeof args.newText === "string" ? textPreview(args.newText, 500) : ""}
+      {typeof args.newText === "string" ? textPreview(args.newText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
     </pre>
   </div>
 );

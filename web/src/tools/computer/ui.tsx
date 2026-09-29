@@ -22,9 +22,10 @@ function processSummary(result: AnyResult) {
   const r = result as any;
   const list = (r?.processes ?? []) as { pid: number; name: string; cpuSeconds: number | null; memoryMB: number | null }[];
   if (list.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.noProcesses}</span>;
+  const maxRows = toolsConfig.limits.processRowMaxRows;
   return (
     <div className="space-y-0.5">
-      {list.slice(0, 30).map((p) => (
+      {list.slice(0, maxRows).map((p) => (
         <div key={p.pid} className="flex justify-between gap-2">
           <span className="truncate">
             {p.name} <span className="text-muted-foreground">({p.pid})</span>
@@ -32,7 +33,7 @@ function processSummary(result: AnyResult) {
           {p.memoryMB != null && <span className="shrink-0 text-muted-foreground">{p.memoryMB} MB</span>}
         </div>
       ))}
-      {list.length > 30 && <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(list.length - 30)}</div>}
+      {list.length > maxRows && <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(list.length - maxRows)}</div>}
     </div>
   );
 }

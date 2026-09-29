@@ -20,6 +20,8 @@ import {
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { ToolElapsed } from "@/tools/elapsed";
+import { BoundedBody } from "@/tools/body-budget";
+import { boundText } from "@/lib/text-budget";
 import { toolsConfig } from "@/config/tools";
 import { logger } from "@/lib/logger";
 import { resolveThreadConversationId } from "@/lib/thread-conversation-id";
@@ -53,11 +55,18 @@ export function ToolCard({
   );
 }
 
+/**
+ * A tool's structured result, bounded before it is rendered.
+ *
+ * This is the single seam behind every tool result card and behind
+ * `read_file`, so the budget applies to all of them at once rather than to
+ * whichever caller remembered to add one. See `body-budget.tsx`.
+ */
 export function Json({ value }: { value: unknown }) {
   return (
-    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-      {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
-    </pre>
+    <BoundedBody
+      text={typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+    />
   );
 }
 
@@ -770,9 +779,10 @@ export function dirSummary(result: AnyResult) {
   const r = result as any;
   const entries = (r?.entries ?? []) as { name: string; type: string; size: number | null }[];
   if (entries.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.emptyFolder}</span>;
+  const maxRows = toolsConfig.limits.dirEntryMaxRows;
   return (
     <div className="space-y-0.5">
-      {entries.slice(0, 100).map((e) => (
+      {entries.slice(0, maxRows).map((e) => (
         <div key={e.name} className="flex justify-between gap-2">
           <span className="truncate">
             {e.type === "dir" ? "📁" : "📄"} {e.name}
@@ -780,8 +790,8 @@ export function dirSummary(result: AnyResult) {
           {e.size != null && <span className="shrink-0 text-muted-foreground">{e.size} B</span>}
         </div>
       ))}
-      {entries.length > 100 && (
-        <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(entries.length - 100)}</div>
+      {entries.length > maxRows && (
+        <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(entries.length - maxRows)}</div>
       )}
     </div>
   );
@@ -819,9 +829,30 @@ export function searchSummary(result: AnyResult) {
   );
 }
 
-/** Cap a long body so a big file result cannot blow up the transcript. */
-export function textPreview(text: string, max = 2000) {
-  return text.length > max ? `${text.slice(0, max)}\n…(${text.length - max} more chars)` : text;
+/**
+ * Cap a long argument or result preview so a big body cannot blow up the
+ * transcript.
+ *
+ * The limit and the wording both come from the shared budget config, so this is
+ * one more consumer of the app's single answer to "how much may one rendered
+ * body paint" rather than a private rule. It returns a plain string because every
+ * caller pastes it inline into an argument preview where there is no room for a
+ * separate element; the note is therefore part of the text, which is acceptable
+ * for an ARGUMENT (a scannable summary) and would not be for a result body -
+ * that is what `BoundedBody` is for.
+ *
+ * Character-only, which is why the note can name the exact number dropped -
+ * something `BoundedBody` cannot do, because its budget may cut whole rows
+ * instead. The row cap is effectively disabled here for the same reason: a
+ * caller-supplied character limit is a preview choice, and a preview that also
+ * silently dropped rows would be reporting two different kinds of loss.
+ */
+export function textPreview(text: string, max = toolsConfig.limits.toolArgPreviewMaxChars) {
+  const bounded = boundText(text, { maxLines: Number.MAX_SAFE_INTEGER, maxChars: max });
+  if (!bounded.truncated) return text;
+  return `${bounded.text}\n${toolsConfig.copy.status.argPreviewTruncated(
+    text.length - bounded.text.length,
+  )}`;
 }
 
 export const ReadFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
@@ -919,11 +950,11 @@ export const EditFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
       <div className="space-y-1 text-xs">
         <div className="text-muted-foreground">Find:</div>
         <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-          {typeof p.args.oldText === "string" ? textPreview(p.args.oldText, 500) : ""}
+          {typeof p.args.oldText === "string" ? textPreview(p.args.oldText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
         </pre>
         <div className="text-muted-foreground">Replace with:</div>
         <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
-          {typeof p.args.newText === "string" ? textPreview(p.args.newText, 500) : ""}
+          {typeof p.args.newText === "string" ? textPreview(p.args.newText, toolsConfig.limits.toolArgEditPreviewMaxChars) : ""}
         </pre>
       </div>
     }

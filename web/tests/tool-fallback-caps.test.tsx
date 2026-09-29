@@ -30,16 +30,18 @@ import {
   ToolFallbackError,
 } from "@/components/assistant-ui/elements/tool-fallback";
 import { functionBody, stripComments } from "@/testing/source-scope";
+import { toolsConfig } from "@/config/tools";
 
-/** Mirrors `textPreview`'s default cap, so the bound on the DOM is pinned here. */
-const PREVIEW_MAX = 2000;
+/** Mirrors `textPreview`'s cap, read from the shared config rather than repeated. */
+const PREVIEW_MAX = toolsConfig.limits.toolArgPreviewMaxChars;
 /**
  * The helper's own truncation marker. Spelled with an escape rather than a
  * literal glyph so this file cannot be misread by a tool that re-encodes it.
  */
-const moreChars = (dropped: number) => `\n\u2026(${dropped} more chars)`;
+const moreChars = (dropped: number) =>
+  `\n\u2026${dropped} more character${dropped === 1 ? "" : "s"} not shown`;
 /** Matches the marker without pinning how many chars were dropped. */
-const MORE_CHARS_SHAPE = /\u2026\(\d+ more chars\)$/;
+const MORE_CHARS_SHAPE = /\u2026\d+ more characters? not shown$/;
 
 /** The single `<pre>` a body painted, split into its open tag and its text. */
 function pre(html: string): { openTag: string; text: string } {

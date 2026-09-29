@@ -278,9 +278,15 @@ export function JobDetail({
                       {run.outputExcerpt && (
                         <div>
                           <span className="text-muted-foreground">{copy.runOutput}: </span>
-                          <span className="break-words">
-                            {run.outputExcerpt.slice(0, 500)}
-                          </span>
+                          {/* The excerpt is already bounded at its source —
+                              `schedulerExecution.ts` slices the run's text
+                              before persisting it, and the field is named for
+                              that. This used to slice it again at a hardcoded
+                              500 characters, so the panel showed a fifth of the
+                              stored excerpt with nothing saying so. A second,
+                              invisible cut on top of a deliberate one is
+                              strictly worse than the deliberate one. */}
+                          <span className="break-words">{run.outputExcerpt}</span>
                         </div>
                       )}
                       <div className="flex flex-wrap items-center gap-2 pt-1">

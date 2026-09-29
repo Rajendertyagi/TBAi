@@ -3,6 +3,7 @@ import type {
   ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { BackendToolView } from "../filesystem/ui";
+import { BoundedBody } from "@/tools/body-budget";
 import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
@@ -44,20 +45,22 @@ function browserSummary(result: AnyResult) {
         <div className="text-muted-foreground">
           {r.ok ? toolsConfig.copy.status.screenshotSaved : toolsConfig.copy.status.screenshotFailed}: {r.path}
         </div>
-        {r.stdout ? (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-            {r.stdout.slice(0, 4000)}
-          </pre>
-        ) : null}
+        {r.stdout ? <BoundedBody text={r.stdout} /> : null}
       </div>
     );
   }
 
-  const output = [r.stdout, r.stderr].filter(Boolean).join("\n").slice(0, 4000);
+  // Bounded, and it says so when it cuts. This used to be a hardcoded
+  // `slice(0, 4000)` with no notice at all, so a reader of a long page scrape
+  // or a verbose CLI saw a block that stopped mid-sentence and had no way to
+  // know it was one fortieth of what the tool returned - a silent truncation
+  // reads as a complete answer.
+  const output = [r.stdout, r.stderr].filter(Boolean).join("\n");
   return (
-    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-      {output || (r.ok ? "ok" : `exit ${r.exitCode ?? "?"}`)}
-    </pre>
+    <BoundedBody
+      text={output}
+      empty={r.ok ? "ok" : `exit ${r.exitCode ?? "?"}`}
+    />
   );
 }
 
