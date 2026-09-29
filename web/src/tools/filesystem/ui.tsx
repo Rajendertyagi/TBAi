@@ -786,6 +786,20 @@ export function dirSummary(result: AnyResult) {
   );
 }
 
+/**
+ * The stable identity of one search match: where it is.
+ *
+ * The path and line ARE the match — two hits on the same line are the same
+ * finding, not two findings. This is also the label the row shows, so the key
+ * and the thing being keyed cannot drift apart.
+ *
+ * Exported so the choice is unit-tested rather than eyeballed: an index key
+ * here would silently re-attribute a row whenever the list is re-sliced.
+ */
+export function searchMatchKey(match: { path: string; line: number }): string {
+  return `${match.path}:${match.line}`;
+}
+
 export function searchSummary(result: AnyResult) {
   const r = result as any;
   const matches = (r?.matches ?? []) as { path: string; line: number; snippet: string }[];
@@ -793,8 +807,8 @@ export function searchSummary(result: AnyResult) {
     return <span className="text-muted-foreground">{toolsConfig.copy.status.noMatchesInFiles(r?.filesScanned ?? 0)}</span>;
   return (
     <div className="space-y-1">
-      {matches.map((m, i) => (
-        <div key={i} className="truncate">
+      {matches.map((m) => (
+        <div key={searchMatchKey(m)} className="truncate">
           <span className="font-medium text-foreground">{m.path}:{m.line}</span>{" "}
           <span className="text-muted-foreground">{m.snippet}</span>
         </div>

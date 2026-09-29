@@ -43,6 +43,38 @@ type AnyProps = ToolCallMessagePartProps<AnyArgs, unknown>;
  * documents where each name was verified.
  */
 
+/**
+ * The name a file inside a patch is shown and keyed by.
+ *
+ * `patchToCodeDiffs` emits ONE entry per file (it walks a file's chunks
+ * internally), so the name IS the entry's identity and the array index it used
+ * to be keyed by carried no information at all. A patch entry with no name falls
+ * back to the path the model asked to edit, which is a real argument, never an
+ * invented one; there is at most one such entry, so it cannot collide with a
+ * sibling.
+ *
+ * One helper serves both the key and the `filename` prop because they must be
+ * the same value: a key disagreeing with the visible name would be a second,
+ * invisible identity for one card.
+ */
+export function patchFileName(filename: string, fallbackPath: string): string {
+  return filename || fallbackPath;
+}
+
+/**
+ * The stable identity of one question inside a single `question` call.
+ *
+ * The payload carries no per-question id, so the identity is the question
+ * itself: its own text, qualified by the header above it, because two questions
+ * under one header are ordinary while two carrying the same text are not.
+ *
+ * Exported so the choice is unit-tested. An index key here would re-attribute a
+ * settled answer to whichever question moved into that slot.
+ */
+export function questionItemKey(header: string, question: string): string {
+  return `${header}::${question}`;
+}
+
 const str = (value: unknown, fallback = ""): string =>
   typeof value === "string" ? value : value == null ? fallback : String(value);
 
@@ -256,18 +288,19 @@ export const OpenCodeEditView = ({
         }
         return (
           <div className="w-full space-y-2">
-            {files.map((file, index) => (
-              <CodeDiff
-                key={`${index}-${file.filename}`}
-                // Falls back to the path the model asked to edit, which is a
-                // real argument — never an invented name.
-                filename={file.filename || str(args.path)}
-                additions={file.additions}
-                deletions={file.deletions}
-                lines={file.lines}
-                cycle={0}
-              />
-            ))}
+            {files.map((file) => {
+              const name = patchFileName(file.filename, str(args.path));
+              return (
+                <CodeDiff
+                  key={name}
+                  filename={name}
+                  additions={file.additions}
+                  deletions={file.deletions}
+                  lines={file.lines}
+                  cycle={0}
+                />
+              );
+            })}
           </div>
         );
       }}
@@ -699,6 +732,7 @@ function questionBody(
   return (
     <div className="space-y-3">
       {questions.map((q, i) => {
+        const key = questionItemKey(str(q.header), str(q.question));
         const answer = answers?.[i] ?? null;
         const settled = state === "answered" && answer !== null && answer.length > 0;
         // The option the answer names, so its description can follow it. The
@@ -709,7 +743,7 @@ function questionBody(
             .find((option) => option !== undefined && answer.includes(str(option.label)))
           : undefined;
         return (
-          <div key={i}>
+          <div key={key}>
             {typeof q.header === "string" && q.header ? (
               <p className="text-xs font-medium text-muted-foreground">{q.header}</p>
             ) : null}
