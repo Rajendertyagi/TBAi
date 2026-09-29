@@ -267,6 +267,7 @@ const SETTINGS_VIEWS: ViewId[] = [
   "providers",
   "appearance",
   "workspace",
+  "opencode-config",
   "folders",
   "desktop",
   "mcp",
