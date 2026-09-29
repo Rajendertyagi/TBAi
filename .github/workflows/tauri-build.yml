@@ -126,6 +126,15 @@ jobs:
       - name: Type-check the Rust shell
         run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
+      # The CLI validates tauri.conf.json against the JSON schema bundled with
+      # @tauri-apps/cli, and that is a SEPARATE version line from the `tauri`
+      # crate whose tauri-build parses the same file. When the CLI is older
+      # than the crate, `tauri build` dies before compiling anything, on schema
+      # errors only ("Additional properties are not allowed") for keys the
+      # crate supports perfectly well. Two of those keys shipped that way:
+      # `build.windows.staticVCRuntime` and `app.appDirectoriesOverride`.
+      # The floor is `^2.12.0` in package.json and must never drop below the
+      # `tauri` version Cargo resolves; both are 2.12.0 today.
       - name: Build Tauri (compile, no bundle)
         run: bunx tauri build --target x86_64-pc-windows-msvc
 
