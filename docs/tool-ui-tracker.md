@@ -44,7 +44,9 @@ row without one is not done.
 | **Question observability moved to the live card** | Four `question.*` events were logged only by a component nothing renders, so the contract passed while every real question was unloggable. Events moved to the live dock; 686 lines of dead code deleted. | `3fa4800` |
 | **The timeline counts real files** | "N steps · 0 files changed" on every coding turn. The count was a missing *shape*, not a wrong number: the tool results carry no line counts, but the patch on every call does. Counts derived from the patch and published on the library's own `artifact` slot. | `288c263` |
 | **`TodoList` was not a todo list** | The "three designs for one feature" finding counted a progress renderer as a todo renderer. It renders server-aggregated stages, not a plan. Renamed to `progress-stages` / `ProgressStages`. | this commit |
-| **index-in-`key` refuted** | Re-derived per site: 10 candidates, 3 vendored (frozen), 4 skeletons with no identity, 3 stateless, 1 append-only log. The single real candidate is safe today for a specific, recorded reason. Nothing changed. | this commit |
+| **index-in-`key` refuted** | Re-derived per site: 10 candidates, 3 vendored (frozen), 4 skeletons with no identity, 3 stateless, 1 append-only log. The single real candidate is safe today for a specific, recorded reason. Nothing changed. | `cbc71bd` |
+| **Subagent calls render a real card** | The delegated-agent tool was registered as `task`; the live server sends `subagent`, so every delegated call fell through to a raw JSON dump. Registered under the verified name, and guarded on the registry. | this commit |
+| **One duration formatter, not two** | The message footer computed `(ms / 1000).toFixed(1)` itself, so a 299s turn read `299.0s` there and `4m 59s` on the tool badge above it. Both now route through `formatDuration`, with a source guard. | this commit |
 | OpenCode configuration page | Read/edit permission rules, file-driven, no invented permission system. | `c371fc7`, `440a39d`, `f7a59f6` |
 
 ### How each was verified
@@ -75,6 +77,11 @@ row without one is not done.
   findings being wrong is itself the reason the rest were treated as claims to
   check instead of work to do — one of them (`R1` in the original audit) had
   already turned out to be wrong too.
+- **And one was neither right nor wrong, but misattributed.** "A subagent call
+  shows nothing of what it did" was filed as a missing feature. It was a tool
+  registered under a name the server never sends. Probing the live server took one
+  turn; the reasoning that filed it as a feature was the failure, not the absence
+  of data.
 - **Live browser verification for the edit gate**, with the test confirmed to
   fail when the gate is reverted. Re-confirmed 2026-09-30: the live Code-surface
   gate spec passes against a real server and a real model, and the real OpenCode
@@ -317,6 +324,66 @@ technical unknown hiding behind it. The investigation is finished; the decision
 is one line: *narrow the column to 48rem, or keep the wide transcript and the
 asymmetry?*
 
+### Subagent transparency — the tool was never registered under the name the server sends
+
+Carried as "a subagent call shows nothing of what it did. A real information gap,
+but a feature rather than a defect." It was neither a gap nor a feature. **It was an
+unregistered tool**, and the card now exists.
+
+**What the live server actually sends.** A real delegated turn (2026-09-30,
+`agnes/agnes-3.0-flash`, captured in the browser) emits a tool part named
+**`subagent`**, with arguments `{ agent, description, prompt }`. The registry
+carried the renderer under **`task`**, reading `subagent_type` — a name and an
+argument the server never sends.
+
+The registry is name-keyed, so a name it does not contain means the renderer never
+fires: the part fell through to `ToolFallback` and rendered as a raw dump —
+`Used tool: subagent {"agent":"explore","description":"…","prompt":"…"}`. That was
+the entire reported symptom.
+
+**Why nothing caught it.** Typecheck, build and the full suite were all green with
+the tool unregistered, because **nothing in the repo knew which name the server
+sends**. The tool inventory in this tracker is read from `toolkit.ts` — it describes
+what we registered, not what the server emits, so it could never have found this.
+The guard is therefore on the **registry**, not the rendering: a test asserts
+`subagent` is registered and reads `args.agent`, confirmed to fail when the
+registration is removed.
+
+`task` is still registered, documented as **unverified** — only `subagent` was
+observed. An inert entry costs nothing; removing it would regress a build that names
+it that way. Both spellings of the argument are read, so the card is right either
+way.
+
+**What the card shows, and what it refuses to claim.** The delegated prompt and the
+subagent's returned text. The subagent's *internal steps* are not obtainable: the
+session stream carries no child parts for a delegated call, no parented message
+link, `parentID` is for forking rather than subagents, and the server answers **404**
+for every child-session route (`children`, `subagent`, `child`). A test asserts the
+card renders **no** step list and **no** files-changed count, so claiming otherwise
+becomes a decision someone has to undo rather than an omission someone has to
+notice.
+
+**Verified on screen**, not merely asserted: the card reads `subagent · explore`,
+shows the full prompt in a monospace block, and offers Allow / Always allow / Deny —
+this build does gate delegation. The raw `Used tool:` dump is gone.
+
+### A second duration formatter, found by looking at that screenshot
+
+The same capture showed the message footer reading **`299.0s`** for a 299-second
+turn while the tool badge on the same card read `4m 59s`. Two spellings of the same
+fact on one screen, one of them unreadable.
+
+Cause: `ChatWindow.tsx` formatted its own durations inline with
+`(ms / 1000).toFixed(1)` — for both the completed duration and the live tick. The
+earlier `formatDuration` work fixed the *tool* badge and left this second location
+alone, which is the failure mode of "one module owns the rule": the rule is only
+owned once every caller is routed through it. Both now call `formatDuration`, and a
+source guard fails if either inline conversion returns. Verified on screen: the same
+turn now reads `5m 00s`.
+
+Found by looking, not by a failing test — which is exactly why it needed a guard and
+not only a fix.
+
 ### "0 files changed" was a missing shape, not a wrong number
 
 The timeline label said `0 files changed` on every single turn of a coding
@@ -471,10 +538,13 @@ the endpoint is covered by five e2e tests against the running server, and the
 diff-or-fallback decision is unit-tested — but the transition itself rests on two
 lines of `useState` in front of a pure function. Stated rather than implied.
 
-### Subagent transparency
+### ~~Subagent transparency~~ — DONE. It was an unregistered tool, not a gap.
 
-A subagent call shows nothing of what it did. A real information gap, but a
-feature rather than a defect.
+"A subagent call shows nothing of what it did. A real information gap, but a
+feature rather than a defect." The live server names the tool `subagent`; the
+registry only had `task`, so every delegated call rendered as a raw JSON dump.
+Fixed, live-verified, and guarded on the registry rather than the rendering — see
+*Subagent transparency* below for why nothing else could have caught it.
 
 ### index-in-`key` — re-derived, and the finding as stated does not hold
 

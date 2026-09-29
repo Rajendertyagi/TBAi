@@ -24,6 +24,7 @@ import {
   OpenCodeBashToolUI,
   OpenCodeEditToolUI,
   OpenCodeWriteToolUI,
+  OpenCodeSubagentToolUI,
   OpenCodeTaskToolUI,
   OpenCodeTodoWriteToolUI,
   OpenCodeWebFetchToolUI,
@@ -106,6 +107,13 @@ export const openCodeToolkit = defineToolkit({
   // Not permission-gated, so they render inline like read/glob/grep.
   // `GET /experimental/tool?provider=<p>&model=<m>` supplied every argument
   // name these read — see `tools/opencode/ui.tsx`.
+  // The delegated-agent tool is registered under BOTH names on purpose. The
+  // running server emits `subagent` (verified live 2026-09-30, arguments
+  // `{ agent, description, prompt }`); `task` is the older spelling and is NOT
+  // verified. Registering only the unverified one left the live tool
+  // unregistered, so every delegated call fell through to `ToolFallback` and
+  // rendered as a raw JSON dump. See `OpenCodeSubagentToolUI`.
+  subagent: { type: "backend", render: OpenCodeSubagentToolUI },
   task: { type: "backend", render: OpenCodeTaskToolUI },
   todowrite: { type: "backend", display: "standalone", render: OpenCodeTodoWriteToolUI },
   webfetch: { type: "backend", render: OpenCodeWebFetchToolUI },

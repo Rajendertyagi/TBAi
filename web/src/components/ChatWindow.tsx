@@ -39,6 +39,7 @@ import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePick
 import { useSettingsStore } from "../stores";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
+import { formatDuration } from "@/tools/elapsed";
 /**
  * Whether the thread boot skeleton renders. Pure (no hooks) so the
  * draft/loading/mode matrix is unit-testable without a DOM runner.
@@ -286,8 +287,15 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
       ? custom.reasoningLevel
       : undefined;
   const isStreaming = timing?.totalStreamTime == null && threadIsRunning;
+  // Routed through `formatDuration`, the one owner of how a span is written.
+  //
+  // These two used to format inline with `(ms / 1000).toFixed(1)`, which is the
+  // exact defect `formatDuration` was written to remove: a real 299-second turn
+  // rendered `299.0s` in this footer while the tool badge on the same card read
+  // `4m 59s`. Two spellings of the same fact on one screen, one of them
+  // unreadable. Caught by looking at a live subagent capture, not by a test.
   const durationSec = !isStreaming && timing?.totalStreamTime != null
-    ? (timing.totalStreamTime / 1000).toFixed(1)
+    ? formatDuration(timing.totalStreamTime)
     : undefined;
   const timeStr =
     createdAt instanceof Date
@@ -300,7 +308,7 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
     const interval = setInterval(() => setLiveMs((m) => m + 1000), 1000);
     return () => clearInterval(interval);
   }, [isStreaming]);
-  const liveDuration = isStreaming && liveMs > 0 ? `${(liveMs / 1000).toFixed(1)}s` : undefined;
+  const liveDuration = isStreaming && liveMs > 0 ? formatDuration(liveMs) : undefined;
 
   const [hovered, setHovered] = useState(false);
   const showTimestamp = hovered && !!timeStr;

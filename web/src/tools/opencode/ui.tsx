@@ -608,14 +608,61 @@ OpenCodeBashToolUI.displayName = "OpenCodeToolUI(bash)";
  * reader touched it.
  * ---------------------------------------------------------------------- */
 
-/** `task` — required `{ description, prompt, subagent_type }` (+ `task_id?`, `command?`). */
-export const OpenCodeTaskToolUI = openCodeView({
-  tool: "task",
-  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.task, str(args.subagent_type, toolsConfig.copy.tool.subagent)),
-  argPreview: (args) => <TextBody text={str(args.prompt)} />,
-  runningLabel: toolsConfig.copy.running.runningSubagent,
-  summarize: body,
-});
+/**
+ * The delegated-agent call — handing work to a subagent such as `explore` or
+ * `general`.
+ *
+ * ## The name was wrong, which is the whole bug
+ *
+ * Verified against the running server on 2026-09-30: a real turn that delegates
+ * emits a tool part named **`subagent`**, with arguments
+ * `{ agent, description, prompt }`. The registry carried this renderer under
+ * **`task`**, reading `subagent_type` — a tool name and an argument the server
+ * never sends.
+ *
+ * The consequence is exactly the reported symptom. A name-keyed registry that
+ * lacks the name the server used means the renderer never fires, the part falls
+ * through to `ToolFallback`, and the delegated call renders as a raw dump:
+ * `Used tool: subagent {"agent":"general","description":"…","prompt":"…"}`. So "a
+ * subagent call shows nothing of what it did" was not a display choice and not a
+ * missing feature — it was an **unregistered tool**.
+ *
+ * ## What it can honestly show
+ *
+ * The prompt it was given, and the text the subagent returned. That is all the
+ * data that reaches the app: the session stream carries no child parts for a
+ * delegated call, no parented message link, and the OpenCode server answers 404
+ * for every child-session route. The subagent's *internal* steps are not
+ * available to any client, so this card does not pretend to list them. Showing
+ * the delegated prompt and the returned answer is a real improvement over a JSON
+ * dump; a fabricated step list would not be.
+ *
+ * ## Why `task` stays registered
+ *
+ * An OpenCode build that names the tool `task` would otherwise lose the card
+ * entirely, and an inert registry entry costs nothing. It is **not** verified —
+ * only `subagent` is. Both spellings of the agent argument are read, so the card
+ * is right for either build rather than right for one and blank for the other.
+ */
+function subagentView(tool: "subagent" | "task") {
+  return openCodeView({
+    tool,
+    title: (args) =>
+      toolsConfig.copy.toolTitle(
+        toolsConfig.copy.tool.subagent,
+        str(args.agent ?? args.subagent_type, toolsConfig.copy.tool.subagent),
+      ),
+    argPreview: (args) => <TextBody text={str(args.prompt)} />,
+    runningLabel: toolsConfig.copy.running.runningSubagent,
+    summarize: body,
+  });
+}
+
+/** The name the running server uses. Read the note above before renaming this. */
+export const OpenCodeSubagentToolUI = subagentView("subagent");
+
+/** The older spelling. Unverified; kept so such a build does not lose the card. */
+export const OpenCodeTaskToolUI = subagentView("task");
 
 /** Parses raw args.todos into typed OpenCodeTodo items. */
 function asTodoList(todos: unknown): OpenCodeTodo[] {
