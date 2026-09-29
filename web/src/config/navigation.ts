@@ -1,4 +1,4 @@
-import { Archive, Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, type LucideIcon } from "lucide-react";
+import { Archive, Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -25,7 +25,8 @@ export type ViewId =
   | "quick-messages"
   | "providers"
   | "appearance"
-  | "desktop";
+  | "desktop"
+  | "opencode-config";
 
 export interface NavItem {
   id: string;
@@ -131,6 +132,17 @@ export const appConfig: AppConfig = {
       order: 4,
     },
     {
+      id: "opencode-config",
+      label: "OpenCode Config",
+      icon: ShieldCheck,
+      view: "opencode-config",
+      route: "/opencode-config",
+      description: "The real OpenCode configuration and its permission rules",
+      visible: true,
+      railVisible: false,
+      order: 5,
+    },
+    {
       id: "folders",
       label: "Folders",
       icon: FolderCog,
@@ -139,7 +151,7 @@ export const appConfig: AppConfig = {
       description: "Registered project folders",
       visible: true,
       railVisible: false,
-      order: 5,
+      order: 6,
     },
     {
       id: "desktop",
@@ -150,7 +162,7 @@ export const appConfig: AppConfig = {
       description: "Window layout and desktop options",
       visible: true,
       railVisible: false,
-      order: 6,
+      order: 7,
     },
     {
       id: "memories",

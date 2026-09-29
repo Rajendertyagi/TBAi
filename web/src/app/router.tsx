@@ -16,6 +16,7 @@ import { FoldersPage } from "../features/folders/FoldersPage";
 import { QuickMessagesPage } from "../features/quick-messages/QuickMessagesPage";
 import { ArchivedPage } from "../features/sidebar/ArchivedPage";
 import { CodeShell } from "../features/opencode/CodeShell";
+import { OpenCodeConfigPage } from "../features/opencode/OpenCodeConfigPage";
 
 /**
  * Application surfaces (hash routing: works under vite dev, the Bun SPA
@@ -56,6 +57,7 @@ export const router = createHashRouter([
           { path: "appearance", Component: AppearancePage },
           { path: "desktop", Component: DesktopSettings },
           { path: "workspace", Component: WorkspacePage },
+          { path: "opencode-config", Component: OpenCodeConfigPage },
         ],
       },
       { path: "*", element: <Navigate to="/" replace /> },

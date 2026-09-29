@@ -8,6 +8,14 @@ import {
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
 import { OpenCodeBinaryMissingError, openCodeServerManager, stripOpenCodeProxyPrefix } from "../services/opencode/serverManager";
 import { getOpenCodeAuthHeaders } from "../services/opencode/runtime";
+import {
+  OpenCodeConfigNotFoundError,
+  OpenCodeConfigUnreadableError,
+  readOpenCodeConfigDocument,
+  setOpenCodeConfigValue,
+  setOpenCodePermissionEffect,
+  writeOpenCodeConfigDocument,
+} from "../services/opencode/configDocument";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
 
@@ -91,6 +99,121 @@ app.post("/session/terminate", async (c) => {
       ...classifyError(err),
     });
     const mapped = openCodeError(err, "Failed to terminate OpenCode session");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
+ * OpenCode configuration management (read + targeted write).
+ *
+ * Two rules make this safe, and both are enforced in
+ * `services/opencode/configDocument.ts` rather than here:
+ *
+ *   1. The document edited is the one the SERVER reports as carrying
+ *      `permissions`, not a path TBAi computes. `data/opencode-home/opencode.json`
+ *      exists and is not the permission source.
+ *   2. A write is refused outright when the document is malformed or when
+ *      `permissions` is not a rule array. There is no fallback policy.
+ *
+ * The write route takes ONE `(action, resource, effect)` triple, not a document.
+ * That is what makes preservation structural rather than a promise: the server
+ * cannot be handed a ruleset to install, so it can only be told to change one
+ * existing rule, and every other rule keeps its index by construction.
+ */
+
+/** Zod-validated body for a single permission-effect change. */
+const permissionEffectSchema = z.object({
+  action: z.string().min(1),
+  resource: z.string().min(1),
+  effect: z.enum(["allow", "ask", "deny"]),
+});
+
+/** Returns the managed server's base URL plus its auth headers. */
+async function configServerTarget(): Promise<{
+  baseUrl: string;
+  headers: Record<string, string>;
+}> {
+  return {
+    baseUrl: await openCodeServerManager.ensureBaseUrl(),
+    headers: getOpenCodeAuthHeaders(),
+  };
+}
+
+app.get("/config", async (c) => {
+  try {
+    const target = await configServerTarget();
+    const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
+    return c.json({
+      path: document.path,
+      discoveredPaths: document.discoveredPaths,
+      raw: document.raw,
+      malformed: document.malformed,
+      permissions: document.doc.permissions ?? null,
+      editable: !document.malformed,
+    });
+  } catch (err) {
+    logger.error("opencode", "opencode.config_read_error", { ...classifyError(err) });
+    if (err instanceof OpenCodeConfigUnreadableError) {
+      return c.json({ error: err.message }, 422);
+    }
+    if (err instanceof OpenCodeConfigNotFoundError) {
+      return c.json({ error: err.message }, 404);
+    }
+    const mapped = openCodeError(err, "Failed to read OpenCode configuration");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+app.put("/config/permissions", async (c) => {
+  const parsed = permissionEffectSchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) {
+    return c.json({ error: "action, resource and effect are required" }, 400);
+  }
+  const { action, resource, effect } = parsed.data;
+  try {
+    const target = await configServerTarget();
+    // Re-read inside the write. The browser's copy is never trusted for the
+    // base document: it may be stale, and a stale base is exactly how an
+    // unrelated rule gets dropped.
+    const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
+    if (document.malformed) {
+      throw new OpenCodeConfigUnreadableError(
+        "OpenCode configuration is not valid JSON; refusing to write",
+      );
+    }
+    const nextPermissions = setOpenCodePermissionEffect(
+      document.doc.permissions,
+      { action, resource },
+      effect,
+    );
+    // A no-op edit returns the identical array; writing it would still
+    // rewrite the file, so it is reported without touching disk.
+    if (nextPermissions === document.doc.permissions) {
+      return c.json({ path: document.path, changed: false });
+    }
+    const nextText = setOpenCodeConfigValue(
+      document.raw,
+      "permissions",
+      nextPermissions,
+    );
+    await writeOpenCodeConfigDocument(document.path, nextText, document.doc);
+    return c.json({ path: document.path, changed: true });
+  } catch (err) {
+    logger.error("opencode", "opencode.config_write_error", {
+      ...classifyError(err),
+      action,
+      resource,
+      effect,
+    });
+    if (err instanceof OpenCodeConfigUnreadableError) {
+      return c.json({ error: err.message }, 422);
+    }
+    if (err instanceof OpenCodeConfigNotFoundError) {
+      return c.json({ error: err.message }, 404);
+    }
+    const mapped = openCodeError(err, "Failed to write OpenCode configuration");
     return c.json({ error: mapped.message }, mapped.status);
   }
 });
