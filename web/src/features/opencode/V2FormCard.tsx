@@ -17,6 +17,8 @@ import {
   type V2FormView,
 } from "./v2Forms";
 import { V2OptionControl } from "./V2OptionControl";
+import { FORM_DOCK_CSS_MAX_HEIGHT_CLASS } from "./formDockSizing";
+import { useFormDockMaxHeight } from "./useFormDockMaxHeight";
 import { questionAsJson, questionAsMarkdown } from "./questionSerializers";
 import { cn } from "@/lib/utils";
 
@@ -172,6 +174,11 @@ export function V2FormCard({
   const [step, setStep] = useState(0);
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The dock's own scrolling body, measured so a long question cannot grow past
+  // the top of the conversation. `collapsed` is the `enabled` flag, so a
+  // collapsed dock measures nothing and keeps its CSS cap.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const bodyMaxHeight = useFormDockMaxHeight(bodyRef, !collapsed);
 
   // A confirmation must not outlive the dock: disarming the timer is what
   // stops a pending `setState` from firing against a card that is gone.
@@ -326,7 +333,30 @@ export function V2FormCard({
 
     {!collapsed && !field ? <p className="mt-3 text-sm text-muted-foreground">{toolsConfig.copy.form.nothingToAsk}</p> : null}
 
-    {!collapsed && field ? <div className="mt-3" role="tabpanel" id={DOCK_TABPANEL_ID} onKeyDown={onKeyDown}>
+    {/*
+      The body grows with its content and is only ever capped, never given a
+      fixed height. Two options in a tall window want a short card; twelve
+      options with a paragraph of text want a tall one. A fixed height is what
+      makes the small case look like a form that needs scrolling, so the height
+      is left to the content and only the ceiling is decided here.
+
+      `max-h-1/2` is the normal case and is left entirely to CSS so it tracks
+      the viewport for free. The inline value engages only when the room between
+      the dock and the top of the conversation is genuinely smaller than that,
+      which `useFormDockMaxHeight` measures.
+
+      Scrolling is scoped to THIS block on purpose: the title, the progress, the
+      step dots and the Back/Next/Submit row all stay put while a long list of
+      options scrolls underneath them.
+    */}
+    {!collapsed && field ? <div
+      ref={bodyRef}
+      role="tabpanel"
+      id={DOCK_TABPANEL_ID}
+      onKeyDown={onKeyDown}
+      className={cn("mt-3 overflow-y-auto overscroll-contain", FORM_DOCK_CSS_MAX_HEIGHT_CLASS)}
+      style={bodyMaxHeight === undefined ? undefined : { maxHeight: bodyMaxHeight }}
+    >
       <label htmlFor={`${field.key}-custom`} className="block font-medium text-foreground">
         {v2FormFieldLabel(field)}
         {field.required ? <span className="text-muted-foreground"> {toolsConfig.copy.form.requiredMarker}</span> : null}

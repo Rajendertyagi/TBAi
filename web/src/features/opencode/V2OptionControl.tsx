@@ -43,6 +43,32 @@ function normalizeOptions(options: readonly V2FormOptionView[] | null | undefine
   return options != null && options.length > 0 ? options : null;
 }
 
+/**
+ * Whether opening the free-text escape hatch must clear the current answer.
+ *
+ * Picking an option and then choosing to type your own answer must not leave the
+ * option sitting in the box as if it were what you typed. The reference client
+ * clears the selection on this same transition.
+ *
+ * But only a LISTED option is cleared. An answer naming no option is already the
+ * reader's own text — a re-opened dock, a second form carrying the same default
+ * — and clearing that would silently destroy an answer nobody retyped. That is
+ * the case `offListAnswer` exists to preserve, so the distinction is the rule.
+ *
+ * Pure, so the decision is pinned by a unit test rather than by clicking.
+ *
+ * @param selectedText - The current single-select answer, or "" for none.
+ * @param options - The field's options, or null when it has none.
+ * @returns True when the answer must be cleared on opening the hatch.
+ */
+export function shouldClearOnOpeningCustom(
+  selectedText: string,
+  options: readonly V2FormOptionView[] | null,
+): boolean {
+  if (selectedText.length === 0) return false;
+  return (options ?? []).some((option) => option.value === selectedText);
+}
+
 export interface V2OptionControlProps {
   field: V2FormFieldView;
   value: FormValue | undefined;
@@ -248,12 +274,39 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
           type="button"
           aria-expanded={otherOpen}
           disabled={disabled}
-          onClick={() => setOtherChosen(true)}
+          onClick={() => {
+            setOtherChosen(true);
+            // Choosing to type your own answer must not start you off with the
+            // option you happened to click a moment ago pre-filled in the box.
+            // The reference client clears the selection on the same transition
+            // (`{ custom: true, selected: [] }`).
+            //
+            // Only a LISTED option is cleared. An answer that names no option is
+            // already the reader's own text — a re-opened dock, a second form
+            // carrying the same default — and clearing that would silently
+            // destroy an answer the reader never retyped. That case is exactly
+            // what `offListAnswer` exists to preserve.
+            // Only a LISTED option is cleared; an off-list answer is already the
+            // reader's own text and must survive. See
+            // `shouldClearOnOpeningCustom`.
+            if (shouldClearOnOpeningCustom(selectedText, options)) onChange(undefined);
+          }}
           className={cn(ROW_BASE, otherOpen ? ROW_SELECTED : ROW_UNSELECTED)}
         >
           <span className="font-medium">{toolsConfig.copy.form.other}</span>
         </button>
-        {otherOpen ? <div className="pt-1">
+        {/*
+          The row and the box are two things, and this is what stops them reading
+          as one control. Drawn as siblings they were both full width, 4px apart,
+          with a filled row directly above a bordered box — every edge lined up,
+          so the eye merged them into a single "custom" widget.
+
+          The box is now INSET from the row's left edge, which reads as "the
+          answer to that row" rather than as a second peer, and the gap is wider
+          so the two are never touching. Both are kept: the row still shows that
+          you are in custom mode, which is worth keeping.
+        */}
+        {otherOpen ? <div className="pt-2 pl-8">
           <AnswerTextarea
             id={textId}
             label={toolsConfig.copy.form.customEntryLabel}
