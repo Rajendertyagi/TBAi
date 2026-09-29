@@ -11,7 +11,7 @@ import {
   OpenCodeSkillToolUI,
   OpenCodeTaskToolUI,
   OpenCodeWebFetchToolUI,
-  OpenCodeWriteToolUI,
+  OpenCodeWriteView,
   QuestionReadonlyView,
 } from "./ui";
 import { openCodeQuestionAnswersFromParts } from "./adapt";
@@ -195,7 +195,7 @@ describe("OpenCode edit / write — title, path and body", () => {
 
   it("titles a write with the file path and renders the result", () => {
     const html = render(
-      OpenCodeWriteToolUI,
+      OpenCodeWriteView,
       toolPart(
         "write",
         { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
@@ -327,9 +327,66 @@ describe("OpenCode edit / write — title, path and body", () => {
     expect(html).not.toContain("OLD_PREVIEW");
   });
 
+  it("shows the resulting new file in the write approval card, not a wall of content", () => {
+    // The payload below is the real one, captured from the live server: a
+    // `write` permission carries a proper new-file unified diff, `@@ -0,0 +1,N @@`,
+    // with every line an addition. That is the answer to the question the fix
+    // turned on, and it meant no diff synthesis was needed anywhere in this app.
+    //
+    // The gate used to show the raw `content` argument instead: a reviewer
+    // scrolled a whole file to answer "is this the change I want?", with nothing
+    // marking which lines are new - because all of them are.
+    const html = render(
+      OpenCodeWriteView,
+      {
+        ...toolPart(
+          "write",
+          { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
+          undefined,
+          {
+            status: { type: "requires-action", reason: "interrupt" },
+            approval: { id: "per_write_1", options: [] },
+          },
+        ),
+        pendingPatch:
+          "Index: src/b.ts\n" +
+          "===================================================================\n" +
+          "--- src/b.ts\n" +
+          "+++ src/b.ts\n" +
+          "@@ -0,0 +1,1 @@\n" +
+          "+export const WRITTEN_MARKER = 1;\n",
+      },
+    );
+    expect(html).toContain("src/b.ts");
+    expect(html).toContain("WRITTEN_MARKER");
+    // A real diff header, so the reader sees a change rather than a file dump.
+    expect(html).toContain("+1");
+  });
+
+  it("falls back to the file content when a write carries no patch", () => {
+    // The fallback stays load-bearing: `metadata.files` is optional, and a gate
+    // with no preview would be worse than one showing what the model proposed.
+    const html = render(
+      OpenCodeWriteView,
+      {
+        ...toolPart(
+          "write",
+          { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
+          undefined,
+          {
+            status: { type: "requires-action", reason: "interrupt" },
+            approval: { id: "per_write_1", options: [] },
+          },
+        ),
+        pendingPatch: null,
+      },
+    );
+    expect(html).toContain("WRITTEN_MARKER");
+  });
+
   it("shows the file content in the write approval card", () => {
     const html = render(
-      OpenCodeWriteToolUI,
+      OpenCodeWriteView,
       toolPart(
         "write",
         { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
@@ -751,7 +808,10 @@ const BODY_RENDERERS = [
   ["read", OpenCodeReadToolUI, { filePath: "D:\\Temp\\ai-chat-app\\package.json" }],
   ["glob", OpenCodeGlobToolUI, { pattern: "**/*.tsx" }],
   ["grep", OpenCodeGrepToolUI, { pattern: "approval", path: "D:\\Temp\\ai-chat-app\\web\\src" }],
-  ["write", OpenCodeWriteToolUI, { filePath: "D:\\ws\\b.ts", content: "x" }],
+  // The pure view, not the registered wrapper: the wrapper reads the pending
+  // patch through a hook that needs an AuiProvider, which this bare
+  // `renderToStaticMarkup` table has no way to supply. Same split as `edit`.
+  ["write", OpenCodeWriteView, { filePath: "D:\\ws\\b.ts", content: "x" }],
   ["task", OpenCodeTaskToolUI, { description: "d", prompt: "p", subagent_type: "general" }],
   ["webfetch", OpenCodeWebFetchToolUI, { url: "https://example.com" }],
   ["skill", OpenCodeSkillToolUI, { name: "brainstorming" }],

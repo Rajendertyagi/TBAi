@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { stripComments } from "@/testing/source-scope";
-import { ToolElapsed } from "./elapsed";
+import { ToolElapsed, formatDuration } from "./elapsed";
 
 /**
  * The duration badge's contract, and the regression it exists to prevent.
@@ -84,10 +84,77 @@ describe("ToolElapsed presentation contract", () => {
   });
 
   it("formats seconds with one decimal, matching the hook's own example", () => {
-    expect(source).toContain("(elapsedMs / 1000).toFixed(1)");
+    // The expression moved into `formatDuration` when long spans stopped
+    // rendering as `3618.8s`. The one-decimal seconds form is still the rule for
+    // anything under a minute, so the guard follows the rule rather than the old
+    // inline position.
+    expect(source).toContain("(safe / 1000).toFixed(1)");
+  });
+
+  it("routes the rendered value through the formatter, not an inline expression", () => {
+    // A direct source guard, because the formatter is the only thing standing
+    // between a three-hour build and a card reading `11423.8s`. If a later change
+    // inlines a second format next to it, this fails.
+    expect(source).toContain("{formatDuration(elapsedMs)}");
   });
 
   it("returns null rather than a zero when there is no timing", () => {
     expect(source).toContain("if (elapsedMs === undefined) return null;");
+  });
+});
+
+describe("formatDuration", () => {
+  it("keeps the library's own form under a minute, which is what it is good at", () => {
+    expect(formatDuration(0)).toBe("0.0s");
+    expect(formatDuration(400)).toBe("0.4s");
+    expect(formatDuration(1400)).toBe("1.4s");
+    expect(formatDuration(12_340)).toBe("12.3s");
+    expect(formatDuration(59_999)).toBe("60.0s");
+  });
+
+  it("switches to minutes and seconds at exactly a minute", () => {
+    // The boundary is pinned in both directions: 59.999s is still "60.0s", and
+    // 60.0s is "1m 00s". A fence that only just fits is the case an off-by-one
+    // hides, because both sides look plausible.
+    expect(formatDuration(59_999)).toBe("60.0s");
+    expect(formatDuration(60_000)).toBe("1m 00s");
+    expect(formatDuration(134_000)).toBe("2m 14s");
+    expect(formatDuration(3_599_000)).toBe("59m 59s");
+  });
+
+  it("switches to hours at exactly an hour, and drops seconds", () => {
+    // The value this was written for: a real failed `shell` call rendered
+    // `3618.8s`, which no reader can parse at a glance.
+    expect(formatDuration(3_618_800)).toBe("1h 00m");
+    expect(formatDuration(3_660_000)).toBe("1h 01m");
+    expect(formatDuration(3_661_900)).toBe("1h 01m");
+    expect(formatDuration(7_500_000)).toBe("2h 05m");
+  });
+
+  it("zero-pads the second unit so the badge width does not jump", () => {
+    // The value ticks once a second while a call runs, so a changing digit
+    // width shoves the row around. This is the same reason the badge uses
+    // `tabular-nums`.
+    expect(formatDuration(65_000)).toBe("1m 05s");
+    expect(formatDuration(610_000)).toBe("10m 10s");
+    expect(formatDuration(3_690_000)).toBe("1h 01m");
+  });
+
+  it("treats a nonsense duration as zero rather than printing NaN", () => {
+    // A badge that reads "NaNs" is worse than one that reads "0.0s": the first
+    // looks like a bug in the card, the second is a number about a call that
+    // just started.
+    expect(formatDuration(Number.NaN)).toBe("0.0s");
+    expect(formatDuration(Number.POSITIVE_INFINITY)).toBe("0.0s");
+    expect(formatDuration(-5000)).toBe("0.0s");
+  });
+
+  it("never emits a unit the reader has to decode", () => {
+    // A property rather than more examples: whatever the input, the result is one
+    // of the three documented shapes and nothing else. A fourth format creeping
+    // in for some range would show up here.
+    for (const ms of [0, 999, 59_999, 60_000, 134_000, 3_599_999, 3_618_800, 86_400_000]) {
+      expect(formatDuration(ms)).toMatch(/^\d+\.\d+s$|^\d+m \d{2}s$|^\d+h \d{2}m$/);
+    }
   });
 });

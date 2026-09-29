@@ -455,15 +455,68 @@ export const OpenCodeEditToolUI: ToolCallMessagePartComponent = (
 };
 OpenCodeEditToolUI.displayName = "OpenCodeToolUI(edit)";
 
-/** `write` — OpenCode args are `{ content, filePath }`. */
-export const OpenCodeWriteToolUI = openCodeView({
-  tool: "write",
-  title: (args) => toolsConfig.copy.toolTitle(toolsConfig.copy.tool.write, str(args.path)),
-  targetPath: (args) => str(args.path),
-  argPreview: contentPreview,
-  runningLabel: toolsConfig.copy.running.writing,
-  summarize: body,
-});
+/**
+ * `write` — OpenCode args are `{ content, filePath }`.
+ *
+ * The gate shows the change the write would make, from the same pre-computed
+ * patch the `edit` gate uses. A whole-file write has no old text, so the raw
+ * argument preview was a wall of the new file's contents: a reviewer scrolled a
+ * file to answer "is this the change I want?", with no indication of which lines
+ * are new because all of them are.
+ *
+ * The server answers this without any synthesis. Verified live: a pending
+ * `write` arrives with `metadata.files[].patch` carrying a proper new-file
+ * unified diff,
+ *
+ *     --- written.txt
+ *     +++ written.txt
+ *     @@ -0,0 +1,5 @@
+ *     +# written by probe
+ *     +
+ *
+ * so the existing `patchToCodeDiffs` + `CodeDiff` path renders it unchanged and
+ * every line reads as an addition. No diff is generated in this app.
+ *
+ * Explicit rather than built on `openCodeView`, because the factory has no
+ * access to the tool call id or the message metadata that carries the patch -
+ * and a hook cannot be added to it conditionally, since ten other renderers use
+ * it. This is the same pure-view-plus-wrapper split `edit` already uses.
+ */
+export const OpenCodeWriteView = ({
+  pendingPatch,
+  ...p
+}: AnyProps & { pendingPatch?: string | null }) => {
+  const args = normalizeOpenCodeArgs("write", p.args) ?? {};
+  const path = str(args.path);
+  const pendingFiles = usableDiffFiles(pendingPatch);
+  return (
+    <BackendToolView
+      title={toolsConfig.copy.toolTitle(toolsConfig.copy.tool.write, path)}
+      args={args}
+      argPreview={
+        pendingFiles.length > 0 ? (
+          <PatchFiles files={pendingFiles} fallbackName={path} />
+        ) : (
+          contentPreview(args)
+        )
+      }
+      result={normalizeOpenCodeResult("write", p.result)}
+      status={p.status}
+      isError={p.isError}
+      approval={p.approval}
+      respondToApproval={p.respondToApproval}
+      runningLabel={toolsConfig.copy.running.writing}
+      summarize={body}
+      tool="write"
+      targetPath={path}
+    />
+  );
+};
+
+export const OpenCodeWriteToolUI: ToolCallMessagePartComponent = (
+  p: AnyProps,
+) => <OpenCodeWriteView {...p} pendingPatch={useOpenCodePendingPatch(p.toolCallId)} />;
+OpenCodeWriteToolUI.displayName = "OpenCodeToolUI(write)";
 
 /**
  * `bash` — OpenCode args are `{ command, timeout?, workdir? }`.

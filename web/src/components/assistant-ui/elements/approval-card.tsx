@@ -19,6 +19,29 @@
  * button renders **only when its callback is supplied**. So "hide the option the
  * host did not offer" is expressed by *not passing* that callback, with no fork
  * and no prop added. See `features/permissions/approvalOptionMapping.ts`.
+ *
+ * ## THIS FILE IS CURRENTLY UNUSED — the app-owned card is canonical
+ *
+ * Nothing imports it. Every gate renders
+ * `components/shared/approval-card.tsx`, which exports an `ApprovalCard` of the
+ * same name: a different component, with no import between the two.
+ *
+ * That shared card is the deliberate successor, not a reimplementation by
+ * accident. It carries decisions upstream does not: the `--card-soft` /
+ * `--card-outline` theme tokens in place of a hard border, the `p-5` bulk that
+ * replaced a `min-h-[140px]` floor (which reserved dead space under one-line
+ * results), the `secondary` button step that a `sm`/`solid` surface requires for
+ * contrast, the 150ms-in / 100ms-out motion, and `CARD_SURFACE`, which the
+ * OpenCode question dock shares so two cards cannot drift apart. Each of those
+ * is documented at its definition.
+ *
+ * The file is kept rather than deleted because the assistant-ui dependency
+ * train is frozen, and a vendored element is part of that set. It is left here so
+ * a future `assistant-ui add` run reconciles against the registry rather than
+ * against a local edit.
+ *
+ * So: if you are here looking for the approval card to use, use
+ * `components/shared/approval-card.tsx`. This one is reference.
  */
 
 import {

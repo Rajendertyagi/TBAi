@@ -109,6 +109,58 @@ function useHasPartScope(): boolean {
 }
 
 /**
+ * Formats a duration for the badge, in three ranges.
+ *
+ * ## Why this exists
+ *
+ * The library documents one format, `{(elapsedMs / 1000).toFixed(1)}s`, and this
+ * file used exactly that. It is right for the case it was written for — a tool
+ * call that takes a moment — and wrong for anything longer. A real failed
+ * `shell` call rendered `3618.8s`, which is a number no reader can parse at a
+ * glance, on a card whose whole purpose is to be scanned.
+ *
+ * OpenChamber has the same line and the same problem (`ToolPart.tsx:126`,
+ * `MessageBody.tsx:206`, `telemetry.ts:83`), so there was no reference to copy
+ * and the shape below is a decision, not a port.
+ *
+ * | Range | Form | Why |
+ * |---|---|---|
+ * | under a minute | `12.3s` | the library's own form, and the case it is good at |
+ * | under an hour | `2m 14s` | the two units a reader actually compares against |
+ * | an hour and up | `1h 03m` | seconds stop mattering at this scale, so they are dropped |
+ *
+ * Seconds are dropped past an hour rather than shown, because `1h 00m 03s` is
+ * three units of noise for the same fact as `1h 00m`, and the minute is
+ * zero-padded so the width does not jump between values.
+ *
+ * ## Why not a library
+ *
+ * `Intl.DurationFormat` is the platform answer and is not used, for two
+ * reasons. It is unavailable or inconsistent across the browsers this app
+ * targets, and its default output is verbose for a badge — it spells out
+ * "1 hour, 2 minutes" rather than the compact form a card can afford. The whole
+ * rule is three branches; a dependency or a polyfill would be more code and more
+ * risk than the function it replaces.
+ *
+ * @param ms - Elapsed milliseconds. Non-finite or negative values read as zero.
+ * @returns A compact, human-comparable duration.
+ */
+export function formatDuration(ms: number): string {
+  // Sanitise once, up front. `Math.max(NaN, 0)` is still `NaN`, so clamping at
+  // the point of use renders "NaNs" — a badge that looks like a bug in the card.
+  const safe = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const totalSeconds = Math.floor(safe / 1000);
+  if (totalSeconds < 60) {
+    return `${(safe / 1000).toFixed(1)}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m ${String(totalSeconds % 60).padStart(2, "0")}s`;
+  }
+  return `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, "0")}m`;
+}
+
+/**
  * The duration badge, safe to mount outside a message part.
  *
  * The library hook is the source of truth; this only decides whether it can be
@@ -140,7 +192,7 @@ function ElapsedValue({ className }: { className?: string }) {
         className,
       )}
     >
-      {(elapsedMs / 1000).toFixed(1)}s
+      {formatDuration(elapsedMs)}
     </span>
   );
 }
