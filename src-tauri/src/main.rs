@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use fs2::FileExt;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -184,6 +184,33 @@ fn quit_app(app: AppHandle) {
     quit_owned(&app);
 }
 
+/// Bring the main window to the foreground: unminimize, unhide, then focus.
+/// `set_focus` alone is not enough — tao skips it while the window is hidden
+/// or minimized — and the ❌ close button hides the window to the tray, so
+/// every reveal path (startup, tray menu, tray click) goes through this one
+/// sequence.
+fn show_main_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+/// True only for a left-button click-release on the tray icon — the gesture
+/// that reveals the main window. Right-click (and any other button/state) is
+/// the OS's context-menu gesture and must never move the window.
+fn is_tray_left_click_up(event: &TrayIconEvent) -> bool {
+    matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        }
+    )
+}
+
 fn render_error(win: &tauri::WebviewWindow, port: u32, state: &str, sidecar: &str, reason: &str) {
     let page = STARTUP_ERROR_HTML
         .replace("{{PORT}}", &port.to_string())
@@ -195,8 +222,7 @@ fn render_error(win: &tauri::WebviewWindow, port: u32, state: &str, sidecar: &st
     // payload is JSON-encoded, never interpolated raw into script.
     let encoded = serde_json::to_string(&page).unwrap_or_else(|_| "\"\"".to_string());
     let _ = win.eval(format!("document.open();document.write({encoded});document.close();"));
-    let _ = win.show();
-    let _ = win.set_focus();
+    show_main_window(win.app_handle());
 }
 
 fn navigate_verified(win: &tauri::WebviewWindow, port: u32, minimized: bool) {
@@ -223,10 +249,7 @@ fn navigate_verified(win: &tauri::WebviewWindow, port: u32, minimized: bool) {
     std::thread::spawn(move || {
         std::thread::sleep(SHOW_FALLBACK);
         if app.state::<StartupOwned>().show_on_load.swap(false, Ordering::SeqCst) {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            show_main_window(&app);
         }
     });
 }
@@ -440,6 +463,22 @@ fn main() {
         ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                // SIZE | POSITION | MAXIMIZED only. VISIBLE is deliberately
+                // excluded: the plugin would show()+focus() the window on
+                // ready, breaking the `visible: false` + page-load-gated
+                // reveal. DECORATIONS is excluded because TBAi is undecorated
+                // by design (a stale saved `true` would re-add the native
+                // title bar). FULLSCREEN is unused.
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .with_filename("window.json")
+                .build(),
+        )
         // Tauri's documented pattern for a `visible: false` main window: reveal
         // it on PageLoadEvent::Finished rather than at navigation time. This is
         // the half that removes the startup flash. The `swap` is the atomic
@@ -455,8 +494,7 @@ fn main() {
             }
             let app = webview.app_handle();
             if app.state::<StartupOwned>().show_on_load.swap(false, Ordering::SeqCst) {
-                let _ = webview.window().show();
-                let _ = webview.window().set_focus();
+                show_main_window(app);
             }
         })
         .setup(|app| {
@@ -501,23 +539,19 @@ fn main() {
                         .icon(icon)
                         .tooltip("TBAi")
                         .menu(&menu)
+                        // Left-click reveals the window via the Click handler
+                        // below; the OS must not also pop the menu on it.
+                        // Right-click keeps showing the menu — that is the
+                        // OS's job, not ours.
+                        .show_menu_on_left_click(false)
                         .on_menu_event(|app, event| match event.id.as_ref() {
-                            "open" => {
-                                if let Some(win) = app.get_webview_window("main") {
-                                    let _ = win.show();
-                                    let _ = win.set_focus();
-                                }
-                            }
+                            "open" => show_main_window(app),
                             "quit" => quit_owned(app),
                             _ => {}
                         })
                         .on_tray_icon_event(|tray, event| {
-                            if matches!(event, TrayIconEvent::Click { .. }) {
-                                let app = tray.app_handle();
-                                if let Some(win) = app.get_webview_window("main") {
-                                    let _ = win.show();
-                                    let _ = win.set_focus();
-                                }
+                            if is_tray_left_click_up(&event) {
+                                show_main_window(tray.app_handle());
                             }
                         })
                         .build(app)?;
@@ -567,4 +601,56 @@ fn main() {
         .invoke_handler(tauri::generate_handler![retry_startup, quit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::tray::TrayIconId;
+
+    fn click(button: MouseButton, button_state: MouseButtonState) -> TrayIconEvent {
+        TrayIconEvent::Click {
+            id: TrayIconId::new("main"),
+            position: tauri::PhysicalPosition::default(),
+            rect: tauri::Rect::default(),
+            button,
+            button_state,
+        }
+    }
+
+    #[test]
+    fn left_click_up_is_the_reveal_gesture() {
+        assert!(is_tray_left_click_up(&click(
+            MouseButton::Left,
+            MouseButtonState::Up
+        )));
+    }
+
+    #[test]
+    fn right_click_never_reveals() {
+        assert!(!is_tray_left_click_up(&click(
+            MouseButton::Right,
+            MouseButtonState::Up
+        )));
+        assert!(!is_tray_left_click_up(&click(
+            MouseButton::Right,
+            MouseButtonState::Down
+        )));
+    }
+
+    #[test]
+    fn left_click_press_does_not_reveal() {
+        assert!(!is_tray_left_click_up(&click(
+            MouseButton::Left,
+            MouseButtonState::Down
+        )));
+    }
+
+    #[test]
+    fn middle_click_never_reveals() {
+        assert!(!is_tray_left_click_up(&click(
+            MouseButton::Middle,
+            MouseButtonState::Up
+        )));
+    }
 }

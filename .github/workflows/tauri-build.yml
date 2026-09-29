@@ -93,7 +93,9 @@ jobs:
       # Type-check the shell BEFORE the full build. `tauri build` is a complete
       # compile with codegen and takes ~10 minutes, so a one-line type error
       # would otherwise be discovered very late. `cargo check` does no codegen
-      # and fails in about a minute.
+      # and fails in about a minute. `--all-targets` also type-checks the
+      # `#[cfg(test)]` unit tests in main.rs — plain `cargo check` skips them,
+      # so a test that no longer compiles would otherwise rot silently.
       #
       # It still runs the tauri-build script, which validates EVERYTHING this
       # step's two predecessors must have produced. All of it is either committed
@@ -122,7 +124,7 @@ jobs:
           }
 
       - name: Type-check the Rust shell
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+        run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Build Tauri (compile, no bundle)
         run: bunx tauri build --target x86_64-pc-windows-msvc

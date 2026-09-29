@@ -13,6 +13,9 @@
     }
   },
   "app": {
+    "appDirectoriesOverride": {
+      "config": "./data"
+    },
     "windows": [
       {
         "label": "main",
