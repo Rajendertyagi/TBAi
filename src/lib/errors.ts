@@ -26,6 +26,17 @@ export type ErrorCategory =
   | "lifecycle"
   | "runtime"
   | "transport"
+  /**
+   * The request exceeded the model's context window. Added by Phase 2 because
+   * Phase 1 established (F7) that this was indistinguishable from a
+   * configuration error, which made it both misreported and unactionable: the
+   * user was told to "retry or pick another provider/model", and retrying an
+   * oversized request reproduces it.
+   *
+   * Deliberately NOT retryable. The remediation is to shrink the context or
+   * change model, never to send the same request again.
+   */
+  | "context_overflow"
   | "unknown";
 
 export interface ClassifiedError {
@@ -54,6 +65,33 @@ const CONFIG_RE =
   /invalid model|model.*not found|invalid.*provider|invalid.*cron|not found|workspace|outside the workspace|approval|refus|permission denied|user approval required/i;
 const TOOL_SUBJECT_RE = /tool|mcp/i;
 const TOOL_OUTCOME_RE = /error|fail/i;
+
+/**
+ * Context-window overflow, as providers actually word it.
+ *
+ * Phase 1 finding F7: an oversized request was classified into the generic
+ * `config` bucket and the user was told "Generation failed. Retry or pick another
+ * provider/model." — which is both wrong and unactionable, because retrying an
+ * oversized request reproduces it. With `DIRECT_MAX_RETRIES = 0`
+ * (`chat.ts:54-55`) nothing retried it either, so the user simply got a
+ * misleading message.
+ *
+ * This is a COARSE category rather than a refinement, and is matched AHEAD of
+ * the 4xx/config branch on purpose: an overflow arrives as a 400, so without
+ * precedence the status line would claim it first. It is matched ahead of
+ * `CANCELLED_RE` too, because "maximum context length" prose does not collide
+ * with the cancel vocabulary but a provider may append it to a 400 body.
+ *
+ * Patterns are provider-worded, not invented: Anthropic says
+ * "prompt is too long" / "input length and `max_tokens` exceed context limit";
+ * OpenAI says "maximum context length" / "reduce the length of the messages";
+ * Google says "prompt is too long" / "input length exceeds the maximum"; the
+ * common AI SDK wording is "context length" / "context window" / "too many
+ * tokens". The vocabulary is broad on purpose: a miss here degrades to the old
+ * generic message, and a false positive would misreport an unrelated 400.
+ */
+const CONTEXT_OVERFLOW_RE =
+  /prompt is too long|context length|context window|maximum context|exceeds context|input length (is )?(too )?(long|exceeds)|too many tokens|reduce the length of the messages|exceeds the maximum|input is too long|request too large for/i;
 
 // ---------------------------------------------------------------------------
 // Refinement markers. These split the two COARSE buckets (`config`, `unknown`)
@@ -172,6 +210,11 @@ export function classifyError(err: unknown, opts?: { provider?: string }): Class
   let base: ErrorCategory = "unknown";
   if (CANCELLED_RE.test(text)) base = "cancelled";
   else if (status === 401 || status === 403 || AUTH_RE.test(text)) base = "auth";
+  // Ahead of the 4xx/config branch: an overflow ARRIVES as a 400, so without
+  // this precedence the status line claims it and the user is told to change
+  // their provider. Ahead of `rate_limit` for the same reason - a quota error
+  // mentioning token counts must not be read as a size problem.
+  else if (CONTEXT_OVERFLOW_RE.test(text)) base = "context_overflow";
   else if (status === 429 || RATE_RE.test(text)) base = "rate_limit";
   // Ahead of every prose heuristic below, and behind only the two facts the
   // display layer is entitled to trust: the user cancelled, or the provider

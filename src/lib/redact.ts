@@ -58,6 +58,14 @@ export function sanitizeStreamError(error: unknown): string {
       return redact("Provider credentials invalid or missing. Check the provider API key.");
     case "rate_limit":
       return redact("Provider rate limit reached. Wait briefly and retry.");
+    case "context_overflow":
+      // Phase 2. F7 established this arrived here as a generic generation
+      // failure, so the user was told to "retry or pick another provider/model" -
+      // and retrying an oversized request reproduces it exactly. The advice is
+      // now the only advice that works, and it names both remedies.
+      return redact(
+        "This conversation is too long for the selected model's context window. Start a new chat, or switch to a model with a larger context limit.",
+      );
     case "network":
     case "timeout":
       return redact("Network error reaching the provider. Retry when online.");

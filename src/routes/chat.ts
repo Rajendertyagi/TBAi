@@ -27,6 +27,7 @@ import {
   type NativeToolSet,
   type NativeToolsContext,
 } from "../tools";
+import { assembleContext, logAssembly, logContextOverflow } from "../context";
 import { createTerminalBatcher } from "../lib/terminal-stream";
 import { resumableContext, chatStreamStore } from "../lib/resumable";
 import {
@@ -314,22 +315,30 @@ app.post("/api/chat", async (c) => {
 
   // Precise on the native side (keeps the `streamText<NativeToolSet>`
   // generic honest) while still admitting the dynamic MCP `mcp__*` tools.
+  //
+  // Phase 2: this block is the SINGLE Direct context-assembly boundary. Layers
+  // A/B/C, lifecycle repair, request-side reduction, measurement and the budget
+  // all happen inside `assembleContext` (src/context/assemble.ts). Nothing here
+  // assembles context, and nothing may bypass it - see docs/decisions.md
+  // "ADR: Direct context assembly is a hybrid explicit seam (2026-10-01)".
   let tools: NativeToolSet & Record<string, any>;
   let toolsContext: NativeToolsContext;
   let modelMessages: Awaited<ReturnType<typeof prepareModelMessages>>;
+  let assembled: Awaited<ReturnType<typeof assembleContext>>;
   try {
-    tools = {
-      ...nativeTools,
-      // Live terminal output rides a thin per-request closure: a function
-      // cannot travel in validated Zod context, so `run_command` alone is
-      // rebuilt with the tap wired in (single instrumentation, not stacked).
-      run_command: withTerminalOutput((toolCallId, event) =>
-        terminalBatcher.push(toolCallId, event),
-      ),
-      // Tool calls share the run's lifetime (survive client disconnect like
-      // the model call); explicit cancel aborts them via the run controller.
-      ...mcpManager.getAiTools(run.controller.signal),
-    };
+    assembled = await assembleContext({
+      conversationId: threadId,
+      submittedMessages: messages,
+      runId: run.streamId,
+      provider: modelConfig,
+      modelId: modelConfig.model,
+      systemPrompt: conversation?.systemPrompt,
+      terminalTap: (toolCallId, event) => terminalBatcher.push(toolCallId, event),
+      // Tool calls share the run's lifetime (survive client disconnect like the
+      // model call); explicit cancel aborts them via the run controller.
+      toolSignal: run.controller.signal,
+    });
+    tools = assembled.context.layerB.tools as NativeToolSet & Record<string, any>;
     toolsContext = buildToolsContext({
       workspaceDir,
       threadId,
@@ -338,11 +347,55 @@ app.post("/api/chat", async (c) => {
       providerId: provider.id,
       modelId: modelConfig.model,
     });
-    modelMessages = await prepareModelMessages(messages, tools, { threadId });
+    modelMessages = assembled.context.modelMessages as Awaited<
+      ReturnType<typeof prepareModelMessages>
+    >;
   } catch (err) {
     chatRuns.markFailed(run.streamId);
     throw err;
   }
+  // `chatLog` is constructed further down, so the assembly line and any
+  // pre-flight rejection are emitted through a correlation-bound child logger
+  // built here. Same bindings, constructed once.
+  const assemblyLog = logger.child({
+    requestId,
+    conversationId: threadId,
+    provider: provider.type,
+    model: modelConfig.model,
+  });
+
+  // Preflight rejection: cheaper than a provider round trip, and - because
+  // DIRECT_MAX_RETRIES = 0 (chat.ts:54-55) - the only chance to avoid spending a
+  // request that is known to be oversized. The user gets the overflow message,
+  // not the generic generation failure Phase 1 recorded as F7.
+  if (assembled.decision.action === "reject") {
+    chatRuns.markFailed(run.streamId);
+    logContextOverflow({
+      log: assemblyLog,
+      requestId,
+      conversationId: threadId,
+      diagnostics: assembled.diagnostics,
+      overByTokens: assembled.decision.overBy,
+      reason: assembled.decision.reason,
+    });
+    return c.json(
+      {
+        error:
+          "This conversation is too long for the selected model's context window. Start a new chat, or switch to a model with a larger context limit.",
+        code: "CONTEXT_OVERFLOW",
+        requestId,
+      },
+      400,
+    );
+  }
+
+  logAssembly({
+    log: assemblyLog,
+    requestId,
+    conversationId: threadId,
+    diagnostics: assembled.diagnostics,
+  });
+
   // Correlation bindings for every line this route emits: requestId (this
   // request) + conversationId (the thread) + provider/model. `operationId` is
   // inherited from the request context, so all of these lines join the user
@@ -517,10 +570,21 @@ app.post("/api/chat", async (c) => {
         messages: modelMessages,
         maxRetries: DIRECT_MAX_RETRIES,
         streamRetries: DIRECT_STREAM_RETRIES,
-        ...(conversation?.systemPrompt ? { instructions: conversation.systemPrompt } : {}),
+        // Layer A is owned by the assembly seam. The route spreads the seam's
+        // options and never names the `instructions` key, so the Direct path has
+        // exactly one system-prompt seam (asserted by
+        // ChatWindow.tool-output-once.test.ts).
+        ...assembled.context.layerA.toStreamTextOptions(),
         tools,
         toolsContext,
         stopWhen: stepCountIs(20),
+        // Phase 2: the reserved room for the response, computed in
+        // `assembleContext` from the resolved output capability. Phase 1
+        // established Direct reserved nothing (F5), which let a request occupy
+        // the whole window and leave no room to answer. This is NOT available
+        // input context: the budget already subtracted it, and adding the two
+        // would double-count.
+        maxOutputTokens: assembled.context.provenance.budget.outputReservation.tokens,
         experimental_toolApprovalSecret: approvalSecret,
         toolApproval: {
           write_file: "user-approval",
