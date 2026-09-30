@@ -71,6 +71,7 @@ describe("tool output is rendered once by TBAi", () => {
   let chatWindowSource = "";
   let markdownSource = "";
   let chatRouteSource = "";
+  let contextSeamSource = "";
 
   beforeAll(async () => {
     chatWindowSource = stripComments(
@@ -85,6 +86,12 @@ describe("tool output is rendered once by TBAi", () => {
     );
     chatRouteSource = stripComments(
       await Bun.file(new URL("../../../src/routes/chat.ts", import.meta.url)).text(),
+    );
+    // Phase 2 moved the system-prompt seam into the assembly boundary
+    // (src/context/assemble.ts). The invariant is unchanged; only its location
+    // moved, so it is now asserted across BOTH files.
+    contextSeamSource = stripComments(
+      await Bun.file(new URL("../../../src/context/assemble.ts", import.meta.url)).text(),
     );
   });
 
@@ -112,15 +119,32 @@ describe("tool output is rendered once by TBAi", () => {
 
   it("sends no TBAi-authored system prompt asking the model to repeat output", () => {
     // `instructions` is the ONLY system-prompt seam on the Direct engine, and
-    // it is wired to the user's own per-conversation field. Asserted on the
-    // assignment, so a TBAi-authored default or a second `instructions` key
-    // cannot appear without this failing.
-    const instructions = [...chatRouteSource.matchAll(/instructions:/g)];
-    expect(instructions.length).toBe(1);
-    expect(chatRouteSource).toContain(
-      "...(conversation?.systemPrompt ? { instructions: conversation.systemPrompt } : {})",
-    );
-    // And the only way it is set is a conversation field, not a constant.
+    // it is wired to the user's own per-conversation field.
+    //
+    // Phase 2: the value now flows route -> assembleContext() -> Layer A, so the
+    // assignment into `streamText` lives in `src/context/assemble.ts` rather
+    // than in the route. The INVARIANT is unchanged, so the assertion is now
+    // made across both files and is stronger than before: it pins that exactly
+    // one `instructions` assignment exists in the whole Direct path, that the
+    // route contributes nothing but the conversation field, and that no
+    // TBAi-authored constant can appear on either side of the seam.
+    const routeAssignments = [...chatRouteSource.matchAll(/instructions:/g)];
+    const seamAssignments = [...contextSeamSource.matchAll(/instructions:/g)];
+    // The route must contribute nothing: it feeds the seam the conversation
+    // field and spreads the seam's own options.
+    expect(routeAssignments.length).toBe(0);
+    expect(seamAssignments.length).toBe(1);
+
+    // The route feeds the seam the conversation field, and nothing else.
+    expect(chatRouteSource).toContain("systemPrompt: conversation?.systemPrompt");
+
+    // The single assignment lives in the seam, and yields no `instructions`
+    // argument at all when the conversation has no system prompt.
+    expect(contextSeamSource).toContain("(text ? { instructions: text } : {})");
+
+    // And the only way it is ever set is a conversation field, not a constant -
+    // checked on both sides of the seam.
     expect(chatRouteSource).not.toMatch(/instructions:\s*["'`]/);
+    expect(contextSeamSource).not.toMatch(/instructions:\s*["'`]/);
   });
 });
