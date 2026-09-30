@@ -9,6 +9,7 @@ import { BackendToolView, denialOf } from "@/tools/filesystem/ui";
 import { textPreview } from "@/tools/text-preview";
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
 import { isUnifiedDiff, patchToCodeDiffs, type CodeDiffFile } from "@/lib/patch-to-diffs";
+import { codexPatchPaths, codexPatchToDiffText } from "@/lib/codex-patch";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { resultToLines } from "@/lib/terminal-lines";
 import {
@@ -22,8 +23,6 @@ import {
   parseOpenCodeWebSearchHits,
 } from "./adapt";
 import { WebSearch } from "@/components/assistant-ui/elements/web-search";
-import { CheckCircle2, Circle } from "lucide-react";
-import type { OpenCodeTodo } from "@/features/opencode/v2Todos";
 import { toolsConfig } from "@/config/tools";
 
 type AnyArgs = Record<string, unknown>;
@@ -520,6 +519,152 @@ export const OpenCodeWriteToolUI: ToolCallMessagePartComponent = (
 OpenCodeWriteToolUI.displayName = "OpenCodeToolUI(write)";
 
 /**
+ * `patch` — OpenCode v2's multi-file patch tool. Args are `{ patchText }`.
+ *
+ * ## Why this needs its own reader
+ *
+ * `edit` and `write` carry a unified diff in `metadata.files[].patch`, and the
+ * existing `patchToCodeDiffs` path renders it. `patch` does not: its input is the
+ * Codex envelope OpenCode's own parser accepts —
+ *
+ *     *** Begin Patch
+ *     *** Add File: src/new.ts
+ *     +export const a = 1
+ *     *** End Patch
+ *
+ * — so `patchToCodeDiffs` would turn a real patch into nothing, and the card
+ * would show a header with no rows. `codexPatchToDiffText` translates the
+ * envelope into the unified diff that path already understands, so this renderer
+ * owns no diff logic at all.
+ *
+ * The grammar was read out of OpenCode 2.0.15's shipped binary, not guessed; see
+ * `@/lib/codex-patch` for the parser and the evidence.
+ *
+ * Explicit rather than built on `openCodeView`, for the reason `edit` is: the
+ * gate has to show the change under decision, and a hook cannot be added to the
+ * factory conditionally because eleven other renderers use it.
+ */
+export const OpenCodePatchView = ({
+  ...p
+}: AnyProps) => {
+  const args = normalizeOpenCodeArgs("patch", p.args) ?? {};
+  const patchText = str(args.patchText);
+  // The completed result string is OpenCode's own confirmation; the change is
+  // the patch, so the diff replaces it in the body exactly as `edit` does.
+  const files = usableDiffFiles(codexPatchToDiffText(patchText));
+  const paths = codexPatchPaths(patchText);
+  const label =
+    paths.length === 0
+      ? toolsConfig.copy.tool.patch
+      : paths.length === 1
+        ? `${toolsConfig.copy.tool.patch} · ${paths[0]}`
+        : `${toolsConfig.copy.tool.patch} · ${paths.length} files`;
+  return (
+    <BackendToolView
+      title={label}
+      args={args}
+      argPreview={
+        files.length > 0 ? (
+          <PatchFiles files={files} fallbackName={paths[0] ?? ""} />
+        ) : (
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+            {patchText}
+          </pre>
+        )
+      }
+      result={normalizeOpenCodeResult("patch", p.result)}
+      status={p.status}
+      isError={p.isError}
+      approval={p.approval}
+      respondToApproval={p.respondToApproval}
+      runningLabel={toolsConfig.copy.running.applyingPatch}
+      summarize={files.length > 0 ? () => <PatchFiles files={files} fallbackName="" /> : body}
+      tool="patch"
+    />
+  );
+};
+
+export const OpenCodePatchToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
+  <OpenCodePatchView {...p} />
+);
+OpenCodePatchToolUI.displayName = "OpenCodeToolUI(patch)";
+
+/**
+ * `execute` — OpenCode Code Mode. One tool runs a short JavaScript script that
+ * calls MCP and integration tools as functions.
+ *
+ * Args are `{ code }`; the calls it made arrive in `metadata.toolCalls` and a
+ * truncated result names its overflow file in `metadata.outputPath`. All three
+ * keys were confirmed present in OpenCode 2.0.15's own string table, and the
+ * truncation message that pairs with `outputPath` reads
+ * `... "truncated; full content saved to "`.
+ *
+ * The card leads with what the script DID rather than what it was written as:
+ * a row of the distinct tools it called, with repeat counts, because that is the
+ * question a reader has. The script itself is the argument preview, so it is on
+ * screen while the gate is open.
+ *
+ * Deliberately NOT permission-gated here. `execute` is absent from OpenCode v2's
+ * `BUILTIN_ACTIONS` (shell, edit, read, glob, grep, patch, webfetch, websearch,
+ * skill, subagent, question, external_directory), so it has no permission action
+ * to gate and a rule written for it would be inert — OpenChamber's editor
+ * deliberately drops such rules on the next save. What the script calls is what
+ * the user actually gates.
+ */
+export const OpenCodeExecuteToolUI = openCodeView({
+  tool: "execute",
+  title: () => toolsConfig.copy.tool.execute,
+  argPreview: (args) => <TextBody text={str(args.code)} />,
+  runningLabel: toolsConfig.copy.running.runningScript,
+  summarize: (_result, args) => {
+    const calls = executeToolCallsFor(args);
+    return (
+      <div className="space-y-1.5">
+        {calls.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            {calls.map((call) => (
+              <span
+                key={call.tool}
+                className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5"
+              >
+                <span className="font-medium text-foreground">{call.tool}</span>
+                {call.count > 1 && (
+                  <span className="tabular-nums text-muted-foreground">x{call.count}</span>
+                )}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <TextBody text={str(args?.code)} />
+      </div>
+    );
+  },
+});
+
+/**
+ * `execute`'s distinct tools with repeat counts, in first-seen order.
+ *
+ * Reads `metadata.toolCalls`, which is where OpenCode reports what the script
+ * called. A script that called nothing yields an empty list, and the card then
+ * shows only the script — never an invented set of tools.
+ */
+function executeToolCallsFor(args: AnyArgs | undefined): { tool: string; count: number }[] {
+  const calls = args?.metadata as { toolCalls?: unknown } | undefined;
+  const list = calls?.toolCalls;
+  if (!Array.isArray(list)) return [];
+  const order: string[] = [];
+  const counts = new Map<string, number>();
+  for (const entry of list) {
+    if (entry === null || typeof entry !== "object") continue;
+    const tool = (entry as { tool?: unknown }).tool;
+    if (typeof tool !== "string" || tool.length === 0) continue;
+    if (!counts.has(tool)) order.push(tool);
+    counts.set(tool, (counts.get(tool) ?? 0) + 1);
+  }
+  return order.map((tool) => ({ tool, count: counts.get(tool) ?? 0 }));
+}
+
+/**
  * `bash` — OpenCode args are `{ command, timeout?, workdir? }`.
  *
  * Completed output renders in the official `TerminalBlock` (the same component
@@ -664,77 +809,25 @@ export const OpenCodeSubagentToolUI = subagentView("subagent");
 /** The older spelling. Unverified; kept so such a build does not lose the card. */
 export const OpenCodeTaskToolUI = subagentView("task");
 
-/** Parses raw args.todos into typed OpenCodeTodo items. */
-function asTodoList(todos: unknown): OpenCodeTodo[] {
-  if (!Array.isArray(todos)) return [];
-  const result: OpenCodeTodo[] = [];
-  for (const item of todos) {
-    if (item && typeof item === "object") {
-      const obj = item as Record<string, unknown>;
-      const content = typeof obj.content === "string" ? obj.content : "";
-      if (!content.trim()) continue;
-      const rawStatus = typeof obj.status === "string" ? obj.status : "pending";
-      const status: OpenCodeTodo["status"] =
-        rawStatus === "in_progress" ||
-        rawStatus === "completed" ||
-        rawStatus === "cancelled"
-          ? rawStatus
-          : "pending";
-      const rawPriority = typeof obj.priority === "string" ? obj.priority : "medium";
-      const priority: OpenCodeTodo["priority"] =
-        rawPriority === "high" || rawPriority === "low" ? rawPriority : "medium";
-      result.push({ content, status, priority });
-    }
-  }
-  return result;
-}
-
-/** `todowrite` — compact historical invocation snapshot from args.todos. */
-export const OpenCodeTodoWriteToolUI = openCodeView({
-  tool: "todowrite",
-  title: (args) => {
-    const list = asTodoList(args.todos);
-    const completed = list.filter((t) => t.status === "completed").length;
-    return list.length > 0
-      ? toolsConfig.copy.toolTitle(toolsConfig.copy.tool.todowrite, toolsConfig.copy.status.completedOf(completed, list.length))
-      : toolsConfig.copy.toolTitle(toolsConfig.copy.tool.todowrite, toolsConfig.copy.tool.empty);
-  },
-  argPreview: (args) => {
-    const list = asTodoList(args.todos);
-    const completed = list.filter((t) => t.status === "completed").length;
-    return (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground py-0.5">
-        <Circle className="size-3.5 text-muted-foreground/60 shrink-0" />
-        <span>{toolsConfig.copy.running.updatingTaskList}</span>
-        {list.length > 0 && (
-          <span className="text-[11px] tabular-nums text-muted-foreground/70">
-            ({completed}/{list.length} completed)
-          </span>
-        )}
-      </div>
-    );
-  },
-  runningLabel: toolsConfig.copy.running.updatingTaskList,
-  variant: "compact",
-  summarize: (result, args) => {
-    const list = asTodoList(args?.todos);
-    const completed = list.filter((t) => t.status === "completed").length;
-    const note =
-      typeof result === "string" && result.trim().length > 0
-        ? result.trim()
-        : toolsConfig.copy.status.taskListUpdated;
-    return (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <CheckCircle2 className="size-3.5 text-muted-foreground shrink-0" />
-        <span className="font-medium text-foreground">
-          todowrite · {completed}/{list.length} completed
-        </span>
-        <span>·</span>
-        <span>{note}</span>
-      </div>
-    );
-  },
-});
+/**
+ * `todowrite` was DELETED here, and its card with it.
+ *
+ * OpenCode v2 removed the tool outright — the string does not occur once in the
+ * 200MB shipped `opencode.exe`, and OpenChamber's v2 tool list omits it. A
+ * name-keyed registry entry for a tool the server can never send is a card that
+ * can never fire, which is what made the Code surface claim a todo list it did
+ * not have: a model with no `todowrite` reports so honestly and improvises a
+ * `todo.md` file instead, and the old card never even got the chance to be
+ * wrong in public.
+ *
+ * `OpenCodeTodo` and its parser went with it, because this was their only
+ * consumer. The Code dock's live tracker (`OpenCodeTodoTracker` +
+ * `features/opencode/v2Todos.ts`) was a SECOND reader of the same tool part, so it
+ * went too: a distinction between two readers of a deleted tool is a distinction
+ * between nothing and nothing. It was already invisible — the component returned
+ * `null` on an empty list, and the list was always empty — so nothing on screen
+ * changed. The native `todo` tool is untouched and is a different tool.
+ */
 
 /** `webfetch` — required `{ url }` (+ `format?`, `timeout?`). */
 export const OpenCodeWebFetchToolUI = openCodeView({

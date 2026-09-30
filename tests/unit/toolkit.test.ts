@@ -70,18 +70,24 @@ describe("OpenCode tool-name registration", () => {
     // how `be6f75a` left this list behind while its own guard was the thing that
     // noticed. See `session-timeline.test.ts` for the same guard on the other
     // name-keyed map.
+    // `todowrite` left this list when OpenCode v2 deleted the tool, and `patch`
+    // and `execute` joined it because v2 ships both. The v2 names themselves live
+    // in `web/src/lib/opencode-v2-tools.ts`, which `opencode-v2-tools.test.ts`
+    // asserts against this registry — so this list and that constant cannot drift
+    // apart silently, which is exactly how `todowrite` rotted.
     expect([...OPENCODE_TOOL_NAMES].sort()).toEqual([
       "bash",
       "edit",
+      "execute",
       "glob",
       "grep",
+      "patch",
       "question",
       "read",
       "shell",
       "skill",
       "subagent",
       "task",
-      "todowrite",
       "webfetch",
       "websearch",
       "write",

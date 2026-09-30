@@ -18,19 +18,21 @@ import type { DataMessagePartProps } from "@assistant-ui/react";
  *
  * The name caused a concrete error: a tool-UI audit counted "three separate
  * designs for one feature" for todo lists, on the strength of this file plus
- * OpenCode's two genuinely-todo renderers. There is **one progress renderer and
- * two todo renderers**, serving two different data sources on two different
- * surfaces. The misnomer survived long enough to be written down as a finding, so
- * it is recorded here rather than only corrected.
+ * OpenCode's two genuinely-todo renderers. The misnomer survived long enough to be
+ * written down as a finding, so it is recorded here rather than only corrected.
  *
- * The two real todo renderers, for anyone looking for them:
- * `OpenCodeTodoWriteToolUI` (the Code transcript's historical `todowrite` card)
- * and `OpenCodeTodoTracker` (the Code dock's live task state). Both read
- * `todowrite` tool input. Neither is this.
+ * Those two OpenCode renderers no longer exist. Both read `todowrite`, and
+ * OpenCode v2 deleted that tool — the string occurs zero times in the shipped
+ * `opencode.exe`. `OpenCodeTodoWriteToolUI` and the Code dock's
+ * `OpenCodeTodoTracker` are both gone, so what is left is **this progress
+ * renderer and the NATIVE `todo` tool's card**, which is a different thing on a
+ * different surface. Do not look for the missing two: they were cards for a tool
+ * that no longer exists. See `docs/tool-ui-tracker.md`.
  *
- * The second reason the old name was wrong: the Direct surface has no todo tool at
- * all, so a component called `TodoList` implied a task list the engine never
- * produces.
+ * The second reason the old name was wrong, and the one that still holds: the
+ * Direct surface's only todo source is its own native `todo` tool, and nothing
+ * here is a plan the model authored — the stages are derived server-side by
+ * aggregating tool calls. Neither is this file.
  */
 export type ProgressStage = {
   id: string;

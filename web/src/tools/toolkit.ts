@@ -24,9 +24,10 @@ import {
   OpenCodeBashToolUI,
   OpenCodeEditToolUI,
   OpenCodeWriteToolUI,
+  OpenCodePatchToolUI,
+  OpenCodeExecuteToolUI,
   OpenCodeSubagentToolUI,
   OpenCodeTaskToolUI,
-  OpenCodeTodoWriteToolUI,
   OpenCodeWebFetchToolUI,
   OpenCodeWebSearchToolUI,
   OpenCodeSkillToolUI,
@@ -115,7 +116,19 @@ export const openCodeToolkit = defineToolkit({
   // rendered as a raw JSON dump. See `OpenCodeSubagentToolUI`.
   subagent: { type: "backend", render: OpenCodeSubagentToolUI },
   task: { type: "backend", render: OpenCodeTaskToolUI },
-  todowrite: { type: "backend", display: "standalone", render: OpenCodeTodoWriteToolUI },
+  // `patch` is OpenCode v2's multi-file patch tool (`apply_patch` was its v1
+  // name). It arrived unregistered, so every patch call fell through to
+  // `ToolFallback` and rendered as a raw JSON dump — the same failure shape as
+  // `subagent` above, one level worse: that was a wrong NAME for a real tool,
+  // this was a real tool with no card at all. Its input is the Codex envelope
+  // (`*** Begin Patch` / `*** Add File:` / …), not a unified diff, which is why
+  // it needs its own reader; see `@/lib/codex-patch`.
+  patch: { type: "backend", display: "standalone", render: OpenCodePatchToolUI },
+  // Code Mode: one tool running a short JS script that calls MCP and integration
+  // tools as functions. Not `display: "standalone"` and not gated — it is inline
+  // like the other reads, and OpenCode v2 has no permission action for it, so a
+  // rule written for one would be inert. What the script calls is what gates.
+  execute: { type: "backend", render: OpenCodeExecuteToolUI },
   webfetch: { type: "backend", render: OpenCodeWebFetchToolUI },
   websearch: { type: "backend", render: OpenCodeWebSearchToolUI },
   skill: { type: "backend", render: OpenCodeSkillToolUI },

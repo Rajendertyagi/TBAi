@@ -1,7 +1,6 @@
 import { useAuiState } from "@assistant-ui/react";
 import type { FormInfo, SessionFormReplyInput, SessionInfo } from "@opencode/client";
 import type { V2PermissionView } from "./v2Permissions";
-import type { OpenCodeTodo } from "./v2Todos";
 import type {
   V2DesiredSelection,
   V2ThreadState,
@@ -23,7 +22,6 @@ export interface V2RuntimeExtras {
   readonly desiredAgent: string | null;
   readonly permissions: readonly V2PermissionView[];
   readonly forms: readonly FormInfo[];
-  readonly todos: readonly OpenCodeTodo[];
   setDesiredSelection(selection: V2DesiredSelection): void;
   awaitReady(): Promise<void>;
   refresh(): Promise<void>;
@@ -44,7 +42,6 @@ export function createV2RuntimeExtras(
   controller: V2ThreadController,
   state: V2ThreadState,
   permissions: readonly V2PermissionView[],
-  todos: readonly OpenCodeTodo[],
 ): V2RuntimeExtras {
   return {
     kind: "tbai-opencode-v2",
@@ -57,7 +54,6 @@ export function createV2RuntimeExtras(
     desiredAgent: state.desiredAgent,
     permissions,
     forms: state.forms,
-    todos,
     setDesiredSelection: (selection) => controller.setDesiredSelection(selection),
     awaitReady: () => controller.awaitReady(),
     refresh: () => controller.refresh(),

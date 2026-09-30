@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { RefreshCw } from "lucide-react";
 import { AssistantRuntimeProvider, AuiConfig, Tools } from "@assistant-ui/react";
-import { DevToolsModal } from "@assistant-ui/react-devtools";
+import { DevToolsGate } from "@/components/DevToolsGate";
 import { ChatWindow } from "@/components/ChatWindow";
 import { ThreadBootSkeleton } from "@/components/assistant-ui/elements/thread-boot-skeleton";
 import { appToolkit } from "@/tools/toolkit";
@@ -28,7 +28,6 @@ import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
 import { OpenCodeQuestions } from "./OpenCodeQuestions";
 import { OpenCodeSessionRow } from "./OpenCodeSessionRow";
-import { OpenCodeTodoTracker } from "./OpenCodeTodoTracker";
 
 /**
  * Code-mode surface. Renders the shared ChatWindow with mode="agent" inside a
@@ -291,7 +290,6 @@ function AgentRuntime({
           <div className="flex h-full min-h-0 flex-col">
             <OpenCodeSessionRow />
             <OpenCodePermissions />
-            <OpenCodeTodoTracker sessionId={sessionId} />
             <div className="min-h-0 flex-1">
               <ChatWindow
                 mode="agent"
@@ -302,7 +300,7 @@ function AgentRuntime({
               />
             </div>
           </div>
-          <DevToolsModal />
+          <DevToolsGate />
         </AssistantRuntimeProvider>
       </OpenCodeRuntimeContext.Provider>
     </OpenCodeIsolationBoundary>

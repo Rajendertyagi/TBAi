@@ -5,7 +5,6 @@ import {
   type ExternalStoreAdapter,
   type ThreadMessage,
 } from "@assistant-ui/react";
-import { deriveLatestOpenCodeTodos } from "./v2Todos";
 import {
   projectV2Permission,
   toV2PermissionReply,
@@ -50,7 +49,7 @@ export function createV2RuntimeStore(
     headId: repositoryHeadId(repositoryItems),
   });
   const permissions = permissionViews(state);
-  const extras = createV2RuntimeExtras(controller, state, permissions, deriveLatestOpenCodeTodos(state));
+  const extras = createV2RuntimeExtras(controller, state, permissions);
   const adapter: ExternalStoreAdapter<ThreadMessage> & { readonly extras: V2RuntimeExtras } = {
     messageRepository,
     isLoading: state.load.type !== "ready",

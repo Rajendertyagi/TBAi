@@ -67,6 +67,11 @@ const TOOL_META: Record<string, { verb: string; icon: LucideIcon }> = {
   shell: { verb: "Ran", icon: TerminalIcon },
   edit: { verb: "Edited", icon: PencilIcon },
   write: { verb: "Wrote", icon: FilePlusIcon },
+  // v2 names. `patch` replaced `apply_patch` and `execute` is its Code Mode
+  // tool; both were unregistered until now, so both rows below the timeline
+  // printed the literal tool name and a terminal icon.
+  patch: { verb: "Patched", icon: PencilIcon },
+  execute: { verb: "Ran script", icon: TerminalIcon },
   // `subagent` is the name verified against the live server; `task` is the older
   // spelling, kept because the same renderer is registered under both. This map
   // is a SECOND name-keyed lookup (the first is `appToolkit` in
@@ -75,7 +80,12 @@ const TOOL_META: Record<string, { verb: string; icon: LucideIcon }> = {
   // delegated call ended up reading "subagent" with a terminal icon.
   subagent: { verb: "Delegated", icon: ListChecksIcon },
   task: { verb: "Delegated", icon: ListChecksIcon },
-  todowrite: { verb: "Tracked todo", icon: ListChecksIcon },
+  // `todowrite` was here and is GONE on purpose. OpenCode v2 deleted the tool
+  // outright — the string occurs zero times in the shipped `opencode.exe` — so
+  // this row claimed "Tracked todo" for a card that could never fire. A v2 model
+  // with no todo tool says so truthfully and improvises a `todo.md` file instead,
+  // which is worse than no card at all. `todo` below is the NATIVE tool and is a
+  // different, working thing; do not confuse the two.
   webfetch: { verb: "Fetched", icon: GlobeIcon },
   websearch: { verb: "Searched web", icon: SearchIcon },
   skill: { verb: "Used skill", icon: ListChecksIcon },
@@ -122,18 +132,27 @@ function firstString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * Tools whose call means a file changed, so a turn counts them as one.
+ *
+ * `patch` is here because OpenCode v2 uses it in place of `apply_patch` and it
+ * rewrites files exactly as `edit` does. It was missing, so a turn that patched
+ * three files reported none of them — the same class of bug as the `0 files
+ * changed` label this function was written to fix, reached the other way.
+ */
+const FILE_CHANGE_TOOLS: ReadonlySet<string> = new Set([
+  "edit_file",
+  "write_file",
+  "edit",
+  "write",
+  "patch",
+]);
+
 /** File-change counts, from the edit/write tools that report them. Exported for testing. */
 export function toStats(parts: readonly ToolCallMessagePart[]): TimelineStat[] {
   const stats: TimelineStat[] = [];
   for (const part of parts) {
-    if (
-      part.toolName !== "edit_file" &&
-      part.toolName !== "edit" &&
-      part.toolName !== "write_file" &&
-      part.toolName !== "write"
-    ) {
-      continue;
-    }
+    if (!FILE_CHANGE_TOOLS.has(part.toolName)) continue;
     // The part's own artifact first: it is computed from the tool's actual patch,
     // so it is right even for a tool whose result object reports no line counts.
     // On the Code surface this is the ONLY source, and before it existed the

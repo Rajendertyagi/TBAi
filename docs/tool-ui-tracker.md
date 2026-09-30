@@ -231,9 +231,22 @@ todo list and never was:
 - The **Direct** surface has no todo tool at all, so a component called
   `TodoList` implied a task list the engine never produces.
 
-So the real shape is **one progress renderer and two todo renderers**, over two
+So the real shape is **one progress renderer and one todo renderer**, over two
 data sources on two surfaces. Renamed to `progress-stages.tsx` / `ProgressStages`,
 with the reason recorded in the file so the misnomer cannot come back as a finding.
+
+> **This section is now half historical.** The second todo renderer it describes —
+> OpenCode's `todowrite` — was **removed**, because OpenCode v2 deleted the tool.
+> So "one progress renderer and two todo renderers" was correct when written and
+> is one renderer short today. The finding stands as written for the `TodoList`
+> misnomer, which was real and is still fixed; the surviving todo renderer is the
+> NATIVE `todo` tool, verified working. See *`todowrite` was a card for a tool
+> OpenCode v2 deleted* for the proof and what replaced the missing half.
+>
+> The lesson is about this file, not about todos. This section stated the correct
+> finding — *"the tool depends on does not exist in this OpenCode build"* — and the
+> coverage table kept listing the tool as a working card for longer than anyone
+> noticed. **A note that contradicts a table does not correct the table.**
 
 The atlas also claimed none of the three "can be seen", because "the tool depends
 on does not exist in this OpenCode build". That is right about OpenCode's
@@ -242,12 +255,17 @@ on does not exist in this OpenCode build". That is right about OpenCode's
 because "unreachable" is the kind of note that stops anyone from looking — and it
 was wrong about the one renderer that is reachable.
 
-**What was left alone, deliberately.** The two genuine todo renderers do overlap:
-the Code transcript's `OpenCodeTodoWriteToolUI` and the Code dock's
-`OpenCodeTodoTracker` both read the latest `todowrite` input. That is not
-duplication, it is the same distinction already drawn for diffs: a tool card is
-the **historical record** of a call, the dock is **current state**. Collapsing them
-would delete one or the other, and the record is the more valuable of the pair.
+**What was left alone, deliberately — and why that reasoning no longer applied.**
+The original judgement was that the two genuine todo renderers overlap without
+being duplication: the Code transcript's `OpenCodeTodoWriteToolUI` and the Code
+dock's `OpenCodeTodoTracker` both read the latest `todowrite` input, and that is
+the same distinction drawn for diffs — a tool card is the **historical record** of
+a call, the dock is **current state**.
+
+That reasoning was sound and the premise under it was not. Both readers keyed on
+`todowrite`, so once v2 deleted the tool the card was gone and the dock had
+nothing left to read. **A distinction between two readers of a deleted tool is a
+distinction between nothing and nothing.** Both are now removed.
 
 #### An unresolved question found on the way: does the progress panel survive a reload?
 
@@ -465,7 +483,27 @@ feature, it was guarding a **file path**.
 
 ---
 
-## Needs a decision — do not start without one
+## Needs a decision - do not start without one
+
+### The Code dock's todo panel — REMOVED
+
+Decided and done, after being listed here as a live decision.
+
+`features/opencode/v2Todos.ts` derived todos by scanning message parts for
+`part.name === "todowrite"`. OpenCode v2 deleted that tool, so
+`OpenCodeTodoTracker` had no input and could never populate. Removed: the panel,
+the reader, its test, the `todos` field on `V2RuntimeExtras`, the derivation call
+in `v2RuntimeStore`, and three copy strings that lost their only consumer.
+
+**Nothing on screen changed, and that is the point worth recording.** The
+component already began `if (!extras || todos.length === 0) return null;`, and the
+list was always empty, so it was rendering nothing at all. It was not a visible
+broken panel — it was a dead component that happened to be mounted. That is the
+more insidious half of this defect class: the *card* looked fine because it never
+drew either, and only reading the code showed there was nothing underneath.
+
+The native `todo` tool is a different tool on a different surface and is
+untouched — it was verified working live against a real turn.
 
 These are not fixes. Each needs a judgement call first.
 ### ~~Direct-chat edit preview~~ — DONE (`93ecc8b`), and the reasoning was wrong
@@ -587,10 +625,10 @@ sweep would have churned a frozen dependency and a settings schema to fix nothin
 
 ---
 
-## Tool coverage — all 29 registered tools
+## Tool coverage - all 30 registered tools
 
-Authoritative count, read from `web/src/tools/toolkit.ts`: **15 native + 14
-OpenCode = 29 registered tool names.** Every entry is `type: "backend"` —
+Authoritative count, read from `web/src/tools/toolkit.ts`: **15 native + 15
+OpenCode = 30 registered tool names.** Every entry is `type: "backend"` —
 render-only, name-keyed. The registry is the single boundary; MCP and dynamic
 tools are deliberately *not* registered and fall through to `ToolFallback`.
 
@@ -637,7 +675,7 @@ Six native tools gate via `toolApproval` in `src/routes/chat.ts:525-532`:
 in that map — it gates through the tool-level `needsApproval` on its `action`
 discriminant instead, which is the only way to gate one tool per call.
 
-### OpenCode (14)
+### OpenCode (15)
 
 Gating differs: OpenCode emits its own `permission.asked` events, projected onto
 the tool part as an assistant-ui `approval` with `allow-once` / `allow-always` /
@@ -654,11 +692,57 @@ the tool part as an assistant-ui `approval` with `allow-once` / `allow-always` /
 | 22 | `write` | `ResultBody`; gate shows the **new-file diff** | diff | **yes** |
 | 23 | `subagent` | `ResultBody`; gate previews the prompt. **The name the live server sends** | body | no |
 | 24 | `task` | same renderer. **Unverified older spelling**, registered so such a build does not lose the card | body | no |
-| 25 | `todowrite` | compact row + count | body | no |
-| 26 | `webfetch` | `ResultBody` | body | in practice |
-| 27 | `websearch` | **`WebSearch`** + provider caption | web | in practice |
-| 28 | `skill` | `ResultBody` | body | no |
-| 29 | `question` | read-only receipt; answered on the question dock | body | n/a |
+| 25 | `patch` | **`CodeDiff`** per file, from the Codex envelope | diff | covered by `edit` |
+| 26 | `execute` | the tools the script called, then the script | body | **no such action** |
+| 27 | `webfetch` | `ResultBody` | body | in practice |
+| 28 | `websearch` | **`WebSearch`** + provider caption | web | in practice |
+| 29 | `skill` | `ResultBody` | body | no |
+| 30 | `question` | read-only receipt; answered on the question dock | body | n/a |
+
+Two rows here were wrong until now, in opposite directions, and both are
+explained below: `todowrite` was a card for a tool OpenCode v2 **deleted**, and
+`patch`/`execute` were real v2 tools with **no card at all**.
+
+### `patch` and `execute`: two v2 tools that had no card
+
+`patch` and `execute` are both in OpenCode v2's tool set and neither was
+registered, so every call fell through to `ToolFallback` and rendered as a raw
+JSON dump. That is the same failure shape as the delegated-agent tool
+(`be6f75a`) and one level worse: that was a wrong *name* for a real tool, these
+were real tools with no name at all.
+
+**`patch` needed a reader as well as a card.** `edit` and `write` carry a
+unified diff in `metadata.files[].patch` and go through `patchToCodeDiffs`.
+`patch` does not: its input is the Codex envelope
+
+    *** Begin Patch
+    *** Add File: src/new.ts
+    +export const a = 1
+    *** Update File: src/old.ts
+    @@
+    -const gone = 1
+    +const here = 1
+    *** End Patch
+
+so `patchToCodeDiffs` would turn a real patch into nothing and the card would
+show a header with no rows. `web/src/lib/codex-patch.ts` translates the
+envelope into the unified diff that path already understands, so the renderer
+owns no diff logic and the diff rules stay in one place. **The grammar was read
+out of OpenCode 2.0.15's own bundled parser, not inferred** — its error string
+states it verbatim: *"is not a valid hunk header. Valid hunk headers: '*** Add
+File: {path}', '*** Delete File: {path}', '*** Update File: {path}'"*.
+
+**`execute` is deliberately not gated.** It is absent from v2's
+`BUILTIN_ACTIONS` (shell, edit, read, glob, grep, patch, webfetch, websearch,
+skill, subagent, question, external_directory), so it has no permission action
+and a rule written for one would be inert — OpenChamber's editor drops such
+rules on the next save on purpose. What the script calls is what the user
+actually gates.
+
+`patch` also counts toward the turn's "N files changed", which it did not before.
+It rewrites files exactly as `edit` does, so a turn that patched three files
+reported none of them — the `0 files changed` label arriving from the opposite
+direction.
 
 ### The available element set — 23 modules
 
@@ -728,6 +812,70 @@ the omission note had been written three times over.
    moved to the live card, the test points there, and the dead component is
    deleted. The lesson is in *Open questions* below: a test that pins a **file
    path** is not guarding a feature.
+
+### `todowrite` was a card for a tool OpenCode v2 deleted
+
+A Code-mode turn reported: *"I don't have a built-in todo tool, but I can create
+and manage a todo file right here in this session"* — followed by a `write` call
+that left a real `todo.md` in a real workspace. The model was telling the truth.
+TBAi had a renderer, tests, and a row in the table above for a tool the server
+can no longer send.
+
+**The removal is not a documentation claim.** OpenCode 2.0.15's shipped
+`opencode.exe` was read as bytes and searched for each name:
+
+| Name | Occurrences in the 203 MB binary |
+|---|---|
+| `todowrite` | **0** |
+| `todoread` | **0** |
+| `multiedit` | **0** |
+| `plan_enter` / `plan_exit` | **0** / **0** |
+| `subagent` | 277 |
+| `websearch` | 97 |
+
+A removed tool is absent from the executable that implements it. Corroborated
+twice over: OpenChamber's v2 client states in its own source that
+*"`todowrite`, `todoread`, `lsp`, `multiedit` and `list` are gone"*, and a live v2
+session returns an empty catalog for both `search("todo")` and
+`search("todowrite")`.
+
+**`bash` and `task` were NOT removed and are still registered.** They are v1
+names v2 *renamed* (`bash` → `shell`, `task` → `subagent`), and an inert
+registry entry costs one line while protecting a build that still sends the old
+name. Deleting them would be the exact regression `be6f75a` fixed.
+
+**Why nothing caught it.** Three reasonable properties, none sufficient alone:
+
+1. The registry is name-keyed, so an entry for a name the server never sends is
+   simply never consulted.
+2. `type: "backend"` does **not** require a `render`. Verified directly:
+   registering a tool with no renderer at all still passes `tsc --noEmit`. So a
+   missing card is not a compile error.
+3. `TOOL_META`'s miss falls back to `verb: part.toolName`, which is well-formed —
+   an unknown name looks like a label rather than a gap.
+
+And this file made it worse: its *Open questions* section already recorded the
+correct answer (*"That is right about OpenCode's `todowrite`"*) while the
+coverage table 500 lines above listed the tool as a working card. **A document
+that contradicts itself resolves in favour of the part that is easier to scan.**
+
+**The fix is an assertion, not a note.** `web/src/lib/opencode-v2-tools.ts` holds
+the v2 set, the v1 aliases, and the v1-removed list, with the three sources
+above. `opencode-v2-tools.test.ts` asserts every v2 tool is registered, nothing
+removed is registered, every alias is *kept*, and nothing is registered outside
+the three lists. It also pins `TOOL_META` against the whole 30-name registry in
+both directions, since a stale entry there reads as a claim the tool is handled.
+
+A checked-in constant is the only option available: **there is no tool-catalogue
+endpoint.** OpenCode's OpenAPI document serves 113 paths and none lists tools; a
+tool part's `metadata` is typed as a bare `object`; and `@opencode/client` has no
+tool namespace. A client cannot ask, so the list has to be right by construction.
+
+**Deliberately left alone:** nothing. The Code dock's tracker
+(`OpenCodeTodoTracker` + `v2Todos.ts`) read the same removed tool, so it was a
+second dead reader of a deleted thing and it went too. It had been rendering
+`null` on every frame, so the removal changed no pixels. See *The Code dock's
+todo panel — REMOVED*.
 
 ### Two guards in this repo were RED, and one of them was this file's own proof
 

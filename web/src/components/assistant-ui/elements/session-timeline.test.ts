@@ -165,11 +165,17 @@ describe("tool timeline — TOOL_META covers the registry", () => {
   it("reads the registry it is guarding, in full", () => {
     // Guards the guard. If `appToolkit` ever stopped spreading both toolkits,
     // every case above would pass on a partial registry and quietly stop
-    // covering the other engine's tools. 15 native + 14 OpenCode, per the tool
+    // covering the other engine's tools. 15 native + 15 OpenCode, per the tool
     // inventory in `docs/tool-ui-tracker.md`.
-    expect(Object.keys(appToolkit)).toHaveLength(29);
+    //
+    // 15 OpenCode, not 14: `patch` and `execute` are registered because OpenCode
+    // v2 ships both, and `todowrite` was removed because v2 deleted it. Net
+    // change of +1, and every individual move is asserted by name in
+    // `web/src/lib/opencode-v2-tools.test.ts` — these counts are the backstop,
+    // not the reason the names are right.
+    expect(Object.keys(appToolkit)).toHaveLength(30);
     expect(NATIVE_TOOL_NAMES).toHaveLength(15);
-    expect(OPENCODE_TOOL_NAMES).toHaveLength(14);
+    expect(OPENCODE_TOOL_NAMES).toHaveLength(15);
     for (const name of [...NATIVE_TOOL_NAMES, ...OPENCODE_TOOL_NAMES]) {
       expect(name in appToolkit).toBe(true);
     }

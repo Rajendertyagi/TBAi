@@ -32,7 +32,17 @@ export const toolsConfig = {
       write: "write",
       bash: "bash",
       task: "task",
-      todowrite: "todowrite",
+      /**
+       * OpenCode v2 tool names. `patch` replaced `apply_patch` and `execute`
+       * is its Code Mode tool; both are registered renderers. `todowrite` was
+       * here and is GONE on purpose: OpenCode 2 deleted it (the string does not
+       * occur anywhere in the shipped `opencode.exe`), so a card for it could
+       * never fire. `bash`/`task` stay as the v1 spellings their v2
+       * counterparts replaced — an inert registry entry costs nothing, and
+       * removing them would drop a build that still uses the old names.
+       */
+      patch: "patch",
+      execute: "execute",
       todo: "todo",
       skill: "skill",
       question: "question",
@@ -60,7 +70,8 @@ export const toolsConfig = {
       updatingList: "Updating list…",
       findingFiles: "Finding files…",
       runningSubagent: "Running subagent…",
-      updatingTaskList: "Updating task list…",
+      applyingPatch: "Applying patch…",
+      runningScript: "Running script…",
       fetching: "Fetching…",
       searchingWeb: "Searching the web…",
       loadingSkill: "Loading skill…",
@@ -68,12 +79,6 @@ export const toolsConfig = {
       approvedExecuting: "Approved — executing…",
     },
     status: {
-      /**
-       * How many of a task list are done, as the reader is shown it. Lives here
-       * so no renderer spells the ratio out for itself.
-       */
-      completedOf: (completed: number, total: number): string =>
-        `${completed}/${total} completed`,
       /**
        * A tool that succeeded and produced nothing. ONLY for a result that is
        * genuinely empty — see `status.resultUnreadable` for the case this must
@@ -168,7 +173,6 @@ export const toolsConfig = {
         `Approval ${resolution} before a decision — run the request again if still needed.`,
       screenshotSaved: "Screenshot saved",
       screenshotFailed: "Screenshot failed",
-      taskListUpdated: "Task list updated.",
       noQuestionText: "No question text.",
       /**
        * The `question` tool card is a READ-ONLY history record — it never hosts
