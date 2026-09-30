@@ -62,6 +62,14 @@ describe("OpenCode tool-name registration", () => {
     // part fell through to ToolFallback).
     // `shell` is the name the live V2 server actually emits; it shares
     // `OpenCodeBashToolUI` with `bash` (one renderer, no second execution path).
+    // `subagent` is the delegated-agent tool under the name verified against the
+    // live server; `task` is the older, unverified spelling, and both are
+    // registered. This list is a hardcoded mirror of `openCodeToolkit`, which is
+    // exactly why it has to be updated in the same commit as a registration —
+    // the mirror going stale is a red test, and a red test that gets ignored is
+    // how `be6f75a` left this list behind while its own guard was the thing that
+    // noticed. See `session-timeline.test.ts` for the same guard on the other
+    // name-keyed map.
     expect([...OPENCODE_TOOL_NAMES].sort()).toEqual([
       "bash",
       "edit",
@@ -71,6 +79,7 @@ describe("OpenCode tool-name registration", () => {
       "read",
       "shell",
       "skill",
+      "subagent",
       "task",
       "todowrite",
       "webfetch",

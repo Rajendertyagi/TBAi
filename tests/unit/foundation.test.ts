@@ -130,10 +130,17 @@ describe("settings nav source of truth", () => {
     // Order follows navigation.ts (the single source of truth); this test
     // guards the membership (no missing/duplicate sections). Scheduler is a
     // top-level workbench route, not a settings section.
+    // `opencode-config` joins at `order: 5`, after workspace and before folders.
+    // Like the list in `toolkit.test.ts`, this is a hardcoded mirror of a
+    // registry: `c371fc7` added the section and this list was not updated with
+    // it, so the guard was red from that commit onwards. Adding the route here
+    // keeps the assertion exactly as strong — it is still an ordered,
+    // exact-equality list, so a removal or a reordering still fails.
     expect(routes).toEqual([
       "/providers",
       "/appearance",
       "/workspace",
+      "/opencode-config",
       "/folders",
       "/desktop",
       "/memory",
