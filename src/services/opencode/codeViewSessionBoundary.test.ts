@@ -277,7 +277,7 @@ describe("E. a stale session pointer is not resurrected", () => {
   // produced a permanent 500 with a Retry button instead of a replacement.
   //
   // Fixed by reading the status off the response the client itself received
-  // (`lastStatusForSessionLookup` in `./client`) — never by treating every
+  // (`lastStatusForSessionLookup` in `./client`) â€” never by treating every
   // `UnsupportedContentType` as "missing", which would replace sessions that
   // still exist and lose their history. Absence requires a positive 404; every
   // other outcome propagates, which the last test here pins.

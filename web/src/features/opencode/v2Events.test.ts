@@ -636,7 +636,7 @@ describe("V2 unknown events", () => {
  * own, so without this the duration badge renders nothing here while working
  * on the Direct surface. The values are the SERVER's: `durableEvent` sets
  * `created = 100 + seq`, so every expectation below is an exact epoch value
- * rather than "roughly now" — a timing test that cannot assert exact numbers is
+ * rather than "roughly now" â€” a timing test that cannot assert exact numbers is
  * not testing timing.
  */
 describe("V2 tool timing", () => {

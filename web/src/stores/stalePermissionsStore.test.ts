@@ -270,7 +270,7 @@ describe("approval parity — every surface shares the ONE guard", () => {
     const code = stripComments(source);
     // Via the guard hook, like every other approval surface. This assertion
     // used to demand a direct `isPermissionGone` call here, which contradicted
-    // the rule the SURFACES block above enforces (a surface must NOT name it �
+    // the rule the SURFACES block above enforces (a surface must NOT name it —
     // the hook owns the rule). Naming it directly would have meant rewriting
     // the hook's own two-line body: the duplication this module exists to stop.
     expect(code).toContain("useStaleApprovalGuard");
