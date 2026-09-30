@@ -40,13 +40,16 @@ row without one is not done.
 | One canonical `ApprovalCard` | Two components shared a name and one was dead. Documented which is canonical, plus a guard test — the vendored file is kept, because the train is frozen. | `b2e48e5` |
 | Flat results render as rows | Six tools painted a JSON envelope for small flat objects. `FieldsOrJson` renders rows, falls back to bounded JSON when nested. | `b303dcd` |
 | **Direct-chat edit gate shows a diff** | The gate that answers "allow this?" showed the model's Find/Replace text. It now shows the change, with surrounding context, from a read-only endpoint that is `runEdit` minus the write. No diff library added — the edit *is* the diff. Pair kept as the fallback. | `93ecc8b` |
-| **`scheduler` is approvable** | A tool that creates and fires jobs unattended was ungated. Now gated per call: `list`/`get` answer freely, `create`/`update`/`delete`/`run_now` ask, and anything unrecognised asks. | this commit |
+| **`scheduler` is approvable** | A tool that creates and fires jobs unattended was ungated. Now gated per call: `list`/`get` answer freely, `create`/`update`/`delete`/`run_now` ask, and anything unrecognised asks. | `3fa4800` |
 | **Question observability moved to the live card** | Four `question.*` events were logged only by a component nothing renders, so the contract passed while every real question was unloggable. Events moved to the live dock; 686 lines of dead code deleted. | `3fa4800` |
 | **The timeline counts real files** | "N steps · 0 files changed" on every coding turn. The count was a missing *shape*, not a wrong number: the tool results carry no line counts, but the patch on every call does. Counts derived from the patch and published on the library's own `artifact` slot. | `288c263` |
-| **`TodoList` was not a todo list** | The "three designs for one feature" finding counted a progress renderer as a todo renderer. It renders server-aggregated stages, not a plan. Renamed to `progress-stages` / `ProgressStages`. | this commit |
+| **`TodoList` was not a todo list** | The "three designs for one feature" finding counted a progress renderer as a todo renderer. It renders server-aggregated stages, not a plan. Renamed to `progress-stages` / `ProgressStages`. | `cbc71bd` |
 | **index-in-`key` refuted** | Re-derived per site: 10 candidates, 3 vendored (frozen), 4 skeletons with no identity, 3 stateless, 1 append-only log. The single real candidate is safe today for a specific, recorded reason. Nothing changed. | `cbc71bd` |
-| **Subagent calls render a real card** | The delegated-agent tool was registered as `task`; the live server sends `subagent`, so every delegated call fell through to a raw JSON dump. Registered under the verified name, and guarded on the registry. | this commit |
-| **One duration formatter, not two** | The message footer computed `(ms / 1000).toFixed(1)` itself, so a 299s turn read `299.0s` there and `4m 59s` on the tool badge above it. Both now route through `formatDuration`, with a source guard. | this commit |
+| **Subagent calls render a real card** | The delegated-agent tool was registered as `task`; the live server sends `subagent`, so every delegated call fell through to a raw JSON dump. Registered under the verified name, and guarded on the registry. | `be6f75a` |
+| **One duration formatter, not two** | The message footer computed `(ms / 1000).toFixed(1)` itself, so a 299s turn read `299.0s` there and `4m 59s` on the tool badge above it. Both now route through `formatDuration`, with a source guard. | `b2e48e5` |
+| **The four hand-rolled row renderers are now one** | `dirSummary`, `processSummary` and `FieldList` each wrote the same `flex justify-between` + truncate + "and N more" note. Two of the three emitted `<dt>`/`<dd>` with **no `<dl>` parent**, which is not valid HTML. All three now render through `ResultList` + `ResultRow` in `result-fields.tsx`. **Visible side effect:** `dirSummary` and `processSummary` were `gap-2` and `FieldList` was `gap-4`; the shared row is `gap-4`, so the gutter on `list_dir` and `process_list` widened. Deliberate — one row style is the point, and a per-caller gap override is the duplication this removed. | this commit |
+| **Emoji → lucide in `list_dir`** | The dir listing painted `📁`/`📄`. An emoji does not inherit `currentColor`, cannot be sized with its row, and renders from a platform fallback font — a visible per-machine difference in a bundled desktop app. Now `Folder`/`File` from the installed `lucide-react`. | this commit |
+| **`session-timeline` was missing `subagent` too** | `be6f75a` fixed the delegated-agent tool in the **render registry** and guarded it there. `TOOL_META` in `session-timeline.tsx` is a *second* name-keyed map, and it still had only `task` — so the timeline row for a real delegated call fell back to `verb: part.toolName` and read the literal string **"subagent"** with a terminal icon. A miss is invisible at build time because the fallback is well-formed. | this commit |
 | OpenCode configuration page | Read/edit permission rules, file-driven, no invented permission system. | `c371fc7`, `440a39d`, `f7a59f6` |
 
 ### How each was verified
@@ -184,9 +187,6 @@ that file has 171 uncommitted lines from another agent mid-edit, and committing
 it would capture a half-finished state of their work under this change. The
 alternative — leaving the ADRs unwritten — is worse, and is why they are here
 instead.
-  (`@@ -0,0 +1,N @@`), which is what OpenChamber does. ~45 min.
-
-No code before the probe answers.
 
 ---
 
@@ -587,12 +587,16 @@ sweep would have churned a frozen dependency and a settings schema to fix nothin
 
 ---
 
-## Tool coverage — all 28 registered tools
+## Tool coverage — all 29 registered tools
 
-Authoritative count, read from `web/src/tools/toolkit.ts`: **15 native + 13
-OpenCode = 28 registered tool names.** Every entry is `type: "backend"` —
+Authoritative count, read from `web/src/tools/toolkit.ts`: **15 native + 14
+OpenCode = 29 registered tool names.** Every entry is `type: "backend"` —
 render-only, name-keyed. The registry is the single boundary; MCP and dynamic
 tools are deliberately *not* registered and fall through to `ToolFallback`.
+
+The count was 28 until `be6f75a`, which registered `subagent` *alongside* `task`
+rather than replacing it — so this table gained a row and the headline did not
+follow. Both are now 29.
 
 ### The four shapes, and which element is the right fit
 
@@ -612,26 +616,28 @@ element should this use" questions are answered by picking the right shape.
 | # | Tool | Card shows today | Shape | Gated |
 |---|---|---|---|---|
 | 1 | `read_file` | `BoundedBody` of file content | body | no |
-| 2 | `list_dir` | hand-rolled `📁/📄` rows, capped | body | no |
+| 2 | `list_dir` | `ResultRow` + lucide `Folder`/`File`, capped at `dirEntryMaxRows` | rows | no |
 | 3 | `search_files` | hand-rolled `path:line` + snippet rows | body | no |
-| 4 | `file_info` | `Json` | body | no |
+| 4 | `file_info` | `FieldsOrJson` rows | rows | no |
 | 5 | `write_file` | `FieldsOrJson` rows; gate previews raw content | rows | **yes** |
-| 6 | `edit_file` | `FieldsOrJson` rows; gate previews Find/Replace | rows | **yes** |
-| 7 | `delete_file` | `Json` | body | **yes** |
+| 6 | `edit_file` | `FieldsOrJson` rows; gate shows the **diff** via `EditPreviewBody`, Find/Replace kept as the fallback | rows | **yes** |
+| 7 | `delete_file` | `FieldsOrJson` rows — reads `path / deleted: yes / wasDir: no` | rows | **yes** |
 | 8 | `run_command` | **`TerminalBlock`** `variant="ink"` | terminal | **yes** |
-| 9 | `process_list` | hand-rolled `name (pid)` + MB rows | body | no |
-| 10 | `process_kill` | `Json` | body | **yes** |
-| 11 | `system_info` | `Json` | body | no |
-| 12 | `scheduler` | `Json` — one uniform envelope for 5 actions | body | no |
-| 13 | `todo` | hand-rolled checkbox list | body | no |
-| 14 | `browser` | `BoundedBody` of stdout/stderr | body | no |
-| 15 | `browser_action` | same | body | **yes** |
+| 9 | `process_list` | `ResultRow` — `name (pid)` + MB, capped at `processRowMaxRows` | rows | no |
+| 10 | `process_kill` | `FieldsOrJson` rows | rows | **yes** |
+| 11 | `system_info` | `FieldsOrJson` rows | rows | no |
+| 12 | `scheduler` | `FieldsOrJson` — one renderer for all 6 actions | rows | **per call** |
+| 13 | `todo` | static status icon + strike-through. **Not interactive** — no `input`, and the card never mutates state | body | no |
+| 14 | `browser` | `BoundedBody` of stdout/stderr, **or** a "screenshot saved" line when the result carries a `path`. Actual image rendering is deferred: no safe way to serve the file yet | body | no |
+| 15 | `browser_action` | same component, different running label | body | **yes** |
 
 Six native tools gate via `toolApproval` in `src/routes/chat.ts:525-532`:
 `write_file`, `edit_file`, `delete_file`, `run_command`, `process_kill`,
-`browser_action`.
+`browser_action`. `scheduler` is the seventh gated tool but does **not** appear
+in that map — it gates through the tool-level `needsApproval` on its `action`
+discriminant instead, which is the only way to gate one tool per call.
 
-### OpenCode (13)
+### OpenCode (14)
 
 Gating differs: OpenCode emits its own `permission.asked` events, projected onto
 the tool part as an assistant-ui `approval` with `allow-once` / `allow-always` /
@@ -646,12 +652,13 @@ the tool part as an assistant-ui `approval` with `allow-once` / `allow-always` /
 | 20 | `shell` | same component as `bash` | terminal | **yes** |
 | 21 | `edit` | **`CodeDiff`**, gate shows the *pending* diff | diff | **yes** |
 | 22 | `write` | `ResultBody`; gate shows the **new-file diff** | diff | **yes** |
-| 23 | `task` | `ResultBody`; gate previews the prompt | body | no |
-| 24 | `todowrite` | compact row + count | body | no |
-| 25 | `webfetch` | `ResultBody` | body | in practice |
-| 26 | `websearch` | **`WebSearch`** + provider caption | web | in practice |
-| 27 | `skill` | `ResultBody` | body | no |
-| 28 | `question` | read-only receipt; answered on the question dock | body | n/a |
+| 23 | `subagent` | `ResultBody`; gate previews the prompt. **The name the live server sends** | body | no |
+| 24 | `task` | same renderer. **Unverified older spelling**, registered so such a build does not lose the card | body | no |
+| 25 | `todowrite` | compact row + count | body | no |
+| 26 | `webfetch` | `ResultBody` | body | in practice |
+| 27 | `websearch` | **`WebSearch`** + provider caption | web | in practice |
+| 28 | `skill` | `ResultBody` | body | no |
+| 29 | `question` | read-only receipt; answered on the question dock | body | n/a |
 
 ### The available element set — 23 modules
 
@@ -667,26 +674,33 @@ the tool part as an assistant-ui `approval` with `allow-once` / `allow-always` /
 |---|---|
 | `code-budget` | Bounding a fence before Shiki tokenises it; no upstream option |
 | `mermaid-source` | Repairs the `graph TD;` header models emit, without forking |
-| `session-timeline` | Maps all 28 tool names to verb+icon for `ToolTimeline` |
+| `session-timeline` | Maps all 29 tool names to verb+icon for `ToolTimeline`. A **second** name-keyed lookup alongside `appToolkit`, and nothing enforces that the two agree — see the row below |
 | `progress-stages` | Renders TBAi's own `data-tbai-progress` contract. **Was `todo-list` / `TodoList`, and the old name was wrong** — see *Three todo renderers* below. |
 | `thread-boot-skeleton` | Shared history-pending placeholder, both surfaces |
 
 ### Coverage verdicts
 
-**Result bodies — all 28 covered.** Every path that paints tool output now goes
+**Result bodies — all 29 covered.** Every path that paints tool output now goes
 through `BoundedBody` → `text-budget.ts`. This was the broad fix (`e1cc7b9`).
 
 **Structured data - CLOSED (`b303dcd`).** `file_info`, `system_info`, `scheduler`,
-`delete_file`, `process_kill` and `write_file` all render a raw `Json` envelope.
-That was the weak spot: *bounded*, but bounded-and-ugly - a machine payload where
-key/value data belonged. There is no vendored element for structured tool output,
-so this needed app code, and `FieldsOrJson` is the smallest thing that does the
-job: rows for a flat object, the existing bounded JSON body for anything nested.
-`delete_file` now reads `path / deleted: yes / wasDir: no`.
+`delete_file`, `process_kill`, `write_file` and `edit_file` all rendered a raw
+`Json` envelope. That was the weak spot: *bounded*, but bounded-and-ugly - a
+machine payload where key/value data belonged. There is no vendored element for
+structured tool output, so this needed app code, and `FieldsOrJson` is the
+smallest thing that does the job: rows for a flat object, the existing bounded
+JSON body for anything nested. `delete_file` now reads
+`path / deleted: yes / wasDir: no`.
 
-`dirSummary` and `processSummary` are the same idea with custom layouts and were
-left alone on purpose - converting them means moving proven, visually tuned
-layouts, and this change is additive.
+That list was five entries short of reality. There are **seven**
+`FieldsOrJson` call sites in non-test code, and `edit_file` was missing from the
+sentence above as well as from the count.
+
+`dirSummary` and `processSummary` were the same idea with a custom layout — a
+name column and a size column, and a name plus a memory figure. They were left
+alone while `FieldsOrJson` was additive, and are now unified onto the same
+`ResultList` / `ResultRow` pair (see *Done*). The row layout, the truncation and
+the omission note had been written three times over.
 
 **Two findings worth deciding on:**
 
@@ -714,6 +728,110 @@ layouts, and this change is additive.
    moved to the live card, the test points there, and the dead component is
    deleted. The lesson is in *Open questions* below: a test that pins a **file
    path** is not guarding a feature.
+
+### Two guards in this repo were RED, and one of them was this file's own proof
+
+Found by the test agent while closing the gaps above, and it changes how the
+evidence in this file should be read.
+
+`bun run test` — the repo's own script, the one `verify` runs — was **2 fail**
+before any of this tool work. Both were the same defect class as `subagent`: a
+hardcoded mirror of a registry that was not updated when the registry grew.
+
+| Red test | Since | Why it matters here |
+|---|---|---|
+| `tests/unit/toolkit.test.ts` "registers renderers for the OpenCode names" | `be6f75a` | **This is the guard this file cites as the proof that `subagent` is registered.** A guard that is red is not a guard. The claim it backed was true, but nothing was enforcing it. |
+| `tests/unit/foundation.test.ts` "lists every settings section exactly once, in order" | `c371fc7` | The settings-nav mirror had been stale since the OpenCode config page landed. |
+
+Both are now 0 fail. Both remain exact-equality assertions, so a removal or a
+reordering still fails — verified by mutating each.
+
+**The lesson, and it is the same one as the `question.*` contract below:** a
+test that pins a *name* is only as strong as the list it was written from. Three
+name-keyed maps now exist — `appToolkit`, `TOOL_META` in `session-timeline`, and
+the mirrors inside these two test files — and nothing in the build ties them
+together. `session-timeline.test.ts` now closes the loop for the first two;
+`TOOL_META`'s header records that it must be changed with the registry.
+
+### A note on how to count a green suite
+
+`bun test` with no arguments reports ~285 failures. That is **not** a real
+baseline and it is not this file's problem: `tests/integration/shutdown-lifecycle.test.ts`
+closes the shared `bun:sqlite` singleton, and because Bun runs every file in one
+process, every file sorting after it that touches the DB fails with "Cannot use
+a closed database". That file's own header documents the trap, and `package.json`
+excludes it via `--path-ignore-patterns`. **Use `bun run test`.** The number to
+quote is 0 fail / 2667 pass / 2 skip across 221 files.
+
+An earlier revision of this work quoted the 285 as a regression baseline. It was
+a mis-specified command, and the "regressions" it implied were never there.
+
+### Which findings were library-first, and which were not
+
+The "hand-rolled" label on four cards was read as a defect to be removed. It is
+not one, and the libraries were checked rather than assumed. All three
+candidates were read at source before deciding.
+
+**`elements-data-table` - rejected, unusable.** Fetched from the assistant-ui
+registry. Its props are `{ rows: readonly ModelUsage[]; cycle: number }` where
+`ModelUsage` is `{ name, context, cost }`: three hard-coded columns and no
+column prop. A directory listing is `name` + `size`; a process list is
+`name (pid)` + `memoryMB`. Neither can be expressed, and there is no way to pass
+a column spec. It is also not exported by the installed `@assistant-ui/react`
+0.15.20 (`dist/index.d.ts` is 82 lines with no `DataTable`), so it would be a
+copy-in against a frozen train.
+
+**`elements-todo-list` - rejected, and it would be wrong here anyway.** Also a
+registry copy-in, not in the installed version. Its `items` prop *is* properly
+generic, but it renders a hard-coded **"Todos"** heading and a `done/total`
+counter, which would sit directly under a card already titled `todo · add`. It
+also models `active` and `failed` states that the native `todo` tool has no
+concept of.
+
+**shadcn `Table` - correct for pages, wrong for tool cards.** Available and free:
+it has no dependencies beyond `cn` (`clsx` + `tailwind-merge`, both installed).
+But read its classes: `TableRow` carries `border-b` and
+`hover:bg-muted/50`, `TableHead` is `h-10`, cells are `p-2`. That is page
+chrome. These rows live inside a collapsed tool card beside `TerminalBlock` and
+`CodeDiff`, so it would have to be overridden straight back out - the custom code
+this file exists to prevent, wearing a library's costume. It is the right
+component for the scheduler job list, the MCP server panel and the conversation
+list; that is a separate change, and nothing is vendored for it yet.
+
+**What actually got used:** `lucide-react`'s `Folder` and `File` (already a
+dependency, both confirmed present in the installed 0.469), and Tailwind for
+layout. No new dependency, and no component added to `components/ui`.
+
+### OpenChamber's `JsonSummaryView` was read, and deliberately not copied
+
+`JsonSummaryView` is the obvious candidate to close the "hand-rolled" gap, and
+this file already predicted what it would cost. The prediction was checked
+against the real source - `JsonSummaryView.tsx` in
+`packages/ui/src/components/chat/message/parts/` - and it holds. It is a
+recursive tree walker over `<details>` disclosure, and it makes four guesses
+about data whose shape this app already knows:
+
+| Its behaviour | What it would do to real tool results here |
+|---|---|
+| `formatKey()` splits camelCase and title-cases | `wasDir` renders as **"Was Dir"** |
+| `isUrl()` wraps any `http(s)` string in an anchor | a server path becomes a clickable link |
+| `IDENTITY_KEYS` promotes `id`/`name`/`title` | a synthetic `id · name` line the tool never returned |
+| recursion into arrays and nested objects | `{ pid, killed }` grows a disclosure widget it does not need |
+
+It also carries `TOOL_OUTPUT_MAX_CHARS = 512 * 1024` and a "Zone Allocation
+failed" OOM guard.
+
+Two of those four would show a reader something the tool never said, which is
+the failure mode this file has repeatedly caught: the atlas notes that "`read`"
+was filed as a feature when it was an unregistered tool. So the shared row stays
+flat and literal - keys are painted as the tool spelled them, no value is
+reformatted, and nothing is linked. If a collapsible tree is ever wanted for
+large nested results, that is a defensible separate decision; it is not the same
+as OpenChamber's design for the flat case, it is a heavier one.
+
+OpenChamber's *icon* choice was copied: its glob output uses an `Icon`
+component and CSS dots, with no emoji anywhere, which is what settled the
+`📁`/`📄` question here.
 
 ---
 

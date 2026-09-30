@@ -44,9 +44,31 @@ import { BoundedBody } from "./body-budget";
  *
  * `dirSummary` and `processSummary` are the same idea with a custom layout — a
  * name column and a size column, and a name plus a memory figure. They were left
- * alone deliberately: converting them means moving proven, visually-tuned
- * layouts, and this component is additive. If they are ever unified, this is the
- * thing to unify them onto.
+ * alone while this component was additive. They are now unified onto
+ * {@link ResultList} and {@link ResultRow}: the row layout, the truncation and
+ * the omission note were written three times over, and two of the three emitted
+ * `<dt>`/`<dd>` with no `<dl>` parent, which is not valid HTML.
+ *
+ * ## Why this is not OpenChamber's `JsonSummaryView`
+ *
+ * That renderer was read before deciding
+ * (`packages/ui/src/components/chat/message/parts/JsonSummaryView.tsx`). It is a
+ * recursive tree walker, and it makes four guesses about data whose shape this
+ * app already knows: it rewrites keys (`wasDir` → `"Was Dir"`), links any
+ * `http(s)` string into an anchor, promotes `id`/`name`/`title` into a synthetic
+ * identity line, and wraps nested values in `<details>`. It also carries a 512 KB
+ * output cap and an OOM guard. None of that is warranted for `{ pid, killed }`,
+ * and two of the four guesses would show a reader something the tool never said.
+ * So the shared row stays flat and literal: keys are painted as the tool spelled
+ * them, and no value is reformatted.
+ *
+ * ## Not a shadcn `Table`
+ *
+ * shadcn's `Table` is vendored-elsewhere and correct for page-level data. Its
+ * rows carry `border-b` and `hover:bg-muted/50` and its heads are `h-10` — page
+ * chrome that would fight the tool-card surface these rows live in, and would
+ * have to be overridden back out again. That is the custom code this file exists
+ * to avoid, in a library's costume.
  */
 
 /** Row cap, so a pathological flat object cannot become a very long card. */
@@ -122,22 +144,85 @@ export function FieldList({
   hidden: number;
 }) {
   return (
-    <div data-slot="tool-result-fields" className="space-y-0.5 text-xs">
+    <ResultList
+      slot="tool-result-fields"
+      omitted={hidden}
+      omittedLabel={toolsConfig.copy.status.resultFieldsOmitted}
+    >
       {fields.map((field) => (
-        <div
+        <ResultRow
           key={field.key}
-          className="flex justify-between gap-4 [&>dt]:min-w-0 [&>dt]:truncate [&>dd]:shrink-0"
-        >
-          <dt className="text-muted-foreground">{field.key}</dt>
-          <dd className="text-right font-mono" title={String(field.value)}>
-            {renderValue(field.value)}
-          </dd>
-        </div>
+          label={field.key}
+          value={renderValue(field.value)}
+          valueTitle={String(field.value)}
+        />
       ))}
-      {hidden > 0 && (
-        <div className="text-muted-foreground">
-          {toolsConfig.copy.status.resultFieldsOmitted(hidden)}
-        </div>
+    </ResultList>
+  );
+}
+
+/**
+ * A list of tool-result rows, plus an honest note when rows were withheld.
+ *
+ * Owns the `<dl>` that makes the rows a description list, the shared spacing,
+ * and the omission note. It does NOT apply the cap: every caller caps with its
+ * own limit, because a directory listing, a process listing and a flat result
+ * are bounded for different reasons and the reasons are recorded per limit in
+ * `toolsConfig.limits`.
+ *
+ * @param slot - `data-slot` value. Distinct per surface so a test can target one.
+ * @param omitted - How many rows were withheld. Zero or less renders no note.
+ * @param omittedLabel - Builds the note from the withheld count.
+ */
+export function ResultList({
+  slot,
+  omitted = 0,
+  omittedLabel,
+  children,
+}: {
+  slot: string;
+  omitted?: number;
+  omittedLabel: (count: number) => string;
+  children: ReactNode;
+}) {
+  return (
+    <dl data-slot={slot} className="space-y-0.5 text-xs">
+      {children}
+      {omitted > 0 && <div className="text-muted-foreground">{omittedLabel(omitted)}</div>}
+    </dl>
+  );
+}
+
+/**
+ * One tool-result row: a label on the left, an optional value on the right.
+ *
+ * The label truncates and the value does not, so a long path can never push a
+ * size or a pid off the card. `icon` sits outside the truncating span so a
+ * glyph is never the thing that gets clipped.
+ */
+export function ResultRow({
+  icon,
+  label,
+  value,
+  valueTitle,
+}: {
+  icon?: ReactNode;
+  label: ReactNode;
+  value?: ReactNode;
+  valueTitle?: string;
+}) {
+  return (
+    // A `div` grouping one `dt`/`dd` pair is valid inside a `dl`; `dt` and `dd`
+    // are not valid as children of a bare `div`, which is what this used to be.
+    <div className="flex justify-between gap-4">
+      <dt className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+        {icon}
+        <span className="truncate">{label}</span>
+      </dt>
+      {value === undefined ? null : (
+        <dd className="shrink-0 text-right font-mono" title={valueTitle}>
+          {value}
+        </dd>
       )}
     </div>
   );

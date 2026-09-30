@@ -31,7 +31,17 @@ import {
 } from "lucide-react";
 import { ToolTimeline, type TimelineStat, type TimelineStep } from "./tool-timeline";
 
-/** Verb + icon per tool. Keys are the real tool names from `web/src/tools/toolkit.ts`. */
+/**
+ * Verb + icon per tool.
+ *
+ * Keys are the tool names registered in `web/src/tools/toolkit.ts`, so this map
+ * and that registry must be changed together. A miss is invisible at build time
+ * because the fallback is well-formed, so the agreement is pinned by a test
+ * rather than by the compiler: `session-timeline.test.ts` asserts every
+ * `appToolkit` key resolves to a real verb here. The `subagent`/`task` pair
+ * below is the second time a name had landed in the registry without reaching
+ * here, and that test is the guard written in response.
+ */
 const TOOL_META: Record<string, { verb: string; icon: LucideIcon }> = {
   // Direct chat
   read_file: { verb: "Read", icon: FileSearchIcon },
@@ -57,6 +67,13 @@ const TOOL_META: Record<string, { verb: string; icon: LucideIcon }> = {
   shell: { verb: "Ran", icon: TerminalIcon },
   edit: { verb: "Edited", icon: PencilIcon },
   write: { verb: "Wrote", icon: FilePlusIcon },
+  // `subagent` is the name verified against the live server; `task` is the older
+  // spelling, kept because the same renderer is registered under both. This map
+  // is a SECOND name-keyed lookup (the first is `appToolkit` in
+  // `web/src/tools/toolkit.ts`), so it has to be updated with the registry —
+  // a miss falls back to the literal tool name as the verb, which is how a
+  // delegated call ended up reading "subagent" with a terminal icon.
+  subagent: { verb: "Delegated", icon: ListChecksIcon },
   task: { verb: "Delegated", icon: ListChecksIcon },
   todowrite: { verb: "Tracked todo", icon: ListChecksIcon },
   webfetch: { verb: "Fetched", icon: GlobeIcon },
@@ -64,6 +81,17 @@ const TOOL_META: Record<string, { verb: string; icon: LucideIcon }> = {
   skill: { verb: "Used skill", icon: ListChecksIcon },
   question: { verb: "Asked", icon: ListChecksIcon },
 };
+
+/**
+ * The tool names this map has an entry for.
+ *
+ * Exported so the registry-coverage guard can read the map without the map
+ * itself being public: a test that needs the *set* of names does not need the
+ * verb/icon objects, and the module's own API stays the three functions below.
+ */
+export function toolMetaKeys(): string[] {
+  return Object.keys(TOOL_META);
+}
 
 /** How many steps to reveal at once on a long run. */
 const MAX_STEPS = 8;

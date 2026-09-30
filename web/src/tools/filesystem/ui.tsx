@@ -4,7 +4,7 @@ import type {
   ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { useAui } from "@assistant-ui/react";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, File, Folder, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ApprovalActions,
@@ -21,7 +21,7 @@ import {
 import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
 import { ToolElapsed } from "@/tools/elapsed";
 import { BoundedBody } from "@/tools/body-budget";
-import { FieldsOrJson } from "@/tools/result-fields";
+import { FieldsOrJson, ResultList, ResultRow } from "@/tools/result-fields";
 import { EditPreviewBody } from "@/tools/edit-preview";
 import { textPreview } from "@/tools/text-preview";
 import { toolsConfig } from "@/config/tools";
@@ -782,20 +782,32 @@ export function dirSummary(result: AnyResult) {
   const entries = (r?.entries ?? []) as { name: string; type: string; size: number | null }[];
   if (entries.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.emptyFolder}</span>;
   const maxRows = toolsConfig.limits.dirEntryMaxRows;
+  const shown = entries.slice(0, maxRows);
   return (
-    <div className="space-y-0.5">
-      {entries.slice(0, maxRows).map((e) => (
-        <div key={e.name} className="flex justify-between gap-2">
-          <span className="truncate">
-            {e.type === "dir" ? "📁" : "📄"} {e.name}
-          </span>
-          {e.size != null && <span className="shrink-0 text-muted-foreground">{e.size} B</span>}
-        </div>
+    <ResultList
+      slot="tool-result-entries"
+      omitted={entries.length - shown.length}
+      omittedLabel={toolsConfig.copy.status.andMoreCount}
+    >
+      {shown.map((e) => (
+        <ResultRow
+          key={e.name}
+          // Lucide, not the 📁/📄 this used to paint. An emoji does not inherit
+          // `currentColor`, cannot be sized with the row, and renders from
+          // whatever fallback font the platform picks — which in a bundled
+          // desktop app is a visible difference per machine, not a style choice.
+          icon={
+            e.type === "dir" ? (
+              <Folder className="size-3.5 shrink-0" aria-hidden />
+            ) : (
+              <File className="size-3.5 shrink-0" aria-hidden />
+            )
+          }
+          label={e.name}
+          value={e.size != null ? `${e.size} B` : undefined}
+        />
       ))}
-      {entries.length > maxRows && (
-        <div className="text-muted-foreground">{toolsConfig.copy.status.andMoreCount(entries.length - maxRows)}</div>
-      )}
-    </div>
+    </ResultList>
   );
 }
 
