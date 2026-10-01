@@ -405,12 +405,18 @@ Requirements:
 
 #### Acceptance criteria — 2.3
 
-- [ ] Per-(provider, model) input limit with recorded provenance
-- [ ] Unknown-limit behaviour implemented and tested
-- [ ] Safety margin documented with its derivation
-- [ ] Output reservation exists, is per-model configurable, and is applied
-- [ ] Over-context behaviour is deterministic, tested, and produces a distinct user-facing message
-- [ ] A context-overflow error is classified as such (`errors.ts` / `redact.ts` updated with a real pattern, not a generic `config` fallback)
+- [x] Per-(provider, model) input limit with recorded provenance — **R1 implemented**: `LimitSource` carries `provider_reported` / `configured` / `conservative_default` / `unknown`; the seam now passes the stored `ModelOption` through (`assemble.ts`); 46 dedicated tests in `src/context/provenance.test.ts`
+- [x] Unknown-limit behaviour implemented and tested — `conservative_default` (128 000), bounded and reported as a stand-in; `enforceable: false` path retained for a genuinely absent ceiling
+- [x] Safety margin documented with its derivation — `SAFETY_MARGIN_FRACTION = 0.25`, sized against the ±~20% estimate band (`budget.ts`)
+- [x] Output reservation exists, is per-model configurable, and is applied — **R1 split this into two quantities**: `outputReservation` (input held back) and `generationCap` (the model's own ceiling, sent as `maxOutputTokens`), with `input + output <= ceiling` guaranteed explicitly
+- [x] Over-context behaviour is deterministic, tested, and produces a distinct user-facing message — `context_overflow` category; pre-flight rejection verified live (HTTP 400 in 48 ms, no provider call)
+- [x] A context-overflow error is classified as such (`errors.ts` / `redact.ts` updated with a real pattern, not a generic `config` fallback)
+
+⚠️ **Still open, and a PRODUCT decision rather than a gap:** the standing 128 000
+ceiling rejects roughly three quarters of the usable window of a model this
+install's provider documents at 512K. The resolver now *can* honour a real limit;
+this installation simply has no model carrying one (0/3 configured models have
+`contextWindow`). Recorded as P1/P2 in `docs/r1-context-limit-decision.md` §15.
 
 ### 2.4 Deterministic assembly and a stable reusable prefix
 
@@ -590,8 +596,41 @@ dead run. ⚠️ This needs a maintainer decision, not just an implementation.
 
 ## Phase 3 — Provider Prompt Caching
 
-**Status:** NOT STARTED. **Blocked by Phase 2** — caching keys on an identical
-request prefix, which requires deterministic assembly (§2.4).
+**Status:** NOT STARTED. **Phase 2 complete and certified**; R1 (limit provenance)
+**resolved and implemented** — see §3.0.1. Caching keys on an identical request
+prefix, which requires deterministic assembly (§2.4), and that precondition is met.
+
+### 3.0.1 Binding safety rule — a stand-in ceiling may not size an experiment (R1, 2026-10-01)
+
+```text
+A conservative_default or unknown context ceiling
+  MAY     be used for safety enforcement
+  MUST NOT size a cache prefix
+  MUST NOT choose a provider cache breakpoint
+  MUST NOT segment a cache experiment
+  MUST NOT claim cache effectiveness
+  MUST NOT interpret cache hit / read / write results
+```
+
+Phase 3 may proceed on an experiment **only** when the context-capability data
+behind it carries trustworthy provenance. Only `provider_reported` qualifies; a
+`configured` figure is this installation's belief about a model, not a statement
+by the model — the same distinction §3.6 draws for cache thresholds, applied to
+the input window.
+
+This is enforced in code, not left to discipline:
+
+- `isPhase3ExperimentEligible(limit)` (`src/context/limits.ts`) returns true only
+  for `provider_reported`.
+- `budgetDiagnostics` emits `phase3ExperimentEligible` on **every** assembled
+  request, so Phase 3's log analysis can exclude ineligible runs rather than
+  averaging a fictional ceiling into a cache-effectiveness result.
+
+**Why this is a rule and not a caution:** the failure is silent. Measured against
+the 128k stand-in while a model documents 512K, a prefix-splitting experiment
+would depress observed cache-hit rate and yield a confidently wrong conclusion
+about whether caching helps. R1 verified this is a live condition for this
+installation's configured model.
 
 ### 3.0 Scope boundary — what this phase is and is not
 

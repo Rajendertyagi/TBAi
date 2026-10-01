@@ -40,8 +40,8 @@ B was rejected because reconciliation is cheap (one indexed read TBAi already pe
 This is the crux, and it holds under C. Enforcement authority does **not** come from trusting the client's content - it comes from the fact that **the client does not decide**:
 
 - The **budget** is computed server-side from the assembled request and enforced server-side. A request above the ceiling is refused or reduced before streamText. The client cannot override this, because the client is not in that path.
-- The **limit** and its **provenance** are resolved server-side. A missing limit is an explicit unknown state with documented conservative behavior, never a silent 128k.
-- The **output reservation** is applied server-side to the request.
+- The **limit** and its **provenance** are resolved server-side. A missing limit is an explicit unknown state with documented conservative behavior, never a silent 128k. (Amended by R1: the provenance is now a four-state resolved vocabulary — `provider_reported`, `configured`, `conservative_default`, `unknown` — and the standing 128k is reported as `conservative_default`, i.e. explicitly as TBAi's assumption rather than as a model fact.)
+- The **output reservation** is applied server-side to the request. (Amended by R1: the reservation held back from *input* and the *generation cap* sent as `maxOutputTokens` are now separate quantities. The pre-R1 code used one value for both, which capped generation at the 4,096-token reserve regardless of what a model documented. The invariant the sharing implied — `input + output <= ceiling` — is now guaranteed explicitly by clamping the cap to the room left in the window.)
 - Layer A and Layer B are **not accepted from the client at all** (chat.ts:191-201, :252-258).
 
 So the worst a dishonest client can achieve is a *wrong* history, which the budget still caps and the reconciliation still reports. It cannot make the server send an oversized request, and it cannot widen the window. That is what "authoritative" means here: the client can lie about *what the history is*, never about *whether it is allowed to be this large*.
@@ -96,3 +96,41 @@ equestReason, 	oolCallId, and part state all survive verbatim).
 3. **Approval id matching** - i:2937-2941 fails closed.
 
 None of the three is enforced by TBAi code, and a dependency upgrade could change any of them. Regression tests are added **at the TBAi boundary** so a change is detected rather than assumed.
+
+### R1 amendment — provenance is a required field, not a convention (2026-10-01)
+
+This decision's authority split says the limit and its provenance are resolved
+server-side. R1 found that half of that sentence was not implementable as
+written: a provider-discovered figure and a human-typed figure were written to the
+same field, so provenance was lost at write time and **unrecoverable afterwards**.
+Wiring the metadata (the one-line change the decision implied) would therefore have
+logged a number the user invented as `provider_reported`.
+
+The amendment makes the contract true rather than weakening it:
+
+1. A numeric limit is stored together with the stance of whoever asserted it
+   (`ModelOption.contextWindowSource`). Only two stances are storable —
+   `provider_reported` and `configured` — because only two kinds of writer exist.
+   `conservative_default` and `unknown` are resolver outcomes, never persisted
+   facts about a model.
+2. The two writers go through dedicated helpers, so **a user-entered value cannot
+   be labelled `provider_reported`** by construction rather than by discipline.
+3. A pre-R1 row (value, no stance) resolves as `configured` — the label that
+   **fails closed**. Over-claiming a number nobody verified could authorise a
+   cache experiment; under-claiming only denies Phase 3 eligibility.
+4. When a provider figure and a configured figure conflict, the **configured**
+   value wins and the losing figure is recorded on `divergentValue`. Rationale: a
+   published window is model-wide while limits may follow a per-account
+   entitlement, so the operator can be closer to the truth than the listing; and
+   silently overriding an explicit human setting is worse than honouring it.
+
+**Binding Phase 3 constraint added by this amendment.** A `conservative_default`
+or `unknown` ceiling may bound safety, but must never size a cache prefix, choose
+a cache breakpoint, segment an experiment, claim cache effectiveness, or
+interpret cache hit/read/write results. This is enforced in code by
+`isPhase3ExperimentEligible` and surfaced on every request as
+`phase3ExperimentEligible`, rather than left to prose — the failure it prevents is
+silent, producing a confidently wrong conclusion about whether caching helps.
+
+Full reasoning and the alternatives rejected: `docs/r1-context-limit-decision.md`
+§13–15. Implementation record: `docs/r1-context-limit-implementation-report.md`.
