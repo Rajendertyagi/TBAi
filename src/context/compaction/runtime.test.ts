@@ -369,6 +369,7 @@ function compactInput(over: Partial<Parameters<typeof maybeCompact>[0]> = {}) {
     measuredTokens: messages.map(() => ORCHESTRATOR_TOKENS_PER_MESSAGE),
     currentTurnIds: ["live"],
     measuredTotalTokens: 900,
+    fixedOverheadTokens: 0,
     usableInputTokens: 1_000,
     existing: undefined,
     compactionLatched: false,

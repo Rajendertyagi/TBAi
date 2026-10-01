@@ -273,6 +273,26 @@ function makeDurableStoreType() {
   };
 }
 
+/**
+ * A conversation of `turns` at a given filler size, ending in a live turn and a
+ * pending approval — the shape a real growing conversation has.
+ *
+ * Sized from measurement so the multi-turn sequences below actually reach the
+ * states they claim to test. `20 @ 60` compacts once and settles at ~13 542; adding
+ * six turns crosses the trigger again and reaches generation 2.
+ */
+function growingConversation(turns: number, repeat: number): UIMessage[] {
+  const messages: UIMessage[] = [];
+  const filler = "context filler text that costs real tokens. ".repeat(repeat);
+  for (let i = 0; i < turns; i += 1) {
+    messages.push(user(`u${i}`, `question ${i} ${filler}`));
+    messages.push(toolTurn(`a${i}`, `tc${i}`));
+  }
+  messages.push(user("live", "THE LIVE REQUEST"));
+  messages.push(approvalPaused("aLive", "tc-live", "ap-live"));
+  return messages;
+}
+
 /** A model that always returns the same short summary. */
 function summaryOnlyModel(): MockLanguageModelV3 {
   return new MockLanguageModelV3({
@@ -308,14 +328,19 @@ describe("compaction is inert unless the seam supplies it", () => {
     expect(JSON.stringify(result.context.layerC.messages)).not.toContain("compacted history");
   });
 
-  it("leaves a moderately over-budget request to Phase 2's own reduction", async () => {
-    // Compaction must not pre-empt a pressure Phase 2 already handles. At 60%
-    // overage the budget verdict is `reduce`, so compaction stays out of the way
-    // and spends no summarisation call.
+  it("leaves a moderately over-budget request alone", async () => {
+    // Compaction must not pre-empt a pressure it does not need to solve, and must
+    // not spend a summarisation call doing so. Sized from measurement: this
+    // conversation assembles to ~18 035 tokens against a trigger of ~18 585, so it
+    // is genuinely just below.
+    //
+    // Note the trigger is measured on A + B + C, not C alone. An earlier version
+    // compared Layer C against a whole-request budget, which understated pressure
+    // by the ~10 745-token tool layer and fired far too late.
     const harness = seamHarness();
     const moderate: UIMessage[] = [];
     const filler = "context filler text that costs real tokens. ".repeat(60);
-    for (let i = 0; i < 20; i += 1) {
+    for (let i = 0; i < 8; i += 1) {
       moderate.push(user(`u${i}`, `question ${i} ${filler}`));
       moderate.push(toolTurn(`a${i}`, `tc${i}`));
     }
@@ -623,27 +648,67 @@ describe("a stored compaction stays applicable across reloads and growth", () =>
   });
 
   it("never records a span covering a server-injected id", async () => {
-    // THE defect this phase found in itself. Compaction used to plan its span over
-    // the already-compacted view, so a second compaction recorded the injected
-    // `tbai-compaction:*` id among its covered ids. The client never receives that
-    // id, so the record became unlocatable, compaction silently stopped applying,
-    // and the conversation reverted to full history — growing without bound.
+    // THE defect this phase found in itself, pinned through a REAL second
+    // compaction. Compaction used to plan its span over the already-compacted
+    // view, so a second compaction recorded the injected `tbai-compaction:*` id
+    // among its covered ids. The client never receives that id, so the record
+    // became unlocatable, compaction silently stopped applying, and the
+    // conversation reverted to full history — growing without bound, with no
+    // error anywhere.
+    //
+    // This test drives the full three-turn sequence with a production-shaped
+    // store. An earlier version asserted the invariant after only ONE compaction,
+    // where nothing has been injected yet and the assertion is vacuous.
     const store = durableStore();
-    await assembleWithStore(oversizedConversation(), store);
+    const base = growingConversation(20, 60);
 
-    for (const record of store.rows.values()) {
-      for (const id of record.coveredMessageIds) {
-        expect(
-          id.startsWith("tbai-compaction:"),
-          `covered id ${id} is server-injected and can never be re-located`,
-        ).toBe(false);
-      }
-      // Every covered id must be a message the client actually sent.
-      const clientIds = new Set(oversizedConversation().map((m) => String(m.id)));
-      for (const id of record.coveredMessageIds) {
-        expect(clientIds.has(id)).toBe(true);
-      }
+    const first = await assembleWithStore(base, store);
+    expect(first.context.provenance.compaction?.applied).toBe(true);
+    expect(store.rows.get("conv-seam-test")?.generation).toBe(1);
+
+    // Same conversation: below the release fraction, so the latch clears.
+    await assembleWithStore(base, store);
+    expect(store.rows.get("conv-seam-test")?.latched).toBe(false);
+
+    // Grown past the trigger again — measured to reach generation 2.
+    const grown = growingConversation(28, 60);
+    const second = await assembleWithStore(grown, store);
+    const record = store.rows.get("conv-seam-test");
+    expect(
+      second.context.provenance.compaction?.applied,
+      `expected a second compaction, got: ${second.context.provenance.compaction?.reason}`,
+    ).toBe(true);
+    expect(record?.generation).toBe(2);
+
+    // The assertion that matters.
+    for (const id of record?.coveredMessageIds ?? []) {
+      expect(
+        id.startsWith("tbai-compaction:"),
+        `covered id ${id} is server-injected and can never be re-located`,
+      ).toBe(false);
+      expect(
+        grown.some((m) => String(m.id) === id),
+        `covered id ${id} is not a message the client sent`,
+      ).toBe(true);
     }
+  });
+
+  it("a second compaction still produces a reapplicable record after reload", async () => {
+    // The user-visible consequence of the defect above, stated directly: after a
+    // generation-2 compaction the summary must still be present on the next
+    // request. If the record recorded an injected id, this fails and the
+    // conversation silently reverts to full history.
+    const store = durableStore();
+    const base = growingConversation(20, 60);
+    await assembleWithStore(base, store);
+    await assembleWithStore(base, store);
+    const grown = growingConversation(28, 60);
+    await assembleWithStore(grown, store);
+    expect(store.rows.get("conv-seam-test")?.generation).toBe(2);
+
+    const reload = await assembleWithStore(grown, store);
+    expect(reload.context.provenance.compaction?.reason).toContain("record_applied");
+    expect(JSON.stringify(reload.context.layerC.messages)).toContain("SUMMARY of earlier turns.");
   });
 
   it("declines precisely when the conversation outgrows one summariser call", async () => {

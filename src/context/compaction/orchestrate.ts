@@ -84,7 +84,14 @@ export interface MaybeCompactInput {
    * The trigger must reflect what the provider would actually receive, which after
    * a prior compaction includes the summary rather than the original span.
    */
-  measuredTotalTokens: number;
+  readonly measuredTotalTokens: number;
+  /**
+   * Tokens compaction cannot reclaim: Layer A + Layer B.
+   *
+   * Lets the planner confirm the request will actually FIT after compaction,
+   * rather than summarising and leaving the caller to reject anyway.
+   */
+  fixedOverheadTokens: number;
   usableInputTokens: number | undefined;
   /** Existing durable record, if any. */
   existing: CompactionRecord | undefined;
@@ -136,6 +143,7 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
     measuredTokens: input.measuredTokens,
     usableInputTokens: input.usableInputTokens,
     measuredTotalTokens: input.measuredTotalTokens,
+    fixedOverheadTokens: input.fixedOverheadTokens,
     policy: input.policy,
     hasExistingCompaction: input.existing !== undefined,
     compactionLatched: input.compactionLatched,

@@ -133,6 +133,7 @@ export type CompactionPlan =
         | "span_too_small_to_compact"
         | "summary_would_not_reclaim_enough"
         | "span_exceeds_summarizer_capacity"
+        | "would_still_exceed_budget"
         | "no_conversation";
     }
   | {
@@ -227,7 +228,27 @@ export function planCompaction(input: {
   /** Effective usable input tokens from the Phase 2 budget. */
   readonly usableInputTokens: number | undefined;
   /** Total measured input tokens for the assembled request. */
+  /**
+   * Measured pressure across the WHOLE request: Layer A + Layer B + Layer C.
+   *
+   * Must be the full total, not Layer C alone. `usableInputTokens` is a budget for
+   * the entire request, so comparing one layer against it understates pressure by
+   * whatever the other layers cost — measured here at ~10 745 tokens for the native
+   * tool definitions alone. The first implementation compared Layer C only, which
+   * made the trigger fire far too late and made it impossible for compaction to
+   * be tested against a realistic conversation.
+   */
   readonly measuredTotalTokens: number;
+  /**
+   * Tokens that compaction cannot reclaim: Layer A (instructions) plus Layer B
+   * (tool definitions).
+   *
+   * Needed so the planner can answer the only question that matters — "after
+   * replacing this span, does the request actually FIT?" Without it, compaction
+   * can cheerfully summarise a span, still miss the budget, and leave the caller to
+   * reject the request it just paid a provider call to compact.
+   */
+  fixedOverheadTokens: number;
   policy: CompactionPolicy;
   /** Whether a compaction record already exists for this conversation. */
   readonly hasExistingCompaction: boolean;
@@ -308,6 +329,18 @@ export function planCompaction(input: {
     spanTokens > input.summarizerInputTokens
   ) {
     return { kind: "none", reason: "span_exceeds_summarizer_capacity" };
+  }
+
+  // Finally: would compaction actually make the request FIT?
+  //
+  // Reclaiming a span is pointless if the result still exceeds the budget — the
+  // caller would reject the request regardless, having paid for a summarisation
+  // call to learn nothing. The residual is measured with the summary at its
+  // MAXIMUM permitted size, so the answer is pessimistic and never optimistic.
+  const residual =
+    input.fixedOverheadTokens + (input.measuredTotalTokens - input.fixedOverheadTokens - spanTokens) + policy.maxSummaryTokens;
+  if (residual >= usableInputTokens) {
+    return { kind: "none", reason: "would_still_exceed_budget" };
   }
 
   const spanMessageIds = messages

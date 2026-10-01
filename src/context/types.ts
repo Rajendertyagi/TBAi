@@ -422,6 +422,18 @@ export interface CompactionPhaseInput {
   /** Resolved by the seam from the Phase 2 budget. Never caller-supplied. */
   readonly usableInputTokens: number | undefined;
   /**
+   * Tokens compaction cannot reclaim: measured Layer A plus Layer B.
+   *
+   * `usableInputTokens` budgets the WHOLE request, so the trigger must compare the
+   * whole request against it. Passing only Layer C understates pressure by the cost
+   * of the tool definitions — ~10 745 tokens for the native set alone — which made
+   * the trigger fire far too late.
+   *
+   * Also lets the planner confirm the request will FIT after compaction, rather
+   * than summarising and leaving the caller to reject anyway.
+   */
+  readonly fixedOverheadTokens: number;
+  /**
    * The summariser's own input ceiling, in tokens — the model's CAPACITY minus its
    * summarisation reservation.
    *

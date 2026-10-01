@@ -251,6 +251,12 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     // CAPACITY, not budget: the summariser reserves far less output than a turn,
     // so it can read more than a turn may send.
     summarizerInputTokens: resolveSummarizerInputTokens(limit, input.compaction),
+    // Layer A + Layer B, measured. Compaction cannot reclaim either, and the budget
+    // governs the whole request, so the trigger must include them.
+    fixedOverheadTokens: combineEstimates([
+      measureInstructions(layerA),
+      measureToolDefinitions(layerB),
+    ]).estimatedTokens,
   });
 
   const layerC: MessagesLayer = compaction.layerC;
@@ -393,12 +399,14 @@ async function runCompactionPhase(
     const reapply = applyExistingCompaction({ messages: input.messages, record: seam.existingRecord });
 
     // 2. Measure the (possibly re-applied) history so the trigger uses real
-    //    numbers rather than a message count.
-    const measured = measureMessages({
+    //    numbers rather than a message count. Layer A and Layer B are added on
+    //    top: the budget governs the WHOLE request, so the trigger must too.
+    const layerCEstimated = measureMessages({
       messages: reapply.messages,
       currentTurnIds: [],
       retainedIds: reapply.messages.map((m) => (m as { id?: string }).id ?? ""),
-    });
+    }).estimatedTokens;
+    const measuredTotal = input.fixedOverheadTokens + layerCEstimated;
 
     // 3. Release the hysteresis latch once usage has demonstrably fallen back
     //    below the release fraction — i.e. once the previous compaction has taken
@@ -406,7 +414,7 @@ async function runCompactionPhase(
     const latched = isCompactionLatched(seam.existingRecord);
     if (latched && input.usableInputTokens !== undefined) {
       const releaseAt = Math.floor(input.usableInputTokens * seam.policy.releaseFraction);
-      if (measured.estimatedTokens < releaseAt) seam.releaseLatch?.();
+      if (measuredTotal < releaseAt) seam.releaseLatch?.();
     }
 
     const outcome = await maybeCompact({
@@ -427,7 +435,8 @@ async function runCompactionPhase(
       currentTurnIds: [],
       // Pressure measured on the COMPACTED view: what the provider would actually
       // receive is what the trigger must reason about.
-      measuredTotalTokens: measured.estimatedTokens,
+      measuredTotalTokens: measuredTotal,
+      fixedOverheadTokens: input.fixedOverheadTokens,
       usableInputTokens: input.usableInputTokens,
       existing: seam.existingRecord,
       compactionLatched: latched,
