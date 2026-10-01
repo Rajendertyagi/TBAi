@@ -16,7 +16,7 @@
  * The table is the same one CRUD writes. There is no second store.
  */
 
-import type { SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { db } from "../../db";
 import { MEMORY_MAX_CANDIDATES } from "./contract";
 import type { MemoryCandidate, MemoryCandidateProvider } from "./contract";
@@ -64,14 +64,32 @@ export function createLocalMemoryProvider(
   };
 }
 
+/** The retrieval statement. One definition, so the test exercises what ships. */
+const CANDIDATE_QUERY =
+  "SELECT id, content, created_at, updated_at FROM memories ORDER BY created_at DESC, id ASC LIMIT ?";
+
+/**
+ * Build a candidate query runner bound to a specific database.
+ *
+ * Exists so the SHIPPED statement can be exercised against a scratch database.
+ * Part 5 makes this the live retrieval path, and a query whose ordering carries
+ * the determinism guarantee cannot be verified by re-typing it in a test.
+ *
+ * @param database Connection to read. Defaults to TBAi's own, which is the
+ * production behaviour; a test passes its own scratch handle.
+ * @returns A runner suitable for {@link createLocalMemoryProvider}.
+ */
+export function createMemoryQueryRunner(
+  database: Pick<Database, "query"> = db,
+): (limit: number) => MemoryCandidateRow[] {
+  return (limit) =>
+    database.query<MemoryCandidateRow, SQLQueryBindings[]>(CANDIDATE_QUERY).all(limit);
+}
+
 function defaultQuery(limit: number): MemoryCandidateRow[] {
   // `created_at DESC, id ASC` is a total order: no two rows can tie, so the result
   // is byte-identical for identical table state on every call and every process.
-  return db
-    .query<MemoryCandidateRow, SQLQueryBindings[]>(
-      "SELECT id, content, created_at, updated_at FROM memories ORDER BY created_at DESC, id ASC LIMIT ?",
-    )
-    .all(limit);
+  return createMemoryQueryRunner()(limit);
 }
 
 /** The provider Phase 5 uses. Bounded, ordered, and the same table CRUD owns. */

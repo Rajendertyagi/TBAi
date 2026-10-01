@@ -27,9 +27,16 @@ export {
 
 export { evaluateMemorySafety, type MemorySafetyReason, type MemorySafetyVerdict } from "./safety";
 
+export { memoryEnabled, MEMORY_ENV } from "./enablement";
+
 export { boundMemoryContent, countExclusions, selectMemories, type SelectionOutcome } from "./select";
 
-export { createLocalMemoryProvider, localMemoryProvider, LOCAL_MEMORY_PROVIDER_ID } from "./provider";
+export {
+  createLocalMemoryProvider,
+  createMemoryQueryRunner,
+  localMemoryProvider,
+  LOCAL_MEMORY_PROVIDER_ID,
+} from "./provider";
 
 export {
   memoryDiagnostics,

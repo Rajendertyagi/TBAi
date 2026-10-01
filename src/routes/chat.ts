@@ -27,7 +27,13 @@ import {
   type NativeToolSet,
   type NativeToolsContext,
 } from "../tools";
-import { assembleContext, logAssembly, logContextOverflow } from "../context";
+import {
+  assembleContext,
+  logAssembly,
+  logContextOverflow,
+  localMemoryProvider,
+  memoryEnabled,
+} from "../context";
 import {
   buildCacheProviderOptions,
   computePrefixIdentity,
@@ -381,6 +387,32 @@ app.post("/api/chat", async (c) => {
               timeoutMs: COMPACTION_SUMMARY_TIMEOUT_MS,
             }
           : undefined,
+      // ── Phase 5: memory ────────────────────────────────────────────────────
+      // The seam, composed here and nowhere else. This is the ONLY place the
+      // Direct path supplies memory, and it is deliberately the same call that
+      // already owns context assembly, so the order the seam documents is the
+      // order that runs: after Phase 4 compaction and before measurement.
+      //
+      // Everything memory decides — validation, ranking, the 50-candidate
+      // consideration ceiling, the 8-memory selection ceiling, the 10%/16k
+      // budget, the 4000-char delivery cap, safety screening, placement before
+      // the current turn, and provenance — lives in the certified Part 4 seam.
+      // This route decides only whether it participates. There is deliberately
+      // no second selection algorithm here, and no memory text is assembled,
+      // truncated, ordered or rendered in this file.
+      //
+      // `localMemoryProvider` is TBAi's own retrieval port over the authoritative
+      // `memories` table. SQLite stays the single source of truth; nothing about
+      // the selected set is accepted from the browser, and no selected-memory
+      // state is cached across requests, so a create/edit/delete is reflected on
+      // the very next turn.
+      //
+      // Off unless `TBAI_MEMORY_ENABLED` is exactly "1"/"true" — supplying this
+      // seam makes stored memory model-visible, which is a deliberate act. See
+      // `src/context/memory/enablement.ts`.
+      memory: memoryEnabled()
+        ? { provider: localMemoryProvider, enabled: true }
+        : undefined,
     });
     tools = assembled.context.layerB.tools as NativeToolSet & Record<string, any>;
     toolsContext = buildToolsContext({
