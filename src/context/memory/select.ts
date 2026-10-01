@@ -22,6 +22,7 @@ import { CHARS_PER_TOKEN_ESTIMATE } from "../measure";
 import { evaluateMemorySafety } from "./safety";
 import {
   isValidCandidate,
+  MEMORY_MAX_CANDIDATES,
   MEMORY_MAX_CHARS,
   MEMORY_MAX_SELECTED,
   rankCandidates,
@@ -54,7 +55,11 @@ export interface SelectionOutcome {
 /**
  * Select memories for one request.
  *
- * @param candidates Candidates as returned by the provider, already capped.
+ * The provider's `limit` is treated as a request, not a guarantee: this function
+ * enforces {@link MEMORY_MAX_CANDIDATES} and {@link MEMORY_MAX_SELECTED} itself,
+ * over the ranked order, so provider return order can never influence the result.
+ *
+ * @param candidates Candidates exactly as the provider returned them, in any order.
  * @param budgetTokens The memory budget from `memoryBudgetTokens`.
  */
 export function selectMemories(
@@ -74,16 +79,25 @@ export function selectMemories(
   const ranked = rankCandidates(valid);
 
   // 3. Budget-select, then 4. safety-screen the survivors.
+  //
+  // Both ceilings are enforced HERE, over the ranked order, rather than being
+  // trusted to the provider. The query carries `limit`, but a request is not a
+  // guarantee: a provider that returns more must not be able to widen the work
+  // TBAi does. Because the cap is applied to `ranked` — never to the provider's
+  // own order — the subset that survives is still TBAi's decision, which is the
+  // ownership property this file exists to hold.
   const selected: SelectedMemory[] = [];
   let used = 0;
+  let considered = 0;
   const overBudget = new Set<string>();
   const overCount = new Set<string>();
 
   for (const candidate of ranked) {
-    if (selected.length >= MEMORY_MAX_SELECTED) {
+    if (considered >= MEMORY_MAX_CANDIDATES || selected.length >= MEMORY_MAX_SELECTED) {
       overCount.add(candidate.id);
       continue;
     }
+    considered += 1;
     const bounded = boundMemoryContent(candidate.content);
     const tokens = estimateTokens(bounded.text.length);
     if (used + tokens > budgetTokens) {

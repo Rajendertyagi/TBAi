@@ -122,7 +122,9 @@ describe("caps: candidates and selection", () => {
   });
 
   it("a provider returning more than asked cannot widen the candidate set", async () => {
-    // A misbehaving provider ignores the cap; TBAi's own ceiling still applies.
+    // A misbehaving provider ignores the cap. TBAi must enforce its own ceilings
+    // rather than trust the query: at most MEMORY_MAX_CANDIDATES considered, and at
+    // most MEMORY_MAX_SELECTED selected.
     const many = Array.from({ length: 500 }, (_, i) => candidate({ id: `m${String(i).padStart(3, "0")}` }));
     const provider: MemoryCandidateProvider = {
       providerId: "greedy",
@@ -136,7 +138,65 @@ describe("caps: candidates and selection", () => {
       seam: seamOf(provider),
       usableInputTokens: 92_928,
     });
+    // The count that entered TBAi is reported truthfully, not silently truncated.
+    expect(report.candidateCount).toBe(500);
     expect(report.selected.length).toBeLessThanOrEqual(MEMORY_MAX_SELECTED);
+    // Every candidate the provider sent is still accounted for, so the report
+    // reconciles instead of quietly losing rows.
+    expect(
+      report.selected.length +
+        report.excluded.filter((entry) => entry.reason === "max_selected").length,
+    ).toBe(500);
+  });
+
+  it("the candidate ceiling is applied by rank, so a late candidate can still be reached", async () => {
+    // The newest memory sits last, beyond the ceiling. Because the cap is applied
+    // to the RANKED order and not to provider order, it is the one that survives.
+    const filler = Array.from({ length: 200 }, (_, i) =>
+      candidate({ id: `f${String(i).padStart(3, "0")}`, createdAt: T0 + i }),
+    );
+    const provider: MemoryCandidateProvider = {
+      providerId: "greedy",
+      async listCandidates() {
+        return [...filler, candidate({ id: "newest", createdAt: T0 + 999_999 })];
+      },
+    };
+    const { report } = await runMemoryPhase({
+      conversationId: "c1",
+      messages: history(),
+      seam: seamOf(provider),
+      usableInputTokens: 92_928,
+    });
+    expect(report.selected[0]?.id).toBe("newest");
+  });
+
+  it("provider return order cannot change which candidates are considered", async () => {
+    // Same 120 candidates, three return orders. The considered set is decided by
+    // rank, so the report's outcome is identical whichever order arrives.
+    const all = Array.from({ length: 120 }, (_, i) =>
+      candidate({ id: `m${String(i).padStart(3, "0")}`, createdAt: T0 + i }),
+    );
+    const run = async (order: readonly MemoryCandidate[]) => {
+      const { report } = await runMemoryPhase({
+        conversationId: "c1",
+        messages: history(),
+        seam: seamOf({
+          providerId: "greedy",
+          async listCandidates() {
+            return order;
+          },
+        }),
+        usableInputTokens: 92_928,
+      });
+      return {
+        selected: report.selected.map((memory) => memory.id),
+        excluded: report.excluded.map((entry) => entry.id),
+      };
+    };
+    const forward = await run(all);
+    const reversed = await run([...all].reverse());
+    expect(reversed.selected).toEqual(forward.selected);
+    expect(reversed.excluded).toEqual(forward.excluded);
   });
 
   it("4. selects at most 8 memories however many qualify", () => {

@@ -95,7 +95,10 @@ export type MemoryExclusionReason =
   | "safety"
   /** Did not fit the remaining memory budget. */
   | "over_budget"
-  /** Ranked below the selected set. */
+  /**
+   * Ranked out by either ceiling: past the {@link MEMORY_MAX_CANDIDATES} TBAi will
+   * consider, or below the {@link MEMORY_MAX_SELECTED} that reach the request.
+   */
   | "max_selected";
 
 /** A memory that passed every filter and is budgeted into this request. */
@@ -123,7 +126,12 @@ export interface ExcludedMemory {
 export interface MemoryReport {
   /** A provider seam was supplied. False ⇒ the phase did not run at all. */
   readonly attempted: boolean;
-  /** Candidates the provider returned, after the query cap. */
+  /**
+   * Candidates the provider actually returned. Not capped: a provider is asked for
+   * at most {@link MEMORY_MAX_CANDIDATES} but is not trusted to comply, so this can
+   * legitimately exceed it. At most {@link MEMORY_MAX_CANDIDATES} of them are then
+   * considered, chosen by rank rather than by the provider's return order.
+   */
   readonly candidateCount: number;
   /** Candidates that failed structural validation. */
   readonly invalidCount: number;
