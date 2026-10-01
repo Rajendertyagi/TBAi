@@ -114,6 +114,67 @@ would create entries that can never legitimately match.
 Mythos models are excluded too: their minimums are documented but they are
 limited-availability with no public Claude API ID in the models overview.
 
+## 5a. P3-R3 — Anthropic automatic-cache breakpoint (resolved by measurement)
+
+**Question.** Anthropic's automatic caching places the breakpoint at the **last
+cacheable block**. TBAi's current-turn tail is exactly that. Does TBAi lose reuse?
+
+**Answer, from the real serialised request rather than from reading types.** The
+installed SDK's actual HTTP body was captured with a fetch mock:
+
+```json
+{
+  "model": "claude-opus-5-5",
+  "max_tokens": 128000,
+  "cache_control": { "type": "ephemeral" },
+  "system": [ { "type": "text", "text": "STABLE SYSTEM PROMPT" } ],
+  "messages": [ { "role": "user", "content": [ {"type":"text","text":"FIRST"} ] }, … ],
+  "tools": [ … ],
+  "tool_choice": { … }
+}
+```
+
+Three verified facts:
+
+1. **`cache_control` is top-level only.** No per-block marker appears anywhere, so
+   automatic caching is selected and Layer C is untouched by the cache layer.
+2. **No message id is serialised.** Anthropic messages are `{role, content}` only.
+   This is load-bearing: `PrefixIdentity` digests retained message *ids*, and if
+   those reached the body, id churn would silently invalidate the cache.
+3. **Turn N's `messages` are a byte-exact prefix of turn N+1's.** Verified by
+   comparing captured bodies across a simulated two-turn conversation.
+
+### Consequence
+
+| Shape | Reuse? | Why |
+|---|---|---|
+| **Append growth** (normal multi-turn) | ✅ **reuses** | The earlier request's entire message list survives unchanged, so the provider's documented 20-block lookback finds the prior write. This is the vendor's own multi-turn table, reproduced against TBAi's shape. |
+| **Same-length replacement** (regenerate / edit-and-resend / retry) | ❌ no reuse | The final block changes at the same position; its hash differs from the earlier write there; the lookback finds nothing. **Costs a fresh cache write, not correctness.** |
+
+**So P3-R3 is a KNOWN LIMITATION with a precise boundary, not a defect.** The
+vendor documents exactly this trap for automatic caching, and TBAi falls into it
+only on the non-append paths.
+
+**Explicit per-block breakpoints remain DEFERRED** — not because automatic caching
+is broken, but because expressing them requires writing provider-specific fields
+into the assembled Layers B and C. That is a Phase 2 contract change and stays out
+of scope.
+
+⚠️ **A real defect this analysis found — in Phase 3's own verification protocol.**
+The protocol was **mode-blind**: it accepted a pair whose prefix was identical but
+whose final block differed, which under automatic caching can *never* produce a
+read. Judging that pair would manufacture a false negative. The protocol is now
+mode-aware: for Anthropic it requires the later request to **contain** the earlier
+one plus appended content, and refuses the same-length pair. Fixed in
+`verification.ts`; pinned by two tests.
+
+### Live-status caveat
+
+All of the above is verified against the **serialised request**, which is a
+property of TBAi plus the installed SDK. It is **not** a live provider
+observation — no Anthropic credential exists in this environment. The provider's
+caching behaviour itself remains **UNVERIFIED**. See §11.
+
 ## The `namespace` field
 
 Part of the surface's identity, recorded **with** the capability rather than passed
@@ -304,23 +365,46 @@ rewrite/reorder/shrink.
 
 # 6. Cache identity / invalidation
 
-**TBAi sends NO cache key by default.** `buildCacheProviderOptions` forwards a key
-only when the capability documents `supportsCacheKey`, and today only OpenAI does.
+**DECIDED (closure): TBAi sends NO explicit cache key, and the decision is
+structural.**
 
-The reasons this is the right default:
+`buildCacheProviderOptions` has **no parameter** through which a key could arrive.
+The absence is the decision — a caller cannot quietly opt out of it, exactly as
+`UnknownCacheCapability` cannot carry a fake threshold.
 
-1. **Anthropic has no cache key at all** — so a TBAi-wide key scheme could not be
-   universal.
-2. **Google's implicit caching needs none.**
-3. **On GPT-5.6+ OpenAI states the key is not needed to optimise caching** — it is
-   for *separate cache accounting* per customer.
-4. **On earlier models the key IS a routing optimisation** and would be valuable —
-   but §3 of the OpenAI guide warns it must be stable and partitioned, and those
-   are product decisions about user grouping.
+### Why, per provider (vendor docs re-verified 2026-10-01)
 
-A client-controlled key is explicitly out of reach: the key is server-derived, and
-TBAi derives none today. **DEFERRED**, with the exact inputs it would need recorded
-in `request.ts`.
+| Provider / model | Key exists? | What it is for | TBAi's decision |
+|---|---|---|---|
+| Anthropic (all) | **No** | — | Nothing to send |
+| Google (all) | **No** | implicit caching is automatic | Nothing to send |
+| OpenAI **GPT-5.6+** | Yes | *"OpenAI handles cache routing automatically; the key is **not needed to optimize caching**."* It is for **separate cache accounting** per customer/user. | **No** — TBAi is a single-user local install and has no per-customer accounting to separate |
+| OpenAI **pre-5.6** | Yes | *"use a stable `prompt_cache_key` … to optimize cache routing"* — a genuine **hit-rate optimisation** | **DEFERRED**, with an explicit trigger (below) |
+
+**Prefix identity vs an explicit provider cache key — the distinction the phase
+rules require:**
+
+- **CACHE PREFIX IDENTITY** is the semantic content a provider matches on. TBAi
+  computes it locally as `PrefixIdentity.fingerprint` and **never sends it**. The
+  provider derives its own from the serialised request — reuse requires the prefix
+  to match, which is provider-native and needs no key.
+- **AN EXPLICIT PROVIDER CACHE KEY** is a routing/accounting label. It does not
+  create identity; it groups requests so a provider can route them to the same
+  cache. Its value comes entirely from what the vendor says it optimises.
+
+**Why a conversation-ID key would be actively wrong.** OpenAI documents keys as a
+means of grouping *"requests that share a reusable prefix"*. A conversation id
+partitions by the opposite criterion, so it would **prevent** reuse across
+conversations that legitimately share a prefix. OpenAI also documents keys as a
+defence against *"cache-hit probing across users"* — a consideration that argues
+against any client-influenceable value. **No generic conversation-ID key exists in
+TBAi.**
+
+### The trigger for revisiting
+
+If an OpenAI model **before GPT-5.6** is actually configured and used: measure hit
+rate with and without a stable key **before** enabling one, and choose the key's
+inputs then. Until then the correct answer is to send nothing.
 
 ## Invalidation reasons
 
@@ -400,16 +484,37 @@ recorded as reasons.
 `cache_not_observed` carries `supportsConclusion: false` **by design** — it is the
 result that must never be read as "caching does not work here".
 
-## Eligibility for a sizing claim
+## Eligibility for a sizing claim — **CORRECTED in closure**
 
 `cacheExperimentEligibility` requires **both**:
 
 1. A documented, observable capability **with a recorded minimum number**.
-2. `contextLimitSource === "provider_reported"`.
+2. A trustworthy **sizing source**.
 
-Rule 2 is R1's binding rule enforced at the point the decision would be taken. A
-`conservative_default` or `configured` limit may bound safety, never a cache
-experiment. **VERIFIED live** — see §11.
+⚠️ **The original rule was wrong and was corrected.** It required
+`contextLimitSource === "provider_reported"`. That conflated two separate facts —
+the **cache threshold** (a vendor minimum) and the **context-window ceiling** (how
+big the window is) — and wrongly forbade an experiment sized against the vendor's
+own documented cache minimum merely because TBAi does not know the window. On this
+installation, 0/3 models carry a provider-reported limit, so that rule would have
+blocked every sizing experiment for no good reason.
+
+The corrected rule is stated over the **source of the number** instead:
+
+| Sizing basis | Allowed? | Why |
+|---|---|---|
+| `documented_cache_minimum` | ✅ | a vendor number for this exact model |
+| `measured_prefix` | ✅ | TBAi's own measurement of what it sent |
+| `context_ceiling` | ❌ **always** | a window size is not a cache threshold, **even when it is a real, correct number** |
+| `default_or_estimated` | ❌ **always** | describes no model |
+
+This is **stricter** where it matters (a real ceiling is now refused too) and
+**looser** where the old rule was arbitrary. R1's binding rule is fully preserved:
+`conservative_default` and `unknown` remain excluded, and are now excluded *by
+construction of the basis* rather than by a provenance coincidence.
+
+`contextLimitSource` is still recorded — for the log line — but no longer gates
+eligibility. **VERIFIED live** — see §11.
 
 ---
 
@@ -555,7 +660,7 @@ task's instruction not to modify provider configuration was followed, so no
 |---|---|---|
 | P3-R1 | **The registry is a dated snapshot.** Verified 2026-10-01; every entry carries `verifiedOn` so staleness is visible. New models resolve to `unknown` and send nothing — safe, but not useful. | Accepted; re-verify before relying on a new model |
 | P3-R2 | **No Anthropic/OpenAI credential configured**, so no cache write or read has ever been observed. The whole two-request protocol is exercised only by tests. | **UNVERIFIED** — the phase's largest gap |
-| P3-R3 | **Explicit per-block breakpoints are DEFERRED.** Anthropic's automatic caching places the breakpoint at the last cacheable block, which the vendor documents as the wrong choice when a varying block is last. TBAi's current-turn tail is exactly that. So Anthropic caching may underperform until marker placement exists. | **DEFERRED** — needs a Phase 2 contract change |
+| P3-R3 | **Anthropic automatic-cache breakpoint vs the variable current-turn tail.** RESOLVED BY MEASUREMENT in the closure — see §5a. Append growth (the normal multi-turn case) reuses correctly; same-length replacement (regenerate / edit-and-resend / retry) does not, and costs a fresh cache write. | **KNOWN LIMITATION** — evidence-backed, not a defect |
 | P3-R4 | **No cache key is sent.** On pre-5.6 OpenAI the key is a documented routing optimisation; without it, hit rates may be lower than achievable. | **DEFERRED** — product decision (per-user accounting) |
 | P3-R5 | OpenAI pre-5.6 has **no recorded minimum**, so a sizing claim is impossible for those models. | By design |
 | P3-R6 | `message_extended_in_place`, `model_changed`, `provider_changed`, `protocol_changed`, `reasoning_setting_changed` are declared but **not emitted** — they describe cross-request changes this in-request function cannot observe. | Accepted |

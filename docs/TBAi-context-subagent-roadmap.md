@@ -596,26 +596,30 @@ dead run. ⚠️ This needs a maintainer decision, not just an implementation.
 
 ## Phase 3 — Provider Prompt Caching
 
-**Status: IMPLEMENTED — NOT LIVE-VERIFIED.** Phase 2 complete and certified; R1
-resolved and implemented (§3.0.1). Code, tests, boundary enforcement and
-per-request diagnostics are in place, but **no cache write or read has been
-observed on any real provider** (see §3.10).
+**Status: CERTIFIED WITH RESIDUAL RISKS** (closed 2026-10-01). Code, tests,
+boundary enforcement and per-request diagnostics are complete. **No provider cache
+write or read has ever been observed** — no Anthropic/OpenAI/Google credential
+exists in this environment. That residual is isolated and classified, and is why
+this reads "with residual risks" rather than a clean certification.
 
 | Deliverable | Status |
 |---|---|
-| Capability registry keyed by full provider + protocol + model | **IMPLEMENTED, VERIFIED** |
-| Unknown-model policy (send nothing) | **IMPLEMENTED, VERIFIED** |
+| Capability registry keyed by exact provider + protocol + model | **IMPLEMENTED, VERIFIED** |
+| Unknown-model policy (send nothing) | **IMPLEMENTED, VERIFIED, LIVE-VERIFIED** |
 | Anthropic + OpenAI request-level cache controls | **IMPLEMENTED, VERIFIED** (gated on exact model) |
 | Stable-prefix identity + invalidation reasons | **IMPLEMENTED, VERIFIED** |
-| Cache observation from provider usage (read + write) | **IMPLEMENTED, LIVE-VERIFIED** (unknown path) |
-| Two-request verification protocol | **IMPLEMENTED, VERIFIED** (evaluates legs; performs no requests) |
-| `cache_observed` diagnostics | **IMPLEMENTED, LIVE-VERIFIED** |
-| **Provider cache write/read observed** | **UNVERIFIED** — no Anthropic/OpenAI credential configured |
-| **Explicit per-block breakpoints** | **DEFERRED** — needs a Phase 2 contract change (§3.10) |
-| **Cache key** | **DEFERRED** — product decision |
-| Ollama / Gemini behaviour | **UNVERIFIED** — neither provider configured |
+| Anthropic request shape (byte-exact append growth; no ids serialised) | **IMPLEMENTED, VERIFIED** |
+| Cache observation + `cache_observed` diagnostics | **IMPLEMENTED, LIVE-VERIFIED** |
+| Two-request verification protocol (mode-aware) | **IMPLEMENTED, VERIFIED** |
+| Sizing-eligibility rule | **CORRECTED** — states the basis, not the ceiling's provenance |
+| **Cache key** | **DECIDED — none sent**, structurally; deferred with a trigger |
+| **P3-R3 Anthropic breakpoint** | **RESOLVED** → KNOWN LIMITATION |
+| **P3-R2 live cache write/read** | **UNAVAILABLE_TO_VERIFY** — no compatible credential |
+| Explicit per-block breakpoints | **DEFERRED** — needs a Phase 2 contract change |
 
-Full record: `docs/phase-3-provider-prompt-caching.md`.
+Full record: `docs/phase-3-provider-prompt-caching.md` ·
+`docs/phase-3-provider-prompt-caching-report.md` ·
+**`docs/phase-3-closure-report.md`**.
 
 ### 3.0.1 Binding safety rule — a stand-in ceiling may not size an experiment (R1, 2026-10-01)
 
