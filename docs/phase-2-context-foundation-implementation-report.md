@@ -293,7 +293,12 @@ Phase 2 and is recorded rather than papered over.
 
 ## 8. Git state
 
-**Three commits, local only. Nothing pushed.**
+**Four commits, local only. Nothing pushed.**
+
+> **Corrected 2026-10-01 during certification.** This report originally said
+> "three commits" because it was written *before* the evidence-trail commit
+> (`2221c5f`) existed. Git confirms **four** linear commits with no squash,
+> rebase, or amend — see `docs/phase-2-final-certification.md` §2.
 
 | SHA | Scope |
 |---|---|
