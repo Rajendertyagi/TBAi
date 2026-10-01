@@ -1037,13 +1037,76 @@ rather than assume. See `docs/phase-3-provider-prompt-caching.md` §13.
 
 ## Phase 4 — Automatic Summarization / Compaction
 
-**Status:** NOT STARTED. **Blocked by Phase 2** — compaction requires
-measurement (2.2) and a budget (2.3) to trigger against.
+**Status: CERTIFIED WITH RESIDUAL RISKS** (2026-10-01). All 22 exit criteria
+PASS. **Live summarisation is UNVERIFIED** — no compatible provider credential
+exists in this environment. Full record: `docs/phase-4-compaction-report.md`;
+architecture: `docs/adr-2026-10-01-context-compaction.md`.
 
 Phase 4 is **not** an extension of `pruneStaleMessages` (F2). Compaction
 *generates* a condensed representation of a span of history; lifecycle repair
 *removes* structurally invalid parts. Different mechanism, different correctness
-requirements, different module.
+requirements, different module. `pruneStaleMessages` is **byte-for-byte
+untouched** — verified by `git diff --name-only`.
+
+### 4.0 Implementation record (2026-10-01)
+
+**Delivered:** `src/context/compaction/{contract,summarize,orchestrate,index}.ts`
+plus `src/services/compaction.ts`, the additive `conversation_compactions` table
+in `src/db/index.ts`, wiring in `src/context/assemble.ts` and `src/routes/chat.ts`.
+**100 tests** across `compaction.test.ts` (35), `runtime.test.ts` (31) and
+`seam.test.ts` (34).
+
+**The architectural decision that shaped the phase.** **A durable marker applied
+at assembly; stored history is never rewritten.** This was not a preference. Phase 1
+finding F8 established that the server never re-reads messages for a request — the
+browser re-posts the whole `messages` array every turn — so rewriting
+`messages.content` would be *functionally inert*: it would change the database and
+have **no effect on what the model sees**. A marker is the only representation that
+can affect the request, because the server is what assembles it.
+
+**What compaction is for.** Converting the hard `CONTEXT_OVERFLOW` rejection into
+graceful degradation. Not a cost optimisation, not a cache optimisation, and not a
+message-deletion policy — each of those would need its own evidence.
+
+⚠️ **KNOWN LIMITATION K1 — the user/model divergence.** The browser owns thread
+state, so the server cannot compact the visible transcript without a second
+authority. The user sees full history; the model sees a compacted form. Nothing is
+deleted from the user's view, and the model's context is deterministic and durable
+across reload, resume and detached completion. Lifting this needs a client-side
+change and a decision about thread-state ownership.
+
+⚠️ **KNOWN LIMITATION K2 — single-pass size bound.** Once a conversation outgrows
+the summariser's one-call input capacity, compaction **declines** with
+`span_exceeds_summarizer_capacity`, checked at plan time before any provider call.
+Both alternatives were rejected as worse: summarising a *prefix* of the span and
+presenting it as the whole span is a fabrication, and summarising the summaries is
+the recursive growth path Phase 4 forbids.
+
+**Two design rules that generalise, both learned the hard way:**
+
+1. **Capacity ≠ budget.** `budget.usableInputTokens` is what a *turn* may send;
+   `limit.maxInputTokens` is what the *model* can accept. Deriving the summariser's
+   ceiling from the budget undershot real capacity and refused essentially every
+   real compaction — a conversation large enough to *need* compaction is by
+   definition larger than the budget.
+2. **Plan over what the client re-posts.** Compaction originally planned its span
+   over the already-compacted view, which contains a server-injected
+   `tbai-compaction:*` block the client never receives. A second compaction
+   therefore recorded an unlocatable id, so on the next request the record could
+   not be found, compaction silently stopped applying, and the conversation
+   reverted to full history and **grew without bound, with no error anywhere**.
+   Every covered id must be one the client will re-post. This applies to *any*
+   future server-derived block, including Phase 5 memory.
+
+**Hysteresis is durable state.** A `latched` column on the record, set on
+compaction and cleared when the seam *observes* usage below the release fraction.
+Deriving it from current usage was the first implementation and it could never
+clear: the condition only cleared below `release`, which is also below `trigger`,
+so a conversation compacted once could never be compacted again.
+
+**Off by default.** Gated on `TBAI_COMPACTION_ENABLED` (`"1"` / `"true"`), following
+the existing `TBAI_CHAT_STREAM_TTL_MS` precedent. An unwired seam cannot compact by
+accident, so every existing caller is unaffected.
 
 ### 4.1 Trigger
 
