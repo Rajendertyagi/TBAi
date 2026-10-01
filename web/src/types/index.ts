@@ -9,11 +9,53 @@ export interface ModelCapabilities {
   reasoning: ReasoningCapability;
 }
 
+/**
+ * Who said a numeric model limit is what it is. Mirrors `src/types/index.ts`.
+ *
+ * Only two states are storable: a figure came either from a provider's own
+ * listing or from a human. The resolver's `conservative_default` and `unknown`
+ * are never facts about a model, so they are never persisted against one.
+ */
+export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured"] as const;
+export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
+
+export interface SourcedNumber {
+  value: number;
+  source: ContextWindowSource;
+}
+
+/**
+ * Build a `provider_reported` limit. Not used by the UI — it exists so both
+ * writers of a limit share one choke point, and a user edit physically cannot
+ * produce the `provider_reported` stance.
+ */
+export function providerReportedLimit(value: number): SourcedNumber {
+  return { value, source: "provider_reported" };
+}
+
+/**
+ * Build a `configured` limit from a human-entered number. This is the ONLY way
+ * the UI writes a context window, which is what makes "a user-entered value is
+ * never labelled `provider_reported`" structural rather than a convention.
+ */
+export function configuredLimit(value: number): SourcedNumber {
+  return { value, source: "configured" };
+}
+
 export interface ModelOption {
   id: string;
   label?: string;
   provider: string;
+  /**
+   * Maximum input tokens, or absent when no source stated one. The VALUE carries
+   * no authority on its own — `contextWindowSource` says who said so. A value
+   * with no source is a pre-R1 row and is resolved as `configured`.
+   */
   contextWindow?: number;
+  contextWindowSource?: ContextWindowSource;
+  /** Maximum output tokens, or absent. Bounds the model's own generation. */
+  maxOutputTokens?: number;
+  maxOutputTokensSource?: ContextWindowSource;
   capabilities?: ModelCapabilities;
 }
 

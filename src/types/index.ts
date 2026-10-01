@@ -27,11 +27,78 @@ export interface ModelCapabilities {
   reasoning: ReasoningCapability;
 }
 
+/**
+ * Who said a numeric model limit is what it is. (R1, 2026-10-01.)
+ *
+ * STORED provenance only. Exactly two states are storable, because exactly two
+ * kinds of writer exist:
+ * - `provider_reported`: a provider's own listing/API stated the number.
+ * - `configured`: a human typed the number for this installation.
+ *
+ * `conservative_default` and `unknown` are NOT storable. They are states the
+ * RESOLVER produces when no stored figure exists (see `src/context/limits.ts`);
+ * storing them per-model would assert a fact about a model that no source
+ * supplied. The four-state resolved vocabulary is `LimitSource`.
+ *
+ * This mirrors `CapabilitySupport` deliberately: a producer must take an
+ * explicit stance, and absence of a stance is never a licence to assume one.
+ */
+export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured"] as const;
+export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
+
+/** The numeric half of a limit, always carrying the stance that produced it. */
+export interface SourcedNumber {
+  readonly value: number;
+  readonly source: ContextWindowSource;
+}
+
+/**
+ * Build a `provider_reported` limit. Used by discovery, the only writer that has
+ * read a number out of a provider response.
+ *
+ * Exists as a function rather than an inline literal so that "a user-entered
+ * value cannot be labelled `provider_reported`" is enforced by the module
+ * boundary and not by discipline. A user edit goes through
+ * `configuredContextWindow`, which is the only other way to set the pair.
+ */
+export function providerReportedLimit(value: number): SourcedNumber {
+  return { value, source: "provider_reported" };
+}
+
+/**
+ * Build a `configured` limit. Used by the provider dialog — the only writer that
+ * originates a number rather than reading one from a provider.
+ *
+ * @param value A positive token count, already validated by the caller.
+ */
+export function configuredLimit(value: number): SourcedNumber {
+  return { value, source: "configured" };
+}
+
 export interface ModelOption {
   id: string;
   label?: string;
   provider: string;
+  /**
+   * Maximum input tokens for this model, or absent when no source stated one.
+   *
+   * ⚠️ The VALUE alone carries no authority. `contextWindowSource` says who said
+   * so, and the two must always be written together via `providerReportedLimit` /
+   * `configuredLimit`. A value with no source is a legacy row and is resolved as
+   * `configured` (see `LEGACY_SOURCE` in `src/context/limits.ts`) — never as
+   * `provider_reported`, which would be a number the provider never stated.
+   */
   contextWindow?: number;
+  /** Provenance of `contextWindow`. Absent only on rows written before R1. */
+  contextWindowSource?: ContextWindowSource;
+  /**
+   * Maximum output tokens for this model, or absent when no source stated one.
+   * Bounds `maxOutputTokens` on the request. Separate from the input budget's
+   * output reservation (see `GenerationCap` in `src/context/types.ts`).
+   */
+  maxOutputTokens?: number;
+  /** Provenance of `maxOutputTokens`. Same rules as `contextWindowSource`. */
+  maxOutputTokensSource?: ContextWindowSource;
   /**
    * Derived discovery metadata. Re-derived on each discovery pass and carried
    * inside the existing provider `models` JSON column — never an independently

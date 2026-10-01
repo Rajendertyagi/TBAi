@@ -16,11 +16,22 @@ export const modelCapabilitiesSchema = z.object({
   reasoning: reasoningCapabilitySchema,
 });
 
+/**
+ * Provenance of a numeric model limit (R1). Only the two states a writer can
+ * actually produce are accepted — `conservative_default` and `unknown` are
+ * resolver outputs, not facts about a model, so persisting them would assert
+ * something no source said.
+ */
+export const contextWindowSourceSchema = z.enum(["provider_reported", "configured"]);
+
 export const modelOptionSchema = z.object({
   id: z.string().min(1).max(200),
   label: z.string().max(200).optional(),
   provider: z.string().min(1).max(40),
   contextWindow: z.number().int().positive().optional(),
+  contextWindowSource: contextWindowSourceSchema.optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
+  maxOutputTokensSource: contextWindowSourceSchema.optional(),
   capabilities: modelCapabilitiesSchema.optional(),
 });
 
@@ -139,6 +150,21 @@ export const conversationUpdateSchema = z.object({
   opencodeModel: z.string().min(1).max(200).optional().nullable(),
   opencodeVariant: z.string().min(1).max(100).optional().nullable(),
   opencodeAutoApprove: z.boolean().optional(),
+});
+
+/**
+ * `POST /api/conversations/reconcile` body — the client asks "which of these
+ * exact ids still exist?".
+ *
+ * The id list is the whole contract: the answer set is driven by the request, so
+ * an id reported as `gone` is proven missing rather than merely absent from a
+ * filtered page. The array is capped (500) to bound request size, matching the
+ * `limit` ceiling the conversations list already uses; `.min(1)` keeps an empty
+ * reconciliation from being a request that can never carry information (the
+ * client skips it entirely).
+ */
+export const conversationReconcileSchema = z.object({
+  ids: z.array(z.string().min(1).max(200)).min(1).max(500),
 });
 
 /**

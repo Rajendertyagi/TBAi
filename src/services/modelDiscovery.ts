@@ -1,4 +1,4 @@
-import type { ModelCapabilities, ModelOption, ProviderConfig } from "../types";
+import { providerReportedLimit, type ModelCapabilities, type ModelOption, type ProviderConfig } from "../types";
 
 export type DiscoverInput = {
   type: ProviderConfig["type"];
@@ -124,11 +124,24 @@ function normalizeAnthropic(raw: any, provider: string): ModelOption[] {
     .map((m: any) => {
       const id = String(m?.id ?? "").trim();
       if (!id || !isChatModel(id, provider)) return null;
+      // R1: a figure read out of the provider's own listing is the ONLY thing
+      // permitted to carry the `provider_reported` stance, so it is built through
+      // the shared writer rather than as an inline literal. `max_input_tokens`
+      // (and the sibling output ceiling, when the listing exposes it) are read
+      // defensively: a listing that omits them yields no value and no stance,
+      // never a fabricated one.
+      const contextWindow =
+        typeof m?.max_input_tokens === "number" ? providerReportedLimit(m.max_input_tokens) : undefined;
+      const maxOutputTokens =
+        typeof m?.max_output_tokens === "number" ? providerReportedLimit(m.max_output_tokens) : undefined;
       return {
         id,
         provider,
         label: m?.display_name ? String(m.display_name) : undefined,
-        contextWindow: typeof m?.max_input_tokens === "number" ? m.max_input_tokens : undefined,
+        contextWindow: contextWindow?.value,
+        contextWindowSource: contextWindow?.source,
+        maxOutputTokens: maxOutputTokens?.value,
+        maxOutputTokensSource: maxOutputTokens?.source,
         // Anthropic listing exposes identity/label/context only — reasoning
         // support is not reported, so it stays unknown.
         capabilities: unknownReasoning(),

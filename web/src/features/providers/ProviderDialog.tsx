@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { formatContextWindow, parseContextWindowInput } from "@/config/modelContext";
-import type { ApiProtocol, ModelOption, ProviderConfig } from "@/types";
+import { configuredLimit, type ApiProtocol, type ModelOption, type ProviderConfig } from "@/types";
 
 type ProviderType = ProviderConfig["type"];
 
@@ -305,6 +305,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
    * stored; a blank draft unsets the field (ring falls back to default);
    * anything else reverts silently. Only valid values ever reach
    * `form.models`, so the save path needs no extra validation.
+   *
+   * R1: a number typed here is `configured` by construction, and the stance is
+   * written through `configuredLimit` so it cannot be mistaken for — or later
+   * reinterpreted as — a figure the provider reported. Unsetting the draft
+   * clears the stance with the value; a bare value is never left behind.
    */
   const commitWindow = () => {
     if (!editingWindow) return;
@@ -321,9 +326,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
         if (parsed === undefined) {
           const next: ModelOption = { ...m };
           delete next.contextWindow;
+          delete next.contextWindowSource;
           return next;
         }
-        return { ...m, contextWindow: parsed };
+        const sourced = configuredLimit(parsed);
+        return { ...m, contextWindow: sourced.value, contextWindowSource: sourced.source };
       }),
     });
     setEditingWindow(null);
