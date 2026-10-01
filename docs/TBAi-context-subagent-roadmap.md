@@ -1082,14 +1082,18 @@ Both alternatives were rejected as worse: summarising a *prefix* of the span and
 presenting it as the whole span is a fabrication, and summarising the summaries is
 the recursive growth path Phase 4 forbids.
 
-**Two design rules that generalise, both learned the hard way:**
+**Three design rules that generalise, all learned the hard way:**
 
 1. **Capacity ≠ budget.** `budget.usableInputTokens` is what a *turn* may send;
    `limit.maxInputTokens` is what the *model* can accept. Deriving the summariser's
    ceiling from the budget undershot real capacity and refused essentially every
    real compaction — a conversation large enough to *need* compaction is by
    definition larger than the budget.
-2. **Plan over what the client re-posts.** Compaction originally planned its span
+2. **Budget the whole request, not the part you can change.** The trigger compared
+   Layer C alone against a whole-request budget, understating pressure by the
+   ~10 745-token tool layer. That fired far too late and made repeat compaction
+   unreachable. Layer A + Layer B are now measured and included.
+3. **Plan over what the client re-posts.** Compaction originally planned its span
    over the already-compacted view, which contains a server-injected
    `tbai-compaction:*` block the client never receives. A second compaction
    therefore recorded an unlocatable id, so on the next request the record could
@@ -1097,6 +1101,13 @@ the recursive growth path Phase 4 forbids.
    reverted to full history and **grew without bound, with no error anywhere**.
    Every covered id must be one the client will re-post. This applies to *any*
    future server-derived block, including Phase 5 memory.
+
+⚠️ **Three of this phase's own regression tests were vacuous** — green with their
+defects present, because they asserted the orchestrator's contract while the
+defects lived in the seam, and drove only a first compaction where the
+"no injected id" assertion was true by construction. Every severe defect is now
+pinned by a test **verified to fail** when the defect is reintroduced. A green
+suite is not evidence; the negative controls are.
 
 **Hysteresis is durable state.** A `latched` column on the record, set on
 compaction and cleared when the seam *observes* usage below the release fraction.

@@ -118,10 +118,37 @@ message content.
 `0.80` leaves room for the summary itself. Compacting *at* the limit would be too
 late, because the summary has to fit.
 
+### The trigger measures the WHOLE request, not Layer C — D7
+
+The first implementation compared **Layer C alone** against
+`budget.usableInputTokens`, which budgets Layer A + Layer B + Layer C. That
+understated pressure by the cost of the other layers — **measured at ~10 745
+tokens for the native tool definitions alone**.
+
+Two consequences, both serious:
+
+1. The trigger fired far too late. A conversation could sit well past 80% of its
+   real budget while Layer C alone still looked below the threshold.
+2. **Repeat compaction was effectively unreachable.** The span is "everything
+   before the retained tail", so the only way to re-cross the trigger was for the
+   whole client history to stay inside the summariser's one-call capacity — which
+   by definition means it did not need compacting again.
+
+`fixedOverheadTokens` (measured Layer A + Layer B) is now added to the trigger.
+Both figures are resolved by the seam, never by the caller.
+
+### Compaction must actually make the request fit
+
+The planner also refuses with `would_still_exceed_budget`. Reclaiming a span is
+pointless if the request still misses the budget afterwards — the caller would
+reject it anyway, having paid for a summarisation call to learn nothing. The
+residual is computed with the summary at its **maximum** permitted size, so the
+check is pessimistic and never optimistic.
+
 ### Hysteresis — durable, not derived
 
-**The first implementation derived the latch from current usage and could never
-clear.** The condition only cleared *below* `release` (0.60), which is also below
+The first implementation derived the latch from current usage and could never
+clear. The condition only cleared *below* `release` (0.60), which is also below
 `trigger` (0.80), so the below-trigger branch always won. A conversation that had
 ever been compacted could **never** be compacted again — it would grow to
 rejection with a perfectly good span sitting there uncompacted.
@@ -395,20 +422,47 @@ effect.
 
 | Suite | Tests | Focus |
 |---|---|---|
-| `src/context/compaction/compaction.test.ts` | 35 | Pure decision: trigger, hysteresis, retained set, provenance, determinism, provider-leak grep |
+| `src/context/compaction/compaction.test.ts` | 36 | Pure decision: trigger, hysteresis, retained set, provenance, determinism, provider-leak grep |
 | `src/context/compaction/runtime.test.ts` | 31 | Summariser bounds and failures, orchestrator containment, real-SQLite store |
 | `src/context/compaction/seam.test.ts` | 34 | Wiring through `assembleContext`, durability, failure containment, property invariants |
-| **Phase 4 total** | **100** | |
-| Full suite | **3 064 pass / 2 skip / 0 fail** across 234 files | Baseline was 2 964 / 231 → **+100 tests, +3 files, no regressions** |
+| **Phase 4 total** | **101** | |
+| Full suite | **3 065 pass / 2 skip / 0 fail** across 234 files | Baseline 2 964 / 231 → **+101 tests, +3 files, no regressions** |
 
 Regression suites run independently, per the task's instruction not to trust
 targeted runs:
 
 | Suite | Result |
 |---|---|
-| Phase 1/2/3 context (`src/context/`, prune, model-messages, overflow) | **280 pass / 0 fail** |
+| Phase 1/2/3 context (`src/context/`, prune, model-messages, overflow) | **281 pass / 0 fail** |
 | Approval / lifecycle / resume / detached (`chat-streams`, `chat-runs`, scheduler approval) | **132 pass / 0 fail** |
-| Full suite | **3 064 pass / 0 fail** |
+| Full suite | **3 065 pass / 0 fail** |
+
+### Negative controls — the tests were verified to actually fail
+
+The most important verification in the phase. A green suite proved nothing on its
+own, so each severe defect was **reintroduced into the source** and the suite
+re-run to confirm it goes red:
+
+| Defect reintroduced | Tests that failed |
+|---|---|
+| D1 — plan the span over the compacted view | **3** |
+| D2 — remove the latch release | **4** |
+| D3 — summariser ceiling = the budget | **10** |
+| D4 — drop the race, keep the advisory abort | **8** |
+
+**This verification found that three of the phase's own regression tests were
+vacuous.** The D1, D3 and D4 suites were green with their defects present. Two
+causes:
+
+- the orchestrator tests asserted the *orchestrator's* contract while the defect
+  lived in the *seam*, so they could never see it;
+- the seam tests only ever drove a **first** compaction, where nothing has been
+  injected yet, making the "no server-injected id" assertion vacuous by
+  construction.
+
+Both are now fixed, and D1 is tested through a real second compaction. This is
+recorded as defect **D7** below and is the single most important process finding
+of the phase: *a regression test that cannot fail is decoration.*
 
 ### Property-style invariants
 
@@ -421,21 +475,25 @@ conversation shapes:
   the first measurement — convergence, not oscillation;
 - identical inputs produce identical compacted output;
 - a durable record never covers a server-injected id, and every covered id exists
-  in what the client actually sent.
+  in what the client actually sent — asserted through a real generation-2
+  compaction.
 
 ### A note on test-harness fidelity
 
-Three tests were initially wrong in ways that produced *false confidence or false
-failure*, and each is now documented in place:
+Several tests were initially wrong in ways that produced *false confidence or
+false failure*, and each is now documented in place:
 
 - a mock model that ignored `abortSignal` "proved" the timeout was broken (it was
   actually the mock);
 - a store stub that did not write the latch meant the second-compaction path was
-  **never reached** — which is precisely how a real durability defect survived
-  several rounds of testing;
+  **never reached** — which is precisely how D1 survived several rounds of testing;
 - an 8 000-token test window was **smaller than Layer B alone** (~10 745 tokens),
-  so every request was rejected before compaction could matter. All fixture sizes
-  are now derived from measurement, and the reasoning is recorded in the tests.
+  so every request was rejected before compaction could matter;
+- a "moderate overage" fixture was in fact *over* the trigger once the tool layer
+  was counted, so it asserted the wrong thing.
+
+All fixture sizes are now derived from measurement, and the reasoning is recorded
+in the tests.
 
 ---
 
@@ -477,10 +535,16 @@ for exactly these.
 | D4 | Timeout implemented as an advisory abort. | **Moderate.** A provider that ignores the signal completed late and returned success past the deadline. | Test that deliberately used a slow model |
 | D5 | ADR initially claimed a `data-tbai-*` part would survive into the request. | Documentation wrong; would have justified a wrong design. | Empirical SDK probe before relying on it |
 | D6 | Test harness reused one in-memory record, so the latch never cleared and D1's path was unreachable. | Test blind spot that masked D1 across several rounds. | Noticed while reading probe output |
+| D7 | **Trigger compared Layer C alone against a whole-request budget**, understating pressure by the ~10 745-token tool layer. Also never checked that compaction would make the request fit. | **Severe.** Fired far too late, and made repeat compaction unreachable — so D1's path could not be exercised even deliberately. | Measurement probe while hunting for D1's negative control |
+| D8 | **Three of the phase's own regression tests were vacuous** — green with D1, D3 and D4 present. | **Severe process defect.** A green suite was hiding three of this phase's defects. | Reintroducing each defect and confirming the suite goes red |
 
-D1 is the one that matters most, and the reason is worth stating: **it produced no
-error, no failed test, and no log line.** It only appeared by constructing the
-realistic multi-turn sequence with a store that behaves like the production one.
+D1 and D8 are the two that matter most, and they are related: **D1 produced no
+error, no failed test and no log line**, and D8 is why — the test that should have
+caught it asserted the orchestrator's contract rather than the seam's behaviour,
+and only ever drove a first compaction where nothing has been injected yet. It
+surfaced only when each defect was deliberately reintroduced and the suite
+re-checked. Green tests were never evidence in this phase; only the negative
+controls were.
 
 ---
 
@@ -506,7 +570,7 @@ dependency. No dependency was added, upgraded or removed.
 
 | # | Criterion | Verdict |
 |---|---|---|
-| 1 | Measured compaction trigger | **PASS** — fraction of the real Phase 2 budget; budget-derived test asserts it scales with model size |
+| 1 | Measured compaction trigger | **PASS** — fraction of the real Phase 2 budget, measured on A + B + C; a budget-derived test asserts it scales with model size, and D7's fix is pinned by its negative control |
 | 2 | Hysteresis | **PASS** — durable latch; the D2 flaw is pinned by a named regression test |
 | 3 | Deterministic retained set | **PASS** — structural cut, id-located span, byte-identical rendering |
 | 4 | System/developer instructions protected | **PASS** — Layer A is never a message |
@@ -525,7 +589,7 @@ dependency. No dependency was added, upgraded or removed.
 | 17 | Compaction failure safe | **PASS** — byte-identical to the unwired assembly |
 | 18 | Phase 3 cache invariants preserved | **PASS** — deterministic request, stable summary position; capability layer untouched |
 | 19 | No new uncontrolled context-growth path | **PASS** — D1 was exactly such a path and is fixed; one row per conversation; convergence test |
-| 20 | Regression suite clean | **PASS** — 3 064 / 0 fail, +100 tests over baseline |
+| 20 | Regression suite clean | **PASS** — 3 065 / 0 fail, +101 tests over baseline |
 | 21 | Typecheck clean | **PASS** — backend exit 0, web exit 0, re-run independently |
 | 22 | Build clean | **PASS** — exit 0 |
 | — | **Live summarisation** | **UNVERIFIED** — no compatible credential (K3) |
@@ -593,7 +657,17 @@ Phase 5 (memory injection) was **not started**, and these are the seams it needs
    the *client* re-posts, or it will fail the same way D1 did. This applies to any
    future server-derived block, not just compaction.
 
-6. **Prohibited here, available there:** Phase 5 must not implement memory
+6. **Budget the whole request, not the part you can change.** D7's rule, and the
+   one most likely to be repeated: a trigger that measures only the injected layer
+   understates pressure by everything else in the request. Memory's own budget
+   must be computed against the total, and the "will this actually fit?" check
+   from `would_still_exceed_budget` should be reused verbatim.
+
+7. **Verify tests can fail.** Reintroduce the defect and confirm the suite goes
+   red before calling a fix done. Three of this phase's tests were green with
+   their defects present (D8).
+
+8. **Prohibited here, available there:** Phase 5 must not implement memory
    *injection* logic inside `assembleContext` directly. The seam already accepts an
    injected collaborator; memory should arrive through one, so the single-assembly-
    path rule holds.
@@ -620,7 +694,7 @@ Phase 5 (memory injection) was **not started**, and these are the seams it needs
 | Figure | Value |
 |---|---|
 | Native tool layer (Layer B) | ~10 745 tokens |
-| Test window / budget / summariser capacity (32k) | 32 000 / ~23 232 / ~29 952 |
+| Test window / budget / trigger / summariser capacity (32k) | 32 000 / ~23 232 / ~18 585 / ~29 952 |
 | Uncompacted → compacted estimate (working fixture) | ~46 000 → ~13 500 |
-| Phase 4 tests | 100 across 3 files |
-| Full suite | 3 064 pass / 2 skip / 0 fail, 234 files |
+| Phase 4 tests | 101 across 3 files |
+| Full suite | 3 065 pass / 2 skip / 0 fail, 234 files |

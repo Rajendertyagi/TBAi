@@ -200,7 +200,47 @@ it.
 The call is now raced against both the deadline and the caller's abort. TBAi's own
 bounds are authoritative, independent of provider behaviour.
 
+## A5. The trigger must measure the WHOLE request
+
+**Assumed:** comparing Layer C's measured size against `usableInputTokens` is
+close enough, since Layer C is what compaction can change.
+
+**Proved wrong by measurement.** `usableInputTokens` budgets Layer A + Layer B +
+Layer C, so comparing one layer understates pressure by the cost of the others —
+~10 745 tokens here for the native tool definitions alone. The trigger fired far
+too late, and repeat compaction became unreachable: since the span is "everything
+before the retained tail", the only way to re-cross the trigger was for the whole
+client history to stay inside the summariser's one-call capacity, which by
+definition means it did not need compacting again.
+
+The planner now receives measured `fixedOverheadTokens` (A + B) and adds them.
+This is the same class of error as A1: **two quantities that look interchangeable
+and are not.** Budget is not capacity; Layer C is not the request.
+
+Compaction also refuses with `would_still_exceed_budget`, because reclaiming a
+span that still leaves the request over budget buys a paid summarisation call and
+a rejection.
+
+## A6. A green suite is not evidence — verify the tests can fail
+
+**Assumed:** tests that assert the right invariants will catch a regression of
+them.
+
+**Proved wrong.** Three of this phase's own regression tests were **vacuous** —
+green with their defects present. The orchestrator tests asserted the
+*orchestrator's* contract while the defects lived in the *seam*, and the seam
+tests only ever drove a first compaction, where nothing has been injected yet and
+the "no server-injected id" assertion was true by construction.
+
+Every severe defect was then reintroduced into the source and the suite re-run to
+confirm it goes red. That is now the phase's exit condition for a fix, not a
+nicety: a test that cannot fail is decoration.
+
 ## K2. KNOWN LIMITATION — single-pass compaction has a hard size bound
+
+Once a conversation outgrows the summariser's one-call input capacity, its span
+can no longer be summarised in a single pass, and compaction **declines** with
+`span_exceeds_summarizer_capacity`. The pre-existing budget machinery then decides.
 
 Once a conversation outgrows the summariser's one-call input capacity, its span
 can no longer be summarised in a single pass, and compaction **declines** with
