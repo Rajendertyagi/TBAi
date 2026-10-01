@@ -42,7 +42,45 @@ export {
   CHARS_PER_TOKEN_ESTIMATE,
 } from "./measure";
 
-export { reduceToolResults, REQUEST_TOOL_RESULT_MAX_CHARS, REQUEST_REDUCIBLE_CATEGORIES } from "./reduce";
+export { reduceToolResults, describeToolResultReduction, REQUEST_TOOL_RESULT_MAX_CHARS, REQUEST_REDUCIBLE_CATEGORIES } from "./reduce";
+
+// Phase 5 — memory to model context. The provider boundary and every decision
+// TBAi owns over it. See `src/context/memory/contract.ts` for the boundary.
+export {
+  boundMemoryContent,
+  countExclusions,
+  createLocalMemoryProvider,
+  evaluateMemorySafety,
+  isValidCandidate,
+  localMemoryProvider,
+  memoryBudgetTokens,
+  memoryDiagnostics,
+  rankCandidates,
+  renderMemoryBlock,
+  runMemoryPhase,
+  selectMemories,
+  LOCAL_MEMORY_PROVIDER_ID,
+  MEMORY_BUDGET_CEILING_TOKENS,
+  MEMORY_BUDGET_FRACTION,
+  MEMORY_MAX_CANDIDATES,
+  MEMORY_MAX_CHARS,
+  MEMORY_MAX_SELECTED,
+  MEMORY_MESSAGE_ID_PREFIX,
+} from "./memory";
+export type {
+  ExcludedMemory,
+  MemoryCandidate,
+  MemoryCandidateProvider,
+  MemoryCandidateQuery,
+  MemoryExclusionReason,
+  MemoryPhaseInput,
+  MemoryPhaseResult,
+  MemoryReport,
+  MemorySafetyReason,
+  MemorySafetyVerdict,
+  MemorySeam,
+  SelectedMemory,
+} from "./memory";
 
 export { classifyDivergence, identifyCurrentTurn, countModelVisibleParts, reconcileWithStoredHistory } from "./divergence";
 

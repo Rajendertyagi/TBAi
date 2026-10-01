@@ -15,6 +15,8 @@
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from "ai";
 import type { ProviderConfig } from "../types";
 import type { BashOutputEvent } from "../services/tools";
+import type { MemoryReport } from "./memory/contract";
+import type { MemorySeam } from "./memory/seam";
 
 /**
  * Layer A - instructions / developer context.
@@ -310,6 +312,12 @@ export interface AssemblyProvenance {
    * has to distinguish "not attempted" from "not implemented".
    */
   readonly compaction?: CompactionReport;
+  /**
+   * Phase 5 memory. Always present once the seam exists, so a consumer never has
+   * to distinguish "not attempted" from "not implemented" — the same rule Phase 4
+   * set for `compaction`.
+   */
+  readonly memory?: MemoryReport;
   /** Measurement taken on the assembled request. */
   readonly estimate: InputSizeEstimate;
   /** Budget applied. */
@@ -571,4 +579,11 @@ export interface AssembleContextInput {
    * is what makes the feature inert rather than silently active.
    */
   readonly compaction?: CompactionSeam;
+  /**
+   * Phase 5 memory seam. Omitted ⇒ no memory is retrieved or injected.
+   *
+   * Inert by default for the same reason compaction is: a caller that has not
+   * opted in must not silently start sending persisted context to a provider.
+   */
+  readonly memory?: MemorySeam;
 }

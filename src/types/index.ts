@@ -229,6 +229,17 @@ export interface Memory {
   content: string;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Derived safety state (Phase 5, D3).
+   *
+   * Recomputed by the server on every read and never stored, so these two fields
+   * are absent whenever the memory screened clean. They are reported rather than
+   * computed in the browser so the panel and the model-context decision can never
+   * disagree about what was withheld.
+   */
+  safetyFlag?: true;
+  /** Which screening class fired. Stable token, not the pattern source. */
+  safetyReason?: string;
 }
 
 /** User-saved reusable message snippet (managed on the Quick Messages page). */

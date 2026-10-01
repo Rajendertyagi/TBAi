@@ -128,6 +128,14 @@ export interface Memory {
   content: string;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Derived safety state (Phase 5, D3). Reported by the server, never computed
+   * here — the panel must not be able to disagree with the backend about which
+   * memories are withheld from the model. Absent when the memory screened clean.
+   */
+  safetyFlag?: true;
+  /** Stable class token, e.g. `turn_structure`. Never the pattern source. */
+  safetyReason?: string;
 }
 
 /** Workspace mode for a conversation (codeg-aligned two-mode model). */

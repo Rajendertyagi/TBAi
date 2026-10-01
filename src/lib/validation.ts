@@ -95,6 +95,43 @@ export const providerDiscoverSchema = z.object({
 
 export type ProviderTest = z.infer<typeof providerTestSchema>;
 
+// Application memory (Phase 5).
+//
+// Phase 5 Part 3 audit found these routes accepted `body.content || ""` verbatim,
+// so an empty, missing, or non-string body silently produced an empty memory.
+// These schemas make a malformed payload a 400 instead.
+//
+// `MEMORY_CONTENT_MAX` bounds what can be STORED. It is deliberately larger than
+// the 4 000-character delivery cap in `context/memory/contract.ts`: storage is
+// the user's own text and is never truncated, while the model-visible rendering
+// is bounded at delivery time. Two different concerns, two different bounds.
+const MEMORY_CONTENT_MAX = 20_000;
+
+/**
+ * `.trim()` before `min(1)` so whitespace-only content is rejected.
+ *
+ * `z.string().min(1)` alone accepts `"   "`, which is exactly the class of
+ * malformed payload the old `body.content || ""` route silently accepted: a
+ * memory that stores nothing and can never be rendered. The transform is
+ * applied first, so what is validated — and what is stored — is the trimmed text.
+ */
+const memoryContent = z.string().trim().min(1).max(MEMORY_CONTENT_MAX);
+
+export const memoryCreateSchema = z.object({
+  content: memoryContent,
+});
+export type MemoryCreate = z.infer<typeof memoryCreateSchema>;
+
+export const memoryUpdateSchema = z.object({
+  // At least one field, so an empty PATCH is rejected rather than silently
+  // bumping `updatedAt` on an unchanged row.
+  content: memoryContent,
+});
+export type MemoryUpdate = z.infer<typeof memoryUpdateSchema>;
+
+/** Trimmed too: a whitespace id is not a valid identifier. */
+export const memoryIdSchema = z.string().trim().min(1).max(200);
+
 // Conversation persistence (assistant-ui RemoteThreadListAdapter)
 export const conversationCreateSchema = z.object({
   title: z.string().min(1).max(200).optional(),

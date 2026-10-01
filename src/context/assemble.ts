@@ -64,6 +64,7 @@ import { combineEstimates, measureInstructions, measureMessages, measureToolDefi
 import { reduceToolResults, describeToolResultReduction } from "./reduce";
 import { applyExistingCompaction, isCompactionLatched, maybeCompact, summarizeSpan } from "./compaction";
 import { describeCompactionOutcome } from "./compaction/outcome";
+import { memoryDiagnostics, runMemoryPhase } from "./memory";
 import type { CompactionPhaseInput, CompactionReport, CompactionSeam } from "./types";
 import type {
   AssembleContextInput,
@@ -269,7 +270,32 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     ]).estimatedTokens,
   });
 
-  const layerC: MessagesLayer = compaction.layerC;
+  // ── Phase 5: memory ───────────────────────────────────────────────────────
+  // Runs AFTER compaction and BEFORE measurement, and that order is the design.
+  //
+  // After compaction, so the memory block can never be inside a compactable span:
+  // Phase 4 computed its span from the client's own messages, which never contain
+  // an injected block. The invariant holds without touching Phase 4 at all.
+  // Before measurement, so memory is inside the estimate the budget gate judges —
+  // a context source that bypassed the budget would be the exact defect Phase 2
+  // exists to prevent.
+  //
+  // `layerC.messages` becomes the array WITH the block; the id sets are deliberately
+  // NOT recomputed. They were derived from conversation messages only, and the
+  // memory id belongs to neither — which is truthful, and keeps it out of Phase 3's
+  // `retainedMessageIds` so a changed selection only moves the dynamic suffix.
+  const memory = await runMemoryPhase({
+    conversationId,
+    messages: compaction.layerC.messages,
+    seam: input.memory,
+    usableInputTokens: budget.usableInputTokens,
+  });
+
+  const layerC: MessagesLayer = {
+    messages: memory.messages,
+    currentTurnIds: compaction.layerC.currentTurnIds,
+    retainedIds: compaction.layerC.retainedIds,
+  };
 
   // ── Measure ───────────────────────────────────────────────────────────────
   // Three per-layer estimates combined, so an overspend is attributable to a
@@ -311,6 +337,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
       lifecycleRepair,
       reduction: reduction.reducedParts > 0 ? reduction : null,
       compaction: compaction.report,
+      memory: memory.report,
       estimate,
       budget,
       limit,
@@ -320,6 +347,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
 
   const diagnostics = {
     ...budgetDiagnostics({ estimate, budget, limit, decision, messages: layerC }),
+    ...memoryDiagnostics(memory.report),
     nativeToolCount: layerB.nativeToolNames.length,
     mcpToolCount: layerB.mcpToolNames.length,
     mcpServerCount: layerB.mcpServerIds.length,

@@ -4,7 +4,23 @@ import { classifyError } from "./errors";
 // places API keys or the master password into error messages, but this scrubs
 // accidental leaks before they reach stdout/stderr.
 
-const SECRET_PATTERNS: RegExp[] = [
+/**
+ * Credential shapes TBAi treats as secret material.
+ *
+ * Exported (Phase 5, D3) so the memory safety check reuses THIS list rather than
+ * declaring a third one — `logger.ts` keeps its own copy for historical reasons,
+ * and adding a third would guarantee drift.
+ *
+ * ## The `g` flag is a hazard for callers
+ *
+ * These are stateful: `RegExp.prototype.test` advances `lastIndex` on a `g`
+ * pattern and leaves it there, so a caller that `test`s these objects mutates
+ * state that `redact()` below also uses. **Callers must not `test()` them
+ * directly.** Use `String.prototype.search` (which saves and restores
+ * `lastIndex`), or derive a non-global copy — which is what the memory safety
+ * module does.
+ */
+export const SECRET_PATTERNS: RegExp[] = [
   /sk-[A-Za-z0-9_-]{8,}/g,
   /AIza[0-9A-Za-z_-]{8,}/g,
   /xox[baprs]-[0-9A-Za-z-]{8,}/g,
