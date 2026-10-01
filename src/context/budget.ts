@@ -12,7 +12,7 @@
  * decision it makes is accept / reduce / reject.
  */
 
-import { describeLimitSource, resolveOutputReservation } from "./limits";
+import { describeLimitSource, isPhase3ExperimentEligible, resolveGenerationCap, resolveOutputReservation } from "./limits";
 import type { ContextLimit } from "./types";
 import {
   type BudgetDecision,
@@ -75,10 +75,18 @@ export function computeBudget(input: {
   const ceiling = input.limit.maxInputTokens;
 
   if (ceiling === undefined || !Number.isFinite(ceiling) || ceiling <= 0) {
+    // No enforceable ceiling, so there is no window to clamp the generation cap
+    // against. The cap still exists — an uncapped generation is not an option.
+    const generationCap = resolveGenerationCap({
+      modelOutputTokens: input.modelOutputTokens,
+      ceilingTokens: undefined,
+      usableInputTokens: undefined,
+    });
     return {
       usableInputTokens: undefined,
       safetyMarginTokens: 0,
       outputReservation,
+      generationCap,
       enforceable: false,
     };
   }
@@ -90,7 +98,16 @@ export function computeBudget(input: {
   const safetyMarginTokens = Math.floor(afterOutput * SAFETY_MARGIN_FRACTION);
   const usableInputTokens = Math.max(0, afterOutput - safetyMarginTokens);
 
-  return { usableInputTokens, safetyMarginTokens, outputReservation, enforceable: true };
+  // The generation cap is computed AFTER usable input, because it is clamped by
+  // the room the window still has left. The two quantities are separate (R1/P3):
+  // `outputReservation` is input held back, `generationCap` is output allowed.
+  const generationCap = resolveGenerationCap({
+    modelOutputTokens: input.modelOutputTokens,
+    ceilingTokens: ceiling,
+    usableInputTokens,
+  });
+
+  return { usableInputTokens, safetyMarginTokens, outputReservation, generationCap, enforceable: true };
 }
 
 /**
@@ -178,8 +195,17 @@ export function budgetDiagnostics(input: {
     measurementKind: "estimate_pre_request",
     windowLimit: limit.maxInputTokens ?? null,
     limitSource: describeLimitSource(limit),
+    // R1: whether this ceiling may be used to size a Phase 3 cache experiment.
+    // Emitted so the Phase 3 log analysis can exclude non-eligible runs instead
+    // of quietly averaging a fictional ceiling into a cache-effectiveness result.
+    phase3ExperimentEligible: isPhase3ExperimentEligible(limit),
     outputReserve: budget.outputReservation.tokens,
     outputReserveSource: budget.outputReservation.source,
+    // The generation cap is a DIFFERENT quantity from the reserve above; both
+    // are logged because the pre-R1 code used one value for both.
+    generationCap: budget.generationCap.tokens,
+    generationCapSource: budget.generationCap.source,
+    generationCapBoundedByWindow: budget.generationCap.boundedByRemainingWindow,
     safetyMargin: budget.safetyMarginTokens,
     usableInput: budget.usableInputTokens ?? null,
     enforceable: budget.enforceable,
@@ -189,6 +215,14 @@ export function budgetDiagnostics(input: {
     currentTurnCount: messages.currentTurnIds.length,
     categories: nonEmptyCategories,
   };
+
+  // A provider/configured disagreement is recorded only when it happened, so the
+  // common case carries no extra keys. The losing value is a count-free number.
+  if (limit.divergent && limit.divergentValue) {
+    base.limitDivergent = true;
+    base.limitDivergentValue = limit.divergentValue.value;
+    base.limitDivergentSource = limit.divergentValue.source;
+  }
 
   if (decision.action === "accept") base.headroom = decision.headroomTokens;
   if (decision.action === "reject") {

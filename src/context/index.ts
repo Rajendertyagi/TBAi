@@ -24,9 +24,14 @@ export {
 export {
   resolveContextLimit,
   resolveOutputReservation,
+  resolveGenerationCap,
   describeLimitSource,
+  isPhase3ExperimentEligible,
+  selectModelOption,
   UNKNOWN_LIMIT_CEILING,
   DEFAULT_OUTPUT_RESERVATION,
+  DEFAULT_GENERATION_CAP,
+  LEGACY_SOURCE,
 } from "./limits";
 
 export {
@@ -52,6 +57,7 @@ export type {
   ContextLimit,
   DivergenceOutcome,
   DivergenceReport,
+  GenerationCap,
   InputSizeEstimate,
   InstructionsLayer,
   LifecycleRepairReport,

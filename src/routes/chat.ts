@@ -578,13 +578,17 @@ app.post("/api/chat", async (c) => {
         tools,
         toolsContext,
         stopWhen: stepCountIs(20),
-        // Phase 2: the reserved room for the response, computed in
-        // `assembleContext` from the resolved output capability. Phase 1
-        // established Direct reserved nothing (F5), which let a request occupy
-        // the whole window and leave no room to answer. This is NOT available
-        // input context: the budget already subtracted it, and adding the two
-        // would double-count.
-        maxOutputTokens: assembled.context.provenance.budget.outputReservation.tokens,
+        // Phase 2: the ceiling on the model's own output, computed in
+        // `assembleContext`. Phase 1 established Direct reserved nothing (F5),
+        // which let a request occupy the whole window and leave no room to answer.
+        //
+        // R1: this is `generationCap`, NOT the input budget's `outputReservation`.
+        // The two are separate quantities that answer different questions — "how
+        // much input must I hold back?" versus "how much may the model emit?" —
+        // and the budget already subtracted the reservation, so the two must never
+        // be added together. The cap is pre-clamped to the room left in the
+        // window, which is what preserves `input + output <= ceiling`.
+        maxOutputTokens: assembled.context.provenance.budget.generationCap.tokens,
         experimental_toolApprovalSecret: approvalSecret,
         toolApproval: {
           write_file: "user-approval",

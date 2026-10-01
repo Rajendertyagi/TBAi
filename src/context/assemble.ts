@@ -53,7 +53,7 @@ import { pruneStaleMessages } from "../lib/prune-messages";
 import { logger } from "../lib/logger";
 import { computeBudget, decideBudget, budgetDiagnostics } from "./budget";
 import { identifyCurrentTurn, reconcileWithStoredHistory } from "./divergence";
-import { describeLimitSource, resolveContextLimit } from "./limits";
+import { describeLimitSource, resolveContextLimit, selectModelOption } from "./limits";
 import { combineEstimates, measureInstructions, measureMessages, measureToolDefinitions } from "./measure";
 import { reduceToolResults } from "./reduce";
 import type {
@@ -217,11 +217,19 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   ]);
 
   // ── Limit + budget ────────────────────────────────────────────────────────
+  // The selected model's stored metadata (its context window, the stance that
+  // produced it, and any documented output ceiling) is already present on the
+  // provider config the caller resolved — R1 verified the seam's input carried it
+  // and the read was simply never made. No network call, no discovery service, no
+  // cache: the registry is the only source, so `source` can only ever be a stance
+  // someone actually recorded.
+  const selectedModel = selectModelOption(provider.models, modelId);
   const limit: ContextLimit = resolveContextLimit({
     providerType: provider.type,
     modelId,
+    model: selectedModel,
   });
-  const budget = computeBudget({ limit });
+  const budget = computeBudget({ limit, modelOutputTokens: selectedModel?.maxOutputTokens });
   const decision = decideBudget({ estimate, budget, reducedAlready: reduction.reducedParts > 0 });
 
   // ── Convert to model messages ─────────────────────────────────────────────

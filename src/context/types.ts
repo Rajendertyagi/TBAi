@@ -81,38 +81,94 @@ export interface MessagesLayer {
   readonly retainedIds: readonly string[];
 }
 
-/** How a context-window limit was determined. Never collapsed to a number alone. */
+/**
+ * How an effective context-window limit was determined. Never collapsed to a
+ * number alone. (R1, 2026-10-01.)
+ *
+ * Four states, and the distinction between the first two and the last two is the
+ * whole point: the first two are figures SOMEONE stated about this model, the
+ * last two are figures TBAi stands in with.
+ *
+ * Stored provenance (`ContextWindowSource`, `src/types/index.ts`) has only the
+ * first two, because only those have a writer. These two additional states are
+ * produced by the resolver when no stored figure exists.
+ */
 export type LimitSource =
-  /** A real figure from a provider response or the provider registry. */
-  | "model_reported"
-  /** A figure the user configured. */
+  /** A figure from a provider's own listing/API for this model. */
+  | "provider_reported"
+  /** A figure a human configured for this installation. */
   | "configured"
-  /** A conservative fallback. NOT a claim about the model. */
-  | "default"
-  /** No figure available. The budget must handle this explicitly. */
+  /** TBAi's stand-in when nothing is known. NOT a claim about the model. */
+  | "conservative_default"
+  /** No ceiling at all. The budget must handle this explicitly. */
   | "unknown";
 
 export interface ContextLimit {
   /** Maximum input tokens, when known. Undefined when `source` is `unknown`. */
   readonly maxInputTokens: number | undefined;
-  /** Provenance. A defaulted or unknown limit is never reported as known. */
+  /** Provenance. A stood-in-for limit is never reported as a known figure. */
   readonly source: LimitSource;
   /** Provider the limit was read for. */
   readonly providerType: ProviderConfig["type"] | "unknown";
   /** Model id the limit was read for. */
   readonly modelId: string;
+  /**
+   * A competing candidate existed with a DIFFERENT value and did not win.
+   *
+   * Recorded rather than resolved silently so a disagreement between what a
+   * provider states and what an operator configured is observable in the logs
+   * instead of being lost. Always `false` when fewer than two candidates existed.
+   */
+  readonly divergent: boolean;
+  /**
+   * The candidate that lost, when `divergent` is true. Diagnostics only — the
+   * value that was NOT used. Absent otherwise.
+   */
+  readonly divergentValue?: { readonly value: number; readonly source: LimitSource };
 }
 
 /**
  * Output reservation - the input budget held back so a generation has room to
  * finish. Phase 1 established Direct reserved nothing (F5), which let a request
  * occupy the whole window and leave no room to answer.
+ *
+ * This is an INPUT-BUDGET quantity: it is subtracted from the ceiling before
+ * usable input is computed. It is NOT the generation cap — see `GenerationCap`.
  */
 export interface OutputReservation {
   /** Tokens reserved for completion. Always > 0. */
   readonly tokens: number;
   /** How the reservation was chosen. */
-  readonly source: "model_reported" | "default";
+  readonly source: "provider_reported" | "conservative_default";
+}
+
+/**
+ * MODEL GENERATION CAP - the ceiling placed on the model's own output, sent as
+ * `maxOutputTokens`. (R1, 2026-10-01.)
+ *
+ * Distinct from `OutputReservation`, and the separation is deliberate:
+ * - the reservation answers "how much input room must I hold back?", a BUDGET
+ *   decision TBAi owns;
+ * - the cap answers "how much may the model emit?", bounded by what the MODEL
+ *   supports and by the room actually left in the window.
+ *
+ * Sharing one value between them (the pre-R1 behaviour) capped generation at the
+ * 4,096-token reservation floor even for models documenting far larger output.
+ * The invariant that made sharing coherent — `input + output <= ceiling` — is
+ * now guaranteed explicitly by clamping the cap to `ceiling - usableInputTokens`
+ * instead of by making both sides happen to equal the reservation.
+ */
+export interface GenerationCap {
+  /** The value sent as `maxOutputTokens`. Always > 0. */
+  readonly tokens: number;
+  /** Where the bound came from. */
+  readonly source: "provider_reported" | "conservative_default";
+  /**
+   * True when the model's own documented ceiling was reduced because the room
+   * left in the window was smaller. Surfaced in diagnostics: it means the cap is
+   * budget-driven, not a statement about the model.
+   */
+  readonly boundedByRemainingWindow: boolean;
 }
 
 /**
@@ -124,8 +180,10 @@ export interface ContextBudget {
   readonly usableInputTokens: number | undefined;
   /** Fraction of the limit held back to absorb estimation error. */
   readonly safetyMarginTokens: number;
-  /** Room left for the response. */
+  /** Room left for the response. Held back from INPUT. */
   readonly outputReservation: OutputReservation;
+  /** Ceiling on the model's own output. Sent as `maxOutputTokens`. */
+  readonly generationCap: GenerationCap;
   /** Whether a ceiling could be computed at all. */
   readonly enforceable: boolean;
 }
