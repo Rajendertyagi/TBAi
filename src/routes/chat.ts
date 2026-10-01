@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { logger, newRequestId } from "../lib/logger";
 import { generateId } from "../lib/utils";
-import { getModel } from "../services/ai";
+import { getModel, resolveApiProtocol } from "../services/ai";
 import { buildReasoningProviderOptions } from "./chat-provider-options";
 import { credentialStore } from "../services/credentials";
 import { sanitizeStreamError } from "../lib/redact";
@@ -28,6 +28,18 @@ import {
   type NativeToolsContext,
 } from "../tools";
 import { assembleContext, logAssembly, logContextOverflow } from "../context";
+import {
+  buildCacheProviderOptions,
+  computePrefixIdentity,
+  describeCacheDecision,
+  describeCacheObservation,
+  describePrefixIdentity,
+  observeSdkCacheUsage,
+  resolveCacheCapability,
+  type CacheCapability,
+  type CacheControlDecision,
+  type PrefixIdentity,
+} from "../context/cache";
 import { createTerminalBatcher } from "../lib/terminal-stream";
 import { resumableContext, chatStreamStore } from "../lib/resumable";
 import {
@@ -325,6 +337,11 @@ app.post("/api/chat", async (c) => {
   let toolsContext: NativeToolsContext;
   let modelMessages: Awaited<ReturnType<typeof prepareModelMessages>>;
   let assembled: Awaited<ReturnType<typeof assembleContext>>;
+  // Phase 3 outputs. Declared here so the pre-flight rejection path can log the
+  // cache capability of a request it refuses to send.
+  let cacheCapability: CacheCapability | undefined;
+  let cacheControl: CacheControlDecision | undefined;
+  let cachePrefix: PrefixIdentity | undefined;
   try {
     assembled = await assembleContext({
       conversationId: threadId,
@@ -350,6 +367,30 @@ app.post("/api/chat", async (c) => {
     modelMessages = assembled.context.modelMessages as Awaited<
       ReturnType<typeof prepareModelMessages>
     >;
+
+    // ── Phase 3: cache capability, resolved BEFORE the model call ─────────────
+    // Two abstract questions, two typed answers. No provider name and no cache
+    // conditional appears here: every provider-specific fact lives behind
+    // `src/context/cache/` (asserted by cache-boundary.test.ts).
+    //
+    // 1. What does the vendor document for this EXACT provider + protocol + model?
+    cacheCapability = resolveCacheCapability({
+      providerType: modelConfig.type,
+      protocol: resolveApiProtocol(modelConfig) ?? "responses",
+      modelId: modelConfig.model,
+    });
+
+    // 2. What request options, if any, should go out?
+    cacheControl = buildCacheProviderOptions({ capability: cacheCapability });
+
+    // 3. Is the prefix that will be cached stable? A digest, never content.
+    cachePrefix = computePrefixIdentity({
+      layerAText: assembled.context.layerA.text,
+      nativeToolNames: assembled.context.layerB.nativeToolNames,
+      mcpToolNames: assembled.context.layerB.mcpToolNames,
+      retainedMessageIds: assembled.context.layerC.retainedIds,
+      currentTurnIds: assembled.context.layerC.currentTurnIds,
+    });
   } catch (err) {
     chatRuns.markFailed(run.streamId);
     throw err;
@@ -575,6 +616,24 @@ app.post("/api/chat", async (c) => {
         // exactly one system-prompt seam (asserted by
         // ChatWindow.tool-output-once.test.ts).
         ...assembled.context.layerA.toStreamTextOptions(),
+        // Phase 3: request-level cache controls, or nothing. `undefined` when the
+        // capability is unknown, implicit-only, or inexpressible without a Phase 2
+        // change — spreading `undefined` sends no parameter at all, which is the
+        // correct request in every one of those cases.
+        // Phase 3: request-level cache controls, MERGED with the reasoning options
+        // below rather than spread separately. `streamText` takes a single
+        // `providerOptions` object, so a second spread would be silently
+        // overwritten by whichever came last — and a dropped cache control is
+        // indistinguishable from caching that simply did not happen.
+        ...
+        (Object.keys(providerOptions).length || cacheControl?.providerOptions
+          ? {
+              providerOptions: {
+                ...providerOptions,
+                ...(cacheControl?.providerOptions ?? {}),
+              },
+            }
+          : {}),
         tools,
         toolsContext,
         stopWhen: stepCountIs(20),
@@ -649,6 +708,42 @@ app.post("/api/chat", async (c) => {
         onEnd: ({ finishReason, usage }) => {
           modelFinishReason = finishReason;
           modelUsage = usage as { totalTokens?: number } | undefined;
+
+          // ── Phase 3: observe what the provider actually reported ─────────────
+          // A measurement, never an inference. The provider's own numbers decide
+          // the verdict. Latency and request success are deliberately NOT
+          // consulted: a request below a documented minimum succeeds and simply
+          // caches nothing, so success is not evidence either way.
+          if (cacheCapability) {
+            const observation = observeSdkCacheUsage({
+              capability: cacheCapability,
+              usage,
+            });
+            chatLog.info("context", "cache_observed", {
+              requestId,
+              conversationId: threadId,
+              ...describeCacheObservation(observation),
+              ...(cacheControl ? describeCacheDecision(cacheControl) : {}),
+              ...(cachePrefix ? describePrefixIdentity(cachePrefix) : {}),
+              capabilityStatus: cacheCapability.status,
+              capabilityMode: cacheCapability.cacheMode,
+              // DOCUMENTED values, carried alongside the observation and never
+              // merged with it. `null` when nothing is documented — a stand-in
+              // number here would be indistinguishable from a vendor fact.
+              documentedMinimumPrefix:
+                cacheCapability.status === "documented" ? cacheCapability.documentedMinimumPrefixTokens : null,
+              documentedSource: cacheCapability.status === "documented" ? cacheCapability.source : null,
+              documentedVerifiedOn:
+                cacheCapability.status === "documented" ? cacheCapability.verifiedOn : null,
+              // R1's binding rule, evaluated per request: a conservative or
+              // configured context ceiling may bound safety but must never size a
+              // cache experiment.
+              contextLimitSource: assembled.context.provenance.limit.source,
+              phase3ExperimentEligible:
+                assembled.context.provenance.limit.source === "provider_reported",
+            });
+          }
+
           const finalProgress = progress.onFinish();
           writer.write({
             type: "data-tbai-progress",
@@ -694,7 +789,6 @@ app.post("/api/chat", async (c) => {
             data: abortedProgress,
           });
         },
-        ...(Object.keys(providerOptions).length ? { providerOptions } : {}),
       });
 
       writer.merge(toUIMessageStream({
