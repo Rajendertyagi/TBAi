@@ -26,6 +26,7 @@ import {
   cacheExperimentEligibility,
   computePrefixIdentity,
   comparePrefixIdentities,
+  describeCacheDecision,
   describeCacheObservation,
   describePrefixIdentity,
   documentedCacheCapabilities,
@@ -272,11 +273,43 @@ describe("C · explicit controls are emitted only where verified", () => {
     ).toEqual({ cacheControl: { type: "ephemeral" } });
   });
 
-  it("never sends a cache key to a provider that does not support one", () => {
+  it("sends NO cache key to any provider — formally deferred, not incidental", () => {
+    // DECISION (closure §4). TBAi has no cache-key source, and
+    // `buildCacheProviderOptions` has no parameter through which one could
+    // arrive. The absence is structural: a caller cannot opt out of it.
+    for (const [providerType, protocol, modelId] of [
+      ["anthropic", "responses", "claude-opus-5-5"],
+      ["openai", "responses", "gpt-6.1-sol"],
+      ["openai", "chat-completions", "gpt-6.1-sol"],
+      ["google", "responses", "gemini-3.8-flash"],
+    ] as const) {
+      const capability = resolveCacheCapability({ providerType, protocol, modelId });
+      const decision = buildCacheProviderOptions({ capability });
+      // An implicit-only capability sends nothing at all, so normalise before
+      // asserting on the payload.
+      const payload = JSON.stringify(decision.providerOptions ?? null);
+      expect(payload).not.toContain("promptCacheKey");
+      expect(payload).not.toContain("prompt_cache_key");
+      expect(payload).not.toContain("cacheKey");
+      // And the decision object has nowhere to carry one.
+      expect(Object.keys(decision) as string[]).not.toContain("cacheKey");
+    }
+  });
+
+  it("logs cacheKeySent:false so the deferred status is visible, not merely absent", () => {
+    const capability = resolveCacheCapability({ providerType: "openai", protocol: "responses", modelId: "gpt-6.1-sol" });
+    const projection = describeCacheDecision(buildCacheProviderOptions({ capability }));
+    expect(projection.cacheKeySent).toBe(false);
+    expect(projection.cacheControlSent).toBe(true);
+  });
+
+  it("records supportsCacheKey per model without acting on it", () => {
+    // The capability still records which models COULD take a key, so a future
+    // policy decision has the evidence without re-deriving it.
+    const openai = resolveCacheCapability({ providerType: "openai", protocol: "responses", modelId: "gpt-6.1-sol" });
     const anthropic = resolveCacheCapability({ providerType: "anthropic", protocol: "responses", modelId: "claude-opus-5-5" });
-    const decision = buildCacheProviderOptions({ capability: anthropic, cacheKey: "abc" });
-    expect(decision.cacheKey).toBeUndefined();
-    expect(JSON.stringify(decision.providerOptions)).not.toContain("abc");
+    expect(isDocumented(openai) && openai.supportsCacheKey).toBe(true);
+    expect(isDocumented(anthropic) && anthropic.supportsCacheKey).toBe(false);
   });
 });
 
@@ -333,17 +366,32 @@ describe("B · documented and observed stay separate", () => {
 describe("D · the two-request protocol distinguishes write from read", () => {
   const capability = resolveCacheCapability({ providerType: "anthropic", protocol: "responses", modelId: "claude-opus-5-5" });
 
-  /** Same retained prefix; the CURRENT TURN differs, which is the varying suffix. */
-  function leg(suffixId: string, observation: CacheExperimentLeg["observation"]): CacheExperimentLeg {
+  /**
+   * Anthropic automatic caching puts the breakpoint on the LAST cacheable block,
+   * so the reusable shape is APPEND GROWTH: the later request must contain
+   * everything the earlier one sent — its retained history AND its current turn,
+   * now settled — plus its own new tail.
+   *
+   * `promoted` models that. Omitting it models the same-length case, which cannot
+   * read the earlier write and must therefore be refused.
+   */
+  function leg(
+    suffixId: string,
+    observation: CacheExperimentLeg["observation"],
+    promoted: readonly string[] = ["m1", "m2"],
+  ): CacheExperimentLeg {
     const prefix: PrefixComponents = {
       layerAText: "You are a helpful assistant.",
       nativeToolNames: ["read_file", "write_file"],
       mcpToolNames: [],
-      retainedMessageIds: ["m1", "m2"],
+      retainedMessageIds: promoted,
       currentTurnIds: [suffixId],
     };
     return { suffixId, prefix, observation };
   }
+
+  /** Leg 2 as the real app sends it: leg 1's tail is now settled history. */
+  const GROWN = ["m1", "m2", "turn-a"];
 
   it("reports write-then-read when the second request reads the first's prefix", () => {
     const result = evaluateCacheExperiment({
@@ -351,7 +399,7 @@ describe("D · the two-request protocol distinguishes write from read", () => {
       measuredPrefixTokens: 4_000,
       legs: [
         leg("turn-a", observeCacheUsage({ capability, usage: { cacheWriteTokens: 4_000 } })),
-        leg("turn-b", observeCacheUsage({ capability, usage: { cacheReadTokens: 4_000 } })),
+        leg("turn-b", observeCacheUsage({ capability, usage: { cacheReadTokens: 4_000 } }), GROWN),
       ],
     });
     expect(result.verdict).toBe("write_then_read_observed");
@@ -368,7 +416,7 @@ describe("D · the two-request protocol distinguishes write from read", () => {
       measuredPrefixTokens: 100,
       legs: [
         leg("turn-a", observeCacheUsage({ capability, usage: { inputTokens: 100, noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 } })),
-        leg("turn-b", observeCacheUsage({ capability, usage: { inputTokens: 100, noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 } })),
+        leg("turn-b", observeCacheUsage({ capability, usage: { inputTokens: 100, noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 } }), GROWN),
       ],
     });
     expect(result.verdict).toBe("cache_not_observed");
@@ -383,7 +431,7 @@ describe("D · the two-request protocol distinguishes write from read", () => {
       capability,
       legs: [
         leg("turn-a", observeCacheUsage({ capability, usage: {} })),
-        leg("turn-b", observeCacheUsage({ capability, usage: {} })),
+        leg("turn-b", observeCacheUsage({ capability, usage: {} }), GROWN),
       ],
     });
     // Absent fields mean the provider exposed nothing, which is distinct from a
@@ -393,14 +441,47 @@ describe("D · the two-request protocol distinguishes write from read", () => {
     expect(result.supportsConclusion).toBe(false);
   });
 
-  it("refuses to conclude when the prefix changed between requests", () => {
+  it("refuses a SAME-LENGTH pair, which automatic caching can never make reusable", () => {
+    // THE FALSE-NEGATIVE CASE. Two requests with the same retained history whose
+    // FINAL BLOCK differs (regenerate / edit-and-resend / retry). The automatic
+    // breakpoint lands on that changed block, its hash differs from the earlier
+    // write at the same position, and the lookback finds nothing — even though
+    // caching is working perfectly. Reporting `cache_not_observed` here would
+    // manufacture a negative result, so the run is refused instead.
+    const result = evaluateCacheExperiment({
+      capability,
+      measuredPrefixTokens: 4_000,
+      legs: [
+        leg("turn-a", observeCacheUsage({ capability, usage: { cacheWriteTokens: 4_000 } })),
+        leg("turn-b", observeCacheUsage({ capability, usage: { cacheWriteTokens: 0, cacheReadTokens: 0 } })),
+      ],
+    });
+    expect(result.verdict).toBe("inconclusive_prefix_mismatch");
+    expect(result.supportsConclusion).toBe(false);
+    expect(result.reasons.some((r) => r.includes("append_growth"))).toBe(true);
+  });
+
+  it("accepts the growing pair that automatic caching CAN reuse", () => {
+    const result = evaluateCacheExperiment({
+      capability,
+      measuredPrefixTokens: 4_000,
+      legs: [
+        leg("turn-a", observeCacheUsage({ capability, usage: { cacheWriteTokens: 4_000 } })),
+        leg("turn-b", observeCacheUsage({ capability, usage: { cacheReadTokens: 4_000 } }), GROWN),
+      ],
+    });
+    expect(result.verdict).toBe("write_then_read_observed");
+    expect(result.supportsConclusion).toBe(true);
+  });
+
+  it("refuses to conclude when the tool set changed between requests", () => {
     const changed: CacheExperimentLeg = {
       suffixId: "turn-b",
       prefix: {
         layerAText: "You are a helpful assistant.",
         nativeToolNames: ["read_file", "write_file", "NEW_TOOL"],
         mcpToolNames: [],
-        retainedMessageIds: ["m1", "m2"],
+        retainedMessageIds: ["m1", "m2", "turn-a"],
         currentTurnIds: ["turn-b"],
       },
       observation: observeCacheUsage({ capability, usage: { cacheWriteTokens: 4_000 } }),
@@ -423,7 +504,7 @@ describe("D · the two-request protocol distinguishes write from read", () => {
       measuredPrefixTokens: 4_000,
       legs: [
         leg("same", observeCacheUsage({ capability, usage: { cacheWriteTokens: 4_000 } })),
-        leg("same", observeCacheUsage({ capability, usage: { cacheReadTokens: 4_000 } })),
+        leg("same", observeCacheUsage({ capability, usage: { cacheReadTokens: 4_000 } }), ["m1", "m2", "same"]),
       ],
     });
     expect(result.reasons).toContain("suffix_must_differ_between_requests");
@@ -480,35 +561,82 @@ describe("D · the two-request protocol distinguishes write from read", () => {
   });
 });
 
-// ─── Rule 10: a conservative default limit must never size an experiment ───
+// ─── Rule 10 (corrected): the SIZING SOURCE must be trustworthy ────────────
 
-describe("Rule 10 · a conservative_default limit cannot size a cache experiment", () => {
+describe("Rule 10 · a context ceiling may never size a cache experiment", () => {
   const capability = resolveCacheCapability({ providerType: "anthropic", protocol: "responses", modelId: "claude-opus-5-5" });
 
-  it("permits sizing only when the context limit is provider_reported", () => {
-    expect(cacheExperimentEligibility({ capability, contextLimitSource: "provider_reported" }).eligible).toBe(true);
+  it("permits sizing from the vendor's documented cache minimum", () => {
+    // CORRECTED RULE. A documented cache minimum is a trustworthy number in its
+    // own right, and exists even when TBAi knows nothing about the window. The
+    // previous gate demanded a `provider_reported` context CEILING, which wrongly
+    // forbade this: the ceiling and the cache threshold are separate facts and
+    // neither supplies the other.
+    expect(
+      cacheExperimentEligibility({ capability, sizingBasis: "documented_cache_minimum" }).eligible,
+    ).toBe(true);
   });
 
-  it("refuses sizing from a conservative_default ceiling", () => {
-    const eligibility = cacheExperimentEligibility({ capability, contextLimitSource: "conservative_default" });
+  it("permits sizing from TBAi's own measurement of the sent prefix", () => {
+    expect(cacheExperimentEligibility({ capability, sizingBasis: "measured_prefix" }).eligible).toBe(true);
+  });
+
+  it("permits the documented minimum even with no provider-reported context ceiling", () => {
+    // The installed configuration has 0/3 models with a provider-reported
+    // context limit. That must not block an experiment sized by the vendor's
+    // documented cache minimum.
+    expect(
+      cacheExperimentEligibility({
+        capability,
+        sizingBasis: "documented_cache_minimum",
+        contextLimitSource: "conservative_default",
+      }).eligible,
+    ).toBe(true);
+  });
+
+  it("refuses sizing from a context ceiling EVEN WHEN it is provider_reported", () => {
+    // Stricter than before, and deliberately so: a window size is not a cache
+    // threshold even when the number is real and correct.
+    const eligibility = cacheExperimentEligibility({
+      capability,
+      sizingBasis: "context_ceiling",
+      contextLimitSource: "provider_reported",
+    });
     expect(eligibility.eligible).toBe(false);
-    expect(eligibility.reasons.some((r) => r.includes("conservative_default"))).toBe(true);
+    expect(eligibility.reasons.some((r) => r.includes("context_ceiling"))).toBe(true);
   });
 
-  it("refuses sizing from a configured (user-set) limit", () => {
-    expect(cacheExperimentEligibility({ capability, contextLimitSource: "configured" }).eligible).toBe(false);
+  it("refuses sizing from a conservative default or an estimate", () => {
+    for (const basis of ["default_or_estimated", "context_ceiling"] as const) {
+      expect(
+        cacheExperimentEligibility({ capability, sizingBasis: basis, contextLimitSource: "conservative_default" })
+          .eligible,
+      ).toBe(false);
+    }
   });
 
   it("refuses sizing when the vendor documents no fixed minimum", () => {
     const varies = resolveCacheCapability({ providerType: "openai", protocol: "responses", modelId: "gpt-5" });
-    const eligibility = cacheExperimentEligibility({ capability: varies, contextLimitSource: "provider_reported" });
+    const eligibility = cacheExperimentEligibility({ capability: varies, sizingBasis: "documented_cache_minimum" });
     expect(eligibility.eligible).toBe(false);
     expect(eligibility.reasons.some((r) => r.includes("no_documented_minimum"))).toBe(true);
   });
 
   it("refuses sizing for an unknown capability", () => {
     const unknown = resolveCacheCapability({ providerType: "custom", protocol: "chat-completions", modelId: "agnes-3.0-flash" });
-    expect(cacheExperimentEligibility({ capability: unknown, contextLimitSource: "provider_reported" }).eligible).toBe(false);
+    expect(cacheExperimentEligibility({ capability: unknown, sizingBasis: "measured_prefix" }).eligible).toBe(false);
+  });
+
+  it("refuses sizing for a documented-but-unobservable model", () => {
+    const base = resolveCacheCapability({ providerType: "anthropic", protocol: "responses", modelId: "claude-opus-5-5" });
+    if (!isDocumented(base)) throw new Error("expected documented");
+    const unobservable = {
+      ...base,
+      usageEvidence: { writeObservable: false, readObservable: false },
+    };
+    expect(
+      cacheExperimentEligibility({ capability: unobservable, sizingBasis: "documented_cache_minimum" }).eligible,
+    ).toBe(false);
   });
 });
 

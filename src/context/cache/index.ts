@@ -63,8 +63,11 @@ export {
   evaluateCacheExperiment,
   cacheExperimentEligibility,
   CACHE_VERDICTS,
+  CACHE_SIZING_BASES,
   type CacheExperimentLeg,
   type CacheExperimentResult,
+  type CacheSizingBasis,
+  type CacheSizingBasisInput,
   type CacheVerdict,
 } from "./verification";
 

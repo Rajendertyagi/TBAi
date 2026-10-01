@@ -79,8 +79,6 @@ export type CacheControlDecision =
       readonly providerOptions: CacheProviderOptions | undefined;
       /** Modes the options actually request, for diagnostics. */
       readonly requestedModes: readonly string[];
-      /** Cache key supplied, when one was. */
-      readonly cacheKey?: string;
       /**
        * Why nothing was sent. Enumerated rather than free text so a log line is
        * greppable and an omitted control is never mistaken for a bug.
@@ -103,12 +101,10 @@ export type CacheOmissionReason = (typeof CACHE_OMISSION_REASONS)[number];
  * @param capability Result of `resolveCacheCapability` for this exact model.
  *                   Supplies the providerOptions namespace itself.
  * @param ttl Optional TTL, only honoured when the capability documents it.
- * @param cacheKey Optional stable key, only honoured when supported.
  */
 export function buildCacheProviderOptions(input: {
   capability: CacheCapability;
   ttl?: CacheTtlOption | undefined;
-  cacheKey?: string | undefined;
 }): CacheControlDecision {
   const { capability } = input;
   const namespace = capability.namespace;
@@ -148,14 +144,42 @@ export function buildCacheProviderOptions(input: {
     return omit("explicit_controls_not_available_without_phase2_change");
   }
 
-  const cacheKey = input.cacheKey && capability.supportsCacheKey ? input.cacheKey : undefined;
-  if (cacheKey) requestedModes.push("cache_key");
-
+  // ── CACHE KEY: formally deferred, and structurally so ──────────────────────
+  //
+  // TBAi supplies NO explicit cache key, and this function has no parameter
+  // through which one could arrive. That is the decision, recorded in
+  // `docs/phase-3-closure-report.md` §4, and it is expressed by ABSENCE rather
+  // than by a convention a future caller could quietly opt out of.
+  //
+  // The evidence, from vendor documentation read 2026-10-01:
+  //
+  // - Anthropic has no cache key at all, so a universal scheme is impossible.
+  // - Google needs none: its implicit caching is automatic.
+  // - OpenAI GPT-5.6 and later: "OpenAI handles cache routing automatically; the
+  //   key is not needed to optimize caching." It exists for SEPARATE CACHE
+  //   ACCOUNTING per customer or user — which a single-user local install has no
+  //   use for.
+  // - OpenAI before GPT-5.6: the key IS a documented hit-rate optimisation
+  //   ("use a stable prompt_cache_key ... to optimize cache routing"). That is
+  //   the one case where a key could measurably help, and it is the exact trigger
+  //   for revisiting: if such a model is actually configured, measure hit rate
+  //   with and without a key before enabling one. TBAi registers these models and
+  //   currently sends none.
+  //
+  // A conversation-ID key would be actively WRONG, not merely unnecessary: the
+  // vendor groups keys by requests that SHARE a reusable prefix, so keying per
+  // conversation would prevent reuse across conversations that legitimately
+  // share a prefix. OpenAI also documents keys as a defence against cache-hit
+  // probing across users — a consideration a client-influenceable key would
+  // weaken.
+  //
+  // TBAi's own identity of a reusable prefix is `PrefixIdentity.fingerprint`,
+  // computed locally and never sent. Provider-native caching already supplies the
+  // identity that matters: reuse requires the serialised prefix to match.
   return {
     send: true,
     providerOptions: { [namespace]: options },
     requestedModes,
-    ...(cacheKey ? { cacheKey } : {}),
   };
 }
 
@@ -185,7 +209,9 @@ export function describeCacheDecision(decision: CacheControlDecision): Record<st
       cacheControlSent: true,
       cacheControlModes: [...decision.requestedModes],
       cacheControlOmissionReason: null,
-      ...(decision.cacheKey ? { cacheKeyProvided: true } : {}),
+      // Always false. Recorded so a log line can never imply a key is in play,
+      // and so the deferred status is visible rather than merely absent.
+      cacheKeySent: false,
     };
   }
   return {

@@ -86,6 +86,31 @@ const wroteOrRead = (kind: CacheObservationKind): boolean =>
   kind === "write_observed" || kind === "read_observed" || kind === "write_and_read_observed";
 
 /**
+ * Whether this capability's breakpoint sits on the LAST cacheable block.
+ *
+ * True only for Anthropic-style automatic caching, where the provider moves the
+ * breakpoint to the final block and relies on a bounded lookback to find earlier
+ * writes. Such a mode can only reuse a prefix that the later request CONTAINS.
+ */
+function requiresAppendGrowthShape(capability: CacheCapability): boolean {
+  return capability.status === "documented" && capability.providerType === "anthropic";
+}
+
+/**
+ * Whether `second` contains `first` plus appended content.
+ *
+ * The later request's retained history must begin with everything the earlier
+ * request sent — its retained history AND its current turn, which the earlier
+ * request sent as a variable tail and the later one carries as settled history.
+ * That promotion is exactly what makes the earlier prefix reusable.
+ */
+function secondExtendsFirst(first: PrefixComponents, second: PrefixComponents): boolean {
+  const firstSent = [...first.retainedMessageIds, ...first.currentTurnIds];
+  if (second.retainedMessageIds.length < firstSent.length) return false;
+  return firstSent.every((id, index) => second.retainedMessageIds[index] === id);
+}
+
+/**
  * Evaluate a two-request cache experiment.
  *
  * @param capability Documented capability for the exact model, or `unknown`.
@@ -146,12 +171,62 @@ export function evaluateCacheExperiment(input: {
     };
   }
 
-  // 3. Prefix mismatch invalidates the comparison: without an identical prefix a
-  //    missing read is uninterpretable rather than negative.
+  // 3. Prefix compatibility, which is MODE-DEPENDENT.
+  //
+  //    This check was previously mode-blind and that was a real defect. Under
+  //    Anthropic AUTOMATIC caching the breakpoint sits on the LAST cacheable
+  //    block, so a prior write is only reusable when the later request CONTAINS
+  //    the earlier one plus appended content. Two same-length requests that
+  //    differ only in the final block cannot read each other's write — the
+  //    breakpoint hash differs and the lookback finds nothing — even when
+  //    caching is working perfectly. Judging that pair would manufacture a false
+  //    negative.
+  //
+  //    Providers whose breakpoints land on an INTERVAL (OpenAI implicit, Gemini)
+  //    behave differently: the same prefix with a different tail does read.
+  //
+  //    Verified against the real Anthropic request body: turn 1's `messages` are a
+  //    byte-exact prefix of turn 2's, and no message id is serialised, so append
+  //    growth is the shape caching can actually reuse.
   const firstIdentity = computePrefixIdentity(first.prefix);
   const secondIdentity = computePrefixIdentity(second.prefix, firstIdentity);
   const comparison = comparePrefixIdentities(firstIdentity, secondIdentity);
-  if (!comparison.identical) {
+  const requiresAppendGrowth = requiresAppendGrowthShape(capability);
+
+  // 3a. Layer B / Layer A churn invalidates the ENTIRE cache, in every mode and
+  //     regardless of breakpoint position. Anthropic documents it explicitly:
+  //     "Modifying tool definitions (names, descriptions, parameters)
+  //     invalidates the entire cache." So this is checked FIRST and
+  //     unconditionally — it is not part of the append-growth special case.
+  const invalidating = secondIdentity.invalidationReasons.filter(
+    (r) => r !== "history_appended",
+  );
+  if (invalidating.length > 0) {
+    reasons.push("stable_prefix_changed_between_requests");
+    return {
+      verdict: "inconclusive_prefix_mismatch",
+      supportsConclusion: false,
+      reasons: [...reasons, ...invalidating],
+      documented,
+      observed,
+    };
+  }
+
+  // 3b. Breakpoint-position compatibility.
+  if (requiresAppendGrowth && !secondExtendsFirst(first.prefix, second.prefix)) {
+    reasons.push(
+      "automatic_cache_requires_append_growth: the later request must contain the earlier one plus appended content, because the automatic breakpoint sits on the last cacheable block",
+    );
+    return {
+      verdict: "inconclusive_prefix_mismatch",
+      supportsConclusion: false,
+      reasons,
+      documented,
+      observed,
+    };
+  }
+
+  if (!comparison.identical && !requiresAppendGrowth) {
     reasons.push("suffix_varied_but_prefix_also_changed");
     return {
       verdict: "inconclusive_prefix_mismatch",
@@ -161,6 +236,9 @@ export function evaluateCacheExperiment(input: {
       observed,
     };
   }
+
+  // 3c. The suffix must actually vary, or the second request is a byte-identical
+  //     repeat that proves nothing about which part was reused.
   if (first.prefix.currentTurnIds.length === 0 || second.prefix.currentTurnIds.length === 0) {
     reasons.push("experiment_requires_a_varying_suffix");
   }
@@ -221,26 +299,63 @@ export function evaluateCacheExperiment(input: {
 }
 
 /**
+ * Where the number used to size or select a cache prefix comes from.
+ *
+ * Four sources, and only two are trustworthy for sizing an experiment. The
+ * distinction the phase rules insist on is between the **cache threshold** (a
+ * vendor-documented minimum for a model) and the **context-window ceiling** (how
+ * large the window is). They are separate facts, neither supplies the other, and
+ * one must never be substituted for the other.
+ *
+ * The gate therefore asks WHERE THE NUMBER CAME FROM rather than what the context
+ * limit's provenance is. Requiring a `provider_reported` context ceiling would
+ * wrongly forbid an experiment sizing against the vendor's own documented cache
+ * minimum — an equally trustworthy number, and one that exists even when TBAi
+ * knows nothing at all about the window.
+ */
+export const CACHE_SIZING_BASES = [
+  /** The vendor's documented cache minimum for this exact model. Trustworthy. */
+  "documented_cache_minimum",
+  /** TBAi's own measurement of the prefix actually sent. Trustworthy. */
+  "measured_prefix",
+  /** The model's context-window ceiling. NEVER a valid sizing basis. */
+  "context_ceiling",
+  /** TBAi's stand-in ceiling or an estimate. NEVER a valid sizing basis. */
+  "default_or_estimated",
+] as const;
+export type CacheSizingBasis = (typeof CACHE_SIZING_BASES)[number];
+
+export interface CacheSizingBasisInput {
+  readonly capability: CacheCapability;
+  /** Where the number used to size/select the prefix comes from. */
+  readonly sizingBasis: CacheSizingBasis;
+  /**
+   * TBAi's context-limit provenance for this model.
+   *
+   * RECORDED for the log line only. It no longer gates eligibility, because the
+   * forbidden thing is sizing from the CEILING — not holding an untrustworthy
+   * ceiling. Sizing from `context_ceiling` is refused regardless of provenance.
+   */
+  readonly contextLimitSource?: string | undefined;
+}
+
+/**
  * Whether an experiment may produce a SIZING claim.
  *
  * Two independent gates, both required:
  *
- * 1. A DOCUMENTED minimum must exist for this exact model. Without one there is
- *    no number to size against.
- * 2. TBAi's CONTEXT CEILING must never be used as the sizing input. A
- *    `conservative_default` or `unknown` limit describes no model, so a prefix
- *    sized from it is meaningless — this is the Phase 3 binding rule from the
- *    roadmap §3.0.1, enforced here at the point where a decision would otherwise
- *    be taken.
+ * 1. A DOCUMENTED, observable minimum must exist for this exact model. Without a
+ *    vendor number there is nothing trustworthy to size against.
+ * 2. The sizing number must come from a trustworthy SOURCE — the vendor's
+ *    documented cache minimum, or TBAi's own measurement of the prefix it sent.
+ *    A context ceiling is never a valid basis, whatever its provenance.
  *
  * @returns Whether a sizing claim is permitted, and why not if it is not.
  */
-export function cacheExperimentEligibility(input: {
-  capability: CacheCapability;
-  /** Whether TBAi's context limit for this model is provider-reported. */
-  contextLimitSource: string;
-}): { eligible: boolean; reasons: readonly string[] } {
-  const { capability, contextLimitSource } = input;
+export function cacheExperimentEligibility(
+  input: CacheSizingBasisInput,
+): { eligible: boolean; reasons: readonly string[] } {
+  const { capability, sizingBasis } = input;
   const reasons: string[] = [];
 
   if (capability.status === "unknown") {
@@ -254,11 +369,19 @@ export function cacheExperimentEligibility(input: {
     reasons.push("no_documented_minimum: vendor states the minimum varies by request settings");
   }
 
-  // The binding rule: a stood-in-for context ceiling may bound safety, never a
-  // cache experiment. Sizing from it would produce a confidently wrong answer.
-  if (contextLimitSource !== "provider_reported") {
+  // The binding rule, stated over the SOURCE rather than the ceiling's
+  // provenance. A context-window size is not a cache threshold even when it is a
+  // real number, so it is refused outright; TBAi's stand-in is refused twice
+  // over. This is STRICTER than requiring a `provider_reported` ceiling, and it
+  // no longer forbids sizing against the vendor's own documented minimum.
+  if (sizingBasis === "context_ceiling") {
     reasons.push(
-      `context_limit_source_${contextLimitSource}: a conservative or configured limit may bound safety but must not size a cache experiment`,
+      "sizing_basis_context_ceiling: a context-window ceiling is not a cache threshold; use documented_cache_minimum or measured_prefix",
+    );
+  }
+  if (sizingBasis === "default_or_estimated") {
+    reasons.push(
+      "sizing_basis_default_or_estimated: a conservative default or estimate describes no model and must not size a cache experiment",
     );
   }
 
