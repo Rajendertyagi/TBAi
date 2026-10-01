@@ -50,6 +50,31 @@ sqlite.run("PRAGMA foreign_keys=ON");
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
 sqlite.run(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
 
+// Phase 4: durable compaction records. Additive and idempotent — one new table,
+// no existing table altered and no row rewritten. Originals are never touched, so
+// deleting these rows is a complete rollback. See
+// docs/adr-2026-10-01-context-compaction.md.
+sqlite.run(`
+  CREATE TABLE IF NOT EXISTS conversation_compactions (
+    conversation_id      TEXT PRIMARY KEY,
+    compaction_id        TEXT NOT NULL UNIQUE,
+    generation           INTEGER NOT NULL DEFAULT 1,
+    latched               INTEGER NOT NULL DEFAULT 1,
+    span_start_index     INTEGER NOT NULL,
+    span_end_index       INTEGER NOT NULL,
+    covered_message_ids  TEXT NOT NULL,
+    span_fingerprint     TEXT NOT NULL,
+    summary_text         TEXT NOT NULL,
+    summary_tokens       INTEGER NOT NULL,
+    origin               TEXT NOT NULL CHECK(origin = 'model_generated_summary'),
+    summarized_by        TEXT NOT NULL,
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  )
+`);
+sqlite.run("CREATE INDEX IF NOT EXISTS idx_compactions_created ON conversation_compactions (created_at)");
+
 // Create tables
 sqlite.run(`
   CREATE TABLE IF NOT EXISTS provider_configs (
