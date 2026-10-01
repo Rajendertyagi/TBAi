@@ -502,6 +502,153 @@ describe("a successful compaction is recorded and applied together", () => {
 
 // ─── the defect this suite exists to prevent ───────────────────────────────
 
+describe("a concurrent writer never has its span silently overwritten", () => {
+  /**
+   * Store semantics identical to `compactionStore.record`: a strictly-greater
+   * generation wins, everything else returns the row that is already there.
+   */
+  function racingStore() {
+    const rows = new Map<string, CompactionRecord>();
+    return {
+      rows,
+      persist: (r: CompactionRecord) => {
+        const existing = rows.get(r.conversationId);
+        if (existing && existing.generation >= r.generation) return existing;
+        rows.set(r.conversationId, r);
+        return r;
+      },
+    };
+  }
+
+  function racingInput(messages: UIMessage[], summaryText: string, store: ReturnType<typeof racingStore>, idFactory: (g: number) => string) {
+    return compactInput({
+      messages,
+      summarize: async () => ({
+        ok: true as const,
+        summaryText,
+        summaryTokens: 30,
+        summarizedBy: "test/model",
+        origin: "model_generated_summary" as const,
+      }),
+      persist: store.persist,
+      nextCompactionId: idFactory,
+      existing: undefined,
+      compactionLatched: false,
+    });
+  }
+
+  function sizedConversation(turns: number): UIMessage[] {
+    const out: UIMessage[] = [];
+    for (let i = 0; i < turns; i += 1) {
+      out.push(user(`u${i}`, `q${i} ${"pad ".repeat(60)}`));
+      out.push(assistant(`a${i}`, `r${i} ${"reply ".repeat(60)}`));
+    }
+    out.push(user("live", "THE LIVE REQUEST"));
+    return out;
+  }
+
+  it("a race loser keeps its own messages instead of splicing the winner's summary over them", async () => {
+    // D9. Two concurrent requests over the SAME conversation with DIFFERENT
+    // histories — two tabs, or a detached run plus a new submit. A wins
+    // generation 1 over the shorter history; B loses over the longer one.
+    //
+    // The defect: B applied the winner's summary across B's OWN plan indices, so
+    // every message between the two spans left B's request and was covered by no
+    // durable record. Silent loss, no provenance, unrecoverable from the record.
+    const store = racingStore();
+    // Unique ids, exactly as the route generates them.
+    let n = 0;
+    const uniqueIds = () => `cmp_${++n}`;
+
+    const short = sizedConversation(12);
+    const long = sizedConversation(16);
+
+    const a = await maybeCompact(racingInput(short, "SUMMARY A (short span)", store, uniqueIds));
+    expect(a.outcome.applied).toBe(true);
+    const winner = store.rows.get("conv-1");
+    expect(winner?.generation).toBe(1);
+
+    const b = await maybeCompact(racingInput(long, "SUMMARY B (long span)", store, uniqueIds));
+    // B lost the race, so the durable record is still A's.
+    expect(store.rows.get("conv-1")?.generation).toBe(1);
+    expect(store.rows.get("conv-1")?.summaryText).toBe("SUMMARY A (short span)");
+
+    const sentIds = b.messages.map((m) => String(m.id));
+    // THE ASSERTION: nothing from B's own history may be dropped.
+    for (const id of long.map((m) => String(m.id))) {
+      const coveredByRecord = new Set(winner!.coveredMessageIds);
+      // A message is either still present, or explicitly described by the record.
+      expect(
+        sentIds.includes(id) || coveredByRecord.has(id),
+        `message ${id} vanished from the loser's request and is covered by no record`,
+      ).toBe(true);
+    }
+    // And the live turn is always present.
+    expect(sentIds).toContain("live");
+  });
+
+  it("a race loser is recognised even when both writers generate the SAME id", async () => {
+    // Race detection must not rest on `compactionId`. Two writers at the same
+    // generation produce the same id whenever the id is derived from the
+    // generation, so an id comparison makes the loser believe it won. Identity is
+    // (generation, spanFingerprint), which cannot collide.
+    const store = racingStore();
+    const derivedIds = (g: number) => `cmp_${g}`;
+
+    await maybeCompact(racingInput(sizedConversation(12), "SUMMARY A", store, derivedIds));
+    const b = await maybeCompact(racingInput(sizedConversation(16), "SUMMARY B", store, derivedIds));
+
+    const sent = JSON.stringify(b.messages);
+    // B's summary must NOT be present — it lost, so A's is authoritative.
+    expect(sent).toContain("SUMMARY A");
+    expect(sent).not.toContain("SUMMARY B");
+    // And B's own extra turns must survive.
+    for (let i = 12; i < 16; i += 1) {
+      expect(sent, `u${i} must survive`).toContain(`"u${i}"`);
+      expect(sent, `a${i} must survive`).toContain(`"a${i}"`);
+    }
+  });
+
+  it("refuses to compact at all when the winner's span is absent from the loser's history", async () => {
+    // A branched or regenerated conversation: the winner's covered ids do not exist
+    // here. Locating them is impossible, and mis-splicing would drop messages the
+    // winner never described. Refusing is the only safe outcome.
+    const store = racingStore();
+    await maybeCompact(racingInput(sizedConversation(12), "SUMMARY A", store, (g) => `cmp_${g}`));
+    // A branched or regenerated conversation: the winner's covered ids do not exist
+    // here. It must still be large enough to PLAN a compaction, otherwise the
+    // planner refuses first (`span_too_small_to_compact`) and the loser path is
+    // never reached — which is safe, but would leave the race untested.
+    const alien: UIMessage[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      alien.push(user(`z${i}`, `other branch ${i} ${"pad ".repeat(60)}`));
+      alien.push(assistant(`y${i}`, `other reply ${i} ${"reply ".repeat(60)}`));
+    }
+    alien.push(user("live", "THE LIVE REQUEST"));
+    const b = await maybeCompact(racingInput(alien, "SUMMARY alien", store, (g) => `cmp_${g}`));
+    expect(b.outcome.applied).toBe(false);
+    if (b.outcome.applied === false) {
+      expect(b.outcome.reason).toBe("lost_race_span_not_locatable");
+    }
+    // Nothing removed.
+    expect(JSON.stringify(b.messages)).toBe(JSON.stringify(alien));
+  });
+
+  it("reports whether this turn won the race, so diagnostics can tell", async () => {
+    const store = racingStore();
+    let n = 0;
+    const ids = () => `cmp_${++n}`;
+    const winner = await maybeCompact(racingInput(sizedConversation(12), "A", store, ids));
+    expect(winner.outcome.applied).toBe(true);
+    if (winner.outcome.applied) expect(winner.outcome.wonRace).toBe(true);
+
+    const loser = await maybeCompact(racingInput(sizedConversation(16), "B", store, ids));
+    if (loser.outcome.applied) {
+      expect(loser.outcome.wonRace, "the second writer must know it lost").toBe(false);
+      expect(loser.outcome.record.summaryText).toBe("A");
+    }
+  });
+});
 describe("a repeated compaction must record only ids the client will re-post", () => {
   it("hands the summariser the previous summary so history is not dropped", async () => {
     // Without this, the second compaction's span covers strictly MORE of the

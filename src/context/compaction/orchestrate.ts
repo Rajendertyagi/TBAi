@@ -62,6 +62,14 @@ export type CompactionOutcome =
       readonly plan: Extract<CompactionPlan, { kind: "compact" }>;
       /** Tokens the removed span was estimated to occupy. */
       readonly reclaimedTokens: number;
+      /**
+       * Whether THIS turn's compaction is the one now stored.
+       *
+       * False when a concurrent writer won the race and this turn applied the
+       * winner's record instead. Diagnostics must distinguish the two: the second
+       * case did no summarisation work worth attributing to itself.
+       */
+      readonly wonRace: boolean;
     };
 
 export interface MaybeCompactInput {
@@ -210,18 +218,54 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
     return { messages: [...input.messages], outcome: { applied: false, reason: "persist_failed" } };
   }
 
-  // Apply the STORED record, not the proposed one. If another writer won the
-  // race, its span is authoritative and applying ours would contradict the
-  // durable record.
-  const applied = applyCompaction({ messages: input.messages, plan, record: stored });
+  // Did we actually win the race? `persist` returns whatever is stored, which may
+  // be another writer's record.
+  //
+  // Identity is (generation, spanFingerprint), NOT `compactionId`. The audit found
+  // that id-based detection is unsound: two concurrent writers at the same
+  // generation can produce the SAME id whenever the id is derived from the
+  // generation rather than from a unique per-call source, and a test doing exactly
+  // that made a losing writer believe it had won. Comparing the span we measured
+  // against the span that was stored is semantic and cannot collide.
+  const wonRace =
+    stored.generation === record.generation && stored.spanFingerprint === record.spanFingerprint;
+
+  // ## Why the loser's path re-locates the winner's span by ID
+  //
+  // Splicing OUR plan indices with THEIR summary is a silent history-loss defect,
+  // and it was found by adversarial audit rather than by review. Verified: with
+  // request A winning generation 1 over 20 turns (its record covering a2..a19) and
+  // request B losing over 24 turns, B replaced ITS OWN index range [5..47] with
+  // A's summary. Eight messages (u20..a23) left B's request and were covered by no
+  // durable record at all — no provenance, no way to recover them, and the model
+  // was told a summary that did not describe what had been removed.
+  //
+  // So when we lose: apply the WINNER's record located by id, exactly as an ordinary
+  // reload would. If their span is not present in our message list — a different
+  // branch, or a history that diverged — compact nothing at all. Refusing is safe;
+  // mis-splicing is not.
+  const applied = wonRace
+    ? { messages: applyCompaction({ messages: input.messages, plan, record: stored }), applied: true as const }
+    : applyExistingCompaction({ messages: input.messages, record: stored });
+
+  if (applied.applied === false) {
+    return {
+      messages: [...input.messages],
+      outcome: { applied: false, reason: "lost_race_span_not_locatable" },
+    };
+  }
 
   return {
-    messages: applied,
+    messages: applied.messages,
     outcome: {
       applied: true,
       record: stored,
       plan,
       reclaimedTokens: plan.spanEstimatedTokens,
+      // True when this turn applied its own compaction; false when it deferred to a
+      // concurrent writer's record. Diagnostics need to distinguish them, because
+      // the second turn did no summarisation work worth attributing to itself.
+      wonRace,
     },
   };
 }
