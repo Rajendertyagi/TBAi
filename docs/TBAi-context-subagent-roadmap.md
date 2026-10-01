@@ -596,9 +596,26 @@ dead run. ⚠️ This needs a maintainer decision, not just an implementation.
 
 ## Phase 3 — Provider Prompt Caching
 
-**Status:** NOT STARTED. **Phase 2 complete and certified**; R1 (limit provenance)
-**resolved and implemented** — see §3.0.1. Caching keys on an identical request
-prefix, which requires deterministic assembly (§2.4), and that precondition is met.
+**Status: IMPLEMENTED — NOT LIVE-VERIFIED.** Phase 2 complete and certified; R1
+resolved and implemented (§3.0.1). Code, tests, boundary enforcement and
+per-request diagnostics are in place, but **no cache write or read has been
+observed on any real provider** (see §3.10).
+
+| Deliverable | Status |
+|---|---|
+| Capability registry keyed by full provider + protocol + model | **IMPLEMENTED, VERIFIED** |
+| Unknown-model policy (send nothing) | **IMPLEMENTED, VERIFIED** |
+| Anthropic + OpenAI request-level cache controls | **IMPLEMENTED, VERIFIED** (gated on exact model) |
+| Stable-prefix identity + invalidation reasons | **IMPLEMENTED, VERIFIED** |
+| Cache observation from provider usage (read + write) | **IMPLEMENTED, LIVE-VERIFIED** (unknown path) |
+| Two-request verification protocol | **IMPLEMENTED, VERIFIED** (evaluates legs; performs no requests) |
+| `cache_observed` diagnostics | **IMPLEMENTED, LIVE-VERIFIED** |
+| **Provider cache write/read observed** | **UNVERIFIED** — no Anthropic/OpenAI credential configured |
+| **Explicit per-block breakpoints** | **DEFERRED** — needs a Phase 2 contract change (§3.10) |
+| **Cache key** | **DEFERRED** — product decision |
+| Ollama / Gemini behaviour | **UNVERIFIED** — neither provider configured |
+
+Full record: `docs/phase-3-provider-prompt-caching.md`.
 
 ### 3.0.1 Binding safety rule — a stand-in ceiling may not size an experiment (R1, 2026-10-01)
 
@@ -720,8 +737,20 @@ construction and must not be introduced.
 | `verified on` | Access date — **re-verify before implementation** |
 | `notes / caveats` | Version-gated behaviour, platform differences |
 
-**Current documented values** (verified 2026-09-30; **re-verify immediately
-before implementation**):
+**Current documented values** (re-verified **2026-10-01**; superseded the
+2026-09-30 table below in `docs/phase-3-provider-prompt-caching.md` §3):
+
+⚠️ **CORRECTION (2026-10-01).** The 2026-09-30 table below states *"Caching is
+**explicit** on Anthropic: `cache_control` markers are required. Without a marker
+nothing is cached."* **That is no longer true.** Anthropic now documents
+**automatic caching**: a single **top-level** `cache_control` field, with the system
+moving the breakpoint to the last cacheable block as the conversation grows,
+available on every platform except legacy Amazon Bedrock (Opus 4.6 and earlier,
+where it returns a **400**). This correction is load-bearing — automatic caching is
+the request-level control Phase 3 needs.
+
+✅ **The non-monotonic-minimums warning below is confirmed** and is now enforced by
+a test rather than by prose.
 
 #### OpenAI — https://developers.openai.com/api/docs/guides/prompt-caching
 
@@ -752,7 +781,7 @@ before implementation**):
 | Claude Haiku 4.5 | **4,096** | 5m / 1h | 4 |
 | Claude Haiku 3.5 | **2,048** | 5m | 4 |
 
-- Caching is **explicit** on Anthropic: `cache_control` markers are required. Without a marker nothing is cached.
+- Caching is **explicit** on Anthropic: `cache_control` markers are required. Without a marker nothing is cached. ⚠️ **SUPERSEDED 2026-10-01 — see the correction above: automatic caching is now documented and needs only a top-level field.**
 - **Breakpoint placement and order matter.** Up to **4** explicit breakpoints per request.
 - TTL: standard **5-minute**, extended **1-hour**. Bedrock documents the ordering constraint — longer-TTL blocks must appear *after* shorter-TTL ones.
 - ⚠️ The minimum is **cumulative across the entire cacheable prefix before each checkpoint**, including `tools`, `system`, and `messages` — not just the marked block.
@@ -945,6 +974,62 @@ something TBAi cannot act on. Do not copy the metric without the control.
 
 
 ---
+
+### 3.10 Implementation record (2026-10-01)
+
+**Delivered:** `src/context/cache/{types,capabilities,request,observe,prefix,verification,index}.ts`
+plus `cache.test.ts` (49 tests), and route wiring in `src/routes/chat.ts`.
+
+**The architectural decision that shaped the phase.** **Request-level cache
+controls only; per-block markers are DEFERRED.** Both remaining providers' explicit
+controls are per content block (the AI SDK reads Anthropic's `cache_control` from
+each *message part's* providerOptions; OpenAI's `prompt_cache_breakpoint` is an
+*input content-block field*). Expressing either would mean writing
+provider-specific fields into the Layers B and C that `assembleContext` produced —
+breaching the capability boundary, the no-bypass rule, and the ban on provider
+branches in the orchestration layer at once. Both vendors document a request-level
+mode needing no per-block markers and recommend it for an append-only
+conversation, so Phase 3 enables those.
+
+⚠️ **Known limitation of that choice.** Anthropic's automatic caching places the
+breakpoint at the **last cacheable block**, which its own guide identifies as the
+wrong choice when a varying block is last — and TBAi's current-turn tail is exactly
+that. Anthropic caching may therefore underperform until explicit marker placement
+exists. Recorded as P3-R3.
+
+**Two bugs the tests caught during implementation**, both now fixed:
+
+1. **Anthropic cache options were being emitted under the `openai` namespace key**,
+   where the Anthropic provider silently ignores them — a failure indistinguishable
+   from "caching did not happen". The namespace is now recorded *with* the
+   capability rather than passed in by the caller.
+2. **Phase 3 broke a Phase 2 invariant, and the Phase 2 test was right.**
+   `ChatWindow.tool-output-once.test.ts` pins that `chat.ts` contains **zero**
+   `instructions:` occurrences, because `instructions` is the reserved `streamText`
+   Layer A key. My first `computePrefixIdentity({ instructions: … })` reintroduced
+   it. Renamed to `layerAText`; the Phase 2 test was **not** weakened.
+
+**Provider capability is UNKNOWN for `custom` / `ollama`.** Protocol compatibility
+is not cache capability, and `@ai-sdk/openai-compatible` exposes no cache control
+at all — only a passive read. The installed provider (`agnes`, type `custom`)
+therefore sends **no** cache parameter, which is the correct request.
+
+**Live verification** (server on `:3012`, provider config unmodified): normal
+request HTTP 200 / 63 SSE frames; oversized 4 MB HTTP 400 in 62 ms; the
+`cache_observed` line reports `cacheControlSent=false`,
+`cacheControlOmissionReason=capability_unknown`, `documentedMinimumPrefix=null`,
+`prefixStable=true`, `contextLimitSource=conservative_default`,
+`phase3ExperimentEligible=false`.
+
+**No cache write or read has been observed.** No Anthropic or OpenAI credential is
+configured, and provider configuration was deliberately **not** modified to
+manufacture one. **No cache hit is claimed.**
+
+**What Phase 4 inherits:** `computePrefixIdentity` can show whether a compaction
+preserved a cacheable prefix, and `evaluateCacheExperiment` reports
+`inconclusive_prefix_mismatch` when it did not. OpenAI's guide states compaction
+"can prevent reuse from the first changed token onward", so Phase 4 must **measure**
+rather than assume. See `docs/phase-3-provider-prompt-caching.md` §13.
 
 ## Phase 4 — Automatic Summarization / Compaction
 
