@@ -10,7 +10,7 @@
  *
  * - **Lifecycle repair.** `pruneStaleMessages` is untouched and still runs first.
  * - **Assembly.** `assembleContext` remains the only Direct context path.
- * - **Enforcement.** The Phase 2 budget still decides accept / reduce / reject.
+ * - **Enforcement.** The Phase 2 budget still decides accept / reject.
  *   Compaction reduces the INPUT to that decision; it never overrides it.
  * - **Cache controls.** Phase 3's capability layer stays authoritative.
  * - **Provider selection.** The summariser model is injected.
@@ -52,6 +52,10 @@ export {
 export {
   isCompactionLatched,
 } from "./orchestrate";
+
+export {
+  describeCompactionOutcome,
+} from "./outcome";
 
 /**
  * Default policy.

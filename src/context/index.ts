@@ -62,8 +62,11 @@ export type {
   InstructionsLayer,
   LifecycleRepairReport,
   LimitSource,
+  MechanismOutcome,
   MessagesLayer,
   OutputReservation,
+  ReductionRecord,
+  ReductionReason,
   ReductionReport,
   ToolDefinitionLayer,
 } from "./types";

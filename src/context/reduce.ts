@@ -36,7 +36,7 @@
  */
 
 import type { UIMessage } from "ai";
-import type { ContextCategory, InputSizeEstimate, ReductionReport } from "./types";
+import type { ContextCategory, InputSizeEstimate, MechanismOutcome, ReductionReport } from "./types";
 
 /**
  * Per-result character ceiling for the request.
@@ -203,6 +203,29 @@ export const REQUEST_REDUCIBLE_CATEGORIES: readonly ContextCategory[] = [
   "tool_results",
   "reasoning",
 ];
+
+/**
+ * Describe what request-side reduction did, in the budget gate's vocabulary.
+ *
+ * ## Why this is always `exhausted`
+ *
+ * `reduceToolResults` runs on EVERY request — there is no flag, no policy gate and
+ * no eligibility test — and it truncates each result to a fixed cap in a single
+ * pass. So once it returns, there is nothing further this mechanism can take from
+ * this request, whether or not it found anything:
+ *
+ * - `reducedParts > 0` → it shrank the request and is now at its cap (`applied`).
+ * - `reducedParts === 0` → it ran and this request has no reducible content.
+ *
+ * The two cases are distinct in diagnostics but identical as verdicts, which is
+ * why `no_reducible_content` is not treated as a withholding: there is genuinely
+ * nothing that was held back.
+ */
+export function describeToolResultReduction(report: ReductionReport): MechanismOutcome {
+  return report.reducedParts > 0
+    ? { kind: "exhausted", reason: "applied" }
+    : { kind: "exhausted", reason: "no_reducible_content" };
+}
 
 /**
  * Measure a reduction so its effect is attributable in diagnostics.

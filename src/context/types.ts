@@ -337,19 +337,113 @@ export interface ReductionReport {
   readonly droppedParts: number;
 }
 
-/** The budget verdict for one assembled request. */
+/**
+ * Why a reduction mechanism did or did not shrink this request.
+ *
+ * Every value is a reason the system can actually observe. Nothing here is
+ * speculative: each maps to a real outcome from `reduceToolResults` or a real
+ * `CompactionReport.reason`.
+ */
+export type ReductionReason =
+  /** It ran and shrank the request. */
+  | "applied"
+  /** It ran (or was applicable) and this request has nothing of that shape. */
+  | "no_reducible_content"
+  /** Compaction's trigger threshold was not reached, so it was never offered. */
+  | "trigger_not_reached"
+  /** Compaction was suppressed by the hysteresis latch and will run later. */
+  | "hysteresis"
+  /** Compaction was offered, ran, and would still not have made it fit. */
+  | "would_still_exceed_budget"
+  /** The span to compact exceeds the summariser's one-call input capacity. */
+  | "span_exceeds_summarizer_capacity"
+  /** There is no settled span that may be compacted. */
+  | "no_compactable_span"
+  /** The candidate span is smaller than the summary that would replace it. */
+  | "span_too_small_to_compact"
+  /** A summary was planned but would not have reclaimed enough to matter. */
+  | "summary_would_not_reclaim_enough"
+  /** Compaction is configured off for this request. */
+  | "disabled"
+  /** The mechanism does not apply to this request's shape. */
+  | "not_eligible"
+  /** The mechanism ran and failed, or lost a race it could not resolve. */
+  | "failed"
+  /** A mechanism exists whose outcome this build does not classify. */
+  | "unknown";
+
+/**
+ * One reduction mechanism's disposition for one request.
+ *
+ * ## Why exactly two states
+ *
+ * The governing distinction for F-A is **"nothing left to try" vs "nothing was
+ * offered"**, and that — not the mechanism's identity, and not a bag of booleans —
+ * is the axis the budget gate needs. So the union has two members and the reason
+ * carries the detail.
+ *
+ * - `exhausted` — this mechanism is done for this request. It applied and gave
+ *   everything it can (`applied`), or it was applicable and has nothing left to
+ *   take (`no_reducible_content`, `would_still_exceed_budget`,
+ *   `span_exceeds_summarizer_capacity`, …). Nothing further is available HERE.
+ * - `withheld` — a mechanism that could have helped was deliberately not used:
+ *   the hysteresis latch, compaction being configured off, or a failure. The
+ *   request is therefore sent rather than rejected, because the policy choice not
+ *   to compact must not be converted into a hard failure by the budget gate.
+ *
+ * `exhausted` and `withheld` are mutually exclusive by construction, so
+ * "exhausted AND withheld" cannot be represented and cannot be misread.
+ */
+export type MechanismOutcome =
+  | { readonly kind: "exhausted"; readonly reason: ReductionReason }
+  | { readonly kind: "withheld"; readonly reason: ReductionReason };
+
+/**
+ * Every size-reduction mechanism's disposition for one assembled request.
+ *
+ * A fixed record rather than a list, because the two mechanisms are known and each
+ * is reported separately in diagnostics. An unknown mechanism cannot be silently
+ * dropped the way an unclaimed category could.
+ */
+export interface ReductionRecord {
+  /** `reduceToolResults`: tool/MCP output and reasoning. Always runs. */
+  readonly toolResults: MechanismOutcome;
+  /** Phase 4 compaction. Only offered when a caller wires the seam. */
+  readonly compaction: MechanismOutcome;
+}
+
+/**
+ * The budget verdict for one assembled request.
+ *
+ * ## Why `"reduce"` is gone
+ *
+ * It was returned in four of seven decision scenarios and **no consumer acted on
+ * it** — every consumer branched on `"reject"` alone, so a `"reduce"` verdict
+ * meant "send it anyway" while claiming a reduction that never happened. That is
+ * the F-A defect.
+ *
+ * Reduction is an EARLIER STAGE, not a verdict: `reduceToolResults` and compaction
+ * both run before this decision, and {@link ReductionRecord} says what they
+ * achieved. So the verdict is only ever "send it" or "do not send it", and both
+ * mean exactly what they say. An unhandled verdict is now unrepresentable.
+ */
 export type BudgetDecision =
-  | { readonly action: "accept"; readonly headroomTokens: number }
   | {
-      readonly action: "reduce";
-      /** Categories reduced, in the order they were reduced. */
-      readonly reduced: readonly ContextCategory[];
-      readonly afterTokens: number;
+      readonly action: "accept";
+      readonly headroomTokens: number;
+      /** What each reduction mechanism did, for diagnostics and audit. */
+      readonly reduction: ReductionRecord;
     }
   | {
       readonly action: "reject";
-      readonly reason: "over_limit" | "limit_unknown_and_over_ceiling";
+      /**
+       * `over_limit` — the estimate band proves it is over at its densest end.
+       * `reduction_exhausted` — the band cannot rule it out, but the point estimate
+       *   is over and nothing safe is left to try.
+       */
+      readonly reason: "over_limit" | "reduction_exhausted";
       readonly overBy: number;
+      readonly reduction: ReductionRecord;
     };
 
 /**

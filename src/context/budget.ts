@@ -7,9 +7,9 @@
  * much?". They have different correctness requirements, and most importantly a
  * size decision must NEVER be able to drop an unexpired approval decision.
  *
- * Nothing in this module removes or rewrites a part. It computes a verdict and
- * reports the reduction that was already applied by `reduce.ts`; the only
- * decision it makes is accept / reduce / reject.
+ * Nothing in this module removes or rewrites a part. Reduction happens BEFORE the
+ * verdict, in `reduce.ts` and the compaction seam; this module only judges what
+ * they achieved, so its verdict is binary and honest: accept / reject.
  */
 
 import { describeLimitSource, isPhase3ExperimentEligible, resolveGenerationCap, resolveOutputReservation } from "./limits";
@@ -21,6 +21,7 @@ import {
   type ContextCategory,
   type InputSizeEstimate,
   type MessagesLayer,
+  type ReductionRecord,
 } from "./types";
 
 /**
@@ -37,6 +38,14 @@ export const SAFETY_MARGIN_FRACTION = 0.25;
 /**
  * Categories eligible for size reduction, in the order they are reduced.
  *
+ * **Sourced from `reduce.ts`, never restated here.** This constant previously
+ * listed six categories — `mcp_results`, `tool_results`, `reasoning`,
+ * `data_parts`, `attachments`, `assistant_text` — while `reduce.ts` only ever
+ * touched three, and `decideBudget` returned all six in its `reduced` field. A
+ * request where NOTHING had been reduced therefore logged a reduction of
+ * `data_parts`, `attachments` and `assistant_text`. That is the Finding 1 defect:
+ * the budget claimed work nobody did, in production diagnostics.
+ *
  * Order encodes policy. Current user input is never reduced, and neither is
  * tool-call/result PAIRING - a result is never dropped or truncated in a way
  * that invalidates its call. Reducing an old tool result is safe precisely
@@ -45,6 +54,11 @@ export const SAFETY_MARGIN_FRACTION = 0.25;
  * `reasoning` is reduced because Phase 1 established it is resent
  * unconditionally (F10) and therefore accumulates unboundedly; whether it should
  * be resent at all is a separate policy decision (U16) and is NOT made here.
+ *
+ * `data_parts`, `attachments` and `assistant_text` remain UNIMPLEMENTED as
+ * reduction targets. If one is ever implemented it must be added in `reduce.ts`
+ * first, and this constant will follow it — which is the whole point of not
+ * restating the list.
  */
 export const REDUCIBLE_CATEGORIES: readonly ContextCategory[] = REQUEST_REDUCIBLE_CATEGORIES;
 
@@ -107,46 +121,102 @@ export function computeBudget(input: {
 /**
  * Decide what to do with an assembled request.
  *
- * `reducedAlready` reports the size reduction `reduce.ts` applied before this
- * call, so the verdict can say "reduce happened" rather than the budget silently
- * assuming a smaller number than was measured.
+ * ## The one-sentence contract
+ *
+ * The verdict is `accept` (send it) or `reject` (do not send it), and every path
+ * that returns `accept` while the estimate is over must be able to say *why no
+ * safe reduction remained*.
+ *
+ * ## Why reduction is an input, not an output
+ *
+ * `reduceToolResults` and compaction both run BEFORE this call. This function is
+ * not asked to perform a reduction, and it cannot: by now the messages are
+ * measured. What it needs is the structured fact of what was attempted, so the
+ * verdict can distinguish:
+ *
+ *   - nothing left to try   → reject (F-A Case B/C)
+ *   - nothing was withheld  → still reject; a mechanism that is simply done
+ *   - something withheld    → accept (F-A Case D)
+ *
+ * The old `reducedAlready: boolean` could not express that, which is exactly how a
+ * request with nothing reducible came to be sent with a point estimate 61% over
+ * budget.
+ *
+ * ## Determinism
+ *
+ * Pure. Same estimate, budget and reduction record ⇒ same verdict.
  */
 export function decideBudget(input: {
   estimate: InputSizeEstimate;
   budget: ContextBudget;
-  reducedAlready: boolean;
+  /** What each reduction mechanism actually did. Required — no defaulting. */
+  reduction: ReductionRecord;
 }): BudgetDecision {
-  const { estimate, budget, reducedAlready } = input;
+  const { estimate, budget, reduction } = input;
   const usable = budget.usableInputTokens;
+  const { estimatedTokens: point, range } = estimate;
+
+  const accept = (headroomTokens: number): BudgetDecision => ({ action: "accept", headroomTokens, reduction });
+
+  if (usable === undefined) {
+    // No enforceable ceiling, so there is no budget to enforce and no verdict to
+    // derive. `budget.enforceable` is already false and carries that fact to the
+    // caller. The previous code returned `"reduce"` here and asked the caller to
+    // decide — but no caller could, so it meant "send it" while claiming a
+    // reduction had happened.
+    return accept(0);
+  }
 
   // Use the HIGH end of the estimate band for the accept decision. Accepting on
   // the point estimate would let a request through whenever the corpus is denser
   // than assumed, which is the failure the whole module exists to prevent.
-  const worstCase = estimate.range.high;
+  const worstCase = range.high;
 
-  if (usable === undefined) {
-    // Unenforceable: no ceiling at all. Report the reduction and let the caller
-    // decide, rather than silently accepting.
-    return { action: "reduce", reduced: reducedAlready ? ["tool_results"] : [], afterTokens: estimate.estimatedTokens };
+  // Fits even at the pessimistic end: send, with the honest headroom.
+  if (worstCase <= usable) return accept(usable - worstCase);
+
+  // Over at the DENSE end too: the corpus cannot be dense enough to fit. Reject.
+  // This is the one verdict that was already correct and is unchanged.
+  if (range.low > usable) {
+    return { action: "reject", reason: "over_limit", overBy: range.low - usable, reduction };
   }
 
-  if (worstCase <= usable) return { action: "accept", headroomTokens: usable - worstCase };
+  // The band straddles the budget: `low <= usable < high`. Whether the request
+  // really fits is genuinely uncertain, so this is where the policy has to be
+  // explicit rather than accidental.
+  //
+  // The point estimate is the project's single best number and the usable budget
+  // already holds back a safety margin for the estimator's documented
+  // pessimism (measure.ts uses 3 chars/token against a ~4 prose rule). So a point
+  // estimate that fits is sent. A point estimate that does NOT fit is not sent
+  // unless a mechanism that could have helped was deliberately withheld.
+  if (point <= usable) return accept(usable - point);
 
-  // Over the ceiling at the conservative end of the band but not the point
-  // estimate: reduce rather than reject, because the request may still fit.
-  if (reducedAlready && estimate.estimatedTokens <= usable) {
-    return { action: "accept", headroomTokens: usable - estimate.estimatedTokens };
+  // Point estimate over budget, band cannot rule it out. Everything from here is
+  // Case B/C/D.
+  if (hasWithheldMechanism(reduction)) {
+    // Case D. A mechanism that could have helped was not used: the hysteresis latch
+    // will release on a later turn, compaction is configured off, or it failed.
+    // The deliberate policy not to compact must NOT become a hard failure here —
+    // that would be converting a conservative choice into an outage.
+    return accept(usable - point);
   }
 
-  if (estimate.range.low > usable) {
-    return {
-      action: "reject",
-      reason: "over_limit",
-      overBy: estimate.range.low - usable,
-    };
-  }
+  // Case B/C. Every applicable mechanism is done: applied, exhausted, or had
+  // nothing of its shape. Nothing safe is left to try, so sending would be
+  // sending an oversized request and hoping the provider accepts the estimator's
+  // pessimism — the exact behaviour this decision exists to prevent.
+  return { action: "reject", reason: "reduction_exhausted", overBy: point - usable, reduction };
+}
 
-  return { action: "reduce", reduced: [...REDUCIBLE_CATEGORIES], afterTokens: estimate.estimatedTokens };
+/**
+ * Whether any reduction mechanism that could have helped was deliberately not used.
+ *
+ * The single place the Case D policy is decided, so it cannot be applied
+ * inconsistently between verdicts and diagnostics.
+ */
+function hasWithheldMechanism(reduction: ReductionRecord): boolean {
+  return reduction.toolResults.kind === "withheld" || reduction.compaction.kind === "withheld";
 }
 
 /**
@@ -208,6 +278,18 @@ export function budgetDiagnostics(input: {
     retainedCount: messages.retainedIds.length,
     currentTurnCount: messages.currentTurnIds.length,
     categories: nonEmptyCategories,
+    // F-A: what each reduction mechanism actually did. Emitted unconditionally
+    // because the WHOLE POINT is that the reduction state must be observable
+    // without reconstructing it from token counts. Previously the only reduction
+    // diagnostic was a hardcoded category list, which claimed work that had not
+    // happened whenever the verdict was the dead `"reduce"`.
+    toolResultReduction: decision.reduction.toolResults.kind,
+    toolResultReductionReason: decision.reduction.toolResults.reason,
+    compactionReduction: decision.reduction.compaction.kind,
+    compactionReductionReason: decision.reduction.compaction.reason,
+    // Case D made explicit at a glance: a helpful mechanism was deliberately
+    // withheld, so an over-budget estimate was sent rather than rejected.
+    reductionWithheld: hasWithheldMechanism(decision.reduction),
   };
 
   // A provider/configured disagreement is recorded only when it happened, so the
@@ -223,7 +305,6 @@ export function budgetDiagnostics(input: {
     base.rejectReason = decision.reason;
     base.overBy = decision.overBy;
   }
-  if (decision.action === "reduce") base.reducedCategories = decision.reduced;
   return base;
 }
 

@@ -61,8 +61,9 @@ import { computeBudget, decideBudget, budgetDiagnostics } from "./budget";
 import { identifyCurrentTurn, reconcileWithStoredHistory } from "./divergence";
 import { describeLimitSource, resolveContextLimit, selectModelOption } from "./limits";
 import { combineEstimates, measureInstructions, measureMessages, measureToolDefinitions } from "./measure";
-import { reduceToolResults } from "./reduce";
+import { reduceToolResults, describeToolResultReduction } from "./reduce";
 import { applyExistingCompaction, isCompactionLatched, maybeCompact, summarizeSpan } from "./compaction";
+import { describeCompactionOutcome } from "./compaction/outcome";
 import type { CompactionPhaseInput, CompactionReport, CompactionSeam } from "./types";
 import type {
   AssembleContextInput,
@@ -71,6 +72,7 @@ import type {
   ContextLimit,
   InstructionsLayer,
   MessagesLayer,
+  ReductionRecord,
   ToolDefinitionLayer,
 } from "./types";
 
@@ -123,10 +125,10 @@ export function buildInstructionsLayer(systemPrompt: string | undefined): Instru
  * It used to be required and was never read. It was removed rather than wired up
  * because every honest use of it would break the guarantee above: the only place
  * it could go is the returned layer, and a per-run id in the serialized Layer B
- * makes the cacheable prefix differ on every request - which would destroy Layer
- * C's cacheability in exactly the way the paragraph above exists to prevent.
- * Per-run attribution already happens at the call site, which logs the assembly
- * once with the real `requestId` (`logAssembly`). Do not re-add it.
+ * makes the cacheable prefix differ on every single request - which would destroy
+ * Layer C's cacheability in exactly the way the paragraph above exists to
+ * prevent. Per-run attribution already happens at the call site, which logs the
+ * assembly once with the real `requestId` (`logAssembly`). Do not re-add it.
  */
 export function buildToolLayer(input: {
   toolSignal: AbortSignal;
@@ -279,7 +281,18 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     measureMessages(layerC),
   ]);
 
-  const decision = decideBudget({ estimate, budget, reducedAlready: reduction.reducedParts > 0 });
+  // ── Reduction record (F-A) ────────────────────────────────────────────────
+  // Built from what the two mechanisms ACTUALLY did, before the verdict, so the
+  // verdict can distinguish "nothing left to try" from "nothing was offered". The
+  // previous signal was `reducedParts > 0`, a single boolean that could not express
+  // either case for a request with no tool output at all — which is exactly how an
+  // oversized tool-free conversation came to be sent.
+  const reductionRecord: ReductionRecord = {
+    toolResults: describeToolResultReduction(reduction),
+    compaction: describeCompactionOutcome(compaction.report),
+  };
+
+  const decision = decideBudget({ estimate, budget, reduction: reductionRecord });
 
   // ── Convert to model messages ─────────────────────────────────────────────
   // Only when the request is going to be sent. A rejection must not pay for a
@@ -504,10 +517,19 @@ async function runCompactionPhase(
       },
     };
   } catch (error) {
-    // Contained, and now RECORDED. Only the error TYPE is logged - never the
+    // Contained, and now RECORDED.
+    //
+    // The containment is correct and unchanged: a failed compaction must never
+    // leave the conversation worse than before it was attempted, so the
+    // uncompacted history is returned and assembly continues. The budget gate
+    // then sees `withheld/failed` for compaction and can decide from that.
+    //
+    // What was wrong was not the containment but the silence: the bare `catch {}`
+    // made every one of these indistinguishable from "compaction was never
+    // offered", so a summariser that throws on every turn looked exactly like a
+    // build with the feature switched off. Only `errorType` is logged — never the
     // message, the stack, or any request content, because a summariser error can
-    // quote the span it was given. A bare `catch {}` made every failure here
-    // indistinguishable from "compaction was never offered".
+    // quote the span it was given.
     logger.warn("context", "compaction_error", {
       errorType: error instanceof Error ? error.name : typeof error,
     });

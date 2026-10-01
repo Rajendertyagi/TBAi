@@ -556,11 +556,25 @@ describe("a failed compaction degrades to today's behaviour, never to corruption
     expect(attempted.context.provenance.compaction?.reason).toBe(
       "summarize_failed:provider_error",
     );
-    // Byte-identical to never having tried.
+    // Byte-identical to never having tried. This is the load-bearing assertion:
+    // a failure must not change the REQUEST.
     expect(JSON.stringify(attempted.context.layerC.messages)).toBe(
       JSON.stringify(untouched.context.layerC.messages),
     );
-    expect(attempted.decision.action).toBe(untouched.decision.action);
+    // The REQUEST is unchanged, but the VERDICT is deliberately more permissive
+    // than the never-offered path, and that difference is the F-A Case D policy
+    // working rather than a regression.
+    //
+    // A compaction that was offered and then failed is a mechanism that *could*
+    // have helped and was withheld, so the request is still sent. A build with no
+    // compaction at all has nothing left to try once tool-output reduction is
+    // exhausted, so the same conversation is rejected rather than shipped
+    // oversized. Asserted in both directions, because either half alone would
+    // pass for the wrong reason.
+    expect(attempted.decision.reduction.compaction).toEqual({ kind: "withheld", reason: "failed" });
+    expect(attempted.decision.action).toBe("accept");
+    expect(untouched.decision.reduction.compaction).toEqual({ kind: "exhausted", reason: "disabled" });
+    expect(untouched.decision.action).toBe("reject");
     expect(harness.persisted).toHaveLength(0);
   });
 

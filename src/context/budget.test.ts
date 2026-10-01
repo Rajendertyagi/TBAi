@@ -10,6 +10,9 @@
 import { describe, expect, it } from "bun:test";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
+  REDUCIBLE_CATEGORIES,
+  REQUEST_REDUCIBLE_CATEGORIES,
+  budgetDiagnostics,
   buildInstructionsLayer,
   combineEstimates,
   computeBudget,
@@ -24,7 +27,10 @@ import {
   resolveOutputReservation,
   SAFETY_MARGIN_FRACTION,
   UNKNOWN_LIMIT_CEILING,
+  type ContextBudget,
+  type InputSizeEstimate,
   type MessagesLayer,
+  type ReductionRecord,
   type ToolDefinitionLayer,
 } from "./index";
 import type { UIMessage } from "ai";
@@ -219,8 +225,29 @@ describe("budget: output is subtracted before input is computed", () => {
   });
 });
 
-describe("budget decision", () => {
+describe("budget decision: the mechanism-aware matrix", () => {
   const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100000 } });
+
+  /** A reduction record in which nothing was withheld — the "nothing left to try" state. */
+  function noMechanismLeft(overrides: Partial<ReductionRecord> = {}): ReductionRecord {
+    return {
+      toolResults: { kind: "exhausted", reason: "applied" },
+      compaction: { kind: "exhausted", reason: "no_compactable_span" },
+      ...overrides,
+    };
+  }
+
+  /** Synthetic estimate, so a band position can be pinned exactly. */
+  function banded(budget: ContextBudget, point: number, low: number, high: number): InputSizeEstimate {
+    return {
+      estimatedTokens: point,
+      estimatedChars: 0,
+      charsPerToken: CHARS_PER_TOKEN_ESTIMATE,
+      range: { low, high },
+      byCategory: {} as never,
+      charsByCategory: {} as never,
+    };
+  }
 
   it("accepts a small request and reports headroom", () => {
     const budget = computeBudget({ limit });
@@ -229,8 +256,9 @@ describe("budget decision", () => {
       currentTurnIds: [],
       retainedIds: ["a"],
     });
-    const decision = decideBudget({ estimate, budget, reducedAlready: false });
+    const decision = decideBudget({ estimate, budget, reduction: noMechanismLeft() });
     expect(decision.action).toBe("accept");
+    if (decision.action === "accept") expect(decision.headroomTokens).toBeGreaterThan(0);
   });
 
   it("rejects a request that cannot fit even at the optimistic end", () => {
@@ -240,7 +268,7 @@ describe("budget decision", () => {
       currentTurnIds: [],
       retainedIds: ["a"],
     });
-    const decision = decideBudget({ estimate: huge, budget, reducedAlready: false });
+    const decision = decideBudget({ estimate: huge, budget, reduction: noMechanismLeft() });
     expect(decision.action).toBe("reject");
     if (decision.action === "reject") {
       expect(decision.reason).toBe("over_limit");
@@ -248,40 +276,210 @@ describe("budget decision", () => {
     }
   });
 
-  it("decides on the pessimistic end of the band, not the point estimate", () => {
-    // The narrow case that matters: the point estimate fits, but the pessimistic
-    // end does not. Accepting here is exactly the failure the module exists to
-    // prevent, so it is asserted directly with a synthetic estimate rather than
-    // reverse-engineered from character counts.
+  it("uses the HIGH end of the band to decide, never the point estimate", () => {
+    // The pessimistic end is what could actually be sent. A band whose high end
+    // fits must be accepted on the honest headroom, so the decision cannot be
+    // quietly made on the point estimate.
     const budget = computeBudget({ limit });
     const usable = budget.usableInputTokens!;
-    const estimate = {
-      estimatedTokens: usable - 10,
-      estimatedChars: 0,
-      charsPerToken: CHARS_PER_TOKEN_ESTIMATE,
-      range: { low: usable - 100, high: usable + 5_000 },
-      byCategory: {} as never,
-      charsByCategory: {} as never,
-    };
-    const decision = decideBudget({ estimate, budget, reducedAlready: false });
-    expect(decision.action).not.toBe("accept");
+    const decision = decideBudget({
+      estimate: banded(budget, usable - 50_000, usable - 60_000, usable - 1),
+      budget,
+      reduction: noMechanismLeft(),
+    });
+    expect(decision.action).toBe("accept");
   });
 
-  it("accepts once reduction has already brought the request inside the ceiling", () => {
-    // Reduction happens before the decision, so a request that only fit after
-    // reduction must not be rejected on a second pass.
+  // ── The F-A band: `low <= usable < high`, where the point estimate decides ──
+
+  it("ACCEPTS a straddling request whose point estimate fits, because the usable budget already holds back the safety margin", () => {
+    // The estimate is deliberately pessimistic (3 chars/token vs a ~4 prose rule)
+    // and the usable budget already subtracts SAFETY_MARGIN_FRACTION. A point
+    // estimate that fits is therefore the best available evidence that it fits,
+    // and rejecting here would reject requests that demonstrably work.
     const budget = computeBudget({ limit });
     const usable = budget.usableInputTokens!;
-    const estimate = {
-      estimatedTokens: usable - 10,
-      estimatedChars: 0,
-      charsPerToken: CHARS_PER_TOKEN_ESTIMATE,
-      range: { low: usable - 100, high: usable + 5_000 },
-      byCategory: {} as never,
-      charsByCategory: {} as never,
-    };
-    const decision = decideBudget({ estimate, budget, reducedAlready: true });
+    const decision = decideBudget({
+      estimate: banded(budget, usable - 10, usable - 100, usable + 5_000),
+      budget,
+      reduction: noMechanismLeft(),
+    });
     expect(decision.action).toBe("accept");
+  });
+
+  it("REJECTS a straddling request whose point estimate is over and nothing was withheld (Case B/C)", () => {
+    // THE F-A DEFECT. Assistant-text-only history, tool-output reduction already
+    // exhausted, compaction not offered: nothing safe is left to try, so the
+    // request must not be sent. Before the fix this returned "reduce", which no
+    // consumer acted on, and the oversized request shipped.
+    const budget = computeBudget({ limit });
+    const usable = budget.usableInputTokens!;
+    const decision = decideBudget({
+      estimate: banded(budget, usable + 5_000, usable - 100, usable + 9_000),
+      budget,
+      reduction: {
+        toolResults: { kind: "exhausted", reason: "no_reducible_content" },
+        compaction: { kind: "exhausted", reason: "disabled" },
+      },
+    });
+    expect(decision.action).toBe("reject");
+    if (decision.action === "reject") {
+      expect(decision.reason).toBe("reduction_exhausted");
+      expect(decision.overBy).toBe(5_000);
+    }
+  });
+
+  it("REJECTS even when the point estimate is only slightly over, if nothing was withheld", () => {
+    // One token over must not be a special case. The band cannot rule the request
+    // out, but there is also no mechanism left, so sending it would be hoping the
+    // provider's count lands under the budget.
+    const budget = computeBudget({ limit });
+    const usable = budget.usableInputTokens!;
+    const decision = decideBudget({
+      estimate: banded(budget, usable + 1, usable - 100, usable + 9_000),
+      budget,
+      reduction: noMechanismLeft(),
+    });
+    expect(decision.action).toBe("reject");
+  });
+
+  it.each([
+    ["hysteresis", { kind: "withheld", reason: "hysteresis" } as const],
+    ["disabled", { kind: "withheld", reason: "disabled" } as const],
+    ["not_eligible", { kind: "withheld", reason: "not_eligible" } as const],
+    ["trigger_not_reached", { kind: "withheld", reason: "trigger_not_reached" } as const],
+    ["failed", { kind: "withheld", reason: "failed" } as const],
+  ] as const)("ACCEPTS an over-budget request when compaction was withheld (%s) — Case D", (_label, compaction) => {
+    const budget = computeBudget({ limit });
+    const usable = budget.usableInputTokens!;
+    const decision = decideBudget({
+      estimate: banded(budget, usable + 5_000, usable - 100, usable + 9_000),
+      budget,
+      reduction: {
+        toolResults: { kind: "exhausted", reason: "no_reducible_content" },
+        compaction,
+      },
+    });
+    // Sent, deliberately. A conservative policy choice must not be converted into
+    // a hard failure by the budget gate. The withhold is still observable in the
+    // decision record and in diagnostics.
+    expect(decision.action).toBe("accept");
+    expect(decision.reduction.compaction.kind).toBe("withheld");
+    expect(decision.reduction.compaction.reason).toBe(decision.reduction.compaction.reason);
+  });
+
+  it("keeps a certain over-limit a rejection even when a mechanism was withheld", () => {
+    // Case D does not weaken the one verdict that was always right. When the band
+    // proves the request cannot fit at any plausible tokenisation, the provider
+    // would reject it too, so withholding nothing matters.
+    const budget = computeBudget({ limit });
+    const usable = budget.usableInputTokens!;
+    const decision = decideBudget({
+      estimate: banded(budget, usable + 60_000, usable + 50_000, usable + 80_000),
+      budget,
+      reduction: { toolResults: noMechanismLeft().toolResults, compaction: { kind: "withheld", reason: "hysteresis" } },
+    });
+    expect(decision.action).toBe("reject");
+    if (decision.action === "reject") expect(decision.reason).toBe("over_limit");
+  });
+
+  it("accepts an unenforceable budget instead of claiming a reduction it cannot perform", () => {
+    // Previously returned "reduce" and asked the caller to decide — but no caller
+    // could, so it meant "send it" while claiming work had been done.
+    const budget: ContextBudget = {
+      usableInputTokens: undefined,
+      safetyMarginTokens: 0,
+      outputReservation: { tokens: 0, source: "conservative_default" },
+      generationCap: { tokens: 0, source: "conservative_default", boundedByRemainingWindow: false },
+      enforceable: false,
+    };
+    const decision = decideBudget({ estimate: banded(budget, 9e9, 9e9, 9e9), budget, reduction: noMechanismLeft() });
+    expect(decision.action).toBe("accept");
+    expect(decision.reduction.toolResults.kind).toBe("exhausted");
+  });
+
+  it("carries the full reduction record on both verdicts, so no state is unobservable", () => {
+    const budget = computeBudget({ limit });
+    const usable = budget.usableInputTokens!;
+    const reduction: ReductionRecord = {
+      toolResults: { kind: "exhausted", reason: "applied" },
+      compaction: { kind: "withheld", reason: "hysteresis" },
+    };
+    for (const estimate of [
+      banded(budget, usable - 10, usable - 100, usable - 5),
+      banded(budget, usable + 5_000, usable - 100, usable + 9_000),
+    ]) {
+      const decision = decideBudget({ estimate, budget, reduction });
+      expect(decision.reduction).toEqual(reduction);
+    }
+  });
+});
+
+describe("budget diagnostics: the reduction state is observable, never a hardcoded claim", () => {
+  const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100000 } });
+  const messages: MessagesLayer = { messages: [], currentTurnIds: [], retainedIds: [] };
+
+  it("reports each mechanism's disposition and reason", () => {
+    const budget = computeBudget({ limit });
+    const estimate = measureMessages({ messages: [assistant("a", "hi")], currentTurnIds: [], retainedIds: ["a"] });
+    const diagnostics = budgetDiagnostics({
+      estimate,
+      budget,
+      limit,
+      messages,
+      decision: decideBudget({
+        estimate,
+        budget,
+        reduction: {
+          toolResults: { kind: "exhausted", reason: "no_reducible_content" },
+          compaction: { kind: "exhausted", reason: "disabled" },
+        },
+      }),
+    });
+
+    expect(diagnostics.toolResultReduction).toBe("exhausted");
+    expect(diagnostics.toolResultReductionReason).toBe("no_reducible_content");
+    expect(diagnostics.compactionReduction).toBe("exhausted");
+    expect(diagnostics.compactionReductionReason).toBe("disabled");
+    expect(diagnostics.reductionWithheld).toBe(false);
+    // The Finding 1 defect: a claim of reduction that nobody performed.
+    expect(diagnostics.reducedCategories).toBeUndefined();
+  });
+
+  it("surfaces the Case D withhold explicitly", () => {
+    const budget = computeBudget({ limit });
+    const estimate = measureMessages({ messages: [assistant("a", "hi")], currentTurnIds: [], retainedIds: ["a"] });
+    const diagnostics = budgetDiagnostics({
+      estimate,
+      budget,
+      limit,
+      messages,
+      decision: decideBudget({
+        estimate,
+        budget,
+        reduction: {
+          toolResults: { kind: "exhausted", reason: "no_reducible_content" },
+          compaction: { kind: "withheld", reason: "hysteresis" },
+        },
+      }),
+    });
+    expect(diagnostics.reductionWithheld).toBe(true);
+    expect(diagnostics.compactionReductionReason).toBe("hysteresis");
+  });
+});
+
+describe("REDUCIBLE_CATEGORIES: one authoritative source", () => {
+  it("is the very list reduce.ts actually reduces", () => {
+    // The two lists diverged: budget.ts named six categories, reduce.ts touched
+    // three, and the verdict reported all six. Deriving one from the other makes
+    // the next divergence a type error rather than a lie in production logs.
+    expect(REDUCIBLE_CATEGORIES).toEqual(REQUEST_REDUCIBLE_CATEGORIES);
+  });
+
+  it("never claims a category reduce.ts does not implement", () => {
+    for (const category of REDUCIBLE_CATEGORIES) {
+      expect(REQUEST_REDUCIBLE_CATEGORIES).toContain(category);
+    }
   });
 });
 
