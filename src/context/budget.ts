@@ -13,6 +13,7 @@
  */
 
 import { describeLimitSource, isPhase3ExperimentEligible, resolveGenerationCap, resolveOutputReservation } from "./limits";
+import { REQUEST_REDUCIBLE_CATEGORIES } from "./reduce";
 import type { ContextLimit } from "./types";
 import {
   type BudgetDecision,
@@ -45,14 +46,7 @@ export const SAFETY_MARGIN_FRACTION = 0.25;
  * unconditionally (F10) and therefore accumulates unboundedly; whether it should
  * be resent at all is a separate policy decision (U16) and is NOT made here.
  */
-export const REDUCIBLE_CATEGORIES: readonly ContextCategory[] = [
-  "mcp_results",
-  "tool_results",
-  "reasoning",
-  "data_parts",
-  "attachments",
-  "assistant_text",
-];
+export const REDUCIBLE_CATEGORIES: readonly ContextCategory[] = REQUEST_REDUCIBLE_CATEGORIES;
 
 /** Categories that must never be reduced. */
 export const PROTECTED_CATEGORIES: readonly ContextCategory[] = ["instructions", "tool_definitions", "user_text"];

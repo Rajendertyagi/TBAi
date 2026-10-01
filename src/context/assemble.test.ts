@@ -96,13 +96,13 @@ describe("the seam produces three distinct layers", () => {
 
 describe("Layer B ordering is deterministic (guarantee G7, second half)", () => {
   it("sorts native tool names", () => {
-    const layer = buildToolLayer({ runId: "r", toolSignal: controller.signal });
+    const layer = buildToolLayer({ toolSignal: controller.signal });
     const sorted = [...layer.nativeToolNames].sort();
     expect([...layer.nativeToolNames]).toEqual(sorted);
   });
 
   it("sorts MCP tool names and derives sorted, de-duplicated server ids", () => {
-    const layer = buildToolLayer({ runId: "r", toolSignal: controller.signal });
+    const layer = buildToolLayer({ toolSignal: controller.signal });
     expect([...layer.mcpToolNames].sort()).toEqual([...layer.mcpToolNames]);
     expect([...layer.mcpServerIds].sort()).toEqual([...layer.mcpServerIds]);
     expect(new Set(layer.mcpServerIds).size).toBe(layer.mcpServerIds.length);
@@ -111,8 +111,8 @@ describe("Layer B ordering is deterministic (guarantee G7, second half)", () => 
   it("produces byte-identical tool key order across repeated builds", () => {
     // The provider's cacheable prefix is A -> B -> C, so a Layer B that varies
     // between identical builds silently destroys Layer C's cacheability.
-    const a = buildToolLayer({ runId: "r", toolSignal: controller.signal });
-    const b = buildToolLayer({ runId: "r", toolSignal: controller.signal });
+    const a = buildToolLayer({ toolSignal: controller.signal });
+    const b = buildToolLayer({ toolSignal: controller.signal });
     expect(Object.keys(a.tools)).toEqual(Object.keys(b.tools));
   });
 });

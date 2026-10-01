@@ -212,6 +212,22 @@ Four limits verified distinct:
 | Does not swallow neighbours | 8 tests pin that 401, bare 401, 429, quota, cancel, invalid-model, and invalid-request still classify as before |
 | Sanitization | `redact.ts` case returns the actionable message and asserts it does **not** advise a retry |
 
+> #### ⚠ ADDENDUM 2026-10-01 — this section certified a defect it could not see
+>
+> Sections 8 and 13 are accurate as written, but they were **incomplete**: the
+> overflow machinery above is only ever reached when `decision.action === "reject"`,
+> and at the time of this certification `decideBudget` could return a `"reduce"`
+> verdict that **no consumer handled** — so several over-budget requests never
+> reached this path at all.
+>
+> **F-A is therefore reclassified from "residual risk" to a confirmed Phase 2
+> defect.** Discovered during the Phase 4 adversarial audit, reproduced
+> independently, and fixed with a mechanism-aware decision model. Full record:
+> `docs/f-a-budget-defect-fix-report.md`.
+>
+> Nothing above is edited. This addendum states what was later found so the
+> certification is not read as having covered it.
+
 ---
 
 ## 9. Invariant preservation
@@ -331,6 +347,7 @@ or duplicated, and no dependency was upgraded.
 | **R6** | Provenance storage has no field in the persisted message shape | Low | A **Phase 4 prerequisite**, not Phase 2. Adding one is a schema change |
 | **R7** | Near-boundary acceptance, live MCP reduction, and live detached divergence unverified | Low | Stated as unverified, not claimed |
 | **R8** | Duplicate `approvalId` across two parts — SDK scan keeps the last write | Very low | **U34**. Ids are SDK-generated |
+| **F-A** | `decideBudget` returned a `"reduce"` verdict **no consumer acted on** (4 of 7 decision scenarios). A `"reduce"` verdict meant "send it anyway" while claiming a reduction had happened, and the category list it reported named 6 categories while `reduce.ts` reduces 3. Net effect: an assistant-text-only conversation ~61% over the usable budget was sent to the provider, which then failed generically instead of with `CONTEXT_OVERFLOW` | **High — it defeats §8 entirely** | **Was: not listed at all. Reclassified 2026-10-01 from Phase 4 "residual risk" to a confirmed Phase 2 DEFECT.** Fixed with a mechanism-aware decision model: `"reduce"` removed entirely, reduction state made explicit per mechanism. Report: `docs/f-a-budget-defect-fix-report.md` |
 
 ### Unknowns carried forward
 

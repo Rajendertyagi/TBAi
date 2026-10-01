@@ -209,6 +209,30 @@ it is a real residual risk in the same code path K2 lands in, and because if the
 provider disagrees with TBAi's estimator the user gets a generic provider error
 rather than a clean `CONTEXT_OVERFLOW`. **Not a Phase 4 defect; not fixed here.**
 
+> #### ⚠ SUPERSEDED — F-A was reclassified from "residual risk" to a **confirmed Phase 2 defect** on 2026-10-01
+>
+> The measurement above is unchanged and still correct. The **classification** is
+> not. It was originally recorded here as a residual risk because at that point the
+> only evidence was a table of numbers. A later independent reproduction established
+> two facts that make it a defect rather than a risk:
+>
+> 1. **The oversize verdict was dead.** `decideBudget` returned a `"reduce"` verdict
+>    in **4 of 7** decision scenarios, and **no consumer acted on it** — every
+>    consumer branched on `"reject"` alone. A `"reduce"` verdict therefore meant
+>    "send it anyway" while *claiming* a reduction had happened. The verdict was not
+>    a design choice about the estimate band; it was an unhandled state.
+> 2. **The "reduction" it reported was a lie.** `budget.ts` named six reducible
+>    categories while `reduce.ts` only ever reduced three, so a request where
+>    nothing had been reduced logged a reduction of `data_parts`, `attachments`
+>    and `assistant_text`.
+>
+> Fix, policy and evidence: **`docs/f-a-budget-defect-fix-report.md`**. The
+> assistant-text-only over-budget conversation now rejects pre-flight with
+> `CONTEXT_OVERFLOW` instead of shipping 61% over budget.
+>
+> The original text above is deliberately left intact as the record of what was
+> believed at the time. This note is the correction, not a rewrite of history.
+
 ---
 
 ## 5. K1 verification (Part 5) — user-view vs model-context
@@ -840,7 +864,7 @@ Original 22 criteria plus the 5 added by this audit. No criterion forced to PASS
 | **K1** | User sees full history; model sees a compacted form. **No UI or API surface discloses it.** | Known product consequence | Accepted, not fixed. Needs a thread-ownership decision. |
 | **K2** | Single-pass compaction refuses once the conversation outgrows the summariser's one-call capacity. | Known limit | Safely contained — refuses, rejects, never sends. Verified live. |
 | **K3** | Semantic summary quality unproven. | Open | Would need an evaluation set + rubric. |
-| **F-A** | Phase 2's estimate band allows sending a request whose point estimate is ~1.6× the usable budget. | Pre-existing, real | Reported, not fixed. If the provider disagrees with the estimator the user gets a generic error rather than `CONTEXT_OVERFLOW`. |
+| **F-A** | Phase 2's estimate band allows sending a request whose point estimate is ~1.6× the usable budget. | **SUPERSEDED → confirmed Phase 2 DEFECT, fixed 2026-10-01.** See the SUPERSEDED note in §4 and `f-a-budget-defect-fix-report.md`. Cause was a dead `"reduce"` verdict with no consumer plus a category list describing reduction nobody performed. |
 | **K4** | Off by default (`TBAI_COMPACTION_ENABLED`), so production use is unproven at scale. | Deliberate | Follows the existing env-flag precedent. |
 | **K6** | Convergence is asserted with a 5% tolerance, not exact equality. | Low | Exactness is unreachable through the estimator; stated honestly. |
 | **K8** | One row per conversation means a **regenerated branch loses its compaction** and reverts to full history until it re-crosses the trigger. | Low | Safe (no wrong summary applied); a UX consequence. |

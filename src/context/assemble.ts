@@ -117,9 +117,18 @@ export function buildInstructionsLayer(systemPrompt: string | undefined): Instru
  * is built in sorted key order so the object's own iteration is stable too -
  * object spread order is not a contract, and relying on it would make the
  * prefix depend on insertion sequence rather than on inputs.
+ *
+ * ## Why there is no `runId` parameter
+ *
+ * It used to be required and was never read. It was removed rather than wired up
+ * because every honest use of it would break the guarantee above: the only place
+ * it could go is the returned layer, and a per-run id in the serialized Layer B
+ * makes the cacheable prefix differ on every request - which would destroy Layer
+ * C's cacheability in exactly the way the paragraph above exists to prevent.
+ * Per-run attribution already happens at the call site, which logs the assembly
+ * once with the real `requestId` (`logAssembly`). Do not re-add it.
  */
 export function buildToolLayer(input: {
-  runId: string;
   toolSignal: AbortSignal;
   terminalTap?: (toolCallId: string, event: BashOutputEvent) => void;
   extraTools?: Record<string, unknown>;
@@ -181,7 +190,6 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
 
   // ── Layer B ───────────────────────────────────────────────────────────────
   const layerB = buildToolLayer({
-    runId: input.runId,
     toolSignal: input.toolSignal,
     terminalTap: input.terminalTap,
     extraTools: input.extraTools,
@@ -495,9 +503,14 @@ async function runCompactionPhase(
         summarizedBy: record.summarizedBy,
       },
     };
-  } catch {
-    // Contained. The conversation proceeds uncompacted and, if it is over budget,
-    // is rejected exactly as it is today.
+  } catch (error) {
+    // Contained, and now RECORDED. Only the error TYPE is logged - never the
+    // message, the stack, or any request content, because a summariser error can
+    // quote the span it was given. A bare `catch {}` made every failure here
+    // indistinguishable from "compaction was never offered".
+    logger.warn("context", "compaction_error", {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
     const identified = identifyCurrentTurn(input.messages);
     return {
       layerC: {

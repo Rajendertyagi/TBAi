@@ -1,9 +1,25 @@
 # TBAi — Model Context Roadmap
 
-**Status:** Phase 1 complete · Phase 2 implemented · Phases 3–5 not started
+**Status:** Phase 1 complete · Phase 2 certified · Phase 3 certified · Phase 4 certified · **Phase 5 not started**
 **Scope:** Model context assembly, budgeting, provider prompt caching, compaction, and memory-to-context. The Direct AI engine.
 
-> This is a planning artifact. Nothing listed under Phases 2–5 is implemented.
+> Status line corrected 2026-10-01. This file's body is a planning artifact written
+> before the work began, so its per-phase "not started" markers are historical.
+> Authoritative per-phase state and evidence:
+>
+> | Phase | State | Record |
+> |---|---|---|
+> | 1 — assembly | CERTIFIED | `docs/phase-1-final-certification.md` |
+> | 2 — budget | CERTIFIED WITH RESIDUAL RISKS | `docs/phase-2-final-certification.md` |
+> | 3 — caching | CERTIFIED WITH RESIDUAL RISKS | `docs/phase-3-final-certification.md` |
+> | 4 — compaction | CERTIFIED WITH RESIDUAL RISKS | `docs/phase-4-final-certification.md` |
+> | 5 — memory injection | **NOT STARTED** | — |
+>
+> **Phase 5 is genuinely unblocked.** Its "Blocked by Phase 2" marker below is
+> stale: Phase 2 shipped measurement and budget long ago, and Phase 4's durable
+> compaction record is exactly the substrate Phase 5 needs. Phase 5 must not be
+> started without a maintainer decision — not because of a dependency, but because
+> it has not been authorised.
 
 **Evidence base**
 
@@ -1317,9 +1333,12 @@ TBAi-specific consequences:
 
 ## Phase 5 — Memory → Model Context
 
-**Status:** NOT STARTED. **Blocked by Phase 2** (measurement + budget) and
-**Phase 4.10** (provenance must exist before injected memory can be tracked
-across compaction).
+**Status:** NOT STARTED, and **NOT BLOCKED**. *(Corrected 2026-10-01: the original
+"Blocked by Phase 2 (measurement + budget) and Phase 4.10 (provenance)" is stale.
+Both shipped — Phase 2 is certified and Phase 4 persists a durable
+`conversation_compactions` record, which is the provenance substrate Phase 5 needs.
+Phase 5 has not begun because it has not been authorised, not because anything is
+missing. Do not start it without a maintainer decision.)*
 
 ### 5.1 Current state — verified, not assumed
 
@@ -1556,7 +1575,8 @@ roadmap.
 ```text
 Phase 1  Context Architecture Audit                    ✅ COMPLETE
               ↓
-Phase 2  Context Foundation                            NOT STARTED
+Phase 2  Context Foundation                            ✅ CERTIFIED
+                                                     (with residual risks)
          2.1a  inspect current browser/server ownership
          2.1b  define assembleContext(...) contract   ← the seam
          2.1c  validate vs streaming / persistence / resume
@@ -1572,18 +1592,22 @@ Phase 2  Context Foundation                            NOT STARTED
          ↓                         ↓
 Phase 3  Provider Prompt     Phase 4  Summarization /
          Caching                    Compaction
-         NOT STARTED                NOT STARTED
-         (needs stable         (needs measurement
-          prefix = §2.4)          + budget)
+         ✅ CERTIFIED                ✅ CERTIFIED
+         (with residual risks)      (with residual risks)
+         (prefix = §2.4 shipped)    (measurement + budget shipped)
          └────────────┬────────────┘
                       ↓
 Phase 5  Memory → Model Context
-         NOT STARTED
-         (needs budget + §4.10 provenance)
+         NOT STARTED — not blocked,
+         awaiting authorisation
 ```
 
-Phase 3 and Phase 4 may proceed in parallel after Phase 2. Phase 5 must follow
-Phase 4.10.
+Phase 3 and Phase 4 proceeded in parallel after Phase 2; both are certified. Phase 5
+must follow Phase 4 (done) and remains **not started by decision, not by
+dependency**.
+
+*(Status block corrected 2026-10-01. The plan above was accurate when written; every
+phase marker past Phase 2 is now historical.)*
 
 ⚠️ **2.1d is a gate, not a formality.** The Phase 2 implementation path cannot
 be locked until the ownership decision is recorded — the three positions have
