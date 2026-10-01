@@ -186,9 +186,11 @@ describe("overflow is a decision, not an accident", () => {
   });
 
   it("reports a default limit as a default, never as a known figure", async () => {
+    // The fixture provider carries NO `models` array, so the unknown path stays
+    // the path under test (R1 did not weaken this fixture to make wiring pass).
     const result = await assemble([user("u1", "hi")]);
-    expect(result.context.provenance.limit.source).toBe("default");
-    expect(result.diagnostics.limitSource).toContain("default_conservative");
+    expect(result.context.provenance.limit.source).toBe("conservative_default");
+    expect(result.diagnostics.limitSource).toContain("conservative_default");
   });
 
   it("labels the measurement as an estimate, never as usage", async () => {

@@ -139,9 +139,13 @@ describe("measurement: the estimate can only be pessimistic, never optimistic", 
 });
 
 describe("limits: provenance is mandatory and never collapsed", () => {
-  it("reports a model-reported limit as such", () => {
-    const limit = resolveContextLimit({ providerType: "anthropic", modelId: "claude", model: { contextWindow: 200000 } });
-    expect(limit.source).toBe("model_reported");
+  it("reports a provider-reported limit as such", () => {
+    const limit = resolveContextLimit({
+      providerType: "anthropic",
+      modelId: "claude",
+      model: { contextWindow: 200000, contextWindowSource: "provider_reported" },
+    });
+    expect(limit.source).toBe("provider_reported");
     expect(limit.maxInputTokens).toBe(200000);
   });
 
@@ -149,9 +153,9 @@ describe("limits: provenance is mandatory and never collapsed", () => {
     // Phase 1 F14: only Anthropic populates contextWindow today. Everything else
     // must not present the fallback as if a provider had reported it.
     const limit = resolveContextLimit({ providerType: "openai", modelId: "gpt-x" });
-    expect(limit.source).toBe("default");
+    expect(limit.source).toBe("conservative_default");
     expect(limit.maxInputTokens).toBe(UNKNOWN_LIMIT_CEILING);
-    expect(describeLimitSource(limit)).toContain("default_conservative");
+    expect(describeLimitSource(limit)).toContain("conservative_default");
   });
 
   it("still bounds an unknown limit rather than allowing unbounded growth", () => {
@@ -160,8 +164,12 @@ describe("limits: provenance is mandatory and never collapsed", () => {
   });
 
   it("ignores a non-positive reported limit rather than trusting it", () => {
-    const limit = resolveContextLimit({ providerType: "google", modelId: "g", model: { contextWindow: 0 } });
-    expect(limit.source).toBe("default");
+    const limit = resolveContextLimit({
+      providerType: "google",
+      modelId: "g",
+      model: { contextWindow: 0, contextWindowSource: "provider_reported" },
+    });
+    expect(limit.source).toBe("conservative_default");
   });
 });
 
@@ -170,13 +178,13 @@ describe("output reservation: never zero, and not available input", () => {
     // Phase 1 F5: Direct reserved nothing at all.
     const reservation = resolveOutputReservation(undefined);
     expect(reservation.tokens).toBeGreaterThan(0);
-    expect(reservation.source).toBe("default");
+    expect(reservation.source).toBe("conservative_default");
   });
 
   it("uses a model-reported output ceiling when available", () => {
     const reservation = resolveOutputReservation(8192);
     expect(reservation.tokens).toBe(8192);
-    expect(reservation.source).toBe("model_reported");
+    expect(reservation.source).toBe("provider_reported");
   });
 
   it("clamps an absurd reported ceiling so it cannot invert the budget", () => {
