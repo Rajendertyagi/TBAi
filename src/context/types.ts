@@ -12,7 +12,7 @@
  * seam (2026-10-01)" for the authority split this encodes.
  */
 
-import type { ModelMessage, ToolSet, UIMessage } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from "ai";
 import type { ProviderConfig } from "../types";
 import type { BashOutputEvent } from "../services/tools";
 
@@ -263,6 +263,36 @@ export interface DivergenceReport {
   readonly onlyInSubmitted: number;
 }
 
+/**
+ * What the Phase 4 compaction phase did.
+ *
+ * Kept SEPARATE from `LifecycleRepairReport` and `ReductionReport` on purpose:
+ * lifecycle repair removes what is INVALID, reduction bounds what is LARGE, and
+ * compaction replaces a settled span with a bounded summary. Three different
+ * operations with three different correctness arguments, and merging them would
+ * make the diagnostics unable to say which one ran.
+ */
+export interface CompactionReport {
+  /** Whether a compaction was applied on THIS assembly. */
+  readonly applied: boolean;
+  /** Why, enumerated. `not_attempted` when the seam was not wired. */
+  readonly reason: string;
+  /** Compaction generation for the conversation. 0 when none. */
+  readonly generation: number;
+  /** Messages the replaced span covered. */
+  readonly spanLength: number;
+  /** Deterministic fingerprint of the replaced span. Null when none. */
+  readonly spanFingerprint: string | null;
+  /** MEASURED size of the injected summary, so the budget can account for it. */
+  readonly summaryTokens: number;
+  /** Tokens the removed span was estimated to occupy. */
+  readonly reclaimedTokens: number;
+  /** Provenance of the injected block. Null when nothing was injected. */
+  readonly origin: "model_generated_summary" | null;
+  /** Provider+model that produced the summary. Recorded, never branched on. */
+  readonly summarizedBy: string | null;
+}
+
 /** What the assembly did, for diagnostics and tests. */
 export interface AssemblyProvenance {
   /** Always `direct`. Scheduler has its own path and never reaches this seam. */
@@ -275,6 +305,11 @@ export interface AssemblyProvenance {
   readonly lifecycleRepair: LifecycleRepairReport | null;
   /** Request-side size reduction applied before conversion. */
   readonly reduction: ReductionReport | null;
+  /**
+   * Phase 4 compaction. Always present once the seam exists, so a consumer never
+   * has to distinguish "not attempted" from "not implemented".
+   */
+  readonly compaction?: CompactionReport;
   /** Measurement taken on the assembled request. */
   readonly estimate: InputSizeEstimate;
   /** Budget applied. */
@@ -332,6 +367,77 @@ export interface AssembledContext {
   readonly provenance: AssemblyProvenance;
 }
 
+/**
+ * Phase 4 compaction seam, as supplied by the caller.
+ *
+ * Absent means "this assembly does not compact", which is the default for every
+ * caller that has not opted in. Supplying it is the ONLY way compaction can run,
+ * so an unwired seam cannot compact by accident.
+ *
+ * Every collaborator is injected — the summariser model, the persistence
+ * function, the id source, the clock — so the seam has no hidden entropy and no
+ * provider knowledge of its own.
+ *
+ * NOTE what is NOT here: `usableInputTokens` and `summarizerInputTokens`. The
+ * trigger must use the actual Phase 2 budget and the capacity check must use the
+ * model's actual capacity; letting the caller supply either would make those
+ * requirements unenforceable. The seam resolves them. See `CompactionPhaseInput`.
+ */
+export interface CompactionSeam {
+  /** Policy: trigger, hysteresis, tail floor, summary bounds. */
+  readonly policy: import("./compaction/contract").CompactionPolicy;
+  /** The durable record for this conversation, when one exists. */
+  readonly existingRecord: import("./compaction/contract").CompactionRecord | undefined;
+  /** Persists a record. Returns what is actually stored after any race. */
+  readonly persist: (
+    record: import("./compaction/contract").CompactionRecord,
+  ) => import("./compaction/contract").CompactionRecord | undefined;
+  /** Model used to produce summaries. Injected: this seam is provider-agnostic. */
+  readonly summarizerModel: LanguageModel;
+  /** Identifier recorded as the summariser. */
+  readonly summarizedBy: string;
+  /** Deterministic id source. */
+  readonly nextCompactionId: (generation: number) => string;
+  /** Clock source, injected for determinism. */
+  readonly now: () => number;
+  /** Abort signal for the summarisation attempt. */
+  readonly signal?: AbortSignal | undefined;
+  /** Wall-clock ceiling for one summarisation attempt. */
+  readonly timeoutMs: number;
+  /**
+   * Releases the durable hysteresis latch.
+   *
+   * Called by the seam when measured usage has fallen back below the release
+   * fraction. Optional: a caller with no latch store simply never clears it, and
+   * compaction stays latched for the conversation's life.
+   */
+  readonly releaseLatch?: (() => void) | undefined;
+}
+
+/** Input to the internal compaction phase: the seam plus the resolved figures. */
+export interface CompactionPhaseInput {
+  readonly conversationId: string | undefined;
+  readonly messages: UIMessage[];
+  readonly seam: CompactionSeam | undefined;
+  /** Resolved by the seam from the Phase 2 budget. Never caller-supplied. */
+  readonly usableInputTokens: number | undefined;
+  /**
+   * The summariser's own input ceiling, in tokens — the model's CAPACITY minus its
+   * summarisation reservation.
+   *
+   * Deliberately distinct from `usableInputTokens`. The budget is what a TURN may
+   * send after the safety margin and the turn's output reservation; capacity is
+   * what the MODEL can accept. The summariser reserves far less output than a turn
+   * does, so it can legitimately read more than a turn may send — and deriving its
+   * ceiling from the budget undershot real capacity, which testing showed refuses
+   * essentially every real compaction.
+   *
+   * Resolved by the seam from the limit. Never caller-supplied, for the same
+   * reason the trigger budget is not.
+   */
+  readonly summarizerInputTokens: number | undefined;
+}
+
 /** Inputs to the single Direct assembly boundary. */
 export interface AssembleContextInput {
   /** Conversation id, when the request carries one. Enables reconciliation. */
@@ -352,4 +458,11 @@ export interface AssembleContextInput {
   readonly terminalTap?: (toolCallId: string, event: BashOutputEvent) => void;
   /** Signal shared with MCP tool execution. */
   readonly toolSignal: AbortSignal;
+  /**
+   * Phase 4 compaction seam. Omitted ⇒ no compaction.
+   *
+   * Omitting it is the correct default for every caller that has not opted in, and
+   * is what makes the feature inert rather than silently active.
+   */
+  readonly compaction?: CompactionSeam;
 }

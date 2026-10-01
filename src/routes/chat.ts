@@ -56,6 +56,12 @@ import { resolveChatModel, buildChatMessageMetadata, UnknownProviderError } from
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService, messageService } from "../services/storage";
+import { compactionStore } from "../services/compaction";
+import {
+  COMPACTION_SUMMARY_TIMEOUT_MS,
+  DEFAULT_COMPACTION_POLICY,
+  compactionEnabled,
+} from "../context/compaction";
 import { resolveConversationWorkspace, WorkspaceError } from "../services/workspace";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
@@ -354,6 +360,27 @@ app.post("/api/chat", async (c) => {
       // Tool calls share the run's lifetime (survive client disconnect like the
       // model call); explicit cancel aborts them via the run controller.
       toolSignal: run.controller.signal,
+      // Phase 4. Present only when compaction is opted in AND the conversation is
+      // persisted — an unwired seam cannot compact by accident, and a conversation
+      // with no durable store has nowhere to record a compaction.
+      compaction:
+        compactionEnabled() && threadId
+          ? {
+              policy: DEFAULT_COMPACTION_POLICY,
+              existingRecord: compactionStore.get(threadId),
+              persist: (record) => compactionStore.record(record),
+              releaseLatch: () => compactionStore.releaseLatch(threadId),
+              // The SAME model the turn will use. Summarising with a different
+              // model than the one that will read the summary would make the
+              // summary a translation rather than a record of this conversation.
+              summarizerModel: languageModel,
+              summarizedBy: `${modelConfig.type}/${modelConfig.model}`,
+              nextCompactionId: (generation) => `${generateId()}_${generation}`,
+              now: () => Date.now(),
+              signal: run.controller.signal,
+              timeoutMs: COMPACTION_SUMMARY_TIMEOUT_MS,
+            }
+          : undefined,
     });
     tools = assembled.context.layerB.tools as NativeToolSet & Record<string, any>;
     toolsContext = buildToolsContext({

@@ -23,6 +23,12 @@
  *        ↓
  *   request-size reduction            (reduceToolResults — request side only)
  *        ↓
+ *   compaction                         (Phase 4 — replaces a settled span with a
+ *                                       bounded, provenance-carrying summary.
+ *                                       Runs AFTER repair, so a size decision can
+ *                                       never resurrect a stale tool part. Off
+ *                                       unless the caller wires the seam.)
+ *        ↓
  *   measure                           (estimate, never reported usage)
  *        ↓
  *   enforce budget                    (accept / reduce / reject)
@@ -56,6 +62,8 @@ import { identifyCurrentTurn, reconcileWithStoredHistory } from "./divergence";
 import { describeLimitSource, resolveContextLimit, selectModelOption } from "./limits";
 import { combineEstimates, measureInstructions, measureMessages, measureToolDefinitions } from "./measure";
 import { reduceToolResults } from "./reduce";
+import { applyExistingCompaction, isCompactionLatched, maybeCompact, summarizeSpan } from "./compaction";
+import type { CompactionPhaseInput, CompactionReport, CompactionSeam } from "./types";
 import type {
   AssembleContextInput,
   AssembledContext,
@@ -196,27 +204,22 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   const { messages: reduced, report: reduction } = reduceToolResults(repaired);
 
   // ── Layer C, step 3: identify the current turn ─────────────────────────────
+  // Identified on the ORIGINAL reduced list, BEFORE compaction. The current turn
+  // must be known first so the compaction planner can be structurally forbidden
+  // from touching it, and so `currentTurnIds` always describes the real user
+  // request rather than a summary block.
   const { currentIds, retainedIds } = identifyCurrentTurn(reduced);
-  const layerC: MessagesLayer = {
-    messages: reduced,
-    currentTurnIds: currentIds,
-    retainedIds,
-  };
 
   // ── Reconciliation against stored history ─────────────────────────────────
   // A comparison, never a merge. See divergence.ts for why it does not reject.
   const divergence = await reconcileWithStoredHistory({ conversationId, submittedMessages: reduced });
 
-  // ── Measure ───────────────────────────────────────────────────────────────
-  // Three per-layer estimates combined, so an overspend is attributable to a
-  // layer rather than only visible as a total.
-  const estimate = combineEstimates([
-    measureInstructions(layerA),
-    measureToolDefinitions(layerB),
-    measureMessages(layerC),
-  ]);
-
   // ── Limit + budget ────────────────────────────────────────────────────────
+  // Computed BEFORE compaction because the compaction trigger must use the actual
+  // Phase 2 budget rather than any caller-supplied number. Safe to move up:
+  // `computeBudget` depends only on the resolved limit and the model's output
+  // ceiling, never on message content.
+  //
   // The selected model's stored metadata (its context window, the stance that
   // produced it, and any documented output ceiling) is already present on the
   // provider config the caller resolved — R1 verified the seam's input carried it
@@ -230,12 +233,44 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     model: selectedModel,
   });
   const budget = computeBudget({ limit, modelOutputTokens: selectedModel?.maxOutputTokens });
+
+  // ── Phase 4: compaction ───────────────────────────────────────────────────
+  // Inserted AFTER lifecycle repair and request-side reduction, and BEFORE
+  // measurement. That ordering is the safety argument: the pruner has already
+  // removed stale tool parts and expired approvals, so a size decision here can
+  // only ever remove more — it can never resurrect one.
+  //
+  // Compaction is a no-op unless the measured request actually exceeds the policy
+  // trigger, and it runs inside a failure boundary whose result on ANY error is
+  // "assemble normally". See `runCompactionPhase`.
+  const compaction = await runCompactionPhase({
+    conversationId,
+    messages: reduced,
+    seam: input.compaction,
+    usableInputTokens: budget.usableInputTokens,
+    // CAPACITY, not budget: the summariser reserves far less output than a turn,
+    // so it can read more than a turn may send.
+    summarizerInputTokens: resolveSummarizerInputTokens(limit, input.compaction),
+  });
+
+  const layerC: MessagesLayer = compaction.layerC;
+
+  // ── Measure ───────────────────────────────────────────────────────────────
+  // Three per-layer estimates combined, so an overspend is attributable to a
+  // layer rather than only visible as a total. Measured on the possibly-compacted
+  // Layer C, so the budget sees what the provider will actually receive.
+  const estimate = combineEstimates([
+    measureInstructions(layerA),
+    measureToolDefinitions(layerB),
+    measureMessages(layerC),
+  ]);
+
   const decision = decideBudget({ estimate, budget, reducedAlready: reduction.reducedParts > 0 });
 
   // ── Convert to model messages ─────────────────────────────────────────────
   // Only when the request is going to be sent. A rejection must not pay for a
   // conversion it will discard.
-  const modelMessages = decision.action === "reject" ? [] : await prepareModelMessages(reduced, layerB.tools, { threadId: conversationId });
+  const modelMessages = decision.action === "reject" ? [] : await prepareModelMessages([...layerC.messages], layerB.tools, { threadId: conversationId });
 
   const context: AssembledContext = {
     layerA,
@@ -248,6 +283,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
       divergence,
       lifecycleRepair,
       reduction: reduction.reducedParts > 0 ? reduction : null,
+      compaction: compaction.report,
       estimate,
       budget,
       limit,
@@ -269,9 +305,225 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     droppedOversizedErrorParts: reduction.droppedParts,
     divergenceOutcome: divergence?.outcome ?? "not_compared",
     historySource: context.provenance.historySource,
+    // Phase 4. Counts, a fingerprint, and provenance — never summary content.
+    compactionApplied: compaction.report.applied,
+    compactionReason: compaction.report.reason,
+    compactionGeneration: compaction.report.generation,
+    compactionSpanMessages: compaction.report.spanLength,
+    compactionSpanFingerprint: compaction.report.spanFingerprint,
+    // Numeric keys deliberately avoid the substring "token": logger.ts redacts
+    // keys matching that, which would destroy the diagnostic. `unit` says what is
+    // counted, and the typed fields keep the honest names.
+    compactionSummarySize: compaction.report.summaryTokens,
+    compactionReclaimedSize: compaction.report.reclaimedTokens,
+    compactionOrigin: compaction.report.origin,
+    compactionSummarizedBy: compaction.report.summarizedBy,
   };
 
   return { context, decision, diagnostics };
+}
+
+/**
+ * How many input tokens the summariser may read in one call.
+ *
+ * CAPACITY, not budget. `budget.usableInputTokens` is what a TURN may send after
+ * the safety margin and the turn's output reservation; `limit.maxInputTokens` is
+ * what the MODEL can accept. The summariser reserves far less output than a turn,
+ * so it can legitimately read more than a turn may send.
+ *
+ * This distinction is load-bearing, not cosmetic. Deriving the summariser's
+ * ceiling from the budget undershot real capacity by roughly the safety margin,
+ * and testing showed the consequence: because a conversation large enough to need
+ * compaction is by definition larger than the budget, every real compaction was
+ * refused with `summary_exceeds_budget` and the phase could never fire.
+ *
+ * Undefined when the limit is unknown, which makes the summariser refuse rather
+ * than guess.
+ */
+function resolveSummarizerInputTokens(
+  limit: ContextLimit,
+  seam: CompactionSeam | undefined,
+): number | undefined {
+  if (limit.maxInputTokens === undefined) return undefined;
+  const reservation = seam?.policy.summaryOutputReservation ?? 0;
+  return Math.max(0, limit.maxInputTokens - reservation);
+}
+
+/**
+ * Run the Phase 4 compaction phase inside the seam.
+ *
+ * ## This is the failure boundary
+ *
+ * EVERY failure — summariser error, timeout, over-budget summary, storage error,
+ * an unexpected throw — resolves to "no compaction", and assembly continues with
+ * the uncompacted history. The caller's existing `CONTEXT_OVERFLOW` rejection then
+ * handles an over-budget request exactly as it does today.
+ *
+ * That is deliberate: a failed compaction must never leave the conversation in a
+ * worse state than before it was attempted, and must never corrupt stored state.
+ *
+ * ## Determinism
+ *
+ * The trigger depends only on measured size and the policy, so the same
+ * conversation state always produces the same decision. Id and clock are injected
+ * by the caller, not read here, so this function has no hidden entropy.
+ */
+async function runCompactionPhase(
+  input: CompactionPhaseInput,
+): Promise<{ layerC: MessagesLayer; report: CompactionReport }> {
+  const base: CompactionReport = { applied: false, reason: "not_attempted", ...emptyCompactionFields() };
+
+  const seam = input.seam;
+  if (!seam || !input.conversationId) {
+    const identified = identifyCurrentTurn(input.messages);
+    return {
+      layerC: {
+        messages: input.messages,
+        currentTurnIds: identified.currentIds,
+        retainedIds: identified.retainedIds,
+      },
+      report: base,
+    };
+  }
+
+  try {
+    // 1. Re-apply any EXISTING durable record. This is what keeps a compacted
+    //    conversation stable across reload, resume and detached completion
+    //    without re-summarising on every turn.
+    const reapply = applyExistingCompaction({ messages: input.messages, record: seam.existingRecord });
+
+    // 2. Measure the (possibly re-applied) history so the trigger uses real
+    //    numbers rather than a message count.
+    const measured = measureMessages({
+      messages: reapply.messages,
+      currentTurnIds: [],
+      retainedIds: reapply.messages.map((m) => (m as { id?: string }).id ?? ""),
+    });
+
+    // 3. Release the hysteresis latch once usage has demonstrably fallen back
+    //    below the release fraction — i.e. once the previous compaction has taken
+    //    effect. Observed here, at the one place that observes it.
+    const latched = isCompactionLatched(seam.existingRecord);
+    if (latched && input.usableInputTokens !== undefined) {
+      const releaseAt = Math.floor(input.usableInputTokens * seam.policy.releaseFraction);
+      if (measured.estimatedTokens < releaseAt) seam.releaseLatch?.();
+    }
+
+    const outcome = await maybeCompact({
+      conversationId: input.conversationId,
+      // Planned over the CLIENT's messages, NOT `reapply.messages`. This is
+      // load-bearing, and getting it wrong was a real defect found by testing.
+      //
+      // `reapply` injects a server-side block whose id the client has never seen.
+      // Planning over it produced a second record whose `coveredMessageIds` began
+      // with that injected id — so on the next request `locateSpan` could not find
+      // the record, the compaction silently stopped applying, and the conversation
+      // reverted to full uncompacted history and grew without bound.
+      //
+      // Planning over the client's own list keeps every covered id something the
+      // client will re-post, which is what makes the record durable.
+      messages: input.messages,
+      measuredTokens: perMessageTokens(input.messages),
+      currentTurnIds: [],
+      // Pressure measured on the COMPACTED view: what the provider would actually
+      // receive is what the trigger must reason about.
+      measuredTotalTokens: measured.estimatedTokens,
+      usableInputTokens: input.usableInputTokens,
+      existing: seam.existingRecord,
+      compactionLatched: latched,
+      summarizerInputTokens: input.summarizerInputTokens,
+      priorSummaryText: seam.existingRecord?.summaryText,
+      policy: seam.policy,
+      summarize: (span) =>
+        summarizeSpan({
+          model: seam.summarizerModel,
+          spanMessages: span,
+          maxInputTokens: input.summarizerInputTokens ?? 0,
+          maxSummaryTokens: seam.policy.maxSummaryTokens,
+          outputReservation: seam.policy.summaryOutputReservation,
+          summarizedBy: seam.summarizedBy,
+          abortSignal: seam.signal,
+          timeoutMs: seam.timeoutMs,
+        }),
+      persist: seam.persist,
+      nextCompactionId: seam.nextCompactionId,
+      now: seam.now,
+    });
+
+    const final = outcome.outcome.applied ? outcome.messages : reapply.messages;
+    const identified = identifyCurrentTurn(final);
+
+    if (outcome.outcome.applied === false) {
+      const noCompactionReason = outcome.outcome.reason;
+      return {
+        layerC: { messages: final, currentTurnIds: identified.currentIds, retainedIds: identified.retainedIds },
+        report: {
+          applied: false,
+          reason: reapply.applied
+            ? `record_applied_no_new_compaction:${noCompactionReason}`
+            : noCompactionReason,
+          ...emptyCompactionFields(),
+        },
+      };
+    }
+
+    const { record, plan, reclaimedTokens } = outcome.outcome;
+    return {
+      layerC: {
+        messages: final,
+        currentTurnIds: identified.currentIds,
+        retainedIds: identified.retainedIds,
+      },
+      report: {
+        applied: true,
+        reason: "compacted",
+        generation: record.generation,
+        spanLength: plan.spanLength,
+        spanFingerprint: record.spanFingerprint,
+        summaryTokens: record.summaryTokens,
+        reclaimedTokens,
+        origin: record.origin,
+        summarizedBy: record.summarizedBy,
+      },
+    };
+  } catch {
+    // Contained. The conversation proceeds uncompacted and, if it is over budget,
+    // is rejected exactly as it is today.
+    const identified = identifyCurrentTurn(input.messages);
+    return {
+      layerC: {
+        messages: input.messages,
+        currentTurnIds: identified.currentIds,
+        retainedIds: identified.retainedIds,
+      },
+      report: { ...base, reason: "compaction_error" },
+    };
+  }
+}
+
+/**
+ * Per-message estimates, index-aligned with `messages`.
+ *
+ * A full measure per message rather than a chars/4 shortcut, so the span the
+ * planner selects is sized by the same estimator the budget uses. A cheap
+ * approximation here would make the trigger disagree with the verdict.
+ */
+function perMessageTokens(messages: readonly UIMessage[]): number[] {
+  return messages.map((message) =>
+    measureMessages({ messages: [message], currentTurnIds: [], retainedIds: [] }).estimatedTokens,
+  );
+}
+
+function emptyCompactionFields(): Omit<CompactionReport, "applied" | "reason"> {
+  return {
+    generation: 0,
+    spanLength: 0,
+    spanFingerprint: null,
+    summaryTokens: 0,
+    reclaimedTokens: 0,
+    origin: null,
+    summarizedBy: null,
+  };
 }
 
 /** Log one assembly. Counts, categories and provenance only - never content. */
