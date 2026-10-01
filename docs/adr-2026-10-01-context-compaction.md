@@ -236,6 +236,34 @@ Every severe defect was then reintroduced into the source and the suite re-run t
 confirm it goes red. That is now the phase's exit condition for a fix, not a
 nicety: a test that cannot fail is decoration.
 
+## A7. Race identity must be SEMANTIC, never an opaque id — and the loser must re-locate
+
+**Assumed:** comparing the compaction id we proposed against the one `persist`
+returned tells us whether we won the race, and applying the returned record is
+sufficient because "its span is authoritative".
+
+**Both halves wrong.** This is **D9**, found by adversarial audit and the most serious
+defect after D1: splicing our own plan indices with the winner's summary silently
+dropped eight messages that no durable record described.
+
+Two rules follow:
+
+1. **Identity is `(generation, spanFingerprint)`, never `compactionId`.** Two
+   concurrent writers at the same generation produce the *same* id whenever the id
+   derives from the generation — and a probe doing exactly that made a losing writer
+   believe it had won. Measured span against stored span cannot collide.
+2. **A race loser re-locates the winner's record by id** — the ordinary reload path —
+   or compacts nothing at all if that span is absent. Refusing is safe; mis-splicing
+   is not.
+
+## A8. A negative control must confirm it modified the source
+
+Three scripted negative controls during the Phase 4 audit **silently failed to apply**
+(a line-ending mismatch in shell string replacement) and reported "no failures" —
+which reads exactly like "this test cannot catch the defect". Every control was re-run
+with a tool that reports whether the substitution took. A negative control that cannot
+prove it changed the source is not a negative control.
+
 ## K2. KNOWN LIMITATION — single-pass compaction has a hard size bound
 
 Once a conversation outgrows the summariser's one-call input capacity, its span
@@ -254,3 +282,35 @@ reports a precise reason.
 
 Lifting the bound would need chunked summarisation with a bounded combining step —
 real work, and a product decision rather than an implementation detail.
+
+## K1. KNOWN LIMITATION — nothing surfaces compaction to the user
+
+Verified: `/api/conversations/:id/messages` carries no compaction field, and no file
+outside `src/context/compaction` and `src/services/compaction.ts` mentions compaction
+in `web/src`, `src/routes` or `src/services`. The durable record is fully auditable
+after the fact, but the user cannot learn that it happened, what was summarised, or
+when.
+
+Deliberately not patched. Under architecture C the browser owns thread state, so
+surfacing this requires a decision about who owns thread state and whether the model's
+context should be disclosed at all — a product statement, not a bug fix.
+
+## Verified live (2026-10-01)
+
+Compaction has been observed against a real provider, which the implementation report
+had recorded as unverified.
+
+```
+applied=true reason=compacted est=14730 gen=1 spanMsgs=187
+summarySize=287 origin=model_generated_summary by=custom/agnes-3.0-flash
+```
+
+~86 000 → 14 730 tokens; a 14-column durable record written and read back; re-applied
+on the next turn with no re-summarisation; and the K2 refusal confirmed live
+(`span_exceeds_summarizer_capacity` → HTTP 400 `CONTEXT_OVERFLOW`, nothing sent).
+
+No credential or provider configuration was modified: the run used a read-only copy
+of the database in a scratch `DATA_DIR`. Note the reasoning differs from Phase 3 —
+cache controls need a documented capability before a parameter may be sent, but
+summarisation is a plain completion with no such gate, so the existing credential was
+legitimately sufficient. Full record: `docs/phase-4-final-certification.md`.

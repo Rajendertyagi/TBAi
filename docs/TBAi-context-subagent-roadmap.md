@@ -1037,10 +1037,12 @@ rather than assume. See `docs/phase-3-provider-prompt-caching.md` §13.
 
 ## Phase 4 — Automatic Summarization / Compaction
 
-**Status: CERTIFIED WITH RESIDUAL RISKS** (2026-10-01). All 22 exit criteria
-PASS. **Live summarisation is UNVERIFIED** — no compatible provider credential
-exists in this environment. Full record: `docs/phase-4-compaction-report.md`;
-architecture: `docs/adr-2026-10-01-context-compaction.md`.
+**Status: CERTIFIED WITH RESIDUAL RISKS** (2026-10-01), re-certified by adversarial
+PM audit the same day. 24 of 27 criteria PASS, 1 PARTIAL, 1 UNVERIFIED, 0 FAIL.
+**Live compaction has now been observed against a real provider.** Full audit record:
+`docs/phase-4-final-certification.md`; architecture:
+`docs/adr-2026-10-01-context-compaction.md`; implementation report:
+`docs/phase-4-compaction-report.md`.
 
 Phase 4 is **not** an extension of `pruneStaleMessages` (F2). Compaction
 *generates* a condensed representation of a span of history; lifecycle repair
@@ -1108,6 +1110,23 @@ defects lived in the seam, and drove only a first compaction where the
 "no injected id" assertion was true by construction. Every severe defect is now
 pinned by a test **verified to fail** when the defect is reintroduced. A green
 suite is not evidence; the negative controls are.
+
+4. **Race identity must be semantic, and a race loser must re-locate.** The PM audit
+   found D9: a losing writer applied the winner's summary across its *own* index
+   range, silently dropping eight messages that no durable record described. Two
+   rules: identity is `(generation, spanFingerprint)` — never `compactionId`, which
+   collides when the id derives from the generation — and a loser re-locates the
+   winner's record by id, or compacts nothing.
+5. **A negative control must confirm it modified the source.** Three scripted controls
+   silently failed to apply and reported "no failures", which reads exactly like
+   "this test cannot catch it".
+
+⚠️ **KNOWN LIMITATION K1 — nothing surfaces compaction to the user.** Verified: the
+history API carries no compaction field, and nothing in `web/src`, `src/routes` or
+`src/services` mentions compaction. The durable record is auditable after the fact,
+but the user cannot learn that compaction happened, what was summarised, or when.
+Deliberately **not patched** — under architecture C the browser owns thread state, so
+disclosing this is a product decision about thread-state ownership.
 
 **Hysteresis is durable state.** A `latched` column on the record, set on
 compaction and cleared when the seam *observes* usage below the release fraction.
