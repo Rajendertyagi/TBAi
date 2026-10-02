@@ -117,6 +117,18 @@ export interface MaybeCompactInput {
   /** Durable hysteresis latch. Engaged on compaction, cleared by the seam. */
   compactionLatched: boolean;
   /**
+   * Message ids the durable record already covers.
+   *
+   * Hysteresis is decided against these, not against `compactionLatched` alone. A
+   * conversation-wide latch made compaction happen exactly once and then grow to
+   * the budget forever; scoping the guard to the span the record already paid to
+   * summarise lets fresh growth be independently eligible while still preventing a
+   * second summarisation of the same history.
+   */
+  coveredMessageIds?: readonly string[];
+  /** Compact on request even when usage is under the trigger (Direct `/compact`). */
+  force?: boolean;
+  /**
    * Capacity for ONE summariser call.
    *
    * Passed to the planner so an oversized span is refused before a provider call,
@@ -155,6 +167,8 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
     policy: input.policy,
     hasExistingCompaction: input.existing !== undefined,
     compactionLatched: input.compactionLatched,
+    coveredMessageIds: input.coveredMessageIds,
+    force: input.force,
     summarizerInputTokens: input.summarizerInputTokens,
     reason: "pressure",
   });

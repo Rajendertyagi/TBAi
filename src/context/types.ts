@@ -521,6 +521,15 @@ export interface CompactionPhaseInput {
   readonly conversationId: string | undefined;
   readonly messages: UIMessage[];
   readonly seam: CompactionSeam | undefined;
+/**
+   * Compact on request even when usage is under the trigger.
+   *
+   * Set only by an explicit user action (the Direct `/compact` command). It removes
+   * the pressure threshold, not the structural rules: a safe, worthwhile span must
+   * still exist, so "nothing eligible" stays a real, reportable answer rather than
+   * a fabricated compaction.
+   */
+  readonly forceCompaction?: boolean;
   /** Resolved by the seam from the Phase 2 budget. Never caller-supplied. */
   readonly usableInputTokens: number | undefined;
   /**

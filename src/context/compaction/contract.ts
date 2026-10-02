@@ -40,24 +40,36 @@
 import type { UIMessage } from "ai";
 
 /**
- * Read the opt-in flag from the environment.
+/**
+ * Read the opt-OUT flag from the environment.
  *
- * OFF BY DEFAULT. Compaction costs an extra model call, makes a model-generated
- * summary part of the conversation's durable record, and is not yet live-verified
- * against a real provider — so enabling it is a deliberate act, not a default.
- * Follows the existing `TBAI_CHAT_STREAM_TTL_MS` env-flag precedent
- * (`src/services/chat-streams/schema.ts`).
+ * ON BY DEFAULT. This inverts the original decision, and deliberately.
  *
- * Anything other than an explicit `"1"` or `"true"` is off. A missing value,
- * `"0"`, `"false"` and arbitrary text are all off, so a typo can never enable
- * compaction by accident.
+ * Compaction used to be opt-in behind `TBAI_COMPACTION_ENABLED`, on the reasoning
+ * that it costs an extra model call and had not been live-verified. An audit of
+ * the running application showed the consequence: the flag was referenced nowhere
+ * outside its own definition, so a normal install never compacted at all. Long
+ * Direct conversations therefore grew until TBAi refused the request, which is
+ * exactly the failure the mechanism was built to prevent. A safety mechanism that
+ * is off in production is not a safety mechanism.
+ *
+ * So automatic compaction is now the product default, and the environment
+ * variable is an OPT-OUT. An operator who needs the old behaviour (debugging the
+ * raw history, or a provider where a summary is unacceptable) sets
+ * `TBAI_COMPACTION_ENABLED=0` / `false`. Anything else - including an unset
+ * variable and a typo - leaves compaction ON, so a typo can never silently
+ * disable context management.
  */
 export const COMPACTION_ENV = "TBAI_COMPACTION_ENABLED";
 
-/** @returns Whether automatic compaction may run. */
+/**
+ * @returns Whether automatic compaction may run. Default `true`.
+ */
 export function compactionEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[COMPACTION_ENV];
-  return raw === "1" || raw === "true";
+  if (raw === undefined) return true;
+  const normalized = raw.trim().toLowerCase();
+  return !(normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off");
 }
 
 /**
@@ -134,6 +146,8 @@ export type CompactionPlan =
         | "summary_would_not_reclaim_enough"
         | "span_exceeds_summarizer_capacity"
         | "would_still_exceed_budget"
+        | "already_compacted_span"
+        | "force_requested_no_compactable_span"
         | "no_conversation";
     }
   | {
@@ -213,6 +227,30 @@ export function currentTurnStartIndex(messages: readonly UIMessage[]): number {
   return lastIndexOfRole(messages, "user");
 }
 
+/**
+ * The last assistant message strictly BEFORE `before`, i.e. the next safe cut
+ * point walking backwards.
+ *
+ * Oversized recovery shrinks a span to fit one summariser call, and it must do so
+ * without splitting a turn. It reuses exactly the rule
+ * {@link latestCutIndexBefore} applies - a span may end on an assistant message
+ * that is not the live continuation - so a cut never strands a user turn without
+ * a reply and never separates a tool call from its result.
+ *
+ * @returns The index, or -1 when there is no earlier assistant message.
+ */
+export function previousSafeCutIndex(
+  messages: readonly UIMessage[],
+  before: number,
+): number {
+  for (let i = Math.min(before - 1, messages.length - 1); i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message) continue;
+    if (roleOf(message) === "assistant") return i;
+  }
+  return -1;
+}
+
 // ─── Span selection ─────────────────────────────────────────────────────────
 
 /**
@@ -275,6 +313,22 @@ export function planCompaction(input: {
    * is the bound on how large a conversation compaction can handle.
    */
   readonly summarizerInputTokens?: number;
+  /**
+   * Compact even when usage is under the trigger.
+   *
+   * Set only by an explicit user request (the Direct `/compact` command). It
+   * removes the pressure threshold, NOT the structural rules: a safe, worthwhile
+   * span must still exist.
+   */
+  readonly force?: boolean;
+  /**
+   * Message ids the durable compaction record already covers.
+   *
+   * Hysteresis is decided against THIS, not against a conversation-wide latch.
+   * When every id the plan would replace is already covered there is nothing new
+   * to summarise; any id beyond it is fresh growth and is independently eligible.
+   */
+  readonly coveredMessageIds?: readonly string[];
   reason: CompactionReason;
 }): CompactionPlan {
   const { messages, policy, usableInputTokens } = input;
@@ -282,53 +336,97 @@ export function planCompaction(input: {
     return { kind: "none", reason: "no_conversation" };
   }
 
-  const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
-  const releaseAt = Math.floor(usableInputTokens * policy.releaseFraction);
+const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
 
-  if (input.measuredTotalTokens < triggerAt) {
+  // An explicit request (the Direct `/compact` command) compacts on demand even
+  // when the conversation sits well under the trigger. It is NOT a bypass of the
+  // structural rules below: a span must still exist, still be safe to cut, and
+  // still be worth summarising.
+  const forced = input.force === true;
+
+  if (!forced && input.measuredTotalTokens < triggerAt) {
     return { kind: "none", reason: "below_trigger" };
-  }
-
-  // HYSTERESIS, stated as a durable latch rather than derived from usage.
-  //
-  // The latch is a flag, not a comparison. Deriving it from the CURRENT usage
-  // does not work, and the first implementation of this function proved it: the
-  // condition can only clear below `releaseAt`, which is also below `triggerAt`,
-  // so the "below trigger" branch always won and a conversation that had ever
-  // been compacted could NEVER be compacted again. It would grow to the budget
-  // and be rejected while a perfectly good span sat there uncompacted.
-  //
-  // So the latch is set on compaction and cleared only once usage is observed to
-  // fall back below the release fraction — i.e. once the previous compaction has
-  // demonstrably taken effect. See `clearCompactionLatch`.
-  if (input.compactionLatched ?? input.hasExistingCompaction) {
-    return { kind: "none", reason: "above_release_but_within_hysteresis" };
   }
 
   // The span may never reach into the current turn.
   const cutIndex = latestCutIndexBefore(messages);
-  if (cutIndex < 0) return { kind: "none", reason: "no_compactable_span" };
+  if (cutIndex < 0) {
+    return {
+      kind: "none",
+      reason: forced ? "force_requested_no_compactable_span" : "no_compactable_span",
+    };
+  }
 
   // The tail floor is a hard floor on retained messages.
-  const spanEndIndex = cutIndex;
-  const spanStartIndex = Math.max(0, spanEndIndex - messages.length + 1 + policy.minRetainedTail);
+  const spanStartIndex = Math.max(0, cutIndex - messages.length + 1 + policy.minRetainedTail);
+  let spanEndIndex = cutIndex;
+  if (spanEndIndex - spanStartIndex + 1 <= 0) {
+    return { kind: "none", reason: "span_too_small_to_compact" };
+  }
+
+  // OVERSIZED RECOVERY. A conversation can outgrow a single summariser call, and
+  // that used to be a permanent refusal: `span_exceeds_summarizer_capacity` left
+  // the chat dead forever, because the following turn planned the same oversized
+  // span again and reached the same verdict.
+  //
+  // Instead of refusing, plan a SAFE PREFIX of the span. The end walks backwards
+  // to an earlier assistant message - the same boundary rule
+  // `latestCutIndexBefore` uses, so a turn is never split and a tool call is
+  // never separated from its result - until the span fits one summariser call.
+  // Everything past the new end stays in the conversation and is eligible on a
+  // later turn, so an oversized history recovers in stages instead of not at all.
+  if (input.summarizerInputTokens !== undefined) {
+    while (
+      spanEndIndex > spanStartIndex &&
+      sum(spanRange(input.measuredTokens, spanStartIndex, spanEndIndex)) >
+        input.summarizerInputTokens
+    ) {
+      const earlierCut = previousSafeCutIndex(messages, spanEndIndex);
+      if (earlierCut < spanStartIndex) break;
+      spanEndIndex = earlierCut;
+    }
+  }
+
+  const spanTokens = sum(spanRange(input.measuredTokens, spanStartIndex, spanEndIndex));
   const spanLength = spanEndIndex - spanStartIndex + 1;
   if (spanLength <= 0) return { kind: "none", reason: "span_too_small_to_compact" };
 
-  const spanTokens = sum(spanRange(input.measuredTokens, spanStartIndex, spanEndIndex));
   // Compaction must RECLAIM enough to matter. If the span is smaller than the
   // summary that would replace it, the "compaction" grows the request.
   if (spanTokens <= policy.maxSummaryTokens) {
     return { kind: "none", reason: "summary_would_not_reclaim_enough" };
   }
 
-  // The span must fit one summariser call. Compared against measured span tokens
-  // rather than char counts, so the check uses the same estimator as the budget.
-  if (
-    input.summarizerInputTokens !== undefined &&
-    spanTokens > input.summarizerInputTokens
-  ) {
+  // The span must still fit one summariser call after shrinking. When even the
+  // smallest safe span does not fit, retrying cannot help, so this stays the
+  // deterministic, actionable refusal.
+  if (input.summarizerInputTokens !== undefined && spanTokens > input.summarizerInputTokens) {
     return { kind: "none", reason: "span_exceeds_summarizer_capacity" };
+  }
+
+  // HYSTERESIS, scoped to the SPAN rather than to the conversation.
+  //
+  // The previous design latched the whole conversation: after any compaction,
+  // `compactionLatched` short-circuited every later plan, so a long chat was
+  // compacted exactly once and then grew to the budget and was rejected. The
+  // latch could only clear below the release fraction, which a growing
+  // conversation never reaches.
+  //
+  // What hysteresis must actually prevent is re-summarising the SAME history. So
+  // the guard is now: if every message this plan would replace is already covered
+  // by the durable record, there is nothing new to do. Fresh growth extends the
+  // span past the covered ids and is independently eligible, so a long-running
+  // conversation compacts repeatedly, one safe span at a time, without ever
+  // re-summarising a span it already paid to summarise.
+  const covered = input.coveredMessageIds;
+  if (!forced && covered !== undefined && covered.length > 0) {
+    const spanIds = messages
+      .slice(spanStartIndex, spanEndIndex + 1)
+      .map((m) => idOf(m))
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    if (spanIds.length > 0 && spanIds.every((id) => covered.includes(id))) {
+      return { kind: "none", reason: "already_compacted_span" };
+    }
   }
 
   // Finally: would compaction actually make the request FIT?

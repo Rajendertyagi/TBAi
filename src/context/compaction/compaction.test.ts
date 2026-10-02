@@ -221,73 +221,64 @@ describe("trigger uses the measured budget, not a message count", () => {
 // ─── Part 3: hysteresis ────────────────────────────────────────────────────
 
 describe("hysteresis prevents compaction on every turn", () => {
-  it("does not re-compact while the latch is engaged", () => {
-    // The latch is DURABLE, set by the previous compaction. Without this a
-    // conversation that reclaimed little would pay a summarisation call per turn.
+it("does not re-summarise a span the durable record already covers", () => {
+    // HYSTERESIS, correctly scoped. The thing that must never happen twice is
+    // paying a summarisation call for the SAME history. So the guard is the
+    // covered-id set, not a conversation-wide latch.
     const messages = conversation(20);
+    const covered = messages.map((m) => (m as { id?: string }).id ?? "");
     const plan = planCompaction({
       messages,
       measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
       usableInputTokens: 1000,
       measuredTotalTokens: 900,
-    fixedOverheadTokens: 0, // over the trigger
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: true,
       compactionLatched: true,
+      coveredMessageIds: covered,
       reason: "pressure",
     });
     expect(plan.kind).toBe("none");
-    if (plan.kind === "none") expect(plan.reason).toBe("above_release_but_within_hysteresis");
+    if (plan.kind === "none") expect(plan.reason).toBe("already_compacted_span");
+  });
+
+  it("treats FRESH growth as independently eligible, even while latched", () => {
+    // The defect this replaces: the latch short-circuited every later plan, so a
+    // long conversation compacted exactly once and then grew to the budget and was
+    // rejected. New messages past the covered ids are new history, so they must
+    // compact on their own.
+    const messages = conversation(20);
+    const covered = messages.slice(0, 10).map((m) => (m as { id?: string }).id ?? "");
+    const plan = planCompaction({
+      messages,
+      measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
+      usableInputTokens: 1000,
+      measuredTotalTokens: 900,
+      fixedOverheadTokens: 0,
+      policy: POLICY,
+      hasExistingCompaction: true,
+      compactionLatched: true,
+      coveredMessageIds: covered,
+      reason: "pressure",
+    });
+    expect(plan.kind).toBe("compact");
   });
 
   it("compacts again once the latch has been released", () => {
-    // The seam releases the latch once usage is observed below the release
-    // fraction, proving the previous compaction took effect.
     const messages = conversation(20);
     const plan = planCompaction({
       messages,
       measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
       usableInputTokens: 1000,
       measuredTotalTokens: 900,
-    fixedOverheadTokens: 0,
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: true,
       compactionLatched: false,
       reason: "pressure",
     });
     expect(plan.kind).toBe("compact");
-  });
-
-  it("a released latch is what makes repeat compaction possible at all", () => {
-    // This is the flaw the first implementation had: deriving the latch from
-    // current usage meant it could only clear BELOW release, which is also below
-    // trigger, so a compacted conversation could never compact again and would
-    // grow to rejection with a perfectly good span sitting there uncompacted.
-    const messages = conversation(20);
-    const latched = planCompaction({
-      messages,
-      measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
-      usableInputTokens: 1000,
-      measuredTotalTokens: 950,
-    fixedOverheadTokens: 0,
-      policy: POLICY,
-      hasExistingCompaction: true,
-      compactionLatched: true,
-      reason: "pressure",
-    });
-    const released = planCompaction({
-      messages,
-      measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
-      usableInputTokens: 1000,
-      measuredTotalTokens: 950,
-    fixedOverheadTokens: 0,
-      policy: POLICY,
-      hasExistingCompaction: true,
-      compactionLatched: false,
-      reason: "pressure",
-    });
-    expect(latched.kind).toBe("none");
-    expect(released.kind).toBe("compact");
   });
 
   it("does not compact below the trigger, latched or not", () => {

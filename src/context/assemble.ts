@@ -489,6 +489,12 @@ async function runCompactionPhase(
       usableInputTokens: input.usableInputTokens,
       existing: seam.existingRecord,
       compactionLatched: latched,
+      // Hysteresis is now decided against the SPAN the record already covers, not
+      // against a conversation-wide latch: a new span that extends past those ids
+      // is fresh growth and must be independently eligible, or a long chat is
+      // compacted exactly once and then grows to the budget and is rejected.
+      coveredMessageIds: seam.existingRecord?.coveredMessageIds,
+      force: input.forceCompaction === true,
       summarizerInputTokens: input.summarizerInputTokens,
       priorSummaryText: seam.existingRecord?.summaryText,
       policy: seam.policy,

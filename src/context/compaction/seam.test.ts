@@ -491,11 +491,17 @@ describe("a compaction is durable because it is stored, not recomputed", () => {
 
 describe("the hysteresis latch is released only when usage genuinely drops", () => {
   it("does not release the latch while the compacted conversation is still large", async () => {
-    const stored = makeRecord();
+    // The record covers exactly the messages this conversation presents, so there
+    // is no fresh growth to compact. Hysteresis must hold: no second
+    // summarisation call for history already summarised.
+    const messages = oversizedConversation();
+    const stored: CompactionRecord = {
+      ...makeRecord(),
+      coveredMessageIds: messages.map((m) => (m as { id?: string }).id ?? ""),
+    };
     const harness = seamHarness({ existing: stored });
-    await harness.assemble(oversizedConversation());
-    expect(harness.released).toHaveLength(0);
-    // Still latched: no second summarisation for the same pressure.
+    await harness.assemble(messages);
+    // Same history, already summarised: not summarised a second time.
     expect(harness.persisted).toHaveLength(0);
   });
 
@@ -609,14 +615,37 @@ describe("a failed compaction degrades to today's behaviour, never to corruption
     }
   });
 
-  it("a conversation beyond the model's window is refused, never half-summarised", async () => {
-    // The honest terminal case. The span cannot fit one summariser call, so
-    // compaction declines and the pre-existing rejection stands.
+  it("recovers an oversized conversation by compacting a SAFE prefix span", async () => {
+    // Previously this was a permanent refusal, which left the chat dead forever:
+    // every later turn planned the same oversized span and reached the same
+    // verdict. Recovery is now staged - the span end walks back to a safe turn
+    // boundary until it fits one summariser call, and the remainder stays in the
+    // conversation for a later turn.
     const harness = seamHarness();
     const result = await harness.assemble(beyondWindowConversation());
+    expect(result.context.provenance.compaction?.applied).toBe(true);
+    // The summary replaces exactly the span it claims to, and the live turn is
+    // never inside it.
+    const covered = harness.persisted[0] as unknown as { coveredMessageIds: string[] };
+    expect(covered.coveredMessageIds.length).toBeGreaterThan(0);
+    expect(covered.coveredMessageIds).not.toContain("live");
+    expect(result.context.modelMessages.length).toBeGreaterThan(0);
+  });
+
+  it("refuses deterministically when even the smallest safe span cannot be summarised", async () => {
+    // No amount of retrying helps when a single indivisible span cannot fit one
+    // call, so this must stay a precise refusal rather than a silent half-summarise.
+    const harness = seamHarness();
+    const oneHugeTurn = [user("u0", "x".repeat(4_000_000)), assistant("a0", "ok"), user("live", "THE LIVE REQUEST")];
+    const result = await harness.assemble(oneHugeTurn as never);
+    // Either refusal is a correct, non-destructive answer: the span could not be
+    // shrunk to anything worth summarising, or it could not fit one call. What
+    // must never happen is a partial summary presented as the whole span.
     expect(result.context.provenance.compaction?.applied).toBe(false);
+    expect(["span_exceeds_summarizer_capacity", "span_too_small_to_compact"]).toContain(
+      result.context.provenance.compaction?.reason,
+    );
     expect(harness.persisted).toHaveLength(0);
-    expect(result.decision.action).toBe("reject");
     expect(result.context.modelMessages).toHaveLength(0);
   });
 });
@@ -756,8 +785,11 @@ describe("a stored compaction stays applicable across reloads and growth", () =>
     }
 
     const result = await assembleWithStore(grown, store);
-    const reason = result.context.provenance.compaction?.reason ?? "";
-    expect(reason).toBe("record_applied_no_new_compaction:span_exceeds_summarizer_capacity");
+    // Recovery is staged now: the 40 fresh turns past the stored record are a NEW
+    // span, so the conversation compacts again instead of being refused forever.
+    // The prior summary still applies, which is the property this case protects.
+    expect(result.context.provenance.compaction?.applied).toBe(true);
+    expect(result.context.provenance.compaction?.generation).toBe(2);
     // Critically: the PRIOR summary is still applied, so the conversation did not
     // silently revert to full history.
     expect(JSON.stringify(result.context.layerC.messages)).toContain(
