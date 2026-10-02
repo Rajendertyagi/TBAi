@@ -16,7 +16,7 @@
     "security": "semgrep scan --config auto",
     "verify": "bun run typecheck && bun run lint && bun test && bun run build",
     "verify:full": "bun run verify && bun run security",
-    "test": "bun test ./tests ./src ./web/src ./web/tests --path-ignore-patterns \"**/shutdown-lifecycle.test.ts\" --timeout=30000",
+    "test": "bun test --isolate ./tests ./src ./web/src ./web/tests --path-ignore-patterns \"**/shutdown-lifecycle.test.ts\" --timeout=30000",
     "test:shutdown": "bun test tests/integration/shutdown-lifecycle.test.ts",
     "test:e2e": "bun scripts/run-e2e.ts",
     "gen:icon": "bun run scripts/gen-icon.ts"
