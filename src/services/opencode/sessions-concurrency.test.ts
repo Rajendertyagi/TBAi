@@ -1,4 +1,5 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
+import * as realOpenCodeClient from "./client";
 
 /**
  * Wave 1 concurrency probe (expected RED pre-fix, must pass after fix).
@@ -22,6 +23,15 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
  * Specifiers mirror `sessions.test.ts` (`../storage`, `./client`); the
  * workspace stub exists because, unlike the resume-path tests there, this
  * no-pointer path always reaches `resolveConversationWorkspace`.
+ *
+ * The `./client` mock is a PARTIAL mock (spread over the real module) on
+ * purpose. `sessions.ts` also imports `lastStatusForSessionLookup` from that
+ * same module, so a factory that listed only `createOpenCodeClient` left the
+ * namespace incomplete and the import failed to link. It used to pass only
+ * because another file had already mocked `./client` more fully into the shared
+ * module registry; `bun test --isolate` gives every file its own registry, so
+ * this file now has to stand on its own. Spreading the real module keeps every
+ * un-stubbed export genuinely real instead of silently absent.
  */
 
 let createCalls = 0;
@@ -41,6 +51,7 @@ mock.module("../storage", () => ({
 }));
 
 mock.module("./client", () => ({
+  ...realOpenCodeClient,
   createOpenCodeClient: () => ({
     session: {
       get: async () => {
@@ -54,6 +65,12 @@ mock.module("./client", () => ({
         return { id: `ses-race-${createCalls}` };
       },
     },
+    // Reached by `fetchServerDefaultModel` for a session created with no model.
+    // Empty catalogue = the server advertises no default, so the session stays
+    // unbound and this file keeps asserting only what it is about: the create
+    // dedup. Not recorded in the create counter, which must stay exact.
+    agent: { list: async () => ({ data: [] }) },
+    model: { list: async () => ({ data: [] }) },
   }),
 }));
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { ClientError } from "@opencode/client";
+import * as realOpenCodeClient from "./client";
 
 /**
  * Tests for session termination (V2 interrupt -> remove) and the liveness probe.
@@ -10,6 +11,15 @@ import { ClientError } from "@opencode/client";
  * All three are stubbed, so no process is spawned, no database is opened and
  * no network I/O happens. Only the V2 call sequence and the error handling
  * under test are real.
+ *
+ * The `./client` mock is a PARTIAL mock (spread over the real module) on
+ * purpose. `sessions.ts` also imports `lastStatusForSessionLookup` from that
+ * same module, so a factory that listed only `createOpenCodeClient` left the
+ * namespace incomplete and the import failed to link. It used to pass only
+ * because another file had already mocked `./client` more fully into the shared
+ * module registry; `bun test --isolate` gives every file its own registry, so
+ * this file now has to stand on its own. Spreading the real module keeps every
+ * un-stubbed export genuinely real instead of silently absent.
  */
 
 /** Ordered log of the V2 session calls the code under test makes. */
@@ -48,6 +58,7 @@ mock.module("../workspace", () => ({
 }));
 
 mock.module("./client", () => ({
+  ...realOpenCodeClient,
   createOpenCodeClient: () => ({
     session: {
       get: (args: { sessionID: string }) => {
@@ -71,6 +82,13 @@ mock.module("./client", () => ({
         return createImpl(args);
       },
     },
+    // A session created with no model reaches `fetchServerDefaultModel`, which
+    // reads the catalogue through this same client. An EMPTY catalogue is the
+    // honest answer here: the server advertises no default, so the session stays
+    // unbound - which is what the cases above assert. Deliberately not recorded
+    // in `calls`, because the V2 session sequence is what those cases check.
+    agent: { list: async () => ({ data: [] }) },
+    model: { list: async () => ({ data: [] }) },
   }),
 }));
 
