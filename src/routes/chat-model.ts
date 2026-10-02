@@ -113,12 +113,41 @@ export interface ChatFinishUsage {
  * verbatim on every event; nothing else is added and the chat protocol is
  * untouched.
  */
+/**
+ * The CURRENT model-visible context for the turn that just completed.
+ *
+ * Deliberately separate from `usage`. `usage` is provider-reported token
+ * TRAFFIC: the AI SDK accumulates it with `addLanguageModelUsage` across every
+ * model call in a turn, so a tool-using turn reports more input tokens than the
+ * window can even hold. That number is correct as usage and wrong as occupancy.
+ *
+ * This is the number the context meter must show: the server's own measurement of
+ * what the provider was actually sent, taken from the same assembly/measurement
+ * pipeline that enforces the budget, plus the effective window it was measured
+ * against and where that window came from.
+ */
+export interface ChatContextState {
+  /** Model-visible input for this request, as the server measured it. */
+  usedTokens: number;
+  /** Effective context window used by the budget for this model. */
+  windowTokens: number;
+  /** Where that window came from: provider_reported | configured | conservative_default. */
+  windowSource: string;
+  /** Input budget actually available after safety margin and output reservation. */
+  usableInputTokens: number;
+}
+
 export function buildChatMessageMetadata(
   part: { type: string; totalUsage?: ChatFinishUsage },
   custom: Record<string, string>,
+  contextState?: ChatContextState,
 ): Record<string, unknown> {
   if (part.type === "finish" && part.totalUsage) {
-    return { custom, usage: part.totalUsage };
+    return {
+      custom,
+      usage: part.totalUsage,
+      ...(contextState ? { context: contextState } : {}),
+    };
   }
   return { custom };
 }

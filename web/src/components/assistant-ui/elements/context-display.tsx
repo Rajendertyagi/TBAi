@@ -96,6 +96,8 @@ type ContextDisplayContextValue = {
   percent: number;
   modelContextWindow: number;
   /** Pin the popover open from a click. Hover/focus/outside/Escape stay native. */
+  /** Provenance of the effective window, so the UI never implies verified. */
+  windowSource: string | undefined;
   togglePin: () => void;
 };
 
@@ -116,11 +118,28 @@ export type PresetProps = {
   side?: "top" | "bottom" | "left" | "right";
   usage?: TokenUsage | undefined;
   resetKey?: string | undefined;
+/** TBAi: current model-visible context, server-measured. See Root. */
+  contextTokens?: number | undefined;
+  /** TBAi: provenance of the effective window, shown to the user. */
+  windowSource?: string | undefined;
 };
 
 export type ContextDisplayRootProps = {
   modelContextWindow: number;
   children: ReactNode;
+/**
+   * TBAi: CURRENT model-visible context, server-measured.
+   *
+   * The ring's occupancy is this, NOT `usage.totalTokens`. `usage` is token
+   * TRAFFIC the provider accumulated across every model call in a turn, so a
+   * tool-using turn reports far more input tokens than the window holds and the
+   * meter reads "100% full" on a conversation that is not full. When supplied it
+   * is the numerator; `usage` still drives the usage breakdown in the popover, so
+   * spend and occupancy stay separately visible and are never merged.
+   */
+  contextTokens?: number | undefined;
+  /** TBAi: where the effective window came from, so the UI never implies verified. */
+  windowSource?: string | undefined;
   usage?: TokenUsage | undefined;
   resetKey?: string | undefined;
 };
@@ -153,8 +172,13 @@ function ContextDisplayRoot({
   children,
   usage,
   resetKey,
+  contextTokens,
+  windowSource,
 }: ContextDisplayRootProps) {
-  const rawTokens = usage?.totalTokens ?? 0;
+  // OCCUPANCY, not traffic. The server measures what the provider was actually
+  // sent; `usage.totalTokens` is provider traffic accumulated across every model
+  // call in the turn and reports "100% full" for a conversation that is not full.
+  const rawTokens = contextTokens ?? usage?.totalTokens ?? 0;
   const [tokenState, setTokenState] = useState({
     resetKey,
     totalTokens: rawTokens > 0 ? rawTokens : 0,
@@ -210,8 +234,9 @@ function ContextDisplayRoot({
       percent,
       modelContextWindow,
       togglePin,
+      windowSource,
     }),
-    [current.usage, totalTokens, percent, modelContextWindow, togglePin],
+    [current.usage, totalTokens, percent, modelContextWindow, togglePin, windowSource],
   );
 
   if (!hasUsage) return null;
@@ -289,7 +314,7 @@ function ContextDisplayContent({
   side?: "top" | "bottom" | "left" | "right" | undefined;
   className?: string;
 }) {
-  const { usage, totalTokens, percent, modelContextWindow } =
+  const { usage, totalTokens, percent, modelContextWindow, windowSource } =
     useContextDisplay();
   const segments = getContextSegments(usage);
 
@@ -322,6 +347,15 @@ function ContextDisplayContent({
             )}
             style={{ "--usage-width": `${percent}%` } as React.CSSProperties}
           />
+        </div>
+        <div className="text-muted-foreground mt-2">
+          {windowSource === "provider_reported"
+            ? "Context limit reported by the provider"
+            : windowSource === "configured"
+              ? "Context limit set in this app’s model settings"
+              : windowSource === "conservative_default"
+                ? "Estimated context limit (this model does not report one)"
+                : "Context limit unknown"}
         </div>
         {segments.length > 0 && (
           <div className="mt-3 grid gap-1.5">
@@ -396,11 +430,15 @@ const ContextDisplayRing: FC<PresetProps> = ({
   className,
   side,
   usage,
+  contextTokens,
+  windowSource,
   resetKey,
 }) => (
   <ContextDisplayRoot
     modelContextWindow={modelContextWindow}
     usage={usage}
+    contextTokens={contextTokens}
+    windowSource={windowSource}
     resetKey={resetKey}
   >
     <ContextDisplayTrigger

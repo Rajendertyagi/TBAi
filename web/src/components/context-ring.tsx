@@ -6,6 +6,7 @@ import {
   resolveModelOwner,
 } from "../lib/model-groups";
 import { useSettingsStore } from "../stores";
+import { useCurrentContext } from "../features/chat/context/useCurrentContext";
 
 interface ConversationCustom {
   providerId?: string;
@@ -44,12 +45,22 @@ export function DirectContextRing() {
   currentModelId ??= custom?.modelId ?? undefined;
   currentModelId ??=
     providers.find((p) => p.id === currentProviderId)?.model ?? undefined;
+  // The SERVER's current-context measurement is the numerator, and the server's
+  // effective window is the denominator, so the meter and the budget can never
+  // disagree. Before the first turn reports one, the ring keeps the previous
+  // behaviour (nothing rendered) rather than inventing a number.
+  const serverContext = useCurrentContext();
   return (
     <DirectRuntimeRing
-      modelContextWindow={resolveContextWindow({
-        modelId: currentModelId,
-        groups,
-      })}
+      modelContextWindow={
+        serverContext?.windowTokens ??
+        resolveContextWindow({
+          modelId: currentModelId,
+          groups,
+        })
+      }
+      contextTokens={serverContext?.usedTokens}
+      windowSource={serverContext?.windowSource}
       side="top"
     />
   );

@@ -62,7 +62,7 @@ import { createProgressTracker } from "../lib/progress-tracker";
 import type { ProgressData } from "../lib/progress-stages";
 import { RESUMABLE_STREAM_ID_HEADER, ResumableStreamError } from "assistant-stream/resumable";
 import { chatMessageMetadataSchema, chatRequestSchema } from "../lib/validation";
-import { resolveChatModel, buildChatMessageMetadata, UnknownProviderError } from "./chat-model";
+import { resolveChatModel, buildChatMessageMetadata, UnknownProviderError, type ChatContextState } from "./chat-model";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService, messageService } from "../services/storage";
@@ -353,6 +353,38 @@ app.post("/api/chat", async (c) => {
   let toolsContext: NativeToolsContext;
   let modelMessages: Awaited<ReturnType<typeof prepareModelMessages>>;
   let assembled: Awaited<ReturnType<typeof assembleContext>>;
+
+/**
+ * The CURRENT context state to hand the browser with this turn.
+ *
+ * The context meter used to divide the provider's accumulated `totalUsage` by the
+ * context window. That is a category error: `totalUsage` is token TRAFFIC summed
+ * across every model call in the turn (the AI SDK accumulates it with
+ * `addLanguageModelUsage`), so a single tool-using turn can report more input
+ * tokens than the window holds. The meter then read "100% full" on a conversation
+ * that was nowhere near full.
+ *
+ * This returns occupancy instead: the server's own measurement of what the
+ * provider was actually sent, from the same pipeline that enforced the budget,
+ * plus the effective window and where that window came from. After a compaction
+ * the estimate is the post-compaction one, so the meter drops immediately.
+ *
+ * Returns `undefined` only when assembly has not happened (an early rejection),
+ * in which case the meter keeps its previous reading rather than inventing one.
+ */
+function contextStateForUi(): ChatContextState | undefined {
+  if (assembled === undefined) return undefined;
+  const provenance = assembled.context.provenance;
+  const usedTokens = provenance.estimate.estimatedTokens;
+  const windowTokens = provenance.limit?.maxInputTokens;
+  if (typeof usedTokens !== "number" || typeof windowTokens !== "number") return undefined;
+  return {
+    usedTokens,
+    windowTokens,
+    windowSource: provenance.limit?.source ?? "unknown",
+    usableInputTokens: provenance.budget.usableInputTokens,
+  };
+}
   // Phase 3 outputs. Declared here so the pre-flight rejection path can log the
   // cache capability of a request it refuses to send.
   let cacheCapability: CacheCapability | undefined;
@@ -939,11 +971,15 @@ app.post("/api/chat", async (c) => {
           });
         },
         messageMetadata: ({ part }) =>
-          buildChatMessageMetadata(part, {
-            providerId: provider.id,
-            modelId: modelConfig.model,
-            reasoningLevel: reasoning,
-          }),
+          buildChatMessageMetadata(
+            part,
+            {
+              providerId: provider.id,
+              modelId: modelConfig.model,
+              reasoningLevel: reasoning,
+            },
+            contextStateForUi(),
+          ),
       }));
     },
     generateId: () => generateId(),
