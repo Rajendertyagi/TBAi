@@ -92,9 +92,40 @@ const CONFIG_RE =
  * A false positive is the worse error: it would tell a user to switch models
  * when the request itself is what the provider rejected. So a miss degrades to
  * the accurate generic 4xx copy instead of lying.
+ *
+ * ## Why the clauses are narrow (Generation-400)
+ *
+ * An earlier version ended with `\bmodel\b[^.]{0,80}\b(?:not found|…)\b`. That
+ * gap happily bridges ordinary English, so real gateway prose that merely
+ * mentions the model and later reports something ELSE as not found was claimed
+ * as a model-identity failure — the exact lie this comment warns about:
+ *
+ *   "The model output did not contain the required tool; not found"
+ *     → told the user to switch models, which changes nothing.
+ *
+ * So every clause below must name the model as the thing that is missing:
+ * either a fixed provider phrase, or a gap that is a MODEL ID (an identifier,
+ * introduced by a colon/equals) followed by a specific predicate. Free English
+ * between "model" and the predicate is never bridged.
  */
-const MODEL_IDENTITY_RE =
-  /\bmodel[_ -]?not[_ -]?found\b|\bno such model\b|\bunknown model\b|\bunsupported model\b|\binvalid model\b|\bmodel\b[^.]{0,80}\b(?:not found|does not exist|doesn't exist|unavailable|deprecated)\b/i;
+const MODEL_IDENTITY_RE = new RegExp(
+  [
+    // "model_not_found" / "model not found" / "model-not-found"
+    /\bmodel[_ -]?not[_ -]?found\b/,
+    /\bno such model\b/,
+    // "unknown model", "unsupported_model", "invalid model", "deprecated model"
+    /\b(?:unknown|unsupported|invalid|deprecated|unavailable)[_ -]?model\b/,
+    // "model: claude-x not found" — a colon/equals proves the gap is a model id.
+    /\bmodel\b\s*[:=]\s*\S{0,80}\s+(?:not found|does not exist|doesn't exist|unavailable|deprecated)\b/,
+    // "The model `claude-x` does not exist" — an identifier-shaped gap plus a
+    // predicate specific enough that surrounding prose cannot reach it.
+    /\bmodel\b\s+[`'"]?[\w.:-]{1,60}[`'"]?\s+(?:does not exist|doesn't exist|was not found|is not available|is deprecated)\b/,
+  ]
+    .map((clause) => clause.source)
+    .join("|"),
+  // No `g`: `.test()` on a global regex carries `lastIndex` between calls.
+  "i",
+);
 const TOOL_SUBJECT_RE = /tool|mcp/i;
 const TOOL_OUTCOME_RE = /error|fail/i;
 

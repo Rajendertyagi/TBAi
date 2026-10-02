@@ -1817,3 +1817,112 @@ an unrelated report (different app). Existing rotation test updated to the batch
   deliberately NOT "fixed": a request that cannot be persisted cannot poison
   history, and loosening the schema to accept it would weaken a real boundary to
   accommodate an unreachable shape.
+
+---
+
+## Generation-400 final defect fix - the replayable-input SHAPE, and not inventing a cause
+
+An independent audit of `78101a8` (the `unreplayable` lifecycle) accepted the
+architecture and the `output-error` recovery, then found one blocker and one
+secondary copy defect. Both are closed here.
+
+### Blocker: ``input !== undefined`` is not "usable arguments"
+
+The repair asked only whether ``input`` was present:
+
+    if (part.input !== undefined) return true;
+
+That is the wrong question. The wire contract is a JSON **object**, and the SDK
+substitutes with ``part.input ?? part.rawInput`` (``ai@7.0.93``) while
+``@ai-sdk/openai-compatible@3.0.44`` serializes whatever it received as
+``arguments: JSON.stringify(part.input)``. Because ``??`` treats ``null`` as
+ABSENT, a part carrying ``input: null`` fell straight through to its
+``rawInput`` and put text on the wire - the production defect, reachable
+through a key the repair had never inspected. Every other non-object shape was
+unrepaired for the same reason: an array, a string, a number and a boolean each
+reached the provider where an object is required.
+
+Reachable, not theoretical: the route validates messages with the SDK's own
+``safeValidateUIMessages``, whose tool-part schema types ``input`` as
+``z.unknown().optional()`` and therefore ACCEPTS ``null``.
+
+- **The fix is the shape, never presence.** ``hasUsableToolInput`` now tests
+  ``isPlainObject(part.input)`` - the same rule the file already used to decide
+  what ``rawInput`` recovery yields, so there is ONE definition of "usable" in
+  the file rather than two that can disagree. ``withRecoveredToolInput`` uses
+  the same test, which is what lets a part with a non-object ``input`` AND a
+  recoverable ``rawInput`` be repaired instead of discarded: leniency should
+  cost nothing. Anything neither shape covers is unreplayable and takes its
+  synthesized tool result with it, because the conversion derives both from the
+  same parts.
+
+- **Approval semantics are untouched, and asserted.** Replayability - never
+  approval state - is still the deciding criterion, and it is still gated by
+  ``emitsProviderToolCall``. An open ``approval-requested`` gate is filtered
+  before conversion, so it is preserved for ANY ``input`` shape including
+  ``null`` and arrays; a RESPONDED approval IS replayed, so it needs usable
+  arguments and is dropped without them.
+
+- **Reproduced before and after at the boundary.** The new integration suite
+  drives the real ``POST /api/chat`` against a local validating stub and audits
+  the captured outbound request. Against pre-fix ``15ffcef`` the exact
+  production payload carrying ``input: null`` put
+  ``messages[1].tool_calls[0](write_file).arguments`` on the wire as a JSON
+  **string** and the stub answered **400**; the same suite reported 24 failures
+  across the shape cases. After the fix all 69 cases pass, with 0 tool calls and
+  0 orphan tool results. The stub's own validator is asserted case-by-case, so
+  its authority to fail a request is proven rather than assumed.
+
+### Secondary: ``MODEL_IDENTITY_RE`` must not invent a cause
+
+The pattern ended with ``\bmodel\b[^.]{0,80}\b(?:not found|...)\b``. That gap
+bridges ordinary English, so gateway prose that merely mentions the model and
+later reports something ELSE as not found was claimed as a model-identity
+failure - telling the user to switch models when switching model would change
+nothing, which the pattern's own comment called the worse error:
+
+    "The model output did not contain the required tool; not found"
+      -> "The provider rejected this model. Pick another model ..."
+
+Every clause must now name the model as the thing that is missing: a fixed
+provider phrase (``model_not_found``, ``no such model``, ``unknown model``), or
+a gap that is a MODEL ID - introduced by a colon/equals, or identifier-shaped -
+followed by a specific predicate. Free English between "model" and the predicate
+is never bridged. The true positives that matter keep working (OpenAI's
+``model_not_found``, Anthropic's ``model: claude-x not found``,
+"The model `x` does not exist", the underscore spellings), the flag is still
+checked against the REFINED category so a claimed refinement wins, and it still
+never makes a failure retryable.
+
+### Alternatives considered and rejected
+
+- **Loosen the route's UIMessage schema to reject ``input: null``.** Rejected:
+  it duplicates a rule the repair already owns, and the SDK owns the schema. A
+  boundary that is stricter about shape but silent about the *other* unreplayable
+  states (``[]``, ``"x"``, ``42``) fixes one symptom and leaves the defect.
+- **Normalize a non-object ``input`` to ``{}`` and keep the part.** Rejected:
+  it invents arguments the model never produced, and the model would then be
+  shown a tool result for arguments it did not choose. Dropping a part that
+  cannot be replayed, and recovering one whose real arguments are recoverable,
+  are both truthful.
+- **Validate on the wire instead of in history.** Rejected: a provider SDK is
+  not a history-repair layer, and by then the malformed payload is already being
+  sent. The application owns the repair.
+
+### What was deliberately NOT done
+
+No AI SDK version change (still ``ai@7.0.93`` /
+``@ai-sdk/openai-compatible@3.0.44``), no patch to ``node_modules``, no
+dependency or lockfile change, no change to Part 4/5 architecture
+(``model-messages.ts`` untouched - only the content handed to it changed), no
+provider behaviour change, no raw request/response logging (the
+``ai.provider_error_code`` allowlist is unchanged and still reads only
+``error.type``/``code``/``param``), and no real provider call of any kind.
+
+### Verified
+
+Focused repair suites, the previously audited Generation-400 suites, approval
+lifecycle, error taxonomy/hygiene, the Direct route suites, and the Part 2/3/4/5
+context-compaction-cache-memory regressions are green; ``typecheck`` and
+``build`` both exit 0. Numbers are recorded against this commit's SHA in the
+audit hand-off rather than restated here.

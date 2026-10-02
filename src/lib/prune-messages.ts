@@ -105,26 +105,40 @@ function recoverPlainObjectFromRawInput(rawInput: unknown): Record<string, unkno
  *
  * Two accepted shapes, and only two:
  *
- *  1. `input` is present — the SDK parsed the model's arguments against the
- *     tool schema. This is the normal case for every state.
- *  2. `input` is absent, the part is `output-error`, and `rawInput` recovers to
- *     a plain object — the legacy shape the SDK still substitutes, whose
+ *  1. `input` is a PLAIN OBJECT — the SDK parsed the model's arguments against
+ *     the tool schema. This is the normal case for every state.
+ *  2. `input` is not a plain object, the part is `output-error`, and `rawInput`
+ *     recovers to one — the legacy shape the SDK still substitutes, whose
  *     arguments are genuine and worth keeping.
  *
- * Everything else (a truncated `rawInput`, an array/primitive/null recovery, or
- * simply no arguments at all) is unreplayable: the SDK would emit a tool call
- * whose `arguments` is a string or absent, which no OpenAI-compatible provider
- * accepts. It is the application's job to drop such a part BEFORE conversion —
- * a provider SDK is not a history-repair layer.
+ * Everything else is unreplayable: a truncated `rawInput`, a `null`/array/
+ * primitive `input`, or simply no arguments at all. The SDK would emit a tool
+ * call whose `arguments` is a string, an array, a bare primitive or absent —
+ * none of which an OpenAI-compatible provider accepts. It is the application's
+ * job to drop such a part BEFORE conversion; a provider SDK is not a
+ * history-repair layer.
+ *
+ * ## Why "present" is not the test (Generation-400)
+ *
+ * An earlier version asked only whether `input` was `!== undefined`, which let
+ * `input: null` through. The SDK substitutes with `part.input ?? part.rawInput`
+ * and `??` treats `null` as ABSENT, so a part carrying `input: null` silently
+ * fell back to its `rawInput` text — reproducing the production defect through a
+ * key the repair had never inspected. The test must therefore be the same shape
+ * the wire requires ({@link isPlainObject}), never mere presence.
  */
 export function hasUsableToolInput(part: LoosePart): boolean {
-  if (part.input !== undefined) return true;
+  if (isPlainObject(part.input)) return true;
   if (part.state !== "output-error") return false;
   return recoverPlainObjectFromRawInput(part.rawInput) !== undefined;
 }
 
 /**
  * The kept part with a legacy `rawInput` PROMOTED to `input`.
+ *
+ * Runs whenever `input` is not already a replayable plain object, so a part
+ * carrying a `null`/array/primitive `input` alongside a recoverable `rawInput`
+ * is repaired rather than discarded — leniency should cost nothing.
  *
  * Returns the part unchanged when there is nothing to recover. `rawInput` is
  * dropped rather than kept alongside, so a replayed part carries exactly one
@@ -134,7 +148,7 @@ export function hasUsableToolInput(part: LoosePart): boolean {
  * This is a copy: the part the caller persisted is never mutated.
  */
 function withRecoveredToolInput(part: LoosePart): LoosePart {
-  if (part.input !== undefined || part.state !== "output-error") return part;
+  if (isPlainObject(part.input) || part.state !== "output-error") return part;
   const recovered = recoverPlainObjectFromRawInput(part.rawInput);
   if (recovered === undefined) return part;
   const { rawInput: _unparsedText, ...rest } = part;
