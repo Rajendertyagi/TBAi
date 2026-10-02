@@ -127,14 +127,25 @@ export interface ChatFinishUsage {
  * against and where that window came from.
  */
 export interface ChatContextState {
-  /** Model-visible input for this request, as the server measured it. */
+  /** Model-visible input for this request. */
   usedTokens: number;
   /** Effective context window used by the budget for this model. */
   windowTokens: number;
-  /** Where that window came from: provider_reported | configured | conservative_default. */
+  /** Where that window came from: provider_reported | configured | conservative_default | unknown. */
   windowSource: string;
   /** Input budget actually available after safety margin and output reservation. */
   usableInputTokens: number;
+  /**
+   * How `usedTokens` was established.
+   *
+   * `provider` = the provider's own count of the prompt for the last model call.
+   * `estimate` = TBAi's local character heuristic, used before any call has
+   * happened or for providers that report no usage. `unknown` = neither source
+   * produced a number, and the UI must show no reading rather than a guess.
+   */
+  occupancyKind?: "provider" | "estimate" | "unknown";
+  /** Cached portion of the measured prompt, when the provider broke it out. */
+  cachedInputTokens?: number | undefined;
 }
 
 export function buildChatMessageMetadata(

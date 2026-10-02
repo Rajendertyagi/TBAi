@@ -40,7 +40,20 @@ export interface CurrentContext {
   windowSource: ContextWindowSource;
   /** Input budget available after safety margin and output reservation. */
   usableInputTokens: number;
+  /**
+   * How `usedTokens` was established.
+   *
+   * `provider` is the provider's own count of the prompt for the last model
+   * call - a measurement. `estimate` is the server's local heuristic, which is
+   * preventive only. `unknown` means no trustworthy number is available.
+   */
+  occupancyKind: OccupancyKind;
+  /** Cached portion of the measured prompt, when reported. Never summed into `usedTokens`. */
+  cachedInputTokens?: number;
 }
+
+/** Whether the occupancy figure is a measurement, a heuristic, or absent. */
+export type OccupancyKind = "provider" | "estimate" | "unknown";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,6 +85,10 @@ export function parseCurrentContext(metadata: unknown): CurrentContext | undefin
   const windowTokens = positiveInt(raw.windowTokens);
   if (usedTokens === undefined || windowTokens === undefined) return undefined;
   const source = raw.windowSource;
+  // Absent means the server could not establish a trustworthy number. That is
+  // reported as `unknown` rather than silently defaulting to a measurement.
+  const occupancyKind: OccupancyKind =
+    raw.occupancyKind === "provider" || raw.occupancyKind === "estimate" ? raw.occupancyKind : "unknown";
   return {
     usedTokens,
     windowTokens,
@@ -82,6 +99,8 @@ export function parseCurrentContext(metadata: unknown): CurrentContext | undefin
         ? source
         : "unknown",
     usableInputTokens: positiveInt(raw.usableInputTokens) ?? windowTokens,
+    occupancyKind,
+    ...(positiveInt(raw.cachedInputTokens) ? { cachedInputTokens: positiveInt(raw.cachedInputTokens) } : {}),
   };
 }
 

@@ -52,6 +52,7 @@ describe("server-measured current context is what the meter reads", () => {
           windowTokens: 1_000_000,
           windowSource: "configured",
           usableInputTokens: 746_928,
+          occupancyKind: "provider",
         },
       }),
     ).toEqual({
@@ -59,7 +60,32 @@ describe("server-measured current context is what the meter reads", () => {
       windowTokens: 1_000_000,
       windowSource: "configured",
       usableInputTokens: 746_928,
+      occupancyKind: "provider",
     });
+  });
+
+  it("keeps the cached portion separate instead of folding it into the numerator", () => {
+    const parsed = parseCurrentContext({
+      context: {
+        usedTokens: 90_000,
+        windowTokens: 1_000_000,
+        windowSource: "provider_reported",
+        occupancyKind: "provider",
+        cachedInputTokens: 236_288,
+      },
+    });
+    // The measured occupancy stands alone. Cached tokens are a subdivision of
+    // the same prompt, never an addition to it - summing them is the exact bug
+    // that produced a 330% readout.
+    expect(parsed?.usedTokens).toBe(90_000);
+    expect(parsed?.cachedInputTokens).toBe(236_288);
+  });
+
+  it("reports an unstated occupancy as unknown rather than as a measurement", () => {
+    const parsed = parseCurrentContext({
+      context: { usedTokens: 5, windowTokens: 100, windowSource: "configured" },
+    });
+    expect(parsed?.occupancyKind).toBe("unknown");
   });
 
   it("reads it from metadata.custom too, since assistant-ui relocates unknown keys", () => {
