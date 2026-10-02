@@ -5,7 +5,11 @@ import { getModel, resolveApiProtocol } from "../services/ai";
 import { buildReasoningProviderOptions } from "./chat-provider-options";
 import { credentialStore } from "../services/credentials";
 import { sanitizeStreamError } from "../lib/redact";
-import { classifyError, errorLogFields } from "../lib/errors";
+import {
+  classifyError,
+  errorLogFields,
+  providerErrorCodeFields,
+} from "../lib/errors";
 import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../lib/ai-diagnostics";
 import { prepareModelMessages } from "../lib/model-messages";
 import { streamStatusQuerySchema } from "../lib/validation";
@@ -577,13 +581,41 @@ app.post("/api/chat", async (c) => {
   const logAiError = (error: unknown): void => {
     if (errorLogged) return;
     errorLogged = true;
+    const effective = error ?? new Error("Direct stream failed");
     chatLog.error("ai", "ai.error", {
       streamId,
-      ...errorLogFields(error ?? new Error("Direct stream failed"), { provider: provider.type }),
+      ...errorLogFields(effective, { provider: provider.type }),
       elapsedMs: Date.now() - chatStartedAt,
       firstChunkArrived: firstChunkAt !== null,
       firstChunkElapsedMs: firstChunkAt !== null ? firstChunkAt - chatStartedAt : null,
       chunkCount,
+    });
+    logProviderErrorCode(effective, streamId);
+  };
+
+  /**
+   * The provider's own machine identifiers for a rejected request, on their own
+   * event so `ai.error` stays exactly as narrow as it was.
+   *
+   * Emitted only for a status-bearing provider call (`4xx`/`5xx`), because that
+   * is the only case where the provider named a cause. The fields are the
+   * allowlisted scalars from `providerErrorCodeFields` — never the response
+   * body, never the request body, never the error prose. `ai.error` continues to
+   * omit the message by design and this does not weaken that: the diagnostic
+   * exists so an engineer can see *which field* a provider rejected without any
+   * user data crossing the boundary.
+   */
+  const logProviderErrorCode = (error: unknown, streamId: string): void => {
+    const status = classifyError(error, { provider: provider.type }).statusCode;
+    if (status === undefined || status < 400) return;
+    const codes = providerErrorCodeFields(error);
+    if (Object.keys(codes).length === 0) return;
+    chatLog.warn("ai", "ai.provider_error_code", {
+      streamId,
+      provider: provider.type,
+      model: modelConfig.model,
+      statusCode: status,
+      ...codes,
     });
   };
 

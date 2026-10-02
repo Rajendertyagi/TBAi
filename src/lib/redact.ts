@@ -93,6 +93,30 @@ export function sanitizeStreamError(error: unknown): string {
       return redact("The connection dropped mid-response. Check the logs and retry.");
     case "tool":
       return redact("A tool call failed. See diagnostics and retry.");
+    case "config":
+      // Split, because the two causes need OPPOSITE advice and the generic copy
+      // gave both of them the wrong one ("retry", which policy forbids: `config`
+      // is never retryable and Direct sets DIRECT_MAX_RETRIES = 0).
+      //
+      //  - The provider rejected the MODEL. Switching model is the fix.
+      //  - The provider rejected the REQUEST. Re-sending the identical request
+      //    reproduces the identical rejection, so the honest advice is a new
+      //    conversation or a different model — never a retry.
+      //
+      // A `config` classification with no 4xx status is deliberately NOT handled
+      // here: it is one of our own refusals (workspace bounds, approval required)
+      // wearing the same bucket, and those keep the generic copy.
+      if (classified.modelIdentity) {
+        return redact(
+          "The provider rejected this model. Pick another model or fix the provider's model id.",
+        );
+      }
+      if (classified.statusCode !== undefined && classified.statusCode >= 400 && classified.statusCode < 500) {
+        return redact(
+          "The provider rejected this request (HTTP 4xx) as invalid. Retrying the same message will not help — start a new chat or switch model.",
+        );
+      }
+      return redact("Generation failed. Retry or pick another provider/model.");
     default:
       return redact("Generation failed. Retry or pick another provider/model.");
   }

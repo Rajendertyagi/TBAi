@@ -267,11 +267,13 @@ composition rather than a custom renderer (ADR-equivalent of the AIPM
 project's ADR-009, re-implemented natively for this codebase):
 
 - **Markdown**: the official markdown-text registry component on top of
-  @assistant-ui/react-markdown (MarkdownTextPrimitive) + emark-gfm
+  @assistant-ui/react-markdown (MarkdownTextPrimitive) + 
+emark-gfm
   (GFM tables, task lists, strikethrough). Streaming-safe: parses
   incrementally with smooth reveal; data-status mirrors part state.
 - **Syntax highlighting**: the official shiki-highlighter element over
-  eact-shiki. Tokenization is deferred while a code block streams and
+  
+eact-shiki. Tokenization is deferred while a code block streams and
   settles afterwards without layout shift.
 - **Code blocks**: language label + copy button ship in the registry
   component's CodeHeader; long lines scroll inside the block.
@@ -309,13 +311,17 @@ project's ADR-009, re-implemented natively for this codebase):
   Not carried over from the legacy viewer, because nothing used them: the split
   view, the `oldFile`/`newFile` content-diff mode, line numbers, and the
   size/style variants.
-- **Reasoning/tools**: official easoning, 	ool-group, 	ool-fallback
+- **Reasoning/tools**: official 
+easoning, 	ool-group, 	ool-fallback
   elements rendered through MessagePrimitive.GroupedParts +
   groupPartByType (current API; components.ChainOfThought is legacy).
   Reasoning renders only when the provider emits reasoning parts; thinking
   budgets are configured per provider (see Thinking-model latency above).
-- **Dependencies added**: @assistant-ui/react-markdown, emark-gfm,
-  eact-shiki (brings shiki), diff, parse-diff, adix-ui (unified
+- **Dependencies added**: @assistant-ui/react-markdown, 
+emark-gfm,
+  
+eact-shiki (brings shiki), diff, parse-diff, 
+adix-ui (unified
   package for Collapsible/Tooltip), 	w-shimmer (CSS). cva,
   clsx, 	ailwind-merge were already present.
 
@@ -324,7 +330,8 @@ project's ADR-009, re-implemented natively for this codebase):
 |---|---|---|
 | `diff -> DiffViewer routing (HighlightingSyntax in ChatWindow.tsx) | ~15 lines | MarkdownText's SyntaxHighlighter slot is language-agnostic; routing diff fences to the official DiffViewer is app glue. |
 | prettyToolName (rendering-glue.ts) | ~10 lines | MCP tool names are mcp__<serverId>__<toolName>; displayed as "server - tool" for readability. |
-| asChild adaptation in tooltip-icon-button.tsx | 1 line | Installed radix-ui@1.6.7 TooltipTrigger supports asChild but not the newer ender prop used by the registry file. |
+| asChild adaptation in tooltip-icon-button.tsx | 1 line | Installed radix-ui@1.6.7 TooltipTrigger supports asChild but not the newer 
+ender prop used by the registry file. |
 | ui/button + ui/tooltip + ui/collapsible + ui/textarea | ~150 lines | Registry elements import these shadcn primitives; this project had a different Button/Input/Textarea set in ui.tsx. Adapted to the existing dark-first token style. |
 | context-display.tsx (tooltip import + arrow) | 2 lines | Vendored Radix flavor imports `@/components/ui/radix/tooltip`; ours lives at `@/components/ui/tooltip` (same exports). Upstream hides `[&_[data-slot=tooltip-arrow]]`; our Arrow carries no such slot, so the popover hides `[&_svg]` instead. Shared tooltip untouched. |
 | context ring wiring (context-ring.tsx + OpenCodeContextRing.tsx + modelContext.ts + chat.ts metadata) | ~200 lines | Registry has no TBAi wiring: backend attaches `usage` on the AI SDK `finish` part; Direct ring reads the official `useThreadTokenUsage()`; Code ring reads `V2ThreadState.usage.tokens` (no second store); window prefers OpenCode `model.limit.context`, else the model's configured `contextWindow` from provider settings (Zod/DB/API already carried it; dialog now shows + edits it per model), else one documented fallback constant — no per-model table in code. No pricing, no fabricated splits; hidden until usage exists. |
@@ -1196,7 +1203,8 @@ future agents don't re-litigate:
 ## Welcome new-chat screen (Codeg parity, UI-only)
 
 - **Decision:** centered welcome (WelcomeScreen: hero + Code/Office/Research quick actions + folder-scope picker + tall composer) rendered only on 	hread.isEmpty; thread creation carries pending {workspaceMode, workspaceFolderId} via adapter initialize() with simple-chat fallback. No new deps, no backend change.
-- **Why:** matches Codeg start-chat UX while keeping assistant-ui runtime, untime.ts wiring, and SQLite workspace model untouched; config-first copy in config/welcome.ts, UI state in features/chat/state/welcomeScope.ts.
+- **Why:** matches Codeg start-chat UX while keeping assistant-ui runtime, 
+untime.ts wiring, and SQLite workspace model untouched; config-first copy in config/welcome.ts, UI state in features/chat/state/welcomeScope.ts.
 - **Edges:** deleted folder falls back to simple, kind=chat never listed, bound threads show static scope, storage keys namespaced with safe-parse.
 
 
@@ -1467,3 +1475,345 @@ an unrelated report (different app). Existing rotation test updated to the batch
 - **The per-part tool renderers are NOT silenced.** Upstream advises silencing them so steps are not shown twice. This app has real per-tool UIs (`part.toolUI`, `AutoOpenToolGroup`, a terminal block for shell calls) that carry output a verb/chip row cannot, so removing them would delete working capability to avoid a cosmetic overlap. The timeline is a COLLAPSED SUMMARY above the parts, and renders nothing at all for a message with no tool calls.
 - **The load-bearing rendering rule.** `useAuiState` compares its selector result BY REFERENCE. An allocating selector — `s.message.parts.filter(...)` — returns a fresh array every call, so the reference always differs and the component re-renders until React aborts with "Maximum update depth exceeded" (error #185). This was hit for real during this work. The parts array is selected whole and filtered in `useMemo`, which is assistant-ui's documented rule ("return one primitive per call, or select an array whole").
 - **Coverage, and its one honest gap.** `web/e2e/mermaid-diagram.spec.ts` seeds a completed assistant turn through the conversations API and asserts, in a real browser, that a valid fence mounts a real SVG, that the fence is NOT also left as a code block, that the zoom affordance is present, and that both invalid forms degrade to the fallback. It runs in both browser projects (15/15 spec files green in each). The Code surface renders the identical `MarkdownText`, so it is covered structurally and by this test — but it has NO Code-specific diagram test, because the harness has no way to seed an OpenCode assistant turn deterministically (its existing spec cannot even guarantee a real reply). Closing that gap is a test-agent task, not something to fake.
+
+## ADR: Context menus deviate from shadcn's ContextMenuShortcut, on purpose (2026-09-29)
+
+- **Status:** implemented. `web/src/components/ui/context-menu.tsx` (the shortcut span), both menu components, and a guard in `web/tests/context-menu-copy.test.ts`.
+- **The deviation, stated up front.** `ContextMenuShortcut` in this repo is NOT byte-identical to the shadcn registry's `context-menu.json`. It adds `aria-hidden="true"`. Items that carry a shortcut additionally pass `textValue`, and — only where the key is genuinely bound — `aria-keyshortcuts` on the item itself. Re-syncing the file from the registry will undo all three; the comment above the component says so.
+- **Why the bare span was a real bug, not a style preference.** The shortcut is a visual affordance at the trailing edge of a row. Left readable, it joins the item's accessible name: "Cut Ctrl+X". That is wrong for a screen reader, and it also breaks every `exact: true` name lookup in the committed e2e spec — `web/e2e/context-menu-spellcheck.spec.ts:191`, `:201` and `:209` look up "Copy", "New Chat", "Toggle Sidebar" and "Open Settings", all of which are shortcut-bearing items. Playwright's default `name` matching is a case-insensitive substring, which is why the NON-exact lookups at `:54`/`:55`/`:157` kept passing and made the breakage look intermittent; `exact: true` compares the whole string and is where it surfaced.
+- **Why `aria-hidden` alone is not enough, and `textValue` is required.** Radix builds its typeahead index from the item's own `textContent` (`@radix-ui/react-menu`, `MenuContentImpl`), which ignores ARIA entirely. So the shortcut stays in the search key even when hidden from assistive tech, and typing "b" would match "Paste as plain text Ctrl+V". `textValue` on the item is what pins typeahead to the label. This is the documented Radix mechanism, not a workaround.
+- **The truthfulness rule for `aria-keyshortcuts`.** MDN documents the attribute for shortcuts *an author has implemented*. That makes it falsifiable, and the audit found three hints that were pure fiction: `ChromeShortcuts.tsx` binds exactly `Ctrl/Cmd+T`, `+W`, `+Tab` and `+1..9`, so the page menu's "Ctrl+B" (toggle sidebar), "Ctrl+Shift+S" (status bar) and "Ctrl+," (settings) advertise keys nothing responds to. Those three therefore carry the visible label and NO `aria-keyshortcuts`; only the two real ones (New Chat, and the browser-native Ctrl+C on the captured selection) declare it. A visible label advertising a shortcut that does nothing is recorded in `web/src/config/sidebar.ts` as needing a maintainer decision — bind the key or drop the label. The composer edits do declare theirs, because the textarea natively performs exactly what each item does.
+- **Deliberately not done.** The whole `context-menu.tsx` was NOT re-vendored from the registry: unrelated restyling in that same file would have been clobbered, for a three-attribute change. No jsdom or happy-dom was added (`web/src/testing/source-scope.ts:11` records them as excluded). No a11y-linter dependency.
+- **The deviation is now enforced, not just documented.** The fast guard fails if `aria-hidden` is dropped from the span, if ANY `ContextMenuItem` in either menu loses its `textValue`, or if the number of `aria-keyshortcuts` claims drifts away from the two that are real.
+
+## ADR: The composer menu replaces the OS spelling menu, and the dictionary is fetched on right-click only (2026-09-29)
+
+- **Status:** implemented. `web/src/lib/spellcheck.ts`, the composer's `resolveSpellingOffer`, and the lazy-load guard in `web/tests/context-menu-copy.test.ts`.
+- **We render our own spelling suggestions because a web app cannot ask for the native ones.** There is no web API to open the OS spelling menu. `window.spellcheck` is unrelated — it controls whether the browser spellchecks editable content at all — and is not a request for suggestions. Firefox additionally shows its native spelling menu on Shift+right-click WITHOUT dispatching a `contextmenu` event, so that path cannot even be intercepted; it is a documented platform difference, left alone rather than fought.
+- **The dictionary is ~540 KB of text and it is fetched exactly once, from a right-click.** Measured in the build output: a dedicated `en_US-*.js` chunk at 551.80 kB (197.91 kB gzip), which is the boundary working — the dictionary is a separate lazily-imported chunk, not part of the main bundle. It is loaded only after a right-click lands on a word that first passes the cheap `couldBeMisspelling` shape check, so right-clicking `TypeScript`, `utf8` or a two-letter token never pays for it.
+- **A prewarm bought nothing, which is why it was removed rather than kept.** typo-js v1.3.2 memoises both `check` and `suggest` on `this.memoized[word]`, so a warm dictionary makes no lookup faster — it only makes the same lookup happen earlier and unconditionally. An `onFocus`/`onMouseEnter` prewarm therefore paid 540 KB on first hover and returned nothing for it. Reintroducing one is now a test failure: the guard counts call sites (one), and rejects any `onFocus`/`onMouseEnter`/`onPointerEnter`/`onMouseOver` binding on the trigger.
+- **A missing dictionary degrades the menu, it does not break right-click.** typo-js `suggest()` throws a **raw string**, `"Dictionary not loaded."` (`typo.js:629-631`), not an `Error` — so a `catch` that assumes `error.message` reads `undefined`. The composer's async path awaits `ensureSpellchecker()` inside a try/catch, logs `spellcheck_load_failed`, and returns "no suggestions".
+- **The guard tier was itself defective, and that was the real finding.** A regression shipped with the fast suite red for the wrong reason: the one failing test asserted `constBody(composer, "resolveSpellingOffer")` and went red because the function was RENAMED — a rename that changed no behaviour — while the structural regression in the same diff, the spelling header demoted from a `menuitem` to a bare `<div>`, left every test green. Two rules came out of it and now shape the whole file: do not pin a function name (the caret assertions follow the call from the `onContextMenu` attribute one hop, and assert the open-time callback does NOT read the selection), and pin the element rather than a string (`toContain("SpellCheck")` passes against a bare `div`; the guard now requires `<ContextMenuItem disabled`, plus no raw `<div>` anywhere in either top-level menu).
+- **Verified by mutation, not by assertion that the tests pass.** Each regression was reintroduced on purpose and the guard observed going red: the bare-`<div>` header, the raw-element rule, and the focus/hover prewarm all failed. Then the helper was renamed and the suite stayed green — the exact scenario that made the old guard cry wolf.
+- **Known gap, stated rather than hidden.** The Quick Messages submenu's empty state is still a centred placeholder `<div>`, which is the same ARIA class of problem. It is pre-existing, and converting it to a disabled item would restyle it, so the "no raw element" guard is scoped to the two TOP-LEVEL menus and says so in a comment instead of quietly excluding it.
+- **Verification:** `bun run typecheck` exit 0; `bun run lint` exit 0; `bun test ./web/src ./web/tests` 1193 pass / 0 fail; `bun run build` exit 0. `web/tests/context-menu-copy.test.ts` alone: 32 tests, 32 pass, 0 fail, 78 `expect()` calls (from 26 tests / 25 pass / 1 fail / 47 expects). Behaviour in a real browser remains owned by `web/e2e/context-menu-spellcheck.spec.ts`, which is not part of `bun run verify`.
+
+## ADR: Tray window reveal + persistent window state (2026-09-29)
+
+- **Status:** implemented. Rust compiles in CI only (no local toolchain); the workflow's `cargo check` step now uses `--all-targets` so the new unit tests are compile-verified too.
+- **The tray bug, root-caused.** The click handler matched `TrayIconEvent::Click { .. }` with no `button`/`button_state` pattern, so **every** click — including the right-click that opens the OS context menu — ran `show()` + `set_focus()`. That is the whole defect cluster: the menu flickered (the window stole focus from the menu), the menu dismissed itself when the window was already visible, and "Open TBAi" appeared to do nothing (the window was already focused, so `set_focus` was a no-op and the menu vanished). The fix is a pure predicate, `is_tray_left_click_up(&TrayIconEvent) -> bool`, matching `button: MouseButton::Left, button_state: MouseButtonState::Up` exactly (CodeG parity, verified verbatim against `D:\Temp\codeg\src-tauri\src\commands\windows.rs:2460-2469`). Right-click stays OS-owned: the menu shows, the window never moves. `.show_menu_on_left_click(false)` stops the OS from also popping the menu on left-click (tauri#11413).
+- **One reveal helper for every path.** `show_main_window(&AppHandle)` does `unminimize()` → `show()` → `set_focus()`. `set_focus` alone is not enough — tao skips it while the window is hidden or minimized — and the ❌ close button hides the window to the tray, so every reveal path (startup page-load, `SHOW_FALLBACK`, render-error, tray menu "Open", tray left-click) funnels through the same sequence. The gated startup reveal is unchanged: `visible: false` + `PageLoadEvent::Finished`/fallback still owns first show; the helper only replaces the scattered `show()`+`set_focus()` pairs.
+- **Window state via the official plugin, not a hand-rolled file.** `tauri-plugin-window-state` (v2, `Builder::new().with_state_flags(...).with_filename("window.json")`) persists position, size, and maximized. `StateFlags` is explicit `SIZE | POSITION | MAXIMIZED` — **VISIBLE is excluded** because the plugin's `restore_state` calls `show()`+`set_focus()` on window-ready when VISIBLE is set, which would break the gated reveal; **DECORATIONS is excluded** because TBAi is undecorated by design (a stale saved `true` would re-add the native title bar); FULLSCREEN is unused. Off-screen recovery is the plugin's documented behaviour: a saved position is restored only if the rect intersects an available monitor, otherwise the OS places the window — it does not clamp coordinates.
+- **Portability preserved.** The plugin stores/loads via `app.path().app_config_dir()`. TBAi is portable (`<exe>/data`), so `tauri.conf.json` gains `app.appDirectoriesOverride: { "config": "./data" }` — the `Directories` form, camelCase keys, relative paths resolving against the exe dir on desktop (verified in tauri's `resolve_override_path`). Only the `config` directory is overridden; `data`/SQLite/port/start-minimized semantics are untouched. CodeG is NOT portable (`app_data_dir()`); this override is what lets the plugin coexist with TBAi's portable contract.
+- **MSRV floor raised to `1.90`.** Both `tauri = "2"` (floating to 2.12.0) and `tauri-plugin-window-state = "2"` (2.5.0) declare `rust_version: "1.90"`; the old `1.77.2` floor was already stale. CI pins 1.98.1, which satisfies it. No `Cargo.lock` (repo intentionally untracked).
+- **`@tauri-apps/cli` had to be raised to `^2.12.0`, and the first CI run of this change failed on it.** The CLI validates `tauri.conf.json` against the JSON schema bundled in its own npm package, which is a version line **independent** of the `tauri` crate that `tauri-build` parses the same file with. `bun.lock` had the CLI pinned at 2.11.4 (stale, since `^2.0.0` and `--frozen-lockfile` never re-resolve it) while `tauri = "2"` floated to 2.12.0. The build died on schema errors before compiling a single line: `build`: `'windows' was unexpected`, `app`: `'appDirectoriesOverride' was unexpected`. `appDirectoriesOverride` is a 2.12.0 key and cannot be avoided — it is what keeps the plugin's state file inside TBAi's portable `<exe>/data` contract. **`build.windows.staticVCRuntime` was the same break and was pre-existing**: it landed in `6298f7d` (2026-09-27, already on `origin/main`) and had never been through a successful CI run, because the workflow only fires on `workflow_dispatch` and `v*` tags. Diagnosis was confirmed by validating the file against both shipped schemas: 2 errors against 2.11.4, **0 errors against 2.12.0**. The floor is declared as `^2.12.0` rather than left at `^2.0.0` so a future install cannot silently resolve back to a CLI that cannot read the committed config. Not pinned exactly, because `tauri = "2"` floats too and an exact pin would rot into the same class of failure. A comment at the `Build Tauri` step records the coupling.
+- **Verification:** `bun run typecheck` / `bun run lint` / `bun test` / `bun run build` run as regression (frontend only — `src-tauri/` is outside `bun run verify`). Rust compile + the four `is_tray_left_click_up` unit tests are verified by the GitHub workflow (`cargo check --all-targets` + `tauri build`). Manual click-tests remain: right-click hidden/visible, left-click reveal, "Open TBAi", resize/move/quit→restore, and `window.json` appearing under `<exe>/data`.
+
+## ADR: The OpenCode Configuration page edits the file OpenCode actually reads (2026-09-29)
+
+- **Status:** implemented. `src/services/opencode/configDocument.ts`, the two routes in `src/routes/opencode.ts`, `web/src/features/opencode/openCodeConfig.ts` + `OpenCodeConfigPage.tsx`, `web/src/config/opencodeConfig.ts`, nav entry `/opencode-config`.
+
+- **The configuration source was DISCOVERED, and the obvious answer was wrong.** TBAi spawns `opencode serve` with `cwd = data/opencode-home` (`serverManager.ts:271`), which makes `data/opencode-home/opencode.json` look authoritative. It is not. Asked directly (`GET /api/config` on the running managed server, 2.0.15/2.0.16), the server reports four sources in precedence order:
+
+  | # | Path | Carries |
+  |---|---|---|
+  | 1 | `D:\IT\Coding\OpenCode\.config\opencode\opencode.json` | **permissions**, shell, providers |
+  | 2 | `D:\IT\Coding\OpenCode\.config\opencode` (directory) | � |
+  | 3 | `D:\IT\Coding\OpenChamber\.chamber-data\opencode.managed.json` | plugins |
+  | 4 | `D:\Temp\ai-chat-app\data\opencode-home\opencode.json` | model, small_model |
+
+  The path is XDG-resolved on the host (`XDG_CONFIG_HOME` / `OPENCODE_CONFIG_DIR` are set in this environment), so it is not computable from the repo. The module therefore **asks the server** rather than walking the filesystem; a path-shaped rule would have picked #4, which parses fine and is not the permission source. Selection is by CONTENT (first document carrying a `permissions` array), never by filename or directory, and the page lists all four so the difference is visible rather than asserted.
+
+- **Preservation is structural, not a promise.** The write route accepts one `(action, resource, effect)` triple � never a document. The backend re-reads the file, edits exactly one array entry, and rebuilds the text. There is no payload in which an unrelated rule, a rule's position, an unknown future field, or the four `deny` rules protecting `config/RULES.md` / `config/opencode.json` / the plugin directory could be lost. A test asserts the four protected denies survive a real round trip against a copy of the user's actual file, credentials included, and the live e2e asserts the same against the real one. A page-wide "apply my edited copy of the whole ruleset" was explicitly rejected: it would require shipping a ruleset TBAi authored, which is the shadow-policy failure this feature exists to prevent.
+
+- **Refusals are real, and one of them was a bug found live.** A malformed document, a non-array `permissions`, and an empty candidate all produce NO write and a 422. The first implementation reported a broken global config as `editable: true` with 0 rules: a config the server cannot parse is **dropped from its own listing**, so selection fell through to the OpenChamber managed file and the page offered to edit a document that is not the policy, while the file actually breaking OpenCode went unmentioned. The `directory` entry is the only place the real path is knowable, so the global config is now re-read directly and reported as the malformed target. Two regression tests cover it. This is the concrete argument for reading the real file rather than trusting a listing: the listing is lossy exactly when it matters most.
+
+- **JSONC is reported read-only, deliberately.** OpenCode accepts `opencode.jsonc`; `JSON.parse` does not. Editing such a file with a JSON serializer would delete the user's comments on the first save, so it is surfaced as malformed rather than silently rewritten.
+
+- **CodeG's model was read, not copied.** `D:\Temp\codeg\src\lib\opencode-permissions.ts` models the **v1** `permission` object form (`{"bash": "ask"}`, `findLast` over a flattened key list) and `opencode-behavior.ts` models `autoupdate` / `snapshot` / `compaction.tail_turns`. The installed V2 schema uses a `permissions` ARRAY of `{action, resource, effect}` and different behaviour keys, so copying either file would have produced a page that renders nothing and writes config the `$schema` rejects. The transferable parts are structural: read ? parse ? targeted change ? preserve unrelated content ? safe write, and the "delete the key rather than write the default" rule for unsetting. The reference's `globCovers` shadowing analysis is not reproduced: it exists to detect v1 key-order hazards, and V2's array form is order-explicit and displayed by index.
+
+- **`ALWAYS_ELIGIBLE_PERMISSION_ACTIONS` is deliberately KEPT.** Once the real `question` rule is set to `allow` in the configuration, OpenCode raises no permission for it and the exemption has no input to fire on � but the V2 permission flow has not been re-proven end-to-end in a live turn, so removing it now would be deleting a live safety net on the strength of a types-level argument. It goes when the runtime behaviour is observed, not before.
+
+- **Verified live against the running server and the real file:** page opens; all 9 rules listed in order with their real effects; the four `deny` rules render as Deny; a `question` change writes the file, persists across reload, and leaves the other 8 rules at their original index and effect; providers and credentials byte-identical; an injected unknown top-level field survives a save; a malformed global config reports read-only and the PUT is refused with the file byte-unchanged. `web/e2e/opencode-config-live.spec.ts` green in Edge and Chromium (8 passed, 2 skipped), with `afterEach` restoring the maintainer's original effect.
+
+- **Status:** implemented. `web/e2e/helpers/cpuProfile.ts`, `web/e2e/renderer-cpu-profile.spec.ts`, `web/e2e/helpers/stubProvider.ts` (`setStubStreamShape` / `resetStubStreamShape`), `scripts/e2e-stub-provider.ts` (`/__e2e/stream` control, `splitIntoDeltas`).
+
+## ADR: Measure renderer CPU in the e2e suite, not in a profiler session
+
+- **The problem was located, not guessed.** A live sample of the packaged app (4s delta) showed `TBAi.exe` and `tbai-server.exe` at 0% while the `msedgewebview2` tree carried the load: 15-20% on 8 cores, bursty, absent at idle. So the cost is in the RENDERER, and the maintainable place to measure it is the suite that already owns renderer behaviour.
+
+- **Four candidate costs were equally plausible from the code** - markdown re-parse per token, Shiki WASM tokenization, synchronous mermaid `dangerouslySetInnerHTML`, and the absence of virtualization. Reading the source establishes all four are POSSIBLE and cannot rank them, so the harness is designed around A/B comparisons whose RESULT is the finding rather than around asserting a budget nobody has measured yet.
+
+- **The existing stub could not have measured the leading hypothesis.** `startStubProvider` emitted the whole reply as ONE delta, so the browser received a complete message in one shot and never rendered a partial reply. The O(n^2) per-token re-parse cost is invisible under that shape. Chunking is therefore opt-in and defaults to the historical single-delta behaviour, because the stub is shared across the whole suite and a non-zero default would silently change what every other spec exercises. `splitIntoDeltas` snaps boundaries to whitespace (a mid-word cut would model a stream no provider produces) and is verified lossless at sizes 1/3/5/24/1000, with no empty deltas.
+
+- **Deliberately NOT a gate.** The specs assert only that the measurement was real (non-zero samples, non-zero task and script time), so a broken harness fails loudly instead of reporting a clean zero. Budget thresholds come after the first real run, the same baseline-first discipline `scripts/perf.ts` uses with its `-1` thresholds. A profiler that fails the build on a slow machine trains people to ignore it.
+
+- **Fidelity caveat is recorded in the helper, not just here.** The suite runs in msedge/chromium, not the packaged WebView2. Same engine family, so RELATIVE attribution carries over and is what the harness is for; ABSOLUTE milliseconds do not, and a real fix must be confirmed against the packaged app.
+
+- **First real run, and it refutes the leading hypothesis.** 3 passed (chromium-headless). Script time dominates (989ms of a 1454ms window; layout only 33ms, so DOM churn and mermaid are NOT the cost). Doubling reply length grew script time 1.76-1.80x, which is LINEAR, not the ~4x that per-token re-parsing of the whole growing message would produce - so `defer` is doing its job and hypothesis 1 is largely wrong as stated. Code-heavy vs prose-only at equal length is 1.56x, and `wasm-CG6Dc4jp.js` plus `wasm-function[25]` appear only in the code-heavy profile, which puts Shiki tokenization as the largest single identified lever. The dominant `(program)` frame is native and unnamed in the minified bundle, so the next step is a symbolicated build before attributing the remainder.
+
+- **Status:** implemented. `web/vite.config.ts` (`TBAI_PROFILE_BUILD` mode), `scripts/profile-web.ts`, `package.json` (`build:web:profile`, `profile:web`), `web/e2e/helpers/cpuProfile.ts` (frameless bucketing), `web/e2e/renderer-cpu-profile.spec.ts` (idle + scroll added), `.gitignore` (`web/dist-profile/`).
+
+## ADR: A symbolicated build cannot attribute the biggest frame, and that is now provable rather than assumed
+
+- **The task was to make the dominant `(program)` frame attributable.** It is not attributable, and three measurements say so. This ADR exists so the question is not re-litigated against the next profiler.
+
+- **Probe 1 - it is not mangled application code.** A trivial arithmetic loop written in the spec itself produced 85.6% `(program)`, with an empty script URL and ZERO positionTicks. A source map maps generated positions back to original ones; a frame with no position and no script has nothing to map. Probing five workload types gave `idle 100%`, `arithmetic 94.9%`, `string-build 78.6%`, `regex 78.9%`, `json 97.0%`, `dom-churn 94.4%` - and **100% on a fully idle page**, which is the tell. Time with no work in it is not a function that lost its name.
+
+- **Probe 2 - the JIT is not the cause.** The plausible theory was that V8 optimising to native code destroys the JS frame, so `--js-flags=--jitless` (which stops compilation) should have restored attribution. It did not: `idle 88.4%`, `arithmetic 83.0%`, `string-build 86.5%`, essentially unchanged from the JIT-on run. The theory predicted a large drop and predicted wrong.
+
+- **Consequence for the reporting, which is the part that matters long-term.** `(program)`, `(idle)` and `(garbage collector)` are now totalled as an `unattributable` bucket and are NEVER ranked beside real functions. Left inline, `(program)` at 18-24% would sit above every actual function in every report forever, and the readable names - the only actionable output - would be buried under a number that no build can improve. The idle floor is now explicit (96.3% frameless, 159ms task over a 3s window), so a busy-window figure can be read against a known baseline.
+
+- **What the build IS good for, and it earned its place.** Disabling minification is what makes the profile readable at all, and the payoff was immediate and specific rather than cosmetic: the top frames went from `L0r`, `a`, `r`, `mGt` to `AssistantMessage` (2.9%), `subtokenize` (1.8%), `consume` (1.5%), `subcontent` (1.4%), `compile` (1.4%), `areChildrenEqual` (1.1%), plus `renderWithHooks` and `UserMessage` elsewhere. The largest single attributable frame is now `AssistantMessage` itself, with the react-shiki tokenizer (`subtokenize` / `subcontent` / `start`) and the markdown/rehype pipeline (`compile` / `check` / `atBreak` / `visit2`) all individually visible and separately targetable. No trace-mapping dependency was added: unminified output means the names are already in the code, so nothing needs resolving.
+
+- **Deliberately fenced off from shipping.** Gated on `TBAI_PROFILE_BUILD`, and it writes to `web/dist-profile/`, never `web/dist/`. Unminified output is 8.1MB against 3.7MB and parses slower, so letting it near a production path would make the app worse while looking like a profiling aid. The artifact is gitignored, and `WEB_DIST_DIR` - which already existed in `src/routes/index.ts:161` - is the only seam used to serve it, so the e2e isolation model is untouched.
+
+- **`cross-env` was not added.** `TBAI_PROFILE_BUILD=1 bun run build` is a plain POSIX assignment that Bun evaluates natively, and a dependency for one env var fails the "clear reason recorded in decisions.md" bar.
+
+- **The three probe specs were deleted after the finding.** They answered their question; keeping them would leave three slow specs in the suite that assert a V8 implementation detail. What survives is the conclusion, in the helper's doc comment and here.
+
+- **Second run (symbolicated, all 5 scenarios green).** Confirms and sharpens the first run: script time still dominates (1005ms of a 1442ms window, layout 36ms); **idle costs 159ms task over 3s** and **scrolling 12 turns costs 210ms** - both far below the streaming windows, so the 15-20% figure is about STREAMING specifically, not about sitting in a long conversation; the markdown tokenizer and react-shiki WASM (`wasm-function[25]` at 1.5-2.1%, only in code-heavy) remain the identifiable levers. The prose-vs-code ratio moved 1.56x -> 1.48x and the length-scaling growth 1.76x -> 1.97x with real names available - still LINEAR, so the O(n^2) re-parse hypothesis stays refuted, now with attribution rather than just a total.
+
+## ADR: The assistant-ui DevTools panel was mounting in production because both of its guards read a `process` object Vite browsers do not have
+
+- **The symptom.** The packaged app displayed "Waiting for assistant-ui instance...". That string is not TBAi copy; it is `@assistant-ui/react-devtools` `DevToolsPanel.tsx:186`, rendered whenever the panel has no `ctx`.
+
+- **It was shipping, verified rather than assumed.** "Waiting for assistant-ui instance" was present in `web/dist/assets/DevToolsModalImpl-*.js` AND in the packaged build at `D:\tbai-windows-x64-portable\web\assets\DevToolsModalImpl-*.js` � a 160.8 KB chunk. `<DevToolsModal />` was rendered unconditionally from two shells (`app/layout/ChatShell.tsx:103`, `features/opencode/OpenCodeView.tsx:305`).
+
+- **Root cause: the guard is written for a bundler that injects `process`.** `DevToolsModal.tsx:24` bails out only on `typeof process !== "undefined" && process.env?.NODE_ENV === "production"`. Vite browsers have no `process`, so `typeof process !== "undefined"` is false, the whole condition is false, and the early return never runs. The panel mounts.
+
+- **Why the message was permanent rather than transient.** The same `process` assumption exists on the OTHER side of the handshake, but with the opposite polarity. `AssistantRuntimeProvider.tsx:43` reads `if (typeof process === "undefined" || ... ) return;` � with no `process`, this returns EARLY, so `DevToolsProviderApi.register` never ran in production. So the data-source side correctly bailed out while the panel side failed to, leaving a mounted panel with a permanently null `ctx`. The mismatch is the message. This is precisely what `main.tsx:9-23` already documents, and its DEV-only `process.env.NODE_ENV = "development"` shim is why dev works: it satisfies both guards.
+
+- **The fix, and why it is not an inline condition.** `config/devtools.ts` owns one constant, `DEV_TOOLS_ENABLED = import.meta.env.DEV`, and `components/DevToolsGate.tsx` is the only place that reads it. Both shells now render `<DevToolsGate />` and neither imports the dev-only package. A wrapper rather than `{DEV && <DevToolsModal/>}` at each call site, because the decision must not be able to drift between the chat branch and the Code branch, and because it keeps a third-party dev dependency out of two feature files.
+
+- **`import.meta.env.DEV` specifically, not `process.env.NODE_ENV`.** Vite statically replaces it, so the constant folds to `false` in a production build and the `lazy()` panel chunk becomes unreferenced. Result: the chunk is GONE from the build, not merely invisible. Verified � after the change, no `DevTools*` chunk exists in `web/dist`, the string is absent, and no main bundle references it. ~160 KB less shipped JS, and it can never be reached.
+
+- **Development is unaffected, and this was checked rather than assumed.** Fetched the module from a live `vite dev` server: it resolves `import.meta.env` to `{DEV: true, PROD: false}`, so the panel still mounts and the `main.tsx` shim still satisfies the library's registration guard. (An earlier check using `vite build --mode development` was invalid and reported a false failure � `vite build` always sets `DEV=false` regardless of `--mode`; the mode name only selects which `.env` file loads. Corrected by testing the dev server directly.)
+
+- **Honest scope on the CPU work: this is NOT the 15-20%.** Registration was already skipped in production (above), so the panel was mounted-but-inert: a static React subtree, a document-level `keydown` listener, and a `useSyncExternalStore` with no event source behind it. There is no `setInterval` or `requestAnimationFrame` in the package. That is dead weight and a wrong message in the shipped app, not a streaming hot path, and removing it should not move the CPU profile. Recording this so it is not later mistaken for the performance fix the profiling is still hunting.
+
+## ADR: Streaming cost is per-delta render work, NOT repeated syntax highlighting - and the experiment that refuted the highlight hypothesis
+
+- **The question.** A trace showed scripting dominating (19.6s script / 1.7s rendering / 82.4s wall), and the first profile had named react-shiki and Shiki WASM as the visible cluster. So: is highlighting being repeated unnecessarily for the same accumulated code? Four candidate fixes were on the table - reduce highlight frequency, avoid re-highlighting unchanged fences, defer highlighting until the message settles, or change the highlighting implementation. The right one depends on the answer, and guessing would have been a 4-way coin flip on the main-thread cost.
+
+- **The experiment (`renderer-cpu-profile.spec.ts`, "is highlighting repeated per delta, or done once per fence").** Stream the EXACT same reply text twice, changing only how it is delivered: one delta, versus ~40 characters per delta. Identical final DOM, so any extra work in the many-delta run is by definition redundant.
+
+- **Two confounds had to be removed before the numbers meant anything.**
+  - *WASM instantiation.* The first run measured 121ms of WASM against the second's 11ms, which looked like proof that chunking causes highlighting and was actually just ordering - oniguruma's module and the Shiki grammars are paid for once per renderer. Added an unmeasured warm-up stream; the gap collapsed to 13ms against 0ms.
+  - *The profile window closed before the work happened.* Highlighting runs AFTER the stream completes, so the window (which ended when the Stop button vanished) captured none of it for the fast run and all of it for the slow one - an artifact that would have read as "many deltas cause highlighting". The settle wait now runs INSIDE the profiled work.
+
+- **The answer: the hypothesis is REFUTED. Shiki is not the problem.** With the module warm, WASM self time is **0ms in BOTH runs, in every run**. Delivering identical content 40 characters at a time does not add highlighting work - `defer` on the markdown element is doing its job. This is the one result that reproduced without exception across three executions, and it is the one the decision turns on.
+
+- **What the cost appears to be - but the magnitude is NOT yet trustworthy.** Script time for piecemeal delivery was higher than for one-delta delivery in all three executions, but by wildly different amounts: **3.2x** (61ms vs 194ms), **1.7x** (115ms vs 198ms), and **1.09x** (186ms vs 203ms). The direction is consistent; the ratio is not. At ~200ms windows and a 1ms sampling interval these runs carry only ~200 samples each, which is far too few to quote a multiplier. The earlier "3.2x" in this entry was one of those three and should not have been written as a finding.
+
+  So: per-delta render overhead is the leading candidate and is directionally supported, but the size is unmeasured. Treat "coalesce deltas" as the hypothesis to test, not a known win. Getting a real number needs either a much longer stream, a finer sampling interval, or several repetitions with the spread reported - none of which this harness does yet.
+
+- **The largest single attributable frame is not Shiki at all, and this one IS solid.** It is `useThreadViewportAutoScroll` in `@assistant-ui/react` - 3.3% self time, more than any named function, named by reading the served bundle at the frame's reported position (`index-Dzhdlcws.js:50473`, inside `const useThreadViewportAutoScroll = ({autoScroll, ...})`). It reads `scrollTop`/`scrollHeight`/`clientHeight` and flips `isAtBottom` on every update. assistant-ui is a frozen dependency (see the 2026-09-15 train freeze), so this is a candidate for upstreaming or for working around at our boundary - not for patching in node_modules.
+
+- **The fence re-highlight counter is not a usable measurement, despite looking like one.** It reported 36, then 84, then 358 "re-highlights" for the same configurations across three runs of the same code. Two reasons: the MutationObserver's first-vs-repeat split is structurally unmeasurable (it is delivered after the batch, so a freshly inserted fence already carries spans), and the per-fence map picks up fences from PRIOR messages being re-rendered when a new message is appended. It is retained as instrumentation for the per-fence update distribution, but no conclusion in this entry rests on it. The WASM comparison is what carries the conclusion, because WASM frames are unambiguous.
+
+- **What this rules out.** "Reduce highlight frequency", "avoid re-highlighting unchanged fences" and "change the highlighting implementation" are all aimed at a cost that is not there. "Defer highlighting until the message settles" is already what `defer` does. The remaining candidates are delta coalescing (render the message fewer times per stream) and reducing per-render AST work.
+
+- **Two bugs in my own instrumentation, both caught by checking reality instead of reasoning.**
+  - *Call paths were always empty.* A CDP `Profile` node carries `children` but NO `parent` field, so the ancestor walk silently produced nothing and printed "(no attributable call paths)". Verified against the payload (2024 nodes, 1943 with children, all 105 sampled nodes resolvable to a parent) and fixed by inverting `children`. This is what turned the hottest frame from `() => {` into a named hook.
+  - *Frames were keyed by name only,* so every anonymous function in a chunk collapsed into one meaningless "(anonymous) index-*.js" row holding 8% of self time. Keyed by position now.
+  - *A fence re-highlight detector reported 0 on a reply that rendered 4 fences and 48 spans* because it walked UP for a `<pre>`; react-shiki inserts the whole `<pre>` into its container, so the `<pre>` is a DESCENDANT of the mutation target. Both directions are checked now. Its `firstHighlights` counter remains structurally unmeasurable (MutationObserver delivers after the batch), and is documented rather than asserted.
+
+- **Still not explained.** These runs profile one stream. The user's 82-second trace is far longer, so whatever dominates a real session over that span is still unattributed. `AssistantMessage`, the AST walk and the viewport hook are the named candidates from the streaming window; confirming the fix against the packaged app is still required, since the harness runs in msedge/chromium and not WebView2.
+
+## ADR: Mermaid was a STATIC import, putting 1.85 MB of layout engine in the startup chunk
+
+- **What prompted it.** A renderer trace contradicted everything the streaming profiles had pointed at. It attributed 2,523 ms of "Script Evaluation" to ONE 3.5 MB chunk and estimated 2,693 KiB of it unused. Script Evaluation is module top-level execution - a STARTUP cost, paid once, before anything is interactive. Every streaming scenario in the harness profiles a LOADED page, so it structurally cannot see this.
+
+- **Two different problems, and the earlier work had been answering the wrong one.** The streaming profiles describe per-delta work while a reply arrives. This trace describes what the browser evaluates before the first paint. They are not the same cost, and a fix for one does not move the other. The sustained 15-20% the user reported is not explained by a one-time evaluation cost; that remains a separate, still-unfixed question.
+
+- **The cause.** `mermaid-diagram.tsx` did `import { renderMermaidSVG } from "beautiful-mermaid"` at the top level. `beautiful-mermaid` depends on **elkjs**, a standalone graph layout engine: 1.53 MB. Together 1.85 MB - 22% of the startup chunk - was parsed and evaluated on every launch to serve a feature most sessions never reach.
+
+- **The fix.** Dynamic `import()` inside the effect that renders, with the resolved renderer cached in a module binding. The cache is not cosmetic: `import()` of an already-evaluated module still resolves in a microtask, so without it every diagram after the first would flash the loading skeleton for a frame - a thread switch would visibly flicker. Module-load failure is now also routed to the existing error fallback, which is strictly better than the synchronous version where a load failure was impossible because there was no load.
+
+- **Measured, not assumed (`renderer-cpu-profile.spec.ts`, "cold start").** Reads Resource Timing rather than summing files off disk, so it reports bytes the browser ACTUALLY fetched.
+
+  | | initial JS | time to interactive |
+  |---|---|---|
+  | before (static import) | 7914 KB | 1365 ms |
+  | after (lazy import)   | 4437 KB |  856 ms |
+
+  A 44% cut in initial JS, and the mermaid chunk is no longer in the startup payload at all (cold start now fetches exactly 1 script). The production build's main chunk went 3580 KB -> 2099 KB. Both numbers are from a real A/B: the "before" row was produced by stashing the change and rebuilding, not by recalling the old size.
+
+- **What was deliberately NOT done.** No route-level `lazy()`. The router has none, so every settings page, the scheduler and the whole OpenCode Code mode ship to a user who opened a chat - but first-party code is only 1.52 MB of the 6.41 MB main chunk, and the genuinely required libraries (ai, react-dom, @assistant-ui/core, react-router, zod) are ~2.5 MB of irreducible floor. The headroom is real but modest, and `lazy()` would add a Suspense boundary inside the chat runtime provider that owns thread state - a much larger blast radius than the win justifies, and one that risks exactly the kind of conditional-mount context bug the dependency rules in AGENTS.md warn about. Worth revisiting with a measurement, not on principle.
+
+- **`assistant-cloud` (0.06 MB) is a dead direct dependency in our package.json** - nothing in `web/src` imports it. It is also a PEER dependency of `@assistant-ui/react`, which is under the 2026-09-15 train freeze, so removing it is not ours to do unilaterally. Left alone deliberately.
+
+- **Still unmeasured.** Whether the 15-20% sustained CPU is startup-related at all. A one-time evaluation cost cannot produce a sustained figure, so something else is still burning CPU during use. The streaming profiles remain the best evidence for that, and their conclusion - that Shiki is NOT implicated - still stands.
+
+## ADR: The persisted tab mirror is reconciled against a request-driven existence endpoint, never a conversation list (2026-09-30)
+
+- **The symptom.** A browser session held ~20 tabs whose conversations no longer existed. Every load re-probed each one, got a truthful `404`, and re-rendered them as "Untitled" - forever. Live check: `GET /api/conversations?status=all` returned 7 rows, all 7 answered `200` by id, and all 20 tab ids answered `404` with zero overlap.
+
+- **The cause.** `localStorage["tbai:openTabs"]` is a set of live references into SQLite, and it had a convergence story for only one of its two necessary halves. It converged on write, from exactly one producer - `closeByRef` is called only by the in-app delete flow. It did not converge on read at all: `loadPersisted` -> `healTab` validates tab *shape*, never existence. Since `DELETE /api/conversations/:id` is a public REST contract also called by the e2e suite's cleanup, the scheduler, and any other client, divergence was monotonic - the mirror could only accumulate. Worse, re-validation was non-destructive by default (`TabStrip` swallowed every probe error into "Untitled"), so probing could never reduce anything. A check that cannot act is only cost.
+
+- **The deeper defect.** Five surfaces probed `GET /api/conversations/:id` with four different error policies, and three of them used `r.ok ? r.json() : null` - an expression that collapses "this row is gone" and "the server is broken" into one value. Existence-checking was a property of whichever view happened to be mounted rather than a property of the state owning the mirror, so it would be re-implemented, differently, indefinitely. The adapter already had the correct semantics; it just was not the path most code took.
+
+- **The contract** (`web/src/features/chat/state/conversationExistence.ts`): `2xx -> exists`, `404 -> gone`, every other status -> `unknown`; network throw / abort / unreadable body -> `unknown`. `unknown` is never `gone`. A 5xx is evidence about the server, not about the row, and treating it as absence is how a UI destroys a user's tabs because a laptop lid closed. One home, one classifier, no throws - every failure resolves to a verdict, so no call site can forget the `unknown` branch.
+
+- **Why a purpose-built endpoint, not the list.** `GET /api/conversations` is scoped (`workspaceMode`, `folderId`, `status`) and capped (`limit <= 500`, ordered by `updated`), so absence from it is not proof of nonexistence. This is not theoretical: verified live during implementation, an **archived** conversation answers `exists` to the new endpoint while being correctly absent from `?status=regular&limit=500`. A list-based prune would have closed a live tab. The new `POST /api/conversations/reconcile` is complete *by construction* - the handler walks the request array to build the response, so an id can never be omitted even when the query matches nothing for it. That property, not request count, is the argument for it. It discloses only `{id, status}`.
+
+- **Two halves, both required.** Boot (`tabReconciliation.ts`) is the one moment the client owns the complete reference set, so it settles the whole mirror in one batch request. Steady state is the per-tab probe `TabStrip` already issued, so deletion *while the app is open* costs zero extra requests. Different triggers, different mechanisms; conflating them is how one gets built and the other silently assumed.
+
+- **The property that makes it safe.** Reconciliation is **removal-only**: `exists` has no write path at all. Resurrection is therefore impossible by construction rather than lock-protected, and `unknown` cannot erase anything because it has no write path. A late or stale `exists` cannot re-add a tab; a duplicate `gone` for an already-closed ref is a no-op (`closeByRef` on an absent ref is already covered by `chatTabs.lifecycle.test.ts`). A response missing any requested id invalidates the whole pass, so a server bug degrades to "retain everything" instead of mass eviction.
+
+- **Ownership.** The module owning `tbai:openTabs` owns the eviction rule. Views receive a verdict; they no longer decide "404 means delete this tab" - including `useConversationTab`, whose hand-rolled per-key close loop was a second removal path and now goes through `evictIfGone`. One mutation (`closeByRef`), one eviction rule, one `tab.evicted` log line.
+
+- **Retry rides the existing mechanism.** No new poller and no second sync system: the pass re-runs as one step in the existing coordinated recovery sequence, and the browser's `storage` event remains the cross-tab path (untouched - it already converges peers, and the writer updates its own store directly because the browser never fires `storage` at the writer). No BroadcastChannel.
+
+- **What was deliberately NOT done.** No conversation-index / N+1 refactor (the sidebar, header, and Code chips still each fetch their own row - separate architectural change). No existence-only single-id API: an earlier draft proposed one and pointed the four data-reading consumers at it, which would have forced a second request per consumer to re-fetch fields they already had - turning one correct fetch into a guaranteed N+1. `probeConversation` returns the row data alongside the verdict, and the row type mirrors what `mapConversation` actually sends (`engine` / `workspaceMode` are coalesced to a default, so they are never null on the wire - a fact the old untyped `.json()` had been hiding). No 404-to-200, no null-for-missing, no tab trimming, no retry-that-deletes, no periodic poll, no console suppression. `TabStrip` keeps routing through `threadListAdapter` because an existing architectural guard asserts that path, and the adapter now delegates to the contract anyway.
+
+- **Deliberately unchanged: the server's 404.** A missing row is a truthful 404 and stays one. `docs/decisions.md`'s resume-404 self-healing entry and the confirmed-vs-indeterminate doctrine both depend on 404 being meaningful; returning `200 {error}` to quiet a symptom would delete the vocabulary the retry story is written in.
+
+## ADR: The application — not the provider SDK — guarantees replayable history (2026-10-02)
+
+- **The symptom.** A Direct conversation against an OpenAI-compatible gateway
+  (`agnes`, `custom` + `chat-completions`) became permanently unusable. Eighteen
+  consecutive sends answered HTTP 400 and the user saw *"Generation failed. Retry
+  or pick another provider/model."* Nothing about the conversation changed
+  between the five successful sends before it and the eighteen failures after,
+  and another conversation on the same provider and model kept working.
+
+- **The cause, end to end.** A prior run's `write_file` tool call had its
+  arguments cut off mid-object by the gateway, so the AI SDK could not parse
+  them and recorded the interaction as
+
+  ```json
+  { "type": "tool-write_file", "toolCallId": "call_92b1…",
+    "state": "output-error", "input": undefined,
+    "rawInput": "{\"path\": \"project-console/projects.json\"" }
+  ```
+
+  `ai@7.0.93`'s `convertToModelMessages` substitutes `rawInput` for the missing
+  `input`, and `@ai-sdk/openai-compatible@3.0.44` then serializes it as
+  `arguments: JSON.stringify(part.input)`. The wire therefore carried a JSON
+  **string** where a JSON **object** is required, and every retry re-sent the
+  identical malformed payload. Measured on the exact production history: one
+  invalid field in a twelve-message request, at
+  `messages[9].tool_calls[0].function.arguments`.
+
+- **The invariant.** Before `convertToModelMessages` receives persisted history,
+  every tool part that CAN become a provider tool call must carry usable
+  arguments. A provider SDK is not a history-repair layer: it faithfully
+  converts what it is given, and it has no way to know that a stored interaction
+  can never be replayed. `src/lib/prune-messages.ts` is the only seam between
+  stored history and conversion, so the invariant lives there and nowhere else.
+
+  Replayable means `input !== undefined`, or — for the legacy `output-error`
+  shape only — a `rawInput` that recovers to a **non-null plain object**.
+  Anything else is `unreplayable`.
+
+- **"Parses" is not the bar.** A recovery that only checked `JSON.parse` would
+  accept `"[]"`, `"null"`, `"42"` and `'"text"'`, each of which serializes to a
+  value the wire rejects. The recovered value must be a plain object, so the
+  check is `isPlainObject`, not "did it parse".
+
+- **Lenient recovery, and why it must WRITE the recovered object.** Keeping a
+  recoverable legacy part is not sufficient, and the integration test caught this:
+  the SDK substitutes `rawInput` **verbatim**, so an un-promoted part still puts
+  raw text on the wire — the same defect. Recovery is therefore promoted into
+  `input` (on a copy; the persisted part is never mutated) and `rawInput` is
+  dropped, so a replayed part carries exactly one authoritative source of
+  arguments. Genuine arguments are preserved rather than discarded, and the
+  history stays replayable.
+
+- **The `unreplayable` lifecycle extends the existing model rather than
+  replacing it.** `output` / `approval` / `incomplete` are untouched. An
+  unreplayable occurrence simply matches neither of the two keep rules in Pass 2,
+  so it falls through to the existing removal path and is recorded in
+  `removedToolParts`. **Atomicity is a property of the architecture, not extra
+  code:** the SDK derives the assistant-side tool call AND the `tool` role
+  message from the same parts, so removing the part removes both. No orphan
+  `tool` message can survive, and an assistant turn left with only `step-start`
+  is already dropped by the existing Pass 4. The keep-set is per *occurrence*,
+  so an id with both a replayable and an unreplayable occurrence keeps the good
+  one.
+
+- **Approval state is NOT the deciding criterion — replayability is.** The
+  question asked is "can this part produce a valid provider tool call", never
+  "does it carry a decision". Concretely, and all four measured against the
+  installed SDK:
+
+  | state | usable input | outcome | why |
+  |---|---|---|---|
+  | `approval-requested` | yes | preserved, `preservedApprovals` | filtered before conversion; never reaches the wire |
+  | `approval-requested` | no | preserved | same; dropping it would break the AGENTS.md invariant to fix a defect it cannot cause |
+  | `approval-responded` | yes | preserved and replayable | the continuation contract |
+  | `approval-responded` | no | `unreplayable` | it IS replayed, so the SDK emits a call whose `arguments` is absent entirely |
+
+  Valid approval state is never blanket-dropped. `approval-requested` is absent
+  from `PROVIDER_TOOL_CALL_STATES` precisely because that set is what makes the
+  distinction safe.
+
+- **An SDK upgrade is explicitly NOT the remedy.** Verified rather than assumed:
+  the installed resolution is `ai@7.0.93`, `@ai-sdk/provider@4.0.10`,
+  `@ai-sdk/provider-utils@5.0.36`, `@ai-sdk/openai-compatible@3.0.44`,
+  `LanguageModelV4` (`specificationVersion: "v4"` observed at runtime), and the
+  compiled portable binary contains the *same* resolution — identical bun
+  integrity hashes, and `bun.lock` is byte-identical to the build commit.
+  Upstream `main` (npm `ai@7.0.127`) **still contains** the same
+  `part.input ?? part.rawInput` fallback, and
+  `warnIfUIMessageHasDeprecatedRawInput` states the position outright:
+
+  > `rawInput` in `output-error` UI message parts — *"Use the `input` field
+  > instead. The `rawInput` field will be removed in the next major version."*
+
+  So the shape is a DEPRECATED shape the SDK merely tolerates, not an SDK defect,
+  and upgrading within v7 changes nothing. The next major would not fix it either:
+  with the fallback gone, `input` is `undefined` and the wire carries no
+  `arguments` at all — the `approval-responded`-without-input case above, which
+  this repair also removes.
+
+- **The 4xx copy split is independent of the repair, and separately justified.**
+  `classifyError` maps every 4xx to `config`, and `config` is never retryable
+  (`DIRECT_MAX_RETRIES = 0`), so the generic copy's first clause — "Retry" —
+  recommended the one thing that cannot work. The bucket also conflated two
+  causes needing OPPOSITE advice: a rejected MODEL (switch model) versus a
+  rejected REQUEST (retrying reproduces the rejection). A new `modelIdentity`
+  FLAG splits them without touching the category, retryability, log fields or
+  any existing policy. Deliberately narrower than `CONFIG_RE`'s bare `not found`,
+  which also matches our own text ("Conversation not found"), and checked against
+  the REFINED category so a claimed refinement wins outright. A `config` failure
+  with no 4xx status is one of our own refusals (workspace bounds, approval
+  required) and keeps the generic copy.
+
+- **Observability is allowlisted, and `responseBody` is never read.**
+  `APICallError` carries three things that must be treated differently: `data`
+  (the provider's parsed error object), `responseBody` (the same content
+  unparsed — a gateway that echoes the offending request puts the prompt, the
+  tool arguments and file contents there), and `requestBodyValues` (the entire
+  outbound request, by definition). The new `ai.provider_error_code` event reads
+  only `error.type`, `error.code` and `error.param` from `data`. These are
+  machine identifiers the provider chose to label its own failure with, which is
+  what makes them safe while remaining actionable: a gateway answering
+  `param: "messages[9].tool_calls[0].function.arguments"` names the exact wire
+  defect and quotes none of the user's data. `errorLogFields` keeps its
+  deliberate omission of the provider message, and the diagnostic is a SEPARATE
+  event so `ai.error` is byte-for-byte as narrow as before.
+
+- **Verified at the boundary, not by mirroring.** The integration suite stands a
+  local OpenAI-compatible endpoint behind a seeded provider and audits the
+  captured outbound request; the endpoint answers 400 to any non-object
+  `arguments`, so it REPRODUCES the production rejection rather than tolerating
+  it. The exact production history — dumped verbatim from the failing
+  conversation into a scratch SQLite database — was replayed against it:
+  **before** repair the stub answered `400 messages[9].tool_calls[0](write_file).arguments parses to string`
+  with 1 tool call and 1 orphan tool message; **after** repair the stub
+  accepted the request with 0 tool calls and 0 tool messages. No production
+  provider was contacted and no quota was spent.
+
+- **What was deliberately NOT done.** No AI SDK change, no dependency change, no
+  patch to `node_modules`, no provider-specific branch, no second history-repair
+  layer, and no change to the Direct route's structure, provider options, retry
+  mechanics, or the approval continuation contract. `model-messages.ts` is
+  untouched: the architecture is unchanged, only the content handed to it is.
+  The compiler fix found while implementing — that a bare `approval-requested`
+  part without `input` is rejected by the route's own UIMessage schema — was
+  deliberately NOT "fixed": a request that cannot be persisted cannot poison
+  history, and loosening the schema to accept it would weaken a real boundary to
+  accommodate an unreachable shape.

@@ -53,6 +53,21 @@ export interface ClassifiedError {
    * unchanged, while logs and diagnostics can still tell the two apart.
    */
   billing?: boolean;
+  /**
+   * True when a `config` failure is specifically the provider rejecting the
+   * MODEL (an unknown/withdrawn/never-shipped model id) rather than rejecting
+   * the request that referenced it.
+   *
+   * Both land in the same coarse `config` bucket — deliberately, since neither
+   * is retryable — but they need OPPOSITE advice: switching model fixes a bad
+   * model id, and switching model does nothing for a rejected request. A flag
+   * keeps the classification (and therefore every existing policy decision:
+   * retry, log fields, diagnostics) byte-identical while letting the display
+   * layer tell the two apart.
+   *
+   * Only ever set when the category is `config`.
+   */
+  modelIdentity?: boolean;
 }
 
 const CANCELLED_RE = /abort|cancel|stopped/i;
@@ -63,6 +78,23 @@ const NETWORK_RE = /fetch failed|econn|enotfound|eai_again|socket|network/i;
 const TIMEOUT_RE = /timeout|timed out/i;
 const CONFIG_RE =
   /invalid model|model.*not found|invalid.*provider|invalid.*cron|not found|workspace|outside the workspace|approval|refus|permission denied|user approval required/i;
+
+/**
+ * The MODEL-IDENTITY subset of {@link CONFIG_RE}: the provider refusing the
+ * model itself, as opposed to refusing the request built around it.
+ *
+ * Provider-worded, and deliberately narrower than `CONFIG_RE`'s `not found`,
+ * which also matches unrelated application text ("conversation not found") and
+ * must not be reported as a bad model id. OpenAI says "model_not_found" /
+ * "does not exist"; Anthropic says "model: ... not found"; gateways commonly
+ * pass either through.
+ *
+ * A false positive is the worse error: it would tell a user to switch models
+ * when the request itself is what the provider rejected. So a miss degrades to
+ * the accurate generic 4xx copy instead of lying.
+ */
+const MODEL_IDENTITY_RE =
+  /\bmodel[_ -]?not[_ -]?found\b|\bno such model\b|\bunknown model\b|\bunsupported model\b|\binvalid model\b|\bmodel\b[^.]{0,80}\b(?:not found|does not exist|doesn't exist|unavailable|deprecated)\b/i;
 const TOOL_SUBJECT_RE = /tool|mcp/i;
 const TOOL_OUTCOME_RE = /error|fail/i;
 
@@ -180,6 +212,72 @@ function refineCategory(base: ErrorCategory, text: string): ErrorCategory {
   return base;
 }
 
+/**
+ * Allowlisted, machine-readable provider rejection fields.
+ *
+ * Every field here is a short identifier the PROVIDER chose to label its own
+ * failure with. That is the whole security argument for including them: a
+ * provider that names its own error also has no reason to put a prompt, a tool
+ * argument or a credential in a machine code field, whereas the same body
+ * returned as prose routinely does.
+ */
+export interface ProviderErrorCodeFields {
+  /** Provider error `type` (e.g. `invalid_request_error`). */
+  errorType?: string;
+  /** Provider error `code` (e.g. `model_not_found`). */
+  errorCode?: string | number;
+  /** Provider error `param` — which field it rejected, e.g. `messages[9].tool_calls`. */
+  errorParam?: string;
+}
+
+/**
+ * The provider's OWN machine identifiers for a failed call, and nothing else.
+ *
+ * ## Why this reads `data` and never `responseBody`
+ *
+ * `APICallError` carries three things this function must treat very differently:
+ *
+ *  - `data` — the provider's parsed error OBJECT. Read here, and only for the
+ *    three allowlisted scalar fields above.
+ *  - `responseBody` — the same content as an UNPARSED string. A gateway that
+ *    echoes the offending request puts the user's prompt, their tool arguments
+ *    and their file contents in here. Never logged, at any level.
+ *  - `requestBodyValues` — the ENTIRE outbound request TBAi sent. It contains
+ *    the system prompt and every message by definition. Never read.
+ *
+ * `param` is included precisely because it is the field that makes a rejection
+ * actionable without being revealing: a provider answering
+ * `param: "messages[9].tool_calls[0].function.arguments"` tells an engineer the
+ * exact wire defect while quoting none of the user's data.
+ *
+ * Returns an empty object when the error is not a provider API error or the
+ * provider supplied none of the allowlisted fields — absence must never be
+ * papered over with a guess.
+ */
+export function providerErrorCodeFields(err: unknown): ProviderErrorCodeFields {
+  if (err === null || typeof err !== "object") return {};
+  const data = (err as { data?: unknown }).data;
+  if (data === null || typeof data !== "object") return {};
+  // OpenAI-shaped: `{ error: { type, code, param } }`. Read defensively — a
+  // provider may return the fields at the top level, or omit all of them.
+  const envelope = data as Record<string, unknown>;
+  const inner =
+    envelope.error !== null && typeof envelope.error === "object"
+      ? (envelope.error as Record<string, unknown>)
+      : envelope;
+  const out: ProviderErrorCodeFields = {};
+  const type = inner.type;
+  if (typeof type === "string" && type.length > 0) out.errorType = type;
+  const code = inner.code;
+  if (typeof code === "string" || typeof code === "number") out.errorCode = code;
+  const param = inner.param;
+  // `param` is provider-authored but occasionally an object/array; only the
+  // scalar form is ever a field name, so anything else is dropped rather than
+  // stringified into the log.
+  if (typeof param === "string" && param.length > 0) out.errorParam = param;
+  return out;
+}
+
 export type ErrorLogFields = Omit<ClassifiedError, "message">;
 
 /**
@@ -249,8 +347,9 @@ export function classifyError(err: unknown, opts?: { provider?: string }): Class
     base === "timeout" ||
     (status !== undefined && status >= 500);
 
+  const category = refineCategory(base, text);
   const out: ClassifiedError = {
-    category: refineCategory(base, text),
+    category,
     statusCode: status,
     provider: opts?.provider,
     retryable,
@@ -258,5 +357,9 @@ export function classifyError(err: unknown, opts?: { provider?: string }): Class
     message: norm.message,
   };
   if (BILLING_RE.test(text)) out.billing = true;
+  // Checked against the REFINED category, so a failure the refinements claimed
+  // (`validation`) never also claims to be a model-identity problem. Nothing
+  // about retryability or the coarse category depends on this flag.
+  if (category === "config" && MODEL_IDENTITY_RE.test(text)) out.modelIdentity = true;
   return out;
 }
