@@ -3,7 +3,10 @@ import type {
   CreateAppendMessage,
 } from "@assistant-ui/react";
 import type {
+  FormInfo,
+  PermissionRequest,
   SessionFormReplyInput,
+  SessionInboxInfo,
   SessionInboxUser,
   SessionPromptInput,
   V2Event,
@@ -24,6 +27,7 @@ import { getAutoPolicy } from "./sessionAutoPolicy";
 import { loadV2History, projectV2History } from "./v2History";
 import {
   createInitialV2ThreadState,
+  mapEventError,
   reduceV2ThreadState,
 } from "./v2Events";
 import {
@@ -40,6 +44,7 @@ import type {
 } from "./v2Client";
 import type {
   V2DesiredSelection,
+  V2HistorySnapshot,
   V2InboxRecord,
   V2MessageState,
   V2ModelSelection,
@@ -88,6 +93,7 @@ export interface V2ThreadController {
   load(): Promise<void>;
   awaitReady(): Promise<void>;
   refresh(): Promise<void>;
+  resyncAuxiliary(): Promise<void>;
   reconcileStagedRevert(): Promise<void>;
   reconcilePendingPrompt(messageId: string): Promise<"admitted" | "absent" | "unresolved">;
   awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult>;
@@ -224,6 +230,9 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let isHydrating = false;
+  let resyncInFlight = false;
+  /** Latest full history projection, kept so a re-sync can reproject without re-paging. */
+  let lastHistorySnapshot: V2HistorySnapshot | null = null;
   let eventBuffer: Array<{ readonly ordinal: number; readonly event: V2Event }> = [];
   const listeners = new Set<() => void>();
   const admissions = new Map<string, AdmissionRecord>();
@@ -281,6 +290,41 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     return state.permissions
       .map(projectV2Permission)
       .filter((permission): permission is V2PermissionView => permission !== null);
+  }
+
+  /**
+   * Bridge OpenCode's compaction lifecycle into the compaction state machine.
+   *
+   * FOUND DURING CONFORMANCE. The reducer has handled `compaction_running`,
+   * `compaction_settled` and `compaction_failed` since the V2 client landed, and
+   * OpenCode publishes all three events - but nothing dispatched them. The only
+   * producer was `compaction_admitted`, fired when `/compact` was submitted, so
+   * the state went `admitted -> admitted` and never left it: a running
+   * compaction was invisible, and a completed one was invisible too.
+   *
+   * That is why the context meter could not implement OpenChamber's post-
+   * compaction rule. The meter needs to know a compaction FINISHED, and the
+   * signal existed on the wire but was dropped at the boundary.
+   *
+   * `ended` with no error is the success signal, matching OpenChamber's
+   * `status === 'completed' && !error`. The `delta` events that stream the
+   * summary text are deliberately not consumed: the meter does not render a
+   * progress figure, and reading them would mean projecting a summarization
+   * TBAi does not own.
+   */
+  function applyCompactionLifecycleEvent(event: V2Event): void {
+    switch (event.type) {
+      case "session.compaction.started":
+        dispatch({ type: "compaction_running" });
+        return;
+      case "session.compaction.ended":
+        dispatch({ type: "compaction_settled" });
+        return;
+      case "session.compaction.failed":
+        dispatch({ type: "compaction_failed", error: mapEventError(event.data.error) });
+        return;
+      default:
+    }
   }
 
   function applyAdmissionEvent(event: V2Event): void {
@@ -374,6 +418,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-and-apply" });
     applyAdmissionEvent(event);
     applyAutoApproveEvent(event);
+    applyCompactionLifecycleEvent(event);
   }
 
   async function consumeEvents(currentGeneration: OpenCodeV2Generation): Promise<void> {
@@ -413,6 +458,78 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     }, delay);
   }
 
+  /**
+   * The three append-only pending sets, stamped with the ordinal that dates
+   * the fetch that produced them.
+   */
+  type V2AuxiliarySnapshot = {
+    readonly requestOrdinal: number;
+    readonly inbox: readonly V2InboxRecord[];
+    readonly permissions: readonly PermissionRequest[];
+    readonly forms: readonly FormInfo[];
+  };
+
+  /**
+   * Fetches the pending sets that only the load-time snapshot and the live
+   * events otherwise know about: inbox records, permission requests, forms.
+   *
+   * `requestOrdinal` is captured BEFORE the fetches on purpose. The reducer
+   * discards a snapshot older than the newest applied event, so a slow response
+   * can never overwrite fresher event-derived state.
+   *
+   * Each list degrades to empty independently rather than failing the batch: a
+   * permissions endpoint that is briefly unavailable must not also cost the
+   * reader their forms.
+   */
+  async function loadAuxiliary(currentGeneration: OpenCodeV2Generation): Promise<V2AuxiliarySnapshot> {
+    const requestOrdinal = ordinal;
+    const [inbox, permissions, forms] = await Promise.all([
+      currentGeneration.operations.inboxList({ sessionID: client.sessionId }).catch((cause: unknown) => {
+        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "inbox", errorType: cause instanceof Error ? cause.name : typeof cause });
+        return [] as SessionInboxInfo[];
+      }),
+      currentGeneration.operations.permissionList({ sessionID: client.sessionId }).catch((cause: unknown) => {
+        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "permission", errorType: cause instanceof Error ? cause.name : typeof cause });
+        return [] as PermissionRequest[];
+      }),
+      currentGeneration.operations.formList({ sessionID: client.sessionId }).catch((cause: unknown) => {
+        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "form", errorType: cause instanceof Error ? cause.name : typeof cause });
+        return [] as FormInfo[];
+      }),
+    ]);
+    return {
+      requestOrdinal,
+      inbox: inbox.map((item) => (item.type === "user"
+        ? inboxRecordFromUser(item)
+        : { id: item.id, sessionId: item.sessionID, type: item.type, delivery: item.delivery })),
+      permissions,
+      forms,
+    };
+  }
+
+  /**
+   * Publishes an auxiliary snapshot, minus anything already resolved locally.
+   *
+   * The two filters close a race the event stream does not cover: a reply
+   * dispatched moments before this snapshot was taken would otherwise re-add a
+   * form or permission the reader has already answered. A locally-resolved
+   * record is authoritative — we know it is settled, regardless of what the
+   * list still returns.
+   */
+  function applyAuxiliary(snapshot: V2AuxiliarySnapshot): void {
+    dispatch({ type: "inbox_hydrated", records: snapshot.inbox, requestOrdinal: snapshot.requestOrdinal });
+    dispatch({
+      type: "permissions_hydrated",
+      requests: snapshot.permissions.filter((request) => !answeredPermissions.has(request.id)),
+      requestOrdinal: snapshot.requestOrdinal,
+    });
+    dispatch({
+      type: "forms_hydrated",
+      forms: snapshot.forms.filter((form) => !formReplies.has(form.id)),
+      requestOrdinal: snapshot.requestOrdinal,
+    });
+  }
+
   async function hydrate(currentGeneration: OpenCodeV2Generation, signals: V2ConnectionSignals): Promise<void> {
     const serverInfo = await currentGeneration.operations.serverInfo();
     if (disposed || generation !== currentGeneration) return;
@@ -431,37 +548,60 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     const historyRequestOrdinal = ordinal;
     const snapshot = await loadV2History(currentGeneration.history, { signal: signals.connectionSignal });
     if (disposed || generation !== currentGeneration) return;
+    lastHistorySnapshot = snapshot;
     const projection = projectV2History(snapshot, currentPermissions());
     dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
     const buffered = eventBuffer.filter((entry) => entry.ordinal > historyRequestOrdinal);
     for (const entry of buffered) dispatch({ type: "v2_event", event: entry.event, ordinal: entry.ordinal, mode: "observe-and-apply" });
     eventBuffer = [];
     isHydrating = false;
-    const permissionRequestOrdinal = ordinal;
-    const [inbox, permissions, forms] = await Promise.all([
-      currentGeneration.operations.inboxList({ sessionID: client.sessionId }).catch((cause: unknown) => {
-        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "inbox", errorType: cause instanceof Error ? cause.name : typeof cause });
-        return [];
-      }),
-      currentGeneration.operations.permissionList({ sessionID: client.sessionId }).catch((cause: unknown) => {
-        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "permission", errorType: cause instanceof Error ? cause.name : typeof cause });
-        return [];
-      }),
-      currentGeneration.operations.formList({ sessionID: client.sessionId }).catch((cause: unknown) => {
-        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "form", errorType: cause instanceof Error ? cause.name : typeof cause });
-        return [];
-      }),
-    ]);
+    const auxiliary = await loadAuxiliary(currentGeneration);
     if (disposed || generation !== currentGeneration) return;
-    dispatch({ type: "inbox_hydrated", records: inbox.map((item) => item.type === "user" ? inboxRecordFromUser(item) : { id: item.id, sessionId: item.sessionID, type: item.type, delivery: item.delivery }) });
-    dispatch({ type: "permissions_hydrated", requests: permissions, requestOrdinal: permissionRequestOrdinal });
+    applyAuxiliary(auxiliary);
     // History was projected before the auxiliary permission snapshot arrived.
     // Reproject once so tool calls restored from history carry their approval
     // gate instead of appearing permanently stuck.
     const permissionProjection = projectV2History(snapshot, currentPermissions());
     dispatch({ type: "history_loaded", messages: permissionProjection.messages, messageOrder: permissionProjection.messageOrder, pages: permissionProjection.pages });
-    dispatch({ type: "forms_hydrated", forms });
     dispatch({ type: "load_completed" });
+  }
+
+  /**
+   * Re-fetches the pending sets so a dropped event is repaired without a reload.
+   *
+   * `ordinal` is a LOCAL counter, so a lost `form.created` or
+   * `permission.asked` leaves no trace at all: nothing can detect the gap, and
+   * the reader waits for a restart. This is the backstop for precisely that
+   * failure, and the reason it is a poll rather than a fix to the stream.
+   *
+   * Bounded to one in-flight request — a caller arriving while a re-sync is
+   * running is a no-op, not a second round of three GETs. Never rejects: this
+   * runs from a timer and from a visibility handler, where there is no caller
+   * to hand an error to.
+   */
+  async function resyncAuxiliary(): Promise<void> {
+    if (disposed) return;
+    const currentGeneration = generation;
+    if (currentGeneration === null || resyncInFlight) return;
+    resyncInFlight = true;
+    try {
+      const snapshot = await loadAuxiliary(currentGeneration);
+      if (disposed || generation !== currentGeneration) return;
+      const previous = state;
+      applyAuxiliary(snapshot);
+      // The reducer hands back the SAME array when nothing changed, so identity
+      // comparison is the honest "did anything actually move" test. Reprojecting
+      // the transcript rebuilds every message, so it must run only when a
+      // permission really appeared or vanished — otherwise a permission-gated
+      // tool card would keep reading as permanently stuck.
+      if (state.permissions === previous.permissions || lastHistorySnapshot === null) return;
+      const projection = projectV2History(lastHistorySnapshot, currentPermissions());
+      dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
+    } catch (error) {
+      logger.warn("opencode", "runtime.auxiliary_resync_failed", { errorType: error instanceof Error ? error.name : typeof error });
+    } finally {
+      resyncInFlight = false;
+    }
   }
 
   async function startConnection(): Promise<void> {
@@ -532,6 +672,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       const session = await generation.operations.sessionGet({ sessionID: client.sessionId });
       dispatch({ type: "session_hydrated", session });
       const snapshot = await loadV2History(generation.history);
+      lastHistorySnapshot = snapshot;
       const projection = projectV2History(snapshot, currentPermissions());
       dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
       dispatch({ type: "load_completed" });
@@ -559,6 +700,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       }
       const verified = await generation.operations.sessionGet({ sessionID: client.sessionId });
       const snapshot = await loadV2History(generation.history);
+      lastHistorySnapshot = snapshot;
       const projection = projectV2History(snapshot, currentPermissions());
       dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
       if (verified.revert !== undefined) throw new Error("staged revert remains");
@@ -793,6 +935,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     load: ensureLoaded,
     awaitReady,
     refresh,
+    resyncAuxiliary,
     reconcileStagedRevert,
     reconcilePendingPrompt,
     awaitPromptAdmission,

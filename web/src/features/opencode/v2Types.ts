@@ -233,6 +233,22 @@ export interface V2ThreadState {
   readonly forms: readonly FormInfo[];
   readonly inboxById: Readonly<Record<string, V2InboxRecord>>;
   readonly usage: V2UsageSnapshot | null;
+  /**
+   * True when a compaction has settled and `usage` therefore describes the
+   * PRE-compaction prompt.
+   *
+   * A compaction rewrites what the model can see, so the usage the server was
+   * holding when it settled no longer describes the conversation. The spend
+   * breakdown stays valid and is deliberately NOT cleared - only the context
+   * NUMERATOR is invalidated, and it stays unknown until the next usage report.
+   *
+   * This is the client half of OpenChamber's rule that a finished compaction
+   * makes the fill unknown until the next response reports tokens. TBAi has no
+   * compaction message in its projection to read that from - OpenCode reports a
+   * compaction as a lifecycle transition - so the invalidation is tracked here
+   * instead of re-derived from message order.
+   */
+  readonly occupancyStale: boolean;
   readonly optimisticMessageIds: readonly string[];
   readonly answeredPermissionIds: readonly string[];
   readonly diagnosticCount: number;
@@ -266,6 +282,7 @@ export type V2ThreadAction =
   | {
       readonly type: "inbox_hydrated";
       readonly records: readonly V2InboxRecord[];
+      readonly requestOrdinal: number;
     }
   | { readonly type: "inbox_recorded"; readonly record: V2InboxRecord }
   | {
@@ -273,7 +290,11 @@ export type V2ThreadAction =
       readonly requests: readonly PermissionRequest[];
       readonly requestOrdinal: number;
     }
-  | { readonly type: "forms_hydrated"; readonly forms: readonly FormInfo[] }
+  | {
+      readonly type: "forms_hydrated";
+      readonly forms: readonly FormInfo[];
+      readonly requestOrdinal: number;
+    }
   | { readonly type: "prompt_submitting"; readonly message: V2MessageState }
   | {
       readonly type: "prompt_admitted";

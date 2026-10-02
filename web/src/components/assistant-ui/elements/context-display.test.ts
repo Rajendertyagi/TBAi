@@ -176,9 +176,23 @@ describe("pin wiring (additional source-guard proof)", () => {
 describe("OpenCode ring source", () => {
   it("reads native V2 extras usage and memoizes the token mapping", () => {
     expect(openCodeRing).toContain("extras?.state.usage?.tokens");
-    expect(openCodeRing).toContain("toTokenUsage(extras?.state.usage?.tokens)");
+    // The meter consumes `toCodeContextUsage`, which prefers the server's
+    // `tokens.total` over a bucket sum. `toTokenUsage` remains inside it for the
+    // spend breakdown, so the ring itself no longer calls it directly.
+    expect(openCodeRing).toContain("toCodeContextUsage(rawTokens)");
     expect(openCodeRing).not.toContain("state.thread.messages");
     expect(openCodeRing).not.toContain("metadata.custom.tokens");
+  });
+
+  it("passes the measured numerator, not only the spend breakdown", () => {
+    // The whole point of the alignment: `usage` alone is traffic, so the ring
+    // receives occupancy as its own prop.
+    expect(openCodeRing).toContain("contextTokens={contextUsage?.contextTokens}");
+  });
+
+  it("renders unknown rather than a stale figure after a compaction", () => {
+    expect(openCodeRing).toContain("extras?.state.occupancyStale === true");
+    expect(openCodeRing).toContain('occupancyState={stale ? "unknown" : "measured"}');
   });
 
   it("resets on session change and prefers the live model limit", () => {

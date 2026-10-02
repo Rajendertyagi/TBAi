@@ -98,6 +98,8 @@ type ContextDisplayContextValue = {
   /** Pin the popover open from a click. Hover/focus/outside/Escape stay native. */
   /** Provenance of the effective window, so the UI never implies verified. */
   windowSource: string | undefined;
+  /** No trustworthy numerator exists (post-compaction). Render a placeholder. */
+  unknown: boolean;
   togglePin: () => void;
 };
 
@@ -112,6 +114,41 @@ function useContextDisplay(): ContextDisplayContextValue {
   }
   return ctx;
 }
+/**
+ * Whether the meter has a trustworthy numerator.
+ *
+ * `unknown` is deliberately distinct from `measured`. After a compaction the
+ * previous number is not small and it is not zero - it is stale, and OpenChamber
+ * reports the fill as unknown until the next response reports tokens again.
+ */
+export type OccupancyState = "measured" | "unknown";
+
+/**
+ * Resolve the numerator the ring displays.
+ *
+ * `contextTokens` wins over `usage.totalTokens` because the server-measured
+ * occupancy is the quantity that fills the window, whereas `totalTokens` is
+ * provider traffic accumulated across every model call in a turn.
+ *
+ * An `unknown` state returns no numerator at all - deliberately NOT falling back
+ * to `usage.totalTokens`, which is exactly the stale figure this state exists to
+ * stop displaying.
+ *
+ * @returns `undefined` for no numerator, so the caller renders a placeholder
+ *   rather than a fabricated zero.
+ */
+export function resolveOccupancyNumerator(input: {
+  contextTokens?: number | undefined;
+  usageTotalTokens?: number | undefined;
+  state: OccupancyState;
+}): number | undefined {
+  if (input.state === "unknown") return undefined;
+  const candidate = input.contextTokens ?? input.usageTotalTokens;
+  return typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0
+    ? candidate
+    : undefined;
+}
+
 export type PresetProps = {
   modelContextWindow: number;
   className?: string;
@@ -122,6 +159,16 @@ export type PresetProps = {
   contextTokens?: number | undefined;
   /** TBAi: provenance of the effective window, shown to the user. */
   windowSource?: string | undefined;
+  /**
+   * TBAi (OpenCode): whether a trustworthy numerator exists.
+   *
+   * `unknown` is a real state, not an absence. A compaction rewrites the prompt,
+   * so the previous measurement describes a conversation that no longer exists;
+   * carrying it forward would report a pre-compaction figure as current. `unknown`
+   * renders an explicit placeholder instead of inventing a number to keep the
+   * ring populated.
+   */
+  occupancyState?: OccupancyState;
 };
 
 export type ContextDisplayRootProps = {
@@ -142,6 +189,8 @@ export type ContextDisplayRootProps = {
   windowSource?: string | undefined;
   usage?: TokenUsage | undefined;
   resetKey?: string | undefined;
+  /** TBAi (OpenCode): `unknown` after a compaction invalidates the numerator. */
+  occupancyState?: OccupancyState;
 };
 
 /**
@@ -174,29 +223,38 @@ function ContextDisplayRoot({
   resetKey,
   contextTokens,
   windowSource,
+  occupancyState = "measured",
 }: ContextDisplayRootProps) {
   // OCCUPANCY, not traffic. The server measures what the provider was actually
   // sent; `usage.totalTokens` is provider traffic accumulated across every model
   // call in the turn and reports "100% full" for a conversation that is not full.
-  const rawTokens = contextTokens ?? usage?.totalTokens ?? 0;
+  //
+  // After a compaction there IS no trustworthy numerator, so it resolves to
+  // `undefined` rather than to 0. The settled value must not be carried across:
+  // that is the stale pre-compaction readout this state exists to prevent.
+  const resolved = resolveOccupancyNumerator({
+    contextTokens,
+    usageTotalTokens: usage?.totalTokens,
+    state: occupancyState,
+  });
+  const rawTokens = resolved ?? 0;
+  const isUnknown = occupancyState === "unknown" && resolved === undefined;
   const [tokenState, setTokenState] = useState({
     resetKey,
-    totalTokens: rawTokens > 0 ? rawTokens : 0,
+    totalTokens: rawTokens,
     usage,
+    isUnknown,
   });
 
   if (
     tokenState.resetKey !== resetKey ||
+    tokenState.isUnknown !== isUnknown ||
     (rawTokens > 0 && rawTokens !== tokenState.totalTokens) ||
     usage !== tokenState.usage
   ) {
     setTokenState((prev) => {
-      if (prev.resetKey !== resetKey) {
-        return {
-          resetKey,
-          totalTokens: rawTokens > 0 ? rawTokens : 0,
-          usage,
-        };
+      if (prev.resetKey !== resetKey || prev.isUnknown !== isUnknown) {
+        return { resetKey, totalTokens: rawTokens, usage, isUnknown };
       }
       if (rawTokens > 0 && rawTokens !== prev.totalTokens) {
         return { ...prev, totalTokens: rawTokens, usage };
@@ -211,10 +269,13 @@ function ContextDisplayRoot({
   const current =
     tokenState.resetKey === resetKey
       ? tokenState
-      : { totalTokens: rawTokens > 0 ? rawTokens : 0, usage };
+      : { totalTokens: rawTokens, usage, isUnknown };
   const totalTokens = current.totalTokens;
+  const unknown = current.isUnknown;
   const percent = getUsagePercent(totalTokens, modelContextWindow);
-  const hasUsage = current.usage !== undefined || totalTokens > 0;
+  // `usage` survives a compaction - the spend was really spent - so the ring
+  // stays mounted and reports "unknown" rather than vanishing or reading 0%.
+  const hasUsage = current.usage !== undefined || totalTokens > 0 || unknown;
 
   // TBAi deviation (click-to-open): the pin only ever ADDS an open hold.
   // Unpinned (`open={undefined}`) the tooltip is fully uncontrolled, so
@@ -235,8 +296,9 @@ function ContextDisplayRoot({
       modelContextWindow,
       togglePin,
       windowSource,
+      unknown,
     }),
-    [current.usage, totalTokens, percent, modelContextWindow, togglePin, windowSource],
+    [current.usage, totalTokens, percent, modelContextWindow, togglePin, windowSource, unknown],
   );
 
   if (!hasUsage) return null;
@@ -314,7 +376,7 @@ function ContextDisplayContent({
   side?: "top" | "bottom" | "left" | "right" | undefined;
   className?: string;
 }) {
-  const { usage, totalTokens, percent, modelContextWindow, windowSource } =
+  const { usage, totalTokens, percent, modelContextWindow, windowSource, unknown } =
     useContextDisplay();
   const segments = getContextSegments(usage);
 
@@ -331,11 +393,13 @@ function ContextDisplayContent({
       <div className="text-xs">
         <div className="flex items-baseline justify-between gap-6 whitespace-nowrap">
           <span className={getPercentColor(percent)}>
-            {Math.round(percent)}% full
+            {unknown ? "context unknown" : `${Math.round(percent)}% full`}
           </span>
           <span className="font-mono tabular-nums">
-            {formatTokenCount(Math.min(totalTokens, modelContextWindow))} /{" "}
-            {formatTokenCount(modelContextWindow)}
+            {unknown
+              ? "--"
+              : formatTokenCount(Math.min(totalTokens, modelContextWindow))}{" "}
+            / {formatTokenCount(modelContextWindow)}
           </span>
         </div>
         <div className="bg-muted mt-2.5 h-1 overflow-hidden rounded-full">
@@ -422,7 +486,10 @@ function RingVisual() {
 }
 
 function RingPercentLabel() {
-  const { percent } = useContextDisplay();
+  const { percent, unknown } = useContextDisplay();
+  // An em dash, not "0%". After a compaction the context is not empty - it is
+  // unmeasured - and those are different claims.
+  if (unknown) return <span className="font-mono tabular-nums">--</span>;
   return <span className="font-mono tabular-nums">{Math.round(percent)}%</span>;
 }
 const ContextDisplayRing: FC<PresetProps> = ({
@@ -433,6 +500,7 @@ const ContextDisplayRing: FC<PresetProps> = ({
   contextTokens,
   windowSource,
   resetKey,
+  occupancyState,
 }) => (
   <ContextDisplayRoot
     modelContextWindow={modelContextWindow}
@@ -440,6 +508,7 @@ const ContextDisplayRing: FC<PresetProps> = ({
     contextTokens={contextTokens}
     windowSource={windowSource}
     resetKey={resetKey}
+    occupancyState={occupancyState}
   >
     <ContextDisplayTrigger
       className={cn(

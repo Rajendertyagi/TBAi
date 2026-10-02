@@ -102,6 +102,45 @@ function incrementDiagnostic(state: V2ThreadState): V2ThreadState {
   };
 }
 
+/**
+ * True when a snapshot dated `requestOrdinal` predates the newest applied event.
+ *
+ * `requestOrdinal` is the event counter sampled BEFORE the fetch, so an event
+ * that arrived mid-flight carries a strictly higher ordinal and must win.
+ *
+ * The `+ 1` is load-bearing. `nextOrdinal` stores `appliedOrdinal + 1`, NOT a
+ * count of events, so comparing the raw counter against it would classify
+ * every snapshot as stale the instant a single event had ever been applied —
+ * including one taken strictly after that event. That silently turns a re-sync
+ * into a permanent no-op, and a reconnect-time hydration into a dropped
+ * permission snapshot. `nextOrdinal - 1` is the newest ordinal actually
+ * applied, which is what "newer than my snapshot" has to be measured against.
+ */
+function isStaleSnapshot(requestOrdinal: number, identity: V2EventIdentityState): boolean {
+  return requestOrdinal + 1 < identity.nextOrdinal;
+}
+
+/**
+ * True when two pending lists hold the same identities in the same order.
+ *
+ * A re-sync that finds nothing new must be a true NO-OP. Allocating a fresh
+ * array here would hand the runtime store a new state object on every poll,
+ * which rebuilds the assistant-ui adapter and re-renders the whole transcript
+ * to redraw an identical screen.
+ *
+ * Identity is the correct comparison, not deep equality: a pending permission
+ * or form is immutable once created. It leaves the pending set by being
+ * answered or cancelled, never by mutating in place, so an id+order match
+ * means the rendered result cannot differ.
+ */
+function sameIdentitySequence(
+  current: readonly { readonly id: string }[],
+  incoming: readonly { readonly id: string }[],
+): boolean {
+  if (current.length !== incoming.length) return false;
+  return current.every((item, index) => item.id === incoming[index]?.id);
+}
+
 function getEventSessionId(event: V2Event): string | null {
   const data: unknown = event.data;
   if (!data || typeof data !== "object" || !("sessionID" in data)) return null;
@@ -226,7 +265,16 @@ function inboxRecordFromItem(
   return { id: inboxId, sessionId, type, delivery: item.delivery };
 }
 
-function mapEventError(
+/**
+ * Project a server error payload onto the safe shape the UI may render.
+ *
+ * Exported so the controller's side effects can reuse the SAME mapping rather
+ * than inventing a second one - a compaction failure is displayed through this
+ * function like every other error.
+ *
+ * @returns The safe error, carrying the server's own message and status.
+ */
+export function mapEventError(
   error: { message: string; status?: number },
 ): V2SafeError {
   return {
@@ -374,7 +422,13 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "session.agent.selected":
       return applyAgentEvent(state, event);
     case "session.usage.updated":
-      return { ...state, usage: { cost: event.data.cost, tokens: event.data.tokens } };
+      // A fresh report supersedes any compaction invalidation: whatever made the
+      // previous reading stale has now been measured past.
+      return {
+        ...state,
+        usage: { cost: event.data.cost, tokens: event.data.tokens },
+        occupancyStale: false,
+      };
     case "session.inbox.enqueued":
       return recordInbox(state, inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item));
     case "session.inbox.cancelled": {
@@ -508,7 +562,11 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         : event.data.cost !== undefined && event.data.tokens !== undefined
           ? { cost: event.data.cost, tokens: event.data.tokens }
           : next.usage;
-      return { ...next, usage };
+      // A step's usage is measured against the CURRENT prompt, so it clears any
+      // compaction invalidation. Without this the meter would stay unknown for
+      // the rest of the session after one compaction.
+      const measured = usage !== next.usage;
+      return { ...next, usage, ...(measured ? { occupancyStale: false } : {}) };
     }
     case "session.tool.input.started":
       return applyAssistantEvent(state, event.data.assistantMessageID, {
@@ -613,12 +671,17 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
     case "load_failed":
       return { ...state, load: { type: "error", error: action.error }, execution: { type: "idle" } };
     case "session_hydrated":
+      // The server's own snapshot is authoritative on reload, including about
+      // compactions it has already performed, so nothing is stale here. This is
+      // what keeps reload after a compaction from inventing an "unknown" state
+      // that OpenCode has already resolved.
       return {
         ...state,
         session: action.session,
         model: modelRefToV2Selection(action.session.model),
         agent: action.session.agent ?? null,
         usage: { cost: action.session.cost, tokens: action.session.tokens },
+        occupancyStale: false,
       };
     case "desired_selection_changed":
       return action.generation <= state.selectionGeneration
@@ -648,18 +711,33 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       };
     }
     case "inbox_hydrated":
-      return {
-        ...state,
-        inboxById: Object.fromEntries(action.records.map((record) => [record.id, record])),
-      };
+      // Stale-guard: a snapshot taken before an event arrived must not
+      // overwrite what that event already established.
+      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+        ? state
+        : sameIdentitySequence(Object.values(state.inboxById), action.records)
+          ? state
+          : {
+              ...state,
+              inboxById: Object.fromEntries(action.records.map((record) => [record.id, record])),
+            };
     case "inbox_recorded":
       return recordInbox(state, action.record);
     case "permissions_hydrated":
-      return action.requestOrdinal < state.eventIdentity.nextOrdinal
+      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
         ? state
-        : { ...state, permissions: [...action.requests] };
+        : sameIdentitySequence(state.permissions, action.requests)
+          ? state
+          : { ...state, permissions: [...action.requests] };
     case "forms_hydrated":
-      return { ...state, forms: [...action.forms] };
+      // Same stale-guard as `permissions_hydrated`. This case previously had
+      // none, which meant a slow snapshot could silently undo a `form.created`
+      // — the exact regression a periodic re-sync would otherwise introduce.
+      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+        ? state
+        : sameIdentitySequence(state.forms, action.forms)
+          ? state
+          : { ...state, forms: [...action.forms] };
     case "prompt_submitting": {
       const alreadySubmitted = state.optimisticMessageIds.includes(action.message.id);
       const next: V2ThreadState = {
@@ -790,8 +868,14 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
     case "compaction_running":
       return { ...state, compaction: { type: "running" } };
     case "compaction_settled":
-      return { ...state, compaction: { type: "idle" } };
+      // The conversation the `usage` snapshot describes no longer exists. The
+      // spend breakdown is kept (it was really spent); only the context
+      // NUMERATOR is invalidated, so the meter reports unknown rather than
+      // continuing to display a pre-compaction figure.
+      return { ...state, compaction: { type: "idle" }, occupancyStale: true };
     case "compaction_failed":
+      // A failed compaction left the conversation intact, so the reading still
+      // describes it. Only a SUCCESSFUL compaction invalidates occupancy.
       return { ...state, compaction: { type: "error", error: action.error } };
     case "permission_answered":
       return {
@@ -889,6 +973,7 @@ export function createInitialV2ThreadState(sessionId: string): V2ThreadState {
     forms: [],
     inboxById: {},
     usage: null,
+    occupancyStale: false,
     optimisticMessageIds: [],
     answeredPermissionIds: [],
     diagnosticCount: 0,

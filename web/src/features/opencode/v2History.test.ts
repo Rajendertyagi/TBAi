@@ -27,6 +27,7 @@ function repositoryState(
     load: { type: "ready" },
     execution: { type: "idle" },
     compaction: { type: "idle" },
+    occupancyStale: false,
     revertRecovery: { type: "none" },
     eventIdentity: {
       nextOrdinal: 0,

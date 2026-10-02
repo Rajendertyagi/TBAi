@@ -138,7 +138,10 @@ describe("THE REGRESSION: cumulative usage must not be the numerator", () => {
   });
 
   it("the ring prefers the server value over usage.totalTokens", () => {
-    expect(ring).toContain("const rawTokens = contextTokens ?? usage?.totalTokens ?? 0;");
+    // The ordering now lives in `resolveOccupancyNumerator`, which the ring calls
+    // instead of inlining the `??` chain.
+    expect(ring).toContain("export function resolveOccupancyNumerator(");
+    expect(ring).toContain("const candidate = input.contextTokens ?? input.usageTotalTokens;");
   });
 
   it("the meter drops immediately after compaction", () => {
