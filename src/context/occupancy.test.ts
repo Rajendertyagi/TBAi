@@ -23,6 +23,7 @@ import {
   providerOccupancyFromStepUsage,
   resolveOccupancy,
   toLimitProvenance,
+  type ContextLimitProvenance,
   type OccupancyMeasurement,
 } from "./occupancy";
 
@@ -48,8 +49,9 @@ describe("occupancy: the provider's count of the last prompt", () => {
 
   it("keeps the cached portion separate instead of adding it", () => {
     const measurement = providerOccupancyFromStepUsage(stepUsage(90_000, 80_000));
+    expect(measurement?.kind).toBe("provider");
     expect(measurement?.inputTokens).toBe(90_000);
-    expect(measurement?.cachedInputTokens).toBe(80_000);
+    expect(measurement?.kind === "provider" ? measurement.cachedInputTokens : undefined).toBe(80_000);
     // 90k + 80k would be the 330%-readout bug.
     expect(measurement?.inputTokens).not.toBe(170_000);
   });
@@ -91,7 +93,7 @@ describe("occupancy: a summed turn is traffic and must not win", () => {
 });
 
 describe("occupancy: provenance is never over-claimed", () => {
-  it.each([
+  it.each<[unknown, ContextLimitProvenance]>([
     ["provider_reported", "provider_reported"],
     ["configured", "configured"],
     ["conservative_default", "conservative_default"],
