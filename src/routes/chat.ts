@@ -69,6 +69,7 @@ import {
   resolveOccupancy,
   type OccupancyMeasurement,
 } from "../context/occupancy";
+import { decideOverflowRecovery } from "../context/recovery";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService, messageService } from "../services/storage";
@@ -375,6 +376,15 @@ app.post("/api/chat", async (c) => {
    */
   let lastStepOccupancy: OccupancyMeasurement | undefined;
 
+  /**
+   * Flips the moment this request performs its ONE permitted overflow recovery.
+   *
+   * Never cleared within a request: that is the bound. An unbounded
+   * compact-and-retry is a hang with extra steps, because a history that
+   * compaction cannot shrink overflows again on every attempt.
+   */
+  let overflowRecoveryAttempted = false;
+
 /**
  * The CURRENT context state to hand the browser with this turn.
  *
@@ -654,6 +664,33 @@ function contextStateForUi(): ChatContextState | undefined {
       chunkCount,
     });
     logProviderErrorCode(effective, streamId);
+    logOverflowRecovery(effective, streamId);
+  };
+
+  /**
+   * The bounded overflow-recovery verdict for this request.
+   *
+   * Consulted for every provider failure so the decision is observable, and so
+   * the executor that compacts-and-re-issues has ONE tested policy to call
+   * rather than re-deriving the conditions. `overflowRecoveryAttempted` is the
+   * bound: it flips on the first recovery and is never cleared within a request.
+   */
+  const logOverflowRecovery = (error: unknown, streamId: string): void => {
+    const decision = decideOverflowRecovery({
+      category: classifyError(error, { provider: provider.type }).category,
+      alreadyAttempted: overflowRecoveryAttempted,
+      compactionEnabled: compactionEnabled(),
+      hasConversation: threadId !== undefined,
+    });
+    if (decision.outcome === "not_context_overflow") return;
+    chatLog.warn("context", "context_overflow_recovery", {
+      streamId,
+      outcome: decision.outcome,
+      shouldRecover: decision.shouldRecover,
+      alreadyAttempted: overflowRecoveryAttempted,
+      compactionEnabled: compactionEnabled(),
+      hasConversation: threadId !== undefined,
+    });
   };
 
   /**
