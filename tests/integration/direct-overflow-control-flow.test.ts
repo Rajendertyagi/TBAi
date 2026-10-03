@@ -44,6 +44,41 @@ function sse(rows: unknown[]): Response {
   );
 }
 
+/**
+ * A NON-streaming completion, as `generateText` requires.
+ *
+ * The stub originally answered every request with SSE. That models only half of the
+ * provider contract: `streamText` asks for `stream: true` and expects `text/event-stream`,
+ * but the compaction summariser goes through `generateText`, which asks for a single JSON
+ * body. Handing an SDK non-streaming client an SSE stream is a malformed response, and it
+ * surfaced as `summarize_failed:provider_error` — which looked like broken compaction but
+ * was the stub lying about the API.
+ *
+ * A real endpoint serves both shapes on the same URL, so the stub now does too.
+ */
+function jsonCompletion(content: string): Response {
+  return new Response(
+    JSON.stringify({
+      id: "chatcmpl-recovery",
+      object: "chat.completion",
+      created: 0,
+      model: MODEL_ID,
+      choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1_000, completion_tokens: 10, total_tokens: 1_010 },
+    }),
+    { headers: { "Content-Type": "application/json" } },
+  );
+}
+
+/** Whether a request asked for a streamed response. */
+function wantsStream(raw: string): boolean {
+  try {
+    return (JSON.parse(raw) as { stream?: unknown }).stream === true;
+  } catch {
+    return false;
+  }
+}
+
 function textChunk(content: string, finish: string): unknown {
   return {
     id: "chatcmpl-recovery",
@@ -62,7 +97,7 @@ async function seed(): Promise<void> {
     port: 0,
     hostname: "127.0.0.1",
     async fetch(req) {
-      await req.json().catch(() => ({}));
+      const raw = await req.text().catch(() => "");
       upstreamCalls += 1;
       if (upstreamCalls === 1) {
         return new Response(JSON.stringify(OVERFLOW_BODY), {
@@ -70,6 +105,9 @@ async function seed(): Promise<void> {
           headers: { "Content-Type": "application/json" },
         });
       }
+      // The compaction summariser is a NON-streaming call; the retried model turn is a
+      // streaming one. Serving the right shape for each is what a real endpoint does.
+      if (!wantsStream(raw)) return jsonCompletion("summary of the earlier turns");
       return sse([textChunk("recovered answer", "stop")]);
     },
   });

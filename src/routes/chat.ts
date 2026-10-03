@@ -1091,8 +1091,23 @@ function contextStateForUi(): ChatContextState | undefined {
         recover: async () => {
           chatLog.warn("context", "overflow_recovery_compaction_entered", {});
           await assembleForRequest({ forceCompaction: true });
+          // SAFETY INVARIANT, kept even though the compaction path is now correct.
+          //
+          // Compaction is CONTAINED: a summariser failure, a lost race, or simply nothing
+          // eligible is REPORTED, not thrown. So `assembleForRequest` resolving is NOT
+          // evidence that anything was compacted - and treating it as such would re-send
+          // the identical oversized history to the same provider, which can only overflow
+          // again. The explicit boolean is the only acceptable proof.
+          //
+          // Throwing makes the gate forward the ORIGINAL provider overflow and skip the
+          // retry, so a no-op compaction can never be mistaken for a recovery.
+          if (assembled.diagnostics.compactionApplied !== true) {
+            throw new Error(`compaction_not_applied:${assembled.diagnostics.compactionReason}`);
+          }
           chatLog.warn("context", "overflow_recovery_context_rebuilt", {
-            compactionApplied: assembled.diagnostics.compactionApplied,
+            compactionApplied: true,
+            compactionGeneration: assembled.diagnostics.compactionGeneration,
+            compactionSpanMessages: assembled.diagnostics.compactionSpanMessages,
           });
         },
         /**

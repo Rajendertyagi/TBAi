@@ -222,8 +222,10 @@ export function withOverflowRecovery<TPart>(
         // provider connection is released rather than left dangling.
         input.onAttemptDiscarded?.(state.attempt);
         await state.reader.cancel().catch(() => undefined);
-        // Its markers are discarded, not replayed: attempt 2 emits its own.
-        held = [];
+        // NOTE: `held` is deliberately NOT cleared yet. If recovery fails, this attempt
+        // becomes final after all, and its markers must still reach the client — dropping
+        // them here would emit a terminal `error` with no preceding `start`, which is not
+        // a well-formed UI message stream.
 
         try {
           await input.recover();
@@ -243,6 +245,9 @@ export function withOverflowRecovery<TPart>(
         }
 
         input.onEvent?.({ type: "retry_started", attempt: MAX_PROVIDER_ATTEMPTS });
+        // Recovery succeeded, so this attempt really is discarded: its markers go, and
+        // attempt 2 emits its own.
+        held = [];
         state = beginAttempt(MAX_PROVIDER_ATTEMPTS);
         continue;
       }
