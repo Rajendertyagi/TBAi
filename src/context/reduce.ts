@@ -47,6 +47,30 @@ import type { ContextCategory, InputSizeEstimate, MechanismOutcome, ReductionRep
  */
 export const REQUEST_TOOL_RESULT_MAX_CHARS = 64 * 1024;
 
+/**
+ * Reasoning reduction policy.
+ *
+ * Reasoning is the single largest unbounded context consumer in a long Direct
+ * conversation (Phase 1 F10 established it is re-sent unconditionally and
+ * accumulates). It is model-internal scratch work, not a load-bearing part of
+ * the reply: the assistant's visible text, tool calls, tool results and approval
+ * state are all SEPARATE parts and are never touched. So it is safe to bound it
+ * in the request without harming replay or pairing.
+ *
+ * Two rules, both request-side only (storage keeps the full reasoning):
+ *
+ * - Only the most recent messages keep their reasoning. Everything older is
+ *   dropped, because a reasoning trace from N turns ago is the least useful and
+ *   the least likely to be continued.
+ * - Even the retained reasoning is capped per part, so a single huge trace cannot
+ *   swallow a usable budget.
+ *
+ * These are POLICY numbers, not model facts; they live here, next to the tool
+ * ceiling, so tuning the request size never changes measurement or enforcement.
+ */
+export const REASONING_RETAIN_LAST_MESSAGES = 4;
+export const REQUEST_REASONING_MAX_CHARS = 4096;
+
 /** Marker appended to a reduced result so the truncation is visible to the model. */
 const TRUNCATION_NOTICE_PREFIX = "\n\n[truncated by TBAi context budget: ";
 const TRUNCATION_NOTICE_SUFFIX = " of the tool result were omitted from this request. The full value is stored and can be re-read by a follow-up tool call.]";
@@ -127,8 +151,27 @@ function reduceResultText(text: string, maxChars: number): { text: string; remov
   return { text: text.slice(0, Math.max(0, maxChars - fallbackNotice.length)) + fallbackNotice, removedChars: text.length };
 }
 
+/** Whether a part is a model-internal reasoning trace (a separate, non-load-bearing part). */
+function isReasoningPart(part: LoosePart): boolean {
+  return part.type === "reasoning";
+}
+
+/** Capped reasoning text with the omission made explicit to the model. */
+function reduceReasoningText(text: string, maxChars: number): { text: string; removedChars: number } {
+  if (text.length <= maxChars) return { text, removedChars: 0 };
+  const head = text.slice(0, maxChars);
+  const omitted = text.length - maxChars;
+  const notice = `\n\n[reasoning truncated by TBAi context budget: ${omitted} characters omitted; only the most recent reasoning is retained.]`;
+  return { text: head + notice, removedChars: text.length - (head + notice).length };
+}
+
 /**
  * Apply request-side reduction across every message in Layer C.
+ *
+ * Reduces TWO declared-reducible categories, both request-side only:
+ *
+ * - oversized tool/MCP results, truncated to `maxCharsPerResult`;
+ * - reasoning traces, dropped outside the retained tail and capped inside it.
  *
  * Returns NEW messages; the caller's input is not mutated. `data-*` parts are
  * counted but not reduced, because Phase 1 established they are dropped at
@@ -137,54 +180,117 @@ function reduceResultText(text: string, maxChars: number): { text: string; remov
  */
 export function reduceToolResults(
   messages: readonly UIMessage[],
-  options: { maxCharsPerResult?: number } = {},
+  options: {
+    maxCharsPerResult?: number;
+    /**
+     * Reasoning policy. Defaults to the exported constants. Overridable only for
+     * tests that exercise the boundary; the production path uses the defaults.
+     */
+    reasoningRetainLast?: number;
+    reasoningMaxChars?: number;
+  } = {},
 ): { messages: UIMessage[]; report: ReductionReport } {
   const maxChars = options.maxCharsPerResult ?? REQUEST_TOOL_RESULT_MAX_CHARS;
+  const reasoningRetainLast = options.reasoningRetainLast ?? REASONING_RETAIN_LAST_MESSAGES;
+  const reasoningMaxChars = options.reasoningMaxChars ?? REQUEST_REASONING_MAX_CHARS;
+
   let reducedParts = 0;
   let droppedParts = 0;
   let removedChars = 0;
+  let reducedReasoningParts = 0;
+  let removedReasoningChars = 0;
   let changed = false;
 
-  const next = messages.map((message) => {
-    const parts = (message as { parts?: unknown }).parts;
-    if (!Array.isArray(parts)) return message;
+  const keepReasoningFrom = Math.max(0, messages.length - reasoningRetainLast);
 
-    let messageChanged = false;
-    const nextParts = (parts as LoosePart[]).map((part) => {
-      if (!isToolPart(part) || !hasResult(part)) return part;
-      const chars = resultChars(part);
-      if (chars <= maxChars) return part;
+  const next = messages
+    .map((message, index) => {
+      const parts = (message as { parts?: unknown }).parts;
+      if (!Array.isArray(parts)) return message;
 
-      if (part.state === "output-error") {
-        // An error result is diagnostic. Cutting it can remove the cause.
-        // Drop it from the request rather than truncating it, and count it so
-        // the omission is observable instead of silent.
+      let messageChanged = false;
+      const retainReasoning = index >= keepReasoningFrom;
+      const nextParts = (parts as LoosePart[]).map((part) => {
+        // ── Reasoning: the unbounded consumer. Never in the tool branch. ──────
+        if (isReasoningPart(part)) {
+          const raw = typeof part.text === "string" ? part.text : "";
+          if (!retainReasoning) {
+            // Old turn: drop the trace entirely. It is scratch work, not the reply.
+            messageChanged = true;
+            reducedReasoningParts += 1;
+            removedReasoningChars += raw.length;
+            return null as unknown as LoosePart;
+          }
+          const reduced = reduceReasoningText(raw, reasoningMaxChars);
+          if (reduced.removedChars === 0) return part;
+          messageChanged = true;
+          reducedReasoningParts += 1;
+          removedReasoningChars += reduced.removedChars;
+          return { ...part, text: reduced.text } as LoosePart;
+        }
+
+        // ── Tool / MCP results: the original behaviour, untouched. ───────────
+        if (!isToolPart(part) || !hasResult(part)) return part;
+        const chars = resultChars(part);
+        if (chars <= maxChars) return part;
+
+        if (part.state === "output-error") {
+          // An error result is diagnostic. Cutting it can remove the cause.
+          // Drop it from the request rather than truncating it, and count it so
+          // the omission is observable instead of silent.
+          messageChanged = true;
+          reducedParts += 1;
+          droppedParts += 1;
+          removedChars += chars;
+          const { output: _output, errorText, ...rest } = part;
+          return { ...rest, errorText: truncateNotice(chars) } as LoosePart;
+        }
+
+        const reduced = reduceResultText(String(part.output), maxChars);
+        if (reduced.removedChars === 0) return part;
         messageChanged = true;
         reducedParts += 1;
-        droppedParts += 1;
-        removedChars += chars;
-        const { output: _output, errorText, ...rest } = part;
-        return { ...rest, errorText: truncateNotice(chars) } as LoosePart;
+        removedChars += reduced.removedChars;
+        return { ...part, output: reduced.text } as LoosePart;
+      });
+
+      // A message whose only parts were reasoning traces has no model-visible
+      // content left; drop it rather than emit an empty turn. A message that
+      // still holds a tool part or text is kept regardless.
+      const survivingParts = nextParts.filter((p): p is LoosePart => p !== null);
+      if (survivingParts.length === 0 && (message as { role?: string }).role !== "user") {
+        // A reasoning-only old message: nothing model-visible left. Drop it and
+        // mark the request changed even though no part object was rewritten.
+        changed = true;
+        return null as unknown as UIMessage;
       }
+      if (!messageChanged) return message;
+      changed = true;
+      return { ...(message as object), parts: survivingParts } as UIMessage;
+    })
+    .filter((m): m is UIMessage => m !== null);
 
-      const reduced = reduceResultText(String(part.output), maxChars);
-      if (reduced.removedChars === 0) return part;
-      messageChanged = true;
-      reducedParts += 1;
-      removedChars += reduced.removedChars;
-      return { ...part, output: reduced.text } as LoosePart;
-    });
-
-    if (!messageChanged) return message;
-    changed = true;
-    return { ...(message as object), parts: nextParts } as UIMessage;
-  });
-
-  if (!changed) return { messages: [...messages], report: { reducedParts: 0, removedChars: 0, droppedParts: 0 } };
-  return {
-    messages: next,
-    report: { reducedParts, removedChars, droppedParts },
+  const report: ReductionReport = {
+    reducedParts,
+    removedChars,
+    droppedParts,
+    reducedReasoningParts,
+    removedReasoningChars,
   };
+
+  if (!changed) {
+    return {
+      messages: [...messages],
+      report: {
+        reducedParts: 0,
+        removedChars: 0,
+        droppedParts: 0,
+        reducedReasoningParts: 0,
+        removedReasoningChars: 0,
+      },
+    };
+  }
+  return { messages: next, report };
 }
 
 function truncateNotice(originalChars: number): string {
@@ -222,7 +328,7 @@ export const REQUEST_REDUCIBLE_CATEGORIES: readonly ContextCategory[] = [
  * nothing that was held back.
  */
 export function describeToolResultReduction(report: ReductionReport): MechanismOutcome {
-  return report.reducedParts > 0
+  return report.reducedParts > 0 || report.reducedReasoningParts > 0
     ? { kind: "exhausted", reason: "applied" }
     : { kind: "exhausted", reason: "no_reducible_content" };
 }
@@ -235,7 +341,7 @@ export function describeToolResultReduction(report: ReductionReport): MechanismO
  */
 export function reductionSavings(report: ReductionReport, charsPerToken: number): number {
   if (charsPerToken <= 0) return 0;
-  return Math.ceil(report.removedChars / charsPerToken);
+  return Math.ceil((report.removedChars + report.removedReasoningChars) / charsPerToken);
 }
 
 /** Re-derive an estimate after reduction, for a before/after diagnostic pair. */

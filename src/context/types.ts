@@ -335,14 +335,18 @@ export interface LifecycleRepairReport {
   readonly preservedApprovals: number;
 }
 
-/** Request-side size reduction applied to tool/MCP output. */
+/** Request-side size reduction applied to tool/MCP output and reasoning. */
 export interface ReductionReport {
   /** Tool/MCP result parts that were reduced. */
   readonly reducedParts: number;
-  /** Characters removed by reduction. */
+  /** Characters removed from tool/MCP results. */
   readonly removedChars: number;
   /** Parts whose reduction left them too large to admit. */
   readonly droppedParts: number;
+  /** Reasoning parts that were capped or dropped. */
+  readonly reducedReasoningParts: number;
+  /** Characters removed from reasoning parts. */
+  readonly removedReasoningChars: number;
 }
 
 /**

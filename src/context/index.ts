@@ -42,7 +42,15 @@ export {
   CHARS_PER_TOKEN_ESTIMATE,
 } from "./measure";
 
-export { reduceToolResults, describeToolResultReduction, REQUEST_TOOL_RESULT_MAX_CHARS, REQUEST_REDUCIBLE_CATEGORIES } from "./reduce";
+export {
+  reduceToolResults,
+  describeToolResultReduction,
+  reductionSavings,
+  REQUEST_TOOL_RESULT_MAX_CHARS,
+  REQUEST_REDUCIBLE_CATEGORIES,
+  REASONING_RETAIN_LAST_MESSAGES,
+  REQUEST_REASONING_MAX_CHARS,
+} from "./reduce";
 
 // Phase 5 — memory to model context. The provider boundary and every decision
 // TBAi owns over it. See `src/context/memory/contract.ts` for the boundary.

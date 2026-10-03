@@ -335,7 +335,8 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
       historySource: divergence ? "submitted_with_stored_reference" : "submitted",
       divergence,
       lifecycleRepair,
-      reduction: reduction.reducedParts > 0 ? reduction : null,
+      reduction:
+        reduction.reducedParts > 0 || reduction.reducedReasoningParts > 0 ? reduction : null,
       compaction: compaction.report,
       memory: memory.report,
       estimate,
@@ -357,6 +358,8 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     lifecyclePreservedApprovals: lifecycleRepair.preservedApprovals,
     reducedToolParts: reduction.reducedParts,
     reducedToolChars: reduction.removedChars,
+    reducedReasoningParts: reduction.reducedReasoningParts,
+    reducedReasoningChars: reduction.removedReasoningChars,
     droppedOversizedErrorParts: reduction.droppedParts,
     divergenceOutcome: divergence?.outcome ?? "not_compared",
     historySource: context.provenance.historySource,

@@ -386,11 +386,40 @@ describe("the reduction state is modelled, not guessed", () => {
   it("treats both tool-reduction outcomes as exhausted, with distinct reasons", () => {
     // `reduceToolResults` always runs and always caps in one pass, so both cases
     // mean "nothing further from this mechanism".
-    expect(describeToolResultReduction({ reducedParts: 0, removedChars: 0, droppedParts: 0 })).toEqual({
+    expect(
+      describeToolResultReduction({
+        reducedParts: 0,
+        removedChars: 0,
+        droppedParts: 0,
+        reducedReasoningParts: 0,
+        removedReasoningChars: 0,
+      }),
+    ).toEqual({
       kind: "exhausted",
       reason: "no_reducible_content",
     });
-    expect(describeToolResultReduction({ reducedParts: 2, removedChars: 100, droppedParts: 0 })).toEqual({
+    expect(
+      describeToolResultReduction({
+        reducedParts: 2,
+        removedChars: 100,
+        droppedParts: 0,
+        reducedReasoningParts: 0,
+        removedReasoningChars: 0,
+      }),
+    ).toEqual({
+      kind: "exhausted",
+      reason: "applied",
+    });
+    // Reasoning-only reduction also reads as "applied".
+    expect(
+      describeToolResultReduction({
+        reducedParts: 0,
+        removedChars: 0,
+        droppedParts: 0,
+        reducedReasoningParts: 3,
+        removedReasoningChars: 5000,
+      }),
+    ).toEqual({
       kind: "exhausted",
       reason: "applied",
     });
