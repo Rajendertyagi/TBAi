@@ -72,6 +72,11 @@ import {
 import { decideOverflowRecovery } from "../context/recovery";
 import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "./direct-overflow-gate";
 import { disableIdleTimeout } from "./shared";
+import {
+  beginCompactCommand,
+  detectCompactCommand,
+  runManualCompaction,
+} from "./direct-compact-command";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService, messageService } from "../services/storage";
 import { compactionStore } from "../services/compaction";
@@ -320,6 +325,36 @@ app.post("/api/chat", async (c) => {
     modelConfig.model,
     reasoning,
   );
+
+  // ── Manual `/compact` — intercepted ABOVE `chatRuns.create` ───────────────
+  // A compaction command produces no assistant message, so it must not create a
+  // chat run: a run created before this intercept would be left non-terminal,
+  // because there is no stream to settle it. The command carries its own
+  // cancellable lifecycle instead. See `direct-compact-command.ts` for the full
+  // ordering argument, and for why this still uses the single assembly seam.
+  if (detectCompactCommand(messages)) {
+    const command = beginCompactCommand(c.req.raw.signal);
+    const compact = await runManualCompaction({
+      operationId: command.operationId,
+      requestId,
+      conversationId: threadId,
+      submittedMessages: messages,
+      provider: modelConfig,
+      modelId: modelConfig.model,
+      systemPrompt: conversation?.systemPrompt,
+      summarizerModel: languageModel,
+      signal: command.controller.signal,
+    });
+    // Data-only stream: a single status part and NO message parts, so no
+    // assistant message exists and nothing enters conversational persistence.
+    return createUIMessageStreamResponse({
+      stream: createUIMessageStream({
+        execute: async ({ writer }) => {
+          writer.write({ type: "data-tbai-compact", id: "compact", data: compact });
+        },
+      }),
+    });
+  }
 
   // Server-owned run: the registry (not the HTTP connection) owns this run's
   // lifetime. Client disconnect detaches; only explicit cancel, wall timeout,
