@@ -50,6 +50,12 @@ import {
 } from "./ui/tooltip";
 import { ComposerContextMenu } from "./chat/ComposerContextMenu";
 import { cancelActiveRun } from "../features/chat/state/deleteConversation";
+import {
+  isDirectCompactCommand,
+  runDirectCompact,
+  type DirectCompactStatus,
+} from "../features/chat/compactCommand";
+import { useKeyboardClaimed } from "../lib/focus";
 import { ModelOptionList } from "./chat/ModelOptionList";
 import { buildModelGroups, resolveModelOwner } from "../lib/model-groups";
 import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
@@ -518,10 +524,47 @@ function Composer({
       setCompacting(false);
     }
   };
-  const handleComposerSubmit = (e: { preventDefault(): void }) => {
-    if (canCompact && isCompactCommandText(composerText)) {
-      e.preventDefault();
-      void runCompact();
+  // ΓöÇΓöÇ Direct `/compact` execution ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // The conversation as the thread currently holds it. Read during render
+  // because `useAuiState` is a subscription, not an imperative getter ΓÇö the value
+  // is always the latest one a render has seen, and every send re-renders before
+  // the next submit can happen.
+  const directThreadMessages = useAuiState(
+    (s) =>
+      (s.thread.messages as ReadonlyArray<{
+        id?: unknown;
+        role?: unknown;
+        parts?: unknown;
+        metadata?: unknown;
+      }> | undefined) ?? [],
+  );
+  // The command's own transient state. Deliberately NOT a message: it lives in a
+  // composer strip, so the thread stays exactly the conversation.
+  const [directCompactStatus, setDirectCompactStatus] = useState<DirectCompactStatus | null>(null);
+  const runDirectCompactCommand = async () => {
+    if (compacting) return;
+    setCompacting(true);
+    setCompactError(null);
+    setDirectCompactStatus(null);
+    try {
+      const status = await runDirectCompact({
+        conversationId: threadKey,
+        messages: directThreadMessages,
+      });
+      setDirectCompactStatus(status);
+      // The command is consumed either way: there is nothing to retry, and
+      // leaving the text in the box would invite a second identical compaction.
+      setText("");
+      clearComposerDraft(threadKey);
+      if (status.outcome === "failed") {
+        setCompactError(composerConfig.copy.compactFailed);
+      }
+    } catch (err) {
+      // Transport failure only. The text is KEPT so a retry is possible, and the
+      // strip says so ΓÇö nothing was sent and nothing was compacted.
+      setCompactError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompacting(false);
     }
   };
 
@@ -572,6 +615,40 @@ function Composer({
     }
   };
 
+  // ΓöÇΓöÇ The single send funnel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // EVERY submit ΓÇö Enter, the Send button, touch, programmatic ΓÇö arrives here,
+  // and this is the only place that decides what submitting means.
+  //
+  // It has to be the only place, because the library cannot be asked to defer.
+  // `ComposerPrimitive.Send` performs the send from its own click handler, which
+  // runs BEFORE the form's submit event; and by the time either reaches the
+  // transport, assistant-ui has already created the user message AND the history
+  // adapter has already persisted it. Guarding only `onSubmit` therefore guarded
+  // too late: measured in the browser, `/compact` still produced a persisted user
+  // row and an empty assistant row. Nothing a response says can remove those, so
+  // the decision has to move in front of the library, and the library's send is
+  // then invoked explicitly below.
+  const handleComposerSubmit = (e: { preventDefault(): void }) => {
+    // Unconditional: the Composer owns sending, so the library's own submit
+    // handler never also fires.
+    e.preventDefault();
+    // Code/OpenCode has a session-bound compact; its `/compact` must never be
+    // re-routed to Direct.
+    if (canCompact && isCompactCommandText(composerText)) {
+      void runCompact();
+      return;
+    }
+    if (!isCodeSurface && isDirectCompactCommand(composerText)) {
+      void runDirectCompactCommand();
+      return;
+    }
+    if (showOpenCodeDraft) {
+      void sendOpenCodeDraft();
+      return;
+    }
+    void sendViaRuntime();
+  };
+
   return (
     <ComposerContextMenu>
       {/* The trigger-popover root groups the `/` declaration below and owns the
@@ -589,10 +666,10 @@ function Composer({
         onPointerDown={(event) => {
           if (event.pointerType !== "mouse") event.stopPropagation();
         }}
-        // Submit interception for the built-in `/compact`: runs before the
-        // library's own submit handler (composed first), so preventing here
-        // diverts a compact box to `runCompact` and the normal send never
-        // fires. Every other box passes through untouched.
+        // The SINGLE send funnel, and the reason the Send button is a plain submit:
+        // the library's own send cannot be intercepted from here, so the Composer
+        // owns sending outright and invokes the library's send itself. See
+        // `handleComposerSubmit` for the measured reason.
         onSubmit={handleComposerSubmit}
         className={cn(
           "relative flex flex-col",
@@ -778,21 +855,30 @@ function Composer({
                   <ArrowUp className="size-3.5" />
                 </button>
               ) : (
-                <ComposerPrimitive.Send asChild>
-                  <button
-                    type="submit"
-                    aria-label={composerConfig.copy.sendMessage}
-                    className={cn(
-                      "size-7 rounded-full flex items-center justify-center",
-                      "bg-accent text-accent-foreground",
-                      "hover:bg-accent/90 active:scale-95",
-                      "transition-all duration-150",
-                      "disabled:opacity-30 disabled:pointer-events-none",
-                    )}
-                  >
-                    <ArrowUp className="size-3.5" />
-                  </button>
-                </ComposerPrimitive.Send>
+                // A PLAIN submit button, not `ComposerPrimitive.Send`.
+                //
+                // The primitive sends from its own click handler, which fires before
+                // the form's submit event, so it cannot be intercepted from here and
+                // would create the `/compact` message before the funnel ever ran.
+                // Same footprint, same affordance, same disabled styling as its
+                // offline sibling above; the funnel above is the only sender.
+                // While a run is active this whole branch is unmounted (see the
+                // `AuiIf` on `!thread.isRunning`), so no re-entrant send is possible
+                // here, and `sendViaRuntime` remains the library's own send.
+                <button
+                  type="submit"
+                  aria-label={composerConfig.copy.sendMessage}
+                  disabled={!composerText.trim()}
+                  className={cn(
+                    "size-7 rounded-full flex items-center justify-center",
+                    "bg-accent text-accent-foreground",
+                    "hover:bg-accent/90 active:scale-95",
+                    "transition-all duration-150",
+                    "disabled:opacity-30 disabled:pointer-events-none",
+                  )}
+                >
+                  <ArrowUp className="size-3.5" />
+                </button>
               )}
             </AuiIf>
             <AuiIf condition={(s) => s.thread.isRunning}>
@@ -845,6 +931,22 @@ function Composer({
             <div className="px-3 pb-3" role="alert">
               <p className="text-xs text-destructive">
                 Couldn&apos;t compact the session: {compactError} Nothing was sent.
+              </p>
+            </div>
+          )}
+          {compacting && (
+            <div className="px-3 pb-3">
+              <p className="text-xs text-muted-foreground" role="status">
+                {composerConfig.copy.compacting}
+              </p>
+            </div>
+          )}
+          {directCompactStatus && directCompactStatus.outcome !== "failed" && (
+            <div className="px-3 pb-3">
+              <p className="text-xs text-muted-foreground">
+                {directCompactStatus.outcome === "compacted"
+                  ? composerConfig.copy.compactCompacted(directCompactStatus.spanLength)
+                  : composerConfig.copy.compactSkipped}
               </p>
             </div>
           )}

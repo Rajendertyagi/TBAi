@@ -34,6 +34,17 @@ export const composerConfig = {
     // or queued, and the user must explicitly send after recovery.
     sendOffline: "Backend unavailable — draft kept",
     sendOfflineTitle: "Backend unavailable. Your draft is kept — send it after reconnect.",
+    // ── Direct `/compact` status strip ───────────────────────────────────────
+    // TRANSIENT and separate from the conversation by construction: a command
+    // result is not a message, so it is never rendered as a bubble. `compacted`
+    // and `skipped` are both outcomes rather than success/failure, because
+    // "nothing was eligible" needs different wording from "it worked" — and
+    // neither may read as an error the user has to act on.
+    compacting: "Compacting…",
+    compactCompacted: (count: number) =>
+      `Compacted ${count} earlier message${count === 1 ? "" : "s"}.`,
+    compactSkipped: "Nothing to compact yet.",
+    compactFailed: "Couldn't compact the conversation.",
     modelSearchPlaceholder: "Search models...",
     modelSearchAria: "Search models",
     modelListAria: "Models",
@@ -53,6 +64,12 @@ export const composerConfig = {
     quickMessagesLoading: "Loading...",
     quickMessageUntitled: "Untitled",
     clipboardWriteFailed: "Clipboard write failed — text kept in place",
+    shortcuts: {
+      cut: "Ctrl+X",
+      copy: "Ctrl+C",
+      paste: "Ctrl+V",
+      selectAll: "Ctrl+A",
+    },
     // Dead-run recovery (Phase 3). One sentence per honest outcome, chosen by the
     // server's durable verdict and never by matching an error string: the client
     // cannot see WHY a restored run failed, and claiming "the app restarted" on a
