@@ -90,9 +90,15 @@ export function isDirectCompactCommand(text: string): boolean {
 }
 
 /**
- * Drop the transient `state` from one part.
+ * Project one thread message's parts onto the shape the Direct route accepts.
  *
- * ## Why this is load-bearing, and why it was a real 400
+ * ## Why this is part-type aware
+ *
+ * `state` is REQUIRED on a tool part and FORBIDDEN on a text part, so no single
+ * rule can be right for both. Applying the text rule to tool parts was a real
+ * production regression in `48a47f2`; the tool branch below records the evidence.
+ *
+ * ## Why text parts are narrowed at all
  *
  * assistant-ui's live thread labels a settled text part `output-available` and a
  * submitted one `submitted`. The AI SDK's `UIMessage` validator — which the route
@@ -105,11 +111,63 @@ export function isDirectCompactCommand(text: string): boolean {
  * stored messages passes and only the live thread fails. That is why this was
  * found in a browser rather than in a test.
  *
- * The field is dropped rather than translated: it is transient UI bookkeeping the
- * route does not own, and absent is valid for every part type. Everything else on
- * the part — `type`, `text`, tool call/result payloads — is preserved, so the
- * summariser still sees the real conversation.
+ * Both branches enumerate what they emit rather than deleting what they dislike, so
+ * a new runtime-only key cannot leak into a validated request by default.
  */
+/**
+ * Translate assistant-ui's tool part into the AI SDK's UIMessage tool part.
+ *
+ * ## Why this exists — proven from a live request, not inferred
+ *
+ * A server-side structural diagnostic on the real `/compact` request recorded the
+ * live part as:
+ *
+ *   type=tool-call
+ *   keys=args+argsText+isError+result+status+toolCallId+toolName
+ *   state=undefined  input=false  output=false  providerMetadata=false
+ *
+ * That is **assistant-ui's** tool schema, not the AI SDK's. The route validates
+ * with `safeValidateUIMessages`, whose tool parts are `type: "tool-<toolName>"`
+ * carrying `toolCallId`, `state`, `input` and `output`. So the live part was
+ * rejected as `AI_TypeValidationError` → HTTP 400 → "Compaction request failed
+ * (400)", on every conversation that had used a tool.
+ *
+ * The mapping below is the narrowest one that satisfies the installed validator,
+ * each field confirmed by direct test rather than assumption:
+ *
+ *   type    "tool-call"        -> "tool-" + toolName
+ *   args    -> input          (REQUIRED whenever output is present; omitting it
+ *                               is itself a rejection)
+ *   result  -> output          ({type:"text", value} for a string result)
+ *   state   derived           -> "output-available" with a result,
+ *                                "input-available" without one
+ *   dropped argsText, isError, status, toolName
+ *
+ * `argsText`/`isError`/`status` are assistant-ui bookkeeping with no AI SDK
+ * equivalent; dropping them loses nothing the summariser reads.
+ */
+function translateAssistantToolPart(record: Record<string, unknown>): Record<string, unknown> {
+  const toolName = typeof record.toolName === "string" && record.toolName.length > 0
+    ? record.toolName
+    : "unknown";
+  const input = record.args;
+  const result = record.result;
+  const hasResult = result !== undefined && result !== null;
+
+  const translated: Record<string, unknown> = {
+    type: `tool-${toolName}`,
+    toolCallId: record.toolCallId,
+    state: hasResult ? "output-available" : "input-available",
+  };
+  // `input` must be present whenever `output` is; an absent value is normalised to
+  // an empty object rather than omitted, which the validator rejects.
+  translated.input = input === undefined || input === null ? {} : input;
+  if (hasResult) {
+    translated.output = typeof result === "string" ? { type: "text", value: result } : result;
+  }
+  return translated;
+}
+
 function projectParts(parts: readonly unknown[]): Array<Record<string, unknown>> {
   const projected: Array<Record<string, unknown>> = [];
   for (const part of parts) {
@@ -125,11 +183,34 @@ function projectParts(parts: readonly unknown[]): Array<Record<string, unknown>>
       continue;
     }
     // Tool calls and results are the other parts this engine produces, and the
-    // summariser needs their payload. Their transient state is dropped; the rest
-    // is forwarded because losing it would misrepresent the conversation.
-    if (type.startsWith("tool-") && typeof record.toolCallId === "string") {
-      const { state: _transientState, ...rest } = record;
-      projected.push(rest);
+    // summariser needs their payload, so they are forwarded WHOLE.
+    //
+    // ## Why tool parts are NOT narrowed the way text parts are
+    //
+    // `state` is required on a tool part by the AI SDK's UIMessage validator, and
+    // omitting it makes the whole array unvalidatable. Stripping it here was a real
+    // production regression in `48a47f2`: `/compact` on any conversation that had
+    // used tools was rejected with `invalid_messages` / `AI_TypeValidationError` →
+    // HTTP 400, and the surface text was "Compaction request failed (400)".
+    //
+    // Text and tool parts therefore need OPPOSITE treatment, which is why the
+    // projection branches on part type rather than applying one rule to both:
+    //
+    //   - text: narrowed to the fields the contract defines, because assistant-ui
+    //     labels settled/submitted text `output-available`/`submitted`, which the
+    //     validator rejects;
+    //   - tool: passed through untouched, because every field it carries —
+    //     `toolCallId`, `state`, `input`/`output`, provider metadata — is part of
+    //     the contract, and inventing a narrower shape is what broke it.
+    if (type === "tool-call" && typeof record.toolCallId === "string") {
+      projected.push(translateAssistantToolPart(record));
+      continue;
+    }
+    // Already an AI SDK tool part (`tool-<name>`): forward whole. `state` is
+    // REQUIRED here, and `input` is required whenever `output` is present — both
+    // verified against the installed validator.
+    if (type.startsWith("tool-") && type !== "tool-call" && typeof record.toolCallId === "string") {
+      projected.push({ ...record });
     }
   }
   return projected;

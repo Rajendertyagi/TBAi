@@ -328,8 +328,201 @@ describe("request shaping", () => {
       },
     ]);
     expect(projected[0]?.parts).toEqual([
-      { type: "tool-run_command", toolCallId: "call-1", input: { cmd: "ls" } },
+      { type: "tool-run_command", toolCallId: "call-1", state: "output-available", input: { cmd: "ls" } },
     ]);
+  });
+
+  // ── Regression: `state` is REQUIRED on tool parts (48a47f2 stripped it) ─────
+
+  it("PRESERVES tool state `output-available`", () => {
+    // Stripping this made `/compact` fail on any conversation that had used tools:
+    // `safeValidateUIMessages` rejected the array, the route answered 400, and the
+    // UI reported "Compaction request failed (400)".
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-run_command",
+            toolCallId: "call-1",
+            state: "output-available",
+            input: { cmd: "ls" },
+            output: { type: "text", value: "a.txt" },
+          },
+        ],
+      },
+    ]);
+    const part = (projected[0]?.parts as Array<Record<string, unknown>>)[0];
+    expect(part?.state).toBe("output-available");
+    expect(part?.toolCallId).toBe("call-1");
+    expect(part?.input).toEqual({ cmd: "ls" });
+    expect(part?.output).toEqual({ type: "text", value: "a.txt" });
+  });
+
+  it("PRESERVES tool state `input-available`", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "tool-foo", toolCallId: "c2", state: "input-available", input: { a: 1 } },
+        ],
+      },
+    ]);
+    expect((projected[0]?.parts as Array<Record<string, unknown>>)[0]?.state).toBe("input-available");
+  });
+
+  it("STILL strips transient state from text parts", () => {
+    // The opposite rule, deliberately: a text part's `output-available` /
+    // `submitted` labels are what the validator rejects.
+    const projected = projectThreadMessages([
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "done", state: "output-available" }] },
+      { id: "u1", role: "user", parts: [{ type: "text", text: "hi", state: "submitted" }] },
+    ]);
+    expect(projected[0]?.parts).toEqual([{ type: "text", text: "done" }]);
+    expect(projected[1]?.parts).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("TRANSLATES assistant-ui's `tool-call` part into an AI SDK tool part", () => {
+    // The exact live shape recorded by the server-side diagnostic on a real
+    // `/compact` request. Forwarded verbatim it is rejected with
+    // `AI_TypeValidationError` -> HTTP 400.
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-call",
+            toolName: "run_command",
+            toolCallId: "c1",
+            args: { cmd: "ls" },
+            argsText: "ls",
+            result: "a.txt",
+            isError: false,
+            status: "completed",
+          },
+        ],
+      },
+    ]);
+    expect(projected[0]?.parts).toEqual([
+      {
+        type: "tool-run_command",
+        toolCallId: "c1",
+        state: "output-available",
+        input: { cmd: "ls" },
+        output: { type: "text", value: "a.txt" },
+      },
+    ]);
+  });
+
+  it("marks a result-less assistant tool part `input-available` with empty input", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "tool-call", toolName: "grep", toolCallId: "c2", args: { q: "x" } }],
+      },
+    ]);
+    expect(projected[0]?.parts).toEqual([
+      { type: "tool-grep", toolCallId: "c2", state: "input-available", input: { q: "x" } },
+    ]);
+  });
+
+  it("the translated live shape passes the INSTALLED validator", async () => {
+    const { safeValidateUIMessages } = await import("ai");
+    const { z } = await import("zod");
+    const { messages } = buildCompactRequestBody(
+      [
+        { id: "u1", role: "user", parts: [{ type: "text", text: "run the command" }] },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "tool-call",
+              toolName: "run_command",
+              toolCallId: "c1",
+              args: { cmd: "ls" },
+              argsText: "ls",
+              result: "a.txt",
+              isError: false,
+              status: "completed",
+            },
+            { type: "text", text: "There is one file.", state: "output-available" },
+          ],
+        },
+      ],
+      "compact-1",
+    );
+    const result = await safeValidateUIMessages({
+      messages,
+      metadataSchema: z.record(z.string(), z.unknown()).optional(),
+    } as never);
+    if ("error" in result) {
+      throw new Error(`translation rejected: ${JSON.stringify(result.error).slice(0, 300)}`);
+    }
+    expect("error" in result).toBe(false);
+  });
+
+  it("keeps provider metadata on a tool part", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-x",
+            toolCallId: "c3",
+            state: "output-available",
+            input: {},
+            providerMetadata: { openai: { itemId: "fc_1" } },
+          },
+        ],
+      },
+    ]);
+    expect((projected[0]?.parts as Array<Record<string, unknown>>)[0]?.providerMetadata).toEqual({
+      openai: { itemId: "fc_1" },
+    });
+  });
+
+  it("projects a tool-containing request that the INSTALLED validator accepts", async () => {
+    // The test that would have caught `48a47f2` in CI rather than in a browser:
+    // it runs the same `safeValidateUIMessages` the route runs, with the same
+    // metadata schema, over what the client actually sends.
+    const { safeValidateUIMessages } = await import("ai");
+    const { z } = await import("zod");
+    const { messages } = buildCompactRequestBody(
+      [
+        { id: "u1", role: "user", parts: [{ type: "text", text: "list the files" }] },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "tool-run_command",
+              toolCallId: "call-1",
+              state: "output-available",
+              input: { cmd: "ls" },
+              output: { type: "text", value: "a.txt" },
+            },
+            { type: "text", text: "There is one file.", state: "output-available" },
+          ],
+        },
+      ],
+      "compact-1",
+    );
+    const result = await safeValidateUIMessages({
+      messages,
+      metadataSchema: z.record(z.string(), z.unknown()).optional(),
+    } as never);
+    if ("error" in result) {
+      throw new Error(`projection rejected by the AI SDK: ${JSON.stringify(result.error).slice(0, 400)}`);
+    }
+    expect("error" in result).toBe(false);
   });
 
   it("normalises an unknown role and drops non-object metadata", () => {
