@@ -35,7 +35,9 @@ const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
 const STUB_PORT = Number(process.env.TBAI_E2E_STUB_PORT ?? 3199);
 
 /** The frontend the server serves. Built output, never a dev server. */
-const WEB_DIST = path.join(REPO_ROOT, "web", "dist");
+// The SPA ships into the same `dist/` that holds the compiled server, so the e2e
+// suite exercises the layout that actually ships rather than a parallel one.
+const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 
 function fail(message: string): never {
   process.stderr.write(`[e2e-server] ${message}\n`);
@@ -56,7 +58,7 @@ for (const dir of ["xdg-config", "xdg-data", "xdg-cache", "xdg-state"]) {
 }
 
 if (!fs.existsSync(path.join(WEB_DIST, "index.html"))) {
-  fail(`web/dist is missing. Run \`bun run build:web\` before \`bun run test:e2e\`.`);
+  fail(`dist/web is missing. Run \`bun run build:web\` before \`bun run test:e2e\`.`);
 }
 
 const stub = startStubProvider(STUB_PORT);

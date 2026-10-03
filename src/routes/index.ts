@@ -157,8 +157,18 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 // ("matcher already built") instead of registering. Import order can never
 // cause that here — composition runs once, before any request.
 
-const DIST_DIR =
-  process.env.WEB_DIST_DIR || path.join(process.cwd(), "web", "dist");
+/**
+ * Where the built SPA is served from.
+ *
+ * Defaults to `<cwd>/dist/web` — the same `dist/` that holds the compiled
+ * `tbai-server`, and the same layout the packaged/portable build produces. One
+ * folder to copy, and no chance of local output diverging from what CI ships.
+ *
+ * `WEB_DIST_DIR` remains the only seam that redirects this, which is what lets the
+ * e2e suite and the CPU-profiling run serve a different artifact without touching
+ * production code.
+ */
+const DIST_DIR = process.env.WEB_DIST_DIR || path.join(process.cwd(), "dist", "web");
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -241,7 +251,7 @@ app.get("/metrics", (c) => {
 // including the catch-all below.
 app.use(accountingMiddleware);
 
-// Serve the built web app (web/dist) as a static fallback. API routes take
+// Serve the built web app (dist/web) as a static fallback. API routes take
 // precedence because they are registered first; this catch-all is added last.
 // Used by the desktop build, where WEB_DIST_DIR points at the bundled
 // resources/web folder. Files stream via Bun.file().stream() so a large asset

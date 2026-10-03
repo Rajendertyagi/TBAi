@@ -1926,3 +1926,60 @@ lifecycle, error taxonomy/hygiene, the Direct route suites, and the Part 2/3/4/5
 context-compaction-cache-memory regressions are green; ``typecheck`` and
 ``build`` both exit 0. Numbers are recorded against this commit's SHA in the
 audit hand-off rather than restated here.
+
+## 2026-10-03 — The SPA builds into `dist/web`, beside the server binary, not into `web/dist`
+
+**The problem was a split artifact, not untidiness.** `build:backend` compiled the
+server to `<repo>/dist/` while `build:web` emitted the SPA to `web/dist`, so one
+shippable product lived in two trees. The cost was that the local layout could
+silently diverge from the shipped one: the portable/tauri workflow already copied
+the SPA to `$out/web/` beside `tbai-server.exe`, so `dist/` was already the shape
+of the artifact being distributed, while a local build produced something else.
+
+**`dist/web` is the single output location.** `web/vite.config.ts` emits to
+`../dist/web`, and the `DIST_DIR` default in `src/routes/index.ts` resolves to
+`<cwd>/dist/web`. Local and packaged output are now the same layout and `dist/` is
+one folder to copy. `WEB_DIST_DIR` remains the only seam that redirects the served
+artifact, which is what still lets the CPU-profiling run and the e2e suite point at
+a different build without touching production code.
+
+**`emptyOutDir` is explicit on both branches because the outDir left the Vite
+root.** Vite refuses to empty an outDir it cannot prove is safe and only warns
+when it skips. Since every build emits new content hashes, a skipped clean would
+strand stale `assets/*.js` in the output forever. It empties `dist/web` and never
+`dist/`, so the web step cannot delete `tbai-server` — verified by building with
+the binary already present.
+
+**Alternatives considered and rejected.** *Flat `dist/`* — `index.html` and
+`assets/` directly beside `tbai-server.exe`. Rejected: it mixes a compiled
+executable with a web root, so anything that serves or copies the SPA must know to
+exclude the binary, and the packaged build already establishes `web/` as the SPA
+subfolder. *Keep `web/dist` and change only the server default* — rejected: the
+local/shipped divergence is the actual defect, so that treats the symptom.
+
+**Every dependent reference moved together**, because a partial move is exactly
+the failure mode that leaves CI green and the shipped package empty:
+`src-tauri/tauri.conf.json` `bundle.resources`; all four `web/dist` sites in
+`.github/workflows/tauri-build.yml` (the `Test-Path` precondition, the
+prerequisites comment, `WEB_DIST_DIR`, and the `Copy-Item` into `$out/web`);
+`scripts/start-e2e-server.ts`'s precondition check; and the `WEB_DIST_DIR`
+fallback in `web/e2e/renderer-cpu-profile.spec.ts`. `.gitignore` needed no change —
+`dist/` already covers `dist/web`, confirmed with `git check-ignore`.
+
+**The profiling build was deliberately left in a different tree.** It stays at
+`web/dist-profile`, which after this change is a genuinely separate tree from
+`dist/web`. The rule that a profiling artifact can never overwrite the shippable
+output therefore became structural rather than conventional, and
+`scripts/profile-web.ts` plus the performance docs keep working untouched.
+
+**Verified.** `bun run build` exit 0, emitting `dist/tbai-server.exe` and
+`dist/web/{index.html, assets/, app-icon.png}`. The compiled binary, launched with
+no `WEB_DIST_DIR` set, serves `GET /` 200 containing `<div id="root">` and an
+`assets/index-*` reference, and `GET /api/health` 200 `{"status":"ok"}` — so the new
+default resolves at runtime, not only at build time. `bun run typecheck` exit 0.
+`bun run lint` exit 0, with no warning in any changed file. The stale `web/dist` tree
+was deleted so it cannot be mistaken for the live output.
+
+**Not claimed:** the CI workflow and the tauri bundle were edited but not executed
+here — `tauri build` was not run, so the packaged artifact is verified by path
+consistency and by the layout already proven locally, not by a fresh CI run.

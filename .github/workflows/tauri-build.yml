@@ -70,19 +70,19 @@ jobs:
       # `tauri build` so it exists at the path `externalBin` declares.
       #
       # The web build is not optional here and not just for the sidecar:
-      # tauri-build validates `bundle.resources` ("../web/dist/*"), and web/dist
+      # tauri-build validates `bundle.resources` ("../dist/web/*"), and dist/web
       # is a build output (gitignored) that does not exist on a fresh checkout.
       # Building only the backend made the `cargo check` step below fail with
-      # "glob pattern ../web/dist/* path not found". `tauri build` re-runs
+      # "glob pattern ../dist/web/* path not found". `tauri build` re-runs
       # `bun run build` via beforeBuildCommand, so the web build happens twice -
-      # ~15s, and cheaper than the alternative of not having web/dist for the
+      # ~15s, and cheaper than the alternative of not having dist/web for the
       # steps in between.
       - name: Build assets and stage the sidecar for externalBin
         shell: pwsh
         run: |
           bun run build
           if ($LASTEXITCODE -ne 0) { throw "bun run build failed" }
-          if (-not (Test-Path "web/dist")) { throw "web/dist not produced - tauri-build requires it for bundle.resources" }
+          if (-not (Test-Path "dist/web")) { throw "dist/web not produced - tauri-build requires it for bundle.resources" }
           $src = "dist/$env:SIDECAR_NAME.exe"
           if (-not (Test-Path $src)) { throw "$src not produced" }
           $binDir = "src-tauri/binaries"
@@ -101,7 +101,7 @@ jobs:
       # step's two predecessors must have produced. All of it is either committed
       # or created above:
       #   build.frontendDist  -> src-tauri/frontend-placeholder   (committed)
-      #   bundle.resources    -> web/dist                         (step 8)
+      #   bundle.resources    -> dist/web                         (step 8)
       #   externalBin         -> binaries/tbai-server-<triple>    (step 8)
       #   Windows resource    -> src-tauri/icons/icon.ico         (icons step)
       # Getting this list wrong is what broke the build twice, so if a
@@ -156,7 +156,7 @@ jobs:
           $env:DATA_DIR = "$smoke\data"
           $env:WORKSPACE_DIR = "$smoke\ws"
           $env:PORT = "39731"
-          $env:WEB_DIST_DIR = (Resolve-Path "web\dist").Path
+          $env:WEB_DIST_DIR = (Resolve-Path "dist\web").Path
           $mirror = Join-Path $env:DATA_DIR "port"
 
           $proc = Start-Process -FilePath "dist/$env:SIDECAR_NAME.exe" -PassThru -NoNewWindow `
@@ -209,7 +209,7 @@ jobs:
           # The SPA stays loose: the backend serves it over WEB_DIST_DIR, so the
           # shell must not be asked to embed it.
           New-Item -ItemType Directory -Force -Path "$out\web" | Out-Null
-          Copy-Item -Path "web/dist/*" -Destination "$out/web/" -Recurse -Force
+          Copy-Item -Path "dist/web/*" -Destination "$out/web/" -Recurse -Force
 
           # Which build is this? Answerable from a user's folder without a rebuild.
           $sha = (git rev-parse --short HEAD).Trim()
