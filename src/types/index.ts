@@ -100,6 +100,18 @@ export interface ModelOption {
   /** Provenance of `maxOutputTokens`. Same rules as `contextWindowSource`. */
   maxOutputTokensSource?: ContextWindowSource;
   /**
+   * When this entry's discovery metadata was last read from the provider.
+   *
+   * Recorded so a STALE listing can be told apart from a FRESH one. A value read
+   * weeks ago is not the same claim as one read seconds ago, and that difference has
+   * to be visible in diagnostics rather than inferred from the absence of a clock.
+   *
+   * Epoch milliseconds. Absent on rows written before discovery recorded it, and on
+   * hand-entered models — both treated as "no discovery claim", never as "freshly
+   * verified".
+   */
+  discoveredAt?: number;
+  /**
    * Derived discovery metadata. Re-derived on each discovery pass and carried
    * inside the existing provider `models` JSON column — never an independently
    * persisted source of truth. Absent on legacy models (treated as unknown).

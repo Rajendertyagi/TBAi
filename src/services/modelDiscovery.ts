@@ -1,9 +1,22 @@
+import {
+  extractCapabilities,
+  extractOllamaModelInfoLimits,
+  limitRuleFor,
+  type ExtractedCapabilities,
+} from "./capabilityDiscovery";
 import { providerReportedLimit, type ModelCapabilities, type ModelOption, type ProviderConfig } from "../types";
 
 export type DiscoverInput = {
   type: ProviderConfig["type"];
   endpoint?: string;
   apiKey?: string;
+  /**
+   * Clock source, injected so a listing's freshness is deterministic in tests.
+   *
+   * Defaults to the wall clock. It is read ONCE per pass, so every entry in one
+   * listing shares a timestamp.
+   */
+  now?: () => number;
 };
 
 const DEFAULT_BASE: Record<ProviderConfig["type"], string> = {
@@ -63,28 +76,39 @@ function unknownReasoning(): ModelCapabilities {
 }
 
 /**
- * Ollama `/api/show` capability lookup (Phase 1's only truthful per-model
- * capability source besides identity listing). Contract: POST {model} →
- * `{capabilities?: unknown}` where the array holds lowercase tokens such as
- * "thinking". Only an explicitly reported "thinking" entry yields supported;
- * a missing/unreachable/malformed source stays unknown — never unsupported.
- * Shape-guarded throughout: an unexpected daemon response degrades one model
- * to unknown instead of breaking discovery.
+ * Ollama `/api/show` capability lookup. Contract: POST {model} →
+ * `{ capabilities?: unknown, model_info?: unknown }`.
+ *
+ * `capabilities` holds lowercase tokens such as "thinking"; only an explicitly
+ * reported "thinking" entry yields reasoning supported, and a missing/unreachable/
+ * malformed source stays unknown — never unsupported.
+ *
+ * `model_info` is Ollama's truthful per-model LIMIT source, keyed by architecture
+ * (e.g. `{ "llama.context_length": 131072 }`). Reading it here means a local Ollama
+ * model no longer falls back to the ceiling either.
+ *
+ * Shape-guarded throughout: an unexpected daemon response degrades one model to
+ * unknown instead of breaking discovery.
  */
-async function fetchOllamaCapabilities(base: string, model: string): Promise<ModelCapabilities> {
+async function fetchOllamaModel(
+  base: string,
+  model: string,
+): Promise<{ capabilities: ModelCapabilities; limits: ExtractedCapabilities }> {
+  const unknown = { capabilities: unknownReasoning(), limits: {} as ExtractedCapabilities };
   try {
     const raw = (await fetchJson(joinBase(base, "api/show"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model }),
-    })) as { capabilities?: unknown };
+    })) as { capabilities?: unknown; model_info?: unknown };
     const caps = raw?.capabilities;
-    if (Array.isArray(caps) && caps.some((c) => c === "thinking")) {
-      return { reasoning: { support: "supported" } };
-    }
-    return unknownReasoning();
+    const capabilities =
+      Array.isArray(caps) && caps.some((c) => c === "thinking")
+        ? { reasoning: { support: "supported" as const } }
+        : unknownReasoning();
+    return { capabilities, limits: extractOllamaModelInfoLimits(raw?.model_info) };
   } catch {
-    return unknownReasoning();
+    return unknown;
   }
 }
 
@@ -108,56 +132,94 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return out;
 }
 
-function normalizeOpenAI(raw: any, provider: string): ModelOption[] {
-  const data = Array.isArray(raw?.data) ? raw.data : [];
-  return data
-    .map((m: any) => String(m?.id ?? "").trim())
-    .filter((id): id is string => Boolean(id) && isChatModel(id, provider))
-    // OpenAI listing endpoints expose identity only — no truthful per-model
-    // capability source exists here, so reasoning stays unknown.
-    .map((id: string) => ({ id, provider, capabilities: unknownReasoning() }));
+/**
+ * Project extracted limits onto a `ModelOption`.
+ *
+ * A value read out of the provider's own listing is `provider_reported` and is
+ * written through the shared writer, so "a human typed it" and "the provider said
+ * it" can never be confused. An absent limit yields an absent value AND an absent
+ * stance — never a fabricated one, and never the fallback, which is the budget's
+ * decision and not discovery's.
+ */
+function withExtractedLimits(
+  base: Omit<ModelOption, "contextWindow" | "contextWindowSource" | "maxOutputTokens" | "maxOutputTokensSource">,
+  limits: ExtractedCapabilities,
+  discoveredAt: number,
+): ModelOption {
+  const contextWindow = limits.contextWindow ? providerReportedLimit(limits.contextWindow.value) : undefined;
+  const maxOutputTokens = limits.maxOutputTokens ? providerReportedLimit(limits.maxOutputTokens.value) : undefined;
+  return {
+    ...base,
+    ...(contextWindow ? { contextWindow: contextWindow.value, contextWindowSource: contextWindow.source } : {}),
+    ...(maxOutputTokens
+      ? { maxOutputTokens: maxOutputTokens.value, maxOutputTokensSource: maxOutputTokens.source }
+      : {}),
+    discoveredAt,
+  };
 }
 
-function normalizeAnthropic(raw: any, provider: string): ModelOption[] {
+function normalizeOpenAI(raw: any, provider: string, discoveredAt: number): ModelOption[] {
+  const data = Array.isArray(raw?.data) ? raw.data : [];
+  return data
+    // R2: the entry is read for its LIMITS, not just its id. A listing that omits
+    // them yields no value and no stance — still unknown, never invented.
+    .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m }))
+    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
+    .map(({ id, raw }) =>
+      withExtractedLimits(
+        // OpenAI-compatible listings expose no reasoning metadata, so that half
+        // stays unknown.
+        { id, provider, capabilities: unknownReasoning() },
+        extractCapabilities(raw, limitRuleFor(provider)),
+        discoveredAt,
+      ),
+    );
+}
+
+function normalizeAnthropic(raw: any, provider: string, discoveredAt: number): ModelOption[] {
   const data = Array.isArray(raw?.data) ? raw.data : [];
   return data
     .map((m: any) => {
       const id = String(m?.id ?? "").trim();
       if (!id || !isChatModel(id, provider)) return null;
-      // R1: a figure read out of the provider's own listing is the ONLY thing
-      // permitted to carry the `provider_reported` stance, so it is built through
-      // the shared writer rather than as an inline literal. `max_input_tokens`
-      // (and the sibling output ceiling, when the listing exposes it) are read
-      // defensively: a listing that omits them yields no value and no stance,
-      // never a fabricated one.
-      const contextWindow =
-        typeof m?.max_input_tokens === "number" ? providerReportedLimit(m.max_input_tokens) : undefined;
-      const maxOutputTokens =
-        typeof m?.max_output_tokens === "number" ? providerReportedLimit(m.max_output_tokens) : undefined;
-      return {
-        id,
-        provider,
-        label: m?.display_name ? String(m.display_name) : undefined,
-        contextWindow: contextWindow?.value,
-        contextWindowSource: contextWindow?.source,
-        maxOutputTokens: maxOutputTokens?.value,
-        maxOutputTokensSource: maxOutputTokens?.source,
-        // Anthropic listing exposes identity/label/context only — reasoning
-        // support is not reported, so it stays unknown.
-        capabilities: unknownReasoning(),
-      } as ModelOption;
+      // `max_input_tokens` / `max_output_tokens` are read generically now, by the
+      // same extractor every other provider uses — Anthropic is no longer a
+      // special case, it is simply the first provider whose field names the
+      // extractor already knew.
+      return withExtractedLimits(
+        {
+          id,
+          provider,
+          label: m?.display_name ? String(m.display_name) : undefined,
+          // Anthropic's listing exposes identity/label/limits only — reasoning
+          // support is not reported, so it stays unknown.
+          capabilities: unknownReasoning(),
+        },
+        extractCapabilities(m, limitRuleFor(provider)),
+        discoveredAt,
+      );
     })
     .filter((m: ModelOption | null): m is ModelOption => m !== null);
 }
 
-function normalizeGoogle(raw: any, provider: string): ModelOption[] {
+function normalizeGoogle(raw: any, provider: string, discoveredAt: number): ModelOption[] {
   const data = Array.isArray(raw?.models) ? raw.models : [];
   return data
-    .map((m: any) => String(m?.name ?? "").replace(/^models\//, "").trim())
-    .filter((id): id is string => Boolean(id) && isChatModel(id, provider))
-    // Google listing exposes identity only — no truthful per-model
-    // capability source exists here, so reasoning stays unknown.
-    .map((id: string) => ({ id, provider, capabilities: unknownReasoning() }));
+    .map((m: any) => ({
+      id: String(m?.name ?? "").replace(/^models\//, "").trim(),
+      raw: m,
+    }))
+    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
+    .map(({ id, raw }) =>
+      withExtractedLimits(
+        // Google's listing reports no reasoning metadata either.
+        { id, provider, capabilities: unknownReasoning() },
+        // Google's limits arrive camelCased (`inputTokenLimit`), which the shared
+        // field list already knows.
+        extractCapabilities(raw, limitRuleFor(provider)),
+        discoveredAt,
+      ),
+    );
 }
 
 /** Ollama tag listing: identity only. Capabilities resolve per model via /api/show. */
@@ -175,13 +237,17 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
     throw new Error("An endpoint is required to discover models for this provider type.");
   }
 
+  // One clock read per pass, so every entry in a single listing shares a timestamp
+  // and a listing cannot be half fresh and half stale.
+  const discoveredAt = input.now?.() ?? Date.now();
+
   switch (type) {
     case "openai":
     case "custom": {
       const headers: Record<string, string> = {};
       if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
       const raw = await fetchJson(joinBase(base, "models"), { headers });
-      return normalizeOpenAI(raw, type);
+      return normalizeOpenAI(raw, type, discoveredAt);
     }
     case "anthropic": {
       if (!apiKey) throw new Error("An API key is required to discover Anthropic models.");
@@ -190,22 +256,21 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
         "anthropic-version": "2023-06-01",
       };
       const raw = await fetchJson(joinBase(base, "v1/models"), { headers });
-      return normalizeAnthropic(raw, type);
+      return normalizeAnthropic(raw, type, discoveredAt);
     }
     case "google": {
       if (!apiKey) throw new Error("An API key is required to discover Google models.");
       const url = `${joinBase(base, "v1beta/models")}?key=${encodeURIComponent(apiKey)}`;
       const raw = await fetchJson(url, {});
-      return normalizeGoogle(raw, type);
+      return normalizeGoogle(raw, type, discoveredAt);
     }
     case "ollama": {
       const raw = await fetchJson(joinBase(base, "api/tags"), {});
       const ids = normalizeOllama(raw);
-      return mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => ({
-        id,
-        provider: type,
-        capabilities: await fetchOllamaCapabilities(base, id),
-      }));
+      return mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => {
+        const { capabilities, limits } = await fetchOllamaModel(base, id);
+        return withExtractedLimits({ id, provider: type, capabilities }, limits, discoveredAt);
+      });
     }
     default:
       throw new Error(`Model discovery is not supported for type: ${type}`);

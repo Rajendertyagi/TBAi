@@ -32,6 +32,11 @@ export const modelOptionSchema = z.object({
   contextWindowSource: contextWindowSourceSchema.optional(),
   maxOutputTokens: z.number().int().positive().optional(),
   maxOutputTokensSource: contextWindowSourceSchema.optional(),
+  /**
+   * Discovery freshness. Validated as a plausible epoch so a corrupt value is
+   * rejected at the boundary rather than being read later as "fresh".
+   */
+  discoveredAt: z.number().int().nonnegative().optional(),
   capabilities: modelCapabilitiesSchema.optional(),
 });
 
