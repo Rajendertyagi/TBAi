@@ -160,15 +160,27 @@ describe("OWNERSHIP: the structural precondition the redesign depends on", () =>
   const routeSource = (): string =>
     fs.readFileSync(path.resolve(import.meta.dir, "..", "..", "src", "routes", "chat.ts"), "utf8");
 
-  it("the attempt-level onError currently publishes, and must keep doing so until the gate can", () => {
-    // The attempt-level handler is the ONLY measured publisher. Recovery's redesign
-    // makes it capture-only and moves publication into the gate. Until the gate is
-    // wired, deleting `logAiError` from here would silently kill terminal logging for
-    // every ordinary provider error — so its presence is asserted deliberately.
+  it("attempt-level onError now CAPTURES only, and the gate publishes", () => {
+    // The ownership model this suite was written to protect is now IMPLEMENTED.
+    // `streamText`'s onError fires at rejection time — before the gate sees the error
+    // part — so it can no longer publish: doing so announced the failure of an attempt
+    // the gate was about to discard. It records into attempt-local state instead.
     const src = routeSource();
     const handler = src.slice(src.indexOf("onError: ({ error }) => {"));
     const body = handler.slice(0, handler.indexOf("},"));
-    expect(body).toContain("logAiError(error)");
+    expect(body).toContain("attemptErrors.set(");
+    // And it must NOT publish: these are the exact calls that made a discarded attempt
+    // announce itself.
+    expect(body).not.toContain("logAiError");
+    expect(body).not.toContain("settleRun");
+    expect(body).not.toContain("originalStreamError =");
+  });
+
+  it("the gate is wired and is the publication authority", () => {
+    const src = routeSource();
+    expect(src).toContain("withOverflowRecovery");
+    // Publication happens once, from the gate's forward-the-final-error path.
+    expect(src).toContain("publishFinalProviderError");
   });
 
   it("the composed onError still settles the run — the path recovery must not rely on", () => {
@@ -181,10 +193,11 @@ describe("OWNERSHIP: the structural precondition the redesign depends on", () =>
     expect(composed).toContain("logAiError(");
   });
 
-  it("the recovery gate is present but NOT yet wired into the route", () => {
-    // Guards against a half-wired lifecycle landing unnoticed: the gate must not be
-    // referenced by the route until the capture/publish ownership model is in place.
+  it("the recovery gate is wired, so no half-wired lifecycle remains", () => {
+    // Was asserted as "not yet wired" while the executor was being built. Now that it
+    // is wired, the guard flips: the gate MUST be referenced, so a future revert to a
+    // half-applied lifecycle fails loudly instead of quietly disabling recovery.
     const src = routeSource();
-    expect(src).not.toContain("withOverflowRecovery");
+    expect(src).toContain("withOverflowRecovery");
   });
 });

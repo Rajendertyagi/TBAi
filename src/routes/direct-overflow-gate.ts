@@ -136,6 +136,19 @@ export interface OverflowRecoveryGateInput<TPart> {
    * settle the logical run, log a terminal provider error, or record usage.
    */
   readonly onAttemptDiscarded?: (attempt: number) => void;
+  /**
+   * Called immediately BEFORE an attempt's error part is forwarded, for the attempt the
+   * gate has decided to KEEP.
+   *
+   * This is the gate's publication authority. The route's attempt-level `onError` cannot
+   * do this itself: `streamText` invokes it when the provider rejects, which is BEFORE
+   * the error part reaches this gate, so at that moment nobody yet knows whether the
+   * attempt will be discarded. Publishing there announces the failure of an attempt that
+   * is about to be thrown away; publishing here — after the decision — is what makes a
+   * discarded attempt genuinely silent while leaving an ordinary provider error on
+   * exactly the path it always had.
+   */
+  readonly onFinalError?: (attempt: number, error: unknown) => void;
   /** Structured diagnostics. */
   readonly onEvent?: (event: OverflowGateEvent) => void;
 }
@@ -195,6 +208,9 @@ export function withOverflowRecovery<TPart>(
 
         if (!recoverable) {
           // Not eligible, or already committed: the existing failure path, unchanged.
+          // The attempt is FINAL, so this is the one moment its error becomes the
+          // logical request's terminal state.
+          input.onFinalError?.(state.attempt, partError);
           yield* held;
           yield value;
           return;
@@ -219,7 +235,8 @@ export function withOverflowRecovery<TPart>(
           });
           // Recovery is a remedy, not a new verdict. The conversation is still too
           // long, so the ORIGINAL overflow is what the user is told — never a
-          // secondary failure that hides the real cause.
+          // secondary failure that hides the real cause. It is final, so it publishes.
+          input.onFinalError?.(state.attempt, partError);
           yield* held;
           yield value;
           return;

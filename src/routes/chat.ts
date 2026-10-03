@@ -70,6 +70,7 @@ import {
   type OccupancyMeasurement,
 } from "../context/occupancy";
 import { decideOverflowRecovery } from "../context/recovery";
+import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "./direct-overflow-gate";
 import { disableIdleTimeout } from "./shared";
 import { chatRuns } from "../services/chat-runs";
 import { conversationService, messageService } from "../services/storage";
@@ -384,6 +385,16 @@ app.post("/api/chat", async (c) => {
    * compaction cannot shrink overflows again on every attempt.
    */
   let overflowRecoveryAttempted = false;
+
+  /**
+   * Per-attempt captured provider error. NOTHING is published from here.
+   *
+   * The gate decides which attempt survives, and only the surviving attempt's error is
+   * published (see `publishFinalProviderError`). A discarded attempt's entry is simply
+   * never read, which is why no "was this attempt discarded" flag is needed: the
+   * publication decision belongs to the gate, not to the attempt.
+   */
+  const attemptErrors = new Map<number, unknown>();
 
 /**
  * The CURRENT context state to hand the browser with this turn.
@@ -714,6 +725,28 @@ function contextStateForUi(): ChatContextState | undefined {
   };
 
   /**
+   * Publish the provider error for the attempt that turned out to be FINAL.
+   *
+   * Reproduces exactly what the attempt-level `onError` used to do, and is called by
+   * the gate at the moment it commits to forwarding an attempt's error — never before.
+   * Keeping the behaviour identical is the point: an ordinary provider error must reach
+   * the user through precisely the path it always has, or this feature would have
+   * silently regressed every non-overflow failure.
+   *
+   * `logAiError` is guarded by `errorLogged`, so this cannot double-log or double-settle.
+   */
+  const publishFinalProviderError = (attempt: number, error: unknown): void => {
+    if (!attemptErrors.has(attempt)) attemptErrors.set(attempt, error);
+    const captured = attemptErrors.get(attempt);
+    if (captured === undefined) return;
+    originalStreamError = captured;
+    streamErrorCaught = captured;
+    const detachedClientAbort =
+      clientDisconnected && classifyError(captured).category === "cancelled";
+    if (!detachedClientAbort) logAiError(captured);
+  };
+
+  /**
    * The provider's own machine identifiers for a rejected request, on their own
    * event so `ai.error` stays exactly as narrow as it was.
    *
@@ -817,7 +850,8 @@ function contextStateForUi(): ChatContextState | undefined {
       // `contextSchema`s. Without it the MCP spread (`Record<string, any>`)
       // would erase the context types and `toolsContext` would collapse to
       // `never`; with it the map is checked per tool name at compile time.
-      const result = streamText<NativeToolSet>({
+      const startAttempt = (attempt: number): ReadableStream<never> => {
+        const result = streamText<NativeToolSet>({
         model: languageModel,
         messages: modelMessages,
         maxRetries: DIRECT_MAX_RETRIES,
@@ -893,11 +927,12 @@ function contextStateForUi(): ChatContextState | undefined {
           }
         },
         onError: ({ error }) => {
-          originalStreamError = error;
-          streamErrorCaught = error;
-          const detachedClientAbort =
-            clientDisconnected && classifyError(error).category === "cancelled";
-          if (!detachedClientAbort) logAiError(error);
+          // CAPTURE ONLY. Publication is the gate's decision, made when it knows
+          // whether this attempt survives. Publishing here is what made a discarded
+          // attempt announce its own failure — and `streamText` fires this callback at
+          // rejection time, before the gate has seen the error part, so nothing could
+          // have suppressed it from in here.
+          attemptErrors.set(attempt, error);
         },
         onToolExecutionStart: ({ toolCall }) => {
           progress.onToolExecutionStart({ toolCall });
@@ -1011,9 +1046,78 @@ function contextStateForUi(): ChatContextState | undefined {
           });
         },
       });
+        return result.fullStream as unknown as ReadableStream<never>;
+      };
+
+      /**
+       * THE RECOVERY GATE.
+       *
+       * Wraps the RAW provider stream, never the composed UI stream. That placement is
+       * measured, not assumed: the composed `createUIMessageStream.onError` settles the
+       * run, and a provider `error` part never reaches it anyway (proved by
+       * `tests/integration/direct-error-ownership.test.ts`), so upstream of the
+       * composition is the only place where the surviving attempt can be chosen.
+       */
+      const gatedStream = withOverflowRecovery<never>({
+        startAttempt: (attempt) => startAttempt(attempt),
+        isErrorPart: (part) => {
+          const candidate = part as { type?: unknown; error?: unknown };
+          return candidate?.type === "error" ? candidate.error : undefined;
+        },
+        // Real SDK lifecycle vocabulary. `start` / `start-step` / `finish-step` carry
+        // nothing the user can read; anything else commits the attempt.
+        isLifecyclePart: (part) =>
+          LIFECYCLE_PART_TYPES.has((part as { type?: unknown })?.type as string),
+        decide: (error) => {
+          const decision = decideOverflowRecovery({
+            category: classifyError(error, { provider: provider.type }).category,
+            alreadyAttempted: overflowRecoveryAttempted,
+            compactionEnabled: compactionEnabled(),
+            hasConversation: threadId !== undefined,
+          });
+          if (decision.shouldRecover) overflowRecoveryAttempted = true;
+          return decision;
+        },
+        /**
+         * Compact, then rebuild through the SAME assembly seam — there is no second
+         * context path. `forceCompaction` is required: the local trigger is derived
+         * from an estimate that already passed pre-flight, so it has nothing to fire
+         * on. The provider's rejection is the evidence that the size problem is real.
+         *
+         * A rejection here propagates, and the gate then forwards the ORIGINAL
+         * overflow: recovery is a remedy, and a failed remedy must not replace the
+         * real diagnosis with a vague one.
+         */
+        recover: async () => {
+          chatLog.warn("context", "overflow_recovery_compaction_entered", {});
+          await assembleForRequest({ forceCompaction: true });
+          chatLog.warn("context", "overflow_recovery_context_rebuilt", {
+            compactionApplied: assembled.diagnostics.compactionApplied,
+          });
+        },
+        /**
+         * The gate has decided to KEEP this attempt and forward its error, so this is
+         * the moment the logical request publishes its terminal failure — once, through
+         * exactly the path an ordinary provider error always took.
+         */
+        onFinalError: (attempt, error) => {
+          publishFinalProviderError(attempt, error);
+        },
+        onEvent: (event) => {
+          if (event.type === "retry_started") {
+            chatLog.warn("context", "overflow_recovery_retry_started", { attempt: event.attempt });
+            return;
+          }
+          if (event.type === "recovery_failed") {
+            chatLog.warn("context", "overflow_recovery_failed", { failure: event.failure });
+            return;
+          }
+          chatLog.warn("context", "overflow_recovery_event", { event: event.type });
+        },
+      });
 
       writer.merge(toUIMessageStream({
-        stream: result.stream,
+        stream: gatedStream as unknown as Parameters<typeof toUIMessageStream>[0]["stream"],
         originalMessages: messages,
         generateMessageId: () => generateId(),
         onError: (error) => {

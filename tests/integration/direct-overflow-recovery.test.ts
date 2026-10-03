@@ -172,8 +172,15 @@ describe("SPIKE: the pre-overflow commitment boundary", () => {
       const body = await res.text();
       const types = chunkTypes(body);
 
-      // The provider really was called, so nothing here passes vacuously.
-      expect(upstreamCalls).toBe(1);
+      // The provider WAS called, so nothing here passes vacuously. This single-message
+
+      // conversation has nothing compactable, so recovery runs, compaction declines, and the
+
+      // RETRY is the attempt that fails: two calls, and no summariser call (nothing to
+
+      // summarise). The chunk sequence above is unchanged by recovery, which is the point.
+
+      expect(upstreamCalls).toBe(2);
 
       // ── THE SPIKE RESULT, pinned as a contract ──────────────────────────────
       //
@@ -219,9 +226,11 @@ describe("SPIKE: the pre-overflow commitment boundary", () => {
       expect(asTooLarge.category).not.toBe("context_overflow");
       expect(isRecoverableOverflow(asTooLarge.category)).toBe(false);
 
-      // `DIRECT_MAX_RETRIES` is independent of overflow recovery and stays at zero:
-      // exactly one upstream call happened, and no retry was attempted.
-      expect(upstreamCalls).toBe(1);
+      // `DIRECT_MAX_RETRIES` remains independent of overflow recovery: the retry above
+      // came from the recovery gate's own bound of one, not from any generic retry
+      // count. A THIRD call would mean the bound leaked, so the total is asserted
+      // exactly rather than as "at least two".
+      expect(upstreamCalls).toBe(2);
     } finally {
       await conversationService.delete(conv.id);
     }
