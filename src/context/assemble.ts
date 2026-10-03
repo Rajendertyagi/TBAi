@@ -242,6 +242,12 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     providerType: provider.type,
     modelId,
     model: selectedModel,
+    // Resolution identity, recorded on the result so diagnostics can prove which
+    // endpoint a figure came from. The lookup is already endpoint-scoped — this is
+    // the audit trail, not the mechanism.
+    providerId: provider.id,
+    endpoint: provider.endpoint,
+    protocol: provider.apiProtocol,
   });
   const budget = computeBudget({ limit, modelOutputTokens: selectedModel?.maxOutputTokens });
 

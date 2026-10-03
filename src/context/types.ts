@@ -115,6 +115,22 @@ export interface ContextLimit {
   /** Model id the limit was read for. */
   readonly modelId: string;
   /**
+   * Identity of the resolution, recorded so diagnostics can prove WHICH endpoint a
+   * figure came from.
+   *
+   * Deliberately metadata about the RESULT, not a merge of provider models. The same
+   * model id served by two endpoints is two different facts, and a limit read from
+   * one is not evidence about the other; without this, a wrong number is
+   * indistinguishable from a right one.
+   *
+   * Absent when the caller cannot supply it. Never inferred from the model id.
+   */
+  readonly providerId?: string;
+  /** Base URL the limit was resolved for, as configured. */
+  readonly endpoint?: string;
+  /** Wire protocol in use (`chat-completions`, `responses`, …). */
+  readonly protocol?: string;
+  /**
    * A competing candidate existed with a DIFFERENT value and did not win.
    *
    * Recorded rather than resolved silently so a disagreement between what a

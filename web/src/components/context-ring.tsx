@@ -1,66 +1,42 @@
-import { useAuiState } from "@assistant-ui/react";
 import { ContextDisplayRing as DirectRuntimeRing } from "./assistant-ui/elements/context-display.aui";
-import { resolveContextWindow } from "../config/modelContext";
-import {
-  buildModelGroups,
-  resolveModelOwner,
-} from "../lib/model-groups";
-import { useSettingsStore } from "../stores";
 import { useCurrentContext } from "../features/chat/context/useCurrentContext";
-
-interface ConversationCustom {
-  providerId?: string;
-  modelId?: string;
-  reasoningLevel?: string;
-}
 
 /**
  * Direct-chat context ring for the composer rail.
  *
- * Runtime preset: usage + thread reset come from the thread itself
- * (`useThreadTokenUsage`, fed by the route's `messageMetadata.usage`). The
- * window uses the same effective model as `ModelChip` (one-shot picker
- * override → conversation default → provider default) resolved against the
- * same provider groups, so the denominator always names the model that will
- * run — configured per-model window where present, documented default
- * otherwise. Renders nothing until usage exists — no placeholder, no estimate.
+ * ## The server is the only authority for the denominator
+ *
+ * Both halves of this meter come from the server's resolution:
+ *
+ *  - the NUMERATOR is the provider's own count of the prompt for the last model call
+ *    (`useCurrentContext`, fed by the route's `messageMetadata.context`);
+ *  - the DENOMINATOR is the effective window the server resolved from that same
+ *    budget it enforces, carried alongside its provenance in `windowSource`.
+ *
+ * This component used to fall back to a frontend-side `resolveContextWindow` with its
+ * own precedence and its own 128k default. That made a second authority for the same
+ * number, and it could contradict the budget the request was actually measured
+ * against — including while reporting no provenance, so the ring could display
+ * "… / 128k" next to the words "Context limit unknown".
+ *
+ * Now the fallback is gone. Before the server publishes a reading the ring renders
+ * NOTHING, which is the honest state: a meter with no authoritative denominator has
+ * nothing truthful to say. There is no placeholder and no local estimate, and the
+ * displayed denominator is by construction the same value the budget used.
+ *
+ * The model/provider plumbing that fed the old fallback was removed with it — the ring
+ * no longer needs to know which model is selected, because it does not resolve the
+ * window. Model identity belongs to the server's resolution result, which already
+ * carries it.
  */
 export function DirectContextRing() {
-  const { providers, activeProviderId, selectedProviderId, selectedModelId } =
-    useSettingsStore();
-  const custom = useAuiState((s) => s.threadListItem.custom) as
-    | ConversationCustom
-    | undefined;
-  const groups = buildModelGroups(providers, activeProviderId);
-  let currentProviderId =
-    selectedProviderId ?? custom?.providerId ?? activeProviderId;
-  let currentModelId: string | undefined;
-  if (selectedModelId) {
-    const owner = resolveModelOwner(groups, selectedModelId);
-    if (owner) {
-      currentProviderId = owner.providerId;
-      currentModelId = owner.modelId;
-    }
-  }
-  currentModelId ??= custom?.modelId ?? undefined;
-  currentModelId ??=
-    providers.find((p) => p.id === currentProviderId)?.model ?? undefined;
-  // The SERVER's current-context measurement is the numerator, and the server's
-  // effective window is the denominator, so the meter and the budget can never
-  // disagree. Before the first turn reports one, the ring keeps the previous
-  // behaviour (nothing rendered) rather than inventing a number.
   const serverContext = useCurrentContext();
+  if (!serverContext) return null;
   return (
     <DirectRuntimeRing
-      modelContextWindow={
-        serverContext?.windowTokens ??
-        resolveContextWindow({
-          modelId: currentModelId,
-          groups,
-        })
-      }
-      contextTokens={serverContext?.usedTokens}
-      windowSource={serverContext?.windowSource}
+      modelContextWindow={serverContext.windowTokens}
+      contextTokens={serverContext.usedTokens}
+      windowSource={serverContext.windowSource}
       side="top"
     />
   );

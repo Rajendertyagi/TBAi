@@ -177,13 +177,27 @@ describe("the denominator is the same window the budget enforced", () => {
     expect(ring).toContain("Context limit unknown");
   });
 
-  it("the Direct ring uses the server window and server occupancy", () => {
+  it("the Direct ring uses the server window and server occupancy, exclusively", () => {
     const ringComponent = fs.readFileSync(
       path.resolve(import.meta.dir, "..", "..", "..", "components", "context-ring.tsx"),
       "utf8",
     );
-    expect(ringComponent).toContain("serverContext?.windowTokens");
-    expect(ringComponent).toContain("contextTokens={serverContext?.usedTokens}");
-    expect(ringComponent).toContain("windowSource={serverContext?.windowSource}");
+    // Comments are stripped so a prohibition cannot be satisfied - or broken - merely by
+    // prose. The ring documents the fallback it removed; the CODE must not contain it.
+    const code = ringComponent
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // The denominator and the numerator both come from the server's resolution.
+    expect(code).toContain("modelContextWindow={serverContext.windowTokens}");
+    expect(code).toContain("contextTokens={serverContext.usedTokens}");
+    expect(code).toContain("windowSource={serverContext.windowSource}");
+
+    // And there is no frontend fallback left to disagree with them. The optional
+    // chaining these assertions used to require WAS the second authority: it let the
+    // ring divide by a locally-resolved window whenever the server had published none,
+    // while reporting no provenance. Absent reading now means the ring renders nothing.
+    expect(code).toContain("if (!serverContext) return null");
+    expect(code).not.toContain("resolveContextWindow");
+    expect(code).not.toContain("DEFAULT_MODEL_CONTEXT_WINDOW");
   });
 });

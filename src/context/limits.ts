@@ -199,11 +199,30 @@ export function resolveContextLimit(input: {
   model?: Pick<ModelOption, "contextWindow" | "contextWindowSource">;
   /** An operator-supplied limit, distinct from the value stored on `model`. */
   configuredContextWindow?: number | undefined;
+  /**
+   * Identity of the endpoint this resolution is FOR, recorded on the result.
+   *
+   * Carried through so a figure can be traced to the provider/endpoint/protocol it
+   * was resolved for. The same model id on two endpoints is two facts, and the
+   * lookup is already endpoint-scoped structurally — `selectModelOption` reads the
+   * selected provider's OWN model list — so this is the audit trail for that
+   * guarantee rather than the mechanism enforcing it.
+   */
+  providerId?: string;
+  endpoint?: string;
+  protocol?: string;
 }): ContextLimit {
   const { providerType, modelId } = input;
   const candidates = collectCandidates(input);
 
-  const base = { providerType, modelId, divergent: false } as const;
+  const base = {
+    providerType,
+    modelId,
+    divergent: false,
+    ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+    ...(input.endpoint !== undefined ? { endpoint: input.endpoint } : {}),
+    ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
+  } as const;
 
   if (candidates.length === 0) {
     // No real figure. Report the conservative ceiling as a stood-in-for value,
