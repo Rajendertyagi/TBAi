@@ -51,6 +51,46 @@ import type { OverflowRecoveryDecision } from "../context/recovery";
 /** Attempts this gate will ever make. The second is the recovery; there is no third. */
 export const MAX_PROVIDER_ATTEMPTS = 2;
 
+/**
+ * Part types that carry nothing the user can read, read off the INSTALLED SDK.
+ *
+ * `streamText(...).fullStream` yields `TextStreamPart`, whose lifecycle vocabulary is
+ * `start` / `start-step` / `finish-step` — NOT `stream-start` / `step-start`. Getting
+ * this wrong is silent and self-defeating: the first `start` part is then classified as
+ * model-visible, `committed` flips before the provider has rejected anything, and the
+ * gate refuses recovery by its own fail-closed rule. The guard behaves correctly; the
+ * vocabulary feeding it does not.
+ *
+ * Read from `node_modules/ai` rather than assumed, because this exact mistake was made
+ * once already and cost a full wiring attempt.
+ */
+export const LIFECYCLE_PART_TYPES: ReadonlySet<string> = new Set([
+  "start",
+  "start-step",
+  "finish-step",
+]);
+
+/**
+ * ⚠️ THE ROUTE MUST NOT WIRE THIS GATE YET.
+ *
+ * The stream-level logic below is proven, but one blocker remains, and it is NOT
+ * visible from inside this module:
+ *
+ * `streamText`'s own `onError` callback fires when the provider REJECTS — before the
+ * error part reaches this gate. So a route that lets an attempt's `onError` publish
+ * terminal state (settle the run, log `ai.error`, set `originalStreamError`) will
+ * publish the failure of an attempt this gate is about to discard. A `discardedAttempt`
+ * flag cannot fix this, because the callback has already run by the time the flag could
+ * be set.
+ *
+ * The fix is an ownership change in the route, not here: an attempt's `onError` must
+ * CAPTURE its error locally, and this gate must be the authority that publishes it for
+ * the surviving attempt only. Before doing that, the route must establish whether the
+ * composed `createUIMessageStream.onError` fires for a forwarded provider `error` chunk
+ * — if it does not, moving publication out of the attempt callback would silently lose
+ * terminal error logging for ordinary provider errors.
+ */
+
 /** A diagnostic event, safe to log: no content, no credentials, no provider bodies. */
 export type OverflowGateEvent =
   | { readonly type: "attempt_started"; readonly attempt: number }

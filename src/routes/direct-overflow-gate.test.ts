@@ -15,13 +15,13 @@ import { withOverflowRecovery, MAX_PROVIDER_ATTEMPTS } from "./direct-overflow-g
 
 /** Raw part shapes, mirroring what `streamText`'s `fullStream` yields. */
 type Part =
-  | { type: "stream-start" }
-  | { type: "step-start" }
+  | { type: "start" }
+  | { type: "start-step" }
   | { type: "text-delta"; text: string }
   | { type: "error"; error: Error }
   | { type: "finish" };
 
-const LIFECYCLE = new Set(["stream-start", "step-start"]);
+const LIFECYCLE = new Set(["start", "start-step"]);
 
 const isErrorPart = (p: Part): unknown | undefined =>
   p.type === "error" ? (p as { error: Error }).error : undefined;
@@ -92,21 +92,21 @@ const types = (parts: Part[]) => parts.map((p) => p.type);
 describe("gate: the happy paths", () => {
   it("streams a first-attempt success through untouched, with no recovery", async () => {
     const h = harness({
-      attempts: [[{ type: "stream-start" }, { type: "text-delta", text: "hi" }, { type: "finish" }]],
+      attempts: [[{ type: "start" }, { type: "text-delta", text: "hi" }, { type: "finish" }]],
     });
     const out = await drain(h.stream);
-    expect(types(out)).toEqual(["stream-start", "text-delta", "finish"]);
+    expect(types(out)).toEqual(["start", "text-delta", "finish"]);
     expect(h.started).toEqual([1]);
     expect(h.recovered.count).toBe(0);
   });
 
   it("replays held lifecycle markers before streaming content", async () => {
     const h = harness({
-      attempts: [[{ type: "stream-start" }, { type: "step-start" }, { type: "text-delta", text: "x" }]],
+      attempts: [[{ type: "start" }, { type: "start-step" }, { type: "text-delta", text: "x" }]],
     });
     const out = await drain(h.stream);
     // The markers were held, then replayed — the client sees one well-formed stream.
-    expect(types(out)).toEqual(["stream-start", "step-start", "text-delta"]);
+    expect(types(out)).toEqual(["start", "start-step", "text-delta"]);
   });
 });
 
@@ -114,8 +114,8 @@ describe("gate: recovery", () => {
   it("overflow → recover → second attempt succeeds, emitting ONLY the retry", async () => {
     const h = harness({
       attempts: [
-        [{ type: "stream-start" }, { type: "error", error: overflow() }],
-        [{ type: "stream-start" }, { type: "text-delta", text: "recovered" }, { type: "finish" }],
+        [{ type: "start" }, { type: "error", error: overflow() }],
+        [{ type: "start" }, { type: "text-delta", text: "recovered" }, { type: "finish" }],
       ],
     });
     const out = await drain(h.stream);
@@ -124,7 +124,7 @@ describe("gate: recovery", () => {
     expect(h.recovered.count).toBe(1);
     // Attempt 1's markers are dropped, not replayed: exactly one `stream-start` reaches
     // the client, from the attempt that actually produced the answer.
-    expect(types(out)).toEqual(["stream-start", "text-delta", "finish"]);
+    expect(types(out)).toEqual(["start", "text-delta", "finish"]);
     expect(out.some((p) => p.type === "error")).toBe(false);
   });
 
@@ -153,7 +153,7 @@ describe("gate: the bound holds", () => {
     const h = harness({
       attempts: [
         [{ type: "error", error: overflow() }],
-        [{ type: "stream-start" }, { type: "error", error: overflow() }],
+        [{ type: "start" }, { type: "error", error: overflow() }],
       ],
     });
     const out = await drain(h.stream);
@@ -163,23 +163,23 @@ describe("gate: the bound holds", () => {
     expect(h.recovered.count).toBe(1);
     expect(out.filter((p) => p.type === "error")).toHaveLength(1);
     // The surviving error is attempt 2's, and its markers were replayed with it.
-    expect(types(out)).toEqual(["stream-start", "error"]);
+    expect(types(out)).toEqual(["start", "error"]);
   });
 
   it("never consults recovery when the policy denies it", async () => {
     const h = harness({
-      attempts: [[{ type: "stream-start" }, { type: "error", error: overflow() }]],
+      attempts: [[{ type: "start" }, { type: "error", error: overflow() }]],
       shouldRecover: false,
     });
     const out = await drain(h.stream);
     expect(h.started).toEqual([1]);
     expect(h.recovered.count).toBe(0);
-    expect(types(out)).toEqual(["stream-start", "error"]);
+    expect(types(out)).toEqual(["start", "error"]);
   });
 
   it("surfaces the ORIGINAL overflow when recovery itself fails", async () => {
     const h = harness({
-      attempts: [[{ type: "stream-start" }, { type: "error", error: overflow() }]],
+      attempts: [[{ type: "start" }, { type: "error", error: overflow() }]],
       recoverFails: true,
     });
     const out = await drain(h.stream);
@@ -199,7 +199,7 @@ describe("gate: failing closed", () => {
     // visible part and therefore refuses to recover.
     const h = harness({
       attempts: [
-        [{ type: "stream-start" }, { type: "text-delta", text: "partial" }, { type: "error", error: overflow() }],
+        [{ type: "start" }, { type: "text-delta", text: "partial" }, { type: "error", error: overflow() }],
         [{ type: "text-delta", text: "second answer" }],
       ],
     });
@@ -209,13 +209,13 @@ describe("gate: failing closed", () => {
     expect(h.started).toEqual([1]);
     // The visible content and the error both reach the client, in order: one normal
     // failed turn, never two competing answers.
-    expect(types(out)).toEqual(["stream-start", "text-delta", "error"]);
+    expect(types(out)).toEqual(["start", "text-delta", "error"]);
   });
 
   it("reports observability events for a successful recovery", async () => {
     const h = harness({
       attempts: [
-        [{ type: "stream-start" }, { type: "error", error: overflow() }],
+        [{ type: "start" }, { type: "error", error: overflow() }],
         [{ type: "finish" }],
       ],
     });
