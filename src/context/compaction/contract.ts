@@ -162,6 +162,19 @@ export type CompactionPlan =
       /** Ids in the span, in order. Recorded so the decision is auditable. */
       readonly spanMessageIds: readonly string[];
       /**
+       * Index from which RAW messages must be handed to the summariser.
+       *
+       * Usually equal to `spanStartIndex`. For a CHAINED compaction it is the first
+       * message the existing record does NOT already cover, because the covered
+       * prefix reaches the summariser as the previous summary instead of as raw
+       * messages. `applyCompaction` still splices the whole `spanStartIndex..
+       * spanEndIndex` range — the plan covers everything the summary replaces, while
+       * the summariser only needs to read what it has not already summarised.
+       *
+       * `summarizerStartIndex > spanStartIndex` is the definition of a chained plan.
+       */
+      readonly summarizerStartIndex: number;
+      /**
        * Index of the message that must survive untouched — the first retained
        * message after the span. Present so a caller cannot apply the plan
        * without also seeing what it is preserving.
@@ -329,6 +342,20 @@ export function planCompaction(input: {
    * to summarise; any id beyond it is fresh growth and is independently eligible.
    */
   readonly coveredMessageIds?: readonly string[];
+  /**
+   * Measured size of the existing record's summary.
+   *
+   * This is what makes a REPEATED compaction able to make forward progress. A
+   * repeated compaction's summariser reads `previous summary + new growth`, so the
+   * already-covered prefix's RAW size must be excluded from the capacity test.
+   *
+   * Omitting it — which is what used to happen — measures the raw span instead,
+   * hits the summariser's capacity wall at the first new message, and reports
+   * `already_compacted_span` on every subsequent turn no matter how much the
+   * conversation has grown. That is the permanently-stuck state this field exists
+   * to remove.
+   */
+  readonly priorSummaryTokens?: number;
   reason: CompactionReason;
 }): CompactionPlan {
   const { messages, policy, usableInputTokens } = input;
@@ -357,33 +384,105 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
     };
   }
 
-  // The tail floor is a hard floor on retained messages.
-  const spanStartIndex = Math.max(0, cutIndex - messages.length + 1 + policy.minRetainedTail);
-  let spanEndIndex = cutIndex;
-  if (spanEndIndex - spanStartIndex + 1 <= 0) {
-    return { kind: "none", reason: "span_too_small_to_compact" };
-  }
-
-  // OVERSIZED RECOVERY. A conversation can outgrow a single summariser call, and
-  // that used to be a permanent refusal: `span_exceeds_summarizer_capacity` left
-  // the chat dead forever, because the following turn planned the same oversized
-  // span again and reached the same verdict.
+  // ── CHAINED REPEATED COMPACTION ───────────────────────────────────────────
   //
-  // Instead of refusing, plan a SAFE PREFIX of the span. The end walks backwards
-  // to an earlier assistant message - the same boundary rule
-  // `latestCutIndexBefore` uses, so a turn is never split and a tool call is
-  // never separated from its result - until the span fits one summariser call.
-  // Everything past the new end stays in the conversation and is eligible on a
-  // later turn, so an oversized history recovers in stages instead of not at all.
-  if (input.summarizerInputTokens !== undefined) {
-    while (
-      spanEndIndex > spanStartIndex &&
-      sum(spanRange(input.measuredTokens, spanStartIndex, spanEndIndex)) >
-        input.summarizerInputTokens
-    ) {
-      const earlierCut = previousSafeCutIndex(messages, spanEndIndex);
-      if (earlierCut < spanStartIndex) break;
-      spanEndIndex = earlierCut;
+  // ## The permanently-stuck state this replaces
+  //
+  // With no prior record, the span runs from the retained-tail floor to the last
+  // settled turn, and the capacity walk-back below shrinks its END until it fits
+  // one summariser call. That is correct for a first compaction.
+  //
+  // It is wrong for a SECOND one. Once a record exists, the planner kept using
+  // the raw span for capacity, and the covered prefix is typically most of the
+  // summariser's budget. So the walk-back landed on exactly the already-covered
+  // range, the span-scoped hysteresis guard then correctly reported
+  // `already_compacted_span`, and the conversation grew forever with no way to
+  // compact again. The guard was not the bug; the span it was given was.
+  //
+  // ## The fix: extend FORWARD over new growth, and re-read nothing
+  //
+  // A repeated compaction does not need the covered prefix as raw messages — the
+  // previous summary already stands for it, and `maybeCompact` hands that summary
+  // to the summariser alongside the new span. So the plan now:
+  //
+  //   1. anchors the span at the FIRST covered message, keeping coverage contiguous;
+  //   2. extends the end to the last settled turn, absorbing all new growth;
+  //   3. measures capacity as `priorSummaryTokens + newGrowth` — the prefix's raw
+  //      size is excluded, because the summariser never sees it.
+  //
+  // `applyCompaction` still replaces the whole `[start..end]` range with the one
+  // new summary, so the covered prefix is removed from the client history exactly
+  // as before, and the new summary legitimately covers it because it was built
+  // from the previous summary plus the growth.
+  const coveredPrefix = locateCoveredPrefix(messages, input.coveredMessageIds ?? []);
+  const chainable =
+    coveredPrefix !== undefined &&
+    coveredPrefix.end < cutIndex &&
+    input.priorSummaryTokens !== undefined;
+
+  let spanStartIndex: number;
+  let spanEndIndex: number;
+  let summarizerStartIndex: number;
+
+  if (chainable && coveredPrefix !== undefined) {
+    spanStartIndex = coveredPrefix.start;
+    summarizerStartIndex = coveredPrefix.end + 1;
+    spanEndIndex = cutIndex;
+
+    if (input.summarizerInputTokens !== undefined) {
+      const summarizerNeed = (end: number): number =>
+        (input.priorSummaryTokens ?? 0) +
+        sum(spanRange(input.measuredTokens, summarizerStartIndex, end));
+
+      while (
+        spanEndIndex > summarizerStartIndex &&
+        summarizerNeed(spanEndIndex) > input.summarizerInputTokens
+      ) {
+        const earlierCut = previousSafeCutIndex(messages, spanEndIndex);
+        if (earlierCut < summarizerStartIndex) break;
+        spanEndIndex = earlierCut;
+      }
+
+      // Whatever survives the walk-back must ACTUALLY fit. The walk-back stops
+      // either when the growth fits or when no earlier safe cut exists — and in
+      // the second case a single new message can still be larger than the whole
+      // summariser budget. Planning it anyway would hand the summariser an input it
+      // refuses, turning a bounded, retryable situation into a provider error. So
+      // the capacity is re-checked against the quantity that is really read.
+      if (summarizerNeed(spanEndIndex) > input.summarizerInputTokens) {
+        return { kind: "none", reason: "span_exceeds_summarizer_capacity" };
+      }
+    }
+  } else {
+    // The tail floor is a hard floor on retained messages.
+    spanStartIndex = Math.max(0, cutIndex - messages.length + 1 + policy.minRetainedTail);
+    spanEndIndex = cutIndex;
+    summarizerStartIndex = spanStartIndex;
+    if (spanEndIndex - spanStartIndex + 1 <= 0) {
+      return { kind: "none", reason: "span_too_small_to_compact" };
+    }
+
+    // OVERSIZED RECOVERY. A conversation can outgrow a single summariser call, and
+    // that used to be a permanent refusal: `span_exceeds_summarizer_capacity` left
+    // the chat dead forever, because the following turn planned the same oversized
+    // span again and reached the same verdict.
+    //
+    // Instead of refusing, plan a SAFE PREFIX of the span. The end walks backwards
+    // to an earlier assistant message - the same boundary rule
+    // `latestCutIndexBefore` uses, so a turn is never split and a tool call is
+    // never separated from its result - until the span fits one summariser call.
+    // Everything past the new end stays in the conversation and is eligible on a
+    // later turn, so an oversized history recovers in stages instead of not at all.
+    if (input.summarizerInputTokens !== undefined) {
+      while (
+        spanEndIndex > spanStartIndex &&
+        sum(spanRange(input.measuredTokens, spanStartIndex, spanEndIndex)) >
+          input.summarizerInputTokens
+      ) {
+        const earlierCut = previousSafeCutIndex(messages, spanEndIndex);
+        if (earlierCut < spanStartIndex) break;
+        spanEndIndex = earlierCut;
+      }
     }
   }
 
@@ -400,7 +499,12 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
   // The span must still fit one summariser call after shrinking. When even the
   // smallest safe span does not fit, retrying cannot help, so this stays the
   // deterministic, actionable refusal.
-  if (input.summarizerInputTokens !== undefined && spanTokens > input.summarizerInputTokens) {
+  //
+  // A CHAINED plan is exempt by construction: its raw span is deliberately larger
+  // than one call, because the covered prefix is summarised already and reaches
+  // the summariser as the previous summary. Its capacity was enforced above
+  // against `priorSummaryTokens + growth`, which is the quantity actually read.
+  if (!chainable && input.summarizerInputTokens !== undefined && spanTokens > input.summarizerInputTokens) {
     return { kind: "none", reason: "span_exceeds_summarizer_capacity" };
   }
 
@@ -453,10 +557,47 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
     spanEndIndex,
     spanLength,
     spanMessageIds,
+    summarizerStartIndex,
     firstRetainedIndex: spanEndIndex + 1,
     spanEstimatedTokens: spanTokens,
     spanFingerprint: spanFingerprint(messages, spanStartIndex, spanEndIndex),
   };
+}
+
+/**
+ * Locate the contiguous run of messages a durable record already covers.
+ *
+ * Mirrors `orchestrate.ts`'s `locateSpan` proof: anchor on the LAST covered id
+ * (the id least likely to move as turns are appended), then walk back the
+ * recorded count and confirm every id matches. A gap, a count mismatch, or an
+ * absent anchor all return `undefined`, which makes the planner fall back to
+ * retained-tail span selection rather than splicing a range it cannot prove.
+ *
+ * @returns Inclusive first/last covered indices, or `undefined` when the covered
+ *          run is absent or not contiguous in this list.
+ */
+function locateCoveredPrefix(
+  messages: readonly UIMessage[],
+  coveredIds: readonly string[],
+): { start: number; end: number } | undefined {
+  if (coveredIds.length === 0) return undefined;
+
+  let end = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (idOf(messages[i] as UIMessage) === coveredIds[coveredIds.length - 1]) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return undefined;
+
+  const start = end - coveredIds.length + 1;
+  if (start < 0) return undefined;
+
+  for (let i = 0; i < coveredIds.length; i += 1) {
+    if (idOf(messages[start + i] as UIMessage) !== coveredIds[i]) return undefined;
+  }
+  return { start, end };
 }
 
 // ─── Provenance ─────────────────────────────────────────────────────────────

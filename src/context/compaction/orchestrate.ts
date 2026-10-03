@@ -168,6 +168,10 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
     hasExistingCompaction: input.existing !== undefined,
     compactionLatched: input.compactionLatched,
     coveredMessageIds: input.coveredMessageIds,
+    // Enables the planner's chained capacity accounting. Taken from the record
+    // itself rather than passed separately, so it cannot disagree with the summary
+    // that is actually handed to the summariser below.
+    priorSummaryTokens: input.existing?.summaryTokens,
     force: input.force,
     summarizerInputTokens: input.summarizerInputTokens,
     reason: "pressure",
@@ -175,20 +179,25 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
 
   if (plan.kind === "none") return { messages: [...input.messages], outcome: { applied: false, reason: plan.reason } };
 
-  // The span to summarise, sliced from the already-repaired CLIENT messages, so
+  // The RAW messages to summarise, sliced from the already-repaired CLIENT list, so
   // the summariser cannot see a stale tool part even if one existed upstream — and
   // so every covered id exists in what the client will re-post.
-  const spanMessages = input.messages.slice(plan.spanStartIndex, plan.spanEndIndex + 1);
+  //
+  // Starts at `summarizerStartIndex`, not `spanStartIndex`. For a first compaction
+  // they are equal. For a CHAINED one the already-covered prefix is deliberately
+  // skipped: it reaches the summariser as the previous summary instead, which is
+  // what lets an oversized history keep making progress instead of re-reading a
+  // prefix that alone exceeds one summariser call.
+  const spanMessages = input.messages.slice(plan.summarizerStartIndex, plan.spanEndIndex + 1);
 
   // A repeated compaction hands the summariser the PREVIOUS summary alongside the
-  // new span. The new span covers strictly more of the conversation, but the part
-  // it no longer contains as messages survives only inside the old summary — so
-  // without this the earlier history would be silently dropped.
+  // new material. The previous summary stands for the covered prefix, so without
+  // it that history would be silently dropped; and it is placed FIRST because it
+  // describes turns that came before everything in `spanMessages`.
   const summariserInput =
     input.priorSummaryText === undefined
       ? spanMessages
       : [
-          ...spanMessages,
           {
             id: `prior-summary-${plan.spanFingerprint}`,
             role: "user" as const,
@@ -199,6 +208,7 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
               },
             ],
           } as unknown as UIMessage,
+          ...spanMessages,
         ];
 
   const summary = await input.summarize(summariserInput);
@@ -317,6 +327,9 @@ export function applyExistingCompaction(input: {
         spanEndIndex: located.end,
         spanLength: located.end - located.start + 1,
         spanMessageIds: record.coveredMessageIds,
+        // Nothing is being summarised here — an existing record is being replayed
+        // verbatim — so the whole span is the "raw" input by definition.
+        summarizerStartIndex: located.start,
         firstRetainedIndex: located.end + 1,
         spanEstimatedTokens: 0,
         spanFingerprint: record.spanFingerprint,
