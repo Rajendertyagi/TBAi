@@ -609,6 +609,20 @@ export interface AssembleContextInput {
    */
   readonly compaction?: CompactionSeam;
   /**
+   * Compact on request even when usage is under the trigger.
+   *
+   * Set by a caller for a size problem the LOCAL estimate cannot see: a provider that
+   * has just rejected this exact request as oversized (overflow recovery), or an
+   * explicit manual `/compact`. The local trigger is derived from the estimate, so
+   * after a provider rejection it has nothing to fire on — recovery has to state that
+   * the problem is real.
+   *
+   * It removes the pressure threshold, NOT the structural rules: a safe, worthwhile
+   * span must still exist, so "nothing eligible" remains a real, reportable answer
+   * rather than a fabricated compaction. Never derived from usage.
+   */
+  readonly forceCompaction?: boolean;
+  /**
    * Phase 5 memory seam. Omitted ⇒ no memory is retrieved or injected.
    *
    * Inert by default for the same reason compaction is: a caller that has not

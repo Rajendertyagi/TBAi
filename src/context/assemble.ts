@@ -264,6 +264,10 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     conversationId,
     messages: reduced,
     seam: input.compaction,
+    // Forwarded, never derived. A provider overflow recovery or an explicit
+    // `/compact` knows the size problem is real even when the estimate is under the
+    // trigger; the structural rules inside the phase still apply either way.
+    forceCompaction: input.forceCompaction === true,
     usableInputTokens: budget.usableInputTokens,
     // CAPACITY, not budget: the summariser reserves far less output than a turn,
     // so it can read more than a turn may send.

@@ -431,8 +431,26 @@ function contextStateForUi(): ChatContextState | undefined {
   let cacheCapability: CacheCapability | undefined;
   let cacheControl: CacheControlDecision | undefined;
   let cachePrefix: PrefixIdentity | undefined;
+  /**
+   * Assemble this request's context, and publish the derived per-request bindings.
+   *
+   * Extracted as a FUNCTION rather than left as an inline block because provider
+   * overflow recovery must rebuild context through this same seam after compacting —
+   * there is no second context path. Re-entering it is also what keeps the retry the
+   * same logical request: same messages, same provider, same tools, same memory; only
+   * the compaction outcome differs.
+   *
+   * `forceCompaction` distinguishes a recovery rebuild from an ordinary turn. A
+   * provider rejected this request as oversized, so the local trigger — which is
+   * derived from the estimate — has nothing to fire on; recovery has to state
+   * explicitly that the size problem is real. It is the same flag the manual
+   * `/compact` path uses, so recovery inherits the engine's structural rules (a safe,
+   * worthwhile span must still exist) instead of bypassing them.
+   */
+  const assembleForRequest = async (options: { forceCompaction?: boolean } = {}): Promise<void> => {
   try {
     assembled = await assembleContext({
+      forceCompaction: options.forceCompaction === true,
       conversationId: threadId,
       submittedMessages: messages,
       runId: run.streamId,
@@ -531,6 +549,8 @@ function contextStateForUi(): ChatContextState | undefined {
     chatRuns.markFailed(run.streamId);
     throw err;
   }
+  };
+  await assembleForRequest();
   // `chatLog` is constructed further down, so the assembly line and any
   // pre-flight rejection are emitted through a correlation-bound child logger
   // built here. Same bindings, constructed once.
