@@ -23,6 +23,21 @@ env:
   # of one commit differ.
   BUN_VERSION: "1.4.2"
 
+  # OpenCode CLI, for the integration tests that drive the managed server.
+  #
+  # 2.0.22 sits inside the range src/config/opencode.ts enforces for the managed
+  # server (>=2.0.15 <2.1.0) and is the version this codebase's behaviour
+  # comments were measured against, so CI matches the developer environment
+  # where these suites were last seen passing.
+  #
+  # The npm package ships the prebuilt Windows binary; there are no GitHub
+  # release assets for the 2.x tags, and `opencode-ai` on npm is the unrelated
+  # 1.x line. `@opencode/cli-windows-x64` declares os=win32 cpu=x64, which is
+  # exactly this runner, and npm's dist.integrity is verified below before the
+  # binary is trusted.
+  OPENCODE_VERSION: "2.0.22"
+  OPENCODE_CLI_SHA512: "sha512-n7eg3FwlHtRSZY5SV00XYh5c/TV7V0GIDqgygv9c5UEzPfbBfdk6d9mvGbZqn/Po/gmOPFyxU6SjmjWdGDF3ag=="
+
 jobs:
   verify:
     # windows-latest, not ubuntu: the suite was verified green on Windows, and
@@ -49,6 +64,43 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # CI-only. Nothing about the application's own dependencies changes: the
+      # binary is unpacked into the runner's temp dir and put on PATH for later
+      # steps, and it is never vendored into the repository.
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:OPENCODE_VERSION
+          $url = "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-$version.tgz"
+          $tgz = Join-Path $env:RUNNER_TEMP 'opencode-cli.tgz'
+          Invoke-WebRequest -Uri $url -OutFile $tgz
+          $sha = [System.Security.Cryptography.SHA512]::Create()
+          $actual = 'sha512-' + [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($tgz)))
+          if ($actual -ne $env:OPENCODE_CLI_SHA512) {
+            throw "opencode tarball integrity mismatch: expected $env:OPENCODE_CLI_SHA512 but downloaded $actual"
+          }
+          $unpack = Join-Path $env:RUNNER_TEMP 'opencode-cli'
+          Remove-Item $unpack -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $unpack | Out-Null
+          tar -xzf $tgz -C $unpack
+          $exe = Join-Path $unpack 'package/bin/opencode.exe'
+          if (-not (Test-Path $exe)) { throw "opencode.exe was not present in the $version tarball" }
+          (Join-Path $unpack 'package/bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "Unpacked opencode $version from the npm registry (sha512 verified)."
+
+      - name: Verify OpenCode is available
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resolved = (Get-Command opencode -ErrorAction Stop).Source
+          $reported = (& opencode --version | Out-String).Trim()
+          Write-Output "opencode resolved to: $resolved"
+          Write-Output "opencode --version:   $reported"
+          if ($reported -notmatch [regex]::Escape($env:OPENCODE_VERSION)) {
+            throw "expected opencode $($env:OPENCODE_VERSION) but the binary reported '$reported'"
+          }
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -66,13 +118,10 @@ jobs:
       # alone - verified locally for exit codes 0, 1 and 3. `2>&1` folds stderr,
       # where bun writes its results, into the same file.
       #
-      # KNOWN FAILURE (pre-existing, deliberately not fixed here):
-      # tests/integration/opencode-binary-missing.test.ts self-skips when an
-      # `opencode` binary is on PATH. It is on a developer's machine, so those
-      # three cases pass vacuously; this runner has no binary, so they execute
-      # for the first time and "a bad conversationId still 400s before the 503
-      # branch" fails. Unrelated to any recent change - nothing in the opencode
-      # routes was touched.
+      # With the OpenCode CLI provisioned above, the suites that drive the
+      # managed server now execute instead of self-skipping, so
+      # src/services/opencode/codeViewSessionBoundary.test.ts is a real signal
+      # rather than a silent pass.
       - name: Test
         run: |
           bun run test 2>&1 | Tee-Object -FilePath test-output.log
@@ -84,7 +133,7 @@ jobs:
       # GitHub caps check-run annotations at 10 per run and downloading the job
       # log requires authentication, so a failing run could not be triaged from
       # outside CI. Teeing the output above also drops bun's own per-failure
-      # annotations, which leaves 9 free annotation slots.
+      # annotations, which leaves slots free.
       #
       # Check-run annotations are the one failure channel readable from the
       # public API without authentication, so the COMPLETE failure list and the
