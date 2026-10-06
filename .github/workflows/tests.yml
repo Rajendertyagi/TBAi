@@ -60,11 +60,11 @@ jobs:
       # database, reporting hundreds of phantom failures instead of real ones.
       # The scoped script in package.json is the only correct invocation.
       #
-      # The output is teed to a file only so the diagnostic step below can
-      # republish the complete failure list. `$LASTEXITCODE` is captured
-      # immediately and re-thrown, so the job's verdict is identical to running
-      # `bun run test` alone - verified locally for exit codes 0, 1 and 3.
-      # `2>&1` folds stderr, where bun writes its summary, into the same file.
+      # The output is teed to a file so the diagnostic step below can republish
+      # the complete failure list. `$LASTEXITCODE` is captured immediately and
+      # re-thrown, so the job's verdict is identical to running `bun run test`
+      # alone - verified locally for exit codes 0, 1 and 3. `2>&1` folds stderr,
+      # where bun writes its results, into the same file.
       #
       # KNOWN FAILURE (pre-existing, deliberately not fixed here):
       # tests/integration/opencode-binary-missing.test.ts self-skips when an
@@ -81,30 +81,24 @@ jobs:
 
       # DIAGNOSTIC ONLY - no test, production, or opencode behaviour changes.
       #
-      # GitHub caps check-run annotations at 10 per run, and downloading the job
-      # log requires authentication, so a failing run cannot be triaged from
-      # outside CI. This republishes the COMPLETE failure list and the suite
-      # totals into the job summary, which renders on the public run page for
-      # anyone who can read the repository. Runs only when something failed.
+      # GitHub caps check-run annotations at 10 per run and downloading the job
+      # log requires authentication, so a failing run could not be triaged from
+      # outside CI. Teeing the output above also drops bun's own per-failure
+      # annotations, which leaves 9 free annotation slots.
       #
-      # Strings are single-quoted on purpose: in PowerShell a backtick is the
-      # escape character, so "```" is a parse error while '```' is a literal.
+      # Check-run annotations are the one failure channel readable from the
+      # public API without authentication, so the COMPLETE failure list and the
+      # suite totals are emitted as two annotations - one message each - rather
+      # than one per failure, which would hit the cap again.
       - name: Publish complete test failure list (diagnostic)
         if: failure()
         run: |
-          $summary = $env:GITHUB_STEP_SUMMARY
-          '## Complete test failure list' | Out-File -FilePath $summary -Append -Encoding utf8
-          '' | Out-File -FilePath $summary -Append -Encoding utf8
-          'Every `(fail)` line reported by `bun run test`:' | Out-File -FilePath $summary -Append -Encoding utf8
-          '' | Out-File -FilePath $summary -Append -Encoding utf8
-          '```' | Out-File -FilePath $summary -Append -Encoding utf8
           $fails = Select-String -Path test-output.log -Pattern '^\(fail\)' | ForEach-Object { $_.Line }
-          if ($fails) { $fails | Out-File -FilePath $summary -Append -Encoding utf8 } else { '(no (fail) lines captured)' | Out-File -FilePath $summary -Append -Encoding utf8 }
-          '```' | Out-File -FilePath $summary -Append -Encoding utf8
-          '' | Out-File -FilePath $summary -Append -Encoding utf8
-          '### Suite totals' | Out-File -FilePath $summary -Append -Encoding utf8
-          '' | Out-File -FilePath $summary -Append -Encoding utf8
-          '```' | Out-File -FilePath $summary -Append -Encoding utf8
+          if (-not $fails) { $fails = @('(no (fail) lines captured - inspect the job log)') }
           $totals = Select-String -Path test-output.log -Pattern '^\s*\d+ (pass|fail|skip|todo)|^Ran ' | ForEach-Object { $_.Line }
-          if ($totals) { $totals | Out-File -FilePath $summary -Append -Encoding utf8 } else { '(no suite totals captured)' | Out-File -FilePath $summary -Append -Encoding utf8 }
-          '```' | Out-File -FilePath $summary -Append -Encoding utf8
+          if (-not $totals) { $totals = @('(no suite totals captured)') }
+          # Workflow-command escaping: % first, then CR/LF. Order matters.
+          $failBody = (($fails -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
+          $totalBody = (($totals -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
+          Write-Output "::error title=Complete test failure list::$failBody"
+          Write-Output "::error title=Suite totals::$totalBody"
