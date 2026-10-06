@@ -48,7 +48,7 @@ export function ScrollPill() {
       <TooltipIconButton
         tooltip="Scroll to bottom"
         side="top"
-        className="absolute bottom-24 right-6 h-8 w-auto gap-1.5 rounded-full border border-border bg-background px-3 py-1 text-xs shadow-md"
+        className="absolute bottom-24 right-6 h-8 w-auto gap-1.5 rounded-full border-none px-3 py-1 text-xs glass-surface shadow-floating"
       >
         <ArrowDown />
         {unseen > 0 ? (

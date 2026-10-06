@@ -8,6 +8,7 @@ import { logger, normalizeError } from "../lib/logger";
 import {
   conversationsListQuerySchema,
   conversationCreateSchema,
+  conversationReconcileSchema,
   conversationUpdateSchema,
   messageUpsertSchema,
 } from "../lib/validation";
@@ -232,6 +233,33 @@ app.post("/api/conversations", async (c) => {
         createInFlight.delete(idempotencyKey);
       }
     }
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
+// Tab reconciliation: "which of these exact ids still exist?" Registered before
+// the `/:id` routes so the literal path never depends on router precedence.
+//
+// The response is built by walking the REQUEST array, not the rows SQLite
+// returned, so every requested id gets an answer even when the query matches
+// nothing for it. That is what makes `gone` trustworthy: completeness is a
+// property of the request, never of a filtered or capped scan. Only existence is
+// disclosed — no title, config, or message content.
+app.post("/api/conversations/reconcile", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = conversationReconcileSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid request", issues: parsed.error.issues }, 400);
+  }
+  try {
+    const { ids } = parsed.data;
+    const existing = await conversationService.existsMany(ids);
+    const results = ids.map((id) => ({
+      id,
+      status: existing.has(id) ? ("exists" as const) : ("gone" as const),
+    }));
+    return c.json({ results });
   } catch (e) {
     return storageError(c, e);
   }

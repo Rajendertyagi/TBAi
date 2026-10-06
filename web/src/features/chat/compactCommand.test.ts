@@ -21,9 +21,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   CompactTransportError,
   buildCompactRequestBody,
+  buildDividerPart,
+  DIRECT_COMPACT_DATA_NAME,
+  DIRECT_COMPACT_PART,
   DIRECT_COMPACT_COMMAND,
   isDirectCompactCommand,
   parseCompactStatus,
+  parseDirectCompactCommand,
   projectThreadMessages,
   runDirectCompact,
   type DirectCompactStatus,
@@ -60,8 +64,14 @@ const compacted: DirectCompactStatus = {
   generation: 1,
   spanLength: 19,
   summaryTokens: 12,
+  // A real summary, not a placeholder, so the round-trip assertions below prove the
+  // text survives parsing rather than merely that a field exists.
+  summary: "The user asked about compaction and we walked through the trigger.",
   reclaimedTokens: 4800,
   requestFits: true,
+  operationId: "op-1",
+  anchorMessageId: "data-tbai-compact-op-1",
+  origin: "manual",
 };
 
 function conversation(): Array<{ id: string; role: string; parts: unknown[] }> {
@@ -140,19 +150,52 @@ describe("TEST 2 — whitespace is tolerated", () => {
 });
 
 describe("TESTS 3-5 — text that merely CONTAINS the command stays a message", () => {
-  for (const text of ["/compact now", "please run /compact", "explain /compact"]) {
+  // `/compact now` is deliberately NOT in this list. It is the command with the
+  // instruction "now"; it used to be ordinary text, and that is the behaviour change
+  // `/compact <instructions>` made on purpose. Only a command word in the middle of
+  // ordinary prose stays a message.
+  const prose = ["please run /compact", "explain /compact", "what does /compact do"];
+  for (const text of prose) {
     it(`does not intercept ${JSON.stringify(text)}`, () => {
       expect(isDirectCompactCommand(text)).toBe(false);
     });
   }
 
   it("a non-command submit is never diverted, so it reaches the normal send path", () => {
-    // The guard returning false is the whole contract: the composer's submit
-    // handler then does nothing, and assistant-ui creates the user message
-    // normally — which is the required behaviour for these three strings.
-    for (const text of ["/compact now", "please run /compact", "explain /compact"]) {
+    // The guard returning false is the whole contract: the composer's submit handler
+    // then does nothing, and assistant-ui creates the user message normally — which
+    // is the required behaviour for a command word that is part of a sentence.
+    for (const text of prose) {
       expect(isDirectCompactCommand(text)).toBe(false);
     }
+  });
+});
+
+describe("TEST 5b — `/compress` is an alias of the SAME command", () => {
+  it("is intercepted, exactly like `/compact`", () => {
+    expect(isDirectCompactCommand("/compress")).toBe(true);
+    expect(isDirectCompactCommand("  /compress  ")).toBe(true);
+  });
+
+  it("is a whole token, and trailing words are instructions rather than a miss", () => {
+    // Whole-token matching is what stops `/compressed` and `/compressx` being
+    // commands; trailing words are the user's instructions, not a failed match.
+    expect(isDirectCompactCommand("/compress now")).toBe(true);
+    expect(isDirectCompactCommand("please run /compress")).toBe(false);
+  });
+
+  it("reaches the same command path and never becomes a user bubble", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    await runDirectCompact({ conversationId: "conv-1", messages: conversation() });
+    // The request body always carries the CANONICAL spelling, so the server's
+    // detection and the logs have exactly one string to reason about regardless
+    // of which spelling the user typed.
+    expect(seen[0]?.payload.messages[2].parts[0].text).toBe(DIRECT_COMPACT_COMMAND);
+  });
+
+  it("accepts a slash-word prefix of nothing else: `/compactx` is not the command", () => {
+    expect(isDirectCompactCommand("/compactx")).toBe(false);
+    expect(isDirectCompactCommand("/compressx")).toBe(false);
   });
 });
 
@@ -204,6 +247,24 @@ describe("TEST 7 — the server status part is consumed, not rendered", () => {
     expect(parseCompactStatus(statusBody({ ...compacted, outcome: "totally-fine" }))).toBeUndefined();
   });
 
+  it("reads the summary off the wire, so the divider survives the round trip", () => {
+    expect(parseCompactStatus(statusBody(compacted))?.summary).toBe(compacted.summary);
+  });
+
+  it("treats a missing, null or blank summary as none, never as text", () => {
+    // `summary` is optional on the wire, so a body from a build that predates it, a
+    // refusal that sends null, and a stray empty string must all read the same way.
+    for (const summary of [undefined, null, ""] as const) {
+      expect(parseCompactStatus(statusBody({ ...compacted, summary }))?.summary).toBeNull();
+    }
+  });
+
+  it("refuses a non-string summary rather than stringifying it", () => {
+    // A malformed payload must not reach the transcript as `[object Object]`.
+    expect(parseCompactStatus(statusBody({ ...compacted, summary: { text: "hi" } }))?.summary).toBeNull();
+    expect(parseCompactStatus(statusBody({ ...compacted, summary: 42 }))?.summary).toBeNull();
+  });
+
   it("surfaces a missing status as a transport error, not a silent success", async () => {
     stubFetch("data: [DONE]\n\n");
     await expect(
@@ -232,6 +293,85 @@ describe("TEST 8 — post-compact conversation is unaffected", () => {
     await runDirectCompact({ conversationId: "conv-1", messages: conversation() });
     expect(seen[0]?.payload.messages.filter((m: any) => m.parts?.[0]?.text === DIRECT_COMPACT_COMMAND))
       .toHaveLength(1);
+  });
+});
+
+describe("the transcript divider part", () => {
+  it("is an assistant-ui data part keyed by the name ChatShell registered", () => {
+    const part = buildDividerPart(compacted);
+    // `type: "data"` + `name` is what `append()` accepts and what resolves the
+    // renderer. The `data-tbai-compact` form is the WIRE shape, not this one.
+    expect(part.type).toBe("data");
+    expect(part.name).toBe("tbai-compact");
+  });
+
+  it("carries the outcome and the server's operation identity", () => {
+    const part = buildDividerPart(compacted);
+    expect(part.data.kind).toBe("tbai-compact");
+    expect(part.data.outcome).toBe("compacted");
+    expect(part.data.generation).toBe(1);
+    expect(part.data.spanLength).toBe(19);
+    // Two compactions must be distinguishable, not silently merged.
+    expect(part.data.operationId).toBe("op-1");
+  });
+
+  it("distinguishes two compactions instead of producing one entry", () => {
+    const a = buildDividerPart(compacted);
+    const b = buildDividerPart({ ...compacted, operationId: "op-2", generation: 2 });
+    expect(b.data.operationId).toBe("op-2");
+    expect(a.data.operationId).not.toBe(b.data.operationId);
+  });
+
+  it("carries the summary, so the divider can show what was kept", () => {
+    // `?? null` because the status field is optional on the wire while the divider
+    // data field is not — the part must never be `undefined`.
+    expect(buildDividerPart(compacted).data.summary).toBe(compacted.summary ?? null);
+  });
+
+  it("normalises an absent or blank summary to null, never to an empty string", () => {
+    // `undefined` is what a row written before the field existed carries, and a blank
+    // string would render as an expandable divider containing nothing.
+    for (const summary of [undefined, null, ""] as const) {
+      expect(buildDividerPart({ ...compacted, summary }).data.summary).toBeNull();
+    }
+  });
+
+  it("keeps a real summary intact, whitespace and all", () => {
+    const summary = "First para.\n\nSecond para, with detail.";
+    expect(buildDividerPart({ ...compacted, summary }).data.summary).toBe(summary);
+  });
+
+  it("represents a failure as a failure, with no checkpoint implied", () => {
+    const part = buildDividerPart({
+      ...compacted,
+      outcome: "failed",
+      reason: "summarize_failed:provider_error",
+      generation: 0,
+    });
+    expect(part.data.outcome).toBe("failed");
+    expect(part.data.reason).toBe("summarize_failed:provider_error");
+    // Generation 0 is the "no checkpoint was written" marker; a failure must not
+    // claim a generation, or the divider would imply a summary exists.
+    expect(part.data.generation).toBe(0);
+  });
+
+  it("carries the server's durable row id, so a durable divider is distinguishable", () => {
+    // `anchorMessageId: null` is a real, different state: the compaction happened
+    // but the row was not written, so the divider is on screen only. Collapsing it
+    // into "success" would claim reload durability that does not exist.
+    expect(buildDividerPart(compacted).data.anchorMessageId).toBe("data-tbai-compact-op-1");
+    expect(
+      buildDividerPart({ ...compacted, anchorMessageId: null }).data.anchorMessageId,
+    ).toBeNull();
+  });
+
+  it("reads a missing anchorMessageId as absent rather than as an empty id", () => {
+    const body = `data: ${JSON.stringify({
+      type: DIRECT_COMPACT_PART,
+      id: "compact",
+      data: { ...compacted, anchorMessageId: undefined },
+    })}\n\n`;
+    expect(parseCompactStatus(body)?.anchorMessageId).toBeNull();
   });
 });
 
@@ -545,5 +685,86 @@ describe("request shaping", () => {
     await expect(
       runDirectCompact({ conversationId: "conv-1", messages: conversation() }),
     ).rejects.toBeInstanceOf(CompactTransportError);
+  });
+});
+
+describe("automatic compaction", () => {
+  it("is rendered as automatic, and is the same part a manual compaction uses", () => {
+    // The engine's own compaction must not be distinguishable from the user's by
+    // mechanism: same part type, same name, same renderer. Only the label differs.
+    const part = buildDividerPart({ ...compacted, origin: "automatic" });
+    expect(part.type).toBe("data");
+    expect(part.name).toBe(DIRECT_COMPACT_DATA_NAME);
+    expect(part.data.origin).toBe("automatic");
+  });
+
+  it("reads a missing origin as manual, never as automatic", () => {
+    // A server that predates automatic compaction omits the field. Defaulting the
+    // other way would attribute the engine's work to the user.
+    const body = `data: ${JSON.stringify({
+      type: DIRECT_COMPACT_PART,
+      id: "compact",
+      data: { ...compacted, origin: undefined },
+    })}\n\n`;
+    expect(parseCompactStatus(body)?.origin).toBe("manual");
+  });
+
+  it("rejects an unrecognised origin rather than passing it through", () => {
+    const body = `data: ${JSON.stringify({
+      type: DIRECT_COMPACT_PART,
+      id: "compact",
+      data: { ...compacted, origin: "reactive" },
+    })}\n\n`;
+    expect(parseCompactStatus(body)?.origin).toBe("manual");
+  });
+});
+
+describe("`/compact <instructions>`", () => {
+  it("sends the text the user typed, so the server reads the instructions itself", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    const command = parseDirectCompactCommand("/compact keep the API decisions");
+    expect(command?.instructions).toBe("keep the API decisions");
+    await runDirectCompact({
+      conversationId: "conv-1",
+      messages: conversation(),
+      command,
+    });
+    // The deciding message is the user's own text, instructions included — not a
+    // bare `/compact` plus a second parameter that could disagree with it.
+    expect(seen[0]?.payload.messages.at(-1)?.parts[0].text).toBe(
+      "/compact keep the API decisions",
+    );
+  });
+
+  it("sends the bare canonical command when there are no instructions", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    await runDirectCompact({
+      conversationId: "conv-1",
+      messages: conversation(),
+      command: parseDirectCompactCommand("  /compact  "),
+    });
+    expect(seen[0]?.payload.messages.at(-1)?.parts[0].text).toBe("/compact");
+  });
+
+  it("parses instructions for the alias too, and reports the typed spelling", () => {
+    const match = parseDirectCompactCommand("/compress keep the tests");
+    expect(match?.command).toBe("/compress");
+    expect(match?.instructions).toBe("keep the tests");
+  });
+
+  it("still refuses a longer slash-word, which is a typo not a command", () => {
+    expect(parseDirectCompactCommand("/compactx now")).toBeUndefined();
+    expect(parseDirectCompactCommand("/compressed")).toBeUndefined();
+  });
+
+  it("still refuses text that merely mentions the command", () => {
+    expect(parseDirectCompactCommand("please run /compact")).toBeUndefined();
+    expect(parseDirectCompactCommand("explain /compact now")).toBeUndefined();
+  });
+
+  it("now treats a trailing word as instructions rather than as ordinary text", () => {
+    // This is the deliberate behaviour change: `/compact now` used to be ordinary
+    // user text. It is now one command with the instruction "now".
+    expect(parseDirectCompactCommand("/compact now")?.instructions).toBe("now");
   });
 });

@@ -38,11 +38,50 @@ export async function setStubText(request: APIRequestContext, text: string): Pro
   await control(request, "/__e2e/text", { text });
 }
 
+/**
+ * Configure the reply so it streams in PIECES rather than arriving whole.
+ *
+ * The default stub behaviour is a single delta, which delivers a finished
+ * message in one shot. That is right for correctness specs and useless for
+ * profiling: the browser never renders a partially-arrived reply, so none of
+ * the per-token render cost that real streaming imposes gets exercised.
+ *
+ * `chunkChars` is the approximate characters per delta (0 = one delta, the
+ * default) and `chunkDelayMs` pauses between them. A short delay is what makes
+ * the stream observably incremental; a chunk size with no delay still produces
+ * many separate deltas, but they may land close enough together to batch into
+ * one render.
+ */
+export async function setStubStreamShape(
+  request: APIRequestContext,
+  options: { text: string; chunkChars: number; chunkDelayMs?: number },
+): Promise<void> {
+  await control(request, "/__e2e/stream", {
+    text: options.text,
+    chunkChars: options.chunkChars,
+    chunkDelayMs: options.chunkDelayMs ?? 0,
+  });
+}
+
+/**
+ * Restore the default single-delta shape.
+ *
+ * The stub is shared across the whole suite and outlives any single spec, so a
+ * spec that leaves chunking on would silently change the streaming behaviour
+ * every later spec sees. Specs that stream in pieces should call this in their
+ * teardown for the same reason `hold` is consumed per request.
+ */
+export async function resetStubStreamShape(request: APIRequestContext): Promise<void> {
+  await control(request, "/__e2e/stream", { chunkChars: 0, chunkDelayMs: 0 });
+}
+
 export interface StubState {
   requests: number;
   hold: boolean;
   held: number;
   text: string;
+  chunkChars: number;
+  chunkDelayMs: number;
 }
 
 export async function readStubState(request: APIRequestContext): Promise<StubState> {

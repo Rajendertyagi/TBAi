@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createOpenCodeV2Client } from "./v2Client";
 import { createV2ThreadController } from "./v2ThreadController";
 import { useV2AssistantRuntime } from "./v2Runtime";
+import { useOpenCodeAuxiliaryResync } from "./useOpenCodeAuxiliaryResync";
 
 /** Builds the native OpenCode V2 runtime for one bootstrapped session. */
 export function useOpenCodeRuntime(
@@ -27,6 +28,8 @@ export function useOpenCodeRuntime(
     void controller.load().catch(() => undefined);
     return () => controller.dispose();
   }, [controller]);
+
+  useOpenCodeAuxiliaryResync(controller);
 
   const reconnect = useCallback(() => {
     setClientEpoch((epoch) => epoch + 1);

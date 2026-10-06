@@ -165,8 +165,15 @@ describe("OpenCodeChipMenu — outside-click and Escape close", () => {
   });
 
   it("closes on the Escape key", () => {
+    // Accepts either spelling. What matters is that Escape reaches `onClose`,
+    // not which expression gets it there. This assertion used to pin the exact
+    // text `e.key === "Escape"`, so adding the IME guard broke it — a false
+    // alarm, because the behaviour did not regress, only the string did.
+    // `isPlainEscape` is the guarded form and is required: this listener is on
+    // `document`, so it also sees Escape pressed in the composer, where a
+    // composition may be open.
     expect(chipSharedSource).toMatch(
-      /e\.key === "Escape"[\s\S]*?onCloseRef\.current\(\)/,
+      /(e\.key === "Escape"|isPlainEscape\([^)]*\))[\s\S]*?onCloseRef\.current\(\)/,
     );
   });
 

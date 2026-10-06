@@ -50,6 +50,7 @@ import { generateId } from "../lib/utils";
 import { logger } from "../lib/logger";
 import { errorLogFields } from "../lib/errors";
 import { compactionStore } from "../services/compaction";
+import { messageService } from "../services/storage";
 import { assembleContext } from "../context/assemble";
 import {
   COMPACTION_SUMMARY_TIMEOUT_MS,
@@ -60,13 +61,69 @@ import {
 import type { AssembleContextInput, MechanismOutcome } from "../context/types";
 
 /**
- * The single command string this route intercepts.
+ * The canonical command string this route intercepts.
  *
- * One value, matched exactly. It is deliberately NOT a general slash-command
- * table: every unlisted string — `/compact now`, `explain /compact` — is ordinary
- * user text and must reach the model untouched.
+ * It is the spelling used in the request body the client builds and in logs, so
+ * the answer to "what was typed" stays stable even if more spellings are accepted.
  */
 export const COMPACT_COMMAND = "/compact";
+
+/**
+ * Accepted spellings of the same command.
+ *
+ * Deliberately a closed list, not a general slash-command table. Every unlisted
+ * string — `/compact now`, `explain /compact` — is ordinary user text and must
+ * reach the model untouched. Each alias is a whole-token alternative, so no alias
+ * can swallow trailing words.
+ */
+export const COMPACT_COMMAND_ALIASES: readonly string[] = ["/compress"];
+
+/** Every accepted spelling, canonical first. The single source of truth for matching. */
+export const COMPACT_COMMANDS: readonly string[] = [
+  COMPACT_COMMAND,
+  ...COMPACT_COMMAND_ALIASES,
+];
+
+/**
+ * A parsed `/compact` invocation.
+ *
+ * `instructions` is everything after the command word, or `undefined` when the user
+ * typed none. Kept as its own field rather than a boolean so "compact with these
+ * words" and "compact plainly" cannot be confused — the second must stay the
+ * byte-identical behaviour it was before instructions existed.
+ */
+export interface CompactCommandMatch {
+  /** The spelling the user actually typed, for logs and provenance. */
+  readonly command: string;
+  readonly instructions: string | undefined;
+}
+
+/**
+ * Parse composer text as a compaction command, or return `undefined`.
+ *
+ * ## Why trailing words are instructions and not a different command
+ *
+ * `/compact keep the API decisions` is one command with a narrowing instruction, the
+ * same grammar ZCode documents (`/compact [instructions]`). Matching the command
+ * word as a whole token — never as a string prefix — is what keeps `/compactx` and
+ * `/compressed` ordinary user text while letting `/compact now` compact.
+ *
+ * The whole-token rule is why the previous "exact match only" behaviour is gone:
+ * `now` used to mean "this is not a command". It means an instruction, and the
+ * instruction is the user's to give.
+ */
+export function parseCompactCommand(text: string): CompactCommandMatch | undefined {
+  const trimmed = text.trim();
+  const [head, ...rest] = trimmed.split(/\s+/);
+  if (head === undefined || !COMPACT_COMMANDS.includes(head)) return undefined;
+  const instructions = rest.join(" ").trim();
+  return { command: head, instructions: instructions.length > 0 ? instructions : undefined };
+}
+
+/** Whether one already-trimmed token sequence is a compaction command. */
+export function isCompactCommandText(text: string): boolean {
+  return parseCompactCommand(text) !== undefined;
+}
 
 /**
  * What the command did.
@@ -77,7 +134,18 @@ export const COMPACT_COMMAND = "/compact";
  */
 export type ManualCompactOutcome = "compacted" | "skipped" | "failed";
 
-/** The status payload delivered to the UI. Contains no message text. */
+/**
+ * The status payload delivered to the UI.
+ *
+ * Carries the summary text, which is conversation content by definition. That is a
+ * deliberate reversal of an earlier "contains no message text" rule: the payload
+ * exists so the user can read what compaction kept, and a summary that cannot be
+ * read makes a destructive operation unauditable.
+ *
+ * The bound is that this is the ONLY place compaction content is allowed to leave
+ * the server, and it is never logged — see `publishCompactionDivider`, whose log
+ * fields carry counts only.
+ */
 export interface ManualCompactData {
   readonly kind: "tbai-compact";
   readonly version: 1;
@@ -87,10 +155,190 @@ export interface ManualCompactData {
   readonly generation: number;
   readonly spanLength: number;
   readonly summaryTokens: number;
+  /**
+   * What compaction kept, or null when nothing was kept.
+   *
+   * Non-null only for a `compacted` outcome. A `skipped` or `failed` compaction
+   * replaced nothing, so there is no summary to show and the divider must not
+   * imply one exists.
+   */
+  readonly summary: string | null;
   readonly reclaimedTokens: number;
   /** Whether the assembled request fits after compaction. */
   readonly requestFits: boolean;
   readonly operationId: string;
+  /**
+   * The transcript row this compaction left behind, or `null` when it could not be
+   * written. Carried so the client can tell "the divider is durable" from "the
+   * divider is only on screen" — the compaction itself already happened either way.
+   */
+  readonly anchorMessageId: string | null;
+  /**
+   * What compaction this was.
+   *
+   * - `manual` — the user ran `/compact` and could read the result.
+   * - `automatic` — the engine crossed its trigger while assembling an ordinary turn.
+   * - `recovery` — the provider rejected the request and overflow recovery forced a
+   *   rebuild; the conversation was shortened without the user asking.
+   *
+   * All three are the SAME durable compaction and the SAME divider. The origin is what
+   * lets the transcript say *why* the context was compacted, instead of leaving three
+   * identical dividers that look like the user pressed a button three times.
+   */
+  readonly origin: CompactionOrigin;
+  readonly instructions?: string;
+}
+
+/** Which trigger produced a compaction. One vocabulary for every producer. */
+export type CompactionOrigin = "manual" | "automatic" | "recovery";
+
+/**
+ * The wire part type the transcript divider is stored as.
+ *
+ * The AI SDK's on-the-wire form, matching every other stored row: `data-tbai-*`
+ * rather than assistant-ui's internal `{ type: "data", name }`.
+ */
+export const COMPACT_DIVIDER_PART_TYPE = "data-tbai-compact";
+
+/** The storage format every assistant-ui row in this database uses. */
+const DIVIDER_STORAGE_FORMAT = "ai-sdk/v6";
+
+/**
+ * The stored row's `content`: exactly the envelope the runtime's own transport
+ * writes, so the loader replays it like any other message.
+ *
+ * Exported for tests because this shape IS the feature: the divider is reload-
+ * durable only if the stored payload matches what the thread loader expects, and
+ * that cannot be asserted from the renderer.
+ */
+export function buildDividerStoredContent(
+  id: string,
+  data: ManualCompactData,
+): Record<string, unknown> {
+  return {
+    role: "assistant",
+    parts: [
+      {
+        type: COMPACT_DIVIDER_PART_TYPE,
+        id,
+        data: {
+          kind: data.kind,
+          version: data.version,
+          outcome: data.outcome,
+          reason: data.reason,
+          spanLength: data.spanLength,
+          generation: data.generation,
+          operationId: data.operationId,
+          origin: data.origin,
+          // The summary is stored WITH the divider, not looked up on click.
+          //
+          // `conversation_compactions` is a single rolling row keyed by
+          // `conversation_id`, so it only ever holds the LATEST summary. An older
+          // divider that fetched on click would display the newest summary against
+          // older history. Embedding at write time makes each divider carry its own,
+          // which is correct by construction and needs no second read path.
+          //
+          // OMITTED when null rather than stored as `null`, so a payload with no
+          // summary is byte-identical to what the pre-summary build wrote and old
+          // rows stay readable.
+          ...(data.summary ? { summary: data.summary } : {}),
+          // OMITTED when absent rather than stored as `undefined`: the field is the
+          // record of something the user typed, so a compaction with no
+          // instructions has no such record.
+          ...(data.instructions ? { instructions: data.instructions } : {}),
+        },
+      },
+    ],
+    metadata: { custom: {} },
+  };
+}
+
+/**
+ * Build the divider payload for a compaction the ENGINE decided on, not the user.
+ *
+ * Same shape, same part, same row — the one difference is `origin`, so the
+ * transcript can distinguish "I asked for this" from "the context filled up and the
+ * engine compacted on its own". Automatic and manual compaction are the same
+ * mechanism; only the trigger and this label differ.
+ */
+export function buildAutomaticDividerData(
+  provenance: NonNullable<ManualCompactData> & { readonly reason: string },
+): ManualCompactData {
+  return {
+    kind: "tbai-compact",
+    version: 1,
+    outcome: provenance.outcome,
+    reason: provenance.reason,
+    generation: provenance.generation,
+    spanLength: provenance.spanLength,
+    summaryTokens: provenance.summaryTokens,
+    // An engine-triggered compaction is auditable on exactly the same terms as a
+    // manual one. If the user cannot read what the engine removed, they cannot
+    // consent to it.
+    summary: provenance.summary,
+    reclaimedTokens: provenance.reclaimedTokens,
+    requestFits: provenance.requestFits,
+    operationId: provenance.operationId,
+    anchorMessageId: null,
+    origin: "automatic",
+  };
+}
+
+/**
+ * Write the divider the conversation will show after a reload.
+ *
+ * ## Why the SERVER writes this row
+ *
+ * `thread().append()` is not a persistence path in this runtime: `adapters.history`
+ * is not configured, so the library only persists messages the transport streams
+ * (its `onNew` / `onUpdate` hooks). Measured, not assumed — an appended message
+ * rendered in the thread and left no row in SQLite, and vanished on reload.
+ *
+ * So the durable artefact is written here, through the same `messageService` the
+ * scheduler and the detached-run finalizer use. SQLite stays the single source of
+ * truth, and the client renders the returned `anchorMessageId` optimistically
+ * rather than owning a second store.
+ *
+ * ## Why one row, anchored to the thread tip
+ *
+ * The divider is appended after the last settled message, so it occupies the tail
+ * of the transcript. `parent_id` is the tip, which is what makes the thread a
+ * linear chain the loader can replay.
+ *
+ * Returns the new row's id, or `null` when the write failed: a persistence fault
+ * must not turn a compaction that DID happen into a reported failure, and must not
+ * be silently swallowed either.
+ */
+/**
+ * Write the divider row, for manual AND automatic compaction alike.
+ *
+ * Exported so `chat.ts` records an automatic compaction through this exact
+ * function: one writer, one payload, one part type. A second writer for the
+ * automatic path is exactly the duplicate persistence mechanism this design
+ * exists to avoid.
+ */
+export async function persistCompactionDivider(
+  conversationId: string,
+  data: ManualCompactData,
+  log: ReturnType<typeof logger.child>,
+): Promise<string | null> {
+  const id = `${COMPACT_DIVIDER_PART_TYPE}-${data.operationId}`;
+  try {
+    const tip = await messageService.getThreadTip(conversationId);
+    await messageService.upsertStored(conversationId, {
+      id,
+      parent_id: tip,
+      format: DIVIDER_STORAGE_FORMAT,
+      content: buildDividerStoredContent(id, data),
+    });
+    return id;
+  } catch (err) {
+    log.error("chat", "chat_compact_divider_persist_failed", {
+      operationId: data.operationId,
+      ...errorLogFields(err),
+    });
+    return null;
+  }
 }
 
 /** Server-side result of a manual compaction, including non-wire diagnostics. */
@@ -117,9 +365,14 @@ function unattemptedResult(
     generation: 0,
     spanLength: 0,
     summaryTokens: 0,
+    // A refusal replaced nothing, so there is nothing to show. Not an empty string:
+    // "no summary" must be distinguishable from "a summary that happens to be blank".
+    summary: null,
     reclaimedTokens: 0,
     requestFits: true,
     operationId,
+    anchorMessageId: null,
+    origin: "manual" as const,
   };
 }
 
@@ -148,19 +401,21 @@ function textOf(message: UIMessage): string {
 /**
  * Whether this request is a manual compaction command.
  *
- * The LAST user message must equal `/compact` after trimming, so surrounding
- * whitespace is tolerated and any additional words are not. Assistant and system
- * messages are skipped rather than matched, so a `/compact` quoted inside the
- * transcript can never trigger the command. Returns `false` when there is no user
- * message at all.
+ * The LAST user message must parse as one of `COMPACT_COMMANDS` (optionally
+ * followed by instructions), so surrounding whitespace is tolerated and a longer
+ * slash-word is not. Assistant and system messages are skipped rather than
+ * matched, so a `/compact` quoted inside the transcript can never trigger the
+ * command. Returns `undefined` when there is no user message at all.
  */
-export function detectCompactCommand(messages: readonly UIMessage[]): boolean {
+export function detectCompactCommand(
+  messages: readonly UIMessage[],
+): CompactCommandMatch | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "user") continue;
-    return textOf(message).trim() === COMPACT_COMMAND;
+    return parseCompactCommand(textOf(message));
   }
-  return false;
+  return undefined;
 }
 
 /** The command's own cancellable lifetime, independent of any chat run. */
@@ -196,6 +451,13 @@ export interface ManualCompactInput {
   readonly modelId: string;
   readonly systemPrompt: string | undefined;
   readonly summarizerModel: SummarizerModel;
+  /**
+   * The user's narrowing words, from `/compact <instructions>`.
+   *
+   * `undefined` when the user typed none, which leaves the summariser prompt
+   * byte-identical to the behaviour from before instructions existed.
+   */
+  readonly instructions: string | undefined;
   readonly signal: AbortSignal;
 }
 
@@ -248,6 +510,9 @@ export async function runManualCompaction(
         // a record of this conversation.
         summarizerModel: input.summarizerModel,
         summarizedBy: `${input.provider.type}/${input.modelId}`,
+        // The user's own narrowing words, when they typed any. `undefined` leaves
+        // the summariser prompt byte-identical to the pre-instructions behaviour.
+        instructions: input.instructions,
         nextCompactionId: (generation) => `${generateId()}_${generation}`,
         now: () => Date.now(),
         signal: input.signal,
@@ -274,9 +539,12 @@ export async function runManualCompaction(
         generation: 0,
         spanLength: 0,
         summaryTokens: 0,
+        summary: null,
         reclaimedTokens: 0,
         requestFits: assembled.decision.action !== "reject",
         operationId: input.operationId,
+        anchorMessageId: null,
+        origin: "manual" as const,
       };
     }
 
@@ -292,6 +560,33 @@ export async function runManualCompaction(
         ? "failed"
         : "skipped";
 
+    const data: ManualCompactData = {
+      kind: "tbai-compact",
+      version: 1,
+      outcome,
+      reason: report.reason,
+      generation: report.generation,
+      spanLength: report.spanLength,
+      summaryTokens: report.summaryTokens,
+      // Only a compaction that APPLIED has anything to show. `outcome` is
+      // `"compacted"` exactly when `applied` is true, so this gate cannot report a
+      // summary for a refusal or a failure.
+      summary: outcome === "compacted" ? report.summaryText : null,
+      reclaimedTokens: report.reclaimedTokens,
+      requestFits: assembled.decision.action !== "reject",
+      operationId: input.operationId,
+      anchorMessageId: null,
+      origin: "manual",
+      // Only recorded when the user actually typed something, so the stored divider
+      // distinguishes "no instructions given" from "instructions given".
+      ...(input.instructions ? { instructions: input.instructions } : {}),
+    };
+    // Every outcome leaves a divider, including a `skipped`: "the context was
+    // already compact" is itself something the user asked to find out, and it is
+    // the answer to that question. Only the row id is added here, so the log line
+    // below reports the same numbers whether or not the write succeeded.
+    const anchorMessageId = await persistCompactionDivider(input.conversationId, data, log);
+
     log.info("chat", "chat_compact_command", {
       operationId: input.operationId,
       outcome,
@@ -300,23 +595,12 @@ export async function runManualCompaction(
       compactionSpanMessages: report.spanLength,
       compactionReclaimedSize: report.reclaimedTokens,
       compactionSummarySize: report.summaryTokens,
-      requestFits: assembled.decision.action !== "reject",
+      requestFits: data.requestFits,
+      anchorMessageId,
       durationMs: Date.now() - startedAt,
     });
 
-    return {
-      kind: "tbai-compact",
-      version: 1,
-      outcome,
-      reason: report.reason,
-      mechanism,
-      generation: report.generation,
-      spanLength: report.spanLength,
-      summaryTokens: report.summaryTokens,
-      reclaimedTokens: report.reclaimedTokens,
-      requestFits: assembled.decision.action !== "reject",
-      operationId: input.operationId,
-    };
+    return { ...data, mechanism, anchorMessageId };
   } catch (err) {
     log.error("chat", "chat_compact_failed", {
       operationId: input.operationId,
@@ -334,9 +618,12 @@ export async function runManualCompaction(
       generation: 0,
       spanLength: 0,
       summaryTokens: 0,
+      summary: null,
       reclaimedTokens: 0,
       requestFits: true,
       operationId: input.operationId,
+      anchorMessageId: null,
+      origin: "manual" as const,
     };
   }
 }

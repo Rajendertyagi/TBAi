@@ -267,13 +267,22 @@ export class OpenCodeServerManager {
 
   /** Spawns the child process for the given port. Extracted for test seams. */
   protected createChild(port: number, binaryPath: string = OPENCODE_CONFIG.binaryName): Subprocess {
+    // The generated credential goes under BOTH env names. OpenCode 2.0.22 reads
+    // `OPENCODE_PASSWORD`; earlier 2.0.x builds read `OPENCODE_SERVER_PASSWORD`.
+    // Sending only one leaves an in-range server either unsecured or expecting a
+    // credential it cannot see - which is exactly the 401 that stopped the
+    // managed server from ever becoming ready.
+    const password = getOpenCodeAuthPassword(this.config);
+    const authEnv = Object.fromEntries(
+      this.config.authPasswordChildEnvVars.map((name) => [name, password]),
+    );
     return spawn(buildOpenCodeServeArgs(port, binaryPath), {
       cwd: this.config.serverHomeDir,
       stdout: "pipe",
       stderr: "pipe",
       env: {
         ...process.env,
-        OPENCODE_SERVER_PASSWORD: getOpenCodeAuthPassword(this.config),
+        ...authEnv,
       },
       detached: process.platform !== "win32",
     });

@@ -174,12 +174,17 @@ describe("pin wiring (additional source-guard proof)", () => {
 });
 
 describe("OpenCode ring source", () => {
-  it("reads native V2 extras usage and memoizes the token mapping", () => {
-    expect(openCodeRing).toContain("extras?.state.usage?.tokens");
-    // The meter consumes `toCodeContextUsage`, which prefers the server's
-    // `tokens.total` over a bucket sum. `toTokenUsage` remains inside it for the
-    // spend breakdown, so the ring itself no longer calls it directly.
-    expect(openCodeRing).toContain("toCodeContextUsage(rawTokens)");
+  it("reads the newest RESPONSE for the numerator, never the session ledger", () => {
+    // The bug this guards: `state.usage.tokens` is OpenCode's SESSION-cumulative
+    // ledger. Measured live against opencode 2.0.22, three trivial turns gave
+    // ledger totals of 12,451 -> 24,005 -> 35,571 while the newest assistant
+    // response stayed flat at 11,524. Summing that ledger reports traffic as
+    // occupancy, so it must never reach the ring's numerator.
+    expect(openCodeRing).toContain("extras?.state.occupancyTokens");
+    expect(openCodeRing).not.toContain("toCodeContextUsage(extras?.state.usage?.tokens)");
+    // The ledger is still consumed, but only for the spend breakdown it describes.
+    expect(openCodeRing).toContain("toTokenUsage(extras.state.usage.tokens)");
+    expect(openCodeRing).toContain("toCodeContextUsage(occupancy)");
     expect(openCodeRing).not.toContain("state.thread.messages");
     expect(openCodeRing).not.toContain("metadata.custom.tokens");
   });

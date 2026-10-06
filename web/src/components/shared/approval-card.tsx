@@ -10,6 +10,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { isPlainEnter, isPlainEscape } from "@/lib/ime";
+import {
+  focusComposerInput,
+  isDecisionSurfaceOwner,
+  registerDecisionSurface,
+  useDecisionSurfaceFocus,
+} from "@/lib/focus";
 
 /**
  * The card surface both decision states share: the open gate
@@ -97,6 +104,16 @@ export function ApprovalCard({
         leaving
           ? "animate-out fade-out-0 duration-100"
           : "animate-in fade-in-0 zoom-in-95 duration-150",
+        // Marks the card holding the keyboard, and ONLY when several decisions
+        // are on screen. Both facts are carried by the row's
+        // `data-decision-owner` attribute, which `ApprovalActions` sets only
+        // when it owns the keyboard AND the count is above one -- so a lone card
+        // needs no pointer, since its arriving is the signal.
+        //
+        // An inset shadow rather than a border: a border would shove the content
+        // 2px sideways the moment focus moved, and a jump like that is exactly
+        // what an attention-drawing mark must not do.
+        "has-[[data-decision-owner]]:shadow-[inset_2px_0_0_0_var(--primary)]",
         className,
       )}
     >
@@ -172,6 +189,50 @@ function ApprovalSpinner() {
  * never mixes three button treatments. Stacks vertically on narrow viewports,
  * rows on sm+. While `busy`, Approve shows an in-place spinner and both
  * disable.
+ *
+ * ## Keyboard contract
+ *
+ * The row takes focus when the card appears, and from there:
+ *
+ *   - **Enter approves.** Native button activation once focus has been tabbed
+ *     onto a button; handled explicitly while focus is on the row itself.
+ *   - **Escape denies.** Handled here because no native control owns Escape.
+ *   - Both are IME-guarded, and Tab still reaches the buttons in order.
+ *
+ * ## Where focus goes when there are several cards
+ *
+ * `OpenCodePermissions` renders a LIST of pending requests, so more than one card
+ * on screen is an intended state rather than an edge case. The rules, both in
+ * `lib/focus.ts`:
+ *
+ *   - **The topmost card owns the keyboard**, not the last one to mount. React
+ *     runs sibling effects top-down, so taking focus on mount left focus on the
+ *     bottom of the column: Enter drained the list from the far end and the
+ *     reader scrolled to find what had changed. Draining from the top makes N
+ *     cards N Enters, with the focused card always already on screen.
+ *   - **A newly-arrived card never takes focus from the current owner.** Only
+ *     the owner's departure frees the keyboard, and the next topmost card then
+ *     claims it. Otherwise a second request arriving mid-answer would yank focus
+ *     away.
+ *
+ * ## Deliberate limits
+ *
+ * 1. **No ring around the buttons, and no indicator at all for a lone card.** A
+ *    ring drawn around a row of buttons reads as an error box -- "this is wrong"
+ *    rather than "the keyboard is here". For one card the card's arrival is the
+ *    signal. When several are stacked, a thin edge appears on the CARD holding
+ *    the keyboard, which is the only moment a reader genuinely cannot tell which
+ *    card they are on.
+ * 2. **Focus is only taken when it is safe** (`canTakeFocusSafely`). A card
+ *    appearing mid-sentence leaves the reader's caret where it is. It does NOT
+ *    wait for a pause, time out, or steal focus on a timer.
+ * 3. **Keys are local to the card.** There is no global "Enter approves" rule,
+ *    because a document-level Enter handler would approve whatever request
+ *    happened to be on screen while the reader typed into anything else. This
+ *    is also OpenChamber's documented rule for shortcut scoping.
+ *
+ * Every call site inherits all of it -- this is the single choke point all four
+ * permission surfaces go through, which is why it is here and not in them.
  */
 export function ApprovalActions({
   busy = false,
@@ -179,6 +240,7 @@ export function ApprovalActions({
   denyLabel = "Deny",
   approveAria,
   denyAria,
+  actionsAria,
   onApprove,
   onDeny,
 }: {
@@ -187,11 +249,93 @@ export function ApprovalActions({
   denyLabel?: string;
   approveAria?: string;
   denyAria?: string;
+  /**
+   * Name announced when this row receives focus, because it is then the thing
+   * Enter and Escape act on. Defaults to the approve label, which already names
+   * the decision (`"Approve once: <title>"` on the native gate), so no call site
+   * has to supply anything for the keyboard path to be usable.
+   */
+  actionsAria?: string;
   onApprove: () => void;
   onDeny: () => void;
 }) {
+  /**
+   * The row itself is the keyboard target, NOT the Approve button.
+   *
+   * Focusing the button was the obvious choice and it is wrong here: the button
+   * takes `disabled` while `busy`, and a disabled button drops focus to `<body>`.
+   * That is the exact moment focus most needs to be somewhere deliberate — the
+   * card is mid-decision. The row is never disabled, so focus survives.
+   *
+   * The cost is that Enter must be handled explicitly instead of arriving free
+   * with button activation, which is why {@link ApprovalActions}'s `onKeyDown`
+   * checks that the event landed on this element.
+   */
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * The row is REGISTERED rather than focusing itself. With several cards on
+   * screen, "each one takes focus on mount" leaves focus on whichever React
+   * mounted last -- the bottom of a column that renders top-down, so Enter
+   * drains the list from the far end and the reader scrolls to find what
+   * changed. `registerDecisionSurface` picks the topmost instead, and hands the
+   * keyboard on when the owner leaves.
+   */
+  useEffect(() => {
+    const element = surfaceRef.current;
+    const release = registerDecisionSurface(element);
+    return () => {
+      // Asked of the REGISTRY, not of a ref captured when the effect ran: by
+      // cleanup time any such value is stale, and this decides whether focus is
+      // ours to give back. Released BEFORE restoring, so a card further down the
+      // list can take the keyboard cleanly rather than racing the composer.
+      const wasOwner = isDecisionSurfaceOwner(element);
+      release();
+      if (wasOwner) focusComposerInput();
+    };
+  }, []);
+
+  const { count, isOwner } = useDecisionSurfaceFocus(surfaceRef.current);
+
   return (
-    <div className="mt-4 flex flex-col gap-2 border-t border-border pt-3 sm:flex-row">
+    <div
+      ref={surfaceRef}
+      // Focusable but NOT in the tab order: `-1` means focus can arrive here
+      // programmatically while Tab still walks into the buttons as before.
+      tabIndex={-1}
+      role="group"
+      aria-label={actionsAria ?? approveAria ?? approveLabel}
+      // Set ONLY when this row holds the keyboard AND more than one decision is
+      // on screen. Both facts in one attribute, because `ApprovalCard` matches it
+      // with a `:has()` rule: a lone card must stay unmarked, and without the
+      // count folded in here the card shell would have no way to know.
+      data-decision-owner={isOwner && count > 1 ? "" : undefined}
+      onKeyDown={(e) => {
+        // Escape declines, mirroring Enter approving. IME-guarded: closing a
+        // candidate window is not consent to decline the request.
+        if (isPlainEscape(e)) {
+          e.preventDefault();
+          onDeny();
+          return;
+        }
+        // Enter approves — but ONLY when it lands on this row. Once focus moves
+        // onto a button, that button activates natively, and handling Enter here
+        // too would run `onApprove` twice for a single press.
+        if (e.target !== e.currentTarget) return;
+        if (isPlainEnter(e)) {
+          e.preventDefault();
+          onApprove();
+        }
+      }}
+      // NO focus ring, by request. A ring drawn around a row of buttons reads
+      // as an error state -- a box saying "this is wrong" -- rather than "the
+      // keyboard is here", and it is the wrong signal on a decision surface.
+      //
+      // `outline-none` stays so the browser's own ring does not appear either.
+      // What replaces it: nothing for a lone card (the card arriving IS the
+      // signal, and there is nothing to disambiguate), and an accent on the CARD
+      // itself when several are stacked -- see `ApprovalCard`.
+      className="mt-4 flex flex-col gap-2 border-t border-border pt-3 focus:outline-none sm:flex-row"
+    >
       <Button
         size="sm"
         disabled={busy}

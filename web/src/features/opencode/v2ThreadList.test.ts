@@ -12,6 +12,7 @@ const state: V2ThreadState = {
   execution: { type: "idle" },
   compaction: { type: "idle" },
   occupancyStale: false,
+  occupancyTokens: null,
   revertRecovery: { type: "none" },
   eventIdentity: {
     nextOrdinal: 0,

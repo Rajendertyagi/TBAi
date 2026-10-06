@@ -1,11 +1,13 @@
 import type {
   SessionInboxItem,
+  SessionMessageInfo,
   V2Event,
 } from "@opencode/client";
 import {
   OPENCODE_V2_DIAGNOSTIC_COUNT_CAP,
   OPENCODE_V2_RECENT_EVENT_ID_WINDOW,
 } from "@/config/opencode";
+import { resolveCodeOccupancy } from "./codeOccupancy";
 import {
   modelRefToV2Selection,
   type V2EventIdentityState,
@@ -422,12 +424,16 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "session.agent.selected":
       return applyAgentEvent(state, event);
     case "session.usage.updated":
-      // A fresh report supersedes any compaction invalidation: whatever made the
-      // previous reading stale has now been measured past.
+      // Spend only. This event reports the SESSION's cumulative ledger, so it is
+      // the wrong thing to measure occupancy from AND the wrong thing to clear a
+      // compaction invalidation with: after a compaction the ledger still counts
+      // every pre-compaction round trip, so clearing here repopulated the meter
+      // with the traffic the compaction was meant to remove. Only a per-response
+      // measurement (`session.step.ended`) or the persisted messages
+      // (`history_loaded`) can resolve the occupancy.
       return {
         ...state,
         usage: { cost: event.data.cost, tokens: event.data.tokens },
-        occupancyStale: false,
       };
     case "session.inbox.enqueued":
       return recordInbox(state, inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item));
@@ -552,7 +558,16 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "session.step.failed": {
       const message = getMessage(state, event.data.assistantMessageID);
       const part = [...message.parts].reverse().find((candidate) => candidate.kind === "step");
-      if (part?.kind !== "step") return state;
+      // Occupancy is settled from this event even when there is no step part to
+      // finish: a response's tokens are the current window whether or not its
+      // parts arrived, and returning early here used to strand the meter in
+      // "unknown" for the rest of the session after one compaction.
+      const occupancyTokens = event.data.tokens ?? state.occupancyTokens;
+      if (part?.kind !== "step") {
+        return event.data.tokens
+          ? { ...state, occupancyTokens, occupancyStale: false }
+          : state;
+      }
       const next = updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
         status: event.type === "session.step.failed" ? "error" : "finished",
@@ -566,7 +581,16 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
       // compaction invalidation. Without this the meter would stay unknown for
       // the rest of the session after one compaction.
       const measured = usage !== next.usage;
-      return { ...next, usage, ...(measured ? { occupancyStale: false } : {}) };
+      // A step's tokens describe the prompt THIS response was given, so they are
+      // the occupancy. The last step of a turn supersedes its earlier steps, and
+      // the last turn supersedes earlier turns - which is exactly OpenChamber's
+      // "newest assistant response that reported tokens".
+      return {
+        ...next,
+        usage,
+        occupancyTokens,
+        ...(event.data.tokens ? { occupancyStale: false } : measured ? { occupancyStale: false } : {}),
+      };
     }
     case "session.tool.input.started":
       return applyAssistantEvent(state, event.data.assistantMessageID, {
@@ -701,6 +725,15 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         .map((messageId) => state.messages[messageId])
         .filter((message): message is V2MessageState => message !== undefined);
       const merged = [...action.messages, ...optimistic];
+      // Occupancy is re-derived from the PERSISTED messages, not from the live
+      // event stream and not from the session ledger. This is what makes reload
+      // and resume correct after a compaction: a session whose last message is a
+      // finished compaction comes back `unknown` instead of resurrecting the
+      // pre-compaction figure the ledger still remembers.
+      const ordered = action.messageOrder
+        .map((messageId) => state.messages[messageId]?.source ?? messages[messageId]?.source)
+        .filter((source): source is SessionMessageInfo => source !== undefined && source !== null);
+      const occupancy = resolveCodeOccupancy(ordered);
       return {
         ...state,
         messages: Object.fromEntries(merged.map((message) => [message.id, message])),
@@ -708,6 +741,8 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
           ...action.messageOrder,
           ...optimistic.map((message) => message.id).filter((id) => !action.messageOrder.includes(id)),
         ],
+        occupancyTokens: occupancy?.state === "measured" ? occupancy.tokens : state.occupancyTokens,
+        occupancyStale: occupancy?.state === "unknown" ? true : occupancy === null ? state.occupancyStale : false,
       };
     }
     case "inbox_hydrated":
@@ -973,6 +1008,7 @@ export function createInitialV2ThreadState(sessionId: string): V2ThreadState {
     forms: [],
     inboxById: {},
     usage: null,
+    occupancyTokens: null,
     occupancyStale: false,
     optimisticMessageIds: [],
     answeredPermissionIds: [],

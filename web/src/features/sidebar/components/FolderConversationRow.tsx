@@ -38,6 +38,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { isPlainEnter } from "@/lib/ime";
 import { sidebarConfig } from "@/config/sidebar";
 import { historyConfig } from "@/config/history";
 import { useChatTabsStore, threadUrl } from "@/features/chat/state/chatTabs";
@@ -288,7 +289,10 @@ const FolderConvRow = memo(function FolderConvRow({
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void handleConfirmRename();
+              // `isPlainEnter`, not `key === "Enter"`: accepting an IME candidate
+              // also fires a keydown, so a bare check would commit the rename
+              // with the pinyin instead of the kanji.
+              if (isPlainEnter(e)) void handleConfirmRename();
             }}
             placeholder={initialTitle}
             autoFocus

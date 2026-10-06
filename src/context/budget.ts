@@ -14,7 +14,7 @@
 
 import { describeLimitSource, isPhase3ExperimentEligible, resolveGenerationCap, resolveOutputReservation } from "./limits";
 import { REQUEST_REDUCIBLE_CATEGORIES } from "./reduce";
-import type { ContextLimit } from "./types";
+import type { ContextLimit, LimitSource } from "./types";
 import {
   type BudgetDecision,
   type ContextBudget,
@@ -151,12 +151,31 @@ export function decideBudget(input: {
   budget: ContextBudget;
   /** What each reduction mechanism actually did. Required — no defaulting. */
   reduction: ReductionRecord;
+  /**
+   * Resolved provenance of the ceiling, required to decide P-1 admissibility.
+   *
+   * `conservative_default` and `unknown` are stand-ins, not stated limits, so a
+   * request over them is ADVISORY rather than rejected. Every other source names a
+   * figure somebody asserted about this endpoint and stays terminal.
+   */
+  limitSource: LimitSource;
 }): BudgetDecision {
   const { estimate, budget, reduction } = input;
   const usable = budget.usableInputTokens;
   const { estimatedTokens: point, range } = estimate;
 
   const accept = (headroomTokens: number): BudgetDecision => ({ action: "accept", headroomTokens, reduction });
+
+  // P-1: a stand-in ceiling is advisory, never terminal.
+  //
+  // `conservative_default` and `unknown` are figures TBAi supplied, not figures the
+  // provider stated. Rejecting against one refuses work the provider would have
+  // done AND prevents the provider from ever stating its real limit — the request
+  // never reaches transport, so nothing can be learned and the next turn repeats.
+  // Tier 2 still bounds these requests unconditionally (`tier2.ts`), so this is not
+  // an unbounded relaxation.
+  const advisoryCeiling =
+    input.limitSource === "conservative_default" || input.limitSource === "unknown";
 
   if (usable === undefined) {
     // No enforceable ceiling, so there is no budget to enforce and no verdict to
@@ -175,9 +194,19 @@ export function decideBudget(input: {
   // Fits even at the pessimistic end: send, with the honest headroom.
   if (worstCase <= usable) return accept(usable - worstCase);
 
-  // Over at the DENSE end too: the corpus cannot be dense enough to fit. Reject.
-  // This is the one verdict that was already correct and is unchanged.
+  // Over at the DENSE end too: the corpus cannot be dense enough to fit. Reject —
+  // unless the ceiling is a stand-in (P-1), in which case the same verdict is
+  // recorded as advisory so transport can still be reached.
   if (range.low > usable) {
+    if (advisoryCeiling) {
+      return {
+        action: "advisory",
+        reason: "limit_not_authoritative",
+        planningCeilingTokens: usable,
+        overBy: range.low - usable,
+        reduction,
+      };
+    }
     return { action: "reject", reason: "over_limit", overBy: range.low - usable, reduction };
   }
 
@@ -206,6 +235,19 @@ export function decideBudget(input: {
   // nothing of its shape. Nothing safe is left to try, so sending would be
   // sending an oversized request and hoping the provider accepts the estimator's
   // pessimism — the exact behaviour this decision exists to prevent.
+  //
+  // P-1: when the ceiling is a stand-in there is no provider statement to honour, so
+  // this is recorded as advisory rather than terminal. The provider — not a guessed
+  // number — decides whether the request fits, and `observed` then learns the answer.
+  if (advisoryCeiling) {
+    return {
+      action: "advisory",
+      reason: "limit_not_authoritative",
+      planningCeilingTokens: usable,
+      overBy: point - usable,
+      reduction,
+    };
+  }
   return { action: "reject", reason: "reduction_exhausted", overBy: point - usable, reduction };
 }
 
@@ -303,6 +345,15 @@ export function budgetDiagnostics(input: {
   if (decision.action === "accept") base.headroom = decision.headroomTokens;
   if (decision.action === "reject") {
     base.rejectReason = decision.reason;
+    base.overBy = decision.overBy;
+  }
+  // P-1: an advisory verdict is a distinct outcome, not an accept. Logging it as
+  // "accept" would hide the fact that the request was over its planning ceiling and
+  // that the ceiling was a stand-in — which is the signal an operator needs when a
+  // conversation grows unexpectedly.
+  if (decision.action === "advisory") {
+    base.advisoryReason = decision.reason;
+    base.planningCeiling = decision.planningCeilingTokens;
     base.overBy = decision.overBy;
   }
   return base;

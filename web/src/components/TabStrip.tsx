@@ -32,7 +32,24 @@ import {
   urlForTab,
   useChatTabsStore,
 } from "../features/chat/state/chatTabs";
+import {
+  evictIfGone,
+  isConfirmedGone,
+} from "../features/chat/state/tabReconciliation";
 
+/**
+ * Tab label, from the conversation row the server already returns.
+ *
+ * This probe is also the steady-state half of tab reconciliation: a
+ * conversation deleted while the app is open is discovered HERE, on the request
+ * this hook already made — no extra call, no new mechanism. Boot covers the
+ * closed-app case in one batch; this covers the open-app case per tab.
+ *
+ * The verdict decides the outcome, and only one of the three may destroy state:
+ * `gone` evicts the tab (the row is proven missing), while `unknown` — a 5xx, a
+ * dropped connection, an unreadable body — keeps the tab and shows the neutral
+ * label. A tab is never closed because the server was briefly unhealthy.
+ */
 function useTabTitle(ref: string): string {
   const [title, setTitle] = useState<string>(() =>
     ref === "new" ? tabStripConfig.copy.newChat : tabStripConfig.copy.untitled,
@@ -44,16 +61,21 @@ function useTabTitle(ref: string): string {
       return;
     }
     let cancelled = false;
-    threadListAdapter
-      .fetch(ref)
-      .then((meta) => {
-        if (cancelled) return;
-        setTitle((meta?.title as string | undefined) ?? tabStripConfig.copy.untitled);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setTitle(tabStripConfig.copy.untitled);
-      });
+    void (async () => {
+      const probe = await threadListAdapter.fetch(ref).then(
+        (meta) => ({ status: "exists" as const, title: meta?.title as string | undefined }),
+        (err: unknown) => ({
+          status: isConfirmedGone(err) ? ("gone" as const) : ("unknown" as const),
+          title: undefined,
+        }),
+      );
+      if (cancelled) return;
+      if (probe.status === "gone") {
+        evictIfGone(ref, "gone");
+        return;
+      }
+      setTitle(probe.title ?? tabStripConfig.copy.untitled);
+    })();
     return () => {
       cancelled = true;
     };

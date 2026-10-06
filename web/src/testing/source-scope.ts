@@ -103,6 +103,42 @@ export function constBody(source: string, name: string): string {
   throw new Error(`${name}'s body is unbalanced`);
 }
 
+/**
+ * The brace-matched body of a JSX attribute, e.g. `onOpenChange={...}`.
+ *
+ * Exists so a guard can say "this callback must NOT do X" without naming the
+ * component's function. A rename should never turn a behavioural guard red; a
+ * structural change must. Pinning the *event* is stable, because the event is
+ * the contract, whereas the helper it calls is an implementation detail.
+ *
+ * Comments must already be stripped, and the attribute must occur exactly once
+ * in the source — an ambiguous attribute is a source of its own bug, so it
+ * throws rather than guessing.
+ */
+export function jsxAttributeBody(source: string, attribute: string): string {
+  const pattern = new RegExp(`\\b${attribute}\\s*=\\s*\\{`, "g");
+  const matches = [...source.matchAll(pattern)];
+  if (matches.length === 0) {
+    throw new Error(`${attribute} is not present in this source`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `${attribute} occurs ${matches.length} times; pass a narrower slice so the match is unambiguous`,
+    );
+  }
+
+  const open = (matches[0].index ?? 0) + matches[0][0].length - 1;
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  throw new Error(`${attribute}'s body is unbalanced`);
+}
+
 /** Read a file beside the calling test and return a const-arrow body. */
 export async function commentedConstBodyOf(
   name: string,

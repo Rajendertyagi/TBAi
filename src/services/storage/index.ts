@@ -262,6 +262,40 @@ export const conversationService = {
     return row ? mapConversation(row) : null;
   },
 
+  /**
+   * Which of `ids` currently exist as conversation rows.
+   *
+   * The authoritative answer set for tab reconciliation. Only the id column is
+   * selected: reconciliation proves existence and nothing more, so no title,
+   * config, or message content leaves SQLite for this path.
+   *
+   * Absence from the returned set is meaningful ONLY because the caller supplied
+   * the complete id set (the request drives the answer). Deriving absence from
+   * `list()` would be unsound — that query is scoped and capped, so a missing id
+   * could be archived, folder-scoped, or past the limit rather than deleted.
+   *
+   * @param ids - Candidate conversation ids. Duplicates are harmless.
+   * @returns The subset of `ids` that exists (never includes anything else).
+   */
+  async existsMany(ids: string[]): Promise<Set<string>> {
+    const found = new Set<string>();
+    if (ids.length === 0) return found;
+    // Chunked to stay well inside SQLite's bound-parameter ceiling regardless
+    // of what the route's request cap allows.
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = db
+        .query<{ id: string }, SQLQueryBindings[]>(
+          `SELECT id FROM conversations WHERE id IN (${placeholders})`,
+        )
+        .all(...chunk);
+      for (const row of rows) found.add(row.id);
+    }
+    return found;
+  },
+
   async update(
     id: string,
     data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId" | "opencodeSessionId" | "engine" | "opencodeAgent" | "opencodeModel" | "opencodeVariant" | "opencodeAutoApprove">>,

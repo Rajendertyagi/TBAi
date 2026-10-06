@@ -51,10 +51,13 @@ import {
 import { ComposerContextMenu } from "./chat/ComposerContextMenu";
 import { cancelActiveRun } from "../features/chat/state/deleteConversation";
 import {
-  isDirectCompactCommand,
+  buildDividerPart,
+  DIRECT_COMPACT_COMMAND,
+  parseDirectCompactCommand,
   runDirectCompact,
-  type DirectCompactStatus,
+  type DirectCompactCommandMatch,
 } from "../features/chat/compactCommand";
+import { buildDirectCompactEntries } from "../features/chat/directCompactEntries";
 import { useKeyboardClaimed } from "../lib/focus";
 import { ModelOptionList } from "./chat/ModelOptionList";
 import { buildModelGroups, resolveModelOwner } from "../lib/model-groups";
@@ -177,7 +180,7 @@ function ModelChip() {
         <button
           type="button"
           className={cn(
-            "inline-flex items-center gap-1.5 h-7 rounded-full border border-border",
+            "inline-flex items-center gap-1.5 h-7 rounded-full",
             "px-2.5 text-xs text-muted-foreground hover:text-foreground",
             "hover:bg-accent/50 transition-colors cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -264,7 +267,7 @@ function ThinkingChip() {
         <button
           type="button"
           className={cn(
-            "inline-flex items-center gap-1.5 h-7 rounded-full border border-border",
+            "inline-flex items-center gap-1.5 h-7 rounded-full",
             "px-2.5 text-xs text-muted-foreground hover:text-foreground",
             "hover:bg-accent/50 transition-colors cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -359,6 +362,9 @@ function Composer({
   // DOM outright; using both is deliberate here, and only for that interception.
   const { value: composerText, setText, send: sendViaRuntime } = unstable_useComposerInput();
   const aui = useAui();
+  // True while a decision card (a permission request, or an agent question) owns
+  // the keyboard. See `lib/focus.ts` for why the composer has to yield.
+  const keyboardClaimed = useKeyboardClaimed();
   // Thread identity for draft persistence. Guarded: the composer also mounts
   // under runtimes where the thread item may be momentarily unavailable —
   // without an identity we skip persistence rather than cross-contaminate.
@@ -456,6 +462,25 @@ function Composer({
   // The library hook owns trigger detection, filtering and keyboard routing;
   // only the item list and the execute action are ours. Called unconditionally
   // (hooks may not be conditional) — an empty list simply never opens.
+  //
+  // Direct contributes its OWN commands here. It previously contributed none, because
+  // the palette was gated on `slashCommandsEnabled` — an OpenCode-only condition —
+  // which left `/compact` reachable only by typing all seven characters. The gate was
+  // right for the OpenCode feed and wrong for the built-in: the feed's commands cannot
+  // run on Direct, but `/compact` is Direct's own and always could.
+  //
+  // The rows are built by a pure function rather than inline here, so the token→name
+  // conversion the palette depends on is executable by a test. It was previously a
+  // source-string assertion, which passed while the entry still inserted `//compact `.
+  const directSlashEntries = useMemo(
+    () =>
+      buildDirectCompactEntries(
+        composerConfig.copy.compactCommandDescription,
+        (name) => setText(applyCommandSelection(composerText, name)),
+      ),
+    [composerConfig.copy.compactCommandDescription, composerText, setText],
+  );
+
   const slashEntries = useMemo(
     () => [
       ...(slashCommandsEnabled
@@ -481,8 +506,16 @@ function Composer({
           });
         })]
         : []),
+      ...(slashCommandsEnabled ? [] : directSlashEntries),
     ],
-    [slashCommandsEnabled, openCodeCommands, canCompact, composerText, setText],
+    [
+      slashCommandsEnabled,
+      openCodeCommands,
+      canCompact,
+      composerText,
+      setText,
+      directSlashEntries,
+    ],
   );
   const slash = unstable_useSlashCommandAdapter({
     commands: slashEntries,
@@ -524,9 +557,9 @@ function Composer({
       setCompacting(false);
     }
   };
-  // ΓöÇΓöÇ Direct `/compact` execution ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // ── Direct `/compact` execution ─────────────────────────────────────────
   // The conversation as the thread currently holds it. Read during render
-  // because `useAuiState` is a subscription, not an imperative getter ΓÇö the value
+  // because `useAuiState` is a subscription, not an imperative getter — the value
   // is always the latest one a render has seen, and every send re-renders before
   // the next submit can happen.
   const directThreadMessages = useAuiState(
@@ -538,35 +571,76 @@ function Composer({
         metadata?: unknown;
       }> | undefined) ?? [],
   );
-  // The command's own transient state. Deliberately NOT a message: it lives in a
-  // composer strip, so the thread stays exactly the conversation.
-  const [directCompactStatus, setDirectCompactStatus] = useState<DirectCompactStatus | null>(null);
-  const runDirectCompactCommand = async () => {
-    if (compacting) return;
-    setCompacting(true);
-    setCompactError(null);
-    setDirectCompactStatus(null);
+  // The command leaves its result IN THE TRANSCRIPT, not in composer state. That is
+  // the whole point: a compaction is an event in the conversation, so it is a
+  // message part the history adapter persists and the codec reloads — not React
+  // state that vanishes on refresh.
+  //
+  // `compacting` / `compactError` are deliberately NOT touched here. They are shared
+  // with the Code surface's own compact (declared at Composer.tsx:505), and driving
+  // them from Direct is exactly what produced the composer toast this replaces.
+  //
+  // `directCompacting` is therefore a SEPARATE flag for a separate reason: it is not
+  // an outcome, it is only "the summariser is running". The outcome belongs to the
+  // divider in the transcript, and putting it back in the composer is the regression
+  // this boundary exists to prevent.
+  const [directCompacting, setDirectCompacting] = useState(false);
+  const runDirectCompactCommand = async (command: DirectCompactCommandMatch) => {
+    // Set BEFORE the await, not after: the whole gap this closes is the silence
+    // between submit and the summariser finishing.
+    setDirectCompacting(true);
     try {
       const status = await runDirectCompact({
         conversationId: threadKey,
         messages: directThreadMessages,
+        command,
       });
-      setDirectCompactStatus(status);
-      // The command is consumed either way: there is nothing to retry, and
-      // leaving the text in the box would invite a second identical compaction.
+      // `startRun: false`: the divider records what just happened, it is not a
+      // prompt. No chat run, no provider call, no assistant reply.
+      //
+      // This is the OPTIMISTIC half only. The server already wrote the durable row
+      // (`anchorMessageId`) — `thread().append()` is not a persistence path in this
+      // runtime, because `adapters.history` is unset and only transported messages
+      // are written. The append exists so the divider is on screen immediately; the
+      // row the server wrote is what a reload replays, so exactly one divider
+      // exists after a refresh.
+      aui.thread().append({
+        role: "assistant",
+        content: [buildDividerPart(status)],
+        startRun: false,
+      });
+      // Consumed either way: nothing to retry, and leaving the text in the box
+      // would invite a second identical compaction.
       setText("");
       clearComposerDraft(threadKey);
-      if (status.outcome === "failed") {
-        setCompactError(composerConfig.copy.compactFailed);
-      }
-    } catch (err) {
-      // Transport failure only. The text is KEPT so a retry is possible, and the
-      // strip says so ΓÇö nothing was sent and nothing was compacted.
-      setCompactError(err instanceof Error ? err.message : String(err));
+    } catch {
+      // Transport failure only — the request never produced a status, so there is
+      // no outcome to represent. The text is KEPT so a retry is possible.
+      logger.warn("direct", "compact.command_failed", { threadId: threadKey ?? undefined });
     } finally {
-      setCompacting(false);
+      // `finally`, not the success path: a thrown transport must not leave the
+      // indicator stuck on with no way to clear it.
+      setDirectCompacting(false);
     }
   };
+
+  // The context panel's "Compress now" — routed through the SAME command handler the
+  // typed `/compact` uses, not a second transport and not a direct call into
+  // `runDirectCompact`.
+  //
+  // That routing is the whole guarantee: one path means one in-flight flag, one
+  // optimistic append, one durable divider row, and the same text-retained-on-failure
+  // behaviour. A shortcut straight to the transport would skip the append and leave
+  // the user with no divider until a reload.
+  //
+  // Offered only on the Direct surface, where the command exists at all.
+  const compactFromPanel = useMemo(() => {
+    if (isCodeSurface) return undefined;
+    return () => {
+      const command = parseDirectCompactCommand(DIRECT_COMPACT_COMMAND);
+      if (command) void runDirectCompactCommand(command);
+    };
+  }, [isCodeSurface, directThreadMessages, threadKey]);
 
   const pendingInsert = useMcpStore((s) => s.pendingInsert);
   const clearPendingInsert = useMcpStore((s) => s.clearPendingInsert);
@@ -615,8 +689,8 @@ function Composer({
     }
   };
 
-  // ΓöÇΓöÇ The single send funnel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-  // EVERY submit ΓÇö Enter, the Send button, touch, programmatic ΓÇö arrives here,
+  // ── The single send funnel ─────────────────────────────────────────────
+  // EVERY submit — Enter, the Send button, touch, programmatic — arrives here,
   // and this is the only place that decides what submitting means.
   //
   // It has to be the only place, because the library cannot be asked to defer.
@@ -638,8 +712,9 @@ function Composer({
       void runCompact();
       return;
     }
-    if (!isCodeSurface && isDirectCompactCommand(composerText)) {
-      void runDirectCompactCommand();
+    const directCommand = isCodeSurface ? undefined : parseDirectCompactCommand(composerText);
+    if (directCommand) {
+      void runDirectCompactCommand(directCommand);
       return;
     }
     if (showOpenCodeDraft) {
@@ -673,18 +748,26 @@ function Composer({
         onSubmit={handleComposerSubmit}
         className={cn(
           "relative flex flex-col",
-          "rounded-2xl border border-border bg-card",
-          "transition-[border-color] duration-200 ease-in-out",
-          "focus-within:border-ring",
+          "rounded-xl border-none glass-surface shadow-floating",
+          "transition-shadow duration-200 ease-in-out",
+          "focus-within:ring-1 focus-within:ring-ring",
         )}
       >
         {/* Textarea: the primitive owns auto-resize (controlled by the
             runtime, including programmatic clears on send) — no hand-rolled
             height hook, so paste-then-send always shrinks back. */}
-        <div className="px-3 pb-1">
+        <div className="px-3 pb-1 pt-3">
           <ComposerPrimitive.Input
             autoFocus
             submitMode="enter"
+            // Yield the keyboard while a decision card holds it. Both of these
+            // default to TRUE in the library and TBAi never overrode them, so
+            // scrolling to the bottom or starting a run would pull focus off
+            // the card -- and Enter would then send an empty message instead of
+            // approving. Restored as soon as the last card goes, so the
+            // convenience is unchanged whenever nothing is being decided.
+            unstable_focusOnScrollToBottom={!keyboardClaimed}
+            unstable_focusOnRunStart={!keyboardClaimed}
             // Touch-primary devices get Return = newline instead of send, so a
             // half-typed message can't be submitted by the on-screen key
             // (matches ChatGPT / Slack / WhatsApp). Desktop is unchanged: the
@@ -717,13 +800,13 @@ function Composer({
             hides the box when the item group is empty (Enter then submits the
             text normally); it depends only on the group being empty, never on
             library internals beyond the wrapper it renders. */}
-        {slashCommandsEnabled && (
+        {slashEntries.length > 0 && (
           <ComposerPrimitive.Unstable_TriggerPopover
             char="/"
             adapter={slash.adapter}
             className={cn(
               "absolute bottom-full left-0 z-50 mb-1 max-h-72 w-full overflow-y-auto",
-              "rounded-xl border border-border bg-popover p-1 shadow-md",
+              "rounded-xl border-none p-1 glass-surface shadow-floating",
               "has-[.slash-command-items:empty]:hidden",
             )}
           >
@@ -766,15 +849,40 @@ function Composer({
           </ComposerPrimitive.Unstable_TriggerPopover>
         )}
 
+        {/*
+          In-flight marker for a Direct `/compact`.
+
+          Its OWN line between the textarea and the button row, deliberately: the
+          button row is a fixed set of chips in a `justify-between` slot, so text
+          placed inside it would shift every chip on appearance. A separate line adds
+          vertical height only while compacting, which does not move anything.
+
+          `role="status"` so the wait is announced. This is the opposite of the
+          transcript divider, which carries no role because its label is static
+          content; this one APPEARS, and a silent appearance is indistinguishable
+          from a hung app.
+
+          No outcome is shown here, ever. The outcome is the divider in the
+          transcript; a composer-level verdict is the toast this replaced.
+        */}
+        {directCompacting ? (
+          <p
+            role="status"
+            className="mx-3 mb-1 text-xs text-muted-foreground select-none"
+          >
+            {composerConfig.copy.compactingContext}
+          </p>
+        ) : null}
+
         {/* Button row: attach on left, thinking/model/voice/send-stop on right */}
         <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
           {/* Left: attach */}
-          <div className="flex items-end gap-1">
+          <div className="flex items-end gap-1.5">
             <AttachDropdown />
           </div>
 
           {/* Right: thinking, model, voice, send/stop (single slot) */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {/* Thinking chip: persists to the conversation default ("Default" =
                  the provider's saved level); also sets a one-shot override for the
                  immediate next message. */}
@@ -804,7 +912,7 @@ function Composer({
             {isCodeSurface || showOpenCodeDraft ? (
               <OpenCodeContextRing />
             ) : (
-              <DirectContextRing />
+              <DirectContextRing {...(compactFromPanel === undefined ? {} : { onCompact: compactFromPanel })} />
             )}
             {/* Voice — always visible, disabled (no DictationAdapter) */}
             <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">
@@ -931,22 +1039,6 @@ function Composer({
             <div className="px-3 pb-3" role="alert">
               <p className="text-xs text-destructive">
                 Couldn&apos;t compact the session: {compactError} Nothing was sent.
-              </p>
-            </div>
-          )}
-          {compacting && (
-            <div className="px-3 pb-3">
-              <p className="text-xs text-muted-foreground" role="status">
-                {composerConfig.copy.compacting}
-              </p>
-            </div>
-          )}
-          {directCompactStatus && directCompactStatus.outcome !== "failed" && (
-            <div className="px-3 pb-3">
-              <p className="text-xs text-muted-foreground">
-                {directCompactStatus.outcome === "compacted"
-                  ? composerConfig.copy.compactCompacted(directCompactStatus.spanLength)
-                  : composerConfig.copy.compactSkipped}
               </p>
             </div>
           )}

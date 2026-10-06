@@ -5,7 +5,7 @@ import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { createV2RuntimeStore } from "./v2RuntimeStore";
+import { createV2RuntimeStoreFactory } from "./v2RuntimeStore";
 import type { V2ThreadController } from "./v2ThreadController";
 
 /** React bridge for the native V2 controller and assistant-ui external store. */
@@ -18,10 +18,13 @@ export function useV2AssistantRuntime(
     controller.getState,
     controller.getState,
   );
-  const adapter = useMemo(
-    () => createV2RuntimeStore(controller, state, conversationId),
-    [controller, state, conversationId],
+  // Built once per controller so its cache survives the per-event adapter
+  // rebuilds below; a factory recreated each render would drop the cache.
+  const buildStore = useMemo(
+    () => createV2RuntimeStoreFactory(controller, conversationId),
+    [controller, conversationId],
   );
+  const adapter = useMemo(() => buildStore(state), [buildStore, state]);
   return useExternalStoreRuntime(adapter);
 }
 

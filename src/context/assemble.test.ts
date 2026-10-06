@@ -174,15 +174,57 @@ describe("the current user turn is identifiable (G11)", () => {
 });
 
 describe("overflow is a decision, not an accident", () => {
-  it("rejects a request that cannot fit, rather than sending it", async () => {
+  it("rejects a request that cannot fit a KNOWN limit, rather than sending it", async () => {
+    // The property under test: a budget rejection is terminal and pays nothing.
+    //
+    // This previously used the default fixture, which carries no `models` array and
+    // therefore resolves to `conservative_default`. Under P-1 a stand-in is advisory,
+    // so it no longer rejects — correctly, because a number TBAi invented must not
+    // stop a request the provider would have served. The terminal case is now pinned
+    // against a REAL ceiling, which is where the property actually has to hold.
+    const known = {
+      ...provider,
+      models: [
+        { id: "claude-test", provider: "anthropic", contextWindow: 128_000, contextWindowSource: "provider_reported" },
+      ],
+    } as unknown as typeof provider;
+
     const huge = [user("u1", "x".repeat(3_000_000))];
-    const result = await assemble(huge);
+    const result = await assemble(huge, { provider: known });
+    expect(result.context.provenance.limit.source).toBe("provider_reported");
     expect(result.decision.action).toBe("reject");
     if (result.decision.action === "reject") {
       expect(result.decision.reason).toBe("over_limit");
       // A rejection must not pay for a conversion it will discard.
       expect(result.context.modelMessages).toHaveLength(0);
     }
+  });
+
+  it("sends an over-stand-in request for an UNKNOWN model, bounded by Tier 2 instead", async () => {
+    // P-1. The stand-in no longer rejects, and the request is converted for
+    // transport so the provider can decide and `observed` can learn. Tier 2 is the
+    // bound that remains.
+    const huge = [user("u1", "x".repeat(3_000_000))];
+    const result = await assemble(huge);
+    expect(result.context.provenance.limit.source).toBe("conservative_default");
+    expect(result.decision.action).toBe("advisory");
+    // ~1M tokens is under the 4,194,304 assembly ceiling, so it proceeds.
+    expect(result.tier2.outcome).toBe("within_assembly_limit");
+    expect(result.context.modelMessages.length).toBeGreaterThan(0);
+  });
+
+  it("still sends an ordinary small request for an UNKNOWN model", async () => {
+    // Tier 2 is a ceiling, not a gate: a request far below it must be unaffected by
+    // the model's limit being unknown. This asserts the PASSING case only.
+    //
+    // It does NOT cover the breach case. Reaching 4,194,304 estimated tokens needs
+    // more text than is practical in this fixture, and doing it artificially would
+    // assert the guard rather than the seam. The breach is proven properly in
+    // `tier2-seam.test.ts`, where a configured 8M window cannot lift the ceiling and
+    // an over-ceiling request yields no model messages at all.
+    const result = await assemble([user("u1", "hi")]);
+    expect(result.tier2.outcome).toBe("within_assembly_limit");
+    expect(result.context.modelMessages.length).toBeGreaterThan(0);
   });
 
   it("reports a default limit as a default, never as a known figure", async () => {

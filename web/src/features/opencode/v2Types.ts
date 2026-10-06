@@ -234,6 +234,19 @@ export interface V2ThreadState {
   readonly inboxById: Readonly<Record<string, V2InboxRecord>>;
   readonly usage: V2UsageSnapshot | null;
   /**
+   * Tokens of the NEWEST assistant response - the current model-visible context.
+   *
+   * Deliberately NOT `usage.tokens`: that is the session's cumulative ledger, so
+   * it grows with every round trip and reports traffic as occupancy. Measured
+   * live against opencode 2.0.22, three trivial turns gave session totals of
+   * 12,451 -> 24,005 -> 35,571 while this stayed flat at 11,524. See
+   * `codeOccupancy.ts`.
+   *
+   * `null` until a response reports tokens, and not consulted while
+   * `occupancyStale` is true.
+   */
+  readonly occupancyTokens: TokenUsageInfo | null;
+  /**
    * True when a compaction has settled and `usage` therefore describes the
    * PRE-compaction prompt.
    *

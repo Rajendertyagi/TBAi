@@ -12,6 +12,7 @@ import {
 } from "./v2Forms";
 import { formTextareaHeight, formTextareaOverflows } from "./formTextareaSizing";
 import { cn } from "@/lib/utils";
+import { isPlainEnter } from "@/lib/ime";
 
 type FormValue = V2FormAnswer[string];
 
@@ -264,7 +265,16 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") { event.preventDefault(); commitDraft(); return; }
+            // `isPlainEnter`, not `event.key === "Enter"`. Accepting an IME
+            // candidate also fires a keydown, so the bare check committed the
+            // PINYIN draft and closed the box instead of keeping the kanji the
+            // reader actually typed.
+            //
+            // This site is worse than a missing guard, because of the `return`:
+            // the event never reaches `onKeyDown`, so the dock's own IME-guarded
+            // handler in `V2FormCard` never sees it either. Nothing downstream
+            // could have caught it -- the guard has to be right here.
+            if (isPlainEnter(event)) { event.preventDefault(); commitDraft(); return; }
             onKeyDown?.(event);
           }}
           className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"

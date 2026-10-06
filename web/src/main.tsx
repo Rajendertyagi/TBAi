@@ -4,7 +4,7 @@ import './styles/globals.css'
 import { installGlobalLogHooks } from './lib/logger'
 import { installOperationHeaderFetch } from './lib/operation'
 import { ThemeProvider } from './components/theme-provider'
-import { Toaster } from 'sonner'
+import { AppToaster } from './components/AppToaster'
 
 // DEV ONLY compatibility shim for the assistant-ui DevTools chain.
 //
@@ -25,7 +25,7 @@ if (import.meta.env.DEV) {
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider>
     <App />
-    <Toaster />
+    <AppToaster />
   </ThemeProvider>
 )
 

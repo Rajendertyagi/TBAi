@@ -59,7 +59,14 @@ import { pruneStaleMessages } from "../lib/prune-messages";
 import { logger } from "../lib/logger";
 import { computeBudget, decideBudget, budgetDiagnostics } from "./budget";
 import { identifyCurrentTurn, reconcileWithStoredHistory } from "./divergence";
-import { describeLimitSource, resolveContextLimit, selectModelOption } from "./limits";
+import {
+  describeLimitCandidates,
+  describeLimitSource,
+  resolveContextLimit,
+  selectModelOption,
+} from "./limits";
+import { readObservedContextWindow } from "./observed-limits";
+import { evaluateTier2, TIER_2_MAX_TOKENS, type Tier2Verdict } from "./tier2";
 import { combineEstimates, measureInstructions, measureMessages, measureToolDefinitions } from "./measure";
 import { reduceToolResults, describeToolResultReduction } from "./reduce";
 import { applyExistingCompaction, isCompactionLatched, maybeCompact, summarizeSpan } from "./compaction";
@@ -83,8 +90,18 @@ const MCP_TOOL_PREFIX = "mcp__";
 /** Result of assembly, plus the decision so the route can act on a rejection. */
 export interface AssembleContextResult {
   readonly context: AssembledContext;
-  /** `reject` means the request must not be sent. */
+  /**
+   * `reject` means the request must not be sent.
+   *
+   * `advisory` means the request exceeded a ceiling that nobody stated — P-1 — so it
+   * proceeds to Tier 2 rather than being rejected against a stand-in.
+   */
   readonly decision: BudgetDecision;
+  /**
+   * Tier 2 verdict. `assembly_limit_exceeded` is terminal and independent of
+   * `decision`: it can breach even when the budget accepted.
+   */
+  readonly tier2: Tier2Verdict;
   /** Flat, loggable diagnostics. Counts and categories only. */
   readonly diagnostics: Record<string, unknown>;
 }
@@ -238,10 +255,21 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   // cache: the registry is the only source, so `source` can only ever be a stance
   // someone actually recorded.
   const selectedModel = selectModelOption(provider.models, modelId);
+  // A limit this provider previously stated FOR ITSELF while rejecting an over-long
+  // request. Consulted only when the registry has nothing (see `resolveContextLimit`),
+  // and scoped to this exact provider configuration, model and endpoint so a figure
+  // learned from one endpoint can never be applied to another.
+  const observed = readObservedContextWindow({
+    providerId: provider.id,
+    modelId,
+    endpoint: provider.endpoint,
+    protocol: provider.apiProtocol,
+  });
   const limit: ContextLimit = resolveContextLimit({
     providerType: provider.type,
     modelId,
     model: selectedModel,
+    observedContextWindow: observed?.limitTokens,
     // Resolution identity, recorded on the result so diagnostics can prove which
     // endpoint a figure came from. The lookup is already endpoint-scoped — this is
     // the audit trail, not the mechanism.
@@ -328,12 +356,34 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     compaction: describeCompactionOutcome(compaction.report),
   };
 
-  const decision = decideBudget({ estimate, budget, reduction: reductionRecord });
+  const decision = decideBudget({
+    estimate,
+    budget,
+    reduction: reductionRecord,
+    limitSource: limit.source,
+  });
+
+  // Tier 2: universal assembly ceiling.
+  //
+  // Runs here, AFTER reduction / compaction / measurement and BEFORE transport, so it
+  // judges the request that would actually be sent rather than an earlier reading.
+  //
+  // Unconditional by design: no `configured`, `provider_reported`, `model_catalog` or
+  // `observed` value can raise or skip it. It is the bound that remains once P-1 makes
+  // a stand-in ceiling advisory — without it, relaxing preflight for unknown models
+  // would leave those requests unbounded.
+  //
+  // A breach does not re-enter assembly and does not trigger compaction: compaction has
+  // already run, and such a request was never viable for any model.
+  const tier2 = evaluateTier2(estimate, limit.source);
 
   // ── Convert to model messages ─────────────────────────────────────────────
   // Only when the request is going to be sent. A rejection must not pay for a
   // conversion it will discard.
-  const modelMessages = decision.action === "reject" ? [] : await prepareModelMessages([...layerC.messages], layerB.tools, { threadId: conversationId });
+  const sendable = decision.action !== "reject" && tier2.outcome === "within_assembly_limit";
+  const modelMessages = sendable
+    ? await prepareModelMessages([...layerC.messages], layerB.tools, { threadId: conversationId })
+    : [];
 
   const context: AssembledContext = {
     layerA,
@@ -353,6 +403,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
       budget,
       limit,
       decision,
+      tier2,
     },
   };
 
@@ -386,9 +437,31 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     compactionReclaimedSize: compaction.report.reclaimedTokens,
     compactionOrigin: compaction.report.origin,
     compactionSummarizedBy: compaction.report.summarizedBy,
+    // Tier 2. Always emitted so the guard is observable on every request, not only
+    // the ones that breach it. `assemblyLimitOutcome` is the verdict;
+    // `assemblyLimitCeiling` is the unconditional constant that produced it.
+    // Numeric keys avoid the substring "token" for the same redaction reason above.
+    assemblyLimitOutcome: tier2.outcome,
+    assemblyLimitCeiling: TIER_2_MAX_TOKENS,
+    // Candidate provenance for the limit that produced this budget. Emitted on
+    // every request, not only the rejected ones, because the case that needs
+    // explaining is frequently a SUCCESSFUL resolution whose number came from
+    // somewhere unexpected — or where a supplied figure was discarded and a
+    // stand-in was used instead.
+    //
+    // Counters are keyed `*Size` rather than `*Tokens` for the redaction reason
+    // noted above. Only numbers and short enum strings are emitted; no supplied
+    // metadata beyond the candidate's own value and stance.
+    ...describeLimitCandidates(context.provenance.limit),
+    ...(tier2.outcome === "assembly_limit_exceeded"
+      ? {
+          assemblyLimitOverBy: tier2.overBy,
+          assemblyLimitAdvisory: tier2.limitWasAdvisory,
+        }
+      : {}),
   };
 
-  return { context, decision, diagnostics };
+  return { context, decision, tier2, diagnostics };
 }
 
 /**
@@ -519,6 +592,7 @@ async function runCompactionPhase(
           maxSummaryTokens: seam.policy.maxSummaryTokens,
           outputReservation: seam.policy.summaryOutputReservation,
           summarizedBy: seam.summarizedBy,
+          instructions: seam.instructions,
           abortSignal: seam.signal,
           timeoutMs: seam.timeoutMs,
         }),
@@ -558,6 +632,11 @@ async function runCompactionPhase(
         spanLength: plan.spanLength,
         spanFingerprint: record.spanFingerprint,
         summaryTokens: record.summaryTokens,
+        // The summary TEXT rides the same record the token count does, so the
+        // divider can never show a size for a summary it does not carry. Read
+        // from `record` — which is `stored`, the winner's record — not from our
+        // own local copy, matching `summaryTokens` above.
+        summaryText: record.summaryText,
         reclaimedTokens,
         origin: record.origin,
         summarizedBy: record.summarizedBy,
@@ -611,6 +690,7 @@ function emptyCompactionFields(): Omit<CompactionReport, "applied" | "reason"> {
     spanLength: 0,
     spanFingerprint: null,
     summaryTokens: 0,
+    summaryText: null,
     reclaimedTokens: 0,
     origin: null,
     summarizedBy: null,

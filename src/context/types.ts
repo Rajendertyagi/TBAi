@@ -13,7 +13,7 @@
  */
 
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from "ai";
-import type { ProviderConfig } from "../types";
+import type { ContextWindowSource, ProviderConfig } from "../types";
 import type { BashOutputEvent } from "../services/tools";
 import type { MemoryReport } from "./memory/contract";
 import type { MemorySeam } from "./memory/seam";
@@ -100,10 +100,96 @@ export type LimitSource =
   | "provider_reported"
   /** A figure a human configured for this installation. */
   | "configured"
+  /**
+   * A figure the provider stated while rejecting an over-long request.
+   *
+   * Weaker than the two above on purpose, and deliberately NOT folded into
+   * `provider_reported`. The provider is the authority in both cases, but a listing is
+   * DECLARED metadata whereas this is read out of an error string, so it carries less
+   * weight and must stay visible as such. It is also the only source that is not
+   * known until a request has already failed once, which is why it is in memory rather
+   * than stored beside the declared figures.
+   *
+   * Being distinct also keeps it out of `isPhase3ExperimentEligible`, which admits only
+   * `provider_reported` — an error-derived figure does not silently authorise a cache
+   * experiment.
+   */
+  | "observed"
   /** TBAi's stand-in when nothing is known. NOT a claim about the model. */
   | "conservative_default"
   /** No ceiling at all. The budget must handle this explicitly. */
   | "unknown";
+
+/**
+ * Why a supplied candidate could not take part in selection.
+ *
+ * Enumerated rather than free text so a reader can tell a MISSING figure from a
+ * MALFORMED one without parsing prose. `non_integer` exists because a context
+ * limit is a count of tokens: silently flooring `1000.9` to `1000` and then
+ * trusting the result is a provenance failure, not a rounding nicety.
+ */
+export type LimitCandidateRejection =
+  /** Not a number at all (wrong type, or `undefined`/`null`). */
+  | "not_a_number"
+  /** `NaN`, or ±`Infinity`. */
+  | "non_finite"
+  /** Zero or negative. */
+  | "non_positive"
+  /** A finite positive fraction. Not a token count. */
+  | "non_integer";
+
+/** Which input a candidate came from. */
+export type LimitCandidateField =
+  | "model.contextWindow"
+  | "configuredContextWindow"
+  | "observedContextWindow";
+
+/**
+ * One supplied candidate, and what became of it.
+ *
+ * Records every input the resolver CONSIDERED, including the ones it discarded,
+ * because "why wasn't this value used" is unanswerable while a dropped
+ * candidate leaves no trace: an absent figure and a malformed one both end in
+ * `conservative_default` and are otherwise indistinguishable.
+ *
+ * Diagnostic only. Nothing here participates in choosing `maxInputTokens` —
+ * see the invariant asserted on `resolveContextLimit`.
+ */
+export interface LimitCandidateRecord {
+  /** The input this candidate was read from. */
+  readonly field: LimitCandidateField;
+  /** Stance recorded beside the stored value. `observed` is resolver-produced. */
+  readonly source: ContextWindowSource | "observed";
+  /** Whether the caller supplied anything for this field at all. */
+  readonly present: boolean;
+  /** Whether the supplied value passed validation. Always false when absent. */
+  readonly valid: boolean;
+  /**
+   * The value exactly as supplied, preserved for diagnosis.
+   *
+   * Kept unrounded and uncoerced so a reader sees what the provider or the
+   * operator actually wrote, not what TBAi made of it.
+   */
+  readonly suppliedValue: number | string | null;
+  /** Normalized integer token count. Present only when `valid`. */
+  readonly value: number | null;
+  /** Why it was discarded. Null when valid or absent. */
+  readonly rejectionReason: LimitCandidateRejection | null;
+  /** Whether this candidate's value became `maxInputTokens`. */
+  readonly selected: boolean;
+  /**
+   * How this candidate fared against the others.
+   *
+   * `not_compared` when fewer than two candidates were valid, which is the
+   * only state in which "agreed" and "conflicted" cannot be claims.
+   */
+  readonly outcome:
+    | "not_compared"
+    | "agreed"
+    | "conflicted"
+    | "lost_precedence"
+    | "rejected";
+}
 
 export interface ContextLimit {
   /** Maximum input tokens, when known. Undefined when `source` is `unknown`. */
@@ -138,6 +224,21 @@ export interface ContextLimit {
    * instead of being lost. Always `false` when fewer than two candidates existed.
    */
   readonly divergent: boolean;
+  /**
+   * Every candidate the resolver considered, valid and discarded alike.
+   *
+   * Additive and diagnostic-only: `maxInputTokens`, `source`, `divergent` and
+   * `divergentValue` are computed exactly as they were before this field
+   * existed, and nothing in this array is read while choosing a winner.
+   *
+   * It exists because the alternative is unanswerable. A provider that
+   * published `contextWindow: 0`, a human who typed `524288.5`, and a model
+   * with no figure at all all resolve to the same `conservative_default`
+   * ceiling — so a report that cannot show the candidates cannot say which
+   * happened, and an operator reading "128000" has no way to learn that a real
+   * number was rejected on the way there.
+   */
+  readonly candidates?: readonly LimitCandidateRecord[];
   /**
    * The candidate that lost, when `divergent` is true. Diagnostics only — the
    * value that was NOT used. Absent otherwise.
@@ -303,6 +404,21 @@ export interface CompactionReport {
   readonly spanFingerprint: string | null;
   /** MEASURED size of the injected summary, so the budget can account for it. */
   readonly summaryTokens: number;
+  /**
+   * The summary text itself, or null when nothing was injected.
+   *
+   * Carried so the transcript divider can show what compaction KEPT, not merely
+   * that it happened. A compaction that silently removes conversation history is
+   * not auditable without this, and the text is already produced and stored — it
+   * simply had no route to the user.
+   *
+   * Null is meaningful, not a placeholder: it is what a refusal, a failure, and a
+   * pre-divider build all report, so "no summary to show" is distinguishable from
+   * an empty one.
+   *
+   * Never logged. A summary quotes the conversation it describes.
+   */
+  readonly summaryText: string | null;
   /** Tokens the removed span was estimated to occupy. */
   readonly reclaimedTokens: number;
   /** Provenance of the injected block. Null when nothing was injected. */
@@ -342,6 +458,14 @@ export interface AssemblyProvenance {
   readonly limit: ContextLimit;
   /** Final verdict. */
   readonly decision: BudgetDecision;
+  /**
+   * Tier 2 verdict — the unconditional assembly ceiling.
+   *
+   * Recorded on provenance so a breach is distinguishable from a model-context
+   * overflow, a provider transport failure, a compaction failure, and a generic
+   * request failure. A breach is terminal and never enters overflow recovery.
+   */
+  readonly tier2: import("./tier2").Tier2Verdict;
 }
 
 /** What the lifecycle pruner did. Kept distinct from size management (G17). */
@@ -472,6 +596,29 @@ export type BudgetDecision =
       readonly reason: "over_limit" | "reduction_exhausted";
       readonly overBy: number;
       readonly reduction: ReductionRecord;
+    }
+  | {
+      /**
+       * P-1: over the planning ceiling, but the ceiling is not a real limit.
+       *
+       * The model's window is unknown (`conservative_default` / `unknown`), so the
+       * figure this request exceeded is a stand-in rather than a stated limit. A
+       * stand-in must not terminally reject a request the provider would have
+       * served — that is the Agnes failure: a ~101K request against a real 512K
+       * window was rejected locally, the provider was never contacted, and no limit
+       * could ever be learned, so the loop repeated every turn.
+       *
+       * NOT a bypass. Tier 2 (`tier2.ts`) still applies unconditionally, and a
+       * genuine provider overflow is still handled by observed-limit learning and
+       * the bounded recovery in `recovery.ts`.
+       */
+      readonly action: "advisory";
+      /** Why the budget could not be enforced. Always a non-authoritative source. */
+      readonly reason: "limit_not_authoritative";
+      /** The stand-in ceiling this request exceeded. Never a provider's own figure. */
+      readonly planningCeilingTokens: number;
+      readonly overBy: number;
+      readonly reduction: ReductionRecord;
     };
 
 /**
@@ -516,6 +663,15 @@ export interface CompactionSeam {
   ) => import("./compaction/contract").CompactionRecord | undefined;
   /** Model used to produce summaries. Injected: this seam is provider-agnostic. */
   readonly summarizerModel: LanguageModel;
+  /**
+   * The user's own narrowing words for THIS compaction, from
+   * `/compact <instructions>`.
+   *
+   * Absent for automatic compaction, which has no user turn to carry them. Added
+   * to the summariser's prompt rather than replacing it — see
+   * `buildSummarySystemPrompt`.
+   */
+  readonly instructions?: string | undefined;
   /** Identifier recorded as the summariser. */
   readonly summarizedBy: string;
   /** Deterministic id source. */

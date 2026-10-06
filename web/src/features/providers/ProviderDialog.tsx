@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { isPlainEnter, isPlainEscape } from "@/lib/ime";
 import { formatContextWindow, parseContextWindowInput } from "@/config/modelContext";
 import { configuredLimit, type ApiProtocol, type ModelOption, type ProviderConfig } from "@/types";
 
@@ -125,7 +126,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
     setSaving(false);
   }, [open, mode, provider]);
 
-  /** Models actually being saved: stored list plus anything still staged —
+  /** Models actually being saved: stored list plus anything still staged â€”
       ticked discovery picks and even unconfirmed manual text (both used to
       be silently dropped on Save). */
   const effectiveModels = (): ModelOption[] => {
@@ -307,8 +308,8 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
    * `form.models`, so the save path needs no extra validation.
    *
    * R1: a number typed here is `configured` by construction, and the stance is
-   * written through `configuredLimit` so it cannot be mistaken for — or later
-   * reinterpreted as — a figure the provider reported. Unsetting the draft
+   * written through `configuredLimit` so it cannot be mistaken for â€” or later
+   * reinterpreted as â€” a figure the provider reported. Unsetting the draft
    * clears the stance with the value; a bare value is never left behind.
    */
   const commitWindow = () => {
@@ -459,7 +460,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
             <label className="text-xs font-medium">Models</label>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" onClick={() => void handleDiscover()} disabled={discovering}>
-                {discovering ? "Finding…" : "Find models"}
+                {discovering ? "Findingâ€¦" : "Find models"}
               </Button>
               {discoverError && <span className="text-xs text-destructive">{discoverError}</span>}
             </div>
@@ -485,7 +486,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                       )}
                       {m.contextWindow ? (
                         <span className="text-xs text-muted-foreground">
-                          · {formatContextWindow(m.contextWindow)}
+                          Â· {formatContextWindow(m.contextWindow)}
                         </span>
                       ) : null}
                     </label>
@@ -543,8 +544,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                         }
                         onBlur={commitWindow}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") commitWindow();
-                          else if (e.key === "Escape") setEditingWindow(null);
+                          // Both keys belong to the IME while a candidate is
+                          // open: Enter would commit the context-window value
+                          // mid-composition, Escape would discard it.
+                          if (isPlainEnter(e)) commitWindow();
+                          else if (isPlainEscape(e)) setEditingWindow(null);
                         }}
                         placeholder={
                           m.contextWindow ? String(m.contextWindow) : "tokens"
@@ -587,7 +591,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
 
           <div className="flex items-center gap-2">
             <Button size="sm" variant="ghost" onClick={() => void handleTest()} disabled={testing}>
-              {testing ? "Testing…" : "Test connection"}
+              {testing ? "Testingâ€¦" : "Test connection"}
             </Button>
             {testResult && (
               <span className={testResult.ok ? "text-xs text-success" : "text-xs text-destructive"}>

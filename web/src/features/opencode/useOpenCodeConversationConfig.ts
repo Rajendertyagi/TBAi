@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useAvailabilityStore } from "../availability/availabilityStore";
+import { probeConversation } from "../chat/state/conversationExistence";
 
 /**
  * OpenCode configuration for a bound conversation: the persisted agent, model,
@@ -61,22 +62,25 @@ export function useOpenCodeConversationConfig(
       return;
     }
     let cancelled = false;
-    fetch(`/api/conversations/${conversationId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return;
-        setConfig({
-          opencodeAgent: data.opencodeAgent ?? null,
-          opencodeModel: data.opencodeModel ?? null,
-          opencodeVariant: data.opencodeVariant ?? null,
-          // `=== true`, not a truthy check: fail closed to manual for anything
-          // that is not an explicit true (see the field's doc).
-          opencodeAutoApprove: data.opencodeAutoApprove === true,
-        });
-      })
-      .catch(() => {
-        /* leave config null — runtime falls back to no explicit default */
+    // Probed through the shared existence contract, so a proven-missing row and
+    // an unhealthy server are distinct verdicts instead of one `null`. This hook
+    // only reads config, so every non-`exists` verdict keeps today's behavior:
+    // config stays `null` and the runtime falls back to no explicit default. One
+    // request; the `recoveryEpoch` re-run is preserved so a transient failure is
+    // retried when the backend comes back.
+    void (async () => {
+      const probe = await probeConversation(conversationId);
+      if (cancelled || probe.status !== "exists") return;
+      const data = probe.data;
+      setConfig({
+        opencodeAgent: data.opencodeAgent ?? null,
+        opencodeModel: data.opencodeModel ?? null,
+        opencodeVariant: data.opencodeVariant ?? null,
+        // `=== true`, not a truthy check: fail closed to manual for anything
+        // that is not an explicit true (see the field's doc).
+        opencodeAutoApprove: data.opencodeAutoApprove === true,
       });
+    })();
     return () => {
       cancelled = true;
     };

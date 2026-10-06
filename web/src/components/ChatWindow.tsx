@@ -33,6 +33,8 @@ import { prettyToolName } from "./assistant-ui/rendering-glue";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import { ScrollPill } from "./ScrollPill";
 import { ThreadBootSkeleton } from "./assistant-ui/elements/thread-boot-skeleton";
+import { CompactionDivider } from "./assistant-ui/elements/compaction-divider";
+import { DIRECT_COMPACT_DATA_NAME } from "../features/chat/compactCommand";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
 import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePicker";
@@ -412,6 +414,17 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
                     />
                   )
                 );
+              // Data parts are LEAF parts: `children` is a sentinel that throws
+              // (see the library's `GroupedParts` docs — `children` is only
+              // meaningful for `group-…` cases), so the part must render itself.
+              // This is what makes the Direct compaction divider appear at all;
+              // before this case it fell into `default` below and rendered
+              // nothing. Keyed on the part name rather than rendering every data
+              // part, so an unregistered name still renders nothing.
+              case "data":
+                return part.name === DIRECT_COMPACT_DATA_NAME ? (
+                  <CompactionDivider {...part} />
+                ) : null;
               // Trailing streaming affordance emitted by GroupedParts (default
               // mode "no-text"). Previously unhandled, so it rendered nothing.
               //

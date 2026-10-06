@@ -16,7 +16,8 @@ import { describe, expect, it } from "bun:test";
 import fs from "fs";
 import path from "path";
 
-import { parseCurrentContext } from "./useCurrentContext";
+import { parseCurrentContext, readingApplies } from "./useCurrentContext";
+import { stripComments } from "../../../testing/source-scope";
 
 const RING_SOURCE = path.resolve(
   import.meta.dir,
@@ -107,6 +108,18 @@ describe("server-measured current context is what the meter reads", () => {
       context: { usedTokens: 5, windowTokens: 100, windowSource: "trust_me" },
     });
     expect(parsed?.windowSource).toBe("unknown");
+  });
+
+  it("keeps an observed limit as itself, not as unknown", () => {
+    // A window the provider stated while rejecting a request IS a real figure. Folding
+    // it into `unknown` would make the ring report "Context limit unknown" while
+    // displaying 524288 - the UI contradicting itself. It stays its own source so the
+    // ring can word it as stated-not-published.
+    const parsed = parseCurrentContext({
+      context: { usedTokens: 5, windowTokens: 524_288, windowSource: "observed" },
+    });
+    expect(parsed?.windowSource).toBe("observed");
+    expect(parsed?.windowTokens).toBe(524_288);
   });
 });
 
@@ -199,5 +212,101 @@ describe("the denominator is the same window the budget enforced", () => {
     expect(code).toContain("if (!serverContext) return null");
     expect(code).not.toContain("resolveContextWindow");
     expect(code).not.toContain("DEFAULT_MODEL_CONTEXT_WINDOW");
+  });
+});
+// ─── staleness ───────────────────────────────────────────────────────────────
+//
+// A reading is a per-turn sample, so it describes the turn it was taken on. That is
+// fine while the authority's inputs stay put, and wrong the moment they move: the
+// ring would keep showing a denominator the server would no longer resolve.
+//
+// The fix is NOT a second resolver. The server publishes WHICH resolution produced
+// the number (`resolvedFor`), the client compares that identity against the
+// conversation it is displaying, and a mismatch WITHHIELDS the reading. The ring
+// already renders nothing when it has no reading, so the honest state needs no new
+// presentation and no invented number.
+
+describe("a reading whose resolution no longer applies is withheld", () => {
+  const reading = (resolvedFor?: Record<string, unknown>) => ({
+    usedTokens: 4_158,
+    windowTokens: 24_000,
+    windowSource: "configured",
+    usableInputTokens: 14_928,
+    occupancyKind: "provider",
+    ...(resolvedFor ? { resolvedFor } : {}),
+  });
+
+  const conversation = { providerId: "prov-1", modelId: "model-a" };
+
+  it("parses the resolution identity the server published", () => {
+    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-a" }) });
+    expect(parsed?.resolvedFor).toEqual({ providerId: "prov-1", modelId: "model-a" });
+  });
+
+  it("keeps a reading that matches the conversation", () => {
+    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-a" }) });
+    expect(parsed).toBeDefined();
+    expect(readingApplies(parsed!, conversation)).toBe(true);
+  });
+
+  it("withholds a reading taken for a DIFFERENT model", () => {
+    // The conversation was re-pointed. The old reading's window and occupancy belong
+    // to a model this conversation no longer uses.
+    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-b" }) });
+    expect(readingApplies(parsed!, conversation)).toBe(false);
+  });
+
+  it("withholds a reading taken for a DIFFERENT provider on the same model", () => {
+    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-2", modelId: "model-a" }) });
+    expect(readingApplies(parsed!, conversation)).toBe(false);
+  });
+
+  it("keeps a reading when the caller has no binding to check against", () => {
+    // Discarding an authoritative measurement because nobody asked would remove a true
+    // number, which is worse than showing it.
+    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-a" }) });
+    expect(readingApplies(parsed!, undefined)).toBe(true);
+  });
+
+  it("keeps a reading from a server that published no identity", () => {
+    // Absence of identity is not disagreement. The number is still authoritative for
+    // its own turn, and the client has nothing to contradict it with.
+    const parsed = parseCurrentContext({ context: reading() });
+    expect(parsed?.resolvedFor).toBeUndefined();
+    expect(readingApplies(parsed!, conversation)).toBe(true);
+  });
+
+  it("does not compare provider identity when the server omitted it", () => {
+    const parsed = parseCurrentContext({ context: reading({ providerId: undefined, modelId: "model-a" }) });
+    expect(readingApplies(parsed!, conversation)).toBe(true);
+  });
+
+  it("drops a partial identity rather than half-matching it", () => {
+    // Provider alone would match a DIFFERENT model on the same provider, so an
+    // identity without a model id is not comparable at all.
+    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1" }) });
+    expect(parsed?.resolvedFor).toBeUndefined();
+  });
+});
+
+describe("the Direct ring never resolves a window itself", () => {
+  it("reads the server value and compares identity — it does not compute one", () => {
+    // Comments are stripped first: this file's prose documents the 128k fallback it
+    // no longer has, and writing about a removed constant is not having one.
+    const ring = stripComments(
+      fs.readFileSync(
+        path.resolve(import.meta.dir, "..", "..", "..", "components", "context-ring.tsx"),
+        "utf8",
+      ),
+    );
+    // The denominator comes from the server reading, full stop.
+    expect(ring).toContain("modelContextWindow={serverContext.windowTokens}");
+    // The only thing the ring contributes is which conversation this is.
+    expect(ring).toContain("useCurrentContext(");
+    expect(ring).toContain("s.threadListItem.custom");
+    // No window arithmetic, and no fallback constant of any kind.
+    expect(ring).not.toMatch(/windowTokens\s*[*/+-]/);
+    expect(ring).not.toContain("DEFAULT_MODEL_CONTEXT_WINDOW");
+    expect(ring).not.toContain("128");
   });
 });

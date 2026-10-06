@@ -146,6 +146,19 @@ export interface ChatContextState {
   occupancyKind?: "provider" | "estimate" | "unknown";
   /** Cached portion of the measured prompt, when the provider broke it out. */
   cachedInputTokens?: number | undefined;
+  /**
+   * WHICH resolution produced `windowTokens`, so the reading is self-describing.
+   *
+   * Without this the meter cannot tell "the window this turn was measured against"
+   * from "the window the server would resolve now", and a configuration change
+   * leaves a stale denominator on screen with nothing to mark it as stale. The
+   * frontend compares this identity and shows no reading when it no longer matches
+   * the conversation — it never recomputes a window from it.
+   */
+  resolvedFor?: {
+    readonly providerId: string | undefined;
+    readonly modelId: string;
+  };
 }
 
 export function buildChatMessageMetadata(

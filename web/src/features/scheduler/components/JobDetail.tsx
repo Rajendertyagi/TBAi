@@ -183,7 +183,7 @@ export function JobDetail({
               type="button"
               onClick={() => onOpenThread(conversationId)}
               title={conversationLabel ?? conversationId}
-              className="truncate rounded text-primary underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="truncate rounded text-link underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               {conversationLabel ?? conversationId}
             </button>
@@ -297,7 +297,7 @@ export function JobDetail({
                           <button
                             type="button"
                             onClick={() => onOpenThread(run.conversationId as string)}
-                            className="rounded text-primary underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            className="rounded text-link underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           >
                             {copy.openThread}
                           </button>

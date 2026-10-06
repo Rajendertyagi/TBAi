@@ -34,17 +34,16 @@ export const composerConfig = {
     // or queued, and the user must explicitly send after recovery.
     sendOffline: "Backend unavailable — draft kept",
     sendOfflineTitle: "Backend unavailable. Your draft is kept — send it after reconnect.",
-    // ── Direct `/compact` status strip ───────────────────────────────────────
-    // TRANSIENT and separate from the conversation by construction: a command
-    // result is not a message, so it is never rendered as a bubble. `compacted`
-    // and `skipped` are both outcomes rather than success/failure, because
-    // "nothing was eligible" needs different wording from "it worked" — and
-    // neither may read as an error the user has to act on.
-    compacting: "Compacting…",
-    compactCompacted: (count: number) =>
-      `Compacted ${count} earlier message${count === 1 ? "" : "s"}.`,
-    compactSkipped: "Nothing to compact yet.",
-    compactFailed: "Couldn't compact the conversation.",
+    // The Direct `/compact` RESULT is a transcript divider (see
+    // `compaction-divider.tsx`), not a composer message, so the outcome needs no
+    // copy here. The IN-FLIGHT label below is a different thing: it carries no
+    // result, only "a summariser is running", and it exists because the call can
+    // take up to the summariser timeout with nothing else on screen.
+    compactingContext: "Compacting context…",
+    // Palette row for the Direct compaction command. Names the argument form, because
+    // `/compact <words>` is a supported capability with no other way to discover it —
+    // the command has no help text and is intercepted before it becomes a message.
+    compactCommandDescription: "Summarise earlier turns to free up context — add words to narrow what is kept",
     modelSearchPlaceholder: "Search models...",
     modelSearchAria: "Search models",
     modelListAria: "Models",

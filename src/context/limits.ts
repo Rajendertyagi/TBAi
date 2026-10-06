@@ -29,7 +29,15 @@
  */
 
 import type { ContextWindowSource, ModelOption } from "../types";
-import type { ContextLimit, GenerationCap, LimitSource, OutputReservation } from "./types";
+import type {
+  ContextLimit,
+  GenerationCap,
+  LimitCandidateField,
+  LimitCandidateRecord,
+  LimitCandidateRejection,
+  LimitSource,
+  OutputReservation,
+} from "./types";
 
 /**
  * Ceiling used when no real limit is known.
@@ -110,45 +118,143 @@ export function selectModelOption(
   return models?.find((m) => m.id === modelId);
 }
 
-/** A usable, positive token count, or undefined. Rejects NaN/Infinity/zero/negatives. */
+/**
+ * A usable, positive token count, or undefined. Rejects NaN/Infinity/zero/negatives.
+ *
+ * ⚠️ FLOORS a fractional value. Retained ONLY for the OUTPUT ceiling paths
+ * (`resolveOutputReservation`, `resolveGenerationCap`), which read
+ * `ModelOption.maxOutputTokens` and are out of scope for the fractional
+ * rejection below.
+ *
+ * For CONTEXT-LIMIT candidates use `checkLimitCandidate` instead. The two
+ * behaviours differ on purpose: a context limit is a token COUNT and must be
+ * rejected rather than quietly rewritten, because flooring it and then
+ * trusting the result reports a figure no source ever stated. That asymmetry
+ * is a known, documented boundary — `maxOutputTokensSource` is likewise
+ * unexamined by `resolveOutputReservation` — and reconciling it is a separate
+ * decision, not one taken silently here.
+ */
 function validTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+/**
+ * Classifies a supplied context-limit candidate WITHOUT altering it.
+ *
+ * Returns the value unchanged on success. Rejection is reported as an explicit
+ * reason so a discarded candidate can be shown to the reader rather than
+ * vanishing — which is the whole defect this replaces, where `Math.floor`
+ * turned `1000.9` into an authoritative `1000`.
+ */
+function checkLimitCandidate(value: unknown): {
+  readonly ok: boolean;
+  readonly value: number | null;
+  readonly rejectionReason: LimitCandidateRejection | null;
+} {
+  if (typeof value !== "number") {
+    return { ok: false, value: null, rejectionReason: "not_a_number" };
+  }
+  if (!Number.isFinite(value)) {
+    return { ok: false, value: null, rejectionReason: "non_finite" };
+  }
+  if (value <= 0) {
+    return { ok: false, value: null, rejectionReason: "non_positive" };
+  }
+  if (!Number.isInteger(value)) {
+    // Deliberately NOT floored. A context limit counts tokens; 1000.9 is not a
+    // token count, and rounding it would let a malformed figure become
+    // authoritative under a provenance label implying a source stated it.
+    return { ok: false, value: null, rejectionReason: "non_integer" };
+  }
+  return { ok: true, value, rejectionReason: null };
 }
 
 /** A limit candidate together with the stance of whoever asserted it. */
 interface LimitCandidate {
   readonly value: number;
   readonly source: ContextWindowSource;
+  /** Index into the diagnostic record array, so selection can mark it later. */
+  readonly recordIndex: number;
 }
 
 /**
- * Candidates for the effective input limit, in the order they are considered.
+ * One candidate as SUPPLIED, before validation — the shape a reader needs in
+ * order to be told the value that was rejected, not the value that survived.
+ */
+interface SuppliedCandidate {
+  readonly field: LimitCandidateField;
+  readonly source: ContextWindowSource | "observed";
+  readonly raw: unknown;
+}
+
+/**
+ * Every input the resolver could consider, in the order it considers them.
  *
- * `model` contributes at most one candidate, using the stance recorded beside
- * its value. `configuredContextWindow` (an explicitly-passed operator figure,
- * distinct from the stored row) contributes a second.
+ * `observedContextWindow` is included for DIAGNOSTIC reporting only. It is
+ * deliberately excluded from the participating candidates below: an observed
+ * figure read out of an error string has no business arbitrating between two
+ * declared figures, and the precedence that does consult it lives in
+ * `resolveContextLimit` on the single path where nothing else produced a value.
  */
 function collectCandidates(input: {
   model?: Pick<ModelOption, "contextWindow" | "contextWindowSource"> | undefined;
   configuredContextWindow?: number | undefined;
-}): LimitCandidate[] {
-  const candidates: LimitCandidate[] = [];
-
-  const stored = validTokenCount(input.model?.contextWindow);
-  if (stored !== undefined) {
-    candidates.push({
-      value: stored,
+  observedContextWindow?: number | undefined;
+}): {
+  readonly candidates: LimitCandidate[];
+  readonly records: LimitCandidateRecord[];
+} {
+  const supplied: SuppliedCandidate[] = [
+    {
+      field: "model.contextWindow",
       // A value with no recorded stance is a legacy row; see LEGACY_SOURCE.
       source: input.model?.contextWindowSource ?? LEGACY_SOURCE,
+      raw: input.model?.contextWindow,
+    },
+    { field: "configuredContextWindow", source: "configured", raw: input.configuredContextWindow },
+    { field: "observedContextWindow", source: "observed", raw: input.observedContextWindow },
+  ];
+
+  const candidates: LimitCandidate[] = [];
+  const records: LimitCandidateRecord[] = [];
+
+  supplied.forEach((entry, index) => {
+    const present = entry.raw !== undefined && entry.raw !== null;
+    const check = present
+      ? checkLimitCandidate(entry.raw)
+      : { ok: false, value: null, rejectionReason: "not_a_number" as const };
+
+    records.push({
+      field: entry.field,
+      source: entry.source,
+      present,
+      valid: present && check.ok,
+      suppliedValue: present ? (entry.raw as number | string) : null,
+      value: present && check.ok ? check.value : null,
+      rejectionReason: present ? check.rejectionReason : null,
+      selected: false,
+      outcome: present && !check.ok ? "rejected" : "not_compared",
     });
-  }
 
-  const configured = validTokenCount(input.configuredContextWindow);
-  if (configured !== undefined && configured !== stored) {
-    candidates.push({ value: configured, source: "configured" });
-  }
+    if (entry.field === "observedContextWindow") return;
+    if (!present || !check.ok) return;
 
-  return candidates;
+    // The stored figure is `candidates[0]` and the configured figure follows it
+    // even when their VALUES ARE EQUAL. Suppressing an equal pair used to make
+    // the documented "two agreeing candidates" rule unreachable — the guard
+    // below (`configured !== stored`) meant two candidates could only ever
+    // disagree, so the agreement branch could never execute. Agreement is a real
+    // state: a provider listing and an operator figure that coincide are two
+    // independent statements of the same fact, and the contract reports the
+    // stronger authority for them. Both paths still select the same number.
+    candidates.push({
+      value: check.value as number,
+      source: entry.source as ContextWindowSource,
+      recordIndex: index,
+    });
+  });
+
+  return { candidates, records };
 }
 
 /**
@@ -164,11 +270,19 @@ function collectCandidates(input: {
  *  2. two candidates, equal values     -> the value, stance `provider_reported`
  *                                        (no disagreement to resolve, so the
  *                                        stronger authority is reported)
- *  3. two candidates, conflicting       -> `configured` WINS, and the losing
+ *  3. two candidates, conflicting      -> `configured` WINS, and the losing
  *                                        `provider_reported` figure is recorded
  *                                        on `divergentValue`
- *  4. no candidates                    -> `UNKNOWN_LIMIT_CEILING` as
- *                                        `conservative_default`
+ *  4. no candidates                    -> a remembered `observed` figure if one
+ *                                        validates, else `UNKNOWN_LIMIT_CEILING`
+ *                                        as `conservative_default`
+ *
+ * Rule 2 was documented but UNREACHABLE until this revision: `collectCandidates`
+ * used to skip the configured figure whenever it equalled the stored one, so two
+ * candidates could only ever disagree and the agreement branch could not run. The
+ * candidate set is no longer filtered that way, so agreement is now a real state
+ * rather than an implied one. Both routes select the same number, so no consumer
+ * of `maxInputTokens` can observe the difference — only the diagnostic record can.
  *
  * Why `configured` wins a conflict (rule 3) — the decision record must state it,
  * because it is not the obvious order:
@@ -199,6 +313,8 @@ export function resolveContextLimit(input: {
   model?: Pick<ModelOption, "contextWindow" | "contextWindowSource">;
   /** An operator-supplied limit, distinct from the value stored on `model`. */
   configuredContextWindow?: number | undefined;
+  /** A figure the provider stated in an overflow rejection, when one is remembered. */
+  observedContextWindow?: number | undefined;
   /**
    * Identity of the endpoint this resolution is FOR, recorded on the result.
    *
@@ -213,7 +329,31 @@ export function resolveContextLimit(input: {
   protocol?: string;
 }): ContextLimit {
   const { providerType, modelId } = input;
-  const candidates = collectCandidates(input);
+  const { candidates, records } = collectCandidates(input);
+
+  /**
+   * Marks the diagnostic record for a candidate and returns the limit unchanged.
+   *
+   * This is the ONLY place diagnostics touch the result, and it writes to
+   * `records` exclusively — never to `candidates`. Selection below reads
+   * `candidates` alone, so no record can influence a winner by construction
+   * rather than by convention.
+   */
+  const withDiagnostics = (
+    limit: ContextLimit,
+    annotations: ReadonlyMap<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>,
+  ): ContextLimit => {
+    // ALWAYS attached, including on the fallback path. That path is precisely
+    // where the records matter most: it is the only route by which a reader
+    // learns that a real figure existed and was thrown away.
+    const merged = records.map((record, index) => {
+      const annotation = annotations.get(index);
+      return annotation === undefined
+        ? record
+        : { ...record, selected: annotation.selected, outcome: annotation.outcome };
+    });
+    return { ...limit, candidates: merged };
+  };
 
   const base = {
     providerType,
@@ -224,34 +364,73 @@ export function resolveContextLimit(input: {
     ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
   } as const;
 
+  // ## Where an observed figure sits in the hierarchy
+  //
+  // BELOW both stored sources and ABOVE the stand-in, and only when neither stored
+  // source produced anything at all. Consulting it here rather than inside
+  // `collectCandidates` is deliberate: that function's two-candidate conflict rule
+  // (configured beats a provider listing, divergence recorded) is load-bearing, and an
+  // observed value has no business arbitrating between two declared figures. So the
+  // existing resolution runs completely untouched, and the observation is consulted
+  // only on the one path that currently has nothing.
   if (candidates.length === 0) {
+    // `observedContextWindow` is validated with the SAME classifier as every
+    // other candidate, so a fractional observed figure is rejected for the same
+    // reason a fractional stored one is rather than silently floored.
+    const observedCheck = checkLimitCandidate(input.observedContextWindow);
+    const observedIndex = records.findIndex((record) => record.field === "observedContextWindow");
+
+    if (observedCheck.ok) {
+      const annotations = new Map<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>();
+      if (observedIndex >= 0) annotations.set(observedIndex, { selected: true, outcome: "not_compared" });
+      return withDiagnostics({ ...base, maxInputTokens: observedCheck.value, source: "observed" }, annotations);
+    }
+
     // No real figure. Report the conservative ceiling as a stood-in-for value,
     // never as a reported limit, so diagnostics can show it is a stand-in.
-    return { ...base, maxInputTokens: UNKNOWN_LIMIT_CEILING, source: "conservative_default" };
+    return withDiagnostics(
+      { ...base, maxInputTokens: UNKNOWN_LIMIT_CEILING, source: "conservative_default" },
+      new Map(),
+    );
   }
 
   const first = candidates[0] as LimitCandidate;
 
   if (candidates.length === 1) {
-    return { ...base, maxInputTokens: first.value, source: first.source };
+    return withDiagnostics(
+      { ...base, maxInputTokens: first.value, source: first.source },
+      new Map([[first.recordIndex, { selected: true, outcome: "not_compared" }]]),
+    );
   }
 
   const second = candidates[1] as LimitCandidate;
 
   if (first.value === second.value) {
     // Agreement. Report the stronger authority; nothing is being overridden.
-    return { ...base, maxInputTokens: first.value, source: "provider_reported" };
+    return withDiagnostics(
+      { ...base, maxInputTokens: first.value, source: "provider_reported" },
+      new Map([
+        [first.recordIndex, { selected: true, outcome: "agreed" }],
+        [second.recordIndex, { selected: true, outcome: "agreed" }],
+      ]),
+    );
   }
 
   // Conflict. Configured wins (rule 3); the provider figure is preserved for
   // diagnostics so the disagreement is observable rather than lost.
-  return {
-    ...base,
-    maxInputTokens: second.value,
-    source: "configured",
-    divergent: true,
-    divergentValue: { value: first.value, source: first.source },
-  };
+  return withDiagnostics(
+    {
+      ...base,
+      maxInputTokens: second.value,
+      source: "configured",
+      divergent: true,
+      divergentValue: { value: first.value, source: first.source },
+    },
+    new Map([
+      [first.recordIndex, { selected: false, outcome: "lost_precedence" }],
+      [second.recordIndex, { selected: true, outcome: "conflicted" }],
+    ]),
+  );
 }
 
 /**
@@ -341,6 +520,43 @@ export function resolveGenerationCap(input: {
   };
 }
 
+/**
+ * Flattens the resolver's candidate record into flat, loggable diagnostics.
+ *
+ * Two shapes, because a log line cannot usefully carry an array of records and
+ * the fields a reader needs are counted, not searched:
+ *
+ *  - `limitCandidateCount` / `limitRejectedCount` — how many were considered and
+ *    how many were thrown away. `limitRejectedCount > 0` on a successful
+ *    resolution is the signal that a supplied figure did not become the winner.
+ *  - `limitCandidateSummary` — one compact string per candidate, including the
+ *    ones that lost, so "why wasn't this value used" is answerable from a log.
+ *
+ * Emits numbers and short enum tokens only. A supplied value is included
+ * verbatim, unrounded, because that IS the diagnosis; it is a caller's own
+ * metadata and never contains prompt content. Keys avoid the substring "token"
+ * so the logger's redaction (`SENSITIVE_KEY_RE`) does not erase them.
+ */
+export function describeLimitCandidates(limit: ContextLimit): Record<string, string | number> {
+  const records = limit.candidates ?? [];
+  const rejected = records.filter((record) => record.present && !record.valid);
+
+  const summary = records.map((record) => {
+    if (!record.present) return `${record.field}=absent`;
+    if (!record.valid) {
+      return `${record.field}=invalid:${String(record.rejectionReason)}:${String(record.suppliedValue)}`;
+    }
+    const role = record.selected ? "selected" : record.outcome;
+    return `${record.field}=valid:${String(record.value)}:${record.source}:${role}`;
+  });
+
+  return {
+    limitCandidateCount: records.length,
+    limitRejectedCount: rejected.length,
+    limitCandidateSummary: summary.join(" "),
+  };
+}
+
 /** Human-readable provenance, for logs and diagnostics. Never the number alone. */
 export function describeLimitSource(limit: ContextLimit): string {
   switch (limit.source) {
@@ -348,6 +564,10 @@ export function describeLimitSource(limit: ContextLimit): string {
       return "provider_reported";
     case "configured":
       return "configured";
+    case "observed":
+      // Says where it came from: stated by the provider, but read from a rejection
+      // rather than declared in a listing.
+      return "observed";
     case "conservative_default":
       // Says out loud that the number is a stand-in.
       return `conservative_default(${limit.maxInputTokens})`;

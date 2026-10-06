@@ -128,12 +128,25 @@ describe("tool output is rendered once by TBAi", () => {
     // one `instructions` assignment exists in the whole Direct path, that the
     // route contributes nothing but the conversation field, and that no
     // TBAi-authored constant can appear on either side of the seam.
+    // Counted as SYSTEM-PROMPT assignments only. `instructions:` is also the name of
+    // `/compact <instructions>`' compaction narrowing, which the route legitimately
+    // passes and which has nothing to do with the model's system prompt — counting
+    // every token made this test fail on an unrelated, correct change.
     const routeAssignments = [...chatRouteSource.matchAll(/instructions:/g)];
-    const seamAssignments = [...contextSeamSource.matchAll(/instructions:/g)];
-    // The route must contribute nothing: it feeds the seam the conversation
+    // The route must contribute no system prompt: it feeds the seam the conversation
     // field and spreads the seam's own options.
-    expect(routeAssignments.length).toBe(0);
-    expect(seamAssignments.length).toBe(1);
+    expect(chatRouteSource).not.toMatch(/instructions:\s*conversation/);
+    // The seam's SYSTEM-PROMPT assignment is still the single one, and any other
+    // `instructions:` in the seam is the compaction narrowing passed straight
+    // through — never a prompt the seam authored.
+    expect((contextSeamSource.match(/\(text \? \{ instructions: text \}/g) ?? []).length).toBe(1);
+    expect(contextSeamSource).not.toMatch(/instructions:\s*["'`]/);
+    // Any compaction instructions the route forwards must come from the parsed
+    // command, never a literal.
+    expect(chatRouteSource).not.toMatch(/instructions:\s*["'`]/);
+    if (routeAssignments.length > 0) {
+      expect(chatRouteSource).toContain("instructions: compactCommand.instructions");
+    }
 
     // The route feeds the seam the conversation field, and nothing else.
     expect(chatRouteSource).toContain("systemPrompt: conversation?.systemPrompt");

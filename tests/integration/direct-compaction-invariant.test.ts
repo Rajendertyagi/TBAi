@@ -39,10 +39,19 @@ let attemptCalls = 0;
 let summariserCalls = 0;
 let controlled: ReturnType<typeof Bun.serve> | null = null;
 
+/**
+ * Provider-worded overflow, HTTP 400.
+ *
+ * The two figures are load-bearing and must stay consistent with each other and with
+ * this file's fixture: the stated limit has to be LARGER than `longHistory()`, because
+ * TBAi now learns the limit the provider states and enforces it. A stub claiming an
+ * 8192-token window while being expected to accept a ~13k-token conversation models
+ * something impossible, and honouring the stub's own claim correctly refuses the retry.
+ */
 const OVERFLOW_BODY = {
   error: {
     message:
-      "This model's maximum context length is 8192 tokens. However, your messages resulted in 9001 tokens.",
+      "This model's maximum context length is 524288 tokens. However, your messages resulted in 950284 tokens.",
     type: "invalid_request_error",
     code: "context_length_exceeded",
   },
@@ -108,6 +117,20 @@ async function seed(behaviour: Behaviour): Promise<void> {
   );
   await registry.loadFromDb(db);
 }
+
+/**
+ * What the stub summariser returns, sized for this fixture's span.
+ *
+ * `longHistory` puts ~2.2k tokens in the removable span, so the summary-adequacy floor
+ * lands near 22 tokens and an eleven-token stub is refused by it. That refusal is
+ * correct, but this file asserts the compaction INVARIANTS, so the stand-in has to be an
+ * adequate summary or the applied compaction they depend on never happens.
+ */
+const ADEQUATE_SUMMARY = Array.from(
+  { length: 12 },
+  (_, i) =>
+    `${i + 1}. The user asked about storage internals and the assistant explained page layout and write-ahead logging.`,
+).join(" ");
 
 function longHistory(): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
@@ -217,7 +240,7 @@ describe("summariser invocation alone must NEVER authorise a retry", () => {
 describe("the positive case: an APPLIED compaction does authorise the retry", () => {
   it("compacts, then issues exactly one more model attempt", async () => {
     await seed((kind) => {
-      if (kind === "summariser") return jsonCompletion("summary of the earlier turns");
+      if (kind === "summariser") return jsonCompletion(ADEQUATE_SUMMARY);
       return attemptCalls === 1
         ? jsonError(400, OVERFLOW_BODY)
         : sse([

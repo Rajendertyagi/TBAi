@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { ContextDisplayRing as StandaloneRing } from "@/components/assistant-ui/elements/context-display";
 import { resolveContextWindow } from "@/config/modelContext";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
-import { toCodeContextUsage } from "./contextTokens";
+import { toCodeContextUsage, toTokenUsage } from "./contextTokens";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 
 /**
@@ -26,8 +26,13 @@ import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 export function OpenCodeContextRing() {
   const extras = useOptionalV2RuntimeExtras();
   const { models } = useOpenCodeCapabilities(true);
-  const rawTokens = extras?.state.usage?.tokens;
-  const contextUsage = useMemo(() => toCodeContextUsage(rawTokens), [rawTokens]);
+  // The NUMERATOR is the newest response's own tokens, never the session ledger
+  // in `state.usage` - that ledger is cumulative spend and reported traffic as
+  // occupancy (measured live: 12,451 -> 24,005 -> 35,571 over three turns while
+  // the real fill stayed at 11,524). `state.usage` is still passed as the spend
+  // breakdown, which is what it actually describes.
+  const occupancy = extras?.state.occupancyTokens;
+  const contextUsage = useMemo(() => toCodeContextUsage(occupancy), [occupancy]);
   const stale = extras?.state.occupancyStale === true;
   if (!extras) return null;
   const current = extras.model
@@ -42,7 +47,7 @@ export function OpenCodeContextRing() {
       modelContextWindow={resolveContextWindow({
         limitContext: current?.limit?.context,
       })}
-      usage={contextUsage?.usage}
+      usage={extras?.state.usage ? toTokenUsage(extras.state.usage.tokens) : undefined}
       contextTokens={contextUsage?.contextTokens}
       occupancyState={stale ? "unknown" : "measured"}
       resetKey={extras.sessionId}

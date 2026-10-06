@@ -105,6 +105,13 @@ export interface SidebarConfig {
     cancel: string;
     save: string;
     threadRunning: string;
+    shortcuts: {
+      newChat: string;
+      copy: string;
+      toggleSidebar: string;
+      toggleStatusBar: string;
+      openSettings: string;
+    };
   };
 }
 
@@ -168,6 +175,25 @@ export const sidebarConfig: SidebarConfig = {
     cancel: "Cancel",
     save: "Save",
     threadRunning: "Generating response",
+    shortcuts: {
+      // Only `newChat` and `copy` correspond to a key the user can actually
+      // press: ChromeShortcuts.tsx binds Ctrl/Cmd+T, and Copy is the browser's
+      // own Ctrl+C on the captured selection.
+      //
+      // The three below are NOT bound by anything. They render as visible hints
+      // only, which is why PageContextMenu gives them no `aria-keyshortcuts` —
+      // that attribute is for shortcuts the app actually implements, and
+      // claiming an unbound key to assistive tech is the opposite of the truth.
+      // A guard in web/tests/context-menu-copy.test.ts pins the page menu to
+      // exactly 2 aria-keyshortcuts claims, so adding a fourth without binding
+      // the key fails the fast tier. The maintainer decision these still need:
+      // bind the key, or drop the label.
+      newChat: "Ctrl+T",
+      copy: "Ctrl+C",
+      toggleSidebar: "Ctrl+B",
+      toggleStatusBar: "Ctrl+Shift+S",
+      openSettings: "Ctrl+,",
+    },
   },
 };
 

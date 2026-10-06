@@ -8,7 +8,12 @@ import { CARD_SURFACE } from "@/components/shared/approval-card";
 import { toolsConfig } from "@/config/tools";
 import { writeClipboardText } from "@/lib/clipboard";
 import { logger } from "@/lib/logger";
-import { isIMECompositionEvent } from "@/lib/ime";
+import { isIMECompositionEvent, isPlainEscape } from "@/lib/ime";
+import {
+  focusComposerInput,
+  isDecisionSurfaceOwner,
+  registerDecisionSurface,
+} from "@/lib/focus";
 import {
   isV2FormFieldVisible,
   projectV2Form,
@@ -40,6 +45,16 @@ const COPY_TONE_CLASS: Record<CopyTone, string> = {
   done: "text-muted-foreground",
   failed: "text-destructive",
 };
+/**
+ * Focusable descendants of the dock body, in DOM order, for handing focus to the
+ * first control when the dock appears or the step changes.
+ *
+ * Deliberately excludes `tabindex="-1"`, which is how the dock body itself is
+ * marked: the body is the fallback target, not the preferred one, and it would
+ * always match first if it were listed here.
+ */
+const FOCUSABLE_IN_DOCK =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** One of the dock's two ways of taking a question away. */
 interface CopyAction {
@@ -179,6 +194,9 @@ export function V2FormCard({
   // the top of the conversation. `collapsed` is the `enabled` flag, so a
   // collapsed dock measures nothing and keeps its CSS cap.
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  /** Whether the dock has been seen at least once expanded. Gates the focus guard. */
+  const dockSeen = useRef(false);
+  /** Whether the dock took focus itself, and so has to give it back on unmount. */
   const bodyMaxHeight = useFormDockMaxHeight(bodyRef, !collapsed);
 
   // A confirmation must not outlive the dock: disarming the timer is what
@@ -285,7 +303,18 @@ export function V2FormCard({
    * Two guards before either: an IME composition (accepting a candidate would
    * otherwise answer a half-typed question) and the reader's own Shift key.
    */
-  const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    // Escape declines, mirroring Escape on a permission card. The agent is
+    // blocked waiting, so there is no "leave it and carry on": the question is
+    // either answered or dropped. It is not a hidden shortcut either -- the
+    // Cancel button sits directly below this dock, so the same action is always
+    // one click away. IME-guarded, because closing a candidate window is not a
+    // decision.
+    if (isPlainEscape(event)) {
+      event.preventDefault();
+      void cancel();
+      return;
+    }
     if (event.key !== "Enter" || isIMECompositionEvent(event)) return;
     if (event.shiftKey) return;
     event.preventDefault();
@@ -293,6 +322,67 @@ export function V2FormCard({
     if (last) void submit();
     else setStep(current + 1);
   };
+
+  /**
+   * Where focus lands inside the dock, and when it is allowed to take it.
+   *
+   * The Enter handler above is attached to this dock body, so before any of this
+   * existed it was unreachable: nothing focused the dock, so Enter only advanced
+   * a step if the reader happened to click an option first.
+   *
+   * Two different rules, deliberately not merged:
+   *
+   *   - **Arrival** is the registry's business. It yields to a reader who is
+   *     already typing (`canTakeFocusSafely`), and it defers to whatever else
+   *     already owns the keyboard -- a permission card and a dock can both be on
+   *     screen, and only one may answer a bare Enter.
+   *   - **A step change** is this effect's business, and is unconditional. The
+   *     reader just pressed Enter or Next; leaving focus behind on the step they
+   *     left is how one Enter press ends up answering two different questions.
+   */
+  // Registration, once per expanded lifecycle. The dock joins the same registry
+  // the permission list uses, so a permission card and a dock can never both
+  // claim the keyboard -- and because the body only exists while expanded, an
+  // unexpanded dock must not be registered at all: there would be nothing to
+  // focus and no Enter to handle.
+  //
+  // The registry decides who owns the keyboard (topmost, and never stolen from),
+  // so the dock does not focus itself here.
+  useEffect(() => {
+    if (collapsed) return;
+    const element = bodyRef.current;
+    const release = registerDecisionSurface(element);
+    // The next step change is the reader's own doing and must move focus; the
+    // arrival above was the registry's job.
+    dockSeen.current = false;
+    return () => {
+      // Asked of the registry, not of a ref captured when the effect ran: by
+      // cleanup time that value is stale, and it decides whether focus is the
+      // dock's to give back.
+      const wasOwner = isDecisionSurfaceOwner(element);
+      release();
+      if (wasOwner) focusComposerInput();
+    };
+  }, [collapsed]);
+
+  useEffect(() => {
+    if (collapsed) return;
+    if (!dockSeen.current) return;
+    const host = bodyRef.current;
+    if (!host) return;
+    dockSeen.current = false;
+    const first = host.querySelector<HTMLElement>(FOCUSABLE_IN_DOCK);
+    (first ?? host).focus({ preventScroll: true });
+    // Keyed on the key of the visible field, never on the field object itself:
+    // `field` is rebuilt on every render, so depending on it would re-run this
+    // effect while the reader types in the custom-answer box and throw their
+    // caret back to the start of what they wrote.
+  }, [field?.key]);
+
+  // The dock unmounts once answered or cancelled, taking focus with it. The
+  // hand-back lives in the registration effect above, which is the only place
+  // that knows whether focus was the dock's to give.
+
 
   return <section aria-label={view.title} className={cn(CARD_SURFACE, "p-5 text-sm")}>
     {/* A fixed-shape header row. The title is the only part that gives ground
@@ -378,7 +468,18 @@ export function V2FormCard({
       role="tabpanel"
       id={DOCK_TABPANEL_ID}
       onKeyDown={onKeyDown}
-      className={cn("mt-3 overflow-y-auto overscroll-contain", FORM_DOCK_CSS_MAX_HEIGHT_CLASS)}
+      // Focusable but out of the tab order: the fallback target when the
+      // field renders no control of its own, so focus lands here rather than
+      // dropping to <body>. `-1` keeps Tab walking into the field controls
+      // exactly as it always did.
+      tabIndex={-1}
+      className={cn(
+        "mt-3 overflow-y-auto overscroll-contain",
+        FORM_DOCK_CSS_MAX_HEIGHT_CLASS,
+        // Token ring rather than the UA default: the body is `tabIndex={-1}`,
+        // so `:focus` here means exactly "the dock took the keyboard".
+        "focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring",
+      )}
       style={bodyMaxHeight === undefined ? undefined : { maxHeight: bodyMaxHeight }}
     >
       <label htmlFor={`${field.key}-custom`} className="block font-medium text-foreground">

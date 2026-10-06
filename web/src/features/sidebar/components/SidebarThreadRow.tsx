@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isPlainEnter } from "@/lib/ime";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -241,7 +242,10 @@ export function SidebarThreadRow({
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void handleConfirmRename();
+              // `isPlainEnter`, not `key === "Enter"`: accepting an IME candidate
+              // also fires a keydown, so a bare check would commit the rename
+              // with the pinyin instead of the kanji.
+              if (isPlainEnter(e)) void handleConfirmRename();
             }}
             placeholder={title}
             autoFocus

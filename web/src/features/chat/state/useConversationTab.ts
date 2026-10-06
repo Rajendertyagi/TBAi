@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { threadListAdapter } from "../../../app/adapter";
-import { ConversationNotFoundError, threadEngine } from "../../../adapters/remoteThreadListAdapter";
+import { threadEngine } from "../../../adapters/remoteThreadListAdapter";
+import { ConversationNotFoundError } from "./conversationExistence";
+import { evictIfGone } from "./tabReconciliation";
 import { logger } from "../../../lib/logger";
 import {
   NEW_DRAFT_TAB_ID,
@@ -105,11 +107,11 @@ export function useConversationTab(
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        // Phase 3.4: only CONFIRMED server evidence (404) may destroy.
-        // Network failure / 5xx / indeterminate means existence is UNKNOWN:
-        // keep the tab, keep the route, keep known data (marked stale by the
-        // global availability indicator). Never generic error-swallowing —
-        // the distinction lives in the adapter's typed fetch errors.
+        // Only CONFIRMED server evidence (404) may destroy. A network failure /
+        // 5xx / indeterminate status means existence is UNKNOWN: keep the tab,
+        // keep the route, keep known data (marked stale by the global
+        // availability indicator). Never generic error-swallowing — the
+        // distinction lives in the shared existence contract's verdict.
         if (!(err instanceof ConversationNotFoundError)) {
           logger.debug("chat", "conversation validation unknown, retaining", {
             ref,
@@ -117,10 +119,10 @@ export function useConversationTab(
           });
           return;
         }
-        const current = useChatTabsStore.getState();
-        for (const tab of current.tabs) {
-          if (tab.ref === ref) current.close(tab.key);
-        }
+        // Eviction goes through the tab mirror's owner (and its single removal
+        // mutation), so this view no longer decides "404 means delete" on its
+        // own — the same rule the boot pass and the tab-strip probe obey.
+        evictIfGone(ref, "gone");
         // The draft is engine-agnostic (one route hosts both engines), so
         // recovery preserves the dead tab's engine in the draft store: a
         // Code tab that pointed at a deleted conversation falls back to a

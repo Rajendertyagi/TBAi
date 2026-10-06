@@ -184,7 +184,142 @@ export type CompactionPlan =
       readonly spanEstimatedTokens: number;
       /** Deterministic fingerprint of the span. Same span ⇒ same fingerprint. */
       readonly spanFingerprint: string;
+      /**
+       * Superseded turns the span CROSSED, in ascending index order.
+       *
+       * Non-empty only when the assistant-anchored boundary could not make
+       * progress and the span absorbed superseded user turns to break the
+       * deadlock. `applyCompaction` replays the entries whose model-visible
+       * content summarisation would destroy, under fresh synthetic ids.
+       *
+       * Empty for every ordinary compaction, so the established behaviour is
+       * bit-for-bit unchanged.
+       */
+      readonly crossedSupersededTurns: readonly SupersededTurn[];
     };
+
+// ─── Crossing superseded turns ───────────────────────────────────────────────
+
+/**
+ * Plan a span that crosses superseded user turns, to break the stale-boundary
+ * deadlock.
+ *
+ * ## When this runs
+ *
+ * ONLY from the `already_compacted_span` branch of {@link planCompaction}, i.e.
+ * after the assistant-anchored span has been proven to be fully covered. That
+ * ordering is the safety property: crossing is a fallback, never the default, so
+ * every ordinary conversation keeps the exact behaviour it had before.
+ *
+ * ## What it guarantees
+ *
+ * - **The live turn is never included.** The span ends at the last SUPERSEDED user
+ *   turn, which by construction is strictly before the newest user message.
+ * - **Coverage stays contiguous.** The span starts where the covered run ended, so
+ *   the new covered set extends the old one rather than skipping messages.
+ * - **Every earlier guard is re-applied** to the new span: reclaim sufficiency,
+ *   summariser capacity, and whether the result would actually fit. Crossing is not
+ *   an exemption from those rules.
+ * - **Nothing already covered is re-summarised.** The summariser is handed only
+ *   `summarizerStartIndex..spanEndIndex`, and the span is refused if it contains no
+ *   message the record does not already cover.
+ *
+ * @returns A `compact` plan, or a typed refusal explaining why crossing cannot help.
+ */
+function planCrossingSuperseded(args: {
+  input: Parameters<typeof planCompaction>[0];
+  messages: readonly UIMessage[];
+  covered: readonly string[];
+  /**
+   * Where the summariser must start reading.
+   *
+   * For a chained plan this is already past the covered prefix, so the crossing span
+   * extends coverage from exactly where the record left off. For a first compaction
+   * it is the retained-tail floor.
+   */
+  summarizerStartIndex: number;
+  policy: CompactionPolicy;
+  usableInputTokens: number;
+}): CompactionPlan {
+  const { input, messages, covered, policy, usableInputTokens } = args;
+
+  const turns = findSupersededTurns(messages);
+  if (turns.length === 0) return { kind: "none", reason: "no_compactable_span" };
+
+  // New end: the last superseded turn. Strictly before the live turn by
+  // construction, so the newest user message cannot be consumed.
+  const newEnd = turns[turns.length - 1]!.index;
+  const newStart = args.summarizerStartIndex;
+  if (newEnd < newStart) return { kind: "none", reason: "span_too_small_to_compact" };
+
+  // The span must contain something the record does not already cover, otherwise
+  // crossing buys nothing and would re-summarise history already paid for.
+  const spanIds = messages
+    .slice(newStart, newEnd + 1)
+    .map((m) => idOf(m))
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (spanIds.length === 0) return { kind: "none", reason: "span_too_small_to_compact" };
+  if (spanIds.every((id) => covered.includes(id))) {
+    return { kind: "none", reason: "already_compacted_span" };
+  }
+
+  // Capacity, measured against what the summariser actually reads. For a chained
+  // crossing that is the previous summary plus the new growth, because the covered
+  // prefix reaches the summariser as the summary.
+  const priorSummaryTokens = input.priorSummaryTokens ?? 0;
+  let end = newEnd;
+  if (input.summarizerInputTokens !== undefined) {
+    const need = (e: number): number =>
+      priorSummaryTokens + sum(spanRange(input.measuredTokens, newStart, e));
+    while (end > newStart && need(end) > input.summarizerInputTokens) {
+      const earlier = previousSafeCutIndex(messages, end);
+      if (earlier < newStart) break;
+      end = earlier;
+    }
+    if (need(end) > input.summarizerInputTokens) {
+      return { kind: "none", reason: "span_exceeds_summarizer_capacity" };
+    }
+  }
+
+  const crossedTurns = turns.filter((t) => t.index <= end);
+  const spanStartIndex = newStart;
+  const spanEndIndex = end;
+  const spanTokens = sum(spanRange(input.measuredTokens, spanStartIndex, spanEndIndex));
+
+  // Reclaim sufficiency: a summary larger than what it replaces grows the request.
+  if (spanTokens <= policy.maxSummaryTokens) {
+    return { kind: "none", reason: "summary_would_not_reclaim_enough" };
+  }
+
+  // Would the result actually fit? Measured pessimistically, with the summary at
+  // its maximum permitted size, exactly as the ordinary path does.
+  const residual =
+    input.fixedOverheadTokens +
+    (input.measuredTotalTokens - input.fixedOverheadTokens - spanTokens) +
+    policy.maxSummaryTokens;
+  if (residual >= usableInputTokens) {
+    return { kind: "none", reason: "would_still_exceed_budget" };
+  }
+
+  const finalSpanIds = messages
+    .slice(spanStartIndex, spanEndIndex + 1)
+    .map((m) => idOf(m))
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+  return {
+    kind: "compact",
+    reason: input.reason,
+    spanStartIndex,
+    spanEndIndex,
+    spanLength: spanEndIndex - spanStartIndex + 1,
+    spanMessageIds: finalSpanIds,
+    summarizerStartIndex: spanStartIndex,
+    firstRetainedIndex: spanEndIndex + 1,
+    spanEstimatedTokens: spanTokens,
+    spanFingerprint: spanFingerprint(messages, spanStartIndex, spanEndIndex),
+    crossedSupersededTurns: crossedTurns,
+  };
+}
 
 // ─── Turn-completion boundaries ─────────────────────────────────────────────
 
@@ -238,6 +373,114 @@ export function latestCutIndexBefore(messages: readonly UIMessage[]): number {
 /** Index of the first message of the current turn (the final user message). */
 export function currentTurnStartIndex(messages: readonly UIMessage[]): number {
   return lastIndexOfRole(messages, "user");
+}
+
+// ─── Superseded-turn settlement ─────────────────────────────────────────────
+
+/**
+ * A user turn inside the trailing unanswered run that compaction may cross.
+ *
+ * ## What "superseded" means here
+ *
+ * A user message is SUPERSEDED when a LATER user message follows it with no
+ * assistant reply in between. The model will never answer it: the user has moved
+ * on, and the only outstanding request is the newest one. Treating such a turn as
+ * permanently uncompactable is what deadlocked compaction — once durable coverage
+ * reached the last assistant message, the boundary could never advance again,
+ * because every eligible span was already covered.
+ *
+ * ## Why this is safe where the old rule was not
+ *
+ * The previous rule (`latestCutIndexBefore`) anchored the span on an ASSISTANT
+ * message, which made the entire trailing user run unreachable. That rule is
+ * retained unchanged as the primary boundary; supersession is consulted only when
+ * the assistant-anchored boundary cannot make progress.
+ *
+ * Crossing a superseded turn carries exactly one risk: a superseded turn holding
+ * MODEL-VISIBLE non-text content (a `file` part) would be reduced to prose by the
+ * summariser, because `renderSpanTranscript` transcribes text and tool outcomes
+ * only. Such a turn is re-materialised verbatim after the summary instead — see
+ * `requiresPreservation`. Every other part type (`data-*`, `custom`, `source-*`,
+ * `step-start`) is already invisible to `convertToModelMessages`, so summarising
+ * it loses nothing the model could see.
+ */
+export interface SupersededTurn {
+  /** Index of the superseded user message in the pruned list. */
+  readonly index: number;
+  /** Id of the original persisted message. Never reused for reconstruction. */
+  readonly messageId: string;
+  /**
+   * Whether this turn must be re-materialised verbatim after the summary.
+   *
+   * True when it carries a model-visible non-text part. Its file payload cannot
+   * survive summarisation, so the original must be replayed alongside the summary.
+   */
+  readonly requiresPreservation: boolean;
+}
+
+/**
+ * Part types that `convertToModelMessages` actually emits.
+ *
+ * Verified against the installed AI SDK rather than assumed: `file` is emitted
+ * with its media type, filename and data URL; `data-*`, `custom`, `source-url` and
+ * `source-document` all convert to empty content, and `step-start` is dropped.
+ */
+export function isModelVisibleNonTextPart(type: string): boolean {
+  return type === "file";
+}
+
+/**
+ * The superseded user turns in the trailing unanswered run.
+ *
+ * The trailing run is every message after the last assistant message. Its LAST
+ * user message is the live turn and is never returned; every earlier user message
+ * in the run is superseded.
+ *
+ * Pure and index-derived, so it is a function of the pruned list alone and cannot
+ * disagree with `identifyCurrentTurn`, which classifies the same run as "current"
+ * for budget purposes. The two agree on which messages are in the run; they differ
+ * only in what compaction is permitted to DO with them.
+ *
+ * @returns Superseded turns in ascending index order. Empty when the run holds
+ *          only the live turn — the single-trailing-user case, unchanged.
+ */
+export function findSupersededTurns(messages: readonly UIMessage[]): SupersededTurn[] {
+  let runStart = messages.length;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (roleOf(messages[i]) === "assistant") break;
+    runStart = i;
+  }
+  if (runStart >= messages.length) return [];
+
+  const out: SupersededTurn[] = [];
+  for (let i = runStart; i < messages.length - 1; i += 1) {
+    const message = messages[i];
+    if (roleOf(message) !== "user") continue;
+    const id = idOf(message);
+    if (id === undefined) continue;
+    const parts = ((message as { parts?: unknown }).parts ?? []) as Array<{ type?: unknown }>;
+    const requiresPreservation = parts.some(
+      (part) => typeof part.type === "string" && isModelVisibleNonTextPart(part.type),
+    );
+    out.push({ index: i, messageId: id, requiresPreservation });
+  }
+  return out;
+}
+
+/**
+ * The span end that lets compaction cross superseded turns.
+ *
+ * Returns the index of the LAST superseded user turn, so a span ending there
+ * absorbs the whole run except the live turn. Returns -1 when there is no
+ * superseded turn, which is the single-trailing-user case and must behave exactly
+ * as before.
+ *
+ * @returns The crossing span end, or -1 when crossing is unnecessary.
+ */
+export function supersededSpanEnd(messages: readonly UIMessage[]): number {
+  const turns = findSupersededTurns(messages);
+  if (turns.length === 0) return -1;
+  return turns[turns.length - 1]!.index;
 }
 
 /**
@@ -529,6 +772,28 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
       .map((m) => idOf(m))
       .filter((id): id is string => typeof id === "string" && id.length > 0);
     if (spanIds.length > 0 && spanIds.every((id) => covered.includes(id))) {
+      // ── CROSS SUPERSEDED TURNS ───────────────────────────────────────────
+      //
+      // The assistant-anchored span is entirely covered, so there is nothing new
+      // between it and the last assistant reply. The conversation still has
+      // uncompacted history though: the superseded user turns that follow.
+      //
+      // Without crossing them the boundary can never move again. `already_compacted_span`
+      // would be returned on every subsequent turn, permanently, while the tail grew.
+      // That is the deadlock this workstream exists to remove.
+      //
+      // Crossing is therefore attempted HERE, and only here: it is reached solely
+      // when the ordinary path has proven it cannot make progress, so every
+      // ordinary compaction is bit-for-bit unchanged.
+      const crossed = planCrossingSuperseded({
+        input,
+        messages,
+        covered,
+        summarizerStartIndex,
+        policy,
+        usableInputTokens,
+      });
+      if (crossed.kind !== "none") return crossed;
       return { kind: "none", reason: "already_compacted_span" };
     }
   }
@@ -561,6 +826,7 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
     firstRetainedIndex: spanEndIndex + 1,
     spanEstimatedTokens: spanTokens,
     spanFingerprint: spanFingerprint(messages, spanStartIndex, spanEndIndex),
+    crossedSupersededTurns: [],
   };
 }
 
@@ -676,21 +942,93 @@ export function renderCompactedMessages(record: CompactionRecord): UIMessage[] {
 // ─── Application ────────────────────────────────────────────────────────────
 
 /**
- * Replace the covered span with the rendered summary.
+ * Deterministic id for a re-materialised superseded turn.
+ *
+ * ## Why a FRESH id, and never the original
+ *
+ * The original id of a covered message is, by definition, present in
+ * `coveredMessageIds`. Re-emitting a message under that id would make the covered
+ * run contiguous again while its content is ALSO being sent verbatim — so the
+ * planner would treat the turn as already summarised and the model would receive
+ * it a second time. That is a silent double-send, strictly worse than the
+ * deadlock this workstream exists to remove.
+ *
+ * So the synthetic id is namespaced away from every persisted id and is
+ * deterministic in the same inputs as `spanFingerprint`, which keeps Phase 3's
+ * prefix identity stable across reloads.
+ */
+export function preservedMessageId(spanFingerprint: string, originalId: string): string {
+  return `tbai-preserved:${spanFingerprint}:${originalId}`;
+}
+
+/**
+ * Re-materialise the superseded turns whose model-visible content cannot survive
+ * summarisation, verbatim, under fresh synthetic ids.
+ *
+ * ## What this is for
+ *
+ * `renderSpanTranscript` transcribes text and tool outcomes only. A superseded user
+ * turn carrying a `file` part would therefore reach the model as prose with its
+ * attachment gone. Replaying the ORIGINAL message restores the payload exactly:
+ * same parts array, same media type, same filename, same data URL.
+ *
+ * ## What this deliberately does NOT do
+ *
+ * - It does not mutate, delete, or rename the persisted original. Storage keeps it
+ *   (`GET /api/conversations/:id/messages` still serves it); this is a view-layer
+ *   replay only.
+ * - It does not reuse the original id, so durable coverage is unaffected (V12).
+ * - It does not touch UI-only part types. `data-*`, `custom`, `source-*` and
+ *   `step-start` never reach the model, so replaying them would be pure noise.
+ *
+ * @returns Zero or more synthetic messages, in ascending original-index order.
+ *          Empty when nothing required preservation, which is the common case.
+ */
+export function renderPreservedMessages(input: {
+  messages: readonly UIMessage[];
+  turns: readonly SupersededTurn[];
+  spanFingerprint: string;
+}): UIMessage[] {
+  const out: UIMessage[] = [];
+  for (const turn of input.turns) {
+    if (!turn.requiresPreservation) continue;
+    const original = input.messages[turn.index];
+    if (!original) continue;
+    const id = preservedMessageId(input.spanFingerprint, turn.messageId);
+    // Copy the ORIGINAL message verbatim, changing only the id. Spreading the
+    // source keeps every part — file payloads included — byte-identical.
+    out.push({ ...original, id } as UIMessage);
+  }
+  return out;
+}
+
+/**
+ * Replace the covered span with the rendered summary and any preserved turns.
  *
  * Order-independent of storage: the caller supplies the span boundaries the plan
- * computed, so this is a pure splice. The current turn is never touched because
- * the plan never places the span end inside it.
+ * computed, so this is a pure splice. The live turn is never touched, because the
+ * plan never places the span end inside it.
+ *
+ * The emitted order is `summary → preserved superseded turns → remaining history`,
+ * which puts the replayed attachments after the summary that replaced them and
+ * before the live request the model must answer.
  */
 export function applyCompaction(input: {
   messages: readonly UIMessage[];
   plan: Extract<CompactionPlan, { kind: "compact" }>;
   record: CompactionRecord;
+  /** Superseded turns to replay, when the span crossed any. */
+  preservedTurns?: readonly SupersededTurn[];
 }): UIMessage[] {
   const { messages, plan } = input;
   return [
     ...messages.slice(0, plan.spanStartIndex),
     ...renderCompactedMessages(input.record),
+    ...renderPreservedMessages({
+      messages,
+      turns: input.preservedTurns ?? [],
+      spanFingerprint: input.record.spanFingerprint,
+    }),
     ...messages.slice(plan.spanEndIndex + 1),
   ];
 }

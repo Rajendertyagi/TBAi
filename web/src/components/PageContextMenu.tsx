@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Copy } from "lucide-react";
+import { Copy, PanelBottom, PanelLeft, Settings, SquarePen } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
 } from "./ui/context-menu";
 import { sidebarConfig } from "../config/sidebar";
 import { lastSettingsRoute } from "../config/navigation";
@@ -35,6 +36,7 @@ import { logger } from "../lib/logger";
  */
 export function PageContextMenu({ children }: { children: ReactNode }) {
   const copy = sidebarConfig.copy;
+  const shortcuts = sidebarConfig.copy.shortcuts;
   const toggleSidebar = useDesktopLayout((s) => s.toggleSidebar);
   const toggleStatusBar = useDesktopLayout((s) => s.toggleStatusBar);
   const navigate = useNavigate();
@@ -75,31 +77,54 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   };
 
   return (
-    <ContextMenu onOpenChange={handleOpenChange}>
+    <ContextMenu modal={false} onOpenChange={handleOpenChange}>
       <ContextMenuTrigger asChild>
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           {children}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={handleNewChat}>{copy.newChat}</ContextMenuItem>
+      <ContextMenuContent className="min-w-[13rem]">
         <ContextMenuItem
+          textValue={copy.newChat}
+          aria-keyshortcuts="Control+T"
+          onSelect={handleNewChat}
+        >
+          <SquarePen aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.newChat}</span>
+          <ContextMenuShortcut>{shortcuts.newChat}</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuItem
+          textValue={copy.copy}
+          aria-keyshortcuts="Control+C"
           disabled={!canCopySelection(selectedText)}
           onSelect={() => void handleCopySelection()}
         >
-          <Copy aria-hidden="true" className="size-4" />
-          {copy.copy}
+          <Copy aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.copy}</span>
+          <ContextMenuShortcut>{shortcuts.copy}</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => toggleSidebar()}>
-          {copy.toggleSidebar}
+        {/* No `aria-keyshortcuts` on the two toggles or on Settings: nothing
+            binds those keys (see `ChromeShortcuts.tsx`, which handles only
+            Ctrl/Cmd+T, +W, +Tab and +1..9). Declaring a shortcut the app does
+            not implement would tell assistive tech the opposite of the truth.
+            The visible hints are inherited from `config/sidebar.ts` and are
+            flagged there for a maintainer decision. */}
+        <ContextMenuItem textValue={copy.toggleSidebar} onSelect={() => toggleSidebar()}>
+          <PanelLeft aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.toggleSidebar}</span>
+          <ContextMenuShortcut>{shortcuts.toggleSidebar}</ContextMenuShortcut>
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => toggleStatusBar()}>
-          {copy.toggleStatusBar}
+        <ContextMenuItem textValue={copy.toggleStatusBar} onSelect={() => toggleStatusBar()}>
+          <PanelBottom aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.toggleStatusBar}</span>
+          <ContextMenuShortcut>{shortcuts.toggleStatusBar}</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={handleOpenSettings}>
-          {copy.openSettings}
+        <ContextMenuItem textValue={copy.openSettings} onSelect={handleOpenSettings}>
+          <Settings aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.openSettings}</span>
+          <ContextMenuShortcut>{shortcuts.openSettings}</ContextMenuShortcut>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

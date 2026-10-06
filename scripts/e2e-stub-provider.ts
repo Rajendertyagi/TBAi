@@ -35,6 +35,19 @@ export interface StubProvider {
   text: string;
   /** Hold the next response open until released, to simulate a slow model. */
   hold: boolean;
+  /**
+   * Split the reply into deltas of roughly this many characters.
+   *
+   * Why this exists: the default is 0, meaning ONE delta, which is what every
+   * existing spec assumes. It is also useless for profiling, because a single
+   * delta delivers a finished message in one shot - the browser never renders
+   * a partially-arrived reply, so the per-token re-render cost that streaming
+   * actually imposes is invisible. Profiling the streaming path requires
+   * deltas that arrive one at a time.
+   */
+  chunkChars: number;
+  /** Pause between deltas, in ms. 0 emits back-to-back. */
+  chunkDelayMs: number;
   release(): void;
   requestCount(): number;
   stop(): void;
@@ -60,17 +73,59 @@ function chunk(delta: unknown, finishReason: string | null = null): string {
   })}\n\n`;
 }
 
+/**
+ * Split reply text into the deltas the stub will stream.
+ *
+ * With `size <= 0` this returns the whole text as ONE piece, which is the
+ * historical behaviour every other spec depends on: a single delta means the
+ * client receives a complete message at once and never renders a partial
+ * reply. Changing that default would silently alter what unrelated specs
+ * exercise, so the chunked path is strictly opt-in.
+ *
+ * With a positive `size` the text is cut into pieces of about that many
+ * characters. Boundaries snap to whitespace so each delta looks like a
+ * plausible token rather than a mid-word slice - a mid-word cut would make the
+ * markdown parser see different intermediate states than a real provider
+ * produces, and this harness is meant to model a real stream.
+ */
+export function splitIntoDeltas(text: string, size: number): string[] {
+  if (size <= 0) return [text];
+  if (text.length <= size) return [text];
+
+  const pieces: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let end = Math.min(cursor + size, text.length);
+    if (end < text.length) {
+      // Snap forward to the next space so no delta ends mid-word, but never
+      // past the end and never so far that this piece is the whole tail.
+      const space = text.indexOf(" ", end);
+      if (space !== -1 && space - cursor < size * 2) end = space + 1;
+    }
+    pieces.push(text.slice(cursor, end));
+    cursor = end;
+  }
+  return pieces;
+}
+
 export function startStubProvider(port: number): StubProvider {
   let requests = 0;
   let text = "ok";
   let hold = false;
+  let chunkChars = 0;
+  let chunkDelayMs = 0;
   const held = new Set<HeldResponse>();
   const encoder = new TextEncoder();
+
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
 
   const finish = (entry: HeldResponse): void => {
     entry.done = true;
     held.delete(entry);
-    entry.res.write(encoder.encode(chunk({ content: text })));
+    for (const piece of splitIntoDeltas(text, chunkChars)) {
+      entry.res.write(encoder.encode(chunk({ content: piece })));
+    }
     entry.res.write(encoder.encode(chunk({}, "stop")));
     entry.res.write(encoder.encode("data: [DONE]\n\n"));
     entry.res.close();
@@ -101,7 +156,14 @@ export function startStubProvider(port: number): StubProvider {
         return new Response("released");
       }
       if (url.pathname === "/__e2e/state") {
-        return Response.json({ requests, hold, text, held: held.size });
+        return Response.json({
+          requests,
+          hold,
+          text,
+          held: held.size,
+          chunkChars,
+          chunkDelayMs,
+        });
       }
       if (url.pathname === "/__e2e/text" && req.method === "POST") {
         try {
@@ -111,6 +173,23 @@ export function startStubProvider(port: number): StubProvider {
           /* keep the previous text on a malformed request */
         }
         return new Response("ok");
+      }
+      // Streaming shape, for specs that must observe a reply ARRIVING rather
+      // than a reply that is already complete when the response opens.
+      if (url.pathname === "/__e2e/stream" && req.method === "POST") {
+        try {
+          const body = (await req.json()) as {
+            text?: string;
+            chunkChars?: number;
+            chunkDelayMs?: number;
+          };
+          if (typeof body.text === "string") text = body.text;
+          if (typeof body.chunkChars === "number") chunkChars = body.chunkChars;
+          if (typeof body.chunkDelayMs === "number") chunkDelayMs = body.chunkDelayMs;
+        } catch {
+          /* keep the previous settings on a malformed request */
+        }
+        return Response.json({ ok: true, chunkChars, chunkDelayMs });
       }
 
       if (!url.pathname.endsWith("/chat/completions")) {
@@ -127,11 +206,16 @@ export function startStubProvider(port: number): StubProvider {
       const holdThisRequest = hold;
       hold = false;
 
+      // Captured per request for the same reason: a spec that reconfigures the
+      // stub must not mutate the shape of a stream that is already in flight.
+      const thisChunkChars = chunkChars;
+      const thisChunkDelayMs = chunkDelayMs;
+
       // Any straggler from an abandoned hold is released rather than left hanging.
       release();
 
       const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
+        async start(controller) {
           if (holdThisRequest) {
             const writer: HeldWriter = {
               write: (bytes: Uint8Array) => controller.enqueue(bytes),
@@ -140,10 +224,38 @@ export function startStubProvider(port: number): StubProvider {
             held.add({ done: false, res: writer });
             return;
           }
-          controller.enqueue(encoder.encode(chunk({ role: "assistant", content: text })));
-          controller.enqueue(encoder.encode(chunk({}, "stop")));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
+
+          const pieces = splitIntoDeltas(text, thisChunkChars);
+          try {
+            // The role marker stays on the first piece, matching the OpenAI
+            // chat-completions shape the real provider sends, so the client's
+            // stream parser sees the same sequence of chunks it sees in
+            // production rather than a shape only the stub produces.
+            controller.enqueue(
+              encoder.encode(
+                chunk({
+                  role: "assistant",
+                  content: thisChunkChars > 0 ? pieces[0] : text,
+                }),
+              ),
+            );
+            for (let i = thisChunkChars > 0 ? 1 : 0; i < pieces.length; i++) {
+              if (thisChunkDelayMs > 0) await sleep(thisChunkDelayMs);
+              controller.enqueue(encoder.encode(chunk({ content: pieces[i] })));
+            }
+            controller.enqueue(encoder.encode(chunk({}, "stop")));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          } catch {
+            // A client that navigates away mid-stream aborts the connection.
+            // Closing is the correct terminal state and must not surface as an
+            // unhandled rejection that takes down the shared stub.
+            try {
+              controller.close();
+            } catch {
+              /* already closed or errored */
+            }
+          }
         },
       });
 
@@ -168,6 +280,18 @@ export function startStubProvider(port: number): StubProvider {
     },
     set hold(next: boolean) {
       hold = next;
+    },
+    get chunkChars() {
+      return chunkChars;
+    },
+    set chunkChars(next: number) {
+      chunkChars = next;
+    },
+    get chunkDelayMs() {
+      return chunkDelayMs;
+    },
+    set chunkDelayMs(next: number) {
+      chunkDelayMs = next;
     },
     release,
     requestCount: () => requests,

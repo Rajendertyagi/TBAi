@@ -79,11 +79,25 @@ describe("slash-command palette wiring", () => {
     expect(sources.composer).toContain("toSlashCommands(");
   });
 
-  it("is scoped to the OpenCode surface (the Direct runtime cannot run these)", () => {
+  it("keeps the OpenCode feed off Direct, and gates the palette on its entries", () => {
+    // The OpenCode feed is still scoped to the OpenCode surface. That part of the
+    // original guard was right and is unchanged.
     expect(sources.composer).toContain(
       "const slashCommandsEnabled = isCodeSurface || showOpenCodeDraft;",
     );
-    expect(sources.composer).toContain("{slashCommandsEnabled && (");
+
+    // What this assertion USED to require — `{slashCommandsEnabled && (` as the
+    // render gate — is what hid `/compact` on Direct. The gate said "this is the
+    // OpenCode surface", and Direct never is one, so Direct's own command could not
+    // be offered even though Direct is the surface that runs it. The gate is now the
+    // entry list, which is what actually decides whether there is anything to show.
+    expect(sources.composer).toContain("{slashEntries.length > 0 && (");
+    expect(sources.composer).not.toContain("{slashCommandsEnabled && (");
+
+    // The scoping invariant this test exists to protect, stated directly: the OpenCode
+    // feed contributes only when the gate is true, and Direct's own entries only when
+    // it is false. Neither can reach the other's surface.
+    expect(sources.composer).toContain("slashCommandsEnabled ? [] : directSlashEntries");
   });
 
   it("hides the box when nothing matches (the library stays open on trigger)", () => {    // The library keeps the popover open whenever `/` is detected, even with
@@ -135,9 +149,16 @@ describe("offline send gate (Phase 3.7)", () => {
       "aria-label={composerConfig.copy.sendOffline}",
     );
     expect(sources.composer).toContain("disabled");
-    // A single Send primitive (the online path): the offline button submits
-    // nothing and triggers no prompt/send call of its own.
-    expect(count(sources.composer, "<ComposerPrimitive.Send ")).toBe(1);
+    // A single online send affordance: the offline button submits nothing and
+    // triggers no prompt/send call of its own.
+    //
+    // This was `<ComposerPrimitive.Send ` and is now `type="submit"`. The
+    // primitive sends from its own click handler, which fires BEFORE the form's
+    // submit event, so it could not be intercepted by `handleComposerSubmit` —
+    // measured in the browser, `/compact` still produced a persisted user row.
+    // A plain submit button routes every path (click, Enter, touch) through the
+    // one funnel instead, so the guard is now "exactly one submit button".
+    expect(count(sources.composer, 'type="submit"')).toBe(1);
     expect(sources.composer).toContain("never auto-submits");
   });
 

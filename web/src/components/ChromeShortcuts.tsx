@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { isTauri } from "../lib/platform";
+import { isComposing } from "../lib/ime";
 import {
   urlForTab,
   useChatTabsStore,
@@ -13,6 +14,15 @@ import {
  *   Ctrl/Cmd+Tab / Shift+Tab  next / previous tab
  *   Ctrl/Cmd+1..9  jump to tab by index
  * These are desktop-only; the browser keeps its native shortcuts untouched.
+ *
+ * ## Why the composition guard is here and not obvious
+ *
+ * These are chords, not a bare Enter, so it is easy to assume they cannot fire
+ * mid-composition. They can: an IME consumes keystrokes and the browser still
+ * delivers the keydown to the page, so Ctrl+<digit> while a candidate is open
+ * would switch tabs out from under the reader mid-sentence. The guard is the
+ * same one the bare-Enter handlers use, and it is checked once at the top rather
+ * than per branch.
  */
 export function ChromeShortcuts() {
   const navigate = useNavigate();
@@ -20,6 +30,8 @@ export function ChromeShortcuts() {
   useEffect(() => {
     if (!isTauri()) return;
     const onKey = (e: KeyboardEvent) => {
+      // An open IME composition owns every key, chords included.
+      if (isComposing(e)) return;
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       const store = useChatTabsStore.getState();

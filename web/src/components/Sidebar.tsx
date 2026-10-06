@@ -95,7 +95,7 @@ export function Sidebar() {
     searchQuery.trim().length >= sidebarConfig.searchMinLength;
 
   return (
-    <div className="relative flex w-[var(--sidebar-width,224px)] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground select-none">
+    <div className="relative flex w-[var(--sidebar-width,224px)] flex-col border-r border-sidebar-border glass-surface text-sidebar-foreground select-none">
       <SidebarHeader
         listRef={listRef}
         allExpanded={allExpanded}

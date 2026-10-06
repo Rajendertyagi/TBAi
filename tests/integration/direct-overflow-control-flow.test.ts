@@ -28,10 +28,19 @@ const MODEL_ID = "recovery-model";
 let upstreamCalls = 0;
 let controlled: ReturnType<typeof Bun.serve> | null = null;
 
+/**
+ * Provider-worded overflow, HTTP 400.
+ *
+ * The stated limit must exceed this file's conversation fixture. TBAi learns the limit a
+ * provider states and then enforces it, so a stub advertising an 8192-token window while
+ * the fixture sends far more is self-contradictory — honouring the stub's own claim
+ * correctly refuses the rebuild+retry this test counts upstream calls for. The figures
+ * are the verified real gateway's and internally consistent: the input does exceed it.
+ */
 const OVERFLOW_BODY = {
   error: {
     message:
-      "This model's maximum context length is 8192 tokens. However, your messages resulted in 9001 tokens.",
+      "This model's maximum context length is 524288 tokens. However, your messages resulted in 950284 tokens.",
     type: "invalid_request_error",
     code: "context_length_exceeded",
   },
@@ -107,7 +116,7 @@ async function seed(): Promise<void> {
       }
       // The compaction summariser is a NON-streaming call; the retried model turn is a
       // streaming one. Serving the right shape for each is what a real endpoint does.
-      if (!wantsStream(raw)) return jsonCompletion("summary of the earlier turns");
+      if (!wantsStream(raw)) return jsonCompletion(ADEQUATE_SUMMARY);
       return sse([textChunk("recovered answer", "stop")]);
     },
   });
@@ -122,6 +131,21 @@ async function seed(): Promise<void> {
 }
 
 /** A conversation with real history, so a compactable span exists. */
+/**
+ * What the stub summariser returns, sized for this fixture's span.
+ *
+ * `longHistory` puts ~2.2k tokens in the removable span, so the summary-adequacy floor
+ * lands near 22 tokens and an eleven-token stub is refused by it. That refusal is
+ * correct — a one-line answer to a two-thousand-token span is exactly the defect the
+ * guard exists to catch — but these tests are about the OVERFLOW CONTROL FLOW, so the
+ * stand-in has to be an adequate summary or the compaction they assert never applies.
+ */
+const ADEQUATE_SUMMARY = Array.from(
+  { length: 12 },
+  (_, i) =>
+    `${i + 1}. The user asked about storage internals and the assistant explained page layout and write-ahead logging.`,
+).join(" ");
+
 function longHistory(): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
   for (let i = 0; i < 12; i += 1) {

@@ -35,6 +35,25 @@ import type { ProviderConfig } from "../../types";
  * that runs in production.
  */
 const TEST_WINDOW = 32_000;
+
+/**
+ * A summary that is actually adequate for this fixture's span.
+ *
+ * `oversizedConversation` puts ~26.7k tokens in the removable span, so the adequacy
+ * floor lands near 267 tokens. The stub these tests used to return ("SUMMARY of earlier
+ * turns.", 10 tokens) is refused by that floor — correctly, because a ten-token
+ * response to a 26.7k-token span is precisely the defect the guard exists to catch.
+ *
+ * This stands in for what a real summariser returns, so these tests go on measuring
+ * the SEAM's behaviour rather than the stub's brevity. Deliberately built rather than
+ * typed: it has to clear a floor derived from the span, so its length is a fact about
+ * the fixture, not a magic literal.
+ */
+const ADEQUATE_SUMMARY = Array.from(
+  { length: 12 },
+  (_, i) =>
+    `${i + 1}. The user asked about topic ${i}; the assistant answered with detail ${i} and left task ${i} open.`,
+).join(" ");
 const provider = {
   id: "p1",
   name: "Test",
@@ -158,7 +177,7 @@ function seamHarness(
   const released: number[] = [];
   const model = new MockLanguageModelV3({
     doGenerate: async () => ({
-      content: [{ type: "text" as const, text: over.summaryText ?? "SUMMARY of earlier turns." }],
+      content: [{ type: "text" as const, text: over.summaryText ?? ADEQUATE_SUMMARY }],
       finishReason: { unified: "stop" as const, raw: "end_turn" },
       usage: {
         inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 },
@@ -297,7 +316,7 @@ function growingConversation(turns: number, repeat: number): UIMessage[] {
 function summaryOnlyModel(): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => ({
-      content: [{ type: "text" as const, text: "SUMMARY of earlier turns." }],
+      content: [{ type: "text" as const, text: ADEQUATE_SUMMARY }],
       finishReason: { unified: "stop" as const, raw: "end_turn" },
       usage: {
         inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 },
@@ -362,7 +381,7 @@ describe("the trigger uses the seam's own Phase 2 budget", () => {
     expect(result.context.provenance.compaction?.applied).toBe(true);
     expect(result.context.provenance.compaction?.origin).toBe("model_generated_summary");
     expect(harness.persisted).toHaveLength(1);
-    expect(harness.persisted[0].summaryText).toContain("SUMMARY");
+    expect(harness.persisted[0].summaryText).toBe(ADEQUATE_SUMMARY);
   });
 
   it("does not compact a conversation well inside the window", async () => {
@@ -461,7 +480,7 @@ describe("a compaction is durable because it is stored, not recomputed", () => {
     expect(second.persisted).toHaveLength(0);
     expect(after.context.provenance.compaction?.applied).toBe(false);
     expect(after.context.provenance.compaction?.reason).toContain("record_applied");
-    expect(JSON.stringify(after.context.modelMessages)).toContain("SUMMARY of earlier turns.");
+    expect(JSON.stringify(after.context.modelMessages)).toContain(ADEQUATE_SUMMARY);
   });
 
   it("produces the SAME context for the same conversation and record", async () => {
@@ -604,7 +623,7 @@ describe("a failed compaction degrades to today's behaviour, never to corruption
     // a request that does not fit is NOT sent. A rejected request may legitimately
     // measure above budget — that is why it was rejected — so the bound is checked
     // only on the accept path, where sending actually happens.
-    const harness = seamHarness({ summaryText: "x" });
+    const harness = seamHarness({ summaryText: ADEQUATE_SUMMARY });
     const result = await harness.assemble(oversizedConversation());
     if (result.decision.action === "accept") {
       expect(result.context.provenance.estimate.estimatedTokens).toBeLessThanOrEqual(
@@ -687,7 +706,7 @@ describe("a stored compaction stays applicable across reloads and growth", () =>
     const second = await assembleWithStore(messages, store);
     expect(store.rows.size).toBe(1);
     expect(second.context.provenance.compaction?.reason).toContain("record_applied");
-    expect(JSON.stringify(second.context.modelMessages)).toContain("SUMMARY of earlier turns.");
+    expect(JSON.stringify(second.context.modelMessages)).toContain(ADEQUATE_SUMMARY);
   });
 
   it("never records a span covering a server-injected id", async () => {
@@ -751,7 +770,7 @@ describe("a stored compaction stays applicable across reloads and growth", () =>
 
     const reload = await assembleWithStore(grown, store);
     expect(reload.context.provenance.compaction?.reason).toContain("record_applied");
-    expect(JSON.stringify(reload.context.layerC.messages)).toContain("SUMMARY of earlier turns.");
+    expect(JSON.stringify(reload.context.layerC.messages)).toContain(ADEQUATE_SUMMARY);
   });
 
   it("declines precisely when the conversation outgrows one summariser call", async () => {
@@ -792,9 +811,7 @@ describe("a stored compaction stays applicable across reloads and growth", () =>
     expect(result.context.provenance.compaction?.generation).toBe(2);
     // Critically: the PRIOR summary is still applied, so the conversation did not
     // silently revert to full history.
-    expect(JSON.stringify(result.context.layerC.messages)).toContain(
-      "SUMMARY of earlier turns.",
-    );
+    expect(JSON.stringify(result.context.layerC.messages)).toContain(ADEQUATE_SUMMARY);
   });
 });
 

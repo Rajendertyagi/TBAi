@@ -96,6 +96,7 @@ describe("occupancy: provenance is never over-claimed", () => {
   it.each<[unknown, ContextLimitProvenance]>([
     ["provider_reported", "provider_reported"],
     ["configured", "configured"],
+    ["observed", "observed"],
     ["conservative_default", "conservative_default"],
   ])("passes %s through", (input, expected) => {
     expect(toLimitProvenance(input)).toBe(expected);

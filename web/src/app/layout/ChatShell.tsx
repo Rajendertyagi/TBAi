@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { AssistantRuntimeProvider, AuiConfig, Tools, Suggestions, makeAssistantDataUI } from "@assistant-ui/react";
 import { useAppChatRuntime } from "../../runtime";
 import { threadListAdapter } from "../adapter";
-import { DevToolsModal } from "@assistant-ui/react-devtools";
+import { DevToolsGate } from "../../components/DevToolsGate";
 import { useSettingsStore } from "../../stores";
 import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../features/chat/state/chatTabs";
 import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngine";
@@ -10,6 +10,8 @@ import { peekMaterializedEngine } from "../../features/chat/state/materializeDra
 import { appToolkit } from "../../tools/toolkit";
 import { logger } from "../../lib/logger";
 import { ProgressStages } from "../../components/assistant-ui/elements/progress-stages";
+import { CompactionDivider } from "../../components/assistant-ui/elements/compaction-divider";
+import { DIRECT_COMPACT_DATA_NAME } from "../../features/chat/compactCommand";
 import { AppShell } from "./AppShell";
 
 /**
@@ -96,11 +98,25 @@ export function ChatShell() {
     render: ProgressStages,
   });
 
+  // The Direct `/compact` result: a labelled separator in the transcript, not a
+  // composer toast. Same registration mechanism as the progress part above.
+  //
+  // This registration makes the part render wherever the library resolves data
+  // parts by name (e.g. `MessagePrimitive.Parts`). The transcript itself renders
+  // it through `GroupedParts`, where a leaf part must render itself — see the
+  // `data` case in `ChatWindow.tsx`. Both read the one name constant and the one
+  // component, so there is no second implementation to drift.
+  const TbaiCompactDataUI = makeAssistantDataUI({
+    name: DIRECT_COMPACT_DATA_NAME,
+    render: CompactionDivider,
+  });
+
   return (
     <AssistantRuntimeProvider runtime={runtime} config={config}>
       <TbaiProgressDataUI />
+      <TbaiCompactDataUI />
       <AppShell />
-      <DevToolsModal />
+      <DevToolsGate />
     </AssistantRuntimeProvider>
   );
 }

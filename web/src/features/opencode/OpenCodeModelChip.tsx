@@ -100,7 +100,7 @@ export function OpenCodeModelChip() {
                 className="h-8"
               />
             </div>
-            <div role="list" className="max-h-48 overflow-y-auto">
+            <div role="list" className="max-h-48 overflow-y-auto p-1">
               {matchCount === 0 ? (
                 <div className="px-2 py-2 text-xs text-muted-foreground">
                   {query.trim() ? copy.noModelsMatch : copy.selectModel}

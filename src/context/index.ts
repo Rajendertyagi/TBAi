@@ -95,6 +95,11 @@ export type {
 
 export { classifyDivergence, identifyCurrentTurn, countModelVisibleParts, reconcileWithStoredHistory } from "./divergence";
 
+// Tier 2 — the universal assembly ceiling. Exported so the route can render a
+// breach as a distinct failure and so tests can assert the constant directly.
+export { evaluateTier2, TIER_2_MAX_TOKENS, ASSEMBLY_LIMIT_CODE } from "./tier2";
+export type { Tier2Breach, Tier2Verdict } from "./tier2";
+
 export { CONTEXT_CATEGORIES } from "./types";
 export type {
   AssembleContextInput,

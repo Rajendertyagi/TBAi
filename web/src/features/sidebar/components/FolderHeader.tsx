@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
+import { isPlainEnter } from "@/lib/ime";
 import {
   ChevronRight,
   FolderClosed,
@@ -257,7 +258,10 @@ export function FolderHeader({
             value={aliasValue}
             onChange={(e) => setAliasValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleConfirmAlias();
+              // `isPlainEnter`, not `key === "Enter"`: accepting an IME candidate
+              // also fires a keydown, so a bare check would save the folder name
+              // as the pinyin instead of the kanji and close the dialog.
+              if (isPlainEnter(e)) handleConfirmAlias();
             }}
             placeholder={folder.name}
             autoFocus

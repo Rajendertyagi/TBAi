@@ -568,7 +568,17 @@ class Logger {
 
   // Live log buffer for the in-app Logs panel: bounded ring of post-redaction
   // entries with a monotonic sequence, plus SSE subscriber notification.
-  private buffer: (LogEntry & { seq: number })[] = [];
+  //
+  // Fixed-capacity ring, not an array-as-queue: eviction overwrites one slot and
+  // bumps a head, so a warm write is O(1) instead of an O(n) splice of the whole
+  // cap on every line. Reads walk from the oldest occupied slot, which keeps the
+  // oldest-first contract intact across wrap-around. Only `reclaimRingCapacity`
+  // resizes `buffer`, so `buffer.length` is always the true capacity.
+  private buffer: (LogEntry & { seq: number })[];
+  /** Next slot to write; also the slot holding the oldest entry once full. */
+  private bufferHead = 0;
+  /** Occupied slots. Rises to capacity, then stays there. */
+  private bufferCount = 0;
   private bufferSeq = 0;
   private bufferListeners = new Set<(seq: number) => void>();
   // Unique per process boot. Seq restarts at 0 on every boot, so entries are
@@ -598,11 +608,50 @@ class Logger {
 
   constructor(config?: Partial<LoggerConfig>) {
     this.config = { ...resolveLoggerConfig(), ...config };
+    this.buffer = new Array<LogEntry & { seq: number }>(this.ringCapacity());
+  }
+
+  /**
+   * Slot count to allocate for the ring.
+   *
+   * `resolveLoggerConfig` only accepts a positive `TBAI_LOG_RING`, so in practice
+   * this is the configured value. The floor of 1 guards the `% capacity` in the
+   * write path against a caller passing 0 through `configure`, where a NaN head
+   * would put every subsequent read out of bounds.
+   */
+  private ringCapacity(): number {
+    const size = Math.floor(this.config.bufferSize);
+    return Number.isFinite(size) && size >= 1 ? size : 1;
+  }
+
+  /**
+   * Re-clamp the ring to the configured capacity after a `bufferSize` change.
+   *
+   * Shrinking keeps the NEWEST entries that fit, which is what the previous
+   * front-splice left alive, and rebuilds them from slot 0 so `bufferHead` is the
+   * next write and the normal oldest-slot walk still finds the oldest entry.
+   *
+   * Entries dropped here are deliberately NOT counted in `ringSpliced`: that
+   * counter is attributed to writes, and charging a resize to it would change the
+   * meaning tests and `/metrics` already read. No runtime caller changes
+   * `bufferSize` — it comes from `TBAI_LOG_RING` at boot — so this path only
+   * serves the boot/test path, where the ring is empty or the accounting is not
+   * user-observable.
+   */
+  private reclaimRingCapacity(): void {
+    const capacity = this.ringCapacity();
+    if (capacity === this.buffer.length && this.bufferCount <= capacity) return;
+    const retained = this.getRecentEntries(0).slice(-capacity);
+    this.buffer = new Array<LogEntry & { seq: number }>(capacity);
+    for (const [i, entry] of retained.entries()) this.buffer[i] = entry;
+    this.bufferCount = retained.length;
+    this.bufferHead = retained.length % capacity;
   }
 
   /** Override config at runtime (tests, boot, settings API). */
   configure(config: Partial<LoggerConfig>): void {
     this.config = { ...this.config, ...config };
+    this.reclaimRingCapacity();
   }
 
   get level(): LogLevelFilter {
@@ -750,11 +799,15 @@ class Logger {
     const safe = redactFields(entry) as LogEntry;
     // Ring buffer for the live Logs panel (bounded; redacted; cheap scalars).
     const buffered = { ...safe, seq: ++this.bufferSeq };
-    this.buffer.push(buffered);
-    const overflow = this.buffer.length - this.config.bufferSize;
-    if (overflow > 0) {
-      this.buffer.splice(0, overflow);
-      this.ringSpliced += overflow;
+    // O(1) eviction: overwrite the slot the head points at, then advance. Once
+    // the ring is full that slot holds the oldest entry, so this is the drop.
+    const capacity = this.buffer.length;
+    this.buffer[this.bufferHead] = buffered;
+    this.bufferHead = (this.bufferHead + 1) % capacity;
+    if (this.bufferCount < capacity) {
+      this.bufferCount += 1;
+    } else {
+      this.ringSpliced += 1;
     }
     for (const listener of this.bufferListeners) {
       try {
@@ -898,7 +951,16 @@ class Logger {
 
   /** Entries buffered after `sinceSeq` (0 = all), oldest first. */
   getRecentEntries(sinceSeq = 0): (LogEntry & { seq: number })[] {
-    return this.buffer.filter((e) => e.seq > sinceSeq);
+    // Walk from the oldest occupied slot rather than index 0: once the head has
+    // wrapped, the oldest entry is behind it, not at the front of the array.
+    const capacity = this.buffer.length;
+    const oldest = (this.bufferHead - this.bufferCount + capacity) % capacity;
+    const out: (LogEntry & { seq: number })[] = [];
+    for (let i = 0; i < this.bufferCount; i += 1) {
+      const entry = this.buffer[(oldest + i) % capacity];
+      if (entry && entry.seq > sinceSeq) out.push(entry);
+    }
+    return out;
   }
 
   /** Boot id for keying entries (see bootIdValue). */
@@ -908,7 +970,12 @@ class Logger {
 
   /** Newest buffered sequence number (0 when empty). */
   get lastSeq(): number {
-    return this.buffer.length ? this.buffer[this.buffer.length - 1].seq : 0;
+    // The newest entry sits in the slot just behind the head, not at the end of
+    // the array. The empty guard is required: slots past `bufferCount` are stale
+    // leftovers, so reading one would report a sequence that was already evicted.
+    if (this.bufferCount === 0) return 0;
+    const capacity = this.buffer.length;
+    return this.buffer[(this.bufferHead - 1 + capacity) % capacity]?.seq ?? 0;
   }
 
   /**

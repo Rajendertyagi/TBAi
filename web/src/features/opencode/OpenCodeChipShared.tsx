@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isPlainEscape } from "@/lib/ime";
 import { logger } from "@/lib/logger";
 import { welcomeConfig } from "@/config/welcome";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
@@ -49,7 +50,7 @@ export function useOpenCodeChipState(conversationId: string) {
   //
   // `nativeExtras.model` is the server-reported bound model (set from the real
   // `SessionInfo` and updated by `session.model.selected`), so it is read state
-  // rather than a local guess — and it is display-only, never written back to
+  // rather than a local guess â€” and it is display-only, never written back to
   // the conversation, so observing it cannot become a stored preference.
   const currentModel = resolveChipModelSource({
     draft,
@@ -92,7 +93,7 @@ export function useOpenCodeChipState(conversationId: string) {
       } | null;
       // Publish ONLY server-echoed values: the override map must reflect
       // SQLite, not the request. A mismatch leaves all visible state
-      // untouched — a failed write changes nothing visible.
+      // untouched â€” a failed write changes nothing visible.
       const confirmed: {
         -readonly [K in keyof OpenCodeSelectionPatch]: OpenCodeSelectionPatch[K];
       } = {};
@@ -154,7 +155,7 @@ export function useOpenCodeChipState(conversationId: string) {
   };
 }
 
-/** Shared chip trigger button — one look for all three OpenCode chips. */
+/** Shared chip trigger button â€” one look for all three OpenCode chips. */
 export function OpenCodeChipButton({
   icon,
   label,
@@ -176,7 +177,7 @@ export function OpenCodeChipButton({
       aria-expanded={open}
       aria-label={ariaLabel}
       className={cn(
-        "inline-flex items-center gap-1.5 h-7 rounded-full border border-border",
+        "inline-flex items-center gap-1.5 h-7",
         "px-2.5 text-xs text-muted-foreground hover:text-foreground",
         "hover:bg-accent/50 transition-colors cursor-pointer",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -253,16 +254,21 @@ export function OpenCodeChipOption({
       role="listitem"
       onClick={onSelect}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+        "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
         "hover:bg-accent/60",
-        active && "bg-accent",
+        active && "bg-accent text-accent-foreground",
       )}
     >
+      {/* A permanent check column, so the label never shifts sideways when an
+          option becomes selected â€” the same contract as the Direct chat model
+          list (`ModelOptionList`). */}
+      <span className="flex size-4 shrink-0 items-center justify-center pt-0.5">
+        {active ? <Check aria-hidden="true" className="size-4" /> : null}
+      </span>
       <span className="min-w-0 flex-1 truncate">
         {label}
-        {sub ? <span className="text-muted-foreground"> · {sub}</span> : null}
+        {sub ? <span className="text-muted-foreground"> Â· {sub}</span> : null}
       </span>
-      {active && <Check aria-hidden="true" className="ml-auto size-3.5 shrink-0" />}
     </button>
   );
 }
@@ -290,7 +296,13 @@ export function OpenCodeChipMenu({
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
+      // This listener is on `document`, so it sees Escape from anywhere while the
+      // menu is open â€” including the composer. The menu holds no text input, so a
+      // composition cannot be open *inside* it, but one can be open in the
+      // composer while this menu happens to be up, and Escape belongs to the IME
+      // first. Guarding only fixes that; it deliberately does NOT change which
+      // element may close the menu.
+      if (isPlainEscape(e)) onCloseRef.current();
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -305,7 +317,7 @@ export function OpenCodeChipMenu({
       ref={rootRef}
       role="menu"
       className={cn(
-        "absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-border bg-card p-0 text-sm shadow-md",
+        "absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border-none p-0 text-sm glass-surface shadow-floating",
         "animate-in fade-in-0 zoom-in-95 duration-150",
         className,
       )}

@@ -43,6 +43,10 @@ The AI/chat stack is fixed:
 - Validate **all** API input with Zod (`src/lib/validation.ts`).
 - Do not store secrets in client state. The frontend `ProviderConfig`/`McpServerConfig` types have
   no `apiKey`/`authToken` field; secrets never reach `localStorage`/Zustand.
+- **No decrypted secret is retained beyond the request that needed it.**
+  `CredentialStore` re-reads the encrypted value and decrypts per request, so
+  deletion or corruption cannot be hidden by an in-memory cache. Do not add a
+  decrypted-key cache for latency; use a prepared statement and an index instead.
 - Log/error output is redacted via `src/lib/redact.ts`.
 
 ## 4. Configuration-first
@@ -101,10 +105,40 @@ Before declaring a feature complete: typecheck, build, start the app, verify a r
 AI request works, verify streaming works, verify errors are handled, and verify
 provider switching works when applicable.
 
-## 9. Documentation
+- The suite has a documented baseline of **259 unique failing tests** from
+  cross-file SQLite contention (all test files in a process share one database via
+  `tests/setup.ts`). A failure in-suite is therefore not evidence of a regression.
+  **Verify a suspected regression by running the single file in isolation** before
+  believing or dismissing it. The known cause is `tests/unit/db.test.ts` opening
+  that shared database three times concurrently.
+- Because the gate cannot currently fail for the right reason, do not add a CI
+  performance or size gate until the baseline is fixed — it inherits the same
+  noise, and a gate that cries wolf gets disabled. See `performance.md`.
+
+## 9. Performance
+
+- **Measure before optimizing.** An unmeasured cost is a guess. Optimizing a
+  subsystem that was already measured and found adequate is a defect, not
+  diligence. Record real numbers in the subsystem's own doc, with the date and
+  conditions.
+- **Blocking I/O is a defect in a route handler and correct in a tool handler.**
+  Route handlers must not block the event loop. Tool handlers are synchronous by
+  contract so a read-modify-write cannot be interleaved by a client abort — do
+  not "modernise" them to async, that introduces the race.
+- **Bound the read, not the result.** A size cap applied after the allocation is
+  not a cap. Stat first, or stream to the limit.
+- No decrypted secret is retained beyond the request that needed it (see §3).
+- Every other in-memory cache needs a bound, an eviction rule that actually
+  executes, and a lifecycle clear path. A bare `Map` is a leak until proven
+  otherwise. A cache keyed by an id needs a delete path.
+- No second library for a problem something already installed solves — one
+  virtualizer, one markdown pipeline, one diff renderer.
+- Detail, budgets, and the current open findings live in `performance.md`.
+
+## 10. Documentation
 
 - Keep `docs/` current: `architecture.md`, `development-rules.md`,
-  `ai-integration.md`, `provider-system.md`, `state-management.md`, `security.md`,
-  `roadmap.md`, `decisions.md`.
+  `performance.md`, `ai-integration.md`, `provider-system.md`,
+  `state-management.md`, `security.md`, `roadmap.md`, `decisions.md`.
 - `AGENTS.md` holds the permanent rules for future agents.
 - Record important architectural decisions in `docs/decisions.md`.

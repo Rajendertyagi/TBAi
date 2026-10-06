@@ -122,12 +122,20 @@ let authPassword: string | null = null;
 let authSource: "environment" | "generated" | null = null;
 let authInitialized = false;
 
-/** Returns the one process-local password used by the managed server and clients. */
+/**
+ * Returns the one process-local password used by the managed server and clients.
+ *
+ * Accepts the current name (`OPENCODE_PASSWORD`) and the legacy in-range one
+ * (`OPENCODE_SERVER_PASSWORD`). The current name wins when both are set, so an
+ * operator can override a stale legacy value without unsetting it.
+ */
 export function getOpenCodeAuthPassword(
   config: OpenCodeConfig = OPENCODE_CONFIG,
 ): string {
   if (!authInitialized) {
-    const configured = process.env[config.authPasswordEnvVar]?.trim();
+    const configured =
+      process.env[config.authPasswordEnvVar]?.trim() ||
+      process.env[config.authPasswordLegacyEnvVar]?.trim();
     if (configured) {
       authPassword = configured;
       authSource = "environment";

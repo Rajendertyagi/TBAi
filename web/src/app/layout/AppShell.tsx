@@ -16,6 +16,7 @@ import { syncChromeVars } from "../../lib/chrome-vars";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 import { useAvailabilityStore } from "../../features/availability/availabilityStore";
 import { registerAvailabilityRecovery } from "../../features/availability/recovery";
+import { registerTabReconciliation } from "../../features/chat/state/tabReconciliation";
 
 /**
  * Single application shell for BOTH the browser and the Windows desktop.
@@ -61,11 +62,16 @@ export function AppShell({ children }: AppShellProps = {}) {
   // Global backend availability (Phase 3): exactly one readiness poller for
   // the whole app lifetime, plus the single coordinated recovery listener.
   // Both are idempotent singletons; StrictMode remounts cannot duplicate them.
+  // The persisted tab mirror is reconciled here too, because boot is the one
+  // moment the client owns the complete reference set and can settle it in a
+  // single batch request; its retry rides the same recovery sequence.
   useEffect(() => {
     const unregister = registerAvailabilityRecovery();
+    const unregisterTabs = registerTabReconciliation();
     useAvailabilityStore.getState().start();
     return () => {
       unregister();
+      unregisterTabs();
       useAvailabilityStore.getState().stop();
     };
   }, []);
@@ -77,7 +83,7 @@ export function AppShell({ children }: AppShellProps = {}) {
         {sidebarVisible && <Sidebar />}
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* codeg-style content-area tab strip (top of the conversation column) */}
-          <div className="relative flex h-[var(--title-bar-height)] shrink-0 items-stretch border-b border-border bg-muted/40">
+          <div className="relative flex h-[var(--title-bar-height)] shrink-0 items-stretch border-b border-border glass-surface">
             {!sidebarVisible && (
               <div
                 data-tauri-drag-region

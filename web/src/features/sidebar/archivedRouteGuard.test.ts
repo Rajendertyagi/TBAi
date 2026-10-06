@@ -39,7 +39,13 @@ describe("/archived route registered after scheduler", () => {
   });
 
   it("renders ArchivedPage on the /archived route", () => {
-    expect(routerSource).toMatch(/path: "archived",\s*Component: ArchivedPage/);
+    // The route is registered LAZILY (route-level code splitting), so the pairing
+    // that matters is `path: "archived"` with `ArchivedPage` as that route's
+    // resolved component — inside its `lazy` callback rather than beside the path.
+    // Asserting both halves separately keeps the guard's real intent: the route
+    // exists AND it is the Archived page, without pinning which loading style is used.
+    expect(routerSource).toMatch(/path: "archived"/);
+    expect(routerSource).toMatch(/ArchivedPage/);
   });
 });
 

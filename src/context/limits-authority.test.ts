@@ -94,11 +94,12 @@ describe("one resolution, one answer, for every consumer", () => {
       };
     };
 
-    const fits = decideBudget({ estimate: estimate(usable), budget, reduction: NO_MECHANISM_LEFT });
+    const fits = decideBudget({ estimate: estimate(usable), budget, reduction: NO_MECHANISM_LEFT, limitSource: "provider_reported" });
     const overflows = decideBudget({
       estimate: estimate(usable + 1),
       budget,
       reduction: NO_MECHANISM_LEFT,
+    limitSource: "provider_reported",
     });
 
     expect(fits.action).toBe("accept");

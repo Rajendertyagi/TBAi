@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TBAi — Master Feature Tracker & OpenCode Audit Ledger</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: rgba(17, 24, 39, 0.7);
+      --surface-hover: rgba(30, 41, 59, 0.8);
+      --surface-card: rgba(22, 32, 50, 0.65);
+      --border: rgba(255, 255, 255, 0.04);
+      --border-accent: rgba(59, 130, 246, 0.4);
+      --accent: #3b82f6;
+      --accent-light: #60a5fa;
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      --text: #f8fafc;
+      --text-muted: #cbd5e1;
+      --text-dim: #94a3b8;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.12);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.12);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.12);
+      --purple: #a855f7;
+      --purple-bg: rgba(168, 85, 247, 0.12);
+      --cyan: #06b6d4;
+      --cyan-bg: rgba(6, 182, 212, 0.12);
+
+      --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.25);
+      --shadow-md: 0 10px 30px -5px rgba(0, 0, 0, 0.45), 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+      --shadow-lg: 0 20px 40px -10px rgba(0, 0, 0, 0.6), 0 8px 24px -4px rgba(59, 130, 246, 0.2);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: radial-gradient(circle at 50% 0%, #111a2e 0%, #090d16 70%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 36px 24px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      line-height: 1.6;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1400px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    /* HEADER */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 24px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo {
+      width: 52px;
+      height: 52px;
+      background: linear-gradient(135deg, #2563eb, #8b5cf6);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 26px;
+      color: #ffffff;
+      box-shadow: 0 8px 25px rgba(59, 130, 246, 0.45);
+    }
+
+    .title-area h1 {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: -0.5px;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+
+    .title-area p {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .stats-bar {
+      display: flex;
+      gap: 16px;
+      background: var(--surface);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      padding: 14px 24px;
+      border-radius: 18px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 80px;
+    }
+
+    .stat-val {
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .stat-lbl {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+
+    /* NAV FILTER TABS */
+    .filter-tabs {
+      display: flex;
+      gap: 10px;
+      background: var(--surface);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      padding: 6px;
+      border-radius: 16px;
+      box-shadow: var(--shadow-sm);
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 18px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      white-space: nowrap;
+    }
+
+    .tab-btn:hover {
+      color: #ffffff;
+      background: var(--surface-hover);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+    }
+
+    /* SECTION BOX */
+    .section-box {
+      background: var(--surface);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      padding-bottom: 14px;
+    }
+
+    .section-title .title-text {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* BADGES */
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 999px;
+      letter-spacing: 0.3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    .badge-working { background: var(--success-bg); color: var(--success); }
+    .badge-needed { background: var(--warning-bg); color: var(--warning); }
+    .badge-added { background: var(--purple-bg); color: var(--purple); }
+    .badge-missing { background: var(--danger-bg); color: var(--danger); }
+    .badge-active { background: var(--accent-glow); color: var(--accent-light); }
+
+    /* CARDS GRID */
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+
+    .feature-card {
+      background: var(--surface-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .feature-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .card-h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .card-desc {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .card-list {
+      font-size: 13px;
+      color: var(--text-muted);
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .card-file {
+      font-family: 'Consolas', 'Fira Code', Monaco, monospace;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: rgba(6, 9, 16, 0.6);
+      padding: 6px 12px;
+      border-radius: 8px;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+      word-break: break-all;
+    }
+
+    /* PROMPT DRAWER */
+    .prompt-box {
+      background: rgba(6, 9, 16, 0.9);
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6), 0 4px 15px rgba(59, 130, 246, 0.15);
+      border: none;
+      border-radius: 12px;
+      padding: 16px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .prompt-box.open { display: flex; }
+
+    .prompt-text {
+      font-family: 'Consolas', 'Fira Code', Monaco, monospace;
+      font-size: 12px;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.5;
+    }
+
+    .btn {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 9px 16px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: #ffffff;
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.35);
+    }
+
+    .btn-outline {
+      background: rgba(59, 130, 246, 0.1);
+      color: var(--accent-light);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .btn-outline:hover {
+      background: rgba(59, 130, 246, 0.2);
+    }
+
+    footer {
+      margin-top: 20px;
+      padding: 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-dim);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    
+    <!-- HEADER -->
+    <header>
+      <div class="brand">
+        <div class="logo">T</div>
+        <div class="title-area">
+          <h1>TBAi OpenCode & System Master Tracker</h1>
+          <p>Granular Capabilities Audit & Task Tracking Ledger</p>
+        </div>
+      </div>
+      <div class="stats-bar">
+        <div class="stat-item">
+          <span class="stat-val" style="color:var(--success)">12</span>
+          <span class="stat-lbl">Working</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-val" style="color:var(--purple)">4</span>
+          <span class="stat-lbl">Recently Added</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-val" style="color:var(--warning)">3</span>
+          <span class="stat-lbl">Needed Next</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- METHODOLOGY EXPLANATION -->
+    <section class="section-box">
+      <div class="section-title">
+        <div class="title-text">
+          <span>🧠 How Tracking & OpenCode Workflow Functions</span>
+        </div>
+      </div>
+      <div class="grid-4">
+        <div class="feature-card">
+          <div class="card-h3">1. Tracking Category Rules</div>
+          <p class="card-desc">Every feature has a verified status badge:</p>
+          <ul class="card-list">
+            <li><span class="badge badge-working">✅ WORKING & VERIFIED</span> Functioning in runtime with passed test suite.</li>
+            <li><span class="badge badge-added">📌 RECENTLY ADDED</span> Built in current development iteration.</li>
+            <li><span class="badge badge-needed">⏳ NEEDED NEXT</span> Required capability scheduled for prompt generation.</li>
+            <li><span class="badge badge-missing">⚠️ MISSING / GAP</span> Identified missing dependency or gap to fix.</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="card-h3">2. OpenCode Architecture Boundary</div>
+          <p class="card-desc">TBAi isolates OpenCode strictly inside <code>src/services/opencode/</code> (backend) and <code>web/src/features/opencode/</code> (frontend).</p>
+          <p class="card-desc">OpenCode communicates over a managed child process (CLI server) and local native V2 SSE client—never leaking into Direct API chat routes.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="card-h3">3. Lead Planner & User Execution</div>
+          <p class="card-desc">Lead Architect audits code &rarr; updates ledger &rarr; generates prompt drawer. User copies prompt into external coding app &rarr; reports test results.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="card-h3">4. Performance Optimization Masterlist</div>
+          <p class="card-desc">Full 6-category optimization roadmap saved under <code>docs/performance-optimization-masterlist.md</code> covering lazy loading, message virtualization, Bun WAL mode, and 16ms stream batching.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- OPENCODE SPECIFIC AUDIT SECTION -->
+    <section class="section-box">
+      <div class="section-title">
+        <div class="title-text">
+          <span>🤖 OpenCode Engine: Feature Breakdown & Audit</span>
+        </div>
+        <span class="badge badge-active">MODULE DEEP DIVE</span>
+      </div>
+
+      <!-- OPENCODE WORKING FEATURES -->
+      <h3 style="font-size:16px; color:var(--success); margin-top:8px;">✅ What IS Working in OpenCode</h3>
+      <div class="grid-4">
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Managed Process Lifecycle</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Backend manages `opencode serve` process ownership, health checking, and automatic child process shutdown on app exit.</p>
+          <div class="card-file">src/services/opencode/serverManager.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">V2 Native SSE Event Reduction</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Frontend streams raw SSE events directly from OpenCode backend and reduces them into UI state without framework abstraction.</p>
+          <div class="card-file">web/src/features/opencode/v2Events.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Interactive V2 Form Cards</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Renders interactive question forms sent by OpenCode agents, allowing user inputs to be returned via `answers[][]` array format.</p>
+          <div class="card-file">web/src/features/opencode/V2FormCard.tsx</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Permission Gate Cards & Approval</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Intercepts destructive tool permission requests (file writes, shell execution) with explicit Allow / Deny buttons.</p>
+          <div class="card-file">web/src/features/opencode/OpenCodePermissions.tsx</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Stale Permission State Guard</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Prevents permission card flashes when sessions reload or state syncs across client view switches.</p>
+          <div class="card-file">web/src/stores/stalePermissionsStore.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Live Agent Todo Tracker</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Extracts todo tasks generated by OpenCode planning phases and displays real-time progress checklist.</p>
+          <div class="card-file">web/src/features/opencode/OpenCodeTodoTracker.tsx</div>
+        </div>
+
+      </div>
+
+      <!-- OPENCODE RECENTLY ADDED -->
+      <h3 style="font-size:16px; color:var(--purple); margin-top:16px;">📌 What Was Recently Added to OpenCode</h3>
+      <div class="grid-4">
+
+        <div class="feature-card" style="border-left: 4px solid var(--purple);">
+          <div class="card-top">
+            <span class="card-h3">Context Ring & Token Usage</span>
+            <span class="badge badge-added">RECENTLY ADDED</span>
+          </div>
+          <p class="card-desc">Visual SVG ring showing exact context window capacity and active token consumption for OpenCode sessions.</p>
+          <div class="card-file">web/src/features/opencode/OpenCodeContextRing.tsx</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--purple);">
+          <div class="card-top">
+            <span class="card-h3">First Prompt Session Handoff</span>
+            <span class="badge badge-added">RECENTLY ADDED</span>
+          </div>
+          <p class="card-desc">Defers session creation until the user sends their first message in Code mode, matching clean conversation UX.</p>
+          <div class="card-file">web/src/features/opencode/FirstPromptHandoff.tsx</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--purple);">
+          <div class="card-top">
+            <span class="card-h3">Model Selector Chip</span>
+            <span class="badge badge-added">RECENTLY ADDED</span>
+          </div>
+          <p class="card-desc">Allows switching OpenCode agent models dynamically from available model providers.</p>
+          <div class="card-file">web/src/features/opencode/OpenCodeModelChip.tsx</div>
+        </div>
+
+      </div>
+
+      <!-- OPENCODE NEEDED & MISSING -->
+      <h3 style="font-size:16px; color:var(--warning); margin-top:16px;">⏳ What Is NEEDED / MISSING in OpenCode (Next Steps)</h3>
+      <div class="grid-4">
+
+        <div class="feature-card" style="border-left: 4px solid var(--warning);">
+          <div class="card-top">
+            <span class="card-h3">Phase 4: OpenCode Session Recovery Across App Restarts</span>
+            <span class="badge badge-needed">NEEDED NEXT</span>
+          </div>
+          <p class="card-desc">Currently, restarting TBAi clears active OpenCode session mapping. We need SQLite persistence for active OpenCode session IDs so state survives app restarts.</p>
+          <div class="card-file">Target: src/storage/db.ts & web/src/features/opencode/</div>
+          <button class="btn btn-outline" onclick="togglePrompt('p4')">📋 View Coding App Prompt</button>
+          <div class="prompt-box" id="p4">
+            <div class="prompt-text">Implement OpenCode session recovery across app restarts:
+1. Store active OpenCode session IDs in SQLite `conversations` table.
+2. On app launch, query OpenCode server for active session state before spawning a new session.
+3. Validate with `bun run typecheck`.</div>
+            <button class="btn btn-primary" onclick="copyText('p4')">Copy Prompt</button>
+          </div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--warning);">
+          <div class="card-top">
+            <span class="card-h3">Phase 4: Native Workspace File Diff Sync</span>
+            <span class="badge badge-needed">NEEDED NEXT</span>
+          </div>
+          <p class="card-desc">Provide native visual diff rendering when OpenCode agent modifies files in the local workspace directory.</p>
+          <div class="card-file">Target: web/src/features/opencode/OpenCodeView.tsx</div>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- GENERAL SYSTEM INFRASTRUCTURE AUDIT SECTION -->
+    <section class="section-box">
+      <div class="section-title">
+        <div class="title-text">
+          <span>⚡ Direct Chat, Security & Infrastructure Audit</span>
+        </div>
+        <span class="badge badge-active">PLATFORM CORE</span>
+      </div>
+
+      <div class="grid-4">
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Direct Chat Engine (AI SDK v7)</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">`streamText` streaming with assistant-ui primitives, resumable stream headers, and background message pruning.</p>
+          <div class="card-file">src/routes/chat.ts • web/src/runtime.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">AES-256-GCM Vault</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Encrypted API keys and MCP credentials stored under local DEK in SQLite database.</p>
+          <div class="card-file">src/services/credentials.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">MCP Server Client Manager</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Official `@modelcontextprotocol/sdk` integration with Stdio/SSE transport support and server-side tool execution.</p>
+          <div class="card-file">src/services/mcp/manager.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--success);">
+          <div class="card-top">
+            <span class="card-h3">Unattended Scheduler Engine</span>
+            <span class="badge badge-working">WORKING</span>
+          </div>
+          <p class="card-desc">Bun.cron handles with read-only tool execution safety guard.</p>
+          <div class="card-file">src/services/scheduler/scheduler.ts</div>
+        </div>
+
+        <div class="feature-card" style="border-left: 4px solid var(--accent-light);">
+          <div class="card-top">
+            <span class="card-h3">Phase 3: Stream Timing Instrumentation</span>
+            <span class="badge badge-active">ACTIVE FOCUS</span>
+          </div>
+          <p class="card-desc">Millisecond boundary timing (T0 request $\rightarrow$ T1 token $\rightarrow$ T2 emit $\rightarrow$ T3 receive) to pinpoint network vs rendering delays.</p>
+          <div class="card-file">src/routes/chat.ts • web/src/runtime.ts</div>
+          <button class="btn btn-outline" onclick="togglePrompt('p3')">📋 View Coding App Prompt</button>
+          <div class="prompt-box" id="p3">
+            <div class="prompt-text">Implement stream boundary timing:
+Log millisecond timestamps at T0 (chat route), T1 (onChunk token), T2 (monitorStream emit), and T3 (browser receive).
+Run `bun run typecheck` to verify.</div>
+            <button class="btn btn-primary" onclick="copyText('p3')">Copy Prompt</button>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+      TBAi Local Master Technical Ledger • File Location: <code>docs/project_tracker.html</code> • Updated 2026-09-30
+    </footer>
+
+  </div>
+
+  <script>
+    function togglePrompt(id) {
+      const box = document.getElementById(id);
+      box.classList.toggle('open');
+    }
+
+    function copyText(id) {
+      const text = document.querySelector(`#${id} .prompt-text`).innerText;
+      navigator.clipboard.writeText(text);
+      alert('Prompt copied to clipboard!');
+    }
+  </script>
+</body>
+</html>

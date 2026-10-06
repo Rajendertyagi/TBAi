@@ -34,9 +34,11 @@
 import type { UIMessage } from "ai";
 import {
   applyCompaction,
+  findSupersededTurns,
   planCompaction,
   type CompactionPlan,
   type CompactionRecord,
+  type SupersededTurn,
 } from "./contract";
 import { summarizeSpan, type SummarizeResult } from "./summarize";
 
@@ -269,7 +271,17 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
   // branch, or a history that diverged — compact nothing at all. Refusing is safe;
   // mis-splicing is not.
   const applied = wonRace
-    ? { messages: applyCompaction({ messages: input.messages, plan, record: stored }), applied: true as const }
+    ? {
+        messages: applyCompaction({
+          messages: input.messages,
+          plan,
+          record: stored,
+          // The span crossed superseded turns, so the ones carrying model-visible
+          // non-text content are replayed after the summary under fresh ids.
+          preservedTurns: plan.crossedSupersededTurns,
+        }),
+        applied: true as const,
+      }
     : applyExistingCompaction({ messages: input.messages, record: stored });
 
   if (applied.applied === false) {
@@ -317,6 +329,16 @@ export function applyExistingCompaction(input: {
   const located = locateSpan(messages, record);
   if (!located) return { messages: [...messages], applied: false, reason: "span_not_present" };
 
+  // A replay summarises nothing, so there is nothing to preserve from THIS call.
+  // But a record that crossed superseded turns must still re-materialise them: the
+  // covered ids no longer appear in the request, so without this the file payload
+  // would be absent on every turn after the compaction, not just the one that
+  // produced it.
+  //
+  // Derived from the located span, so it needs no extra persisted state and cannot
+  // disagree with what the record actually covered.
+  const crossedSupersededTurns = locateCrossedSuperseded(messages, located);
+
   return {
     messages: applyCompaction({
       messages,
@@ -333,12 +355,31 @@ export function applyExistingCompaction(input: {
         firstRetainedIndex: located.end + 1,
         spanEstimatedTokens: 0,
         spanFingerprint: record.spanFingerprint,
+        crossedSupersededTurns,
       },
       record,
+      preservedTurns: crossedSupersededTurns,
     }),
     applied: true,
     reason: "record_applied",
   };
+}
+
+/**
+ * The superseded turns a stored record's span crossed, located in this list.
+ *
+ * A replay does not carry the original plan, so the crossed turns are recovered
+ * structurally: the messages inside the covered span that sit in the trailing
+ * unanswered run and carry model-visible non-text content. That is exactly the set
+ * the crossing planner recorded, recovered from the same inputs it used.
+ */
+function locateCrossedSuperseded(
+  messages: readonly UIMessage[],
+  located: { start: number; end: number },
+): SupersededTurn[] {
+  return findSupersededTurns(messages).filter(
+    (turn) => turn.index >= located.start && turn.index <= located.end,
+  );
 }
 
 /**

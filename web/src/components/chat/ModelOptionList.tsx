@@ -1,6 +1,7 @@
 import { useCallback, useId, useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isComposing } from "@/lib/ime";
 import { filterModelGroups, type ModelGroup } from "@/lib/model-groups";
 
 interface ModelOptionListProps {
@@ -83,7 +84,15 @@ export function ModelOptionList({
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
       // IME composition (CJK): Enter confirms the candidate, must not select.
-      if ((event.nativeEvent as { isComposing?: boolean }).isComposing) return;
+      //
+      // `isComposing`, not the bare event flag, because the flag alone does not
+      // hold on Safari: Safari fires `compositionend` BEFORE the final keydown,
+      // so the Enter that *ended* the composition arrives with `isComposing`
+      // already false and would fall through to `onSelect` -- silently choosing
+      // a model out of a half-typed query. `isComposing` ORs the event signal
+      // with document-level composition state, which is still set at that
+      // moment. See `lib/ime.ts`.
+      if (isComposing(event)) return;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();

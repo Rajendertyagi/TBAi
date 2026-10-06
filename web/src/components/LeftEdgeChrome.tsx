@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { PanelLeft, Search, X } from "lucide-react";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import { Input } from "./ui/input";
+import { isPlainEscape } from "../lib/ime";
 import { sidebarConfig } from "../config/sidebar";
 import { historyConfig } from "../config/history";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
@@ -90,7 +91,10 @@ export function LeftEdgeChrome() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape") closeSearch();
+                // `isPlainEscape`: Escape cancels an IME candidate before it
+                // reaches the app, so a bare check would close the search box
+                // while the reader was still typing into it.
+                if (isPlainEscape(e)) closeSearch();
               }}
               placeholder={copy.searchPlaceholder}
               aria-label={copy.searchLabel}

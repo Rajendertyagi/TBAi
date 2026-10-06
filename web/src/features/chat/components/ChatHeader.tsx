@@ -15,8 +15,10 @@ import {
 import { chatHeaderConfig } from "@/config/sidebar";
 import { historyConfig } from "@/config/history";
 import { logger } from "@/lib/logger";
+import { isPlainEnter } from "@/lib/ime";
 import { useDeleteConversation } from "@/features/chat/state/deleteConversation";
 import { NEW_DRAFT_TAB_ID } from "@/features/chat/state/chatTabs";
+import { probeConversation } from "@/features/chat/state/conversationExistence";
 import { updateConversation } from "@/adapters/remoteThreadListAdapter";
 import {
   DropdownMenu,
@@ -80,25 +82,31 @@ export function ChatHeader({ threadId }: { threadId: string }) {
         cancelled = true;
       };
     }
-    // Existing conversation: derive the crumb from its workspace mode.
-    fetch(`/api/conversations/${threadId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((conv) => {
-        if (cancelled || !conv) return;
-        if (conv.workspaceMode === "project" && conv.workspaceFolderId) {
-          setRootHref("/folders");
-          return fetch(`/api/folders/${conv.workspaceFolderId}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((f) => {
-              if (cancelled) return;
-              setRootName(f ? (f.alias || f.name) : "Project (folder removed)");
-            })
-            .catch(() => {});
+    // Existing conversation: derive the crumb from its workspace mode. The probe
+    // is the shared existence contract, so a 5xx ("this row is gone") is no
+    // longer indistinguishable from a broken read — but neither destroys state
+    // here: the header only renders a label, so every non-`exists` verdict keeps
+    // today's behavior of leaving the crumb at its default. One request, same as
+    // before, and the row data still arrives on the happy path.
+    void (async () => {
+      const probe = await probeConversation(threadId);
+      if (cancelled || probe.status !== "exists") return;
+      const conv = probe.data;
+      if (conv.workspaceMode === "project" && conv.workspaceFolderId) {
+        setRootHref("/folders");
+        try {
+          const res = await fetch(`/api/folders/${conv.workspaceFolderId}`);
+          const f = res.ok ? await res.json().catch(() => null) : null;
+          if (cancelled) return;
+          setRootName(f ? (f.alias || f.name) : "Project (folder removed)");
+        } catch {
+          /* keep the current crumb — a folder read failure is not a 404 story */
         }
-        setRootHref("/workspace");
-        setRootName(copy.temporaryWorkspace);
-      })
-      .catch(() => {});
+        return;
+      }
+      setRootHref("/workspace");
+      setRootName(copy.temporaryWorkspace);
+    })();
     return () => {
       cancelled = true;
     };
@@ -338,7 +346,10 @@ export function ChatHeader({ threadId }: { threadId: string }) {
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void handleRenameConfirm();
+              // `isPlainEnter`, not `key === "Enter"`: accepting an IME candidate
+              // also fires a keydown, so a bare check would save the rename with
+              // the pinyin instead of the kanji and close the field.
+              if (isPlainEnter(e)) void handleRenameConfirm();
             }}
             autoFocus
             aria-label={copy.renameTitle}

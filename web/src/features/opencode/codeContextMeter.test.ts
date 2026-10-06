@@ -168,6 +168,7 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     forms: [],
     inboxById: {},
     usage: { cost: 1.5, tokens: usage({ total: 900_000, input: 900_000, output: 1_000 }) },
+    occupancyTokens: usage({ total: 900_000, input: 900_000, output: 1_000 }),
     optimisticMessageIds: [],
     answeredPermissionIds: [],
     diagnosticCount: 0,
@@ -223,16 +224,38 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     expect(failed.occupancyStale).toBe(false);
   });
 
-  it("the next usage report clears the invalidation", () => {
-    // A public EVENT, so it goes through the event reducer, not the action one.
+  it("session.usage.updated does NOT clear the invalidation", () => {
+    // Measured live against opencode 2.0.22: this event carries the SESSION's
+    // cumulative ledger, which still counts every pre-compaction round trip.
+    // Clearing here repopulated the meter with exactly the traffic the
+    // compaction was meant to remove. Only a per-response measurement clears it.
     const after = reduceV2Event(reduceV2ThreadState(base, settle), usageEvent, 1);
-    expect(after.occupancyStale).toBe(false);
+    expect(after.occupancyStale).toBe(true);
+    // The spend is still recorded - that part of the event is correct.
     expect(after.usage?.tokens.input).toBe(75_000);
   });
 
-  it("a session reload trusts the server's snapshot", () => {
-    // OpenCode has already resolved its own compactions; a reload must not
-    // resurrect an "unknown" state the server can answer.
+  it("the next RESPONSE clears the invalidation, not the next ledger report", () => {
+    const response = {
+      type: "session.step.ended",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_2",
+        cost: 2,
+        tokens: usage({ total: 12_000, input: 11_500, output: 500 }),
+      },
+    } as never;
+    const after = reduceV2Event(reduceV2ThreadState(base, settle), response, 1);
+    expect(after.occupancyStale).toBe(false);
+    // And the numerator becomes the RESPONSE, not the ledger.
+    expect(after.occupancyTokens?.input).toBe(11_500);
+  });
+
+  it("a session reload re-derives occupancy from the persisted messages", () => {
+    // OpenCode has already resolved its own compactions, so a reload must not
+    // invent an "unknown" the server can answer - and equally must not
+    // resurrect the pre-compaction figure out of the ledger. The messages are
+    // the only trustworthy source on reload.
     const reloaded = reduceV2ThreadState(reduceV2ThreadState(base, settle), hydrated);
     expect(reloaded.occupancyStale).toBe(false);
   });

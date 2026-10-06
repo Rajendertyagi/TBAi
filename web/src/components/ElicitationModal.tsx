@@ -69,7 +69,7 @@ export function ElicitationModal() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-lg border border-border bg-background p-4 shadow-xl">
+      <div className="w-full max-w-md rounded-xl border-none p-4 glass-surface shadow-overlay">
         <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
           {pending.serverName} is asking
         </div>

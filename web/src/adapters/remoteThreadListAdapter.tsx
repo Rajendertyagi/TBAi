@@ -12,6 +12,10 @@ import {
   captureDraftSnapshot,
   materializeDraft,
 } from "../features/chat/state/materializeDraft";
+import {
+  ConversationNotFoundError,
+  probeConversation,
+} from "../features/chat/state/conversationExistence";
 
 interface ConvDTO {
   id: string;
@@ -111,18 +115,14 @@ export function invalidateThreadListCache(): void {
 
 /**
  * Confirmed server evidence that a conversation does not exist (HTTP 404).
- * Only this error may drive destructive transitions (tab close + fallback);
- * every other fetch failure means existence is UNKNOWN and must retain.
+ *
+ * Now DEFINED in the shared existence contract and re-exported here, because
+ * this adapter's throwing `fetch` contract is the one caller that needs an
+ * exception rather than a verdict. Re-exported (not re-declared) so there is
+ * exactly one class identity in the app: an `instanceof` check written against
+ * either import path refers to the same constructor.
  */
-export class ConversationNotFoundError extends Error {
-  readonly threadId: string;
-
-  constructor(threadId: string) {
-    super(`Thread not found: ${threadId}`);
-    this.name = "ConversationNotFoundError";
-    this.threadId = threadId;
-  }
-}
+export { ConversationNotFoundError } from "../features/chat/state/conversationExistence";
 
 export function setThreadListSortOrder(order: "updated" | "created"): void {
   threadListSortOrder = order;
@@ -331,21 +331,18 @@ export function createRemoteThreadListAdapter(
       }
     },
 
+    // assistant-ui's `fetch` contract is throwing, so the three-valued verdict
+    // from the shared contract is translated here rather than re-derived:
+    // only `gone` becomes ConversationNotFoundError, and `unknown` (network,
+    // 5xx, unreadable body) stays a generic error so no caller mistakes an
+    // unhealthy server for a missing row. One request, same as before.
     async fetch(threadId) {
-      let res: Response;
-      try {
-        res = await fetch(`/api/conversations/${threadId}`);
-      } catch {
-        // Network failure: existence UNKNOWN — propagate without a verdict so
-        // callers retain rather than delete.
+      const probe = await probeConversation(threadId);
+      if (probe.status === "gone") throw new ConversationNotFoundError(threadId);
+      if (probe.status === "unknown") {
         throw new Error(`Thread status unknown: ${threadId}`);
       }
-      // Only a confirmed 404 means "does not exist". Any other non-ok status
-      // is indeterminate (500/503/…) and must not drive deletion either.
-      if (res.status === 404) throw new ConversationNotFoundError(threadId);
-      if (!res.ok) throw new Error(`Thread status unknown: ${threadId}`);
-      const conv = await res.json();
-      return toMetadata(conv);
+      return toMetadata(probe.data);
     },
 
     // Server auto-titles from the first user message; return a no-op stream.

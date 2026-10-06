@@ -343,6 +343,7 @@ describe("the reduction state is modelled, not guessed", () => {
         spanLength: 0,
         spanFingerprint: null,
         summaryTokens: 0,
+        summaryText: null,
         reclaimedTokens: 0,
         origin: null,
         summarizedBy: null,
@@ -360,6 +361,7 @@ describe("the reduction state is modelled, not guessed", () => {
         spanLength: 4,
         spanFingerprint: "fp",
         summaryTokens: 10,
+        summaryText: null,
         reclaimedTokens: 0,
         origin: "model_generated_summary",
         summarizedBy: "m",
@@ -376,6 +378,7 @@ describe("the reduction state is modelled, not guessed", () => {
         spanLength: 0,
         spanFingerprint: null,
         summaryTokens: 0,
+        summaryText: null,
         reclaimedTokens: 0,
         origin: null,
         summarizedBy: null,
@@ -452,15 +455,15 @@ describe("no dead verdicts remain", () => {
 
     const verdicts = [
       // Branch 1: fits at the pessimistic end.
-      decideBudget({ estimate: banded(usable - 1, usable - 2, usable - 1), budget, reduction: exhausted }),
+      decideBudget({ estimate: banded(usable - 1, usable - 2, usable - 1), budget, reduction: exhausted, limitSource: "provider_reported" }),
       // Branch 2: the band straddles and the point estimate FITS. This is the
       // branch the old `"reduce"` verdict came from, so it must be pinned here —
       // otherwise a reintroduced dead verdict hides behind branch 1.
-      decideBudget({ estimate: banded(usable - 10, usable - 100, usable + 5_000), budget, reduction: exhausted }),
+      decideBudget({ estimate: banded(usable - 10, usable - 100, usable + 5_000), budget, reduction: exhausted, limitSource: "provider_reported" }),
       // Branch 3: the band straddles and the point estimate is OVER.
-      decideBudget({ estimate: banded(usable + 1, usable, usable + 9), budget, reduction: exhausted }),
+      decideBudget({ estimate: banded(usable + 1, usable, usable + 9), budget, reduction: exhausted, limitSource: "provider_reported" }),
       // Branch 4: over at both ends.
-      decideBudget({ estimate: banded(usable + 50_000, usable + 40_000, usable + 60_000), budget, reduction: exhausted }),
+      decideBudget({ estimate: banded(usable + 50_000, usable + 40_000, usable + 60_000), budget, reduction: exhausted, limitSource: "provider_reported" }),
     ];
 
     // Compile-time exhaustiveness is the strongest form of this assertion; this is

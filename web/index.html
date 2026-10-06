@@ -8,15 +8,30 @@
     <meta name="theme-color" content="#0a0a0a" />
     <title>TBAi</title>
     <script>
-      // Pre-apply the saved theme before first paint (no flash). Mirrors
-      // ThemeProvider defaults: tbai-theme in localStorage, else dark.
+      // Pre-apply the saved theme before first paint (no flash).
+      //
+      // This mirrors ThemeProvider exactly, and deliberately carries NO colour
+      // logic: the palettes live in `src/styles/themes.css`, so all this has to do
+      // is set the mode class and the theme attribute and let the (render-blocking)
+      // stylesheet do the rest. That is what keeps this bootstrap from drifting away
+      // from the provider.
+      //
+      // Keys: tbai-theme (mode), tbai-theme-light / tbai-theme-dark (palette per
+      // mode). An unknown or missing palette id simply matches no generated block,
+      // which leaves the stylesheet's own colours — TBAi's existing look — standing.
       try {
         var t = localStorage.getItem("tbai-theme");
         var theme = t === "light" || t === "dark" ? t : "dark";
-        document.documentElement.classList.remove("light", "dark");
-        document.documentElement.classList.add(theme);
+        var root = document.documentElement;
+        root.classList.remove("light", "dark");
+        root.classList.add(theme);
+        var id = localStorage.getItem(theme === "dark" ? "tbai-theme-dark" : "tbai-theme-light");
+        if (id && id !== "classic") root.setAttribute("data-tbai-theme", id);
+        // Browser chrome should match the resolved background, whatever it turned
+        // out to be. Read it back from the cascade rather than duplicating colours.
         var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute("content", theme === "dark" ? "#0a0a0a" : "#ffffff");
+        var bg = getComputedStyle(root).getPropertyValue("--background").trim();
+        if (meta && bg) meta.setAttribute("content", bg);
       } catch (e) { /* storage unavailable — class="dark" default stands */ }
     </script>
   </head>

@@ -256,7 +256,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       currentTurnIds: [],
       retainedIds: ["a"],
     });
-    const decision = decideBudget({ estimate, budget, reduction: noMechanismLeft() });
+    const decision = decideBudget({ estimate, budget, reduction: noMechanismLeft(), limitSource: "provider_reported" });
     expect(decision.action).toBe("accept");
     if (decision.action === "accept") expect(decision.headroomTokens).toBeGreaterThan(0);
   });
@@ -268,7 +268,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       currentTurnIds: [],
       retainedIds: ["a"],
     });
-    const decision = decideBudget({ estimate: huge, budget, reduction: noMechanismLeft() });
+    const decision = decideBudget({ estimate: huge, budget, reduction: noMechanismLeft(), limitSource: "provider_reported" });
     expect(decision.action).toBe("reject");
     if (decision.action === "reject") {
       expect(decision.reason).toBe("over_limit");
@@ -286,6 +286,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       estimate: banded(budget, usable - 50_000, usable - 60_000, usable - 1),
       budget,
       reduction: noMechanismLeft(),
+      limitSource: "provider_reported",
     });
     expect(decision.action).toBe("accept");
   });
@@ -303,6 +304,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       estimate: banded(budget, usable - 10, usable - 100, usable + 5_000),
       budget,
       reduction: noMechanismLeft(),
+      limitSource: "provider_reported",
     });
     expect(decision.action).toBe("accept");
   });
@@ -321,6 +323,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
         toolResults: { kind: "exhausted", reason: "no_reducible_content" },
         compaction: { kind: "exhausted", reason: "disabled" },
       },
+      limitSource: "provider_reported",
     });
     expect(decision.action).toBe("reject");
     if (decision.action === "reject") {
@@ -339,6 +342,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       estimate: banded(budget, usable + 1, usable - 100, usable + 9_000),
       budget,
       reduction: noMechanismLeft(),
+      limitSource: "provider_reported",
     });
     expect(decision.action).toBe("reject");
   });
@@ -359,6 +363,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
         toolResults: { kind: "exhausted", reason: "no_reducible_content" },
         compaction,
       },
+      limitSource: "provider_reported",
     });
     // Sent, deliberately. A conservative policy choice must not be converted into
     // a hard failure by the budget gate. The withhold is still observable in the
@@ -378,6 +383,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       estimate: banded(budget, usable + 60_000, usable + 50_000, usable + 80_000),
       budget,
       reduction: { toolResults: noMechanismLeft().toolResults, compaction: { kind: "withheld", reason: "hysteresis" } },
+      limitSource: "provider_reported",
     });
     expect(decision.action).toBe("reject");
     if (decision.action === "reject") expect(decision.reason).toBe("over_limit");
@@ -393,7 +399,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       generationCap: { tokens: 0, source: "conservative_default", boundedByRemainingWindow: false },
       enforceable: false,
     };
-    const decision = decideBudget({ estimate: banded(budget, 9e9, 9e9, 9e9), budget, reduction: noMechanismLeft() });
+    const decision = decideBudget({ estimate: banded(budget, 9e9, 9e9, 9e9), budget, reduction: noMechanismLeft(), limitSource: "provider_reported" });
     expect(decision.action).toBe("accept");
     expect(decision.reduction.toolResults.kind).toBe("exhausted");
   });
@@ -409,7 +415,7 @@ describe("budget decision: the mechanism-aware matrix", () => {
       banded(budget, usable - 10, usable - 100, usable - 5),
       banded(budget, usable + 5_000, usable - 100, usable + 9_000),
     ]) {
-      const decision = decideBudget({ estimate, budget, reduction });
+      const decision = decideBudget({ estimate, budget, reduction, limitSource: "provider_reported" });
       expect(decision.reduction).toEqual(reduction);
     }
   });
@@ -434,6 +440,7 @@ describe("budget diagnostics: the reduction state is observable, never a hardcod
           toolResults: { kind: "exhausted", reason: "no_reducible_content" },
           compaction: { kind: "exhausted", reason: "disabled" },
         },
+        limitSource: "provider_reported",
       }),
     });
 
@@ -461,6 +468,7 @@ describe("budget diagnostics: the reduction state is observable, never a hardcod
           toolResults: { kind: "exhausted", reason: "no_reducible_content" },
           compaction: { kind: "withheld", reason: "hysteresis" },
         },
+        limitSource: "provider_reported",
       }),
     });
     expect(diagnostics.reductionWithheld).toBe(true);

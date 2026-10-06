@@ -117,7 +117,7 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
             <ChevronDown aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/60" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="top" className="w-72 overflow-hidden rounded-2xl p-0">
+        <DropdownMenuContent align="start" side="top" className="w-72 overflow-hidden rounded-xl p-0">
           <div className="p-1">
             <Input
               value={query}

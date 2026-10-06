@@ -33,20 +33,101 @@
  * row.
  */
 
+import type { DataMessagePart } from "@assistant-ui/react";
 import { logger } from "../../lib/logger";
 
 /**
- * The one command string the Direct surface intercepts.
+ * The canonical command string the Direct surface intercepts.
  *
- * Mirrors the server's `COMPACT_COMMAND`. Matched EXACTLY after trimming, so
- * `/compact now`, `please run /compact` and `explain /compact` stay ordinary user
- * messages. The server stays authoritative: this guard only decides whether the
- * command becomes conversation content, never whether compaction runs.
+ * This is the spelling the client puts in the request body, and the one that
+ * appears in logs. Mirrors the server's `COMPACT_COMMAND`.
  */
 export const DIRECT_COMPACT_COMMAND = "/compact";
 
-/** The status part the server emits. Named once; never spelled inline elsewhere. */
+/**
+ * Accepted spellings of the same command, mirroring the server's aliases.
+ *
+ * Matched EXACTLY after trimming, so `/compact now`, `please run /compact` and
+ * `explain /compact` stay ordinary user messages. The server stays authoritative:
+ * this guard only decides whether the command becomes conversation content, never
+ * whether compaction runs.
+ */
+export const DIRECT_COMPACT_COMMAND_ALIASES: readonly string[] = ["/compress"];
+
+/** Every accepted spelling, canonical first. Mirrors the server's `COMPACT_COMMANDS`. */
+export const DIRECT_COMPACT_COMMANDS: readonly string[] = [
+  DIRECT_COMPACT_COMMAND,
+  ...DIRECT_COMPACT_COMMAND_ALIASES,
+];
+
+/** The sigil that introduces a command token, e.g. the `/` in `/compact`. */
+export const COMMAND_SIGIL = "/";
+
+/**
+ * The sigil-less NAME of a command token.
+ *
+ * Tokens and names are deliberately different things here. A token is matched
+ * against text the user typed, so it carries its sigil — `parseDirectCompactCommand`
+ * compares whole tokens. A name is what the composer's command palette expects: it
+ * supplies the sigil itself via `commandLabel`, and its entry ids are sigil-less.
+ *
+ * Handing `applyCommandSelection` a token therefore produced `//compact `, which no
+ * longer matches `DIRECT_COMPACT_COMMANDS` — so selecting the palette entry sent the
+ * command to the model as an ordinary message instead of compacting anything. The
+ * palette was the only caller that needed this conversion, so it lives here beside
+ * the tokens rather than being spelled out at the call site.
+ */
+export function commandNameOf(token: string): string {
+  return token.startsWith(COMMAND_SIGIL) ? token.slice(COMMAND_SIGIL.length) : token;
+}
+
+/**
+ * A parsed Direct compaction command.
+ *
+ * `instructions` is what the user typed after the command word, or `undefined` for
+ * a bare `/compact`. Mirrors the server's `CompactCommandMatch`: the client needs
+ * the command word to decide whether to intercept, and the instructions so the
+ * synthetic request message carries them to the summariser.
+ */
+export interface DirectCompactCommandMatch {
+  readonly command: string;
+  readonly instructions: string | undefined;
+  /** The exact text to send as the synthetic command message. */
+  readonly text: string;
+}
+
+/**
+ * Parse composer text as the Direct compaction command, or `undefined`.
+ *
+ * Mirrors the server's `parseCompactCommand` rule for the same reason the whole
+ * grammar is duplicated: the client's job is to decide whether the text becomes
+ * conversation content, and it cannot ask the server first. Whole-token matching
+ * keeps `/compactx` ordinary user text.
+ */
+export function parseDirectCompactCommand(text: string): DirectCompactCommandMatch | undefined {
+  const trimmed = text.trim();
+  const [head, ...rest] = trimmed.split(/\s+/);
+  if (head === undefined || !DIRECT_COMPACT_COMMANDS.includes(head)) return undefined;
+  const instructions = rest.join(" ").trim();
+  return {
+    command: head,
+    instructions: instructions.length > 0 ? instructions : undefined,
+    text: trimmed,
+  };
+}
+
+/** The status part the server emits, in the AI SDK WIRE form. */
 export const DIRECT_COMPACT_PART = "data-tbai-compact";
+
+/**
+ * The renderer key for the compaction divider, in assistant-ui's internal form.
+ *
+ * `thread().append()` takes assistant-ui's `DataMessagePart`, which discriminates on
+ * the literal `"data"` and carries the identity in a separate `name` field — not in
+ * the `data-*` type the route streams. This is the ONE place that string is named;
+ * the part builder, the DataUI registration and the transcript renderer all read it.
+ */
+export const DIRECT_COMPACT_DATA_NAME = "tbai-compact";
 
 /** What the server actually did. Three values, never a bare boolean. */
 export type DirectCompactOutcome = "compacted" | "skipped" | "failed";
@@ -59,8 +140,42 @@ export interface DirectCompactStatus {
   readonly generation: number;
   readonly spanLength: number;
   readonly summaryTokens: number;
+  /**
+   * What compaction kept, or `null` when nothing was kept.
+   *
+   * Non-null only for a `compacted` outcome. A `skipped` or `failed` compaction
+   * replaced nothing, so the divider must not imply a summary exists.
+   *
+   * Optional because rows written before this field existed have none, and absent
+   * must read as "no summary" rather than as an error.
+   */
+  readonly summary?: string | null;
   readonly reclaimedTokens: number;
   readonly requestFits: boolean;
+  /**
+   * Server-side identity of this compaction.
+   *
+   * Carried so the transcript entry can be keyed by it, which is what stops a
+   * second `/compact` from silently mutating an earlier divider.
+   */
+  readonly operationId: string;
+  /**
+   * The durable transcript row, or `null` when the server could not write it.
+   *
+   * `null` means the divider is on screen but not reload-durable, which is a
+   * different fact from "the compaction failed" — the compaction itself already
+   * happened. Surfaced so nothing reports a durable divider that does not exist.
+   */
+  readonly anchorMessageId: string | null;
+  /**
+   * Who decided to compact: the user running `/compact`, or the engine reacting to
+   * the conversation filling up.
+   *
+   * Defaults to `"manual"` when absent, which is the only value the manual command
+   * ever produced before automatic compaction existed — so an older server's answer
+   * is read correctly rather than guessed at.
+   */
+  readonly origin: CompactDividerOrigin;
 }
 
 /** A thread message, narrowed to what the projection actually reads. */
@@ -80,13 +195,14 @@ const OUTCOMES: ReadonlySet<string> = new Set<DirectCompactOutcome>([
 /**
  * Whether this composer text is the Direct compaction command.
  *
- * Exact match after trimming, so surrounding whitespace is tolerated and any
- * additional word is not. This is the same rule the server applies to the last
- * user message; keeping them identical is what makes the guard a presentation
- * concern rather than a second, divergent command language.
+ * Exact match against one of `DIRECT_COMPACT_COMMANDS` after trimming, so
+ * surrounding whitespace is tolerated and any additional word is not. This is the
+ * same rule the server applies to the last user message; keeping them identical is
+ * what makes the guard a presentation concern rather than a second, divergent
+ * command language.
  */
 export function isDirectCompactCommand(text: string): boolean {
-  return text.trim() === DIRECT_COMPACT_COMMAND;
+  return parseDirectCompactCommand(text) !== undefined;
 }
 
 /**
@@ -266,17 +382,34 @@ export function projectThreadMessages(
  * The synthetic message is last, which is what the server's last-user-message rule
  * requires. It is never persisted, because it is never handed to the history
  * adapter.
+ *
+ * `commandText` is the text the user actually typed, instructions included, so the
+ * server can read them off the deciding message rather than receiving a second,
+ * differently-shaped parameter for the same information. It defaults to the bare
+ * canonical command for a `/compact` with nothing after it.
  */
 export function buildCompactRequestBody(
   messages: readonly ThreadMessageLike[],
   commandId: string,
+  commandText: string = DIRECT_COMPACT_COMMAND,
 ): { messages: Array<Record<string, unknown>> } {
   return {
     messages: [
       ...projectThreadMessages(messages),
-      { id: commandId, role: "user", parts: [{ type: "text", text: DIRECT_COMPACT_COMMAND }] },
+      { id: commandId, role: "user", parts: [{ type: "text", text: commandText }] },
     ],
   };
+}
+
+/**
+ * Read the wire `origin`, defaulting to `manual`.
+ *
+ * An unrecognised value is NOT passed through: it is treated as `manual`, because a
+ * divider whose trigger cannot be named must not claim that the engine or overflow
+ * recovery did something they may not have.
+ */
+function originOf(value: unknown): CompactDividerOrigin {
+  return value === "automatic" || value === "recovery" ? value : "manual";
 }
 
 /**
@@ -307,8 +440,19 @@ export function parseCompactStatus(body: string): DirectCompactStatus | undefine
       generation: typeof data.generation === "number" ? data.generation : 0,
       spanLength: typeof data.spanLength === "number" ? data.spanLength : 0,
       summaryTokens: typeof data.summaryTokens === "number" ? data.summaryTokens : 0,
+      // Only a real, non-blank string counts. Anything else — absent (an older
+      // server), null (a refusal), or a non-string — is "no summary", so a
+      // transport that echoes something unexpected cannot produce a divider with
+      // `[object Object]` in it.
+      summary: typeof data.summary === "string" && data.summary.length > 0 ? data.summary : null,
       reclaimedTokens: typeof data.reclaimedTokens === "number" ? data.reclaimedTokens : 0,
       requestFits: data.requestFits !== false,
+      operationId: typeof data.operationId === "string" ? data.operationId : "",
+      anchorMessageId:
+        typeof data.anchorMessageId === "string" && data.anchorMessageId.length > 0
+          ? data.anchorMessageId
+          : null,
+      origin: originOf(data.origin),
     };
   }
   return undefined;
@@ -322,10 +466,92 @@ export class CompactTransportError extends Error {
   }
 }
 
+/**
+ * Build the transcript part a compaction leaves behind.
+ *
+ * The command's HTTP response is only how the client LEARNS the outcome; this is
+ * how the outcome is REPRESENTED. The part rides on an ordinary message, so the
+ * existing history adapter persists it and the existing codec round-trips it —
+ * both proven in `web/src/adapters/dataPartCodec.test.ts`.
+ *
+ * `id` is derived from `operationId`, so re-running a compaction produces a
+ * distinct entry rather than silently mutating an older one.
+ */
+/** The payload the transcript divider renders. */
+export interface CompactDividerData {
+  kind: "tbai-compact";
+  version: 1;
+  outcome: DirectCompactOutcome;
+  reason: string;
+  spanLength: number;
+  generation: number;
+  operationId: string;
+  /**
+   * What compaction kept, rendered on expand. `null` when there is nothing to show,
+   * which is what makes the divider non-expandable rather than expandable-and-empty.
+   */
+  summary: string | null;
+  /**
+   * The server's durable row id, when it wrote one. Rendered nowhere; carried so
+   * the transcript entry can be traced back to the row a reload will replay.
+   */
+  anchorMessageId: string | null;
+  /**
+   * Who decided to compact. `"manual"` when the user ran `/compact`, `"automatic"`
+   * when the engine did. The same part and the same renderer either way.
+   */
+  origin: CompactDividerOrigin;
+}
+
+/** Who decided to compact. Absent on the wire means manual. */
+export type CompactDividerOrigin = "manual" | "automatic" | "recovery";
+
+// Annotated as assistant-ui's own `DataMessagePart` so the part is assignable to
+// `thread().append()`. Left to inference the `type` field widens to `string`,
+// which no longer matches the discriminated union `append()` accepts.
+export function buildDividerPart(status: DirectCompactStatus): DataMessagePart<CompactDividerData> {
+  return {
+    // assistant-ui's `DataMessagePart` discriminates on the literal "data" and
+    // carries its identity in `data.kind`, which is what `makeAssistantDataUI`'s
+    // `name` matches. The `data-tbai-compact` form is the WIRE shape the route
+    // streams; the adapter converts between the two.
+    type: "data",
+    // `name` is how the renderer is resolved. No part `id`: identity lives in
+    // `data.operationId`, which is what distinguishes two separate compactions.
+    name: DIRECT_COMPACT_DATA_NAME,
+    data: {
+      kind: "tbai-compact",
+      version: 1,
+      outcome: status.outcome,
+      reason: status.reason,
+      spanLength: status.spanLength,
+      generation: status.generation,
+      operationId: status.operationId,
+      // Normalised here rather than passed through, so an absent field and an empty
+      // string both mean "no summary". Without this a blank summary would render as
+      // an expandable divider containing nothing.
+      summary: status.summary === undefined || status.summary === "" ? null : status.summary,
+      anchorMessageId: status.anchorMessageId,
+      origin: status.origin,
+    },
+  };
+}
+
 export interface DirectCompactInput {
   /** The conversation to compact. Omitted ⇒ the server answers `skipped`. */
   readonly conversationId: string | null;
   readonly messages: readonly ThreadMessageLike[];
+  /**
+   * The parsed command, when the composer text was one.
+   *
+   * Its `text` is sent as the synthetic deciding message so the SERVER reads the
+   * instructions off that message, rather than the client forwarding the same
+   * information through a second parameter that could disagree with it.
+   *
+   * Omitted when the caller has already established the text is not a command; the
+   * body then carries the bare canonical spelling.
+   */
+  readonly command?: DirectCompactCommandMatch;
   readonly signal?: AbortSignal;
 }
 
@@ -340,7 +566,7 @@ export async function runDirectCompact(
   input: DirectCompactInput,
 ): Promise<DirectCompactStatus> {
   const commandId = `compact-${globalThis.crypto.randomUUID()}`;
-  const { messages } = buildCompactRequestBody(input.messages, commandId);
+  const { messages } = buildCompactRequestBody(input.messages, commandId, input.command?.text);
   let response: Response;
   try {
     response = await fetch("/api/chat", {

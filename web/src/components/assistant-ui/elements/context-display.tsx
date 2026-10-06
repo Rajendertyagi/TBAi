@@ -14,6 +14,17 @@
  *    and Trigger toggles it on click. Unpinned behavior is byte-identical to
  *    upstream. Pure transition helpers (`nextPinState`, `pinnedOpenProp`) carry
  *    the runtime contract and are unit-tested.
+ * 4. Optional `action` node, rendered last inside Content and only when supplied.
+ *    Every other caller omits it, so their markup is byte-identical to before.
+ *    It is a plain node rather than a callback so this file stays unaware of what
+ *    the action does.
+ *
+ * On (4): this component already owns a trigger, a pin and a dismissal, so it is
+ * the interaction model. An earlier attempt at a Direct context panel instead
+ * wrapped the whole ring in a second `PopoverTrigger`; `asChild` merged the props
+ * but the inner tooltip trigger consumed the click, so the panel could never open
+ * and the failure was invisible to markup and source assertions. **An action that
+ * belongs to this surface has to live inside this surface.**
  *
  * Everything else is verbatim upstream, including the severity thresholds
  * (amber ≥65%, red >85%), the sticky running total, thread/session reset via
@@ -159,6 +170,15 @@ export type PresetProps = {
   contextTokens?: number | undefined;
   /** TBAi: provenance of the effective window, shown to the user. */
   windowSource?: string | undefined;
+  /**
+   * TBAi (Direct): an optional control rendered at the foot of the ring's content.
+   *
+   * Adaptation 4. Omitted by every other caller, so their output is unchanged. It
+   * exists because this component already owns a click-to-pin content surface, and a
+   * Direct-only action belongs inside that surface rather than in a second overlay
+   * competing with it for the same click.
+   */
+  action?: React.ReactNode;
   /**
    * TBAi (OpenCode): whether a trustworthy numerator exists.
    *
@@ -369,12 +389,39 @@ const getContextSegments = (
   ].filter((segment) => segment.tokens > 0);
 };
 
+/**
+ * TBAi adaptation 4 — the optional action slot.
+ *
+ * Rendered LAST inside Content, and only when supplied, so every existing preset
+ * (ring, bar, text) and every Code/OpenCode caller emits byte-identical markup to
+ * before this prop existed. It is a plain `ReactNode` rather than a callback so this
+ * file stays unaware of what the action does; the caller owns the behaviour.
+ *
+ * Deliberately NOT a second overlay. This element already owns its trigger, pinning
+ * and dismissal, so a control placed here inherits that single lifecycle — which is
+ * what an earlier attempt got wrong by nesting a `PopoverTrigger` around the whole
+ * ring and losing the click to the inner tooltip.
+ *
+ * Extracted as its own component, like the pin helpers beside it, because Radix
+ * `TooltipContent` renders nothing during server rendering — so the absent case and
+ * the present case are only observable by rendering this piece directly.
+ */
+function ContextDisplayAction({ action }: { action?: React.ReactNode }) {
+  // `null` as well as `undefined`: both mean "no action", and a wrapper div with
+  // nothing in it is a visible artefact in a shared component.
+  if (action === undefined || action === null) return null;
+  return <div className="mt-3 border-t border-border pt-2">{action}</div>;
+}
+
 function ContextDisplayContent({
   side = "top",
   className,
+  action,
 }: {
   side?: "top" | "bottom" | "left" | "right" | undefined;
   className?: string;
+  /** TBAi (Direct): optional control rendered at the foot of the content. */
+  action?: React.ReactNode;
 }) {
   const { usage, totalTokens, percent, modelContextWindow, windowSource, unknown } =
     useContextDisplay();
@@ -416,10 +463,12 @@ function ContextDisplayContent({
           {windowSource === "provider_reported"
             ? "Context limit reported by the provider"
             : windowSource === "configured"
-              ? "Context limit set in this app’s model settings"
-              : windowSource === "conservative_default"
-                ? "Estimated context limit (this model does not report one)"
-                : "Context limit unknown"}
+              ? "Context limit set in this app's model settings"
+              : windowSource === "observed"
+                ? "Context limit stated by the provider when it rejected a request"
+                : windowSource === "conservative_default"
+                  ? "Estimated context limit (this model does not report one)"
+                  : "Context limit unknown"}
         </div>
         {segments.length > 0 && (
           <div className="mt-3 grid gap-1.5">
@@ -436,6 +485,7 @@ function ContextDisplayContent({
             ))}
           </div>
         )}
+        <ContextDisplayAction action={action} />
       </div>
     </TooltipContent>
   );
@@ -501,6 +551,7 @@ const ContextDisplayRing: FC<PresetProps> = ({
   windowSource,
   resetKey,
   occupancyState,
+  action,
 }) => (
   <ContextDisplayRoot
     modelContextWindow={modelContextWindow}
@@ -520,7 +571,7 @@ const ContextDisplayRing: FC<PresetProps> = ({
       <RingVisual />
       <RingPercentLabel />
     </ContextDisplayTrigger>
-    <ContextDisplayContent side={side} />
+    <ContextDisplayContent side={side} action={action} />
   </ContextDisplayRoot>
 );
 
@@ -623,6 +674,7 @@ export {
   ContextDisplayRoot,
   ContextDisplayTrigger,
   ContextDisplayContent,
+  ContextDisplayAction,
   ContextDisplayRing,
   ContextDisplayBar,
   ContextDisplayText,

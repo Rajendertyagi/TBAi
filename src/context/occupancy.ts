@@ -49,6 +49,14 @@
 export type ContextLimitProvenance =
   | "provider_reported"
   | "configured"
+  /**
+   * Stated by the provider while rejecting an over-long request.
+   *
+   * A real figure, so it must be carried rather than folded into `unknown` — a reading
+   * that shows 524288 while claiming the window is unknown contradicts itself. Weaker
+   * than a published listing, and worded as such in the UI.
+   */
+  | "observed"
   | "conservative_default"
   | "unknown";
 
@@ -103,6 +111,7 @@ export function toLimitProvenance(value: unknown): ContextLimitProvenance {
   switch (value) {
     case "provider_reported":
     case "configured":
+    case "observed":
     case "conservative_default":
       return value;
     default:

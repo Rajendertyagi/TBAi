@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronRight, Folder, FolderOpen, CornerDownLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { isPlainEnter } from "@/lib/ime";
 
 interface BrowseResult {
   path: string;
@@ -79,7 +80,9 @@ export function DirectoryBrowser({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") browse(input.trim());
+            // `isPlainEnter`: accepting an IME candidate also fires a keydown, so
+            // a bare check would navigate to a path spelled in pinyin.
+            if (isPlainEnter(e)) browse(input.trim());
           }}
           placeholder="Path to a folder"
           aria-label="Folder path"

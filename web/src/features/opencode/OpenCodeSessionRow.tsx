@@ -6,6 +6,7 @@ import { Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useFoldersStore } from "@/stores/foldersStore";
 import { welcomeConfig } from "@/config/welcome";
+import { probeConversation } from "@/features/chat/state/conversationExistence";
 
 /**
  * Conversation identity fields this row consumes. These are the P1-extended
@@ -33,28 +34,30 @@ const ENGINE_LABELS: Record<string, string> = {
  * whose `threadListItem.custom` is session-scoped and does not carry these
  * conversation fields — so we read the same source `toMetadata` maps into
  * `custom` (the conversation record) by id.
+ *
+ * Probed through the shared existence contract, so a proven-missing row and an
+ * unreadable response are no longer the same value. This row is display-only, so
+ * every non-`exists` verdict keeps today's behavior: identity stays `null` and
+ * nothing renders. One request, and the row data still arrives on the happy path.
  */
 function useConversationIdentity(conversationId: string | undefined) {
   const [identity, setIdentity] = useState<ConversationIdentity | null>(null);
   useEffect(() => {
     if (!conversationId) return;
     let cancelled = false;
-    fetch(`/api/conversations/${conversationId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return;
-        setIdentity({
-          engine: data.engine,
-          workspaceMode: data.workspaceMode,
-          workspaceFolderId: data.workspaceFolderId,
-          opencodeAgent: data.opencodeAgent,
-          opencodeModel: data.opencodeModel,
-          opencodeVariant: data.opencodeVariant,
-        });
-      })
-      .catch(() => {
-        /* leave identity null → render nothing */
+    void (async () => {
+      const probe = await probeConversation(conversationId);
+      if (cancelled || probe.status !== "exists") return;
+      const data = probe.data;
+      setIdentity({
+        engine: data.engine,
+        workspaceMode: data.workspaceMode,
+        workspaceFolderId: data.workspaceFolderId,
+        opencodeAgent: data.opencodeAgent,
+        opencodeModel: data.opencodeModel,
+        opencodeVariant: data.opencodeVariant,
       });
+    })();
     return () => {
       cancelled = true;
     };

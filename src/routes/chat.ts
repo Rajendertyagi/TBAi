@@ -11,6 +11,7 @@ import {
   providerErrorCodeFields,
 } from "../lib/errors";
 import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../lib/ai-diagnostics";
+import { observedContextLength } from "../lib/context-window-observation";
 import { prepareModelMessages } from "../lib/model-messages";
 import { streamStatusQuerySchema } from "../lib/validation";
 import {
@@ -32,6 +33,7 @@ import {
   type NativeToolsContext,
 } from "../tools";
 import {
+  ASSEMBLY_LIMIT_CODE,
   assembleContext,
   logAssembly,
   logContextOverflow,
@@ -70,11 +72,13 @@ import {
   type OccupancyMeasurement,
 } from "../context/occupancy";
 import { decideOverflowRecovery } from "../context/recovery";
+import { observeContextWindow } from "../context/observed-limits";
 import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "./direct-overflow-gate";
 import { disableIdleTimeout } from "./shared";
 import {
   beginCompactCommand,
   detectCompactCommand,
+  persistCompactionDivider,
   runManualCompaction,
 } from "./direct-compact-command";
 import { chatRuns } from "../services/chat-runs";
@@ -332,7 +336,8 @@ app.post("/api/chat", async (c) => {
   // because there is no stream to settle it. The command carries its own
   // cancellable lifecycle instead. See `direct-compact-command.ts` for the full
   // ordering argument, and for why this still uses the single assembly seam.
-  if (detectCompactCommand(messages)) {
+  const compactCommand = detectCompactCommand(messages);
+  if (compactCommand) {
     const command = beginCompactCommand(c.req.raw.signal);
     const compact = await runManualCompaction({
       operationId: command.operationId,
@@ -343,6 +348,9 @@ app.post("/api/chat", async (c) => {
       modelId: modelConfig.model,
       systemPrompt: conversation?.systemPrompt,
       summarizerModel: languageModel,
+      // What the user typed after the command word, or `undefined` for a bare
+      // `/compact`. Parsed once, here, so the command module never re-reads text.
+      instructions: compactCommand.instructions,
       signal: command.controller.signal,
     });
     // Data-only stream: a single status part and NO message parts, so no
@@ -470,6 +478,17 @@ function contextStateForUi(): ChatContextState | undefined {
     usableInputTokens: state.usableInputTokens,
     occupancyKind: state.measurement?.kind ?? "unknown",
     cachedInputTokens: state.measurement?.kind === "provider" ? state.measurement.cachedInputTokens : undefined,
+    // The resolution identity travels WITH the number, so a reading whose window is
+    // no longer the one this conversation would resolve can be recognised as stale
+    // instead of being presented as current.
+    ...(provenance.limit
+      ? {
+          resolvedFor: {
+            providerId: provenance.limit.providerId,
+            modelId: provenance.limit.modelId,
+          },
+        }
+      : {}),
   };
 }
   // Phase 3 outputs. Declared here so the pre-flight rejection path can log the
@@ -607,10 +626,163 @@ function contextStateForUi(): ChatContextState | undefined {
     model: modelConfig.model,
   });
 
+  // ── Compaction dividers ──────────────────────────────────────────────────
+  // ONE publisher for every compaction this route performs, whatever triggered it.
+  //
+  // Manual `/compact` goes through `runManualCompaction` and has its own stream; this
+  // function serves the two triggers that happen INSIDE an ordinary turn:
+  //
+  //   - automatic: the engine crossed the trigger while assembling the turn;
+  //   - recovery:  the provider rejected the request and overflow recovery forced a
+  //     rebuild (see `recover()` below).
+  //
+  // Both re-enter the SAME `assembleForRequest` seam, so both read the SAME
+  // `provenance.compaction` report and both persist through the SAME
+  // `persistCompactionDivider`. The only per-trigger difference is `origin` and the
+  // operation id, which is also the divider's identity — so two compactions in one
+  // turn can never collide, and one compaction can never write two rows.
+  //
+  // It is a FUNCTION, not a value computed once, because recovery re-assembles
+  // AFTER the automatic decision has already been made. Reading the flag eagerly is
+  // exactly what made recovery's compaction invisible.
+  const publishCompactionDivider = async (
+    origin: "automatic" | "recovery",
+    operationId: string,
+    log: typeof assemblyLog,
+  ): Promise<boolean> => {
+    // The authoritative condition, and the same `applied` fact overflow recovery and
+    // the manual command are gated on. Absent or false ⇒ nothing happened, so nothing
+    // is written and nothing is claimed.
+    const report = assembled?.context.provenance.compaction;
+    if (report?.applied !== true || !threadId) return false;
+
+    // Every field below comes from the report of the assembly that ACTUALLY applied,
+    // so generation, span and reason describe this compaction rather than an earlier
+    // one. `requestFits` reads the same decision the budget enforced.
+    const requestFits = assembled.decision.action !== "reject";
+    const anchorMessageId = await persistCompactionDivider(
+      threadId,
+      {
+        kind: "tbai-compact",
+        version: 1,
+        // `applied` is true, so the outcome IS `compacted`. The skipped/failed
+        // vocabulary belongs to a command the user ran and could read the result of;
+        // an automatic one has no reader to report to at the time it happens.
+        outcome: "compacted",
+        reason: report.reason,
+        generation: report.generation,
+        spanLength: report.spanLength,
+        summaryTokens: report.summaryTokens,
+        // An engine-triggered compaction is auditable on the same terms as a manual
+        // one. The `applied` guard above has already proven this compaction happened,
+        // so the summary is the one this operation actually produced.
+        summary: report.summaryText,
+        reclaimedTokens: report.reclaimedTokens,
+        requestFits,
+        operationId,
+        anchorMessageId: null,
+        origin,
+      },
+      log,
+    );
+    log.info("chat", `chat_compact_${origin}`, {
+      operationId,
+      compactionReason: report.reason,
+      compactionGeneration: report.generation,
+      compactionSpanMessages: report.spanLength,
+      compactionReclaimedSize: report.reclaimedTokens,
+      compactionSummarySize: report.summaryTokens,
+      requestFits,
+      anchorMessageId,
+    });
+    return true;
+  };
+
+  /**
+   * The `data-tbai-compact` part for a compaction this turn performed.
+   *
+   * A part rather than a message of its own: the compaction already happened during
+   * assembly, so the only thing left to say is that it did. Written before the reply
+   * it applies to, which is where a reader expects to find it.
+   *
+   * Field-for-field the same payload the stored row carries, minus the fields the
+   * renderer never reads — so a live divider and the same divider after a reload
+   * cannot disagree.
+   */
+  const compactionPart = (origin: "automatic" | "recovery", operationId: string) => {
+    const report = assembled?.context.provenance.compaction;
+    if (report?.applied !== true) return undefined;
+    return {
+      type: "data-tbai-compact" as const,
+      id: "compact",
+      data: {
+        kind: "tbai-compact" as const,
+        version: 1 as const,
+        outcome: "compacted" as const,
+        reason: report.reason,
+        generation: report.generation,
+        spanLength: report.spanLength,
+        summaryTokens: report.summaryTokens,
+        reclaimedTokens: report.reclaimedTokens,
+        // Present in the live part for the same reason it is present in the stored
+        // row: so a divider read on screen and the same divider after a reload
+        // carry the identical payload. Both read the same `report`, so they cannot
+        // disagree about what was kept.
+        summary: report.summaryText,
+        operationId,
+        origin,
+      },
+    };
+  };
+
+  // ── Automatic compaction ────────────────────────────────────────────────
+  // The engine compacts on its own when the conversation's real occupancy crosses
+  // the trigger. No command, no run of its own, no second engine.
+  const automaticOperationId = `${streamId}-auto`;
+  const automaticDividerPublished = await publishCompactionDivider(
+    "automatic",
+    automaticOperationId,
+    assemblyLog,
+  );
+  const automaticPart = automaticDividerPublished
+    ? compactionPart("automatic", automaticOperationId)
+    : undefined;
+
+  // Tier 2 — universal assembly ceiling. Checked BEFORE the budget rejection so a
+  // request that was never viable for any model reports the assembly limit rather
+  // than a model-context overflow it did not actually hit.
+  //
+  // Terminal and deliberately NOT recoverable: it is outside overflow recovery's
+  // contract (a size problem with a known remedy). Compaction has already run and
+  // did not, or could not, bring the request under the ceiling; compacting again
+  // would be the hang-with-extra-steps `recovery.ts` exists to prevent.
+  if (assembled.tier2.outcome === "assembly_limit_exceeded") {
+    chatRuns.markFailed(run.streamId);
+    assemblyLog.error("context", "assembly_limit_exceeded", {
+      requestId,
+      conversationId: threadId,
+      limitWasAdvisory: assembled.tier2.limitWasAdvisory,
+      ...assembled.diagnostics,
+    });
+    return c.json(
+      {
+        error:
+          "This conversation is too large to send to any model. Its history has grown past the assembly limit. Start a new chat to continue.",
+        code: ASSEMBLY_LIMIT_CODE,
+        requestId,
+      },
+      400,
+    );
+  }
+
   // Preflight rejection: cheaper than a provider round trip, and - because
   // DIRECT_MAX_RETRIES = 0 (chat.ts:54-55) - the only chance to avoid spending a
   // request that is known to be oversized. The user gets the overflow message,
   // not the generic generation failure Phase 1 recorded as F7.
+  //
+  // Only a `reject` reaches here. An `advisory` verdict (P-1) means the ceiling was
+  // a stand-in rather than a stated limit, so the provider decides whether the
+  // request fits and `observed` learns the answer.
   if (assembled.decision.action === "reject") {
     chatRuns.markFailed(run.streamId);
     logContextOverflow({
@@ -630,6 +802,16 @@ function contextStateForUi(): ChatContextState | undefined {
       },
       400,
     );
+  }
+
+  // P-1: the request exceeded a planning ceiling nobody stated. Record it so the
+  // condition is observable, then continue to transport.
+  if (assembled.decision.action === "advisory") {
+    assemblyLog.info("context", "context_limit_advisory", {
+      requestId,
+      conversationId: threadId,
+      ...assembled.diagnostics,
+    });
   }
 
   logAssembly({
@@ -868,6 +1050,15 @@ function contextStateForUi(): ChatContextState | undefined {
         data: { kind: "tbai-progress" as const, version: 1 as const, stages: [] },
       });
 
+      // Automatic compaction, as a part of THIS turn's message rather than a
+      // message of its own. Written before any provider output, so the divider sits
+      // above the reply it applies to. Rendered by the same `CompactionDivider` as a
+      // manual compaction and as an overflow recovery — the client needs no separate
+      // path for any of them.
+      if (automaticPart) {
+        writer.write(automaticPart);
+      }
+
       // ── AI funnel: request ────────────────────────────────────────────────
       chatLog.debug("ai", "ai.request", {
         streamId,
@@ -947,8 +1138,69 @@ function contextStateForUi(): ChatContextState | undefined {
         //
         // Deliberately NOT `totalUsage`: that is traffic (summed across steps)
         // and is exactly the category error this replaces.
-        onStepFinish: ({ usage }: { usage?: unknown }) => {
-          lastStepOccupancy = providerOccupancyFromStepUsage(usage);
+        onStepFinish: (step: {
+          readonly callId?: string;
+          readonly stepNumber?: number;
+          readonly usage?: unknown;
+          readonly model?: { readonly provider?: string; readonly modelId?: string };
+          readonly response?: { readonly id?: string };
+          readonly content?: ReadonlyArray<{ readonly type?: string; readonly toolCallId?: string }>;
+        }) => {
+          lastStepOccupancy = providerOccupancyFromStepUsage(step.usage);
+
+          // ── Generation identity ────────────────────────────────────────────
+          // A model invocation is the PAIR (callId, stepNumber). `callId` alone
+          // is not it: the SDK generates `callId` once per `streamText()` and
+          // reuses it across every step, so a tool loop of twenty steps carries
+          // one callId. Verified against ai@7.0.93 (callId is minted outside the
+          // step loop in `streamText` and referenced unchanged inside it).
+          //
+          // Not added to the logger's ambient correlation fields on purpose.
+          // Those are inherited by every nested emit, and the step loop belongs
+          // to the SDK — there is no scope this route can open around it, so an
+          // ambient binding would be set once and then misattribute every later
+          // step and tool to the first one. The pair is therefore passed
+          // explicitly here, and tool causality is established by `toolCallId`
+          // below rather than by an ambient value that could drift.
+          const toolCallIds = (step.content ?? [])
+            .filter((part) => part.type === "tool-call" && typeof part.toolCallId === "string")
+            .map((part) => part.toolCallId as string);
+          const usage = step.usage as
+            | {
+                inputTokens?: number;
+                outputTokens?: number;
+                totalTokens?: number;
+                outputTokenDetails?: { textTokens?: number; reasoningTokens?: number };
+              }
+            | undefined;
+
+          // Cache accounting is deliberately NOT read here. `cacheReadTokens` /
+          // `cacheWriteTokens` are provider cache vocabulary and belong to
+          // `src/context/cache/`, which already reports them per request via
+          // `observeSdkCacheUsage` on the `cache_observed` event in `onEnd`.
+          // Repeating them per generation would duplicate that source of truth
+          // and leak cache syntax into the route, which `cache.test.ts` forbids.
+          chatLog.info("ai", "generation_step", {
+            streamId,
+            attempt,
+            // The generation identity. Never logged as `callId` alone.
+            callId: step.callId,
+            stepNumber: step.stepNumber,
+            // Provider response id is a DIFFERENT identity — provider-assigned and
+            // distinct per step. Recorded, never equated with the pair above.
+            responseId: step.response?.id,
+            provider: step.model?.provider,
+            model: step.model?.modelId,
+            // Counts only. Prompt and completion CONTENT never reach this line.
+            // Keyed `*Size` because the logger redacts keys containing "token".
+            inputSize: usage?.inputTokens,
+            outputSize: usage?.outputTokens,
+            reasoningSize: usage?.outputTokenDetails?.reasoningTokens,
+            totalSize: usage?.totalTokens,
+            // The join back to the tool funnel, which already logs toolCallId.
+            toolCallIds,
+            toolCallCount: toolCallIds.length,
+          });
         },
         // ── Diagnostic: first chunk ────────────────────────────────────────
         onChunk: () => {
@@ -1085,6 +1337,45 @@ function contextStateForUi(): ChatContextState | undefined {
       };
 
       /**
+       * Record a context window the provider stated for itself in this rejection.
+       *
+       * Some providers publish no window metadata, so resolution falls back to a
+       * conservative stand-in that refuses part of the window the model actually has.
+       * The rejection is the one place the real figure appears, so it is read here and
+       * kept for subsequent assemblies.
+       *
+       * Three properties are deliberate:
+       *
+       *  - It runs on the RAW provider error, before recovery acts, so the compaction
+       *    recovery forces is planned against the real window rather than the stand-in.
+       *  - It is scoped to this provider configuration, model and endpoint, so a figure
+       *    learned from one endpoint is never applied to another.
+       *  - Only a NUMBER is ever logged. The provider's text never crosses this
+       *    boundary, so an observation cannot leak a message body into a log line.
+       *
+       * A provider that states nothing simply leaves no observation, which is the
+       * existing behaviour.
+       */
+      const noteProviderStatedLimit = (error: unknown): void => {
+        const limitTokens = observedContextLength(error);
+        if (limitTokens === undefined) return;
+        observeContextWindow(
+          {
+            providerId: modelConfig.id,
+            modelId: modelConfig.model,
+            endpoint: modelConfig.endpoint,
+            protocol: modelConfig.apiProtocol,
+          },
+          limitTokens,
+        );
+        chatLog.info("context", "context_window_observed", {
+          providerId: modelConfig.id,
+          modelId: modelConfig.model,
+          source: "provider_overflow",
+        });
+      };
+
+      /**
        * THE RECOVERY GATE.
        *
        * Wraps the RAW provider stream, never the composed UI stream. That placement is
@@ -1104,6 +1395,12 @@ function contextStateForUi(): ChatContextState | undefined {
         isLifecyclePart: (part) =>
           LIFECYCLE_PART_TYPES.has((part as { type?: unknown })?.type as string),
         decide: (error) => {
+          // Recorded BEFORE the decision is acted on, and therefore before `recover()`
+          // runs: the gate calls `decide` on the raw provider error and only then
+          // compacts. Recovery re-assembles through `assembleForRequest`, which reads
+          // the observation — so the compaction it forces is planned against the
+          // window the provider just stated instead of the conservative stand-in.
+          noteProviderStatedLimit(error);
           const decision = decideOverflowRecovery({
             category: classifyError(error, { provider: provider.type }).category,
             alreadyAttempted: overflowRecoveryAttempted,
@@ -1144,6 +1441,32 @@ function contextStateForUi(): ChatContextState | undefined {
             compactionGeneration: assembled.diagnostics.compactionGeneration,
             compactionSpanMessages: assembled.diagnostics.compactionSpanMessages,
           });
+          // Recovery compaction is now VISIBLE, through the one publisher every other
+          // trigger uses. It runs after the rebuild above, so the report it reads is the
+          // recovery's own — generation, span and reason describe the compaction that
+          // actually happened, not the pre-recovery assembly.
+          //
+          // `origin: "recovery"` is the only thing that distinguishes it, which is the
+          // point: same durable row, same part, same renderer as automatic and manual.
+          //
+          // The divider is emitted only because `compactionApplied` was just proven
+          // true; a failed or no-op recovery throws above and never reaches here, so it
+          // cannot leave a divider claiming a compaction that did not happen.
+          //
+          // Written to `streamWriter` rather than to the stream's `writer`: recovery
+          // fires mid-stream, and this is the writer the stream installed when it
+          // opened. The part lands above the RETRIED reply, which is the turn the
+          // recovery made possible.
+          const recoveryOperationId = `${streamId}-recovery`;
+          const published = await publishCompactionDivider(
+            "recovery",
+            recoveryOperationId,
+            chatLog,
+          );
+          if (published) {
+            const part = compactionPart("recovery", recoveryOperationId);
+            if (part) streamWriter?.write(part);
+          }
         },
         /**
          * The gate has decided to KEEP this attempt and forward its error, so this is

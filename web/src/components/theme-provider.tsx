@@ -1,55 +1,89 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-type Theme = "light" | "dark";
+import { DEFAULT_THEME_ID, getTheme, THEMES, type ThemeDefinition } from "../features/appearance/theme-data";
+import { applyThemeToDom, THEME_ATTRIBUTE } from "../features/appearance/theme-dom";
+import {
+  DEFAULT_MODE,
+  readMode,
+  readThemeIds,
+  writeMode,
+  writeThemeId,
+  type ThemeMode,
+} from "../features/appearance/theme-storage";
+
+/**
+ * Colour theme state: a light/dark mode, plus one palette per mode.
+ *
+ * Two palette slots rather than one because they are genuinely independent — a
+ * warm palette in light and a cool one in dark is a legitimate choice, and it is
+ * how OpenChamber models it. Keeping them separate means picking a theme for
+ * dark mode cannot disturb light mode, or the reverse.
+ *
+ * Backwards compatible by construction: `theme`/`setTheme`/`toggleTheme` behave
+ * exactly as before, and an install with nothing stored keeps TBAi's existing
+ * look because both slots default to `classic`, which has no generated CSS and
+ * therefore lets the stylesheet's own colours stand.
+ */
+
+export type Theme = ThemeMode;
 
 interface ThemeContextValue {
+  /** Current mode. */
   theme: Theme;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
+  /** Palette family id for each mode. */
+  themeIds: { light: string; dark: string };
+  /** Change the palette used in one mode only. */
+  setThemeId: (mode: ThemeMode, id: string) => void;
+  /** The palette currently in effect, resolved for the active mode. */
+  activeTheme: ThemeDefinition;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const STORAGE_KEY = "tbai-theme";
-const DEFAULT_THEME: Theme = "dark";
-
-function readStoredTheme(): Theme {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored === "light" || stored === "dark") return stored;
-  } catch {
-    /* storage unavailable — fall through to default */
-  }
-  return DEFAULT_THEME;
-}
-
-function applyTheme(theme: Theme): void {
-  const root = window.document.documentElement;
-  root.classList.remove("light", "dark");
-  root.classList.add(theme);
-}
-
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(readStoredTheme);
+  const [theme, setThemeState] = useState<Theme>(readMode);
+  const [themeIds, setThemeIds] = useState(readThemeIds);
 
+  // One effect for the whole DOM write, so class and attribute can never disagree.
   useEffect(() => {
-    applyTheme(theme);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      /* storage unavailable — theme still applies for the session */
-    }
-  }, [theme]);
+    applyThemeToDom(theme, themeIds[theme]);
+  }, [theme, themeIds]);
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next);
+    writeMode(next);
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setThemeState((prev) => (prev === "dark" ? "light" : "dark"));
+    setThemeState((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      writeMode(next);
+      return next;
+    });
   }, []);
 
-  return <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>{children}</ThemeContext.Provider>;
+  const setThemeId = useCallback((mode: ThemeMode, id: string) => {
+    if (!getTheme(id)) return;
+    setThemeIds((prev) => {
+      if (prev[mode] === id) return prev;
+      writeThemeId(mode, id);
+      return { ...prev, [mode]: id };
+    });
+  }, []);
+
+  const activeTheme = useMemo(
+    () => getTheme(themeIds[theme]) ?? getTheme(DEFAULT_THEME_ID)!,
+    [theme, themeIds],
+  );
+
+  const value = useMemo<ThemeContextValue>(
+    () => ({ theme, setTheme, toggleTheme, themeIds, setThemeId, activeTheme }),
+    [theme, setTheme, toggleTheme, themeIds, setThemeId, activeTheme],
+  );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme(): ThemeContextValue {
@@ -57,3 +91,5 @@ export function useTheme(): ThemeContextValue {
   if (!value) throw new Error("useTheme must be used within ThemeProvider");
   return value;
 }
+
+export { THEMES, THEME_ATTRIBUTE, DEFAULT_MODE };

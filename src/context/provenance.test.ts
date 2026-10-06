@@ -136,13 +136,49 @@ describe("R1 · provenance travels with the number", () => {
     }
   });
 
-  it("floors a fractional value rather than reporting a non-integer window", () => {
+  it("rejects a fractional value rather than flooring it into an authoritative window", () => {
+    // A context limit is a COUNT of tokens. Flooring 1000.9 to 1000 and then
+    // trusting the result published a figure no source ever stated, under a
+    // provenance label implying a source did state it. The malformed value is
+    // therefore discarded, and the original is preserved for diagnosis.
     const limit = resolveContextLimit({
       providerType: "custom",
       modelId,
       model: { contextWindow: 1000.9, contextWindowSource: "provider_reported" },
     });
-    expect(limit.maxInputTokens).toBe(1000);
+
+    expect(limit.source).toBe("conservative_default");
+    expect(limit.maxInputTokens).toBe(UNKNOWN_LIMIT_CEILING);
+    // Flooring must not be reachable by any route back into authority.
+    expect(limit.maxInputTokens).not.toBe(1000);
+
+    const stored = limit.candidates?.find((c) => c.field === "model.contextWindow");
+    expect(stored?.present).toBe(true);
+    expect(stored?.valid).toBe(false);
+    expect(stored?.rejectionReason).toBe("non_integer");
+    // The value the provider actually wrote is kept, unrounded.
+    expect(stored?.suppliedValue).toBe(1000.9);
+    expect(stored?.value).toBeNull();
+    expect(stored?.selected).toBe(false);
+  });
+
+  it("cannot promote a fractional candidate to authority through flooring", () => {
+    // Regression guard for the exact defect: whatever the caller supplies, a
+    // non-integer window must never become `maxInputTokens`, and must never
+    // carry `provider_reported`.
+    for (const bad of [1000.9, 0.5, 524288.1, Number.EPSILON * 1e12]) {
+      const limit = resolveContextLimit({
+        providerType: "custom",
+        modelId,
+        model: { contextWindow: bad, contextWindowSource: "provider_reported" },
+      });
+      expect(limit.source).not.toBe("provider_reported");
+      expect(limit.source).toBe("conservative_default");
+      expect(Number.isInteger(limit.maxInputTokens)).toBe(true);
+      expect(limit.maxInputTokens).not.toBe(Math.floor(bad));
+      // A rejected figure must not be able to authorise anything downstream.
+      expect(isPhase3ExperimentEligible(limit)).toBe(false);
+    }
   });
 
   it("selects the requested model and nothing else, by id alone", () => {
@@ -404,16 +440,32 @@ describe("R1 · model metadata actually reaches the resolver", () => {
     expect(result.decision.action).toBe("reject");
   });
 
-  it("accepts a request the stand-in would have refused", async () => {
+  it("never terminally rejects against a stand-in, and still bounds the request", async () => {
     // ~200k tokens: refused against the 128k stand-in, fine against a real 512K.
+    //
+    // P-1 changed the second half of this test. It previously asserted that an
+    // unknown model produced `reject` — i.e. that a figure TBAi INVENTED was enforced
+    // as though the provider had stated it. That is the Agnes failure: the request
+    // never reaches transport, so no real limit can ever be learned. The stand-in is
+    // now advisory, and Tier 2 (not the stand-in) is what bounds the request.
     const big = [user("u1", "x".repeat(600_000))];
+
     const real = await assembleWith(
       [{ id: modelId, provider: "custom", contextWindow: 524288, contextWindowSource: "provider_reported" }],
       big,
     );
     expect(real.decision.action).not.toBe("reject");
+
     const standIn = await assembleWith([{ id: modelId, provider: "custom" }], big);
-    expect(standIn.decision.action).toBe("reject");
+    // Advisory, not terminal — the request proceeds so the provider can decide.
+    expect(standIn.decision.action).toBe("advisory");
+    // And the request is still converted for transport, which is what "not terminal"
+    // has to mean in practice.
+    expect(standIn.context.modelMessages.length).toBeGreaterThan(0);
+    // Tier 2 passed it: ~200k is far below the 4,194,304 assembly ceiling.
+    expect(standIn.tier2.outcome).toBe("within_assembly_limit");
+    // The stand-in is reported as a stand-in, never as the provider's own figure.
+    expect(standIn.diagnostics.limitSource).toBe("conservative_default(128000)");
   });
 
   it("reports divergence in diagnostics only when it happened", async () => {

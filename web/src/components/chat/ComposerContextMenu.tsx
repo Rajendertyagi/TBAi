@@ -33,6 +33,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -96,6 +97,12 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
    * Dictionary load and lookup are both deferred to here so nothing happens
    * until a right-click actually asks for it. The lookup is synchronous once
    * loaded, but the load is a dynamic import, so this stays async.
+   *
+   * This is the ONLY caller of `ensureSpellchecker`, and that is deliberate:
+   * the dictionary is ~540 KB of text (see `lib/spellcheck.ts`), so it must not
+   * be fetched because the pointer happened to cross the composer or it gained
+   * focus. Right-click is the first moment a correction can be wanted, so it is
+   * the first moment the cost is justified.
    */
   const resolveSpellingOffer = async (
     ta: HTMLTextAreaElement,
@@ -208,7 +215,12 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
 
           This is also where the caret is read. `contextmenu` fires before
           Radix opens its content and takes focus, so this is the last moment
-          the textarea's selection still describes the user's right-click. */}
+          the textarea's selection still describes the user's right-click.
+
+          No prewarm lives on this div. A `focus` or `mouseenter` handler that
+          called `ensureSpellchecker` would pull ~540 KB of dictionary on first
+          hover; `web/tests/context-menu-copy.test.ts` fails the build if one
+          reappears. */}
       <ContextMenuTrigger
         asChild
         onContextMenu={(event) => {
@@ -220,16 +232,23 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
       >
         <div ref={boxRef}>{children}</div>
       </ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent className="min-w-[13rem]">
         {spellingOffer && (
           <>
-            <ContextMenuItem disabled>
+            {/* A disabled `menuitem`, not a bare element. APG allows only
+                menuitem / menuitemcheckbox / menuitemradio plus separator as
+                children of a `menu`, and a non-activatable labelled row is
+                exactly what a disabled item is for. A plain `div` here is
+                invalid ARIA AND invisible to the e2e spec's role lookup —
+                both of which happened. */}
+            <ContextMenuItem disabled textValue={copy.spellingSuggestions}>
               <SpellCheck aria-hidden="true" className="size-4" />
               {copy.spellingSuggestions}
             </ContextMenuItem>
             {spellingOffer.suggestions.map((suggestion) => (
               <ContextMenuItem
                 key={suggestion}
+                textValue={suggestion}
                 onSelect={() => applySuggestion(suggestion)}
               >
                 {suggestion}
@@ -238,24 +257,42 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuItem onSelect={() => void handleCut()}>
-          <Scissors aria-hidden="true" className="size-4" />
-          {copy.cut}
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => void handleCopy()}>
-          <Copy aria-hidden="true" className="size-4" />
-          {copy.copy}
+        <ContextMenuItem
+          textValue={copy.cut}
+          aria-keyshortcuts="Control+X"
+          onSelect={() => void handleCut()}
+        >
+          <Scissors aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.cut}</span>
+          <ContextMenuShortcut>{copy.shortcuts.cut}</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem
+          textValue={copy.copy}
+          aria-keyshortcuts="Control+C"
+          onSelect={() => void handleCopy()}
+        >
+          <Copy aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.copy}</span>
+          <ContextMenuShortcut>{copy.shortcuts.copy}</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuItem
+          textValue={copy.pasteAsPlainText}
+          aria-keyshortcuts="Control+V"
           disabled={!clipboardReadSupported}
           onSelect={() => void handlePaste()}
         >
-          <ClipboardPaste aria-hidden="true" className="size-4" />
-          {copy.pasteAsPlainText}
+          <ClipboardPaste aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.pasteAsPlainText}</span>
+          <ContextMenuShortcut>{copy.shortcuts.paste}</ContextMenuShortcut>
         </ContextMenuItem>
-        <ContextMenuItem onSelect={handleSelectAll}>
-          <TextSelect aria-hidden="true" className="size-4" />
-          {copy.selectAll}
+        <ContextMenuItem
+          textValue={copy.selectAll}
+          aria-keyshortcuts="Control+A"
+          onSelect={handleSelectAll}
+        >
+          <TextSelect aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{copy.selectAll}</span>
+          <ContextMenuShortcut>{copy.shortcuts.selectAll}</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuSub>
@@ -272,6 +309,7 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
               quickItems.map((item) => (
                 <ContextMenuItem
                   key={item.id}
+                  textValue={item.title || copy.quickMessageUntitled}
                   onSelect={() => handleInsertSnippet(item.content)}
                 >
                   <span className="truncate">

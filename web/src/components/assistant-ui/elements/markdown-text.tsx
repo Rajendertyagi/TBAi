@@ -190,7 +190,10 @@ const defaultComponents = memoizeMarkdownComponents({
   a: ({ className, ...props }) => (
     <a
       className={cn(
-        "aui-md-a text-primary hover:text-primary/80 underline underline-offset-2",
+        // `text-link`, not `text-primary`: --primary is a fill colour meant to
+        // sit behind --primary-foreground, and as link text it measured 2.61:1
+        // against the page across almost every palette.
+        "aui-md-a text-link hover:text-link-hover underline underline-offset-2",
         className,
       )}
       {...props}

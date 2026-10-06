@@ -1,6 +1,5 @@
 "use client";
 
-import { renderMermaidSVG } from "beautiful-mermaid";
 import { Maximize2, Minus, Plus, RotateCcw, X } from "lucide-react";
 import {
   type FC,
@@ -24,6 +23,45 @@ export type MermaidDiagramProps = {
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 4;
+
+/** Diagram palette, hoisted so the loading and loaded paths cannot drift. */
+const MERMAID_THEME = {
+  bg: "var(--background)",
+  fg: "var(--foreground)",
+  muted: "var(--muted-foreground)",
+  border: "var(--border)",
+  accent: "var(--foreground)",
+  transparent: true,
+} as const;
+
+type MermaidRenderer = typeof import("beautiful-mermaid").renderMermaidSVG;
+
+type MermaidRender = { svg: string; error: null } | { svg: null; error: Error };
+
+/**
+ * Mermaid's renderer, loaded on first use and then retained.
+ *
+ * ## Why this is not a plain dynamic import
+ *
+ * A static import of `beautiful-mermaid` put 1.85 MB of source in the startup
+ * chunk - 0.32 MB of the library plus 1.53 MB of `elkjs`, a standalone graph
+ * layout engine it depends on. All of it was evaluated on every launch to serve
+ * a feature most sessions never reach, and a renderer trace attributed 2.4s of
+ * script evaluation to that one chunk. A dynamic import removes it from startup
+ * entirely.
+ *
+ * The resolved renderer is cached in a module binding, which matters beyond
+ * tidiness: `import()` of an already-evaluated module still resolves in a
+ * microtask, so without the cache every LATER diagram - a second fence, a thread
+ * switch, a re-render - would flash the loading skeleton for a frame. Caching
+ * keeps first render async and all subsequent ones synchronous.
+ */
+let mermaidRenderer: MermaidRenderer | null = null;
+
+async function loadMermaidRenderer(): Promise<MermaidRenderer> {
+  mermaidRenderer ??= (await import("beautiful-mermaid")).renderMermaidSVG;
+  return mermaidRenderer;
+}
 
 type MermaidZoomProps = {
   svg: string;
@@ -168,7 +206,7 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
         data-slot="mermaid-zoom-trigger"
         aria-label="Expand diagram"
         onClick={() => setIsOpen(true)}
-        className="aui-mermaid-zoom-trigger text-muted-foreground hover:text-foreground hover:border-muted-foreground/70 border-border bg-background absolute top-2 right-2 cursor-pointer rounded-md border p-1.5 opacity-0 transition group-hover/mermaid:opacity-100 focus-visible:opacity-100"
+        className="aui-mermaid-zoom-trigger text-muted-foreground hover:text-foreground absolute top-2 right-2 cursor-pointer rounded-md border-none p-1.5 opacity-0 transition group-hover/mermaid:opacity-100 focus-visible:opacity-100 glass-surface shadow-floating"
       >
         <Maximize2 className="size-3.5" />
       </button>
@@ -203,7 +241,7 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
             </div>
             <div
               data-slot="mermaid-zoom-toolbar"
-              className="aui-mermaid-zoom-toolbar border-border bg-background absolute top-4 right-4 flex items-center gap-1 rounded-lg border p-1"
+              className="aui-mermaid-zoom-toolbar absolute top-4 right-4 flex items-center gap-1 rounded-lg border-none p-1 glass-surface shadow-floating"
             >
               <button
                 type="button"
@@ -246,31 +284,63 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
   );
 }
 
+/**
+ * Renders one diagram, lazily.
+ *
+ * `result === null` covers three states that look identical to a user and are
+ * intentionally indistinguishable: streaming, module still loading, and no
+ * diagram requested. All three show the skeleton. A failed render or a failed
+ * module load both land in the error branch, which is a real improvement over
+ * the synchronous version - before, a failure to load was impossible because
+ * there was no load.
+ */
 const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
   code,
   className,
   streaming = false,
 }) => {
-  const result = useMemo(() => {
-    if (streaming) return null;
-    try {
-      return {
-        svg: renderMermaidSVG(code, {
-          bg: "var(--background)",
-          fg: "var(--foreground)",
-          muted: "var(--muted-foreground)",
-          border: "var(--border)",
-          accent: "var(--foreground)",
-          transparent: true,
-        }),
-        error: null,
-      };
-    } catch (err) {
-      return {
-        svg: null,
-        error: err instanceof Error ? err : new Error(String(err)),
-      };
+  const [result, setResult] = useState<MermaidRender | null>(null);
+
+  useEffect(() => {
+    if (streaming) {
+      setResult(null);
+      return;
     }
+    // Guards every async continuation. Without it a slow first load can resolve
+    // after a later `code` and overwrite a fresher diagram, or after unmount.
+    let cancelled = false;
+
+    const run = (render: MermaidRenderer) => {
+      if (cancelled) return;
+      try {
+        setResult({ svg: render(code, MERMAID_THEME), error: null });
+      } catch (err) {
+        setResult({
+          svg: null,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
+      }
+    };
+
+    if (mermaidRenderer) {
+      // Already loaded, so render synchronously and skip a pointless frame of
+      // skeleton - the common case for every diagram after the first.
+      run(mermaidRenderer);
+    } else {
+      void loadMermaidRenderer()
+        .then(run)
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setResult({
+            svg: null,
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [streaming, code]);
 
   if (!result) {

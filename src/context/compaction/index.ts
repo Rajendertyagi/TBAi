@@ -27,11 +27,17 @@ export {
   COMPACTION_ENV,
   COMPACTION_SUMMARY_TIMEOUT_MS,
   CONTEXT_ORIGINS,
+  findSupersededTurns,
+  supersededSpanEnd,
+  renderPreservedMessages,
+  preservedMessageId,
+  isModelVisibleNonTextPart,
   type CompactionPlan,
   type CompactionPolicy,
   type CompactionReason,
   type CompactionRecord,
   type ContextOrigin,
+  type SupersededTurn,
 } from "./contract";
 
 export {

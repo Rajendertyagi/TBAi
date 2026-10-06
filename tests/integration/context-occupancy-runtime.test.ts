@@ -236,6 +236,16 @@ describe("runtime: the meter reads occupancy, not traffic", () => {
       expect(context!.occupancyKind).toBe("provider");
       expect(context!.windowTokens).toBeGreaterThan(0);
 
+      // The reading says WHICH resolution produced it, so a client can tell a
+      // current number from one left over from before the model or its configuration
+      // changed. Without this the meter has no way to know its denominator is stale
+      // and keeps presenting it as current.
+      const resolvedFor = (context as { resolvedFor?: { providerId?: string; modelId: string } })
+        .resolvedFor;
+      expect(resolvedFor).toBeDefined();
+      expect(resolvedFor?.modelId).toBe(MODEL_ID);
+      expect(resolvedFor?.providerId).toBeTruthy();
+
       // The traffic sum is still published - for the spend breakdown, where it
       // belongs. Separating the two is the whole point: both exist, neither is
       // used as the other's meaning.
