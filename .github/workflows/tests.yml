@@ -151,3 +151,12 @@ jobs:
           $totalBody = (($totals -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
           Write-Output "::error title=Complete test failure list::$failBody"
           Write-Output "::error title=Suite totals::$totalBody"
+          # If the suite aborted before printing a summary, the two annotations
+          # above are empty and say nothing. The tail is what explains a hard
+          # stop: a panic, a killed process, or a crash in a spawned child.
+          $exists = Test-Path test-output.log
+          $size = if ($exists) { (Get-Item test-output.log).Length } else { 0 }
+          $tail = if ($exists -and $size -gt 0) { (Get-Content test-output.log -Tail 100) } else { @('(test-output.log missing or empty)') }
+          $head = "test-output.log present=$exists bytes=$size"
+          $tailBody = ((@($head) + $tail) -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A'
+          Write-Output "::error title=Test log tail::$tailBody"
