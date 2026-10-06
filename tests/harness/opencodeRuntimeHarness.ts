@@ -28,6 +28,7 @@
 import { spawn, type Subprocess } from "bun";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../src/config/opencode";
 import {
   detectOpenCodeVersion,
@@ -123,6 +124,89 @@ export function runtimeChildEnvExtras(
 }
 
 /**
+ * The directory tree one isolated runtime test owns.
+ *
+ * OpenCode resolves its global config as `OPENCODE_CONFIG_DIR`, else
+ * `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode` (confirmed against
+ * OpenChamber's `shared.js:10-20`, which derives the same three constants from
+ * the same precedence). Pinning only `OPENCODE_CONFIG_DIR` is therefore not
+ * enough to keep a test off the developer's real config, because the home
+ * fallback stays reachable - so both are set, plus an explicit config file.
+ */
+export interface RuntimeIsolation {
+  /** Root of the tree; safe to delete when the test ends. */
+  readonly root: string;
+  /** `$XDG_CONFIG_HOME` - the isolated parent of the config directory. */
+  readonly xdgConfigHome: string;
+  /** The isolated `opencode` config directory. */
+  readonly configDir: string;
+  /** The isolated `opencode.json` a test may write. */
+  readonly configFile: string;
+  /** An isolated working directory, used as the child's `cwd`. */
+  readonly homeDir: string;
+}
+
+/**
+ * Creates an isolated directory tree for one runtime test.
+ *
+ * Every path is derived from a single root so a test can clean up with one
+ * `rmSync`. Nothing outside the root is touched.
+ *
+ * The root comes from `os.tmpdir()`, which is the platform's own answer on every
+ * OS this suite runs on and the same mechanism `tests/test-sandbox.ts` already
+ * uses. It deliberately does NOT fall back to `process.cwd()`: a previous
+ * version read `process.env.TEMP` and fell back to the working directory, so on
+ * any runner without `TEMP` (Linux, and any Windows session that cleared it) a
+ * test would silently write its config and scratch state into the repository
+ * working tree. An isolation helper that can land inside the repo is worse than
+ * one that fails loudly, and there is no legitimate reason to want the fallback.
+ *
+ * @param suffix Distinguishes concurrent tests' trees.
+ * @returns The created directories; the caller creates any files it needs.
+ */
+export function createRuntimeIsolation(suffix = "runtime"): RuntimeIsolation {
+  const root = path.join(os.tmpdir(), "tbai-opencode-runtime", suffix);
+  const xdgConfigHome = path.join(root, "xdg-config");
+  const configDir = path.join(xdgConfigHome, "opencode");
+  const homeDir = path.join(root, "home");
+  for (const dir of [configDir, homeDir]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return { root, xdgConfigHome, configDir, configFile: path.join(configDir, "opencode.json"), homeDir };
+}
+
+/**
+ * Child environment that isolates CONFIG while deliberately keeping the real
+ * cache and data directories.
+ *
+ * Isolating `XDG_CACHE_HOME` or `XDG_DATA_HOME` is what broke eight earlier
+ * attempts at this: OpenCode resolves its model catalogue from a models.dev
+ * cache, and an empty cache means zero models are ever listed. The catalogue is
+ * needed even for a config-declared model, so those two are left alone and only
+ * the configuration surface is pinned.
+ *
+ * Project config is disabled twice on purpose: `OPENCODE_CONFIG_PROJECT_DISABLE`
+ * is the documented switch, and `OPENCODE_DISABLE_PROJECT_CONFIG` covers builds
+ * that only honour the older name. The child's `cwd` is an empty temp directory,
+ * so a stray `opencode.json` in the repository cannot be discovered either way.
+ *
+ * The parent's `process.env` is never mutated - the result is returned and
+ * passed to `spawn`, so concurrent tests cannot leak config into each other.
+ *
+ * @param isolation The tree from {@link createRuntimeIsolation}.
+ * @returns Environment overrides to merge over the inherited environment.
+ */
+export function isolatedChildEnv(isolation: RuntimeIsolation): Record<string, string> {
+  return {
+    XDG_CONFIG_HOME: isolation.xdgConfigHome,
+    OPENCODE_CONFIG_DIR: isolation.configDir,
+    OPENCODE_CONFIG: isolation.configFile,
+    OPENCODE_CONFIG_PROJECT_DISABLE: "1",
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+  };
+}
+
+/**
  * Spawn a real `opencode serve`, wait for its readiness probe, and return a
  * handle for authenticated requests.
  *
@@ -137,22 +221,34 @@ export function runtimeChildEnvExtras(
 export async function startRuntimeOpenCodeServer(
   config: OpenCodeConfig = OPENCODE_CONFIG,
   extras: Record<string, string> = {},
-  options: { requireAuthenticated?: boolean } = {},
+  options: {
+    requireAuthenticated?: boolean;
+    /** Isolated tree; also becomes the child's `cwd` so no project config is found. */
+    isolation?: RuntimeIsolation;
+  } = {},
 ): Promise<RuntimeOpenCodeServer> {
   const binary = resolveManagedBinary(config).path;
   const version = detectOpenCodeVersion(binary, config);
   if (!isSupportedOpenCodeVersion(version, config)) {
     throw new Error(`Unsupported OpenCode version for runtime tests: ${version}`);
   }
-  fs.mkdirSync(config.serverHomeDir, { recursive: true });
+  const workingDirectory = options.isolation?.homeDir ?? config.serverHomeDir;
+  fs.mkdirSync(workingDirectory, { recursive: true });
 
   const port = await allocateRuntimePort();
   const password = RUNTIME_PASSWORD;
   const child = spawn([binary, "serve", "--port", String(port)], {
-    cwd: config.serverHomeDir,
+    cwd: workingDirectory,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...runtimeChildEnvExtras(extras, password, config) },
+    // Isolation overrides come before the auth vars and `extras` so a test can
+    // still override either, and the auth credential always wins last - it is
+    // the one value that must never be displaced.
+    env: {
+      ...process.env,
+      ...(options.isolation ? isolatedChildEnv(options.isolation) : {}),
+      ...runtimeChildEnvExtras(extras, password, config),
+    },
     detached: process.platform !== "win32",
   });
 

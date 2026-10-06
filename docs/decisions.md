@@ -3275,3 +3275,31 @@ identity and candidate provenance are proven at the unit and seam level only.
 
 The output-limit flooring defect (Decision 5) remains open and is unexamined on the
 `maxOutputTokensSource` provenance axis, exactly as the input side was before Decision 1.
+
+## 2026-10-06 - `gpt-tokenizer` as a devDependency for OpenCode runtime tests
+
+**Decision:** add `gpt-tokenizer@4.0.0` to `devDependencies` for the OpenCode
+real-binary harness only. No production code imports it.
+
+**Reason.** The OpenCode Code-surface context proofs compare a numerator derived
+from provider-reported tokens against the conversation that produced them. A stub
+that reported a constant, or an estimated count, would let those proofs pass
+regardless of what OpenCode actually did - the assertion would be measuring the
+stub, not the system. The stub therefore counts with a real BPE encoder over the
+prompt it received, so a longer conversation genuinely reports a larger number
+and OpenCode's own accumulation stays under test.
+
+**Why this package.** MIT licensed, zero runtime dependencies, pure JS with an
+embedded BPE vocabulary (no network fetch at test time), and small enough to keep
+the default suite hermetic. Verified in this repo: `encode("hello world").length
+=== 2`, so the vocabulary loads offline.
+
+**Alternatives rejected.** `js-tiktoken` / `@dqbd/tiktoken` (WASM or heavier
+runtime). A hand-rolled word or byte heuristic - rejected outright, because an
+approximation is exactly the failure mode this decision exists to prevent. No
+tokenizer already existed in the tree: the `ai` package ships none, and Bun
+exposes no `Bun.Tokenizer`.
+
+**Scope.** `devDependencies` only, and only `tests/harness/opencodeStubProvider.ts`
+imports it. It is absent from `dependencies`, so the compiled server binary is
+unaffected.
