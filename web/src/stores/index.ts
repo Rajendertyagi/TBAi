@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ProviderConfig, Memory, ReasoningLevel } from "../types";
+import { apiFetch } from "../lib/platform";
 
 interface SettingsState {
   providers: ProviderConfig[];
@@ -94,7 +95,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     // rather than empty). Only a confirmed response replaces it.
     let response: Response;
     try {
-      response = await fetch("/api/providers");
+      response = await apiFetch("/api/providers");
     } catch {
       return;
     }
@@ -109,13 +110,13 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   newMemory: "",
   setNewMemory: (content) => set({ newMemory: content }),
   loadMemories: async () => {
-    const response = await fetch("/api/memories");
+    const response = await apiFetch("/api/memories");
     const memories = (await response.json()) as Memory[];
     set({ memories });
   },
   addMemory: async (content) => {
     if (!content.trim()) return;
-    const response = await fetch("/api/memories", {
+    const response = await apiFetch("/api/memories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
@@ -136,7 +137,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
    */
   updateMemory: async (id, content) => {
     if (!content.trim()) return;
-    const response = await fetch(`/api/memories/${id}`, {
+    const response = await apiFetch(`/api/memories/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
@@ -148,7 +149,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
     }));
   },
   deleteMemory: async (id) => {
-    await fetch(`/api/memories/${id}`, { method: "DELETE" });
+    await apiFetch(`/api/memories/${id}`, { method: "DELETE" });
     set((state) => ({
       memories: state.memories.filter((m) => m.id !== id),
     }));

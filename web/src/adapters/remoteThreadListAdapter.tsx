@@ -16,6 +16,7 @@ import {
   ConversationNotFoundError,
   probeConversation,
 } from "../features/chat/state/conversationExistence";
+import { apiFetch } from "../lib/platform";
 
 interface ConvDTO {
   id: string;
@@ -180,7 +181,7 @@ export function createRemoteThreadListAdapter(
       const startMs = Date.now();
       logger.debug("opencode", "conversations.list.request", { url });
       try {
-        const res = await fetch(url);
+        const res = await apiFetch(url);
         if (!res.ok) {
           logger.debug("opencode", "conversations.list.error", {
             status: res.status,
@@ -240,7 +241,7 @@ export function createRemoteThreadListAdapter(
       if (reasoningLevel !== undefined) body.reasoningLevel = reasoningLevel;
       let res: Response;
       try {
-        res = await fetch(`/api/conversations/${remoteId}`, {
+        res = await apiFetch(`/api/conversations/${remoteId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -285,7 +286,7 @@ export function createRemoteThreadListAdapter(
     // applies them optimistically and only rolls the row back when the adapter
     // throws. Resolving on failure would commit a lie to local state.
     async rename(remoteId, newTitle) {
-      const res = await fetch(`/api/conversations/${remoteId}`, {
+      const res = await apiFetch(`/api/conversations/${remoteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: newTitle }),
@@ -296,7 +297,7 @@ export function createRemoteThreadListAdapter(
     },
 
     async archive(remoteId) {
-      const res = await fetch(`/api/conversations/${remoteId}`, {
+      const res = await apiFetch(`/api/conversations/${remoteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "archived" }),
@@ -307,7 +308,7 @@ export function createRemoteThreadListAdapter(
     },
 
     async unarchive(remoteId) {
-      const res = await fetch(`/api/conversations/${remoteId}`, {
+      const res = await apiFetch(`/api/conversations/${remoteId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "regular" }),
@@ -318,7 +319,7 @@ export function createRemoteThreadListAdapter(
     },
 
     async delete(remoteId) {
-      const res = await fetch(`/api/conversations/${remoteId}`, {
+      const res = await apiFetch(`/api/conversations/${remoteId}`, {
         method: "DELETE",
       });
       // Idempotent by HTTP semantics: 404 means already gone (e.g. the
@@ -378,7 +379,7 @@ export async function createConversation(input: {  workspaceMode?: "simple" | "p
   opencodeVariant?: string | null;
   title?: string;
 }): Promise<{ id: string }> {
-  const res = await fetch("/api/conversations", {
+  const res = await apiFetch("/api/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -409,7 +410,7 @@ export async function updateConversation(
     title?: string;
   },
 ): Promise<void> {
-  const res = await fetch(`/api/conversations/${id}`, {
+  const res = await apiFetch(`/api/conversations/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),

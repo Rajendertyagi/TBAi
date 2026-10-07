@@ -5,6 +5,7 @@ import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isPlainEscape } from "@/lib/ime";
 import { logger } from "@/lib/logger";
+import { apiFetch } from "@/lib/platform";
 import { welcomeConfig } from "@/config/welcome";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";
 import {
@@ -74,7 +75,7 @@ export function useOpenCodeChipState(conversationId: string) {
     }
     if (!conversationId) return;
     try {
-      const res = await fetch(`/api/conversations/${conversationId}`, {
+      const res = await apiFetch(`/api/conversations/${conversationId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),

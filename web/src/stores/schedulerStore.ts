@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { SchedulerJobPublic, SchedulerRun } from "../types";
+import { apiFetch } from "../lib/platform";
 
 interface SchedulerState {
   jobs: SchedulerJobPublic[];
@@ -44,7 +45,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   loadJobs: async () => {
     set({ loading: true, error: null });
     try {
-      const response = await fetch("/api/scheduler/jobs");
+      const response = await apiFetch("/api/scheduler/jobs");
       const payload = await readJson(response);
       if (!response.ok) {
         set({ error: apiError(payload, "Failed to load jobs"), loading: false });
@@ -60,7 +61,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   loadRuns: async (jobId: string) => {
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/scheduler/jobs/${encodeURIComponent(jobId)}/runs?limit=50`,
       );
       const payload = (await readJson(response)) as {
@@ -80,7 +81,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   loadRecentRuns: async () => {
     try {
-      const response = await fetch("/api/scheduler/runs?limit=100");
+      const response = await apiFetch("/api/scheduler/runs?limit=100");
       const payload = (await readJson(response)) as {
         runs?: SchedulerRun[];
         error?: unknown;
@@ -98,7 +99,7 @@ export async function schedulerApi<T>(
   path: string,
   init?: RequestInit,
 ): Promise<{ ok: boolean; data: T; error?: string }> {
-  const response = await fetch(`/api/scheduler${path}`, {
+  const response = await apiFetch(`/api/scheduler${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });

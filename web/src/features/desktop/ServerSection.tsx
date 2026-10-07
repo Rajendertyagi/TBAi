@@ -5,6 +5,7 @@ import { SettingsSection, SettingRow } from "../../components/shared/settings";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useServerIdentity } from "./state/serverIdentity";
+import { apiFetch, isTauri, updateVerifiedPort } from "../../lib/platform";
 
 /** Poll cadence while waiting for the rebound server to answer. */
 const READY_POLL_INTERVAL_MS = 250;
@@ -100,7 +101,7 @@ export function ServerSection() {
     setSaving(true);
     setRestartError(null);
     try {
-      const res = await fetch("/api/server/port", {
+      const res = await apiFetch("/api/server/port", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ port: inputPort }),
@@ -123,7 +124,7 @@ export function ServerSection() {
   }, [busy, dirty, inputPort, reload]);
 
   const probePort = useCallback(async (port: number): Promise<PortProbe> => {
-    const res = await fetch("/api/server/check-port", {
+    const res = await apiFetch("/api/server/check-port", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ port }),
@@ -172,7 +173,7 @@ export function ServerSection() {
             : `Port ${port} is already in use.`,
         );
       }
-      const res = await fetch("/api/server/restart", {
+      const res = await apiFetch("/api/server/restart", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ port }),
@@ -185,11 +186,12 @@ export function ServerSection() {
         throw new Error(data.error ?? `Restart failed (${res.status})`);
       }
       // The response came from the OLD listener. Wait until the new origin
-      // actually answers, then move the whole client (browser tab or Tauri
-      // webview) over, preserving the current view via path + hash.
+      // actually answers.
       const loc = window.location;
-      const origin = `${loc.protocol}//${loc.hostname}:${port}`;
-      const ready = await waitForReady(origin);
+      const targetOrigin = isTauri()
+        ? `http://127.0.0.1:${port}`
+        : `${loc.protocol}//${loc.hostname}:${port}`;
+      const ready = await waitForReady(targetOrigin);
       if (!mounted.current) return;
       if (!ready) {
         setRestartError(
@@ -199,7 +201,13 @@ export function ServerSection() {
         await reload();
         return;
       }
-      window.location.href = `${origin}${loc.pathname}${loc.search}${loc.hash}`;
+      if (isTauri()) {
+        await updateVerifiedPort(port);
+        await reload();
+        toast.success(`Server restarted on port ${port}.`);
+        return;
+      }
+      window.location.href = `${targetOrigin}${loc.pathname}${loc.search}${loc.hash}`;
     } catch (err: unknown) {
       if (!mounted.current) return;
       const message = err instanceof Error ? err.message : "Restart failed.";
@@ -215,8 +223,9 @@ export function ServerSection() {
 
   const onCopyUrl = useCallback(async () => {
     if (!identity) return;
-    const loc = window.location;
-    const url = `${loc.protocol}//${loc.hostname}:${identity.activePort}`;
+    const url = isTauri()
+      ? `http://127.0.0.1:${identity.activePort}`
+      : `${window.location.protocol}//${window.location.hostname}:${identity.activePort}`;
     try {
       await navigator.clipboard.writeText(url);
       if (!mounted.current) return;

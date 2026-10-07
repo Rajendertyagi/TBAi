@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { schedulerViewConfig } from "../../config/scheduler";
 import { useSchedulerStore, schedulerApi } from "../../stores/schedulerStore";
 import { useSettingsStore } from "../../stores";
+import { apiFetch } from "../../lib/platform";
 import { SchedulerTitleStrip } from "./components/SchedulerTitleStrip";
 import { SchedulerToolbar, type JobStatusFilter } from "./components/SchedulerToolbar";
 import { JobListItem } from "./components/JobListItem";
@@ -90,7 +91,7 @@ export function SchedulerPage() {
       },
       () => {},
     );
-    fetch("/api/conversations?status=regular")
+    apiFetch("/api/conversations?status=regular")
       .then((r) => r.json())
       .then(
         (data) =>

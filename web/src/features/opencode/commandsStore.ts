@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { logger } from "../../lib/logger";
+import { apiFetch } from "../../lib/platform";
 import {
   parseCommandFeed,
   type OpenCodeCommand,
@@ -58,7 +59,7 @@ export const useCommandsStore = create<CommandsState>((set, get) => ({
     const request = (async () => {
       set({ loading: true });
       try {
-        const res = await fetch(OPENCODE_COMMANDS_PATH);
+        const res = await apiFetch(OPENCODE_COMMANDS_PATH);
         if (!res.ok) {
           // Non-ok carries no authoritative list: keep the previous one.
           logger.warn("opencode", "command.feed_failed", {

@@ -29,7 +29,35 @@ import serverApp from "./server";
  */
 const app = new Hono<{ Variables: { requestId: string } }>();
 
-app.use("*", cors());
+app.use(
+  "*",
+  cors({
+    origin: (origin) => {
+      if (
+        !origin ||
+        origin === "http://app.localhost" ||
+        /^http:\/\/localhost(:\d+)?$/.test(origin) ||
+        /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
+      ) {
+        return origin || "*";
+      }
+      return null;
+    },
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: [
+      "Content-Type",
+      "Accept",
+      "X-TBAI-Operation-ID",
+      "x-opencode-directory",
+      "x-request-id",
+    ],
+    exposeHeaders: [
+      "x-resumable-stream-id",
+      "x-request-id",
+      "Content-Type",
+    ],
+  }),
+);
 
 // High-frequency poll paths whose 200s are noise, not audit. They stay fully
 // error-covered (status >= 400 always logs above); only the routine hits drop

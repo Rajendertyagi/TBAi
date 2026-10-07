@@ -22,6 +22,7 @@
  */
 
 import { create } from "zustand";
+import { apiFetch } from "@/lib/platform";
 
 /**
  * Why a run cannot be shown as finished.
@@ -273,7 +274,7 @@ export type FetchLike = (input: string) => Promise<Response>;
  */
 export async function fetchConversationRunStatus(
   conversationId: string,
-  fetchImpl: FetchLike = (input) => fetch(input),
+  fetchImpl: FetchLike = (input: string) => apiFetch(input),
 ): Promise<StreamStatus | null> {
   try {
     const res = await fetchImpl(
@@ -314,7 +315,7 @@ export async function resolveStreamRecovery(
   prompt = "",
   options: ResolveRecoveryOptions = {},
 ): Promise<{ state: StreamRecoveryState; status: StreamStatus | null }> {
-  const { assumeRun = false, fetchImpl = (input: string) => fetch(input) } = options;
+  const { assumeRun = false, fetchImpl = (input: string) => apiFetch(input) } = options;
   const status = await fetchConversationRunStatus(threadId, fetchImpl);
   const { reason, canRetry } = classifyStreamStatus(status, prompt);
   const state: StreamRecoveryState = {

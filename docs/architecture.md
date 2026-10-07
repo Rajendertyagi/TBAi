@@ -617,3 +617,34 @@ UI/tool rendering is library-first. External tool data is normalized at an adapt
 and then rendered by an official assistant-ui element when possible. TBAi-specific renderers
 exist only for demonstrated capability gaps. Forms are a separate interaction from
 permissions/approvals.
+
+## Desktop Startup Decoupling & Dynamic Backend Endpoint (Workstream 1)
+
+In desktop mode (Tauri v2 on Windows):
+
+1. **Frontend Asset Delivery via Custom Protocol:**
+   - Tauri registers an asynchronous custom protocol `app://localhost`, which maps to loose static files in `<exe_dir>/web/`.
+   - Windows WebView2 produces the origin `http://app.localhost`.
+   - Path sanitization prevents directory traversal (`..`, `:`, `\0`), ensuring confinement to the `web/` asset directory. SPA client-side routes fallback to `index.html`.
+2. **Asynchronous Backend Startup & Immediate First Paint:**
+   - The main window is configured `visible: true` in `tauri.conf.json`. Window presentation is fully decoupled from backend server readiness, rendering the shell immediately.
+   - The Bun sidecar (`tbai-server.exe`) is spawned asynchronously in the background with a fresh `TBAI_INSTANCE_ID`.
+3. **Single Port Authority:**
+   - The Bun server is the 100% sole authority for backend port resolution:
+     `PORT` environment override -> persisted SQLite `server.port` -> fallback 3000.
+   - Bun performs upward self-healing (+1..+100) if the port is busy and writes the final verified port to `data/port`.
+   - Rust does no duplicate pre-heal port probing.
+4. **Dynamic Backend Endpoint Resolution:**
+   - `web/src/lib/platform.ts` provides `getApiBaseUrl()` (`http://127.0.0.1:<port>` in desktop; `""` same-origin in browser) and `apiFetch()`.
+   - Direct chat transport (`AssistantChatTransport`) and OpenCode client receive explicit base URLs (`resolveApiUrl("/api/chat")` and `getApiBaseUrl() || window.location.origin`).
+   - All frontend data stores, hooks, and adapters route backend requests through `apiFetch` or `resolveApiUrl`.
+5. **In-Memory Runtime Port Change:**
+   - Modifying and restarting the server port from Settings updates `setApiBaseUrl("http://127.0.0.1:<newPort>")` and notifies Rust via `update_verified_port`.
+   - No browser reload (`window.location.reload()` or `.href` assignment) is performed. Open tabs, chat state, and unsaved drafts are fully preserved.
+6. **Bounded Crash Recovery:**
+   - If the Bun sidecar crashes, Rust allows up to 3 restarts within a 30-second window before entering `failed` status.
+   - Rust emits `backend-status` and `backend-ready` events. Frontend displays an inline recovery banner with a manual Retry button (`retry_startup`), without reloading the WebView.
+7. **Cross-Origin Security & Transport:**
+   - Hono backend binds explicitly to `127.0.0.1` and enables CORS for `http://app.localhost` and loopback origins, allowing necessary headers (`Content-Type`, `Accept`, `X-TBAI-Operation-ID`, `x-opencode-directory`, `x-request-id`) and exposing response headers (`x-resumable-stream-id`, `x-request-id`, `Content-Type`).
+   - Minimal functional CSP Level 3 allows `connect-src 'self' http://127.0.0.1:* http://localhost:*`.
+

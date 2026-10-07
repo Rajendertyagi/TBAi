@@ -16,6 +16,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Switch } from "./ui/switch";
 import { maxSeq, mergeLogEntries, serializeLogEntries } from "../lib/log-entries";
+import { apiFetch, resolveApiUrl } from "../lib/platform";
 import {
   Select,
   SelectContent,
@@ -351,7 +352,7 @@ export function LogsPanel() {
 
   const refreshLogs = useCallback(async () => {
     try {
-      const res = await fetch(`/api/logs/recent?since=${lastSeqRef.current}`);
+      const res = await apiFetch(`/api/logs/recent?since=${lastSeqRef.current}`);
       if (!res.ok) return;
       const data = (await res.json()) as LogBatch;
       applyIncoming(data.entries ?? [], data.bootId ?? "");
@@ -368,9 +369,9 @@ export function LogsPanel() {
       setLoadError(null);
       try {
         const [settingsRes, recentRes, filesRes] = await Promise.all([
-          fetch("/api/logs/settings"),
-          fetch("/api/logs/recent"),
-          fetch("/api/logs/files"),
+          apiFetch("/api/logs/settings"),
+          apiFetch("/api/logs/recent"),
+          apiFetch("/api/logs/files"),
         ]);
         if (!settingsRes.ok || !recentRes.ok || !filesRes.ok) {
           throw new Error("Could not load log settings.");
@@ -429,7 +430,7 @@ export function LogsPanel() {
 
     const connect = () => {
       if (closed) return;
-      const source_ = new EventSource("/api/logs/stream");
+      const source_ = new EventSource(resolveApiUrl("/api/logs/stream"));
       source = source_;
       source_.onopen = () => {
         setStreamState("live");
@@ -500,7 +501,7 @@ export function LogsPanel() {
   // those may hold unsaved edits).
   const refreshThrottle = useCallback(async () => {
     try {
-      const res = await fetch("/api/logs/settings");
+      const res = await apiFetch("/api/logs/settings");
       if (!res.ok) return;
       const data = (await res.json()) as {
         throttle?: { throttled: Array<{ scope: string; dropped: number }> };
@@ -521,7 +522,7 @@ export function LogsPanel() {
           targets: validTargets(settingsRef.current.targets),
         };
         if (settingsRef.current.file) body.file = settingsRef.current.file;
-        const res = await fetch("/api/logs/settings", {
+        const res = await apiFetch("/api/logs/settings", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -608,7 +609,7 @@ export function LogsPanel() {
 
   const handleDownload = useCallback(async (file: LogFileInfo) => {
     try {
-      const res = await fetch(`/api/logs/files/${encodeURIComponent(file.name)}`);
+      const res = await apiFetch(`/api/logs/files/${encodeURIComponent(file.name)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const content = await res.text();
       const blob = new Blob([content], { type: "text/plain" });

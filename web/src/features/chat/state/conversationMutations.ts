@@ -1,4 +1,5 @@
 import { logger } from "@/lib/logger";
+import { apiFetch } from "@/lib/platform";
 
 export interface RenameConversationOptions {
   title: string;
@@ -21,7 +22,7 @@ export async function renameConversation(
     throw new Error("Title cannot be empty");
   }
 
-  const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+  const res = await apiFetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: cleanTitle }),
@@ -44,7 +45,7 @@ export async function setConversationStatus(
   conversationId: string,
   status: "regular" | "archived",
 ): Promise<void> {
-  const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+  const res = await apiFetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),

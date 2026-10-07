@@ -20,6 +20,7 @@ import { useDeleteConversation } from "@/features/chat/state/deleteConversation"
 import { NEW_DRAFT_TAB_ID } from "@/features/chat/state/chatTabs";
 import { probeConversation } from "@/features/chat/state/conversationExistence";
 import { updateConversation } from "@/adapters/remoteThreadListAdapter";
+import { apiFetch } from "@/lib/platform";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,7 +73,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     // Draft (pre-creation) chat: nothing is persisted yet — show the default.
     if (isDraft) {
       setRootHref("/workspace");
-      fetch("/api/workspace")
+      apiFetch("/api/workspace")
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           if (!cancelled && data?.name) setRootName(data.name);
@@ -95,7 +96,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
       if (conv.workspaceMode === "project" && conv.workspaceFolderId) {
         setRootHref("/folders");
         try {
-          const res = await fetch(`/api/folders/${conv.workspaceFolderId}`);
+          const res = await apiFetch(`/api/folders/${conv.workspaceFolderId}`);
           const f = res.ok ? await res.json().catch(() => null) : null;
           if (cancelled) return;
           setRootName(f ? (f.alias || f.name) : "Project (folder removed)");

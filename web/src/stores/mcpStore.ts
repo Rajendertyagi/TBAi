@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { logger } from "../lib/logger";
+import { apiFetch } from "../lib/platform";
 import type {
   McpStatus,
   McpServerDraft,
@@ -29,7 +30,7 @@ interface McpState {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });

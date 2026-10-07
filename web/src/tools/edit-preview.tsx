@@ -3,6 +3,7 @@ import { toolsConfig } from "@/config/tools";
 import { patchToCodeDiffs, type CodeDiffFile } from "@/lib/patch-to-diffs";
 import { textPreview } from "@/tools/text-preview";
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
+import { apiFetch } from "@/lib/platform";
 
 /**
  * The change a Direct-chat `edit_file` call would make, rendered as a diff.
@@ -168,7 +169,7 @@ export function EditPreviewBody({
     // a request the server is bound to reject.
     if (path === "" || oldText === "") return;
     const controller = new AbortController();
-    void fetch("/api/tools/edit-preview", {
+    void apiFetch("/api/tools/edit-preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, oldText, newText }),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAvailabilityStore } from "../availability/availabilityStore";
+import { apiFetch } from "../../lib/platform";
 
 export interface OpenCodeAgentOption {
   id: string;
@@ -102,7 +103,7 @@ export function useOpenCodeCapabilities(enabled = true) {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    fetch("/api/opencode/capabilities", { signal: controller.signal })
+    apiFetch("/api/opencode/capabilities", { signal: controller.signal })
       .then((r) => r.json())
       .then((data: OpenCodeCapabilities) => {
         if (cancelled) return;

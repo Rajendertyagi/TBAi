@@ -35,6 +35,7 @@
 
 import type { DataMessagePart } from "@assistant-ui/react";
 import { logger } from "../../lib/logger";
+import { apiFetch } from "../../lib/platform";
 
 /**
  * The canonical command string the Direct surface intercepts.
@@ -569,7 +570,7 @@ export async function runDirectCompact(
   const { messages } = buildCompactRequestBody(input.messages, commandId, input.command?.text);
   let response: Response;
   try {
-    response = await fetch("/api/chat", {
+    response = await apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

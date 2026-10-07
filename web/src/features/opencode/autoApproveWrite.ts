@@ -1,4 +1,5 @@
 import { setAutoPolicy } from "./sessionAutoPolicy";
+import { apiFetch } from "@/lib/platform";
 
 /**
  * The Auto shield's single write path for a bound conversation.
@@ -36,7 +37,7 @@ export async function persistAutoApprove(
   enabled: boolean,
   reconcile?: () => Promise<number>,
 ): Promise<void> {
-  const res = await fetch(`/api/conversations/${conversationId}`, {
+  const res = await apiFetch(`/api/conversations/${conversationId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ opencodeAutoApprove: enabled }),

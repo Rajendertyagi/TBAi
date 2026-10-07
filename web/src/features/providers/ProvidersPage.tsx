@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Pencil, Plus, Server, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSettingsStore } from "@/stores";
+import { apiFetch } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -61,7 +62,7 @@ export function ProvidersPage() {
 
   const handleSetActive = async (id: string) => {
     try {
-      const res = await fetch(`/api/providers/${id}/set-active`, { method: "POST" });
+      const res = await apiFetch(`/api/providers/${id}/set-active`, { method: "POST" });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         toast.error(data.error || `Could not activate (HTTP ${res.status}).`);
@@ -77,7 +78,7 @@ export function ProvidersPage() {
     if (!deleteTarget || deleting) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/providers/${deleteTarget.id}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/providers/${deleteTarget.id}`, { method: "DELETE" });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         toast.error(data.error || `Could not delete (HTTP ${res.status}).`);

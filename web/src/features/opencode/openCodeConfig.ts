@@ -18,6 +18,8 @@
  * has not set is shown as "not configured", never as a value TBAi invented.
  */
 
+import { apiFetch } from "@/lib/platform";
+
 /** The three effects OpenCode's V2 schema accepts for a permission rule. */
 export type OpenCodePermissionEffect = "allow" | "ask" | "deny";
 
@@ -105,7 +107,7 @@ export function toPermissionRules(value: unknown): {
  * @throws {OpenCodeConfigError} When the request fails or the server refuses.
  */
 export async function fetchOpenCodeConfig(): Promise<OpenCodeConfigSnapshot> {
-  const response = await fetch("/api/opencode/config");
+  const response = await apiFetch("/api/opencode/config");
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const message =
@@ -181,7 +183,7 @@ async function postPermissionChange(
   body: Record<string, unknown>,
   method: "POST" | "DELETE" = "POST",
 ): Promise<OpenCodePermissionWriteResult> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -220,7 +222,7 @@ export async function saveOpenCodePermissionEffect(
   rule: OpenCodePermissionRule,
   effect: OpenCodePermissionEffect,
 ): Promise<OpenCodePermissionWriteResult> {
-  const response = await fetch("/api/opencode/config/permissions", {
+  const response = await apiFetch("/api/opencode/config/permissions", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

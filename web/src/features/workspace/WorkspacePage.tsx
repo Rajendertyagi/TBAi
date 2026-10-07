@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { FolderCog } from "lucide-react";
 import { SettingRow, SettingsPage, SettingsSection } from "../../components/shared/settings";
+import { apiFetch } from "../../lib/platform";
 
 interface Sysinfo {
   platform: string;
@@ -26,7 +27,7 @@ export function WorkspacePage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/tools/sysinfo", { method: "POST" })
+    apiFetch("/api/tools/sysinfo", { method: "POST" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as Sysinfo;

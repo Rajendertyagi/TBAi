@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { logger } from "@/lib/logger";
+import { apiFetch } from "@/lib/platform";
 import { useChatTabsStore } from "./chatTabs";
 import { readDirectResumableStreamId } from "./resumable-stream";
 
@@ -29,7 +30,7 @@ export async function cancelActiveRun(
     // server side would otherwise keep burning tokens. Logged before the call
     // so the request exists in the timeline even if the response never lands.
     logger.info("chat", "run.cancel_requested", { streamId });
-    const res = await fetch(
+    const res = await apiFetch(
       `/api/chat/cancel/${encodeURIComponent(streamId)}`,
       { method: "POST" },
     );
@@ -69,7 +70,7 @@ export async function deleteConversation(
 
   let opencodeTerminated = false;
   try {
-    const res = await fetch("/api/opencode/session/terminate", {
+    const res = await apiFetch("/api/opencode/session/terminate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ conversationId: ref }),
@@ -92,7 +93,7 @@ export async function deleteConversation(
     });
   }
 
-  const res = await fetch(`/api/conversations/${ref}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/conversations/${ref}`, { method: "DELETE" });
   // 404 means already gone (repeat call or raced delete): the desired end
   // state holds, so resolve. Any other failure rejects — local state must not
   // claim a deletion the server refused.

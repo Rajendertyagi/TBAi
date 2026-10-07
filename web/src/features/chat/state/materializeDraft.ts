@@ -2,6 +2,7 @@ import { getWelcomeScopeSnapshot } from "./welcomeScope";
 import { getWelcomeEngineSnapshot } from "./welcomeEngine";
 import { useSettingsStore } from "../../../stores";
 import { logger } from "../../../lib/logger";
+import { apiFetch } from "../../../lib/platform";
 
 /**
  * Single owner of draft materialization (Phase 4).
@@ -129,7 +130,7 @@ export function captureDraftSnapshot(): DraftSnapshot {
 }
 
 async function postConversations(body: Record<string, unknown>): Promise<{ id: string }> {
-  const res = await fetch("/api/conversations", {
+  const res = await apiFetch("/api/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

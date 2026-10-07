@@ -29,6 +29,7 @@ import {
 import { resolveStreamRecovery, useStreamRecoveryStore, type StreamRecoveryState } from "./features/chat/state/streamRecovery";
 import { lastUserText } from "./lib/ui-messages";
 import { useAvailabilityStore } from "./features/availability/availabilityStore";
+import { resolveApiUrl } from "./lib/platform";
 
 /**
  * Wires the assistant-ui runtime to our backend using the native
@@ -314,11 +315,11 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
   const transport = useMemo(
     () =>
       new AssistantChatTransport({
-        api: "/api/chat",
+        api: resolveApiUrl("/api/chat"),
         fetch: diagnosticFetch(() => aui.threadListItem.getState()),
         resumable: {
           storage,
-          resumeApi: (streamId) => `/api/chat/resume/${streamId}`,
+          resumeApi: (streamId) => resolveApiUrl(`/api/chat/resume/${streamId}`),
           isFinishEvent: makeIsFinishEvent(),
         },
         prepareSendMessagesRequest: async ({

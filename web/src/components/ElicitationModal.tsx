@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Input } from "./ui";
+import { apiFetch } from "../lib/platform";
 import type { McpPendingElicitation } from "../types";
 
 /**
@@ -16,7 +17,7 @@ export function ElicitationModal() {
     let active = true;
     const tick = async () => {
       try {
-        const res = await fetch("/api/mcp/elicit/pending");
+        const res = await apiFetch("/api/mcp/elicit/pending");
         const data = (await res.json()) as McpPendingElicitation | null;
         if (!active) return;
         if (data && (!pending || data.elicitationId !== pending.elicitationId)) {
@@ -50,7 +51,7 @@ export function ElicitationModal() {
       // Phase 3.11: dismissal requires server confirmation. A failed resolve
       // keeps the pending request visible instead of reporting an answer the
       // server never received.
-      const res = await fetch("/api/mcp/elicit/resolve", {
+      const res = await apiFetch("/api/mcp/elicit/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

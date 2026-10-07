@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { appConfig, getRailNav, lastSettingsRoute } from "../config/navigation";
 import { cn } from "../lib/utils";
+import { apiFetch } from "../lib/platform";
 
 /**
  * VS Code–style activity bar: a narrow icon rail on the far left. Chat,
@@ -20,7 +21,7 @@ export function ActivityBar() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/scheduler/summary")
+    apiFetch("/api/scheduler/summary")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data) return;

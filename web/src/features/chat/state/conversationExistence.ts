@@ -32,6 +32,7 @@
  */
 
 import { logger } from "../../../lib/logger";
+import { apiFetch } from "../../../lib/platform";
 
 /**
  * Three-valued existence verdict. `unknown` is a first-class outcome, not an
@@ -130,7 +131,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function probeConversation(id: string): Promise<ConversationProbe> {
   let res: Response;
   try {
-    res = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
+    res = await apiFetch(`/api/conversations/${encodeURIComponent(id)}`);
   } catch (err) {
     // Network throw or abort: the request never produced a status, so
     // existence is undetermined. No per-probe diagnostics — the browser already
@@ -181,7 +182,7 @@ export async function reconcileConversations(
 
   let body: unknown;
   try {
-    const res = await fetch("/api/conversations/reconcile", {
+    const res = await apiFetch("/api/conversations/reconcile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),

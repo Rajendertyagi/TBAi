@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSettingsStore } from "@/stores";
+import { apiFetch } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -176,12 +177,12 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
       };
       const res =
         mode === "edit" && provider
-          ? await fetch(`/api/providers/${provider.id}`, {
+          ? await apiFetch(`/api/providers/${provider.id}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
             })
-          : await fetch("/api/providers", {
+          : await apiFetch("/api/providers", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
@@ -215,7 +216,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
       };
       if (provider) payload.id = provider.id;
       if (form.apiKey) payload.apiKey = form.apiKey;
-      const res = await fetch("/api/providers/test", {
+      const res = await apiFetch("/api/providers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -256,7 +257,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
       };
       if (provider) payload.id = provider.id;
       if (form.apiKey) payload.apiKey = form.apiKey;
-      const res = await fetch("/api/providers/discover", {
+      const res = await apiFetch("/api/providers/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

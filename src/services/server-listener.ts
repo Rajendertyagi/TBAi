@@ -75,7 +75,8 @@ function isAddrInUse(err: unknown): boolean {
 function bindListener(port: number): BunServer {
   // Bun.serve binds synchronously and throws (EADDRINUSE) when the port is
   // occupied — the caller keeps the old listener untouched in that case.
-  return Bun.serve({ fetch: requireFetch(), port, idleTimeout: LISTENER_IDLE_TIMEOUT_S });
+  // Explicitly binds to 127.0.0.1 so the socket is strictly loopback (never LAN-exposed).
+  return Bun.serve({ hostname: "127.0.0.1", fetch: requireFetch(), port, idleTimeout: LISTENER_IDLE_TIMEOUT_S });
 }
 
 function setActive(server: BunServer, port: number): void {

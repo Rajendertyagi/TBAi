@@ -3,6 +3,7 @@ import { ChevronRight, Folder, FolderOpen, CornerDownLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { isPlainEnter } from "@/lib/ime";
+import { apiFetch } from "@/lib/platform";
 
 interface BrowseResult {
   path: string;
@@ -36,7 +37,7 @@ export function DirectoryBrowser({
     setLoading(true);
     setError(null);
     const url = `/api/folders/browse?path=${encodeURIComponent(target)}`;
-    fetch(url)
+    apiFetch(url)
       .then(async (res) => {
         const data = (await res.json()) as BrowseResult & { error?: string };
         if (!res.ok) throw new Error(data.error || "Browse failed");

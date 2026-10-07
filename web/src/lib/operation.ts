@@ -135,12 +135,15 @@ export function resolveRequestUrl(
   }
 }
 
+import { getApiBaseUrl } from "./platform";
+
 /**
- * Same-origin `/api/*` calls are the ones the backend can correlate; anything
- * else (assets, third-party, dev-server modules) is left byte-identical. Pure.
+ * Same-origin or verified-backend `/api/*` calls are the ones the backend can correlate;
+ * anything else (assets, third-party, dev-server modules) is left byte-identical. Pure.
  */
-export function isCorrelatableRequest(url: URL, origin: string): boolean {
-  return url.origin === origin && url.pathname.startsWith("/api/");
+export function isCorrelatableRequest(url: URL, origin: string, apiOrigin?: string): boolean {
+  const matchesOrigin = url.origin === origin || (apiOrigin ? url.origin === apiOrigin : false);
+  return matchesOrigin && url.pathname.startsWith("/api/");
 }
 
 /**
@@ -156,10 +159,11 @@ export function operationInitFor(
   init: RequestInit | undefined,
   id: string | undefined,
   origin: string,
+  apiOrigin?: string,
 ): RequestInit | undefined {
   if (!id) return undefined;
   const url = resolveRequestUrl(input, origin);
-  if (!url || !isCorrelatableRequest(url, origin)) return undefined;
+  if (!url || !isCorrelatableRequest(url, origin, apiOrigin)) return undefined;
   const headers = new Headers(
     init?.headers ?? (input instanceof Request ? input.headers : undefined),
   );
@@ -174,10 +178,10 @@ let fetchInstalled = false;
  * Install the operation-id header application-wide by wrapping `fetch` ONCE,
  * instead of editing every call site (which would silently miss new ones).
  *
- * Only same-origin `/api/*` requests are touched, and only when an operation is
- * actually active — so probes, asset loads, and requests made outside any user
- * action keep their exact previous behavior. An explicit header already set by
- * a caller always wins.
+ * Only `/api/*` requests aimed at this origin or the verified backend origin are touched,
+ * and only when an operation is actually active — so probes, asset loads, and requests
+ * made outside any user action keep their exact previous behavior. An explicit header
+ * already set by a caller always wins.
  */
 export function installOperationHeaderFetch(): void {
   if (fetchInstalled || typeof window === "undefined") return;
@@ -192,6 +196,7 @@ export function installOperationHeaderFetch(): void {
       init,
       currentOperationId(),
       window.location.origin,
+      getApiBaseUrl(),
     );
     return next ? base(input, next) : base(input, init);
   }) as typeof globalThis.fetch;

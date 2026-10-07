@@ -1,4 +1,5 @@
 import { logger } from "@/lib/logger";
+import { apiFetch } from "@/lib/platform";
 
 /**
  * Result of bootstrapping an OpenCode session for a conversation.
@@ -70,7 +71,7 @@ export async function bootstrapOpenCodeSession(
     });
 
     try {
-      const res = await fetch(OPENCODE_BOOTSTRAP_PATH, {
+      const res = await apiFetch(OPENCODE_BOOTSTRAP_PATH, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ conversationId: convId }),

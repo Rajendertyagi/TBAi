@@ -27,6 +27,7 @@ import { textPreview } from "@/tools/text-preview";
 import { toolsConfig } from "@/config/tools";
 import { logger } from "@/lib/logger";
 import { resolveThreadConversationId } from "@/lib/thread-conversation-id";
+import { apiFetch } from "@/lib/platform";
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = unknown;
@@ -142,7 +143,7 @@ export function ApprovalGate({
           aui.threadListItem.getState(),
         );
         if (!conversationId) return;
-        const res = await fetch("/api/tools/check", {
+        const res = await apiFetch("/api/tools/check", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ conversationId, tool, path: targetPath }),
@@ -247,7 +248,7 @@ export function ApprovalGate({
         if (!conversationId || !tool || !targetPath) {
           throw new Error("No conversation for this approval");
         }
-        const res = await fetch("/api/tools/grant", {
+        const res = await apiFetch("/api/tools/grant", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ conversationId, tool, path: targetPath }),
@@ -542,7 +543,7 @@ function FailedOutsideRetry({
     setError(null);
     (async () => {
       try {
-        const res = await fetch("/api/tools/run-granted", {
+        const res = await apiFetch("/api/tools/run-granted", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ conversationId, tool, args }),

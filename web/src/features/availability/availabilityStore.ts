@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { computeBackoffDelay } from "../../lib/backoff";
 import { logger } from "../../lib/logger";
+import { resolveApiUrl } from "../../lib/platform";
 
 /**
  * ONE frontend availability authority (Phase 3.1).
@@ -97,7 +98,7 @@ async function probeOnce(): Promise<void> {
     const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
     let res: Response;
     try {
-      res = await fetch(READYZ_URL, { signal: controller.signal });
+      res = await fetch(resolveApiUrl(READYZ_URL), { signal: controller.signal });
     } finally {
       clearTimeout(timeout);
     }

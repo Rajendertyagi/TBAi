@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "../../../lib/platform";
 
 /** How often liveness is re-checked (cheap same-origin read). */
 export const SERVER_STATUS_POLL_INTERVAL_MS = 15000;
@@ -30,6 +31,7 @@ export function useServerIdentity(poll = true): {
 
   const reload = useCallback(async () => {
     try {
+      const fetch = apiFetch;
       const res = await fetch("/api/server", { cache: "no-store" });
       if (!res.ok) throw new Error(`Server responded ${res.status}`);
       const data = (await res.json()) as ServerIdentity;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAvailabilityStore } from "../../availability/availabilityStore";
 import { sidebarConfig } from "../../../config/sidebar";
+import { apiFetch } from "../../../lib/platform";
 
 export interface ConversationItem {
   remoteId: string;
@@ -104,7 +105,7 @@ export function useConversationsList(
     params.set("limit", String(queryLimit));
     params.set("offset", String(queryOffset));
 
-    fetch(`/api/conversations?${params.toString()}`)
+    apiFetch(`/api/conversations?${params.toString()}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
         return res.json() as Promise<{

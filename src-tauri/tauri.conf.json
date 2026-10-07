@@ -7,7 +7,7 @@
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "bun run build",
-    "frontendDist": "./frontend-placeholder",
+    "frontendDist": "app://localhost",
     "windows": {
       "staticVCRuntime": true
     }
@@ -26,11 +26,11 @@
         "minHeight": 360,
         "decorations": false,
         "transparent": false,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:* http://localhost:*;"
     }
   },
   "bundle": {
