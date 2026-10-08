@@ -2,6 +2,7 @@ import { createHashRouter, Navigate } from "react-router";
 import { ChatShell } from "./layout/ChatShell";
 import { RouteError } from "./RouteError";
 import { SettingsLayout } from "./layout/SettingsLayout";
+import { HydrateFallback } from "./HydrateFallback";
 
 // ─── Eager vs lazy route modules ────────────────────────────────────────────
 //
@@ -39,6 +40,7 @@ export const router = createHashRouter([
   {
     path: "/",
     Component: ChatShell,
+    HydrateFallback,
     errorElement: <RouteError />,
     children: [
       {
@@ -131,6 +133,7 @@ export const router = createHashRouter([
     // Lazy because nothing outside `features/opencode` imports it, and it pulls
     // the whole `@opencode/client` runtime that most sessions never open.
     lazy: () => import("../features/opencode/CodeShell").then((m) => ({ Component: m.CodeShell })),
+    HydrateFallback,
     errorElement: <RouteError />,
   },
   // Diagnostic page, DEV BUILDS ONLY, and deliberately outside the chat shell.
