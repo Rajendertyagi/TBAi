@@ -24,11 +24,12 @@
  *   - the range converges: once rows are measured, the scrollport's scrollable
  *     height equals the virtualizer's total size.
  *
- * REPORTED, not asserted - the estimate's initial error. Mean row height is not
- * a stable target (TBAi rows are messages AND parts AND turn-ends, so the mix
- * moves per conversation), and pinning an assertion to a percentage would just
- * re-freeze the guess this file exists to keep honest. The numbers are printed
- * so the estimate can be re-chosen against real data instead of folklore.
+ * REPORTED, not asserted - and deliberately not as a percentage. Mean row height
+ * is not a stable target (TBAi rows are messages AND parts AND turn-ends, so the
+ * mix moves per conversation), and the previous version of this file DID report
+ * an error percentage that turned out to sample after measurement had already
+ * corrected the range. See the in-test note. Only converged/settled values are
+ * recorded, which are real and reproducible.
  */
 import { expect, test, type Page } from "@playwright/test";
 import {
@@ -78,23 +79,30 @@ test.describe("initial scroll range", () => {
       const settledHeight = await waitForStableScrollHeight(page);
       const settled = await readRange(page);
 
-      const errorPct =
-        settled.containerHeight === 0
-          ? 0
-          : ((first.containerHeight - settled.containerHeight) / settled.containerHeight) * 100;
+      // ── The estimate-error number is deliberately NOT reported. ──
+      //
+      // An earlier version of this file printed `(first - settled) / settled` as
+      // an "estimate accuracy" percentage, and it was cited in support of a
+      // 320-vs-200 decision. It does not measure that. `first` is taken after
+      // `waitForSelector`, by which time `measureElement` has usually already
+      // corrected the range, so the sample is frequently post-measurement and
+      // reports ~0%. Repeat runs of the SAME fixture produced 0.0%, 18.0% and
+      // 89.6%, which is a property of when the sample landed, not of the
+      // estimate.
+      //
+      // A real figure needs a sample taken before the first measurement
+      // corrects the range, which is not observable from a Playwright assertion
+      // that waits on a rendered element. Until that exists, emitting the number
+      // only invites it to be read as evidence. `ESTIMATED_ROW_SIZE_PX` is
+      // documented in VirtualizedTranscript.tsx as retained by default for
+      // exactly this reason.
       test.info().annotations.push({
-        type: "estimate-study",
+        type: "range-convergence",
         description:
-          `turns=${turns} initial=${Math.round(first.containerHeight)} ` +
+          `turns=${turns} firstSample=${Math.round(first.containerHeight)} ` +
           `settled=${Math.round(settled.containerHeight)} ` +
-          `error=${errorPct.toFixed(1)}% scrollHeight=${settled.scrollHeight}`,
+          `scrollHeight=${settled.scrollHeight} (initial-estimate error NOT measured here)`,
       });
-      // Printed for the record; the assertion below is the real invariant.
-      console.log(
-        `[range] turns=${turns} initial=${Math.round(first.containerHeight)} ` +
-          `settled=${Math.round(settled.containerHeight)} error=${errorPct.toFixed(1)}% ` +
-          `scrollHeight=${settled.scrollHeight}`,
-      );
 
       // The range CONVERGES: once rows are measured the two heights agree, which
       // is what lets `isAtEnd` and `resizeItem`'s `wasAtEnd` agree too.

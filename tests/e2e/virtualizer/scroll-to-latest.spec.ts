@@ -21,44 +21,111 @@ function storedMessage(id: string, parentId: string | null, text: string, role: 
   };
 }
 
+/**
+ * Persisted message ids must be unique across the WHOLE database, not merely
+ * within a conversation. The shared `seedTextConversation` helper namespaces
+ * them with `seedPrefix()` for exactly this reason; this spec's own seeder did
+ * not, and it also ignored the POST result entirely, so a rejected write was
+ * invisible and simply left a hole in the history. A missing `seeded-body-79`
+ * is indistinguishable at the assertion site from a row that never mounted, so
+ * the write is verified here rather than assumed.
+ */
 async function seedConversation(request: APIRequestContext): Promise<string> {
   const created = await request.post("/api/conversations", {
     data: { title: `scroll to latest ${Date.now()}`, workspaceMode: "simple", engine: "direct" },
   });
+  if (!created.ok()) throw new Error(`seed conversation failed: ${created.status()}`);
   const { id } = (await created.json()) as { id: string };
+
+  const failures: string[] = [];
+  // One prefix per seed call, so ids are unique across the whole database while
+  // the parent chain stays linear - the Direct history window pages by parent id.
+  const prefix = `stl-${Math.random().toString(36).slice(2, 10)}`;
   for (let batch = 0; batch < SEEDED_MESSAGES; batch += 10) {
     await Promise.all(
       Array.from({ length: Math.min(10, SEEDED_MESSAGES - batch) }, (_, offset) => {
         const index = batch + offset;
-        return request.post(`/api/conversations/${id}/messages`, {
-          data: {
-            message: storedMessage(
-              `seed-${index}`,
-              index === 0 ? null : `seed-${index - 1}`,
-              `seeded-body-${index}`,
-              index % 2 === 0 ? "user" : "assistant",
-            ),
-          },
-        });
+        return request
+          .post(`/api/conversations/${id}/messages`, {
+            data: {
+              message: storedMessage(
+                `${prefix}-${index}`,
+                index === 0 ? null : `${prefix}-${index - 1}`,
+                `seeded-body-${index}`,
+                index % 2 === 0 ? "user" : "assistant",
+              ),
+            },
+          })
+          .then((res) => {
+            if (!res.ok()) failures.push(`seeded-body-${index}: HTTP ${res.status()}`);
+          });
       }),
     );
+  }
+  if (failures.length > 0) {
+    throw new Error(`history seeding rejected ${failures.length} write(s): ${failures.join(", ")}`);
   }
   return id;
 }
 
 test("scroll-to-latest moves the real virtualized scroller", async ({ page, request }) => {
+  // Sibling virtualizer specs budget 180-240s. This one seeds 80 messages over
+  // HTTP before it navigates, and its expectations below are generous on their
+  // own; without an explicit budget it silently inherits Playwright's 30s
+  // default, which is the SAME number as the largest `expect` timeout below -
+  // so the test can hit the harness limit while an expectation is still polling
+  // and report a timeout instead of the real cause.
+  test.setTimeout(180_000);
+
+  // Every non-2xx response the page sees, so a failure can say whether the
+  // history ever arrived rather than only that the text was not on screen.
+  const httpFailures: string[] = [];
+  page.on("response", (res) => {
+    if (res.status() >= 400) httpFailures.push(`${res.status()} ${res.url()}`);
+  });
+
   const conversationId = await seedConversation(request);
 
   try {
     await page.goto(`/#/chat/${conversationId}`);
 
     const scroller = page.locator('[data-testid="virtual-transcript-scroller"]');
-    // Wait on the newest message's TEXT, not on a row element: the last row of
-    // a thread is often a `turn-end` row, which TBAi renders empty, so it has no
-    // box and would never satisfy a visibility check.
-    await expect(page.getByText(`seeded-body-${SEEDED_MESSAGES - 1}`)).toBeVisible({
-      timeout: 30000,
-    });
+    try {
+      // Wait on the newest message's TEXT, not on a row element: the last row of
+      // a thread is often a `turn-end` row, which TBAi renders empty, so it has
+      // no box and would never satisfy a visibility check.
+      await expect(page.getByText(`seeded-body-${SEEDED_MESSAGES - 1}`)).toBeVisible({
+        timeout: 30000,
+      });
+    } catch (cause) {
+      // "element not found" has two very different causes: the message was never
+      // persisted, or it was persisted but its row never mounted because the
+      // transcript is not at the live end. They need opposite fixes, so the
+      // diagnosis is attached rather than left to a retry.
+      const mounted = await rows(page).count();
+      const geometry = await page
+        .locator('[data-testid="virtual-transcript-scroller"]')
+        .evaluate((el) => ({
+          scrollTop: el.scrollTop,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+          distanceFromEnd: el.scrollHeight - el.scrollTop - el.clientHeight,
+        }))
+        .catch(() => null);
+      const persisted = await request
+        .get(`/api/conversations/${conversationId}/messages?direction=backward&limit=100`)
+        .then((res) => (res.ok() ? res.text() : `HTTP ${res.status()}`))
+        .catch((e: unknown) => `request failed: ${String(e)}`);
+
+      throw new Error(
+        `the newest seeded message never became visible.\n` +
+          `mountedRows=${mounted} geometry=${JSON.stringify(geometry)}\n` +
+          `httpFailures=${JSON.stringify(httpFailures)}\n` +
+          `newestTextPresent=${persisted.includes(`seeded-body-${SEEDED_MESSAGES - 1}`)}\n` +
+          `windowResponse(first 400)=${persisted.slice(0, 400)}\n` +
+          `cause=${String(cause)}`,
+      );
+    }
     // Virtualization is active: the mounted rows are a fraction of the logical
     // history, which is the whole point of the architecture.
     const mounted = await rows(page).count();

@@ -77,8 +77,6 @@
     "dom/**/*.tsx",
     "e2e/**/*.ts",
     "e2e/**/*.tsx",
-    "spikes/**/*.ts",
-    "spikes/**/*.tsx",
     "unit/web/**/*.ts",
     "unit/web/**/*.tsx",
     "helpers/**/*.ts",

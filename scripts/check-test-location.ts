@@ -157,15 +157,15 @@ export function findViolations(root: string = REPO_ROOT): Violation[] {
  * `@/*` means `src/*` from the ROOT tsconfig but `web/src/*` from the web
  * tsconfig, so its meaning depends on which project compiles the file. In the
  * BACKEND layers (`unit/`, `integration/`) `@/` is correct and expected — those
- * suites test backend code. In the WEB layers (`dom/`, `e2e/`, `spikes/`,
- * `unit/web/`) it would silently resolve to the backend tree, where a same-named
- * module often exists: `@/lib/logger` exists at BOTH `src/lib/logger.ts` and
+ * suites test backend code. In the WEB layers (`dom/`, `e2e/`, `unit/web/`) it
+ * would silently resolve to the backend tree, where a same-named module often
+ * exists: `@/lib/logger` exists at BOTH `src/lib/logger.ts` and
  * `web/src/lib/logger.ts`. The import then compiles, and the test passes against
  * the wrong module. Those must use `@web/*`.
  *
  * Scoping by layer is what makes this rule correct rather than merely loud.
  */
-const WEB_LAYER_DIRS: ReadonlySet<string> = new Set(["dom", "e2e", "spikes"]);
+const WEB_LAYER_DIRS: ReadonlySet<string> = new Set(["dom", "e2e"]);
 
 function isWebLayerFile(relativePath: string): boolean {
   const segments = relativePath.split("/");

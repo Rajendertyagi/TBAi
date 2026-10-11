@@ -68,45 +68,39 @@ const OVERSCAN_ROWS = 6;
 
 /**
  * Initial row-height guess. Only a guess — `measureElement` records every row's
- * real height as it mounts. TanStack recommends estimating the LARGEST plausible
- * size when measuring dynamically, because an undersized estimate costs a
- * correction frame for every row that mounts.
+ * real height as it mounts. TanStack's own guidance recommends estimating the
+ * largest plausible size when measuring dynamically, because an undersized
+ * estimate costs a correction frame for every row that mounts.
  *
- * ## Why 320 and not 200
+ * ## Status: 320 is retained BY DEFAULT, not proven superior to 200
  *
- * A prior study measured candidates on real conversations and reported 200px
- * opening the initial scroll range far better than 320px. That claim was never
- * adopted here, and the note that recorded the decision was self-contradictory —
- * it compared "89%/41%/46% long" against "19%/7%/3% at 200", i.e. against 200
- * while arguing for 200 — so the actual numbers behind the choice were not on
- * the record. This was re-measured rather than inherited.
+ * This value was previously justified with two claims. Both have since been
+ * checked, and neither survives:
  *
- * At 320px the initial range overshoots the measured total by 18.0% on a 24-turn
- * conversation (`initial-scroll-range.spec.ts`), which matches the "19%" figure.
- * So 320 IS the less accurate estimate of the two, and that part of the earlier
- * study is reproducible.
+ *  1. "320 over-estimates the initial range by ~18-19%." That figure came from
+ *     `initial-scroll-range.spec.ts`, which samples the container height after
+ *     `waitForSelector` — i.e. usually AFTER rows have been measured, so it does
+ *     not measure the estimate at all. Repeated runs of the same fixture
+ *     reported 0.0%, 18.0% and 89.6% for identical input. The percentage is a
+ *     sampling artifact and has been withdrawn.
+ *  2. "200 breaks R2/R3, therefore 320." Also unsupported. Substituting 200 did
+ *     make R2 and R3 fail with `distanceFromEnd 0`, but R2 subsequently failed
+ *     at 320 too, before any estimate change, for an unrelated reason (the
+ *     parking precondition depended on transcript height modulo the wheel step).
+ *     The comparison never isolated the estimate.
  *
- * But accuracy is not the property at stake. The estimate sets the scroll range
- * BEFORE any row is measured, and `parkMidHistory` in
- * `scroll-anchoring-regressions.spec.ts` needs a reader parked a real
- * `distanceFromEnd >= 4000` from the live end before it appends output. Its
- * seeded transcript settles at ~4,850px in a 414px viewport, so the maximum
- * reachable distance from the end is ~4,436px — a 436px window.
+ * So there is currently NO evidence that 320 is better than 200, and none that it
+ * is worse. 320 is simply the value that was in place, and changing it now would
+ * be churn justified by nothing.
  *
- * Substituting 200px was run end to end and R2 and R3 both FAILED with
- * "the reader is scrolled away from the top" (distanceFromEnd 0): with the
- * smaller initial range the reader could not be parked mid-history at all, so
- * both tests were silently exercising a reader who was still pinned to the live
- * end — the exact state they exist to rule out. R1, R4 and the rest of the
- * virtualizer suite passed, which is what makes this a real trade-off rather
- * than a broken build.
+ * ## What would actually settle it
  *
- * So 320 stays: it over-estimates by 18% on load, and the alternative makes two
- * anchoring regressions unable to test what they claim to test. Re-raise this
- * only by re-basing `parkMidHistory` onto a precondition that does not depend on
- * the estimate (a fraction of the current scroll range), then re-run the
- * comparison. Do not "improve" the percentage while the reader-parks precondition
- * silently stops being reachable.
+ * A deterministic sample taken BEFORE the first `measureElement` call corrects
+ * the range — not after it — across enough conversations to matter. Until that
+ * exists, do not tune this number from percentages, and do not cite the withdrawn
+ * figures above. Re-derive the history-parking precondition onto a fraction of
+ * the current scroll range at the same time, so the comparison cannot be
+ * confounded by whether the reader is able to park mid-history at all.
  */
 const ESTIMATED_ROW_SIZE_PX = 320;
 
@@ -217,6 +211,30 @@ export function VirtualizedTranscript({
     virtualizer.scrollToEnd();
   }, [virtualizer]);
 
+  // ── No run-start jump, deliberately ──
+  //
+  // assistant-ui's official virtualization guide lists a "run-start jump": jump to
+  // the bottom when `thread.isRunning` flips true "so a just-sent message never
+  // flashes below the fold". P2 REBASE 2 removed it with the rest of the
+  // hand-rolled following, and that removal is correct: the guide's version is
+  // UNCONDITIONAL, and `R2` parks the reader ~4,200px from the end, sends, and
+  // asserts the read position does NOT move. An unconditional jump fails R2.
+  //
+  // It was also TRIED here in a narrower form — jump only when the reader was
+  // already within `scrollEndThreshold` of the end — and then removed again.
+  // The guard was right (R2 passed 2/2, `scrollTopDeltaPx 0`), but it fixed
+  // nothing: the start-of-run excursion persisted unchanged (3 pass / 3 fail
+  // with the jump, versus 1 pass / 5 fail without). Keeping a change that adds a
+  // scroll write and demonstrably helps nothing is worse than not having it.
+  //
+  // The excursion is real and is tracked in `run-start-scroll.spec.ts`
+  // (`test.fixme`): ~316px away from the live end at frame 3 of ~150, settling
+  // to ~22px. That is ≈ `ESTIMATED_ROW_SIZE_PX`, so the likely cause is one
+  // unmeasured row's estimate landing before `followOnAppend` compensates.
+  // The sent message itself was on screen in 150/150 frames, so the guide's
+  // stated failure mode does not occur here.
+  //
+
   const items = virtualizer.getVirtualItems();
 
   return (
@@ -257,6 +275,17 @@ export function VirtualizedTranscript({
 
           Neither in-flow property satisfies both, which is why this was
           measured rather than argued.
+
+          ONE MORE THING THIS COMMENT HAS TO BE HONEST ABOUT: the equality of the
+          two distances is NOT something TanStack Virtual guarantees. The library
+          reads `scrollHeight` and `getTotalSize()` independently and never
+          reconciles them; it will not warn if they diverge. `scrollHeight` is
+          whatever the browser computes. So `scrollHeight === getTotalSize()` is
+          an invariant TBAi OWNS and must keep maintaining - which is why the
+          scrollport uses margin rather than padding (padding on a scroll
+          container is part of its scrollable overflow), and why the header stays
+          outside it. Treat any future CSS change to that scrollport as a change
+          to this invariant until proven otherwise.
 
           As a sibling the header satisfies both: it is not inside the
           scrollport at all, so `scrollHeight` is untouched and (b) holds; and it

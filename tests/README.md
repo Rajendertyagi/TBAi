@@ -13,7 +13,6 @@ Each runner scopes discovery to this directory:
 | `bun run test` | `./tests/unit ./tests/integration` |
 | `bun run test:dom` | `./tests/dom` (preloaded with `tests/setup/dom-preload.ts`) |
 | `bun run test:e2e` | Playwright, `testDir: ../tests/e2e` |
-| `bun run test:spikes` | `./tests/spikes` (not a CI gate — see below) |
 
 A test file written outside `tests/` is collected by **none** of them. It does
 not fail; it silently never runs, and the suite stays green while quietly losing
@@ -29,7 +28,6 @@ tests/
 ├── integration/   real storage, servers, streams (bun run test)
 ├── dom/           React + happy-dom              (bun run test:dom)
 ├── e2e/           Playwright against a built app (bun run test:e2e)
-├── spikes/        P2 candidate-D diagnostics     (bun run test:spikes)
 ├── helpers/       shared test infrastructure
 ├── fixtures/      test-only data
 ├── setup/         runner preloads
@@ -79,13 +77,16 @@ nothing, Bun registers a mock nobody asks for, and the real module is used — t
 suite fails with a transport error that looks like a product defect. Use the
 alias (`@/services/opencode/client`) so the pointer survives the next move.
 
-## Spikes
+## Spikes (removed)
 
-`tests/spikes/p2-candidate-d/` is diagnostic work, separated three ways:
+`tests/spikes/p2-candidate-d/` was P2 candidate-D diagnostic work — disposable
+`probes/`, retained `proofs/`, and a `scroll-harness/`. It ran via a
+`test:spikes` script that was **never a CI gate**, so nothing executed it
+automatically; it had drifted to 8 failing tests, 7 errors, and 20 typecheck
+errors against APIs that no longer exist. It was removed on 2026-10-11 along
+with the script, its `tsconfig.web.json` include globs, and its entry in the web
+layer set used by `scripts/check-test-location.ts`.
 
-- `probes/` — disposable experiments; may be deleted freely;
-- `proofs/` — retained evidence for a specific claim;
-- `scroll-harness/` — reusable infrastructure.
-
-Spikes run via `bun run test:spikes` and are **not** a CI gate: they record what
-was true at a point in time and are expected to drift as the code moves.
+Note that "spike" is still a live word in this tree: `tests/integration/core/__spike-sse.test.ts`
+and `tests/integration/opencode/opencode-stub-provider-spike.test.ts` are ordinary
+`bun run test` integration tests and were deliberately kept.

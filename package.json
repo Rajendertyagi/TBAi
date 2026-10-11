@@ -22,7 +22,6 @@
     "test": "bun test --isolate ./tests/unit ./tests/integration --path-ignore-patterns \"**/shutdown-lifecycle.test.ts\" --timeout=30000",
     "test:locations": "bun scripts/check-test-location.ts",
     "test:dom": "bun test --isolate --preload ./tests/setup/dom-preload.ts ./tests/dom",
-    "test:spikes": "bun test --isolate --preload ./tests/setup/dom-preload.ts ./tests/spikes",
     "test:shutdown": "bun test tests/integration/core/shutdown-lifecycle.test.ts",
     "test:e2e": "bun scripts/run-e2e.ts",
     "gen:icon": "bun run scripts/gen-icon.ts"

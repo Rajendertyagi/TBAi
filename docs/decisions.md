@@ -4153,3 +4153,124 @@ and bounded DOM row count on a large list (#12).
 None of these run in CI today: the workflow's `e2e` job executes exactly five
 specs and `logs-viewer.spec.ts` is not among them. Whether to promote it is a
 separate, deliberate decision.
+
+## Virtualized transcript: header placement, run-start pin, and estimate status (2026-10-11)
+
+Supersedes parts of **P2 REBASE 2** above. That entry is accurate about the
+coordinate system (absolutely positioned rows inside a `height: getTotalSize()`
+container are TanStack's documented chat DOM, and the padding-spacer list really
+did produce a measured 369px prepend jump), and that part is unchanged. Three
+details in and around it were not accurate to the implementation, and are
+corrected here.
+
+### 1. The header is a SIBLING of the scrollport, not a sticky child
+
+P2 REBASE 2 recorded that the header "sits outside the coordinate system, sticky
+at the top of the scroll container". The first half was true; **"sticky" was not.**
+The wrapper was rendered `position: absolute` inside the scrollport, which is not
+`position: sticky` and does not pin. Measured on the real app: the header's offset
+from the scrollport's top edge was `0` at `scrollTop=0` and `-400` at
+`scrollTop=400` — tracking `scrollTop` one-to-one as it slid up and off the top of
+the viewport. The paging control was unreachable for exactly the readers who had
+scrolled into history.
+
+Both candidate positions inside the scrollport fail, and neither is a matter of
+taste:
+
+| position | contributes to `scrollHeight`? | stays at the top? |
+|---|---|---|
+| `position: sticky` | **yes** — it is in normal flow | yes |
+| `position: absolute` | no | **no** — scrolls away |
+| **sibling above the scrollport** | no | yes |
+
+So the header is now a `shrink-0` flex sibling of the scrollport, inside the same
+provider and the same `ThreadPrimitive.Root` flex column. **Cost, accepted:** the
+scrollport is one header band shorter — measured 40px (R4 `clientHeight` 414 →
+374). That is the price of a control that is actually reachable, and it matches
+what the control looks like: a bar above the transcript, not a floating chip
+inside it.
+
+`transcript-header-contract.spec.ts` asserts both halves at once — the offset is
+*constant* across scroll positions, and `scrollHeight === getTotalSize()` — so an
+edit that restores stickiness by returning the header to normal flow fails the
+header spec while `virtual-end-distance.spec.ts` still guards the geometry.
+
+### 2. `scrollHeight === getTotalSize()` is an invariant TBAi OWNS
+
+TanStack Virtual **does not guarantee** this. It reads the two independently and
+never reconciles them (verified against the published `virtual-core@3.18.0`):
+
+- `getDistanceFromEnd()` = `getMaxScrollOffset() - scrollOffset`, and
+  `getMaxScrollOffset()` reads `scrollHeight - clientHeight` (index.js:1004)
+- `getVirtualDistanceFromEnd()` = `getTotalSize() - getSize() - scrollOffset`
+  (index.js:1010)
+- `resizeItem`'s `wasAtEnd` branches on the second (index.js:919); `isAtEnd()`
+  uses the first (index.js:1019)
+
+They differ by exactly `scrollHeight - getTotalSize()`. Keeping them equal is a
+**CSS/DOM property the application must maintain**, which is why the scrollport
+uses margin (`mt-6 mb-4`) rather than padding, and why the header stays out of it.
+Padding on a scroll container is part of its scrollable overflow and would reopen
+the divergence. Nothing in the library will warn if this is broken later.
+
+### 3. Run-start pin restore — TRIED, DID NOT WORK, REVERTED (open defect)
+
+P2 REBASE 2 removed "the run-start jump" along with the hand-rolled
+follow/scrollToFn machinery. That removal stands: the guide's version is
+unconditional, and `R2` parks the reader ~4,200px from the end, sends, and
+asserts the read position does **not** move.
+
+A **narrower, conditional** jump was implemented and measured here — jump only
+when `thread.isRunning` flips true AND the reader is already within
+`scrollEndThreshold` of the end. The guard behaved exactly as intended (R2 passed
+2/2, `scrollTopDeltaPx 0`, so a reader in history is never yanked by their own
+send). **It fixed nothing and was reverted**: the start-of-run excursion survived
+unchanged at 3 pass / 3 fail with the jump, against 1 pass / 5 fail without it.
+A change that adds a scroll write and demonstrably helps nothing is worse than no
+change, so it was removed rather than kept on the strength of its guard alone.
+
+**Open defect.** Starting a run from the live end briefly pulls the reader ~316px
+from the live end — frame 3 of ~150 sampled frames, settling to ~22px.
+`run-start-scroll.spec.ts` is retained as `test.fixme` so the measurement stays
+live and the limitation stays visible.
+
+Two things this work established, which bound the shape of a future fix:
+
+- **The guide's stated failure mode does not occur.** The sent prompt was on
+  screen in 148-150 of ~150 frames; it never flashes below the fold. Whatever
+  this is, it is not what the official run-start jump exists to prevent.
+- **The magnitude is ≈ `ESTIMATED_ROW_SIZE_PX` (320px)**, i.e. one unmeasured
+  row's estimate. The likely mechanism is that estimate landing before
+  `followOnAppend` compensates — and because `followOnAppend` only fires while the
+  viewport is within `scrollEndThreshold`, one missed correction strands the
+  reader rather than self-correcting. **Unconfirmed.** A fix needs the
+  compensation timing isolated, not another jump.
+
+### 4. `ESTIMATED_ROW_SIZE_PX = 320` is retained BY DEFAULT, not proven better than 200
+
+Both previous justifications were checked and neither survives:
+
+- "320 over-estimates by ~18–19%" came from a sample taken *after*
+  `waitForSelector`, usually after `measureElement` had corrected the range. The
+  same fixture reported 0.0%, 18.0% and 89.6%. That number has been withdrawn and
+  is no longer emitted by `initial-scroll-range.spec.ts`.
+- "200 breaks R2/R3" was confounded: R2 also failed at 320, for an unrelated
+  reason, so the substitution never isolated the estimate.
+
+There is no evidence 320 is better than 200, and none that it is worse. It is
+retained because changing it now would be churn justified by nothing. Settling it
+needs a sample taken **before** the first measurement correction, and a
+history-parking precondition expressed as a fraction of the scroll range rather
+than an absolute pixel count.
+
+### 5. History parking: 1000px wheel step (PRELIMINARY evidence)
+
+`parkMidHistory` used a 2,500px step, which overshot its target and landed where
+the scroller clamped. The result depended on transcript height modulo the step,
+not on transcript behaviour: a 40px viewport change alone moved the landing point
+from `scrollTop 271` to `0` and failed R2 with no product change involved. A
+1,000px step stops near the requested distance instead of overshooting.
+
+**This evidence is preliminary: two consecutive runs were observed, which is a
+suggestion, not a flake-rate measurement.** Treat the step as a starting point,
+not a settled value.
