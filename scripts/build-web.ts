@@ -37,6 +37,13 @@ const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 /** The real build. `web`'s own script is the single definition of it. */
 const BUILD_LABEL = "cd web && bun run build";
 
+/** Optional target paths for isolated tests. Production calls use repository defaults. */
+export interface BuildWebAndStampOptions {
+  readonly webRoot?: string;
+  readonly webDist?: string;
+  readonly buildLabel?: string;
+}
+
 /**
  * Build the web bundle and stamp it on success.
  *
@@ -48,15 +55,10 @@ const BUILD_LABEL = "cd web && bun run build";
  * @param build - Runs the actual build. Throwing or returning a non-zero code
  * both count as failure.
  * @param onLog - Progress output; defaults to stderr.
+ * @param options - Optional test-only target paths. Defaults to the repository's
+ *   real web source and build-output directories.
  * @returns True when the build succeeded AND the stamp was written.
  */
-export interface BuildWebAndStampOptions {
-  /** Optional paths for isolated tests. Production calls use the repository defaults. */
-  readonly webRoot?: string;
-  readonly webDist?: string;
-  readonly buildLabel?: string;
-}
-
 export function buildWebAndStamp(
   build: () => number | undefined,
   onLog: (message: string) => void = (m) => process.stderr.write(`[build:web] ${m}\n`),
