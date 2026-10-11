@@ -27,7 +27,7 @@ function formOf(fields: FormInfo["fields"]): ReturnType<typeof projectV2Form> {
 /** The field-error map of a rejected answer, or `null` when it was accepted. */
 function fieldErrors(view: ReturnType<typeof projectV2Form>, answer: V2FormAnswer): Record<string, string> | null {
   const result = validateV2FormAnswer(view, answer);
-  return result.ok ? null : result.fieldErrors;
+  return result.ok === true ? null : result.fieldErrors;
 }
 
 describe("native V2 form contract", () => {

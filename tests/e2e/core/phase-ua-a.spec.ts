@@ -100,9 +100,6 @@ function convUrl(id: string, engine: "direct" | "opencode"): RegExp {
 /** The scope-picker chip on the draft surface: its trigger button's
  *  aria-label is `Working folder: <name>` where <name> is the folder's
  *  alias/name in project scope, or "Chat mode" in simple scope. */
-function scopeChipLabel(name: string): string {
-  return `Working folder: ${name}`;
-}
 // ---------------------------------------------------------------------------
 // (a) folder "+" lands on /chat/new with the folder preset in scope
 // ---------------------------------------------------------------------------

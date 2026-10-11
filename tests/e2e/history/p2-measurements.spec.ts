@@ -51,7 +51,6 @@ async function seedConversation(request: APIRequestContext): Promise<string> {
 }
 
 const rows = (page: Page) => page.locator("[data-row-key]");
-const scroller = (page: Page) => page.locator('[data-testid="virtual-transcript-scroller"]');
 
 /** Everything the acceptance list asks to be measured, read from the live page. */
 async function measure(page: Page) {

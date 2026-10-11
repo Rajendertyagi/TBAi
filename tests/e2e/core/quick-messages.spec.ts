@@ -102,7 +102,6 @@ test("quick messages page manages snippets end to end", async ({ page }) => {
     });
     await expect(first).toBeVisible();
     const firstBox = await first.boundingBox();
-    const secondBox = await second.boundingBox();
     // Drag the second ROW itself onto the first row. The row div (not the
     // grip button) is the draggable source; dropping onto the first row
     // fires its onDrop with the dragged id.

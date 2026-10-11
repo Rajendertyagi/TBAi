@@ -114,17 +114,6 @@ const controllerFor = () =>
     },
   });
 
-/** The format adapter shape `useChatRuntime` requires. */
-const v6Format = {
-  format: "ai-sdk/v6",
-  encode: ({ message: { id: _id, ...message } }: { message: Record<string, unknown> }) => message,
-  decode: (stored: { id: string; parent_id: string | null; content: Record<string, unknown> }) => ({
-    parentId: stored.parent_id,
-    message: { id: stored.id, ...stored.content },
-  }),
-  getId: (message: { id: string }) => message.id,
-};
-
 let renderedIds: string[] = [];
 function Probe() {
   renderedIds = useAuiState((s) => s.thread.messages).map((m) => m.id);

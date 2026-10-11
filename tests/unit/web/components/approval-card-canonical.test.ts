@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
 import fs from "fs";
-import { fileURLToPath } from "url";
 import { stripComments } from "@web/testing/source-scope";
 
 /**

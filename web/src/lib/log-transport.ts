@@ -83,7 +83,9 @@ export function toScalarFields(
     if (value === undefined) continue;
     if (RESERVED_FIELD_KEYS.has(key)) continue;
     const safeKey = key.length > MAX_KEY_LEN ? key.slice(0, MAX_KEY_LEN) : key;
-    if (value === null || typeof value === "boolean") {
+    if (value === null) {
+      out[safeKey] = null;
+    } else if (typeof value === "boolean") {
       out[safeKey] = value;
     } else if (typeof value === "number") {
       if (!Number.isFinite(value)) continue;

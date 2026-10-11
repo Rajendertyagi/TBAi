@@ -27,7 +27,18 @@ import path from "node:path";
  * comment above the map names the removed prefix, and a whole-file
  * `not.toContain` would fail on that comment rather than on a real regression.
  */
-const GROUP_MAP = /groupPartByType\(\{([\s\S]*?)\n\}\);/;
+/**
+ * Extract the body of the `groupPartByType({...})` map literal.
+ *
+ * The optional `<...>` is REQUIRED, not defensive: the call site passes an
+ * explicit type argument (`groupPartByType<TChatGroupKey>({`), because `TKey`
+ * cannot be inferred from a map whose first property fixes it. A regex that only
+ * matched `groupPartByType({` silently captured an empty string here, and the
+ * two grouping assertions below then failed against an empty capture rather than
+ * against real code. That is a false failure with a misleading message, so the
+ * pattern has to match the shape the call site actually uses.
+ */
+const GROUP_MAP = /groupPartByType(?:<[^>]*>)?\(\{([\s\S]*?)\n\}\);/;
 
 let source = "";
 let groupMap = "";

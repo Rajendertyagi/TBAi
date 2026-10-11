@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeAll } from "bun:test";
-import { REPO_ROOT } from "../../../helpers/repo-root";
-import path from "node:path";
 import { commentedBodyOf } from "@web/testing/source-scope";
 
 /**

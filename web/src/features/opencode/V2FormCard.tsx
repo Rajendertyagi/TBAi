@@ -227,7 +227,7 @@ export function V2FormCard({
     const effective: { [key: string]: FormValue } = { ...answer };
     for (const item of view.fields) if (!isV2FormFieldVisible(item, effective)) delete effective[item.key];
     const result = validateV2FormAnswer(view, effective);
-    if (!result.ok) {
+    if (result.ok === false) {
       setError(result.formError ?? Object.values(result.fieldErrors)[0] ?? toolsConfig.copy.form.invalidForm);
       // Take the reader TO the question that is blocking, rather than leaving
       // them on the last step with a message about a step they cannot see. The

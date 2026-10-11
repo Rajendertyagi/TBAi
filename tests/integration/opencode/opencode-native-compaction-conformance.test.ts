@@ -83,16 +83,7 @@ interface CompactionRecord {
   error?: unknown;
 }
 
-interface ToolRecord {
-  function?: { name?: string };
-}
 
-interface RecordedRequest {
-  messages: ReadonlyArray<Record<string, unknown>>;
-  tools: readonly ToolRecord[];
-  carriesToolResult: boolean;
-  promptTokens: number;
-}
 
 describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
   let stub: StubProvider;

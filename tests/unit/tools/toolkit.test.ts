@@ -3,7 +3,6 @@ import {
   appToolkit,
   nativeToolkit,
   NATIVE_TOOL_NAMES,
-  openCodeToolkit,
   OPENCODE_TOOL_NAMES,
 } from "@web/tools/toolkit.ts";
 

@@ -20,7 +20,7 @@ import {
   formatRelativePast,
   formatTime,
 } from "@web/features/scheduler/lib/scheduler-format.ts";
-import type { SchedulerJob, SchedulerJobDraft } from "@web/types";
+import type { SchedulerJob } from "@web/types";
 
 describe("presetToCron", () => {
   const opts = { minutes: 15, hour: 9, minute: 30, weekday: 1, monthDay: 15 };
