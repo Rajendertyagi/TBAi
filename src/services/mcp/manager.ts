@@ -97,6 +97,8 @@ const _SSE_PROBE_TIMEOUT_MS = 3000;
 export class McpManager {
   private static instance: McpManager;
   private connections = new Map<string, McpConnection>();
+  /** Latest attempt number per server id; see {@link nextAttemptSeq}. */
+  private attemptSeq = new Map<string, number>();
   private initialized = false;
 
   static getInstance(): McpManager {
@@ -224,6 +226,13 @@ export class McpManager {
     const { row, authToken } = loaded;
     const config = storedRowToConfig(row);
 
+    // Claim an attempt number BEFORE the first await, so ownership is decided
+    // by when the attempt STARTED rather than by when it happens to register.
+    // Without this, two overlapping connects could register in the wrong order:
+    // an older attempt resuming after its teardown await could install its
+    // entry over a newer one that had already taken the id.
+    const attemptSeq = this.nextAttemptSeq(id);
+
     // Tear down any prior connection for this id first.
     const prior = this.connections.get(id);
     if (prior) {
@@ -269,6 +278,12 @@ export class McpManager {
       // its EventSource. The probe is diagnostic, never the transport itself.
       if (config.transport === "sse" && config.url) {
         const probe = await probeSseEndpoint(config.url, buildHeaders(config, authToken));
+        // First await boundary. `disconnect()` may have run while the probe was
+        // open, and a newer connect() may have taken the id.
+        if (!this.ownsAttempt(id, conn, attemptSeq)) {
+          await this.abandonAttempt(conn, "superseded-during-sse-probe");
+          return;
+        }
         const reason = classifySseFailure(probe, undefined, authToken !== undefined);
         if (
           probe.kind === "unreachable" ||
@@ -287,6 +302,15 @@ export class McpManager {
       this.registerRequestHandlers(id);
 
       await client.connect(transport);
+
+      // Second await boundary, and the one that produced the reported
+      // resurrection: `disconnect()` closes the client underneath this attempt,
+      // and for a stdio child the process can still finish starting afterwards,
+      // so `client.connect()` resolves on a transport that is already closed.
+      if (!this.ownsAttempt(id, conn, attemptSeq)) {
+        await this.abandonAttempt(conn, "superseded-during-connect");
+        return;
+      }
 
       conn.status = "connected";
       conn.error = undefined;
@@ -313,6 +337,15 @@ export class McpManager {
         message: `tools=${conn.tools.length} resources=${conn.resources.length} prompts=${conn.prompts.length} era=${conn.protocolEra ?? "unknown"}`,
       });
     } catch (err) {
+      // A rejection here is not always a server problem. `disconnect()` closes
+      // this very client, which is the most common cause of a failure at these
+      // boundaries, and `scheduleReconnect()` below would then undo the caller's
+      // explicit teardown. An attempt that no longer owns the id reports
+      // nothing and reconnects to nothing.
+      if (!this.ownsAttempt(id, conn, attemptSeq)) {
+        await this.abandonAttempt(conn, "superseded-during-connect");
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       // SSE endpoints get a post-hoc classification too: the probe was
       // inconclusive, so map the SDK error shape onto a failure reason.
@@ -393,6 +426,64 @@ export class McpManager {
     this.scheduleReconnect(id);
   }
 
+  /**
+   * Allocate the next attempt number for `id`.
+   *
+   * Monotonic and allocated before the first await of `connect()`, so "which
+   * attempt is newer" is a fact rather than an observation about registration
+   * order.
+   */
+  private nextAttemptSeq(id: string): number {
+    const seq = (this.attemptSeq.get(id) ?? 0) + 1;
+    this.attemptSeq.set(id, seq);
+    return seq;
+  }
+
+  /**
+   * Whether this connect attempt still owns `id` and may write shared state.
+   *
+   * Three independent ways to lose ownership, all of which used to be invisible:
+   *
+   *  - a NEWER `connect()` replaced the entry (identity);
+   *  - this attempt registered late and installed itself over a newer one
+   *    (attempt number);
+   *  - `disconnect()` deliberately marked the entry disconnected while this
+   *    attempt sat on an await (status).
+   *
+   * The status half is the one that stops the reported resurrection: a single
+   * in-flight attempt is still the registered entry after `disconnect()`, so
+   * identity alone would wave it straight through.
+   */
+  private ownsAttempt(id: string, conn: McpConnection, attemptSeq: number): boolean {
+    return (
+      this.connections.get(id) === conn &&
+      this.attemptSeq.get(id) === attemptSeq &&
+      conn.status === "connecting"
+    );
+  }
+
+  /**
+   * Abandon a superseded attempt: close the resources THIS attempt opened and
+   * leave every shared field alone.
+   *
+   * `conn.client` is this attempt's own client, so closing it cannot disturb a
+   * newer connection that has since taken the id.
+   */
+  private async abandonAttempt(conn: McpConnection, why: string): Promise<void> {
+    try {
+      await conn.client.close();
+    } catch {
+      /* the transport is already gone; nothing to release */
+    }
+    logger.info("mcp", "mcp.operation", {
+      op: "connect",
+      outcome: "abandoned",
+      mcpServer: conn.config.name,
+      transport: conn.config.transport,
+      message: why,
+    });
+  }
+
   async disconnect(id: string): Promise<void> {
     const conn = this.connections.get(id);
     if (!conn) return;
@@ -453,12 +544,17 @@ export class McpManager {
     const conn = this.connections.get(id);
     if (!conn) return;
     if (!conn.config.enabled) return;
+    // Never arm a retry for a connection someone deliberately closed.
+    if (conn.status === "disconnected") return;
     if (conn.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return;
     conn.reconnectAttempts += 1;
     const attempt = conn.reconnectAttempts;
     conn.reconnectTimer = setTimeout(() => {
       const c = this.connections.get(id);
       if (!c?.config.enabled || c.status === "connected") return;
+      // Re-check at fire time: the id may have been disconnected, or replaced,
+      // between arming the timer and this callback running.
+      if (c.status === "disconnected") return;
       logger.info("mcp", "mcp.operation", {
         op: "reconnect",
         outcome: "started",

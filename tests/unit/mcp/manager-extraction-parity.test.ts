@@ -82,6 +82,19 @@ function snapshot(source: string): ParitySnapshot {
 }
 
 // Captured from the 1,297-line single-file manager.ts, before any move.
+//
+// TWO DELIBERATE ADDITIONS since that capture, both from the connection-lifecycle
+// ownership fix (see `tests/integration/mcp/connection-lifecycle-race.test.ts`):
+//
+//   - `loggerEventCallCount` 16 -> 17, for the one `mcp.operation` line
+//     `abandonAttempt()` emits when a superseded attempt releases its resources
+//     and reports nothing else. An abandoned attempt is otherwise invisible: it
+//     deliberately writes no status and no event, so without this line there is
+//     no trace that one ever existed.
+//   - `outcomeLabels` gains "abandoned" for the same reason.
+//
+// Everything else is still pinned byte-for-byte, and the mutation cases at the
+// bottom still bite, so any FURTHER drift still fails here.
 const BASELINE: ParitySnapshot = {
   loggerEvents: [
     "debug|mcp|mcp.operation",
@@ -89,7 +102,7 @@ const BASELINE: ParitySnapshot = {
     "info|mcp|mcp.operation",
     "warn|mcp|mcp.operation",
   ],
-  loggerEventCallCount: 16,
+  loggerEventCallCount: 17,
   operationLabels: [
     "connect",
     "disconnect",
@@ -102,7 +115,7 @@ const BASELINE: ParitySnapshot = {
     "sampling",
     "test_connection",
   ],
-  outcomeLabels: ["error", "ok", "started"],
+  outcomeLabels: ["abandoned", "error", "ok", "started"],
   sqlStatements: [
     "DELETE FROM mcp_servers WHERE id = ?",
     "INSERT INTO mcp_servers (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
