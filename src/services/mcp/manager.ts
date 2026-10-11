@@ -9,6 +9,25 @@ import { logger, normalizeError } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 import { classifySseFailure, safeEndpointMeta } from "./classify";
 import type { SseProbeOutcome } from "./classify";
+import {
+  deleteConfigRow,
+  getConfig as getStoredConfig,
+  insertConfig as insertStoredConfig,
+  loadConfigs as loadStoredConfigs,
+  readRow as readStoredRow,
+  rowToConfig as storedRowToConfig,
+  setEnabledRow,
+  updateConfigRow as updateStoredConfigRow,
+} from "./store";
+import {
+  authHintFor,
+  buildHeaders,
+  buildTransport,
+  errMsg,
+  probeSseEndpoint,
+  sseFailureMessage,
+} from "./transport";
+import { extractMessageText, mcpContentToText } from "./tool-content";
 import { encryptSecret, decryptSecret } from "../../services/credentials";
 import { credentialStore } from "../../services/credentials";
 import { getModel } from "../../services/ai";
@@ -33,24 +52,6 @@ import type {
   McpPromptGetResult,
 } from "./types";
 
-interface McpServerRow {
-  id: string;
-  name: string;
-  transport: McpTransport;
-  command: string | null;
-  args: string | null;
-  url: string | null;
-  env: string | null;
-  headers: string | null;
-  auth_type: string;
-  auth_token: string | null;
-  enabled: number;
-  auto_connect: number;
-  notes: string | null;
-  roots: string | null;
-  created_at: number;
-  updated_at: number;
-}
 
 interface McpConnection {
   config: McpServerConfig;
@@ -85,34 +86,7 @@ const RECONNECT_DELAY_MS = 5000;
 /** Read-only SSE probe budget: 3s, diagnostics only, never the transport. */
 const SSE_PROBE_TIMEOUT_MS = 3000;
 
-function jsonParseSafe<T>(value: string | null, fallback: T): T {
-  if (!value) return fallback;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
-}
 
-function rowToConfig(row: McpServerRow): McpServerConfig {
-  return {
-    id: row.id,
-    name: row.name,
-    transport: row.transport,
-    command: row.command ?? undefined,
-    args: row.args ? jsonParseSafe<string[]>(row.args, []) : undefined,
-    url: row.url ?? undefined,
-    env: row.env ? jsonParseSafe<Record<string, string>>(row.env, {}) : undefined,
-    headers: row.headers ? jsonParseSafe<Record<string, string>>(row.headers, {}) : undefined,
-    authType: (row.auth_type as McpAuthType) || "none",
-    enabled: row.enabled === 1,
-    autoConnect: row.auto_connect === 1,
-    notes: row.notes ?? undefined,
-    roots: row.roots ? jsonParseSafe<string[]>(row.roots, []) : undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
 
 /**
  * Generic MCP client manager.
@@ -151,115 +125,31 @@ export class McpManager {
   }
 
   // ---- Configuration persistence ----
+  // Thin delegates: the SQL lives in `store.ts`, but these remain public
+  // methods because callers outside this module use them.
 
   loadConfigs(): McpServerConfig[] {
-    const rows = db
-      .query<McpServerRow, []>("SELECT * FROM mcp_servers ORDER BY created_at ASC")
-      .all();
-    return rows.map(rowToConfig);
+    return loadStoredConfigs();
   }
 
   getConfig(id: string): McpServerConfig | undefined {
-    const row = db
-      .query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?")
-      .get(id);
-    return row ? rowToConfig(row) : undefined;
+    return getStoredConfig(id);
   }
+
+
 
   /** Read a row including the (decrypted) auth token. Internal use only. */
-  private readRow(id: string): { row: McpServerRow; authToken?: string } | undefined {
-    const row = db
-      .query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?")
-      .get(id);
-    if (!row) return undefined;
-    let authToken: string | undefined;
-    if (row.auth_token) {
-      try {
-        authToken = decryptSecret(row.auth_token);
-      } catch {
-        authToken = undefined;
-      }
-    }
-    return { row, authToken };
-  }
 
-  private insertConfig(input: McpServerCreate): McpServerConfig {
-    const id = generateId();
-    const now = Date.now();
-    const enabled = input.enabled ?? true;
-    const autoConnect = input.autoConnect ?? true;
-    const authTokenEnv = input.authToken ? encryptSecret(input.authToken) : null;
-    db.run(
-      `INSERT INTO mcp_servers
-        (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.name,
-        input.transport,
-        input.command ?? null,
-        input.args ? JSON.stringify(input.args) : null,
-        input.url ?? null,
-        input.env ? JSON.stringify(input.env) : null,
-        input.headers ? JSON.stringify(input.headers) : null,
-        input.authType ?? "none",
-        authTokenEnv,
-        enabled ? 1 : 0,
-        autoConnect ? 1 : 0,
-        input.notes ?? null,
-        input.roots ? JSON.stringify(input.roots) : null,
-        now,
-        now,
-      ],
-    );
-    return this.getConfig(id)!;
-  }
 
-  private updateConfigRow(id: string, input: Partial<McpServerCreate>): McpServerConfig | undefined {
-    const existing = this.getConfig(id);
-    if (!existing) return undefined;
-    const now = Date.now();
-    const sets: string[] = [];
-    const values: SQLQueryBindings[] = [];
-    const set = (col: string, value: SQLQueryBindings) => {
-      sets.push(`${col} = ?`);
-      values.push(value);
-    };
-    if (input.name !== undefined) set("name", input.name);
-    if (input.transport !== undefined) set("transport", input.transport);
-    if (input.command !== undefined) set("command", input.command ?? null);
-    if (input.args !== undefined) set("args", input.args ? JSON.stringify(input.args) : null);
-    if (input.url !== undefined) set("url", input.url ?? null);
-    if (input.env !== undefined) set("env", input.env ? JSON.stringify(input.env) : null);
-    if (input.headers !== undefined) set("headers", input.headers ? JSON.stringify(input.headers) : null);
-    if (input.authType !== undefined) set("auth_type", input.authType);
-    // Auth token trichotomy: omitted (undefined/null) preserves the stored
-    // credential; a non-empty string replaces it; an explicit empty string
-    // clears it (persists NULL). The UI sends "" from its "Remove auth" action.
-    if (input.authToken !== undefined && input.authToken !== null) {
-      if (input.authToken === "") {
-        set("auth_token", null);
-      } else {
-        set("auth_token", encryptSecret(input.authToken));
-      }
-    }
-    if (input.roots !== undefined) set("roots", input.roots ? JSON.stringify(input.roots) : null);
-    if (input.enabled !== undefined) set("enabled", input.enabled ? 1 : 0);
-    if (input.autoConnect !== undefined) set("auto_connect", input.autoConnect ? 1 : 0);
-    if (input.notes !== undefined) set("notes", input.notes ?? null);
-    set("updated_at", now);
-    db.run(`UPDATE mcp_servers SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
-    return this.getConfig(id);
-  }
 
   createConfig(input: McpServerCreate): McpServerConfig {
-    return this.insertConfig(input);
+    return insertStoredConfig(input);
   }
 
   updateConfig(id: string, input: Partial<McpServerCreate>): McpServerConfig | undefined {
     const conn = this.connections.get(id);
     const wasConnected = conn?.status === "connected";
-    const updated = this.updateConfigRow(id, input);
+    const updated = updateStoredConfigRow(id, input);
     if (!updated) return undefined;
     if (!updated.enabled) {
       return updated;
@@ -335,53 +225,15 @@ export class McpManager {
 
   // ---- Transport construction ----
 
-  private buildHeaders(config: McpServerConfig, authToken?: string): Record<string, string> {
-    const headers: Record<string, string> = { ...(config.headers ?? {}) };
-    if (authToken && config.authType !== "none") {
-      if (config.authType === "bearer" || config.authType === "oauth") {
-        headers["Authorization"] = `Bearer ${authToken}`;
-      } else if (config.authType === "basic") {
-        headers["Authorization"] = `Basic ${Buffer.from(authToken).toString("base64")}`;
-      }
-    }
-    return headers;
-  }
 
-  private buildTransport(config: McpServerConfig, authToken?: string): Transport {
-    if (config.transport === "stdio") {
-      if (!config.command) {
-        throw new Error("STDIO transport requires a command");
-      }
-      return new StdioClientTransport({
-        command: config.command,
-        args: config.args ?? [],
-        env: { ...process.env, ...(config.env ?? {}) },
-        cwd: process.cwd(),
-        stderr: "ignore",
-      }) as unknown as Transport;
-    }
-    if (!config.url) {
-      throw new Error(`${config.transport.toUpperCase()} transport requires a URL`);
-    }
-    const url = new URL(config.url);
-    if (config.transport === "http") {
-      return new StreamableHTTPClientTransport(url, {
-        requestInit: { headers: this.buildHeaders(config, authToken) },
-      }) as unknown as Transport;
-    }
-    // sse
-    return new SSEClientTransport(url, {
-      requestInit: { headers: this.buildHeaders(config, authToken) },
-    }) as unknown as Transport;
-  }
 
   // ---- Connection lifecycle ----
 
   async connect(id: string): Promise<void> {
-    const loaded = this.readRow(id);
+    const loaded = readStoredRow(id);
     if (!loaded) return;
     const { row, authToken } = loaded;
-    const config = rowToConfig(row);
+    const config = storedRowToConfig(row);
 
     // Tear down any prior connection for this id first.
     const prior = this.connections.get(id);
@@ -427,9 +279,9 @@ export class McpManager {
       // classifies unreachable / auth / non-SSE responses BEFORE the SDK opens
       // its EventSource. The probe is diagnostic, never the transport itself.
       if (config.transport === "sse" && config.url) {
-        const probe = await this.probeSseEndpoint(
+        const probe = await probeSseEndpoint(
           config.url,
-          this.buildHeaders(config, authToken),
+          buildHeaders(config, authToken),
         );
         const reason = classifySseFailure(probe, undefined, authToken !== undefined);
         if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
@@ -437,7 +289,7 @@ export class McpManager {
           return;
         }
       }
-      const transport = this.buildTransport(config, authToken);
+      const transport = buildTransport(config, authToken);
       conn.transport = transport;
       this.registerNotificationHandlers(id);
       this.registerRequestHandlers(id);
@@ -504,30 +356,6 @@ export class McpManager {
    * only, consumes and discards the body, never streams. Same auth headers as
    * the real connection. Timeout: 3s. Never logs headers or the URL query.
    */
-  private async probeSseEndpoint(url: string, headers: Record<string, string>): Promise<SseProbeOutcome> {
-    try {
-      const res = await fetch(url, {
-        headers: { ...headers, Accept: "text/event-stream" },
-        signal: AbortSignal.timeout(SSE_PROBE_TIMEOUT_MS),
-      });
-      const contentType = res.headers.get("content-type");
-      try {
-        await res.arrayBuffer();
-      } catch {
-        /* body discard is best-effort */
-      }
-      return { kind: "ok", status: res.status, contentType };
-    } catch (err) {
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        return { kind: "timeout" };
-      }
-      const text = err instanceof Error ? err.message : String(err);
-      if (/timed out|timeout|aborted/i.test(text)) return { kind: "timeout" };
-      // DNS refusal / connection refused / no listener: the fetch layer
-      // cannot establish the connection at all.
-      return { kind: "unreachable" };
-    }
-  }
 
   /**
    * Record a classified SSE connection failure: truthful status
@@ -926,7 +754,10 @@ export class McpManager {
         op: "resource_read",
         outcome: "error",
         mcpServer: conn.config.name,
-        message: `uri=${uri}`,
+        // `target`, not `message`: `normalizeError` also emits `message`, and a
+        // same-named key before the spread is silently overwritten, which lost
+        // the URI on every resource_read failure. The error's own text wins.
+        target: `uri=${uri}`,
         durationMs: Date.now() - started,
         ...normalizeError(err),
       });
@@ -957,7 +788,8 @@ export class McpManager {
         op: "prompt",
         outcome: "error",
         mcpServer: conn.config.name,
-        message: `name=${name}`,
+        // `target`, not `message` - see the note in readResource above.
+        target: `name=${name}`,
         durationMs: Date.now() - started,
         ...normalizeError(err),
       });
@@ -1089,9 +921,9 @@ export class McpManager {
       // SSE-only diagnostic probe first (same rules as connect()): definitive
       // probe failures short-circuit with a classified failureReason.
       if (config.transport === "sse" && config.url) {
-        const probe = await this.probeSseEndpoint(
+        const probe = await probeSseEndpoint(
           config.url,
-          this.buildHeaders(config, input.authToken ?? undefined),
+          buildHeaders(config, input.authToken ?? undefined),
         );
         const reason = classifySseFailure(
           probe,
@@ -1133,7 +965,7 @@ export class McpManager {
           };
         }
       }
-      const transport = this.buildTransport(config, input.authToken ?? undefined);
+      const transport = buildTransport(config, input.authToken ?? undefined);
       await client.connect(transport);
       const caps = (client.getServerCapabilities() as Record<string, unknown>) ?? {};
       const tools: McpToolInfo[] = [];
@@ -1216,82 +1048,14 @@ export class McpManager {
  * Masked, non-secret auth hint for the UI (type + mask). Never the credential.
  * Returns undefined when no credential is stored or auth is "none".
  */
-function authHintFor(authType: McpAuthType, authConfigured: boolean): string | undefined {
-  if (!authConfigured || authType === "none") return undefined;
-  const label = authType === "bearer" ? "Bearer" : authType === "basic" ? "Basic" : "OAuth";
-  return `${label} ••••••`;
-}
 
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Human-readable, non-secret detail for a classified SSE failure. Carries
  * host/port/path only — never query strings, headers, or credentials.
  */
-function sseFailureMessage(
-  reason: McpFailureReason,
-  meta: { host: string; port: string; path: string },
-  detail?: string,
-): string {
-  const where = meta.host ? `${meta.host}:${meta.port}${meta.path}` : "endpoint";
-  switch (reason) {
-    case "unreachable":
-      return `Cannot reach ${where} — is the service running?`;
-    case "auth_required":
-      return `Authentication required for ${where} — no credential is stored`;
-    case "auth_failed":
-      return `Authentication failed for ${where} — check the stored credential`;
-    case "incompatible_response":
-      return `Endpoint ${where} did not return an SSE stream — confirm the URL points at an MCP SSE endpoint`;
-    case "timeout":
-      return `Connection to ${where} timed out`;
-    case "protocol_error":
-      return detail ? `MCP protocol error: ${detail}` : `MCP protocol error with ${where}`;
-    default:
-      return detail ? `Connection failed: ${detail}` : `Connection to ${where} failed`;
-  }
-}
 
 /** Best-effort text extraction from a v2 sampling/prompt message content block. */
-function extractMessageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => {
-        if (typeof c === "string") return c;
-        if (c && typeof c === "object") {
-          const item = c as { type?: string; text?: string };
-          if (item.type === "text") return item.text ?? "";
-          return "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (content && typeof content === "object") {
-    const item = content as { type?: string; text?: string };
-    if (typeof item.text === "string") return item.text;
-  }
-  return "";
-}
 
-function mcpContentToText(res: unknown): string {
-  const content = (res as { content?: unknown })?.content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c: unknown) => {
-        const item = c as { type?: string; text?: string; resource?: unknown; [k: string]: unknown };
-        if (item.type === "text") return item.text ?? "";
-        if (item.type === "resource") return JSON.stringify(item.resource ?? item);
-        return JSON.stringify(item);
-      })
-      .join("\n");
-  }
-  if (res && typeof res === "object") return JSON.stringify(res);
-  return String(res ?? "");
-}
 
 export const mcpManager = McpManager.getInstance();

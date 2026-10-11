@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { logger } from "../lib/logger";
-import { apiFetch } from "../lib/platform";
+import { apiJson } from "../lib/api";
 import type { Folder, FolderGroup, FolderLink } from "../types";
 
 /**
@@ -66,27 +65,6 @@ interface FoldersState {
   setAllFoldersExpanded: (expanded: boolean) => void;
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  const data = (await res.json().catch(() => ({}))) as T & {
-    error?: string;
-    requestId?: string;
-  };
-  if (!res.ok) {
-    const err = new Error(data.error || `Request failed (${res.status})`);
-    (err as Error & { requestId?: string }).requestId = data.requestId;
-    logger.warn("folders.ui", "api_failed", {
-      message: `${init?.method ?? "GET"} ${path} → ${res.status}`,
-      requestId: data.requestId,
-    });
-    throw err;
-  }
-  return data as T;
-}
-
 const SELECTED_KEY = "tbai:selectedFolder";
 const EXPANDED_KEY = "tbai:folderExpanded";
 
@@ -145,7 +123,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     const epoch = ++foldersLoadEpoch;
     set({ loading: true });
     try {
-      const folders = await api<Folder[]>("/api/folders");
+      const folders = await apiJson<Folder[]>("/api/folders");
       // A newer load issued while this one was in flight owns the state;
       // this response is stale and must not overwrite it.
       if (epoch !== foldersLoadEpoch) return;
@@ -168,12 +146,12 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   loadGroups: async () => {
-    const folderGroups = await api<FolderGroup[]>("/api/folders/groups");
+    const folderGroups = await apiJson<FolderGroup[]>("/api/folders/groups");
     set({ folderGroups });
   },
 
   createFolder: async (input) => {
-    const folder = await api<Folder>("/api/folders", {
+    const folder = await apiJson<Folder>("/api/folders", {
       method: "POST",
       body: JSON.stringify(input),
     });
@@ -182,7 +160,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   updateFolder: async (id, data) => {
-    await api(`/api/folders/${id}`, {
+    await apiJson(`/api/folders/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
@@ -190,18 +168,18 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   removeFolder: async (id) => {
-    await api(`/api/folders/${id}`, { method: "DELETE" });
+    await apiJson(`/api/folders/${id}`, { method: "DELETE" });
     if (get().selectedFolderId === id) get().setSelectedFolder(null);
     await get().loadFolders();
   },
 
   closeFolder: async (id) => {
-    await api(`/api/folders/${id}/close`, { method: "POST" });
+    await apiJson(`/api/folders/${id}/close`, { method: "POST" });
     await get().loadFolders();
   },
 
   createGroup: async (name, color) => {
-    await api("/api/folders/groups", {
+    await apiJson("/api/folders/groups", {
       method: "POST",
       body: JSON.stringify({ name, color }),
     });
@@ -209,7 +187,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   updateGroup: async (id, data) => {
-    await api(`/api/folders/groups/${id}`, {
+    await apiJson(`/api/folders/groups/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
@@ -217,13 +195,13 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   deleteGroup: async (id) => {
-    await api(`/api/folders/groups/${id}`, { method: "DELETE" });
+    await apiJson(`/api/folders/groups/${id}`, { method: "DELETE" });
     await get().loadGroups();
     await get().loadFolders();
   },
 
   setFolderGroup: async (folderId, groupId) => {
-    await api(`/api/folders/groups/${groupId ?? "_none"}/set`, {
+    await apiJson(`/api/folders/groups/${groupId ?? "_none"}/set`, {
       method: "POST",
       body: JSON.stringify({ folderId }),
     }).catch(async () => {
@@ -236,24 +214,24 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
   },
 
   listLinks: async (folderId) =>
-    api<FolderLink[]>(`/api/folders/${folderId}/links`),
+    apiJson<FolderLink[]>(`/api/folders/${folderId}/links`),
 
   registerLink: async (folderId, name, targetPath) => {
-    await api(`/api/folders/${folderId}/links`, {
+    await apiJson(`/api/folders/${folderId}/links`, {
       method: "POST",
       body: JSON.stringify({ name, targetPath }),
     });
   },
 
   renameLink: async (folderId, linkId, name) => {
-    await api(`/api/folders/${folderId}/links/${linkId}`, {
+    await apiJson(`/api/folders/${folderId}/links/${linkId}`, {
       method: "PATCH",
       body: JSON.stringify({ name }),
     });
   },
 
   deleteLink: async (folderId, linkId) => {
-    await api(`/api/folders/${folderId}/links/${linkId}`, { method: "DELETE" });
+    await apiJson(`/api/folders/${folderId}/links/${linkId}`, { method: "DELETE" });
   },
 
   setSelectedFolder: (id) => {

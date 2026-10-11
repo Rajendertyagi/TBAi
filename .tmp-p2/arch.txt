@@ -1,0 +1,64 @@
+﻿bun test v1.4.2 (744846f84)
+bun : 
+At line:1 char:448
++ ... ence) ==="; bun test web/spikes/p2-candidate-d/arch-1-repository-path ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+web\spikes\p2-candidate-d\arch-1-repository-path.test.ts:
+
+=== messageRepository: branch preserved ===
+  parents: m5<-null m5a<-m5 m6a<-m5a m5b<-m5 m6b<-m5b
+  head: m6a
+  visible (head walk): m5,m5a,m6a
+
+=== messageRepository: explicit headId ===
+  array: m5, m5a, m6a   headId: m5a (not last)
+  resolved head: m5a   visible: m5,m5a
+
+=== messageRepository: window root with external parent ===
+  outcome: MessageRepository(addOrUpdateMessage): Parent message not found. This is likely an internal bug in assistant-ui.
+
+=== messageRepository: bounded window, null root ===
+  m451 parent: null  m452 parent: m451  head: m500
+
+=== messages path: same branch FLATTENED ===
+  parents: m5<-null m5a<-m5 m5b<-m5a m6b<-m5b
+
+web\spikes\p2-candidate-d\arch-2-divergence.test.ts:
+
+=== divergence: full Chat + bounded repository ===
+  chat.messages: 500 (full chain)
+  rendered: 50 (window)
+  repository head: m500
+  submission length: 501
+  submission first: m1 last: SxdPI9fwPFdOppUH
+
+=== historical window (repo head m400) + full Chat (tip m500) ===
+  repository head: m400
+  chat tip: m500
+  submission length: 501 last: FasbU3HqZItf8OYQ
+  => the append went to the Chat tip, NOT the repository head
+
+=== contract shape: chat == window ===
+  submission length: 51 first: m451
+
+=== composer.send() with isSendDisabled: true ===
+  composer.canSend: false
+
+web\spikes\p2-candidate-d\arch-3-issenddisabled.test.ts:
+  submissions: 0
+
+=== composer.send() with isSendDisabled: false ===
+  composer.canSend: true
+  submissions: 1
+
+=== runtime.append() with isSendDisabled: true ===
+  submissions: 1
+  => isSendDisabled does NOT block a direct runtime.append()
+
+ 12 pass
+ 0 fail
+ 22 expect() calls
+Ran 12 tests across 3 files. [430.00ms]

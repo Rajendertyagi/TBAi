@@ -68,7 +68,11 @@ export interface CacheExperimentResult {
   readonly reasons: readonly string[];
   /** DOCUMENTED values, carried through unchanged for comparison. */
   readonly documented: {
-    readonly minimumPrefixTokens: number | null;
+    // `undefined`, not `null`: the value is copied straight from
+    // `CacheCapability.documentedMinimumPrefixTokens`, which is optional and
+    // absent (not null) when a vendor documents no minimum. The verdict is a
+    // transport for that fact, so it must not re-spell it.
+    readonly minimumPrefixTokens: number | undefined;
     readonly mode: string;
     readonly source: string;
     readonly verifiedOn: string;

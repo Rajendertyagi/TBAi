@@ -1,0 +1,541 @@
+﻿bun : $ bun test --isolate --preload ./web/tests-dom/preload.ts ./web/tests-dom
+At line:1 char:170
++ ... t "=== test:dom (permanent suite) ==="; bun run test:dom 2>&1 | Out-F ...
++                                             ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ bun test --is..../web/tests-dom:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+bun test v1.4.2 (744846f84)
+
+web\tests-dom\composition\react-composition.test.tsx:
+=== PROBE: rendered message rows ===
+rows with data-message-id: 5
+ids: m1,m2,m3,m4,m5
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to __internal_Host inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to __internal_Host inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef(AuiProvider) inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+=== PROBE: under useRemoteThreadListRuntime ===
+rows: 5
+ids: m1,m2,m3,m4,m5
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to __internal_RenderThreadRuntimes inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+An update to __internal_Host inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at 
+https://react.dev/link/wrap-tests-with-act
+[assistant-ui] thread list switch failed: 61 | 		return new Promise((resolve, reject) => {
+62 | 			const callback = () => {
+63 | 				const instance = this.instances.get(threadId);
+64 | 				if (!instance) {
+65 | 					dispose();
+66 | 					reject(/* @__PURE__ */ new Error("Thread was deleted before runtime was started"));
+                                     ^
+error: Thread was deleted before runtime was started
+      at callback (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modules\@assis
+tant-ui\core\dist\react\runtimes\RemoteThreadListHookInstanceManager.js:66:33)
+      at notifySubscribers (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modul
+es\@assistant-ui\core\dist\subscribable\subscribable.js:8:3)
+      at _notifySubscribers (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modu
+les\@assistant-ui\core\dist\subscribable\subscribable.js:45:3)
+      at stopThreadRuntime (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modul
+es\@assistant-ui\core\dist\react\runtimes\RemoteThreadListHookInstanceManager.js:191:9)
+      at __internal_dispose (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modu
+les\@assistant-ui\core\dist\react\runtimes\RemoteThreadListHookInstanceManager.js:223:9)
+      at __internal_dispose (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modu
+les\@assistant-ui\core\dist\react\runtimes\RemoteThreadListThreadListRuntimeCore.js:721:21)
+      at <anonymous> (D:\Temp\ai-chat-app\node_modules\.bun\@assistant-ui+core@0.3.24+924560ce4712ad63\node_modules\@as
+sistant-ui\core\dist\react\runtimes\useRemoteThreadListRuntime.js:28:60)
+
+=== PROBE: Chat append through the store ===
+rows before: 0 rows after: 1
+visible ids after append: 1Qrpk0gHrr5jqPcR
+transport submissions: 1
+
+=== Q5.1 real converter output ===
+  id      : m1
+  role    : assistant
+  createdAt: true
+  status  : {"type":"requires-action","reason":"tool-calls"}
+  metadata keys: unstable_state,unstable_annotations,unstable_data,custom,steps
+  content types: text,reasoning,tool-call,tool-call,source,file,data
+
+web\tests-dom\contract\conversion.test.ts:
+
+=== Q5.2 tool parts ===
+  call-1: isError=false hasArgs=true hasArgsText=true approval=false
+  call-2: isError=false hasArgs=true hasArgsText=true approval=false
+
+=== Q5.3 the lighter `convertMessage` path ===
+  visible      : m9
+  error        : (none)
+  derived status  : {"type":"requires-action","reason":"tool-calls"}
+  derived metadata: unstable_state,unstable_annotations,unstable_data,custom,steps
+  createdAt       : true
+  content types   : text,tool-call
+
+=== Q5.4 write-back binding ===
+  converter output is bound: true
+  recovered id            : m1
+  hand-built is bound    : false
+
+=== Q5.5 realWrapper write-back ===
+  writeBacks: []
+  chat.messages: 4
+
+
+--- baseline ---
+web\tests-dom\contract\direct-eviction.test.ts:
+  visible        : m1,m2,m3,m4,m5
+  head           : m5
+  chat.messages  : m1,m2,m3,m4,m5
+  retained off-head: (none)
+  parents(visible): m1<-null m2<-m1 m3<-m2 m4<-m3 m5<-m4
+  tool call-read on m2: result=true approval=-
+  tool call-del on m4: result=false approval=ap-1
+  approval surfaces: ap-1
+
+--- HAZARD: adjacent assistant messages ---
+  visible        : m1,m2,m4
+  head           : m4
+  chat.messages  : m1,m2,m3,m4
+  retained off-head: m3
+  parents(visible): m1<-null m2<-m1 m4<-m2
+  tool call-a on m2: result=true approval=-
+  tool call-b on m2: result=true approval=-
+  approval surfaces: (none)
+  persisted: 4  assistant-ui visible: 3
+
+--- A. older-side eviction (m1,m2 evicted) ---
+  visible        : m3,m4,m5
+  head           : m5
+  chat.messages  : m3,m4,m5
+  retained off-head: m1,m2
+  parents(visible): m3<-null m4<-m3 m5<-m4
+  tool call-del on m4: result=false approval=ap-1
+  approval surfaces: ap-1
+
+--- B. newer-side eviction (m4,m5 evicted) ---
+  visible        : m1,m2,m3
+  head           : m3
+  chat.messages  : m1,m2,m3
+  retained off-head: (none)
+  parents(visible): m1<-null m2<-m1 m3<-m2
+  tool call-read on m2: result=true approval=-
+  approval surfaces: (none)
+
+--- C. historical relocation (m4,m5 hidden) ---
+  visible        : m1,m2
+  head           : m2
+  chat.messages  : m1,m2
+  retained off-head: (none)
+  parents(visible): m1<-null m2<-m1
+  tool call-read on m2: result=true approval=-
+  approval surfaces: (none)
+
+--- D. return to tip ---
+  visible        : m1,m2,m3,m4,m5
+  head           : m5
+  chat.messages  : m1,m2,m3,m4,m5
+  retained off-head: (none)
+  parents(visible): m1<-null m2<-m1 m3<-m2 m4<-m3 m5<-m4
+  tool call-read on m2: result=true approval=-
+  tool call-del on m4: result=false approval=ap-1
+  approval surfaces: ap-1
+
+--- identity check: m1 evicted ---
+  visible        : m2,m3,m4,m5
+  head           : m5
+  chat.messages  : m2,m3,m4,m5
+  retained off-head: m1
+  parents(visible): m2<-null m3<-m2 m4<-m3 m5<-m4
+  tool call-read on m2: result=true approval=-
+  tool call-del on m4: result=false approval=ap-1
+  approval surfaces: ap-1
+
+--- tool-relationship atomicity across every window start ---
+  verified: a tool part is never visible without its message,
+            and call-read never appears without its result
+
+--- A. edit m490 (parent m490) ---
+  in window        : true
+  head before/after: m500 -> m500
+  chat.messages    : 41
+  submission       : 41
+  outcome          : OK
+
+web\tests-dom\contract\edit-regenerate.test.ts:
+
+--- B. regenerate m490 (parent m490) ---
+  in window        : true
+  head before/after: m500 -> m500
+  chat.messages    : 39
+  submission       : 39
+  outcome          : OK
+
+--- C. edit m451 (window floor) (parent m451) ---
+  in window        : true
+  head before/after: m500 -> m500
+  chat.messages    : 3
+  submission       : 3
+  outcome          : OK
+
+--- D. regenerate m451 (window floor) (parent m451) ---
+  in window        : true
+  head before/after: m500 -> m500
+  chat.messages    : 1
+  submission       : 1
+  outcome          : OK
+
+--- E. edit m400 (outside window) (parent m400) ---
+  in window        : false
+  head before/after: m500 -> m500
+  chat.messages    : 50
+  submission       : 0
+  outcome          : THREW -> sliceMessagesUntil: Message "m400" not found in AI SDK messages. This is likely an internal bug in assistant-ui.
+
+--- F. regenerate m400 (outside window) (parent m400) ---
+  in window        : false
+  head before/after: m500 -> m500
+  chat.messages    : 50
+  submission       : 0
+  outcome          : THREW -> sliceMessagesUntil: Message "m400" not found in AI SDK messages. This is likely an internal bug in assistant-ui.
+
+--- G. branch from m400 (outside window) ---
+  outcome: sliceMessagesUntil: Message "m400" not found in AI SDK messages. This is likely an internal bug in assistant-ui.
+  head: m500
+  chat.messages: 50
+
+--- H. edit m500 after returning to tip (parent m500) ---
+  in window        : true
+  head before/after: m500 -> m500
+  chat.messages    : 51
+  submission       : 51
+  outcome          : OK
+
+---   (after host widened the window) (parent m400) ---
+  in window        : true
+  head before/after: m500 -> m500
+  chat.messages    : 7
+  submission       : 7
+  outcome          : OK
+
+web\tests-dom\contract\historical-view.test.ts:
+
+=== baseline capabilities (active) ===
+   {"switchToBranch":true,"switchBranchDuringRun":false,"edit":true,"delete":true,"reload":true,"refetchThread":false,"cancel":false,"speech":false,"dictation":false,"voice":false,"unstable_copy":true,"attachments":false,"feedback":false,"queue":false,"answerToolCall":true}
+
+=== baseline user mutations (active) ===
+  append      blocked=false submissions=1 err=-
+  edit        blocked=false submissions=1 err=-
+  regenerate  blocked=false submissions=1 err=-
+  delete      blocked=true  submissions=0 err=-
+
+=== HISTORICAL_VIEW capabilities ===
+   {"switchToBranch":false,"switchBranchDuringRun":false,"edit":false,"delete":false,"reload":false,"refetchThread":false,"cancel":false,"speech":false,"dictation":false,"voice":false,"unstable_copy":true,"attachments":false,"feedback":false,"queue":false,"answerToolCall":true}
+
+=== HISTORICAL_VIEW user mutations ===
+  append      blocked=false submissions=1 err=-
+  edit        blocked=true  submissions=0 err=Runtime does not support editing messages.
+  regenerate  blocked=true  submissions=0 err=Runtime does not support reloading messages.
+  delete      blocked=true  submissions=0 err=Runtime does not support deleting messages.
+  branch      blocked=true  submissions=0 err=Runtime does not support switching branches.
+
+=== A. append in HISTORICAL_VIEW ===
+  submissions: 1 error: (none)
+  => onNew remains wired, so the runtime still accepts an append.
+
+=== F. synchronization without setMessages ===
+  store.setMessages present: false
+  visible after republish: m340..m400 (61)
+
+=== G. tool state via synchronization only ===
+  visible: m390,m391
+  tool parts on m391: call-x
+  derived message status: {"type":"requires-action","reason":"tool-calls"}
+
+=== H. approval state via synchronization only ===
+  visible: m390,m391
+  approval id: {"id":"ap-1","prompt":"Delete x?"}
+  message status: {"type":"requires-action","reason":"interrupt"}
+
+=== I. repository replacement ===
+  visible: m1..m20 (20)
+  head: m20
+
+=== J. restored to STABLE_ACTIVE ===
+   {"switchToBranch":true,"switchBranchDuringRun":false,"edit":true,"delete":true,"reload":true,"refetchThread":false,"cancel":false,"speech":false,"dictation":false,"voice":false,"unstable_copy":true,"attachments":false,"feedback":false,"queue":false,"answerToolCall":true}
+  submission length: 51
+
+=== append capability ===
+  capabilities: {"switchToBranch":false,"switchBranchDuringRun":false,"edit":false,"delete":false,"reload":false,"refetchThread":false,"cancel":false,"speech":false,"dictation":false,"voice":false,"unstable_copy":true,"attachments":false,"feedback":false,"queue":false,"answerToolCall":true}
+
+=== Q3 historical -> restore -> send ===
+  submission length: 51
+  first submitted  : m451
+  parent used      : m500
+  P1' will restore : 449 prefix messages
+
+web\tests-dom\contract\navigation-eviction.test.ts:
+
+=== Q3 sending while a historical window is visible ===
+  submission length: 52
+  first submitted  : m350
+  runtime head     : m400
+  authoritative tip: m500
+
+=== Q4.1 eviction of a tool-calling message ===
+  visible after eviction: [ "m4", "m5" ]
+  runtime head          : m5
+  chat.messages         : [ "m4", "m5" ]
+  errors raised         : none
+
+=== Q4.2 evicting a message that has a sibling branch ===
+  window before : m1,m2,m3,m4,m5,m5b,m6
+  window after  : m5,m5b,m6
+  head          : m6
+  error         : (none ΓÇö silent)
+  repository parents: m1<-null m2<-m1 m3<-m2 m4<-m3 m5<-null m5b<-m5 m6<-m5b
+
+=== Q4.3 removing a middle message ===
+  requested: m1..m9 + m11..m20 (20 minus m10)
+  visible  : m1..m20 (19)
+  head     : m20
+
+=== Q4.4 narrowed window then send ===
+  visible: m495,m496,m497,m498,m499,m500
+  submission length: 7
+  P1' prefix needed: 493
+
+
+=== P1' real: tip-containing submission ===
+  submitted   : 51 first m451
+  applied     : true
+  effective   : 501
+  missing     : 0
+web\tests-dom\contract\p1p-real-storage.test.ts:
+
+=== P1' real: tip-EXCLUDING submission ===
+  submitted   : 51 first m351
+  applied     : true
+  effective   : 401 of 500
+  missing     : 100 (m401..m500)
+
+=== real window slice, older from tip ===
+  first: m451 last: m500
+  complete: false
+  hasMoreBefore: true hasMoreAfter: false
+
+web\tests-dom\contract\tip-submission.test.ts:
+
+=== Q1.1 tip-containing window [m451..m500] + send ===
+  A repository visible : m451..m500 (50)
+  E repository head    : m500
+  B chat.messages      : m451..mXkooeyu8eZCF4sD (51)
+  C transport payload  : m451..mXkooeyu8eZCF4sD (51)
+  D P1' applied        : true
+  D P1' effective      : m1..mXkooeyu8eZCF4sD (501)
+  !! missing from chain : 0
+
+=== Q1.2 tip-EXCLUDING window [m351..m400] + send ===
+  A repository visible : m351..m400 (50)
+  E repository head    : m400
+  B chat.messages      : m351..d2wJfXqXdo37cbNx (51)
+  C transport payload  : m351..d2wJfXqXdo37cbNx (51)
+  D P1' applied        : true
+  D P1' effective      : m1..d2wJfXqXdo37cbNx (401)
+  !! missing from chain : 100 -> m401,m402,m403,m404,m405,m406...
+
+=== Q1.3 append with parentId = true tip m500 while window ends m400 ===
+  thrown: sliceMessagesUntil: Message "m500" not found in AI SDK messages. This is likely an internal bug in assistant-ui.
+  transport submissions: 0
+  chat.messages now: m351,m352,m353 ...
+
+=== Q1.4 navigation-only, no send ===
+  visible: m350..m400
+  head: m400
+  authoritative tip still known to host: m500
+  transport submissions: 0
+
+=== Q1.5 restore tip window, then send ===
+  A repository visible : m451..m500 (50)
+  E repository head    : m500
+  B chat.messages      : m451..NkRYtQiMpPSaZp91 (51)
+  C transport payload  : m451..NkRYtQiMpPSaZp91 (51)
+  D P1' applied        : true
+  D P1' effective      : m1..NkRYtQiMpPSaZp91 (501)
+  !! missing from chain : 0
+
+=== Q1.6 trigger ===
+  trigger: submit-message
+
+ 55 pass
+ 0 fail
+ 187 expect() calls
+Ran 55 tests across 8 files. [3.12s]

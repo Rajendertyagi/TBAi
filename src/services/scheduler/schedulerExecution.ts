@@ -70,7 +70,11 @@ export function buildSchedulerTools() {
       description: "List files and folders inside the workspace.",
       inputSchema: toolListSchema,
       outputSchema: z.unknown(),
-      execute: instrumentedExecute("list_dir", async (args) => runList(args, getWorkspaceDir())),
+      // Annotated as `any` to match the `read_file` sibling above: under
+    // strictNullChecks the SDK infers `unknown` for this callback when
+    // `inputSchema` is a plain zod object, and `runList` needs the parsed
+    // shape. The runtime validation still happens in `toolListSchema.parse`.
+    execute: instrumentedExecute("list_dir", async (args: any) => runList(args, getWorkspaceDir())),
     }),
     search_files: tool({
       description:
@@ -406,12 +410,16 @@ export async function executeJobRun(
         : sanitizeStreamError(err);
       lastError = message;
       // Best-effort: persist an error message so the thread shows why it failed.
+      // G5 decision: chain the failure row to the thread tip, matching the
+      // success path. parent_id: null would make the row unreachable from the
+      // head chain and invisible to P1′ reconstruction.
       if (conversationId) {
         try {
           const errId = generateId();
+          const tip = await messageService.getThreadTip(conversationId);
           await messageService.upsertStored(conversationId, {
             id: errId,
-            parent_id: null,
+            parent_id: tip,
             format: "ai-sdk/v6",
             content: { id: errId, role: "assistant", parts: [{ type: "text", text: `Error: ${message}`, state: "done" as const }] },
           });

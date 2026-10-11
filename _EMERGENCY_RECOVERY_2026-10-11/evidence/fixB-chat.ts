@@ -1,0 +1,454 @@
+import { Hono } from "hono";
+import { logger, newRequestId } from "../lib/logger";
+import { generateId } from "../lib/utils";
+import { sanitizeStreamError } from "../lib/redact";
+import {
+  classifyError,
+  errorLogFields,
+  providerErrorCodeFields,
+} from "../lib/errors";
+import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../lib/ai-diagnostics";
+import { observedContextLength } from "../lib/context-window-observation";
+import { streamStatusQuerySchema } from "../lib/validation";
+import {
+  stepCountIs,
+  streamText,
+  UI_MESSAGE_STREAM_HEADERS,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  toUIMessageStream,
+} from "ai";
+import { mcpManager } from "../services/mcp/manager";
+import { nativeTools, type NativeToolSet } from "../tools";
+import {
+  ASSEMBLY_LIMIT_CODE,
+  logAssembly,
+  logContextOverflow,
+} from "../context";
+import {
+  describeCacheDecision,
+  describeCacheObservation,
+  describePrefixIdentity,
+  observeSdkCacheUsage,
+} from "../context/cache";
+import { createTerminalBatcher } from "../lib/terminal-stream";
+import { resumableContext, chatStreamStore } from "../lib/resumable";
+import {
+  chatHistoryFinalizerDeps,
+  finalizeDetachedRunHistory,
+  validateFinalMessage,
+} from "../services/chat-streams/historyFinalizer";
+import type { ChatStreamTerminalKind } from "../services/chat-streams/schema";
+import { createProgressTracker } from "../lib/progress-tracker";
+import type { ProgressData } from "../lib/progress-stages";
+import { RESUMABLE_STREAM_ID_HEADER, ResumableStreamError } from "assistant-stream/resumable";
+import { buildChatMessageMetadata, type ChatContextState } from "./chat-model";
+import { providerOccupancyFromStepUsage } from "../context/occupancy";
+import { decideOverflowRecovery } from "../context/recovery";
+import { observeContextWindow } from "../context/observed-limits";
+import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "./direct-overflow-gate";
+import { disableIdleTimeout } from "./shared";
+import { validateAndResolve } from "./chat/validate-and-resolve";
+import { gateAssembledContext } from "./chat/gate";
+import type { StreamWriterHolder } from "./chat/types";
+import {
+  createTerminalOutput,
+  executeDirectStream,
+} from "./chat/execute-direct-stream";
+import { mirrorRunToDurableStream, type DirectRunSettlement } from "./chat/settlement";
+import {
+  assembleForRequest,
+  contextStateForUi,
+  createRunAndAssemble,
+} from "./chat/assemble-run";
+import {
+  persistCompactionDivider,
+} from "./direct-compact-command";
+import { compactionEnabled } from "../context/compaction";
+import { chatRuns } from "../services/chat-runs";
+import type { BashOutputEvent } from "../services/tools";
+import { messageService } from "../services/storage";
+
+const app = new Hono<{ Variables: { requestId: string } }>();
+
+// Chat streaming endpoint (AI SDK v7 UI-message stream consumed by @assistant-ui/react)
+app.post("/api/chat", async (c) => {
+  // Model stalls (thinking, tools, approvals) must never kill the stream.
+  disableIdleTimeout(c);
+  const requestId = (c.get("requestId") as string | undefined) ?? newRequestId();
+
+  // ── P1: validate the envelope and resolve the provider ───────────────────
+  // Rejection paths (400 / 422 / 500) and the manual `/compact` intercept all
+  // live inside the phase, which returns the finished Response.
+  const validation = await validateAndResolve(c, requestId);
+  if (!validation.ok) return validation.response;
+  const {
+    threadId,
+    conversation,
+    provider,
+    modelConfig,
+    reasoning,
+    approvalSecret,
+    languageModel,
+    providerOptions,
+    messages,
+  } = validation.value;
+
+  // ── P2: create the run and assemble context ──────────────────────────────
+  // Run creation and workspace resolution are one step because a workspace
+  // failure must settle the run it just created. The registry — not the HTTP
+  // connection — owns this run's lifetime: client disconnect detaches; only
+  // explicit cancel, wall timeout, or terminal completion changes run state.
+  // See services/chat-runs.ts.
+  const assembly = await createRunAndAssemble(c, validation.value);
+  if (!assembly.ok) return assembly.response;
+  const state = assembly.value;
+  const { run, streamId, workspaceDir, attemptErrors } = state;
+
+  // Assembly is a FUNCTION because provider overflow recovery rebuilds context
+  // through this same seam after compacting — there is no second context path.
+  // `terminalTap` is a required parameter: assembly wires it into the native
+  // `run_command` tool and has no correct default sink. The arrow captures this
+  // handler's `terminalBatcher` binding, which is declared in the stream phase
+  // below; the tap only fires when `run_command` actually executes, so that
+  // deferred read is well-defined. See `assemble-run.ts`.
+  //
+  // Hoisted so overflow recovery passes the IDENTICAL sink. A second arrow would
+  // still work today, but two taps writing one batcher is a split-stream bug
+  // waiting for someone to reorder the phases.
+  // The terminal-output pair is created HERE, before assembly, because assembly
+  // wires the tap into `run_command`'s execute. The batcher's sink is a closure
+  // over `streamWriter`, which the stream phase fills when it runs. Per-request by
+  // construction: a module-level batcher would be shared by concurrent requests.
+  //
+  // That closure only works because the sink reads a HOLDER this handler also hands
+  // to the stream phase. A plain local `let` here cannot do the job: the phase would
+  // assign its own binding, leaving this one null for the whole request, and every
+  // terminal part would be dropped in silence. See `execute-direct-stream.ts`.
+  const streamWriter: StreamWriterHolder = { current: null };
+  const terminal = createTerminalOutput((part) => streamWriter.current?.write(part));
+  await assembleForRequest(validation.value, state, terminal.tap);
+
+  // -- P3: gate the assembled context ---------------------------------------
+  // Rejection paths (assembly ceiling, budget reject) live inside the phase.
+  // On success it hands back the capabilities the stream phase reuses: the
+  // correlation logger, the request clock, and the compaction publisher that
+  // overflow recovery re-enters. See `gate.ts`.
+  const gateResult = await gateAssembledContext(c, validation.value, state);
+  if (!gateResult.ok) return gateResult.response;
+  const { chatLog, chatStartedAt, publishCompactionDivider, compactionPart, automaticPart } =
+    gateResult.value;
+
+  // ── Diagnostic: chat_request_received ─────────────────────────────────────
+  chatLog.info("chat", "chat_request_received", {
+    provider: provider.type,
+    providerId: provider.id,
+    model: modelConfig.model,
+    reasoningLevel: reasoning,
+    threadId,
+    messageCount: messages.length,
+    // `state.tools` is populated by P2, which always runs before this phase.
+    toolCount: Object.keys(state.tools ?? {}).length,
+    endpointConfigured: Boolean(provider.endpoint),
+    abortSignalAborted: c.req.raw.signal.aborted,
+  });
+
+  if (aiDebugRequestsEnabled() && chatLog.isEnabled("debug")) {
+    chatLog.debug("ai.provider", "ai_request_diagnostic", {
+      ...sanitizeAiRequest({
+        provider: provider.type,
+        model: modelConfig.model,
+        messages: state.modelMessages,
+        tools: state.tools,
+      }),
+      durationMs: Date.now() - chatStartedAt,
+    } as Record<string, unknown>);
+  }
+
+  // -- P4+P5: execute the provider stream and return the response ----------
+  // The settlement cluster and the stream mutate the same counters in both
+  // directions, so they travel together. `terminalTap` is created HERE, before
+  // assembly ran, and reads `terminalBatcher` created inside the phase below -
+  // a deferred read that is well-defined because the tap only fires when
+  // `run_command` executes during streaming. See `execute-direct-stream.ts`.
+  return executeDirectStream(
+    c,
+    validation.value,
+    state,
+    gateResult.value,
+    terminal,
+    streamWriter,
+  );
+});
+
+// Resume endpoint: replays persisted bytes for reconnecting clients.
+// Protocol unchanged: unknown/expired streams 404, and the mount auto-resume
+// flow works exactly as before. Attaching clears a detached mark so lifecycle
+// queries stay truthful.
+//
+// What IS added is observability, not behaviour (design §11/§12): the durable row
+// is read so the resume records WHY a client came back — a live producer, a
+// finished run, a run the app restarted through — as scalars only. The response
+// is byte-for-byte what it was before, and the client learns the reason from the
+// replayed bytes exactly as it does today.
+app.get("/api/chat/resume/:streamId", async (c) => {
+  disableIdleTimeout(c);
+  const streamId = c.req.param("streamId");
+  const requestId = (c.get("requestId") as string | undefined) ?? newRequestId();
+  chatRuns.attach(streamId);
+  chatRuns.sweep();
+  const logResume = (outcome: "replayed" | "missing" | "unavailable", startedAt: number): void => {
+    const description = chatStreamStore.describe(streamId);
+    logger.info("ai", "ai.resume", {
+      streamId,
+      requestId,
+      outcome,
+      // The run axis and the byte-stream axis are reported separately: a resumed
+      // client must be able to tell a finished run from a dead one.
+      status: description?.status ?? "missing",
+      terminalKind: description?.terminalKind ?? null,
+      chunkCount: description?.chunkCount ?? 0,
+      byteLen: description?.byteLength ?? 0,
+      // The signal that separates "the app restarted" from "the network blipped":
+      // the row records the boot that created it, so a foreign boot means the
+      // producer this client was watching cannot still be alive.
+      restarted: description?.fromForeignBoot ?? false,
+      ageMs: description ? Math.max(0, Date.now() - description.createdAt) : null,
+      elapsedMs: Date.now() - startedAt,
+    });
+  };
+  const startedAt = Date.now();
+  try {
+    const stream = await resumableContext.resume(streamId);
+    if (!stream) {
+      logResume("missing", startedAt);
+      return c.json({ error: "stream not found", requestId }, 404);
+    }
+    logResume("replayed", startedAt);
+    return new Response(stream, {
+      headers: {
+        ...UI_MESSAGE_STREAM_HEADERS,
+        [RESUMABLE_STREAM_ID_HEADER]: streamId,
+      },
+    });
+  } catch (error) {
+    logResume("unavailable", startedAt);
+    if (error instanceof ResumableStreamError) {
+      return c.json({ error: "stream unavailable" }, 404);
+    }
+    return c.json({ error: "stream unavailable" }, 500);
+  }
+});
+
+// Durable stream status: a read-only projection of the `chat_streams` row.
+//
+// WHY this exists, in the shape it takes. The design (§12) wanted the client to
+// tell a restart apart from a network blip and to confirm a run is safe to retry,
+// "without a new client protocol branch beyond reading the existing error path".
+// That is not possible with the installed AI SDK: `makeRequest` never rejects
+// (`ai/dist/index.js:19120-19320` swallows a failed reconnect at :19176 and an
+// errored replayed stream at :19273), so `onResumeError` is unreachable and the
+// error path cannot carry the durable reason.
+//
+// The first attempt then keyed recovery on the transport's resumable-stream
+// pointer, and a live run against a real provider showed why that cannot work:
+// the pointer is transport-owned, the transport clears it when a send fails
+// (BEFORE the failure is reported), and it does not survive an app restart. A
+// client that can only ask "what is stream X?" with an id it may have lost
+// cannot recognise a dead run at all — observed live as a crash that produced no
+// recovery state whatsoever.
+//
+// So the client asks about something it always has: the CONVERSATION. The server
+// already binds `conversation_id` to every run, so "what became of the last thing
+// I asked in this conversation?" is answerable durably, with no client-held state
+// at all. `?streamId=` remains for callers that already hold one.
+//
+// This reads the same row the resume protocol replays and exposes safe scalars
+// only — never chunk bytes, never provider text, never the prompt. It changes
+// nothing the resume contract promises, and a client that cannot reach it must
+// treat the terminal state as unconfirmed and offer no Retry.
+type StreamStatusBody = {
+  streamId: string;
+  status: "streaming" | "done" | "error" | "missing";
+  terminalKind: "completed" | "failed" | "cancelled" | "interrupted" | null;
+  restarted: boolean;
+  historyState: "pending" | "claimed" | "done" | "skipped" | null;
+  chunkCount: number;
+  byteLen: number;
+  ageMs: number;
+  finalizedAgeMs: number | null;
+  /**
+   * Whether the conversation currently ends with an assistant reply.
+   *
+   * The client's run-recovery notice is gated on this: a finished run whose reply
+   * is present is a healthy conversation, not an incident. Absent (older server)
+   * means "unknown", never "broken".
+   */
+  endsWithReply: boolean;
+  /**
+   * The shared classifier's category for a failed run (`src/lib/errors.ts`).
+   *
+   * Projected, never re-derived: the client branches on this so auth wording
+   * stays scoped to evidence-backed authentication failures instead of a second
+   * regex disagreeing with the server's. Null for a completed run.
+   */
+  errorCategory: string | null;
+};
+
+function projectStreamStatus(
+  description: NonNullable<ReturnType<typeof chatStreamStore.describe>>,
+  endsWithReply: boolean,
+): StreamStatusBody {
+  const now = Date.now();
+  return {
+    streamId: description.streamId,
+    status: description.status,
+    terminalKind: description.terminalKind,
+    // The boot that created the row is the signal that separates "the app
+    // restarted" from "the network blipped" (design §12).
+    restarted: description.fromForeignBoot,
+    historyState: chatStreamStore.getRunContext(description.streamId)?.historyState ?? null,
+    chunkCount: description.chunkCount,
+    byteLen: description.byteLength,
+    ageMs: Math.max(0, now - description.createdAt),
+    finalizedAgeMs:
+      description.finalizedAt === null ? null : Math.max(0, now - description.finalizedAt),
+    endsWithReply,
+    // Already stored on the row by `mirrorRunToDurableStream`, from the one
+    // shared classifier. Never re-classified here.
+    errorCategory: description.errorCategory ?? null,
+  };
+}
+
+app.get("/api/chat/stream-status", async (c) => {
+  disableIdleTimeout(c);
+  const requestId = (c.get("requestId") as string | undefined) ?? newRequestId();
+  const parsed = streamStatusQuerySchema.safeParse(c.req.query());
+  if (!parsed.success) {
+    return c.json({ error: "streamId or conversationId required", requestId }, 400);
+  }
+  const { streamId, conversationId } = parsed.data;
+
+  let description: ReturnType<typeof chatStreamStore.describe>;
+  try {
+    description = streamId
+      ? chatStreamStore.describe(streamId)
+      : chatStreamStore.describeLatestForConversation(conversationId!);
+  } catch (error) {
+    if (error instanceof ResumableStreamError) {
+      return c.json({ error: "invalid stream id", requestId }, 400);
+    }
+    logger.error("chat", "chat_stream_status_failed", {
+      requestId,
+      ...(streamId ? { streamId } : { conversationId }),
+      ...errorLogFields(error),
+    });
+    return c.json({ error: "stream status unavailable", requestId }, 500);
+  }
+
+  // A conversation with no run is NOT an error: it is the normal state of a
+  // thread that has never been answered, and a client must be able to tell that
+  // apart from a run it failed to read.
+  if (!description) {
+    logger.debug("chat", "chat_stream_status", {
+      requestId,
+      ...(streamId ? { streamId } : { conversationId }),
+      found: false,
+    });
+    return c.json({ run: null, requestId }, 200);
+  }
+  // The conversation is the durable key, but this endpoint also accepts a bare
+  // stream id, so fall back to the run's own bound conversation. A stream with
+  // neither reports `endsWithReply: false` — "unknown" to the client, which must
+  // never be read as "the reply is missing".
+  const runConversationId =
+    conversationId ?? chatStreamStore.getRunContext(description.streamId)?.conversationId ?? null;
+  const run = projectStreamStatus(
+    description,
+    runConversationId ? await messageService.endsWithReply(runConversationId) : false,
+  );
+  // Scalars only — never chunk bytes, provider text, or the prompt.
+  logger.debug("chat", "chat_stream_status", {
+    requestId,
+    ...(streamId ? { streamId } : { conversationId }),
+    found: true,
+    resolvedStreamId: run.streamId,
+    status: run.status,
+    terminalKind: run.terminalKind,
+    restarted: run.restarted,
+    historyState: run.historyState,
+    ageMs: run.ageMs,
+    endsWithReply: run.endsWithReply,
+    errorCategory: run.errorCategory,
+  });
+  return c.json({ run, requestId }, 200);
+});
+
+// Explicit user-cancel path: the ONLY way to stop a server-owned run.
+// Browser aborts alone merely detach (see monitor cancel above); without this
+// call a stopped run would burn tokens until the wall clock kills it.
+// Settles synchronously (mark → log → abort) so a repeated cancel observes
+// `cancelled` and reports a terminal no-op; onAbort then no-ops via its
+// status guard instead of racing the API response.
+app.post("/api/chat/cancel/:streamId", (c) => {
+  const streamId = c.req.param("streamId");
+  const requestId = (c.get("requestId") as string | undefined) ?? newRequestId();
+  const rec = chatRuns.get(streamId);
+  if (!rec) {
+    return c.json({ error: "run not found", requestId }, 404);
+  }
+  chatRuns.sweep();
+  if (rec.status !== "running") {
+    return c.json({ ok: true, cancelled: false, status: rec.status });
+  }
+  // The wall-clock timer marks `timedOut` before aborting. If a cancel request
+  // wins the synchronous transition race after that marker, preserve the
+  // timeout outcome instead of reporting a user cancellation.
+  const timedOut = rec.timedOut;
+  const settled = timedOut
+    ? chatRuns.markFailed(streamId)
+    : chatRuns.markCancelled(streamId);
+  if (!settled) {
+    const cur = chatRuns.get(streamId);
+    return c.json({ ok: true, cancelled: false, status: cur?.status ?? rec.status });
+  }
+  // Funnel-owned lifecycle line (the single terminal transition emission —
+  // onAbort no-ops below once the record is terminal).
+  if (timedOut) {
+    logger.error("ai", "ai.error", {
+      category: "timeout",
+      streamId,
+      requestId,
+      ...(rec.conversationId ? { conversationId: rec.conversationId } : {}),
+      ...(rec.providerId ? { providerId: rec.providerId } : {}),
+      ...(rec.modelId ? { modelId: rec.modelId } : {}),
+      elapsedMs: Date.now() - rec.createdAt,
+    });
+  } else {
+    logger.warn("ai", "ai.error", {
+      category: "cancelled",
+      streamId,
+      requestId,
+      ...(rec.conversationId ? { conversationId: rec.conversationId } : {}),
+      ...(rec.providerId ? { providerId: rec.providerId } : {}),
+      ...(rec.modelId ? { modelId: rec.modelId } : {}),
+      elapsedMs: Date.now() - rec.createdAt,
+    });
+  }
+  try {
+    rec.controller.abort();
+  } catch {
+    /* abort is best-effort; the record is already terminal */
+  }
+  // Mirror the terminal verdict durably. `onAbort` cannot do this: the cancel
+  // endpoint settles the run first, so the abort handler sees a terminal record
+  // and no-ops.
+  mirrorRunToDurableStream(streamId, timedOut ? "failed" : "cancelled", {
+    log: logger,
+    providerType: rec.providerId,
+    runStatus: rec.status,
+  });
+  return c.json({ ok: true, cancelled: !timedOut, status: rec.status });
+});
+
+export default app;

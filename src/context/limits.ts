@@ -146,11 +146,20 @@ function validTokenCount(value: unknown): number | undefined {
  * vanishing — which is the whole defect this replaces, where `Math.floor`
  * turned `1000.9` into an authoritative `1000`.
  */
-function checkLimitCandidate(value: unknown): {
-  readonly ok: boolean;
-  readonly value: number | null;
-  readonly rejectionReason: LimitCandidateRejection | null;
-} {
+/**
+ * The result of validating one candidate limit figure.
+ *
+ * A discriminated union, not `{ok: boolean, value: number | null}`. With the
+ * flat shape a caller that checked `ok` still could not prove `value` was a
+ * number, so every accepted branch had to re-narrow a value the checker had
+ * already proved. Here `value` exists only on the ok branch, which is what
+ * makes `observedCheck.ok` sufficient to use it.
+ */
+type LimitCandidateCheck =
+  | { readonly ok: true; readonly value: number; readonly rejectionReason: null }
+  | { readonly ok: false; readonly value: null; readonly rejectionReason: LimitCandidateRejection };
+
+function checkLimitCandidate(value: unknown): LimitCandidateCheck {
   if (typeof value !== "number") {
     return { ok: false, value: null, rejectionReason: "not_a_number" };
   }

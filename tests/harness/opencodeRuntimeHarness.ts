@@ -353,16 +353,3 @@ async function drain(stream: ReadableStream<Uint8Array>): Promise<void> {
     /* discard */
   }
 }
-
-/** An isolated config for one runtime test, so homes never collide. */
-export function runtimeTestConfig(
-  overrides: Partial<OpenCodeConfig> = {},
-  suffix = "runtime",
-): OpenCodeConfig {
-  const home = path.join(
-    process.env.TEMP ?? process.cwd(),
-    "tbai-opencode-runtime",
-    suffix,
-  );
-  return { ...OPENCODE_CONFIG, serverHomeDir: home, ...overrides };
-}

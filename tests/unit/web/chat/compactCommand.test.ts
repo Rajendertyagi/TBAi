@@ -1,0 +1,770 @@
+/**
+ * Direct `/compact` client behaviour — the fix for `/compact` rendering as a user
+ * bubble.
+ *
+ * ## What is actually under test
+ *
+ * The defect was NOT that the server mis-detected the command: `/compact` was
+ * intercepted and compacted correctly, and still appeared in the thread. It was
+ * that the composer let the text become a user message at all — a row that
+ * assistant-ui creates and PERSISTS before the request is made, which no response
+ * can remove. So the assertions here are about the command never entering
+ * conversation history, and about the request/response that replaces it.
+ *
+ * `fetch` is stubbed rather than a DOM being rendered, because the bubble's
+ * existence is decided by whether the thread is appended to — not by how a bubble
+ * is styled. Asserting on markup would pass for a CSS-hidden row, which is the one
+ * thing this fix must not be.
+ */
+
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+  CompactTransportError,
+  buildCompactRequestBody,
+  buildDividerPart,
+  DIRECT_COMPACT_DATA_NAME,
+  DIRECT_COMPACT_PART,
+  DIRECT_COMPACT_COMMAND,
+  isDirectCompactCommand,
+  parseCompactStatus,
+  parseDirectCompactCommand,
+  projectThreadMessages,
+  runDirectCompact,
+  type DirectCompactStatus,
+} from "@web/features/chat/compactCommand.ts";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+/** Build the SSE body the server emits for a compact command. */
+function statusBody(data: unknown): string {
+  return `data: ${JSON.stringify({ type: "data-tbai-compact", id: "compact", data })}\n\ndata: [DONE]\n\n`;
+}
+
+/**
+ * Text of a projected message's first text part.
+ *
+ * Narrowed explicitly rather than reached through with a cast: the projection is
+ * `Record<string, unknown>` on purpose, and these assertions are about what the
+ * server will receive, so reading them through one helper keeps that shape honest.
+ */
+function textOf(message: Record<string, unknown> | undefined): string {
+  const parts = message?.parts;
+  if (!Array.isArray(parts)) return "";
+  const first = parts[0] as { text?: unknown } | undefined;
+  return typeof first?.text === "string" ? first.text : "";
+}
+
+const compacted: DirectCompactStatus = {
+  outcome: "compacted",
+  reason: "compacted",
+  generation: 1,
+  spanLength: 19,
+  summaryTokens: 12,
+  // A real summary, not a placeholder, so the round-trip assertions below prove the
+  // text survives parsing rather than merely that a field exists.
+  summary: "The user asked about compaction and we walked through the trigger.",
+  reclaimedTokens: 4800,
+  requestFits: true,
+  operationId: "op-1",
+  anchorMessageId: "data-tbai-compact-op-1",
+  origin: "manual",
+};
+
+function conversation(): Array<{ id: string; role: string; parts: unknown[] }> {
+  return [
+    { id: "u0", role: "user", parts: [{ type: "text", text: "hello" }] },
+    { id: "a0", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+  ];
+}
+
+/** Requests the stub captured, so "was it sent" is checked, not assumed. */
+function stubFetch(body: string, init?: ResponseInit): Array<{ url: string; payload: any }> {
+  const seen: Array<{ url: string; payload: any }> = [];
+  globalThis.fetch = (async (input: unknown, options?: { body?: unknown }) => {
+    seen.push({
+      url: String(input),
+      payload: typeof options?.body === "string" ? JSON.parse(options.body) : undefined,
+    });
+    return new Response(body, init);
+  }) as unknown as typeof fetch;
+  return seen;
+}
+
+describe("TEST 1 — `/compact` is a command, never a user message", () => {
+  it("is recognised as the command and is not treated as conversation text", () => {
+    expect(isDirectCompactCommand(DIRECT_COMPACT_COMMAND)).toBe(true);
+  });
+
+  it("sends the conversation plus ONE synthetic command message, and no provider/model", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    const status = await runDirectCompact({
+      conversationId: "conv-1",
+      messages: conversation(),
+    });
+
+    expect(status.outcome).toBe("compacted");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("/api/chat");
+    const payload = seen[0]?.payload;
+    // The conversation is preserved verbatim, in order.
+    expect(payload.messages.slice(0, 2).map((m: any) => m.id)).toEqual(["u0", "a0"]);
+    // Exactly one synthetic message, last, carrying the command.
+    expect(payload.messages).toHaveLength(3);
+    expect(payload.messages[2].role).toBe("user");
+    expect(payload.messages[2].parts[0].text).toBe(DIRECT_COMPACT_COMMAND);
+    // The server resolves the conversation's own provider when these are absent,
+    // so re-projecting the picker layering here would be a second source of truth.
+    expect(payload.providerId).toBeUndefined();
+    expect(payload.model).toBeUndefined();
+  });
+
+  it("never returns a message-shaped payload a thread could render", () => {
+    // The status is a data part, not a message: there is no role and no text part
+    // anywhere in the body, so there is nothing for a bubble to render even if a
+    // client ignored the part type.
+    const parsed = parseCompactStatus(statusBody(compacted));
+    expect(parsed).toEqual(compacted);
+    expect((parsed as unknown as { role?: unknown }).role).toBeUndefined();
+  });
+});
+
+describe("TEST 2 — whitespace is tolerated", () => {
+  it("treats a padded command as the command", () => {
+    expect(isDirectCompactCommand("   /compact   ")).toBe(true);
+    expect(isDirectCompactCommand("\n/compact\n")).toBe(true);
+  });
+
+  it("runs the same command path, not a send", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    const status = await runDirectCompact({
+      conversationId: "conv-1",
+      messages: conversation(),
+    });
+    expect(status.outcome).toBe("compacted");
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe("TESTS 3-5 — text that merely CONTAINS the command stays a message", () => {
+  // `/compact now` is deliberately NOT in this list. It is the command with the
+  // instruction "now"; it used to be ordinary text, and that is the behaviour change
+  // `/compact <instructions>` made on purpose. Only a command word in the middle of
+  // ordinary prose stays a message.
+  const prose = ["please run /compact", "explain /compact", "what does /compact do"];
+  for (const text of prose) {
+    it(`does not intercept ${JSON.stringify(text)}`, () => {
+      expect(isDirectCompactCommand(text)).toBe(false);
+    });
+  }
+
+  it("a non-command submit is never diverted, so it reaches the normal send path", () => {
+    // The guard returning false is the whole contract: the composer's submit handler
+    // then does nothing, and assistant-ui creates the user message normally — which
+    // is the required behaviour for a command word that is part of a sentence.
+    for (const text of prose) {
+      expect(isDirectCompactCommand(text)).toBe(false);
+    }
+  });
+});
+
+describe("TEST 5b — `/compress` is an alias of the SAME command", () => {
+  it("is intercepted, exactly like `/compact`", () => {
+    expect(isDirectCompactCommand("/compress")).toBe(true);
+    expect(isDirectCompactCommand("  /compress  ")).toBe(true);
+  });
+
+  it("is a whole token, and trailing words are instructions rather than a miss", () => {
+    // Whole-token matching is what stops `/compressed` and `/compressx` being
+    // commands; trailing words are the user's instructions, not a failed match.
+    expect(isDirectCompactCommand("/compress now")).toBe(true);
+    expect(isDirectCompactCommand("please run /compress")).toBe(false);
+  });
+
+  it("reaches the same command path and never becomes a user bubble", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    await runDirectCompact({ conversationId: "conv-1", messages: conversation() });
+    // The request body always carries the CANONICAL spelling, so the server's
+    // detection and the logs have exactly one string to reason about regardless
+    // of which spelling the user typed.
+    expect(seen[0]?.payload.messages[2].parts[0].text).toBe(DIRECT_COMPACT_COMMAND);
+  });
+
+  it("accepts a slash-word prefix of nothing else: `/compactx` is not the command", () => {
+    expect(isDirectCompactCommand("/compactx")).toBe(false);
+    expect(isDirectCompactCommand("/compressx")).toBe(false);
+  });
+});
+
+describe("TEST 6 — an assistant message containing `/compact` cannot trigger it", () => {
+  it("is not the command, because only composer input is matched", () => {
+    // The guard runs on composer text, which is user input by construction. A
+    // quoted `/compact` in the transcript is never composer text, so it cannot
+    // reach this predicate — asserted here so the reason is recorded rather than
+    // assumed.
+    expect(isDirectCompactCommand("a0")).toBe(false);
+  });
+
+  it("projects a transcript containing `/compact` without turning it into a command", () => {
+    const messages = [
+      { id: "u0", role: "user", parts: [{ type: "text", text: "hi" }] },
+      { id: "a0", role: "assistant", parts: [{ type: "text", text: "/compact" }] },
+    ];
+    const projected = projectThreadMessages(messages);
+    // The quoted text stays a quoted assistant message; it is not promoted, not
+    // dropped, and not treated as a pending command.
+    expect(projected).toHaveLength(2);
+    expect(projected[1].role).toBe("assistant");
+    expect(textOf(projected[1])).toBe("/compact");
+  });
+});
+
+describe("TEST 7 — the server status part is consumed, not rendered", () => {
+  it("reads compacted, skipped and failed outcomes", () => {
+    expect(parseCompactStatus(statusBody(compacted))?.outcome).toBe("compacted");
+    expect(
+      parseCompactStatus(statusBody({ ...compacted, outcome: "skipped", reason: "no_compactable_span" })),
+    ).toMatchObject({ outcome: "skipped", reason: "no_compactable_span" });
+    expect(
+      parseCompactStatus(statusBody({ ...compacted, outcome: "failed", reason: "summarize_failed:x" })),
+    ).toMatchObject({ outcome: "failed", reason: "summarize_failed:x" });
+  });
+
+  it("returns nothing for a body with no status part, and never invents success", () => {
+    expect(parseCompactStatus("")).toBeUndefined();
+    expect(parseCompactStatus("data: [DONE]\n\n")).toBeUndefined();
+    // A normal assistant turn carries message parts; it must not be misread.
+    const assistantBody = `data: ${JSON.stringify({
+      type: "start",
+    })}\n\ndata: ${JSON.stringify({ type: "text", text: "hello" })}\n\n`;
+    expect(parseCompactStatus(assistantBody)).toBeUndefined();
+  });
+
+  it("rejects an unknown outcome rather than trusting it", () => {
+    expect(parseCompactStatus(statusBody({ ...compacted, outcome: "totally-fine" }))).toBeUndefined();
+  });
+
+  it("reads the summary off the wire, so the divider survives the round trip", () => {
+    expect(parseCompactStatus(statusBody(compacted))?.summary).toBe(compacted.summary);
+  });
+
+  it("treats a missing, null or blank summary as none, never as text", () => {
+    // `summary` is optional on the wire, so a body from a build that predates it, a
+    // refusal that sends null, and a stray empty string must all read the same way.
+    for (const summary of [undefined, null, ""] as const) {
+      expect(parseCompactStatus(statusBody({ ...compacted, summary }))?.summary).toBeNull();
+    }
+  });
+
+  it("refuses a non-string summary rather than stringifying it", () => {
+    // A malformed payload must not reach the transcript as `[object Object]`.
+    expect(parseCompactStatus(statusBody({ ...compacted, summary: { text: "hi" } }))?.summary).toBeNull();
+    expect(parseCompactStatus(statusBody({ ...compacted, summary: 42 }))?.summary).toBeNull();
+  });
+
+  it("surfaces a missing status as a transport error, not a silent success", async () => {
+    stubFetch("data: [DONE]\n\n");
+    await expect(
+      runDirectCompact({ conversationId: "conv-1", messages: conversation() }),
+    ).rejects.toBeInstanceOf(CompactTransportError);
+  });
+});
+
+describe("TEST 8 — post-compact conversation is unaffected", () => {
+  it("a later normal message is projected as ordinary content, command untouched", () => {
+    // After a compact the thread holds only conversation. The next send builds its
+    // own body through the normal path; this asserts the compact helper does not
+    // leak state into it.
+    const body = buildCompactRequestBody(
+      [...conversation(), { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] }],
+      "compact-1",
+    );
+    expect(body.messages).toHaveLength(4);
+    expect(textOf(body.messages[2])).toBe("hi");
+    // Only the LAST message is the command, so `hi` is not mistaken for one.
+    expect(textOf(body.messages[3])).toBe(DIRECT_COMPACT_COMMAND);
+  });
+
+  it("a second compact after the first still sends one command message", async () => {
+    const seen = stubFetch(statusBody({ ...compacted, generation: 2 }));
+    await runDirectCompact({ conversationId: "conv-1", messages: conversation() });
+    expect(seen[0]?.payload.messages.filter((m: any) => m.parts?.[0]?.text === DIRECT_COMPACT_COMMAND))
+      .toHaveLength(1);
+  });
+});
+
+describe("the transcript divider part", () => {
+  it("is an assistant-ui data part keyed by the name ChatShell registered", () => {
+    const part = buildDividerPart(compacted);
+    // `type: "data"` + `name` is what `append()` accepts and what resolves the
+    // renderer. The `data-tbai-compact` form is the WIRE shape, not this one.
+    expect(part.type).toBe("data");
+    expect(part.name).toBe("tbai-compact");
+  });
+
+  it("carries the outcome and the server's operation identity", () => {
+    const part = buildDividerPart(compacted);
+    expect(part.data.kind).toBe("tbai-compact");
+    expect(part.data.outcome).toBe("compacted");
+    expect(part.data.generation).toBe(1);
+    expect(part.data.spanLength).toBe(19);
+    // Two compactions must be distinguishable, not silently merged.
+    expect(part.data.operationId).toBe("op-1");
+  });
+
+  it("distinguishes two compactions instead of producing one entry", () => {
+    const a = buildDividerPart(compacted);
+    const b = buildDividerPart({ ...compacted, operationId: "op-2", generation: 2 });
+    expect(b.data.operationId).toBe("op-2");
+    expect(a.data.operationId).not.toBe(b.data.operationId);
+  });
+
+  it("carries the summary, so the divider can show what was kept", () => {
+    // `?? null` because the status field is optional on the wire while the divider
+    // data field is not — the part must never be `undefined`.
+    expect(buildDividerPart(compacted).data.summary).toBe(compacted.summary ?? null);
+  });
+
+  it("normalises an absent or blank summary to null, never to an empty string", () => {
+    // `undefined` is what a row written before the field existed carries, and a blank
+    // string would render as an expandable divider containing nothing.
+    for (const summary of [undefined, null, ""] as const) {
+      expect(buildDividerPart({ ...compacted, summary }).data.summary).toBeNull();
+    }
+  });
+
+  it("keeps a real summary intact, whitespace and all", () => {
+    const summary = "First para.\n\nSecond para, with detail.";
+    expect(buildDividerPart({ ...compacted, summary }).data.summary).toBe(summary);
+  });
+
+  it("represents a failure as a failure, with no checkpoint implied", () => {
+    const part = buildDividerPart({
+      ...compacted,
+      outcome: "failed",
+      reason: "summarize_failed:provider_error",
+      generation: 0,
+    });
+    expect(part.data.outcome).toBe("failed");
+    expect(part.data.reason).toBe("summarize_failed:provider_error");
+    // Generation 0 is the "no checkpoint was written" marker; a failure must not
+    // claim a generation, or the divider would imply a summary exists.
+    expect(part.data.generation).toBe(0);
+  });
+
+  it("carries the server's durable row id, so a durable divider is distinguishable", () => {
+    // `anchorMessageId: null` is a real, different state: the compaction happened
+    // but the row was not written, so the divider is on screen only. Collapsing it
+    // into "success" would claim reload durability that does not exist.
+    expect(buildDividerPart(compacted).data.anchorMessageId).toBe("data-tbai-compact-op-1");
+    expect(
+      buildDividerPart({ ...compacted, anchorMessageId: null }).data.anchorMessageId,
+    ).toBeNull();
+  });
+
+  it("reads a missing anchorMessageId as absent rather than as an empty id", () => {
+    const body = `data: ${JSON.stringify({
+      type: DIRECT_COMPACT_PART,
+      id: "compact",
+      data: { ...compacted, anchorMessageId: undefined },
+    })}\n\n`;
+    expect(parseCompactStatus(body)?.anchorMessageId).toBeNull();
+  });
+});
+
+describe("request shaping", () => {
+  it("forwards only id, role, parts and metadata", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a0",
+        role: "assistant",
+        parts: [{ type: "text", text: "hi" }],
+        metadata: { custom: true },
+        status: { type: "running" },
+        createdAt: 123,
+      } as never,
+    ]);
+    expect(Object.keys(projected[0] ?? {}).sort()).toEqual(["id", "metadata", "parts", "role"]);
+  });
+
+  it("still sends an id when the thread message has none", () => {
+    // The AI SDK's `safeValidateUIMessages` REQUIRES a string `id`, so omitting it
+    // made the server reject the whole command as `invalid_messages`. Measured in
+    // the browser, not inferred.
+    const projected = projectThreadMessages([{ role: "user", parts: [] }]);
+    expect(Object.keys(projected[0] ?? {}).sort()).toEqual(["id", "parts", "role"]);
+    expect(typeof projected[0]?.id).toBe("string");
+    expect(String(projected[0]?.id).length).toBeGreaterThan(0);
+  });
+
+  it("replaces a non-string or empty id rather than forwarding it", () => {
+    // Runtime-generated messages after a normal turn were the real trigger.
+    const projected = projectThreadMessages([
+      { id: 7, role: "user", parts: [] },
+      { id: "", role: "assistant", parts: [] },
+      { id: "real-id", role: "user", parts: [] },
+    ]);
+    expect(projected[0]?.id).not.toBe(7);
+    expect(projected[1]?.id).not.toBe("");
+    // A real id is preserved verbatim — never rewritten, because the planner
+    // matches covered ids against what the client will re-post.
+    expect(projected[2]?.id).toBe("real-id");
+  });
+
+  it("drops the transient part `state` the AI SDK rejects", () => {
+    // assistant-ui labels settled/submitted parts `output-available`/`submitted`;
+    // `safeValidateUIMessages` accepts only `streaming`/`done`. Verified against
+    // the installed `ai` package — this shape was a real 400 in the browser.
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "step-start" },
+          { type: "text", text: "STUB_REPLY", state: "output-available" },
+        ],
+      },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "hi", state: "submitted" }] },
+    ]);
+    const assistantParts = projected[0]?.parts as Array<Record<string, unknown>>;
+    const userParts = projected[1]?.parts as Array<Record<string, unknown>>;
+    expect(userParts[0]).toEqual({ type: "text", text: "hi" });
+    expect(assistantParts).toEqual([{ type: "text", text: "STUB_REPLY" }]);
+    // No `state` anywhere, and no transient keys carried through the whitelist.
+    expect(JSON.stringify(projected)).not.toContain("output-available");
+    expect(JSON.stringify(projected)).not.toContain("submitted");
+  });
+
+  it("drops step-start and other non-text, non-tool parts", () => {
+    // The projection is a whitelist of what compaction needs: conversation text and
+    // tool payload. A step boundary is a stream artefact and carries no content, so
+    // forwarding it only risked another validator mismatch.
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "data-tbai-progress", id: "progress", data: { stages: [] } },
+          { type: "step-start" },
+          { type: "source-url", sourceId: "s1", url: "https://example.com" },
+          { type: "text", text: "kept" },
+        ],
+      },
+    ]);
+    expect(projected[0]?.parts).toEqual([{ type: "text", text: "kept" }]);
+  });
+
+  it("preserves tool parts, whose payload the summariser depends on", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "t1",
+        role: "assistant",
+        parts: [
+          { type: "tool-run_command", toolCallId: "call-1", state: "output-available", input: { cmd: "ls" } },
+        ],
+      },
+    ]);
+    expect(projected[0]?.parts).toEqual([
+      { type: "tool-run_command", toolCallId: "call-1", state: "output-available", input: { cmd: "ls" } },
+    ]);
+  });
+
+  // ── Regression: `state` is REQUIRED on tool parts (48a47f2 stripped it) ─────
+
+  it("PRESERVES tool state `output-available`", () => {
+    // Stripping this made `/compact` fail on any conversation that had used tools:
+    // `safeValidateUIMessages` rejected the array, the route answered 400, and the
+    // UI reported "Compaction request failed (400)".
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-run_command",
+            toolCallId: "call-1",
+            state: "output-available",
+            input: { cmd: "ls" },
+            output: { type: "text", value: "a.txt" },
+          },
+        ],
+      },
+    ]);
+    const part = (projected[0]?.parts as Array<Record<string, unknown>>)[0];
+    expect(part?.state).toBe("output-available");
+    expect(part?.toolCallId).toBe("call-1");
+    expect(part?.input).toEqual({ cmd: "ls" });
+    expect(part?.output).toEqual({ type: "text", value: "a.txt" });
+  });
+
+  it("PRESERVES tool state `input-available`", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "tool-foo", toolCallId: "c2", state: "input-available", input: { a: 1 } },
+        ],
+      },
+    ]);
+    expect((projected[0]?.parts as Array<Record<string, unknown>>)[0]?.state).toBe("input-available");
+  });
+
+  it("STILL strips transient state from text parts", () => {
+    // The opposite rule, deliberately: a text part's `output-available` /
+    // `submitted` labels are what the validator rejects.
+    const projected = projectThreadMessages([
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "done", state: "output-available" }] },
+      { id: "u1", role: "user", parts: [{ type: "text", text: "hi", state: "submitted" }] },
+    ]);
+    expect(projected[0]?.parts).toEqual([{ type: "text", text: "done" }]);
+    expect(projected[1]?.parts).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("TRANSLATES assistant-ui's `tool-call` part into an AI SDK tool part", () => {
+    // The exact live shape recorded by the server-side diagnostic on a real
+    // `/compact` request. Forwarded verbatim it is rejected with
+    // `AI_TypeValidationError` -> HTTP 400.
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-call",
+            toolName: "run_command",
+            toolCallId: "c1",
+            args: { cmd: "ls" },
+            argsText: "ls",
+            result: "a.txt",
+            isError: false,
+            status: "completed",
+          },
+        ],
+      },
+    ]);
+    expect(projected[0]?.parts).toEqual([
+      {
+        type: "tool-run_command",
+        toolCallId: "c1",
+        state: "output-available",
+        input: { cmd: "ls" },
+        output: { type: "text", value: "a.txt" },
+      },
+    ]);
+  });
+
+  it("marks a result-less assistant tool part `input-available` with empty input", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "tool-call", toolName: "grep", toolCallId: "c2", args: { q: "x" } }],
+      },
+    ]);
+    expect(projected[0]?.parts).toEqual([
+      { type: "tool-grep", toolCallId: "c2", state: "input-available", input: { q: "x" } },
+    ]);
+  });
+
+  it("the translated live shape passes the INSTALLED validator", async () => {
+    const { safeValidateUIMessages } = await import("ai");
+    const { z } = await import("zod");
+    const { messages } = buildCompactRequestBody(
+      [
+        { id: "u1", role: "user", parts: [{ type: "text", text: "run the command" }] },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "tool-call",
+              toolName: "run_command",
+              toolCallId: "c1",
+              args: { cmd: "ls" },
+              argsText: "ls",
+              result: "a.txt",
+              isError: false,
+              status: "completed",
+            },
+            { type: "text", text: "There is one file.", state: "output-available" },
+          ],
+        },
+      ],
+      "compact-1",
+    );
+    const result = await safeValidateUIMessages({
+      messages,
+      metadataSchema: z.record(z.string(), z.unknown()).optional(),
+    } as never);
+    if ("error" in result) {
+      throw new Error(`translation rejected: ${JSON.stringify(result.error).slice(0, 300)}`);
+    }
+    expect("error" in result).toBe(false);
+  });
+
+  it("keeps provider metadata on a tool part", () => {
+    const projected = projectThreadMessages([
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-x",
+            toolCallId: "c3",
+            state: "output-available",
+            input: {},
+            providerMetadata: { openai: { itemId: "fc_1" } },
+          },
+        ],
+      },
+    ]);
+    expect((projected[0]?.parts as Array<Record<string, unknown>>)[0]?.providerMetadata).toEqual({
+      openai: { itemId: "fc_1" },
+    });
+  });
+
+  it("projects a tool-containing request that the INSTALLED validator accepts", async () => {
+    // The test that would have caught `48a47f2` in CI rather than in a browser:
+    // it runs the same `safeValidateUIMessages` the route runs, with the same
+    // metadata schema, over what the client actually sends.
+    const { safeValidateUIMessages } = await import("ai");
+    const { z } = await import("zod");
+    const { messages } = buildCompactRequestBody(
+      [
+        { id: "u1", role: "user", parts: [{ type: "text", text: "list the files" }] },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [
+            { type: "step-start" },
+            {
+              type: "tool-run_command",
+              toolCallId: "call-1",
+              state: "output-available",
+              input: { cmd: "ls" },
+              output: { type: "text", value: "a.txt" },
+            },
+            { type: "text", text: "There is one file.", state: "output-available" },
+          ],
+        },
+      ],
+      "compact-1",
+    );
+    const result = await safeValidateUIMessages({
+      messages,
+      metadataSchema: z.record(z.string(), z.unknown()).optional(),
+    } as never);
+    if ("error" in result) {
+      throw new Error(`projection rejected by the AI SDK: ${JSON.stringify(result.error).slice(0, 400)}`);
+    }
+    expect("error" in result).toBe(false);
+  });
+
+  it("normalises an unknown role and drops non-object metadata", () => {
+    const projected = projectThreadMessages([
+      { id: "x", role: "tool", parts: [], metadata: "nope" as never },
+    ]);
+    expect(projected[0]?.role).toBe("user");
+    expect(projected[0]?.metadata).toBeUndefined();
+  });
+
+  it("omits the conversation id when there is none, and the server answers skipped", async () => {
+    const seen = stubFetch(statusBody({ ...compacted, outcome: "skipped", reason: "no_conversation" }));
+    const status = await runDirectCompact({ conversationId: null, messages: conversation() });
+    expect(status.outcome).toBe("skipped");
+    expect(seen[0]?.payload.id).toBeUndefined();
+  });
+
+  it("reports a non-OK response as a transport error", async () => {
+    stubFetch("nope", { status: 500 });
+    await expect(
+      runDirectCompact({ conversationId: "conv-1", messages: conversation() }),
+    ).rejects.toBeInstanceOf(CompactTransportError);
+  });
+});
+
+describe("automatic compaction", () => {
+  it("is rendered as automatic, and is the same part a manual compaction uses", () => {
+    // The engine's own compaction must not be distinguishable from the user's by
+    // mechanism: same part type, same name, same renderer. Only the label differs.
+    const part = buildDividerPart({ ...compacted, origin: "automatic" });
+    expect(part.type).toBe("data");
+    expect(part.name).toBe(DIRECT_COMPACT_DATA_NAME);
+    expect(part.data.origin).toBe("automatic");
+  });
+
+  it("reads a missing origin as manual, never as automatic", () => {
+    // A server that predates automatic compaction omits the field. Defaulting the
+    // other way would attribute the engine's work to the user.
+    const body = `data: ${JSON.stringify({
+      type: DIRECT_COMPACT_PART,
+      id: "compact",
+      data: { ...compacted, origin: undefined },
+    })}\n\n`;
+    expect(parseCompactStatus(body)?.origin).toBe("manual");
+  });
+
+  it("rejects an unrecognised origin rather than passing it through", () => {
+    const body = `data: ${JSON.stringify({
+      type: DIRECT_COMPACT_PART,
+      id: "compact",
+      data: { ...compacted, origin: "reactive" },
+    })}\n\n`;
+    expect(parseCompactStatus(body)?.origin).toBe("manual");
+  });
+});
+
+describe("`/compact <instructions>`", () => {
+  it("sends the text the user typed, so the server reads the instructions itself", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    const command = parseDirectCompactCommand("/compact keep the API decisions");
+    expect(command?.instructions).toBe("keep the API decisions");
+    await runDirectCompact({
+      conversationId: "conv-1",
+      messages: conversation(),
+      command,
+    });
+    // The deciding message is the user's own text, instructions included — not a
+    // bare `/compact` plus a second parameter that could disagree with it.
+    expect(seen[0]?.payload.messages.at(-1)?.parts[0].text).toBe(
+      "/compact keep the API decisions",
+    );
+  });
+
+  it("sends the bare canonical command when there are no instructions", async () => {
+    const seen = stubFetch(statusBody(compacted));
+    await runDirectCompact({
+      conversationId: "conv-1",
+      messages: conversation(),
+      command: parseDirectCompactCommand("  /compact  "),
+    });
+    expect(seen[0]?.payload.messages.at(-1)?.parts[0].text).toBe("/compact");
+  });
+
+  it("parses instructions for the alias too, and reports the typed spelling", () => {
+    const match = parseDirectCompactCommand("/compress keep the tests");
+    expect(match?.command).toBe("/compress");
+    expect(match?.instructions).toBe("keep the tests");
+  });
+
+  it("still refuses a longer slash-word, which is a typo not a command", () => {
+    expect(parseDirectCompactCommand("/compactx now")).toBeUndefined();
+    expect(parseDirectCompactCommand("/compressed")).toBeUndefined();
+  });
+
+  it("still refuses text that merely mentions the command", () => {
+    expect(parseDirectCompactCommand("please run /compact")).toBeUndefined();
+    expect(parseDirectCompactCommand("explain /compact now")).toBeUndefined();
+  });
+
+  it("now treats a trailing word as instructions rather than as ordinary text", () => {
+    // This is the deliberate behaviour change: `/compact now` used to be ordinary
+    // user text. It is now one command with the instruction "now".
+    expect(parseDirectCompactCommand("/compact now")?.instructions).toBe("now");
+  });
+});

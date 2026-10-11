@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import "@assistant-ui/react-markdown/styles/dot.css";
 
@@ -57,14 +57,10 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
     };
   }, [stableComponents]);
 
-  // `smooth` is explicitly disabled. The library defaults it to `true`, which
-  // re-animates arriving text as a client-side typewriter (useSmooth) and
-  // reports the part as still running until that animation catches up — so the
-  // rendered reply is not the text that arrived, it is an animation of it.
-  // Streamed Markdown must paint as tokens land, the same rule the terminal
-  // block already follows (docs/decisions.md). `defer` is retained: it only
-  // lowers the priority of re-parsing the growing message; it does not
-  // re-animate text.
+  // `smooth` is enabled to match official @assistant-ui streaming behavior,
+  // re-animating arriving text as a client-side typewriter (useSmooth) at 60 FPS
+  // to ensure silky, fluid visual streaming. `defer` is retained to lower the
+  // priority of re-parsing growing markdown on every token.
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
@@ -75,7 +71,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
       // chat both render through this one `MarkdownText`, so the diagram lands
       // in each with no per-engine wiring and no second copy.
       componentsByLanguage={{ mermaid: { SyntaxHighlighter: MermaidSyntaxHighlighter } }}
-      smooth={false}
+      smooth={true}
       defer
     />
   );

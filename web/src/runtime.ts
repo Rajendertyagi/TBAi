@@ -30,6 +30,7 @@ import { resolveStreamRecovery, useStreamRecoveryStore, type StreamRecoveryState
 import { lastUserText } from "./lib/ui-messages";
 import { useAvailabilityStore } from "./features/availability/availabilityStore";
 import { resolveApiUrl } from "./lib/platform";
+import { useDirectHistoryWindowUi } from "./features/chat/history/useDirectHistoryWindow";
 
 /**
  * Wires the assistant-ui runtime to our backend using the native
@@ -312,6 +313,19 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     if (pending.length === 0) return;
     void Promise.all(pending.map((s) => reconcileRecovery(s.threadId, s.prompt)));
   }, [backendOnline, reconcileRecovery]);
+  // P2 bounded Direct history — the ACTIVE window state for this conversation.
+  //
+  // Only the UI state is read here, never the controller itself: this component
+  // creates the runtime provider, so it cannot reach `useAISDKChat()` (that needs
+  // the provider to already exist). The window's navigation lives in
+  // `useDirectHistoryWindow`, mounted inside the provider, and this subscription
+  // is what gates the composer while the controller is in a historical window.
+  const activeConversationId = (() => {
+    const item = aui.threadListItem.getState();
+    return item.remoteId ?? item.id ?? null;
+  })();
+  const historyWindowUi = useDirectHistoryWindowUi(activeConversationId);
+
   const transport = useMemo(
     () =>
       new AssistantChatTransport({
@@ -436,6 +450,18 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
 
   return useChatRuntime({
     transport,
+    // P2 bounded Direct history enters through `adapters.history`, which is the
+    // SINGLE writer for a persisted thread: the adapter returns the controller's
+    // bounded window, and upstream converts it (installing the write-back
+    // binding), imports it as a branch-aware tree and calls
+    // `chatHelpers.setMessages`. Nothing is seeded here.
+    //
+    // `messageRepository` is intentionally absent. Upstream documents it as a
+    // one-shot seed for threads with no history adapter, and `useAISDKRuntime`
+    // only feeds it while the chat is empty (`useAISDKRuntime.js:488`) — so it
+    // cannot carry a repeatedly-committing window, and running both would create
+    // two competing history writers.
+    //
     // Offline send gate (runtime level). The composer ALSO swaps its Send
     // button for an inert one while offline, but a disabled button only stops
     // CLICKS: `ComposerPrimitive.Input` submits the form on Enter via
@@ -444,7 +470,12 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
     // `canSend = !isEmpty && !isSendDisabled && !isSending` gates `send()` —
     // so setting the flag here is what actually holds the gate shut, on every
     // path, while leaving the input usable so the user can keep typing.
-    isSendDisabled: isOffline,
+    //
+    // The historical flag is the second half of that gate: while the controller
+    // shows a non-submittable historical window, sending is refused at the same
+    // boundary. Edit composers intentionally ignore `isSendDisabled`, which is
+    // why the controller refuses out-of-window and historical MUTATION itself.
+    isSendDisabled: isOffline || historyWindowUi.historical,
     // A failed run is the terminal event of the send operation, so it is the
     // one that ends it. `kind` distinguishes a transport kill from anything
     // else, which is what tells "the answer never arrived" apart from "the
@@ -510,6 +541,17 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
   });
 }
 
+/**
+ * The remote thread-list runtime for the chat shell.
+ *
+ * `runtimeHook` is the stable module-level `ResumableThreadRuntime`. It must
+ * stay referentially stable: assistant-ui wraps it once
+ * (`useRemoteThreadListRuntime.js:59`, a `useState` initializer) and only ever
+ * passes THAT wrapper to `RemoteThreadListHookInstanceManager.setRuntimeHook`,
+ * so a new function identity here would NOT re-key thread resources and would
+ * not remount anything. Do not memoise this per-thread or wrap it in a closure
+ * expecting a re-key side effect — there is none.
+ */
 export function useAppChatRuntime(
   adapter: RemoteThreadListAdapter,
   threadId: string | undefined,

@@ -259,7 +259,14 @@ export type SchedulerResult =
       ok: true;
       action: SchedulerArgs["action"];
       summary: string;
-      job?: SchedulerJobView;
+      /**
+     * `get` returns the full job WITH its prompt (the handler spreads
+     * `toJobSummary(job)` plus `prompt`), while the other actions return the
+     * summary shape. Typed as optional rather than required so the type matches
+     * what the other actions actually return, and so a test asserting the prompt
+     * is checked against the real return type instead of failing to compile.
+     */
+    job?: SchedulerJobView & { prompt?: string };
       jobs?: SchedulerJobView[];
       id?: string;
       runId?: string;

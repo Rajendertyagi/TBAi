@@ -685,7 +685,7 @@ Advanced:
 | *(existing)* `bun:sqlite` | built-in | Persistence | Already used |
 | *(existing)* `@paralleldrive/cuid2` | ^3.3.0 | ID generation | Already used |
 | *(existing)* `zod` | ^4.5.4 | Validation | Already used |
-| *(existing)* `ai` | ^7.0.93 | AI execution | Already used |
+| *(existing)* `ai` | 7.0.137 | AI execution | Already used |
 
 **Total new dependencies: 0**
 

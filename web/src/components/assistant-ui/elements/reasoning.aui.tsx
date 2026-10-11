@@ -8,6 +8,7 @@ import {
   type ReasoningGroupComponent,
 } from "@assistant-ui/react";
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
+import { useTranscriptOwnsScrollCompensation } from "@/components/VirtualizedTranscript";
 import {
   ANIMATION_DURATION,
   ReasoningRoot as ReasoningRootBase,
@@ -29,11 +30,18 @@ function ReasoningRoot({
 }: ReasoningRootProps) {
   const collapsibleRef = useRef<HTMLDivElement | null>(null);
   const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
+  const ownsScroll = useTranscriptOwnsScrollCompensation();
 
   const handleAnimationStart = useCallback(() => {
-    lockScroll();
+    // Inside a virtualized transcript the virtualizer ALREADY compensates a row
+    // that changes size above the fold. Arming the lock here re-pins scrollTop to
+    // its pre-animation value on every scroll event, which overwrites that
+    // compensation and moves the content the reader is looking at. Off a
+    // virtualized transcript there is nothing else compensating, so the lock
+    // keeps its original job.
+    if (!ownsScroll) lockScroll();
     onAnimationStart?.();
-  }, [lockScroll, onAnimationStart]);
+  }, [lockScroll, onAnimationStart, ownsScroll]);
 
   const composedRef = useCallback(
     (node: HTMLDivElement | null) => {

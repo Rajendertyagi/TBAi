@@ -286,6 +286,21 @@ export const messageUpsertSchema = z.object({
   message: storedMessageSchema,
 });
 
+/**
+ * Query for a bounded history window (P2).
+ *
+ * `direction` selects the walk: `older` walks back from `anchorId` toward the
+ * root, `newer` walks down from the authoritative tip toward the anchor. A null
+ * `anchorId` means "start at the tip", which is what an initial load asks for.
+ * `limit` is a message count, not a page size — the server returns the window it
+ * can prove, plus the boundaries the client needs to decide the next move.
+ */
+export const messageWindowQuerySchema = z.object({
+  direction: z.enum(["older", "newer"]).default("older"),
+  anchorId: z.string().min(1).max(256).nullable().default(null),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+});
+
 // Agentic tool request bodies (server-executed in the workspace sandbox)
 export const toolReadSchema = z.object({
   path: z.string().min(1).max(4096),
@@ -591,6 +606,14 @@ const schedulerGetSchema = z
 const schedulerUpdateSchema = z.object({
   action: z.literal("update"),
   jobId: z.string().min(1).max(200),
+  /**
+   * Pause/resume is reachable through this tool: the `update` handler forwards
+   * the parsed args to the store, which owns `status`, and `list` filters on
+   * it. Declaring it here makes the VALIDATED contract match what the handler
+   * already does — previously `status` reached the store unvalidated, because
+   * Zod strips unknown keys silently instead of rejecting them.
+   */
+  status: z.enum(["active", "paused", "cancelled"]).optional(),
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(2000).optional().nullable(),
   enabled: z.boolean().optional(),

@@ -11,6 +11,7 @@ import {
 import { ChevronDownIcon, LoaderIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
+import { useTranscriptOwnsScrollCompensation } from "@/components/VirtualizedTranscript";
 import {
   Collapsible,
   CollapsibleContent,
@@ -53,19 +54,23 @@ function ToolGroupRoot({
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
   const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
+  // Inside a virtualized transcript the virtualizer already compensates a row that
+  // changes size above the fold; the lock would overwrite that compensation on
+  // every scroll event. See reasoning.aui.tsx for the full explanation.
+  const ownsScroll = useTranscriptOwnsScrollCompensation();
 
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      lockScroll();
+      if (!ownsScroll) lockScroll();
       if (!isControlled) {
         setUncontrolledOpen(open);
       }
       controlledOnOpenChange?.(open);
     },
-    [lockScroll, isControlled, controlledOnOpenChange],
+    [lockScroll, isControlled, controlledOnOpenChange, ownsScroll],
   );
 
   return (
@@ -158,10 +163,10 @@ function ToolGroupContent({
       className={cn(
         "aui-tool-group-content relative overflow-hidden text-sm outline-none",
         "group/collapsible-content ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
-        "data-closed:animate-collapsible-up",
-        "data-open:animate-collapsible-down",
-        "data-closed:fill-mode-forwards",
-        "data-closed:pointer-events-none",
+        "data-[state=closed]:animate-collapsible-up",
+        "data-[state=open]:animate-collapsible-down",
+        "data-[state=closed]:fill-mode-forwards",
+        "data-[state=closed]:pointer-events-none",
         "[--tw-duration:var(--animation-duration)]",
         className,
       )}

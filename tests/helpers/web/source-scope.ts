@@ -1,0 +1,167 @@
+/**
+ * Source-scoping helpers for the source-level guard tests.
+ *
+ * Render tests DO exist here: `react-dom/server`'s `renderToStaticMarkup` runs
+ * components under `bun test` with no DOM (see `web/tests/rendering.test.tsx`,
+ * `terminal-block.test.ts`, `openCodeShield.test.ts`). What that cannot do is
+ * run effects, interaction, or live state, so these helpers exist for the
+ * contracts a static snapshot cannot prove — above all *ordering* and
+ * *absence*: a static render cannot show that a guard runs BEFORE the controls
+ * it suppresses, nor that a prop was never forwarded, because both render
+ * identically either way. jsdom / happy-dom are deliberately not dependencies.
+ *
+ * Those assertions must be *scoped*, because a whole-file `toContain` also
+ * matches the import line, a doc comment, or a passing mention — none of which
+ * prove the component itself does the thing.
+ *
+ * Two rules follow, and both are enforced by the helpers here:
+ *  1. Strip comments first, so prose describing a rule can never satisfy a
+ *     test for the rule.
+ *  2. Extract the component's own body, so a match has to be inside it.
+ *
+ * Shared rather than copied into each test file: duplicated test
+ * infrastructure is how two guard tests drift apart and start disagreeing
+ * about what "the surface does X" means.
+ */
+
+/**
+ * Base URL for every source path these helpers resolve.
+ *
+ * A file URL, because `new URL(relative, base)` needs one, and terminated with a
+ * separator so a repo-relative path is read as a path rather than being treated
+ * as a sibling of the root's last segment.
+ */
+const REPO_ROOT_URL = pathToFileURL(REPO_ROOT + path.sep).href;
+
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { REPO_ROOT } from "../repo-root";
+
+/** Remove comments, so prose about a rule cannot be mistaken for the rule. */
+export function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+
+/**
+ * The body of a named function, found by matching its braces.
+ *
+ * Walks the parameter list before looking for the body, because the params are
+ * destructured (their `{` is not the body) and a type annotation may carry
+ * braces of its own.
+ */
+export function functionBody(source: string, name: string): string {
+  const decl = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
+  if (decl == null) throw new Error(`${name} is not declared in this source`);
+
+  let depth = 0;
+  let i = source.indexOf("(", decl.index);
+  for (; i < source.length; i++) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        i++;
+        break;
+      }
+    }
+  }
+
+  const open = source.indexOf("{", i);
+  if (open === -1) throw new Error(`${name} has no body`);
+
+  depth = 0;
+  for (let j = open; j < source.length; j++) {
+    if (source[j] === "{") depth++;
+    else if (source[j] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, j + 1);
+    }
+  }
+  throw new Error(`${name}'s body is unbalanced`);
+}
+
+/**
+ * Read a source file and return its comment-free body.
+ *
+ * `relativeFile` is resolved against the REPOSITORY ROOT, not against the
+ * calling test. Source-scanning guards moved out of the source tree during the
+ * test centralisation, so "beside the calling test" is no longer a meaningful
+ * anchor - and a per-call-site base was a silent trap, because a test that
+ * passed `import.meta.url` still compiled and simply read nothing.
+ *
+ * @param name Function whose body is being extracted.
+ * @param relativeFile Path to the source file, relative to the repository root.
+ * @throws When the file cannot be read or the function is not found in it.
+ */
+export async function commentedBodyOf(name: string, relativeFile: string): Promise<string> {
+  const source = await Bun.file(new URL(relativeFile, REPO_ROOT_URL)).text();
+  return functionBody(stripComments(source), name);
+}
+
+/**
+ * The body of a `const name = ... => { ... }` arrow function, brace-matched
+ * like `functionBody`. Same scoping rules: comments already stripped, match
+ * must sit inside the arrow's own braces.
+ */
+export function constBody(source: string, name: string): string {
+  const decl = new RegExp(`const\\s+${name}\\s*=`).exec(source);
+  if (decl == null) throw new Error(`${name} is not declared in this source`);
+  const arrow = source.indexOf("=>", decl.index);
+  if (arrow === -1) throw new Error(`${name} is not an arrow function`);
+  const open = source.indexOf("{", arrow);
+  if (open === -1) throw new Error(`${name} has no body`);
+
+  let depth = 0;
+  for (let j = open; j < source.length; j++) {
+    if (source[j] === "{") depth++;
+    else if (source[j] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, j + 1);
+    }
+  }
+  throw new Error(`${name}'s body is unbalanced`);
+}
+
+/**
+ * The brace-matched body of a JSX attribute, e.g. `onOpenChange={...}`.
+ *
+ * Exists so a guard can say "this callback must NOT do X" without naming the
+ * component's function. A rename should never turn a behavioural guard red; a
+ * structural change must. Pinning the *event* is stable, because the event is
+ * the contract, whereas the helper it calls is an implementation detail.
+ *
+ * Comments must already be stripped, and the attribute must occur exactly once
+ * in the source — an ambiguous attribute is a source of its own bug, so it
+ * throws rather than guessing.
+ */
+export function jsxAttributeBody(source: string, attribute: string): string {
+  const pattern = new RegExp(`\\b${attribute}\\s*=\\s*\\{`, "g");
+  const matches = [...source.matchAll(pattern)];
+  if (matches.length === 0) {
+    throw new Error(`${attribute} is not present in this source`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `${attribute} occurs ${matches.length} times; pass a narrower slice so the match is unambiguous`,
+    );
+  }
+
+  const open = (matches[0].index ?? 0) + matches[0][0].length - 1;
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  throw new Error(`${attribute}'s body is unbalanced`);
+}
+
+/** Read a repository-relative source file and return a const-arrow body. */
+export async function commentedConstBodyOf(name: string, relativeFile: string): Promise<string> {
+  const source = await Bun.file(new URL(relativeFile, REPO_ROOT_URL)).text();
+  return constBody(stripComments(source), name);
+}

@@ -43,7 +43,10 @@ export class ProviderRegistry {
         id: row.id,
         name: row.name,
         type: row.type,
-        endpoint: row.endpoint,
+        // SQLite has no way to store `undefined`, so a nullable column comes
+        // back as `null`. The config type uses `| undefined` for "not set", so
+        // the two are reconciled here at the one place a row becomes a config.
+        endpoint: row.endpoint ?? undefined,
         model: row.model,
         models,
         thinking: (row.thinking as ProviderConfig["thinking"]) || "off",
@@ -58,7 +61,10 @@ export class ProviderRegistry {
       }
     }
     if (!this.activeProviderId && this.providers.size > 0) {
-      this.activeProviderId = this.providers.keys().next().value;
+      // `keys().next().value` is `string | undefined` even though the map is
+      // non-empty: the iterator type cannot prove it. The size check above is
+      // the proof, so the fallback is unreachable.
+      this.activeProviderId = this.providers.keys().next().value ?? null;
     }
   }
 

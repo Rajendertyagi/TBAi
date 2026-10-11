@@ -1,0 +1,58 @@
+﻿bun test v1.4.2 (744846f84)
+2026-10-11 06:03:05 INFO  [context] context_assembled requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model unit=tokens estimatedSize=11201 estimateRangeLow=6721 estimateRangeHigh=13441 estimatedChars=33602 charsPerUnit=3 measurementKind=estimate_pre_request windowLimit=128000 limitSource=conservative_default(128000) phase3ExperimentEligible=false outputReserve=4096 outputReserveSource=conservative_default generationCap=4096 generationCapSource=conservative_default generationCapBoundedByWindow=false safetyMargin=30976 usableInput=92928 enforceable=true decision=accept messageCount=25 retainedCount=24 currentTurnCount=1 categories=["tool_definitions:9000","user_text:1172","assistant_text:997"] toolResultReduction=exhausted toolResultReductionReason=no_reducible_content compactionReduction=withheld compactionReductionReason=trigger_not_reached reductionWithheld=true headroom=79487 memoryAttempted=false memoryCandidateCount=0 memorySelectedCount=0 memoryInvalidCount=0 memorySafetyExcludedCount=0 memoryOverBudgetCount=0 memoryOverCountCount=0 memoryEstimatedSize=0 memoryBudget=0 memoryBlockPresent=false memoryFailure=null memorySafetyReasons=[] nativeToolCount=15 mcpToolCount=0 mcpServerCount=0 instructionsPresent=false lifecycleRemovedToolParts=0 lifecycleRemovedEmptyTurns=0 lifecyclePreservedApprovals=0 reducedToolParts=0 reducedToolChars=0 reducedReasoningParts=0 reducedReasoningChars=0 droppedOversizedErrorParts=0 divergenceOutcome=in_flight_extension historySource=submitted_with_stored_reference compactionApplied=false compactionReason=below_trigger compactionGeneration=0 compactionSpanMessages=0 compactionSpanFingerprint=null compactionSummarySize=0 compactionReclaimedSize=0 compactionOrigin=null compactionSummarizedBy=null assemblyLimitOutcome=within_assembly_limit assemblyLimitCeiling=4194304 limitCandidateCount=3 limitRejectedCount=0 limitCandidateSummary=model.contextWindow=absent configuredContextWindow=absent observedContextWindow=absent
+2026-10-11 06:03:05 INFO  [chat] chat_request_received requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model providerId=prov-recovery-proof reasoningLevel=off threadId=ruopr1yvlqeponwut9avly0i messageCount=25 toolCount=15 endpointConfigured=true abortSignalAborted=false
+bun : 
+At line:4 char:6
++ $r = bun test --isolate ./tests/integration/history/direct-overflow-c ...
++      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+tests\integration\history\direct-overflow-control-flow.test.ts:
+2026-10-11 06:03:05 DEBUG [ai] ai.request requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model streamId=s6g6ua236tai0pu5eo75aac2 endpointConfigured=true protocol=chat-completions streamRetries=0 maxRetries=0 abortSignalAborted=false elapsedMs=1
+2026-10-11 06:03:05 WARN  [context] overflow_recovery_event requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model
+2026-10-11 06:03:05 INFO  [chat] stream_first_chunk requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model elapsedMs=14 abortSignalAborted=false
+2026-10-11 06:03:05 WARN  [context] overflow_recovery_event requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model
+2026-10-11 06:03:05 INFO  [context] context_window_observed requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model providerId=prov-recovery-proof modelId=recovery-model source=provider_overflow
+2026-10-11 06:03:05 WARN  [context] overflow_recovery_event requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model
+2026-10-11 06:03:05 WARN  [context] overflow_recovery_compaction_entered requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model
+2026-10-11 06:03:05 WARN  [context] overflow_recovery_failed requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model 
+failure=compaction_not_applied:below_trigger
+2026-10-11 06:03:05 ERROR [ai] ai.error requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i 
+provider=ollama model=recovery-model streamId=s6g6ua236tai0pu5eo75aac2 category=context_overflow statusCode=400 
+retryable=false errorType=AI_APICallError elapsedMs=61 firstChunkArrived=true firstChunkElapsedMs=14 chunkCount=2
+2026-10-11 06:03:05 WARN  [ai] ai.provider_error_code requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model streamId=s6g6ua236tai0pu5eo75aac2 
+statusCode=400 errorType=invalid_request_error errorCode=context_length_exceeded
+2026-10-11 06:03:05 WARN  [context] context_overflow_recovery requestId=req_cxvjgr02i7xot8qyak4f3fy2 
+conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model streamId=s6g6ua236tai0pu5eo75aac2 
+outcome=recovery_already_attempted shouldRecover=false alreadyAttempted=true compactionEnabled=true 
+hasConversation=true
+2026-10-11 06:03:05 INFO  [chat] chat_response_closed requestId=req_cxvjgr02i7xot8qyak4f3fy2 conversationId=ruopr1yvlqeponwut9avly0i provider=ollama model=recovery-model closedBy=drain elapsedMs=66 streamId=s6g6ua236tai0pu5eo75aac2 runStatus=failed chunkCount=2 responseBytesSent=630 hadError=true
+RECOVERY_PROOF {"upstreamCalls":2,"errorChunks":1,"textChunks":0,"startChunks":1,"hasRecoveredText":false}
+230 |       //   2. the compaction SUMMARISER ΓÇö recovery compacts through the same model, by
+231 |       //      design, so summarising is a real provider call
+232 |       //   3. attempt #2  ΓÇö the retry, which answers
+233 |       //
+234 |       // A fourth call would mean a second recovery, which the gate must never permit.
+235 |       expect(upstreamCalls).toBe(3);
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: 3
+Received: 2
+
+      at <anonymous> (C:\Users\RTPC\.opencode\plan\tbai-recovery\isolated\tbai\tests\integration\history\direct-overflo
+w-control-flow.test.ts:235:29)
+(fail) CONTROL FLOW: overflow ΓåÆ compact ΓåÆ rebuild ΓåÆ retry > issues a second provider attempt and streams only 
+the recovered answer [114.16ms]
+
+ 0 pass
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [389.00ms]

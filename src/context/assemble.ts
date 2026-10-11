@@ -205,6 +205,52 @@ export function buildToolLayer(input: {
 export async function assembleContext(input: AssembleContextInput): Promise<AssembleContextResult> {
   const { conversationId, submittedMessages, provider, modelId, systemPrompt } = input;
 
+  // ── P1′: Server-authoritative prefix reconstruction ───────────────────────
+  // The client's submitted array is authoritative only from the persistence
+  // boundary onward. The server reconstructs the prefix that PRECEDES that
+  // boundary from the selected parent_id head chain.
+  //
+  // Every failure mode here falls CLOSED to the untouched submitted history.
+  // Splicing a partial prefix silently drops client messages from the request,
+  // which is strictly worse than trusting the client.
+  let effectiveMessages = submittedMessages;
+  let p1pApplied = false;
+
+  if (conversationId && !input.disableP1p) {
+    try {
+      const { messageService } = await import("../services/storage");
+      const headChain = await messageService.getHeadChain(conversationId);
+
+      // A truncated chain is NOT a shorter-but-valid chain: everything above the
+      // break is unreachable, so splicing it would silently drop those messages.
+      // Only a walk that PROVED it reached a legitimate root may be authoritative.
+      if (headChain.complete && submittedMessages.length > 0) {
+        // The boundary is exactly the client's OLDEST submitted message. It is NOT
+        // "the first submitted id that happens to be persisted": scanning forward
+        // for a later match would discard the submitted messages before it, which
+        // is silent loss of user content.
+        const oldestSubmittedId = submittedMessages[0]?.id;
+
+        if (oldestSubmittedId !== undefined) {
+          const boundaryChainIndex = headChain.messages.findIndex((m) => m.id === oldestSubmittedId);
+
+          // Absent from the authoritative chain ⇒ fail closed to client history.
+          if (boundaryChainIndex >= 0) {
+            const serverPrefix = headChain.messages
+              .slice(0, boundaryChainIndex)
+              .map((m) => m.content as UIMessage);
+            // The ENTIRE submission is retained, boundary included.
+            effectiveMessages = [...serverPrefix, ...submittedMessages];
+            p1pApplied = true;
+          }
+        }
+      }
+    } catch {
+      // Fail closed: fall back to client-authoritative path
+      effectiveMessages = submittedMessages;
+    }
+  }
+
   // ── Layer A ───────────────────────────────────────────────────────────────
   const layerA = buildInstructionsLayer(systemPrompt);
 
@@ -218,7 +264,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   // ── Layer C, step 1: lifecycle repair (NOT size management) ────────────────
   // The pruner's own stats are read from its return value; its logging is left
   // in place so existing diagnostics do not change shape.
-  const { messages: repaired, stats } = pruneStaleMessages(submittedMessages);
+  const { messages: repaired, stats } = pruneStaleMessages(effectiveMessages);
   const lifecycleRepair = {
     removedToolParts: stats.removedToolParts.length,
     removedEmptyTurns: stats.removedEmptyTurns,

@@ -190,6 +190,30 @@ changes. It is the forward-looking contract for the system. Key non-negotiables:
 - **Prefer deleting obsolete custom code** when upstream capability becomes
   sufficient; do not preserve custom architecture merely because it exists.
 
+## Test location — hard rule
+
+**Every test source file and every test-only asset lives under the root `tests/`
+directory. Nothing else.** No test beside the code it covers, no fixture in
+`src/`, no harness in `web/`.
+
+This is enforced, not advisory:
+
+- `bun run test:locations` fails on any test file or test-only asset outside
+  `tests/`, including untracked files.
+- It runs as a gate in the `verify` and `e2e` CI jobs.
+
+The reason it must be a gate rather than a convention: every runner scopes
+discovery to `tests/` — `bun run test` to `./tests/unit ./tests/integration`,
+`test:dom` to `./tests/dom`, Playwright's `testDir` to `../tests/e2e`. A test
+file written anywhere else is **collected by none of them**. It would not fail;
+it would simply never run, and the suite would stay green while losing coverage.
+Documentation alone cannot prevent that.
+
+Structure is layer first, feature second: `tests/<layer>/<feature>/`. A test
+that moved out of its source tree must resolve paths from the repository root
+(`tests/helpers/repo-root`), never by counting parent directories from its own
+location — see `tests/README.md`.
+
 ## Testing before "done"
 
 Typecheck → build → start → real AI request works → streaming works → errors handled
@@ -199,7 +223,23 @@ Typecheck → build → start → real AI request works → streaming works → 
 
 Maintain `docs/`: `architecture.md`, `development-rules.md`, `ai-integration.md`,
 `provider-system.md`, `state-management.md`, `security.md`, `mcp.md`, `roadmap.md`,
-`decisions.md`. Record architectural decisions in `docs/decisions.md`.
+`decisions.md`, `performance.md`. Record architectural decisions in
+`docs/decisions.md`.
+
+`docs/performance.md` is the performance guideline: how to build software that stays
+fast. Every rule is marked **Always** (correct by default, follow it while writing
+code) or **Verify first** (real, but expensive and possibly unnecessary — measure
+before committing to it). It contains no repo-specific facts by design, so it should
+not need updating.
+
+Two companion files are historical and are not guidance:
+
+- `docs/performance-baseline.md` — the former guideline, preserved for its measurement
+  trail and decision reasoning. Contains statements known to be out of date.
+- `docs/TBAiPERFORMANCEAUDIT.md` — a superseded point-in-time source survey.
+
+Read only the baseline to answer "why did we decide this?" Never execute anything from
+it.
 
 ## How to make architectural changes
 
@@ -318,10 +358,7 @@ extending it. Never again:
 
 ## Agent division of labor (applies alongside the standards above)
 
-- The **coding agent** implements features following all sections above,
-  EXCEPT it does not author test files and does not run test suites.
-- A **separate test agent** owns tests: it adds the happy-path + edge-case
-  tests per §3 and runs the full suite per §6, reporting actual numbers.
+- Any agent can implement features, author test files, and run the test suite.
 - The coding agent's "done" report still uses the Output format above, with
-  the tests section stating "handed to test agent" where applicable, and its
+  the tests section stating the actual suite numbers where applicable, and its
   verification is `bun run typecheck` → `bun run build` with actual output.

@@ -33,9 +33,15 @@ import { spawn, type Subprocess } from "bun";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildWebAndStamp, runWebBuild } from "./build-web";
+import { assessWebBuild, describeBuildFreshness } from "./web-build-provenance";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const E2E_DIR = path.join(REPO_ROOT, "web", "e2e");
+// E2E specs live in the canonical test tree, not under web/. One root for every
+// test file in the repository - see the AGENTS.md test-location section.
+const E2E_DIR = path.join(REPO_ROOT, "tests", "e2e");
+const WEB_ROOT = path.join(REPO_ROOT, "web");
+const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
 const READY_URL = `http://localhost:${E2E_PORT}/readyz`;
 
@@ -56,14 +62,41 @@ const reporterDefault = forwarded.some((a) => a.startsWith("--reporter"))
 
 const runLive = process.env.TBAI_E2E_LIVE === "1";
 
+/**
+ * Every `*.spec.ts` under the E2E root, recursively.
+ *
+ * This MUST be recursive. Specs are bucketed into subdirectories
+ * (`history/`, `core/`, `tools/`, ...), so a flat `readdirSync` returns
+ * directories, the `.spec.ts` filter matches nothing, and the runner reports
+ * "0 spec file(s)" and EXITS 0 - a green gate that ran no tests at all. That is
+ * the exact silent-coverage-loss the AGENTS.md test-location rule exists to
+ * prevent, reintroduced by the runner that was meant to serve it.
+ */
+function collectSpecFiles(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...collectSpecFiles(full));
+    } else if (entry.name.endsWith(".spec.ts")) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
 function specFiles(): string[] {
   if (explicit.length > 0) {
     return explicit.map((f) => (f.endsWith(".spec.ts") ? f : `${f}.spec.ts`));
   }
-  return fs
-    .readdirSync(E2E_DIR)
-    .filter((f) => f.endsWith(".spec.ts"))
+  return collectSpecFiles(E2E_DIR)
     .filter((f) => runLive || !f.endsWith("-live.spec.ts"))
+    // Playwright treats positional arguments as REGEXES matched against each
+    // test file's path. An absolute Windows path is full of backslashes, which
+    // are regex escapes, so every pattern fails to match and the run reports
+    // "No tests found" for every file. Relative POSIX paths from the E2E root
+    // match literally.
+    .map((f) => path.relative(E2E_DIR, f).split(path.sep).join("/"))
     .sort();
 }
 
@@ -94,6 +127,54 @@ async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
     if (Date.now() > deadline) return;
     await new Promise((r) => setTimeout(r, 200));
   }
+}
+
+/**
+ * Build the bundle the suite is about to serve, or refuse to run at all.
+ *
+ * The suite serves `dist/web`, a build output. Leaving that to the operator made
+ * a source edit followed by `bun run test:e2e` exercise the PREVIOUS bundle and
+ * report a confident, wrong result — a test suite that does not fail but lies.
+ * So the build is enforced HERE, once, before any server is spawned:
+ *
+ *   - a failed build exits non-zero immediately, before the first spawn, so a
+ *     stale artifact cannot be reached even by accident;
+ *   - it runs ONCE for the whole run rather than per spec file. The artifact is
+ *     read-only to the suite, so repeating it would only add minutes; the
+ *     server re-verifies provenance per file regardless.
+ *
+ * `TBAI_E2E_SKIP_BUILD=1` skips the rebuild for someone iterating on spec code
+ * with a freshly built bundle already in place. It is an opt-in, never a default,
+ * and it cannot reintroduce the hazard on its own: `start-e2e-server.ts`
+ * independently refuses any artifact whose stamp does not match the source.
+ * The two gates are deliberately redundant — the rebuild is the convenience, the
+ * stamp check is the guarantee.
+ */
+function ensureFreshWebBuild(): boolean {
+  if (process.env.TBAI_E2E_SKIP_BUILD === "1") {
+    const freshness = assessWebBuild(WEB_ROOT, WEB_DIST);
+    console.log(`[e2e] TBAI_E2E_SKIP_BUILD=1 — ${describeBuildFreshness(freshness)}`);
+    // Still fatal when stale. Skipping the rebuild is a legitimate shortcut;
+    // serving an artifact that does not match the source is not.
+    return freshness.status === "current";
+  }
+
+  console.log("[e2e] building the web bundle the suite will serve…");
+  if (!buildWebAndStamp(runWebBuild, (message) => console.log(`[e2e] ${message}`))) {
+    console.error(
+      "[e2e] build FAILED — refusing to run E2E against a stale or unstamped bundle. " +
+        "Fix the build and re-run.",
+    );
+    return false;
+  }
+
+  const freshness = assessWebBuild(WEB_ROOT, WEB_DIST);
+  console.log(`[e2e] ${describeBuildFreshness(freshness)}`);
+  return freshness.status === "current";
+}
+
+if (!ensureFreshWebBuild()) {
+  process.exit(1);
 }
 
 const files = specFiles();
@@ -156,4 +237,19 @@ for (const file of files) {
 
 console.log(`\n[e2e] spec files ok: ${passed}, failed: ${failed}`);
 if (failedFiles.length) console.log(`[e2e] failing files:\n  - ${failedFiles.join("\n  - ")}`);
+
+// Fail closed on a run that collected nothing. `failed === 0` is not evidence of
+// a healthy suite when no spec was ever executed - a bad `testDir`, a filter that
+// matched nothing, or specs that stopped being discovered all produce exactly
+// this state, and `failed === 0 ? 0 : 1` reported all of them as a green gate.
+// The E2E job depends on this exit code, so a zero-spec run must be red.
+if (passed === 0 && failed === 0) {
+  console.error(
+    "[e2e] no spec files were executed. This is not a passing run: discovery " +
+      "matched nothing, so the suite reported success while testing nothing. " +
+      "Check playwright.config.ts testDir against tests/e2e and the spec paths " +
+      "passed as arguments.",
+  );
+  process.exit(1);
+}
 process.exit(failed === 0 ? 0 : 1);

@@ -163,9 +163,9 @@ function normalizeOpenAI(raw: any, provider: string, discoveredAt: number): Mode
   return data
     // R2: the entry is read for its LIMITS, not just its id. A listing that omits
     // them yields no value and no stance — still unknown, never invented.
-    .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m }))
+    .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m as Record<string, unknown> }))
     .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
-    .map(({ id, raw }) =>
+    .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
       withExtractedLimits(
         // OpenAI-compatible listings expose no reasoning metadata, so that half
         // stays unknown.
@@ -207,10 +207,10 @@ function normalizeGoogle(raw: any, provider: string, discoveredAt: number): Mode
   return data
     .map((m: any) => ({
       id: String(m?.name ?? "").replace(/^models\//, "").trim(),
-      raw: m,
+      raw: m as Record<string, unknown>,
     }))
     .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
-    .map(({ id, raw }) =>
+    .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
       withExtractedLimits(
         // Google's listing reports no reasoning metadata either.
         { id, provider, capabilities: unknownReasoning() },

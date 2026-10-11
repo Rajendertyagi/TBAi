@@ -489,11 +489,15 @@ export async function runManualCompaction(
     return unattemptedResult(input.operationId, "not_attempted");
   }
 
+  // Bound to a `string`: the guard above proves it is present, but TypeScript
+  // cannot carry that proof into the closures below (`releaseLatch`, `persist`).
+  const conversationId: string = input.conversationId;
+
   const startedAt = Date.now();
   try {
     const assembled = await assembleContext({
       forceCompaction: true,
-      conversationId: input.conversationId,
+      conversationId,
       submittedMessages: input.submittedMessages,
       runId: input.operationId,
       provider: input.provider,
@@ -502,9 +506,9 @@ export async function runManualCompaction(
       toolSignal: input.signal,
       compaction: {
         policy: DEFAULT_COMPACTION_POLICY,
-        existingRecord: compactionStore.get(input.conversationId),
+        existingRecord: compactionStore.get(conversationId),
         persist: (record) => compactionStore.record(record),
-        releaseLatch: () => compactionStore.releaseLatch(input.conversationId),
+        releaseLatch: () => compactionStore.releaseLatch(conversationId),
         // The SAME model the next turn will read the summary with. Summarising
         // with a different model would make the summary a translation rather than
         // a record of this conversation.

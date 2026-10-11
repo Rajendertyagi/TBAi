@@ -88,7 +88,9 @@ app.put("/api/providers/:id", async (c) => {
   db.run(`UPDATE provider_configs SET ${sets.join(", ")} WHERE id = ?`, values);
 
   let credentialConfigured = credentialStore.has(id);
-  if (body.apiKey !== undefined && body.apiKey !== "") {
+  // `!== ""` alone does not exclude null under strictNullChecks, so the
+  // truthiness test is what actually proves a string is present here.
+  if (body.apiKey !== undefined && body.apiKey !== null && body.apiKey !== "") {
     credentialStore.set(id, body.apiKey);
     credentialConfigured = true;
   }
@@ -158,7 +160,7 @@ app.post("/api/providers/test", async (c) => {
     return c.json({ ok: false, error: "No API key provided" }, 400);
   }
   try {
-    const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint, apiKey });
+    const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint ?? undefined, apiKey: apiKey ?? undefined });
     return c.json({ ok: true, modelCount: models.length });
   } catch (e) {
     logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });
@@ -188,7 +190,7 @@ app.post("/api/providers/discover", async (c) => {
     return c.json({ ok: false, error: "No API key provided" }, 400);
   }
   try {
-    const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint, apiKey });
+    const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint ?? undefined, apiKey: apiKey ?? undefined });
     return c.json({ ok: true, models });
   } catch (e) {
     logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });

@@ -189,7 +189,7 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
         report.unrecoverable += 1;
         logger.warn("chat", "chat_history_reconcile_unrecoverable", {
           streamId: row.streamId,
-          conversationId: row.conversationId,
+          conversationId: row.conversationId ?? undefined,
           reason: row.finalMessageJson === null ? "no_captured_message" : "unreadable_capture",
         });
         continue;

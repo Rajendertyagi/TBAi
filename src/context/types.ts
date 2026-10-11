@@ -785,4 +785,11 @@ export interface AssembleContextInput {
    * opted in must not silently start sending persisted context to a provider.
    */
   readonly memory?: MemorySeam;
+  /**
+   * Disable P1′ server-authoritative prefix reconstruction.
+   *
+   * Used only for differential testing: the OLD path (full submitted history)
+   * vs the P1′ path (server-reconstructed prefix + client suffix).
+   */
+  readonly disableP1p?: boolean;
 }

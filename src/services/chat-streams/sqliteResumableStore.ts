@@ -392,11 +392,14 @@ export function createSqliteResumableStreamStore(
   assertSchema(db);
 
   const rowOf = (streamId: string): ChatStreamRow | undefined =>
+    // `get` returns null for a missing row; the callers below treat a missing
+    // row as "absent", which `| undefined` expresses. Reconciled here so no
+    // caller has to handle both spellings of the same state.
     db
       .query<ChatStreamRow, SQLQueryBindings[]>(
         "SELECT * FROM chat_streams WHERE stream_id = ?",
       )
-      .get(streamId);
+      .get(streamId) ?? undefined;
 
   const isExpired = (row: ChatStreamRow): boolean => row.expires_at <= now();
 

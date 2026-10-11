@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { logger } from "../lib/logger";
-import { apiFetch } from "../lib/platform";
+import { apiJson } from "../lib/api";
 import type {
   McpStatus,
   McpServerDraft,
@@ -29,24 +28,9 @@ interface McpState {
   clearPendingInsert: () => void;
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string; requestId?: string };
-  if (!res.ok) {
-    const err = new Error(data.error || `Request failed (${res.status})`);
-    // Correlate with the server record: "Error reference req_123".
-    (err as Error & { requestId?: string }).requestId = data.requestId;
-    logger.warn("mcp.ui", "api_failed", {
-      message: `${init?.method ?? "GET"} ${path} → ${res.status}`,
-      requestId: data.requestId,
-    });
-    throw err;
-  }
-  return data as T;
-}
+/** Every MCP call logs its failures under the `mcp.ui` scope. */
+const api = <T>(path: string, init?: RequestInit): Promise<T> =>
+  apiJson<T>(path, init, "mcp.ui");
 
 export const useMcpStore = create<McpState>((set) => ({
   servers: [],
