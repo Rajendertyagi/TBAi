@@ -388,7 +388,7 @@ async function expectReconnectsBounded(
 }
 
 describe("MCP lifecycle (Phase 4)", () => {
-  it("disconnectAll wins over a pending HTTP connect; late failure cannot resurrect it", async () => {
+  it("disconnectAll wins over a pending HTTP connect; late settlement cannot resurrect it", async () => {
     const cutoff = logger.lastSeq;
     let markRequestStarted!: () => void;
     const requestStarted = new Promise<void>((resolve) => {
@@ -398,15 +398,31 @@ describe("MCP lifecycle (Phase 4)", () => {
     const responseGate = new Promise<void>((resolve) => {
       releaseResponse = resolve;
     });
+    const serverTransport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    const protocolServer = new McpServer({
+      name: "p4-race-pending-http",
+      version: "1.0.0",
+    });
+    await protocolServer.connect(serverTransport);
     const server = Bun.serve({
       port: 0,
       fetch: async (request) => {
         if (new URL(request.url).pathname !== "/mcp") {
           return new Response("not found", { status: 404 });
         }
-        markRequestStarted();
-        await responseGate;
-        return new Response("connect intentionally interrupted", { status: 503 });
+        const payload = (await request.clone().json().catch(() => undefined)) as
+          | { method?: string }
+          | undefined;
+        const response = await serverTransport.handleRequest(request);
+        if (payload?.method === "initialize") {
+          markRequestStarted();
+          // The official SDK prepares a valid initialize response, but the
+          // response is withheld until disconnectAll has been initiated.
+          await responseGate;
+        }
+        return response;
       },
     });
     const created = mcpManager.createConfig({
@@ -450,6 +466,7 @@ describe("MCP lifecycle (Phase 4)", () => {
     } finally {
       releaseResponse();
       await Promise.allSettled([connectAttempt, mcpManager.disconnect(created.id)]);
+      await protocolServer.close();
       server.stop(true);
     }
   }, 20000);
