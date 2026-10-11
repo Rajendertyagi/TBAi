@@ -55,9 +55,9 @@ const STUB_PORT = Number(process.env.TBAI_E2E_STUB_PORT ?? 3199);
 /** The frontend the server serves. Built output, never a dev server. */
 // The SPA ships into the same `dist/` that holds the compiled server, so the e2e
 // suite exercises the layout that actually ships rather than a parallel one.
-const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
+const WEB_DIST = process.env.TBAI_E2E_WEB_DIST ?? path.join(REPO_ROOT, "dist", "web");
 /** Build inputs, used to verify `WEB_DIST` was built from the current source. */
-const WEB_ROOT = path.join(REPO_ROOT, "web");
+const WEB_ROOT = process.env.TBAI_E2E_WEB_ROOT ?? path.join(REPO_ROOT, "web");
 
 function fail(message: string): never {
   process.stderr.write(`[e2e-server] ${message}\n`);

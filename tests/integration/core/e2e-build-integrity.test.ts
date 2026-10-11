@@ -20,7 +20,7 @@
  * observable effects: the stamp on disk, the exit code, and whether a port ever
  * opened.
  */
-import { afterAll, afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,7 +28,6 @@ import path from "node:path";
 import {
   assessWebBuild,
   buildStampPath,
-  clearBuildStamp,
   describeBuildFreshness,
   hashWebSource,
   readBuildStamp,
@@ -40,7 +39,6 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 /** This file lives at `<repo>/tests/integration/`, so the root is two levels up. */
 
 const WEB_ROOT = path.join(REPO_ROOT, "web");
-const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 
 const tempDirs: string[] = [];
 
@@ -58,11 +56,7 @@ afterEach(() => {
  * side effect of running the tests would be the exact hazard these tests exist to
  * prevent, just pointed at the next person instead.
  */
-afterAll(() => {
-  if (assessWebBuild(WEB_ROOT, WEB_DIST).status !== "current") {
-    writeBuildStamp(WEB_DIST, hashWebSource(WEB_ROOT), "restored by e2e-build-integrity.test.ts");
-  }
-});
+
 
 /** A throwaway directory shaped like `web/`, with a small real source tree. */
 function makeFakeWebRoot(): string {
@@ -212,11 +206,17 @@ describe("the E2E server refuses an artifact it cannot vouch for", () => {
    * is used so "did the app start?" is answerable by a real connection attempt
    * rather than by trusting the exit code alone.
    */
-  function startServerExpectingRefusal(port: number) {
+  function startServerExpectingRefusal(port: number, webRoot: string, webDist: string) {
     const result = spawnSync(process.execPath, [START_SERVER], {
       cwd: REPO_ROOT,
       encoding: "utf8",
-      env: { ...process.env, TBAI_E2E_PORT: String(port), TBAI_E2E_STUB_PORT: String(port + 1) },
+      env: {
+        ...process.env,
+        TBAI_E2E_PORT: String(port),
+        TBAI_E2E_STUB_PORT: String(port + 1),
+        TBAI_E2E_WEB_ROOT: webRoot,
+        TBAI_E2E_WEB_DIST: webDist,
+      },
       timeout: 30_000,
     });
     return { code: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
@@ -225,84 +225,81 @@ describe("the E2E server refuses an artifact it cannot vouch for", () => {
   /** A port nothing is listening on, derived from a unique-ish base. */
   const unusedPort = (base: number): number => base + Math.floor(process.pid % 500) * 2;
 
-  it("REFUSES a missing artifact and never starts the app", () => {
+  it("REFUSES an artifact with no build stamp and never starts the app", () => {
     const port = unusedPort(41_000);
-    // Remove the stamp so the real dist is refused regardless of its age.
-    const hadStamp = clearBuildStamp(WEB_DIST);
-    expect(hadStamp || !fs.existsSync(buildStampPath(WEB_DIST))).toBe(true);
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
 
-    const { code, output } = startServerExpectingRefusal(port);
+    const { code, output } = startServerExpectingRefusal(port, webRoot, webDist);
     expect(code).not.toBe(0);
     expect(output).toContain("refusing to start");
-    expect(output).toContain("build stamp");
+    expect(output).toContain("no build stamp");
   });
 
   it("REFUSES a stale stamp: an artifact built from different source", () => {
     const port = unusedPort(43_000);
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
     // A stamp that is well-formed but describes source that is not this source.
-    writeBuildStamp(WEB_DIST, "0".repeat(64), "test: deliberately stale");
-    try {
-      const { code, output } = startServerExpectingRefusal(port);
-      expect(code).not.toBe(0);
-      expect(output).toContain("refusing to start");
-      expect(output).toContain("different source");
-    } finally {
-      // Restore a truthful stamp so later checks and the real suite still run.
-      writeBuildStamp(WEB_DIST, hashWebSource(WEB_ROOT), "restored by test");
-    }
+    writeBuildStamp(webDist, "0".repeat(64), "test: deliberately stale");
+
+    const { code, output } = startServerExpectingRefusal(port, webRoot, webDist);
+    expect(code).not.toBe(0);
+    expect(output).toContain("refusing to start");
+    expect(output).toContain("different source");
   });
 });
 
 describe("buildWebAndStamp — a failed build can never leave a trusted artifact", () => {
   it("writes a stamp only after a successful build", async () => {
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
-    // Drive the orchestration against the REAL dist/web, but with a build
-    // function that does no work, so the assertion is about the stamping
-    // protocol rather than about vite.
-    const ok = buildWebAndStamp(
-      () => 0,
-      () => undefined,
-    );
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
+    // No real build is needed: this test isolates orchestration and stamp order.
+    const ok = buildWebAndStamp(() => 0, () => undefined, { webRoot, webDist });
     expect(ok).toBe(true);
-    expect(readBuildStamp(WEB_DIST)).not.toBeNull();
-    expect(assessWebBuild(WEB_ROOT, WEB_DIST).status).toBe("current");
+    expect(readBuildStamp(webDist)).not.toBeNull();
+    expect(assessWebBuild(webRoot, webDist).status).toBe("current");
   });
 
   it("a FAILED build returns false, clears the stamp, and leaves no artifact trusted", async () => {
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
-    const stampBefore = readBuildStamp(WEB_DIST);
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
+    writeBuildStamp(webDist, hashWebSource(webRoot), "test: initial successful artifact");
+    const stampBefore = readBuildStamp(webDist);
     expect(stampBefore).not.toBeNull(); // precondition: a trusted artifact exists
 
-    const ok = buildWebAndStamp(
-      () => 1,
-      () => undefined,
-    );
+    const ok = buildWebAndStamp(() => 1, () => undefined, { webRoot, webDist });
     expect(ok).toBe(false);
     // The old bundle is still physically present — that is exactly why existence
     // checking was never enough — but it is no longer trusted.
-    expect(fs.existsSync(path.join(WEB_DIST, "index.html"))).toBe(true);
-    expect(readBuildStamp(WEB_DIST)).toBeNull();
-    expect(assessWebBuild(WEB_ROOT, WEB_DIST)).toEqual({ status: "missing-stamp" });
+    expect(fs.existsSync(path.join(webDist, "index.html"))).toBe(true);
+    expect(readBuildStamp(webDist)).toBeNull();
+    expect(assessWebBuild(webRoot, webDist)).toEqual({ status: "missing-stamp" });
   });
 
   it("a build that THROWS is treated as failure, not as success", async () => {
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
+    writeBuildStamp(webDist, hashWebSource(webRoot), "test: initial successful artifact");
     const ok = buildWebAndStamp(
       () => {
         throw new Error("tsc exited with diagnostics");
       },
       () => undefined,
+      { webRoot, webDist },
     );
     expect(ok).toBe(false);
-    expect(readBuildStamp(WEB_DIST)).toBeNull();
+    expect(readBuildStamp(webDist)).toBeNull();
   });
 
   it("restores a truthful stamp so the real E2E suite remains runnable", async () => {
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
-    buildWebAndStamp(
-      () => 0,
-      () => undefined,
-    );
-    expect(assessWebBuild(WEB_ROOT, WEB_DIST).status).toBe("current");
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
+    buildWebAndStamp(() => 0, () => undefined, { webRoot, webDist });
+    expect(assessWebBuild(webRoot, webDist).status).toBe("current");
   });
 });
