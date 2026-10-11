@@ -216,7 +216,29 @@ test.describe("P2 bounded Direct history in the mounted app", () => {
       // The buffer was never truncated, so the tip is still in it — it is simply
       // not MOUNTED while the viewport is parked at the top. Returning to the
       // live edge (which also re-arms auto-follow) proves it is still there.
-      await page.mouse.wheel(0, 40000);
+      // Click moved the pointer onto the restore control, which has now been
+      // removed; put the wheel over the transcript scroller itself. A single
+      // large wheel delta is not guaranteed to reach the end of a long virtual
+      // list, so keep issuing real wheel gestures until its scroll geometry
+      // confirms that the live edge has actually been reached.
+      const liveBox = await scroller.boundingBox();
+      if (!liveBox) throw new Error("the virtualized transcript has no box");
+      await page.mouse.move(
+        liveBox.x + liveBox.width / 2,
+        liveBox.y + liveBox.height / 2,
+      );
+      await expect
+        .poll(
+          async () => {
+            await page.mouse.wheel(0, 20000);
+            await page.waitForTimeout(120);
+            return scroller.evaluate((el) =>
+              Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop),
+            );
+          },
+          { timeout: 20000 },
+        )
+        .toBeLessThanOrEqual(1);
       await expect(page.getByText("seeded-body-149")).toBeVisible({ timeout: 15000 });
 
       await composer.fill("sent from the restored active tip");
