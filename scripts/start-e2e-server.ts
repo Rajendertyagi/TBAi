@@ -104,7 +104,9 @@ if (freshness.status !== "current") {
   fail(`${describeBuildFreshness(freshness)}\n[e2e-server] refusing to start.`);
 }
 if (PROVENANCE_CHECK_ONLY) {
-  process.stdout.write("[e2e-server] provenance check passed; check-only mode, server not started.\n");
+  process.stdout.write(
+    "[e2e-server] provenance check passed; check-only mode, server not started.\n",
+  );
   process.exit(0);
 }
 process.stdout.write(
