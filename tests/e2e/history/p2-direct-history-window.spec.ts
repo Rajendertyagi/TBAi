@@ -223,10 +223,7 @@ test.describe("P2 bounded Direct history in the mounted app", () => {
       // confirms that the live edge has actually been reached.
       const liveBox = await scroller.boundingBox();
       if (!liveBox) throw new Error("the virtualized transcript has no box");
-      await page.mouse.move(
-        liveBox.x + liveBox.width / 2,
-        liveBox.y + liveBox.height / 2,
-      );
+      await page.mouse.move(liveBox.x + liveBox.width / 2, liveBox.y + liveBox.height / 2);
       await expect
         .poll(
           async () => {
