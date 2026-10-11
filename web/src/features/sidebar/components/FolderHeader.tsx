@@ -57,6 +57,21 @@ const FOLDER_COLORS = [
 ];
 
 /**
+ * The sentinel a folder carries when the user has not picked one.
+ *
+ * Named because it was previously written out three times — in the write, in
+ * the swatch, and in the "is this the default?" comparison — and the comparison
+ * is what makes a typo silent: a near-miss literal still renders a plausible
+ * swatch and simply never matches, so the checkmark quietly stops appearing.
+ *
+ * A literal on purpose. This is the colour VALUE the user sees and stores, not
+ * presentation, so it must stay independent of the theme's `muted-foreground`;
+ * otherwise picking "Default" would repaint itself with whatever the active
+ * theme happens to use.
+ */
+const DEFAULT_FOLDER_COLOR = "#6b7280";
+
+/**
  * Folder header row in the sidebar's "Folders" section (codeg parity):
  * expand/collapse toggle, folder icon + alias/name label, hover-revealed
  * "+" (new conversation) and "⋯" (context menu) buttons. Context menu
@@ -200,17 +215,17 @@ export function FolderHeader({
             <ContextMenuSubContent className="min-w-[12rem] p-2">
               <ContextMenuItem
                 onSelect={() =>
-                  void updateFolder(folder.id, { color: "#6b7280" })
+                  void updateFolder(folder.id, { color: DEFAULT_FOLDER_COLOR })
                 }
                 className="gap-2"
               >
                 <span
                   aria-hidden
                   className="size-4 shrink-0 rounded border border-border"
-                  style={{ backgroundColor: "#6b7280" }}
+                  style={{ backgroundColor: DEFAULT_FOLDER_COLOR }}
                 />
                 <span className="min-w-0 flex-1 truncate">Default</span>
-                {folder.color === "#6b7280" && (
+                {folder.color === DEFAULT_FOLDER_COLOR && (
                   <span className="text-xs text-muted-foreground">✓</span>
                 )}
               </ContextMenuItem>

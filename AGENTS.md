@@ -261,6 +261,45 @@ the non-negotiable rules).
 - If two places need the same value, that value lives in exactly one
   place and both import it.
 
+### 1b. Styling standard (Tailwind v4 + theme tokens)
+
+Established from the 2026-10-11 inline-style audit, which found **14** inline
+style objects across `web/src` — of which **1** was a genuine duplication defect
+and **13** were legitimate runtime or library contracts.
+
+- **Static presentation lives in Tailwind utilities or CSS.** A fixed colour,
+  width, height, spacing, position, or border belongs in a class or a
+  stylesheet, not a `style={{}}` object.
+- **Repeated or genuinely complex styling gets one owner.** A Tailwind v4
+  `@utility`, a semantic class in `styles/globals.css`, or an existing shared
+  component. Prefer the simplest option that fits the actual usage.
+- **Theme tokens beat literal colours.** Use `bg-background`, `text-muted-foreground`,
+  `border-border`, `bg-sidebar-accent` and friends. A hex literal in
+  `web/src` is legitimate only when the colour IS the data — a user-selectable
+  palette, a theme definition, or a value read back out of storage.
+- **Runtime `style` props are allowed.** Do not read this section as a blanket
+  ban. The following are correct and must not be "cleaned up":
+  - measured geometry — virtualizer total size, row offsets, measured widths and
+    heights (`VirtualizedTranscript`, `V2FormCard`, `surfaces`)
+  - interactive transforms — drag positions, diagram zoom/pan
+  - CSS custom properties carrying a runtime value (`--usage-width`)
+  - caller-supplied `style` passthrough props (`shiki-highlighter`)
+  - DOM-level styling a technique requires (`clipboard`'s off-screen textarea,
+    a scroll lock during fullscreen)
+- **A retained runtime style should be self-explanatory.** If the reason is not
+  obvious from the code, say so in a comment. "Why is this inline?" should never
+  require archaeology.
+- **Shell geometry has one source of truth.** `lib/window-chrome.ts` holds the
+  numbers, `lib/chrome-vars.ts` is the only module that turns them into CSS
+  variables, and components consume `var(--sidebar-width)` and friends. Do not
+  add widths, offsets or reserves anywhere else. `AppShell.tsx` composes chrome
+  only; feature chrome belongs to its own component.
+
+Enforcement: TypeScript plus the existing Biome gate. There is deliberately
+**no custom lint rule** banning `style=` — a blanket rule would fail the
+legitimate runtime cases above and would have to be suppressed at a dozen call
+sites, which is worse than the problem it claims to solve.
+
 ### 2. Modular & layered
 
 - Small, single-responsibility modules. No god-files, no 500-line components.
