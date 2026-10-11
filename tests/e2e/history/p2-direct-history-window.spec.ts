@@ -209,7 +209,36 @@ test.describe("P2 bounded Direct history in the mounted app", () => {
       // The buffer was never truncated, so the tip is still in it — it is simply
       // not MOUNTED while the viewport is parked at the top. Returning to the
       // live edge (which also re-arms auto-follow) proves it is still there.
-      await page.mouse.wheel(0, 40000);
+      //
+      // The pointer has to be put back over the transcript first. `restore` is a
+      // toolbar control ABOVE the scroller, so clicking it leaves the cursor
+      // there, and `mouse.wheel` dispatches at the cursor — over the toolbar,
+      // outside the scroll container — where it scrolls nothing at all. The
+      // failure snapshot for this step showed the transcript still parked on
+      // `seeded-body-0`, which is the signature of a wheel that never reached
+      // it: the row was never missing from the buffer, only never scrolled to.
+      //
+      // This is the same gesture the upward scroll above already performs, so it
+      // is the test's own precedent rather than a new accommodation.
+      const restoreBox = await scroller.boundingBox();
+      if (!restoreBox) throw new Error("the virtualized transcript lost its box");
+      await page.mouse.move(
+        restoreBox.x + restoreBox.width / 2,
+        restoreBox.y + restoreBox.height / 2,
+      );
+      // Condition-based, like the upward scroll: the transcript is far taller
+      // than one wheel delta, so keep scrolling until it is genuinely at the
+      // live edge rather than assuming a single large delta lands there.
+      await expect
+        .poll(
+          async () => {
+            await page.mouse.wheel(0, 20000);
+            await page.waitForTimeout(120);
+            return scroller.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1);
+          },
+          { timeout: 20000 },
+        )
+        .toBe(true);
       await expect(page.getByText("seeded-body-149")).toBeVisible({ timeout: 15000 });
 
       await composer.fill("sent from the restored active tip");
