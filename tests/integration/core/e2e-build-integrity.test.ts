@@ -211,6 +211,7 @@ describe("the E2E server refuses an artifact it cannot vouch for", () => {
         TBAI_E2E_STUB_PORT: String(port + 1),
         TBAI_E2E_WEB_ROOT: webRoot,
         TBAI_E2E_WEB_DIST: webDist,
+        TBAI_E2E_PROVENANCE_CHECK_ONLY: "1",
       },
       timeout: 30_000,
     });

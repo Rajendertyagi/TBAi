@@ -55,9 +55,17 @@ const STUB_PORT = Number(process.env.TBAI_E2E_STUB_PORT ?? 3199);
 /** The frontend the server serves. Built output, never a dev server. */
 // The SPA ships into the same `dist/` that holds the compiled server, so the e2e
 // suite exercises the layout that actually ships rather than a parallel one.
-const WEB_DIST = process.env.TBAI_E2E_WEB_DIST ?? path.join(REPO_ROOT, "dist", "web");
+const PROVENANCE_CHECK_ONLY = process.env.TBAI_E2E_PROVENANCE_CHECK_ONLY === "1";
+/** Overrides are allowed only in check-only mode, which exits before starting any server. */
+const WEB_DIST =
+  PROVENANCE_CHECK_ONLY && process.env.TBAI_E2E_WEB_DIST
+    ? process.env.TBAI_E2E_WEB_DIST
+    : path.join(REPO_ROOT, "dist", "web");
 /** Build inputs, used to verify `WEB_DIST` was built from the current source. */
-const WEB_ROOT = process.env.TBAI_E2E_WEB_ROOT ?? path.join(REPO_ROOT, "web");
+const WEB_ROOT =
+  PROVENANCE_CHECK_ONLY && process.env.TBAI_E2E_WEB_ROOT
+    ? process.env.TBAI_E2E_WEB_ROOT
+    : path.join(REPO_ROOT, "web");
 
 function fail(message: string): never {
   process.stderr.write(`[e2e-server] ${message}\n`);
@@ -94,6 +102,10 @@ for (const dir of ["xdg-config", "xdg-data", "xdg-cache", "xdg-state"]) {
 const freshness = assessWebBuild(WEB_ROOT, WEB_DIST);
 if (freshness.status !== "current") {
   fail(`${describeBuildFreshness(freshness)}\n[e2e-server] refusing to start.`);
+}
+if (PROVENANCE_CHECK_ONLY) {
+  process.stdout.write("[e2e-server] provenance check passed; check-only mode, server not started.\n");
+  process.exit(0);
 }
 process.stdout.write(
   `[e2e-server] serving web build ${freshness.stamp.sourceHash} (built ${freshness.stamp.builtAt})\n`,
