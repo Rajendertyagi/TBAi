@@ -47,17 +47,12 @@ afterEach(() => {
 });
 
 /**
- * These cases deliberately invalidate the REAL `dist/web` stamp, because that is
- * the only way to prove the shipped server script refuses an untrusted artifact.
- *
- * The cost is that a failure part-way through could leave the working tree unable
- * to start the E2E server. So the truthful stamp is restored unconditionally on
- * the way out — not only on the happy path. Leaving a stale artifact behind as a
- * side effect of running the tests would be the exact hazard these tests exist to
- * prevent, just pointed at the next person instead.
+ * The server-refusal and build-orchestration cases use temporary web roots and
+ * dist directories. CI's fast verification job intentionally runs independently
+ * of the E2E job, so a fresh checkout may not contain `dist/web`. These tests
+ * must therefore neither depend on nor mutate the repository's build artifact.
+ * Each temporary directory is registered for cleanup by afterEach().
  */
-
-
 /** A throwaway directory shaped like `web/`, with a small real source tree. */
 function makeFakeWebRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-webroot-"));
