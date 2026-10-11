@@ -63,17 +63,41 @@ const recovered = (m: unknown) =>
  * convert each stored message and keep the parent link beside the RESULT (the
  * object is never re-materialized).
  */
-const productionRepository = (rows: readonly { message: unknown; parentId: string | null }[]) => ({
+/**
+ * The shape both constructions are asserted against.
+ *
+ * `BoundRow.message` is `unknown` by design — any assistant-ui message can reach
+ * it and `deriveWriteBack` is what extracts identity — so the repositories this
+ * file builds have no useful inferred type. `spikeRepository` in particular goes
+ * through an untyped `dist/*` internal. Declaring the contract here is the
+ * honest alternative to casting at every read below.
+ */
+type RepositoryView = {
+  readonly headId: string | null;
+  readonly messages: readonly {
+    readonly parentId: string | null;
+    readonly message: { id: string };
+  }[];
+};
+
+const productionRepository = (
+  rows: readonly { message: unknown; parentId: string | null }[],
+): RepositoryView => ({
   headId: rows.at(-1) ? (rows.at(-1)!.message as { id: string }).id : null,
-  messages: rows.map((r) => ({ parentId: r.parentId, message: r.message })),
+  messages: rows.map((r) => ({
+    parentId: r.parentId,
+    message: r.message as { id: string },
+  })),
 });
 
 /** What the SPIKE used — and what must never be used for write-back. */
-const spikeRepository = (rows: readonly { message: unknown; parentId: string | null }[]) =>
+const spikeRepository = (
+  rows: readonly { message: unknown; parentId: string | null }[],
+): RepositoryView =>
   ExportedMessageRepository.fromBranchableArray(
     rows.map((r) => ({ message: r.message as never, parentId: r.parentId })) as never,
     { headId: rows.at(-1) ? (rows.at(-1)!.message as { id: string }).id : null },
-  );
+  ) as unknown as RepositoryView;
 
 describe("P2 — binding survival by repository construction", () => {
   it("production construction keeps the binding; fromBranchableArray loses it", () => {

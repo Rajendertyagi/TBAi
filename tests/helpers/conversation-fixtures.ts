@@ -21,7 +21,11 @@
 // `Conversation` is declared in `src/types`, not re-exported from the storage
 // service; importing it from where it is DEFINED keeps the factory tied to the
 // contract rather than to a re-export that may be dropped.
-import type { Conversation } from "@/types";
+// `@backend/*`, not `@/*`: this fixture builds BACKEND conversation records.
+// `tests/tsconfig.web.json` also checks `tests/helpers/**` and maps `@/*` to
+// `web/src/*`, whose `Conversation` has none of the create-input keys below, so
+// the bare specifier resolved to a different type under that project.
+import type { Conversation } from "@backend/types";
 
 /** The shape `conversationService.create` accepts. */
 export type ConversationCreateInput = Pick<

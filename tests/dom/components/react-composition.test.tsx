@@ -176,7 +176,7 @@ function Transcript() {
  * `ResumableThreadRuntime` does exactly this). The first spike run wrongly
  * returned JSX from it, which is why the nested thread rendered nothing.
  */
-function useCandidateRuntime(initial: unknown[], onSend: () => void) {
+function useCandidateRuntime(initial: unknown[]) {
   const chat = useChat({
     id: "spike-thread",
     transport: useMemo(() => makeTransport(), []),
@@ -207,7 +207,7 @@ function useCandidateRuntime(initial: unknown[], onSend: () => void) {
 }
 
 function CandidateD({ initial, onSend }: { initial: unknown[]; onSend: () => void }) {
-  const runtime = useCandidateRuntime(initial, onSend);
+  const runtime = useCandidateRuntime(initial);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Probe onSend={onSend} />
@@ -217,9 +217,12 @@ function CandidateD({ initial, onSend }: { initial: unknown[]; onSend: () => voi
 }
 
 /** Hosts a candidate runtime under useRemoteThreadListRuntime, as TBAi does. */
-function AppWithRemoteThreadList({ initial, onSend }: { initial: unknown[]; onSend: () => void }) {
+// `onSend` stays in the prop contract (callers pass it, mirroring the other
+// harness) but is deliberately not destructured: this composition renders only
+// the remote-thread list, so nothing here wires the send button.
+function AppWithRemoteThreadList({ initial }: { initial: unknown[]; onSend: () => void }) {
   const runtime = useRemoteThreadListRuntime({
-    runtimeHook: () => useCandidateRuntime(initial, onSend),
+    runtimeHook: () => useCandidateRuntime(initial),
     adapter: {
       list: async () => ({
         threads: [{ remoteId: "spike-thread", title: "spike", status: "regular" }],

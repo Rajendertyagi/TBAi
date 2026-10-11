@@ -55,6 +55,13 @@ export interface ChatInstance<T> {
   setMessages: (next: T | ((current: T) => T)) => void;
   sendMessage: (message: never, options?: { metadata?: unknown }) => Promise<unknown>;
   regenerate: (options?: { metadata?: unknown }) => Promise<unknown>;
+  /**
+   * Run state, which the composition contracts branch on (`"submitted"` /
+   * `"streaming"` mean a run is in flight). Declared here because this harness
+   * pins the installed version's shape explicitly rather than importing the
+   * deep-internal types that have no published declarations.
+   */
+  status: string;
 }
 
 /** A stored thread message, as far as the harness needs to see it. */
@@ -104,6 +111,30 @@ export interface ExternalStoreThreadRuntimeInstance {
 }
 
 /**
+ * The serialized form of the repository, as the round-trip contracts consume it.
+ *
+ * Previously declared `export: () => unknown`, which pushed a cast onto every
+ * caller: five separate `.messages` accesses needed `as unknown as ...` before a
+ * single field could be read. The shape is not a guess — `StoredMessage`
+ * already models the message record, and every call site reads exactly
+ * `{ messages: [{ message }] }`.
+ */
+export interface MessageRepositoryExport {
+  readonly messages: readonly {
+    /**
+     * The recorded parent of this ENTRY.
+     *
+     * On the entry, not on the message. `navigation-eviction.test.ts` asserts a
+     * parent's id against this field, and reading `parentId` from the message
+     * instead silently yields `null` — a wrong-answer bug that still typechecks
+     * when `StoredMessage` carries an index signature.
+     */
+    readonly parentId: string | null;
+    readonly message: StoredMessage;
+  }[];
+}
+
+/**
  * `MessageRepository` is referenced as an instance type and by the members the
  * history contracts exercise.
  */
@@ -111,7 +142,7 @@ export interface MessageRepositoryInstance {
   readonly canonicalHeadId: string;
   import: (input: { headId: string; messages: unknown }) => unknown;
   /** Serialize the repository's messages (used to prove round-trip identity). */
-  export: () => unknown;
+  export: () => MessageRepositoryExport;
 }
 
 const here = createRequire(import.meta.url);
@@ -140,7 +171,9 @@ const aiSdkReact = (await import(aiSdkRequire.resolve("@ai-sdk/react"))) as Reco
 export const Chat = aiSdkReact.Chat as unknown as new <T>(config: unknown) => ChatInstance<T>;
 export type Chat<T> = ChatInstance<T>;
 
-export const useChat = aiSdkReact.useChat;
+export const useChat = aiSdkReact.useChat as unknown as (
+  config: unknown,
+) => ChatInstance<unknown[]>;
 
 /* ── @assistant-ui/core (public `internal` subpath) ───────────────────────── */
 const coreInternal = (await import(aiSdkRequire.resolve("@assistant-ui/core/internal"))) as Record<

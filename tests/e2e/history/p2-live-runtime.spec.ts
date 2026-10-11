@@ -252,8 +252,13 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     // serialized and executed in the browser, where the Node-side constant is
     // not in scope.
     const scrollAfter = await scroller(page).evaluate(
-      ({ anchorKey, threshold }) => {
-        const el = document.querySelector('[data-testid="virtual-transcript-scroller"]')!;
+      // Playwright passes `(element, arg)` to a locator callback. This declared a
+    // SINGLE parameter destructuring `{ anchorKey, threshold }`, which silently
+    // unpacked those names off the ELEMENT instead — both `undefined`, so
+    // `distance <= threshold` was always false and `isAtEnd` always reported
+    // false. The reading looked plausible and no assertion could catch it.
+    (_el, { anchorKey, threshold }) => {
+      const el = document.querySelector('[data-testid="virtual-transcript-scroller"]')!;
         const mountedKeys = Array.from(el.querySelectorAll("[data-row-key]"))
           .map((row) => row.getAttribute("data-row-key"))
           .filter((k): k is string => k !== null);

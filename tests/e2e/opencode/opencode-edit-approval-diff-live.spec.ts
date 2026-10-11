@@ -106,7 +106,11 @@ test.describe("edit approval shows the resulting change (live)", () => {
     // Anything else is a failure, not a skip. See ConfigState. Thrown rather than
     // asserted, so the union narrows instead of being cast past the compiler.
     if (state.kind !== "readable") {
-      throw new Error(`the OpenCode permissions API is not usable: ${state.reason}`);
+      throw new Error(
+      `the OpenCode permissions API is not usable: ${
+        state.kind === "broken" ? state.reason : state.kind
+      }`,
+    );
     }
     const previous = state.effect;
 

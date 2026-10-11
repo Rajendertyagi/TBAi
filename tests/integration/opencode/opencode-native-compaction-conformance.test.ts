@@ -392,10 +392,13 @@ describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
     // assistant reply legitimately restores a reading. The claim under test is
     // narrower and exact: at the moment the compaction settled, and before any
     // later response, occupancy is `unknown`.
-    const slice = messages.slice(
-      0,
-      messages.findLastIndex((m) => m.type === "compaction" && m.status === "completed") + 1,
+    // `findLastIndex` needs lib es2023; a reverse scan is the same result and
+    // keeps the test on the project's configured lib rather than widening it.
+    const lastCompaction = messages.reduce(
+      (found, m, i) => (m.type === "compaction" && m.status === "completed" ? i : found),
+      -1,
     );
+    const slice = messages.slice(0, lastCompaction + 1);
     expect(slice.length).toBeGreaterThan(0);
     expect(slice[slice.length - 1]?.type).toBe("compaction");
     const atCompaction = resolveCodeOccupancy(

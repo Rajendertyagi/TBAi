@@ -21,7 +21,11 @@
  */
 
 import { describe, expect, it, afterAll, beforeAll } from "bun:test";
-import { OPENCODE_CONFIG } from "@/config/opencode.ts";
+// `@backend/*`, not `@/*`: this starts the real backend runtime server, so it
+// needs the BACKEND config. `tests/tsconfig.web.json` also checks this file and
+// maps `@/*` to `web/src/*`, where `config/opencode.ts` has no `OPENCODE_CONFIG`
+// at all — the bare `@/` specifier silently resolved to the wrong tree there.
+import { OPENCODE_CONFIG } from "@backend/config/opencode.ts";
 import {
   runtimeTestsRequested,
   runtimeUnavailableReason,

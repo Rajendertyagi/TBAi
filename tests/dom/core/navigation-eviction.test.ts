@@ -147,10 +147,7 @@ describe("Q4 — eviction is presentation-only, and children are orphaned silent
 
     const exported = h.repository.export();
     const parentOf = new Map(
-      exported.messages.map((entry) => [
-        entry.message.id,
-        (entry as { parentId: string | null }).parentId,
-      ]),
+      exported.messages.map((entry) => [entry.message.id, entry.parentId]),
     );
     console.log("  repository parents:", [...parentOf].map(([id, p]) => `${id}<-${p}`).join(" "));
 

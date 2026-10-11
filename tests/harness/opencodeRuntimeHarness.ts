@@ -347,9 +347,18 @@ function allocateRuntimePort(): Promise<number> {
   return Promise.resolve(port);
 }
 
-/** Consume a stream so the child never blocks writing to it. */
+/**
+ * Consume a stream so the child never blocks writing to it.
+ *
+ * Uses the reader API rather than `for await`. Async iteration on a
+ * `ReadableStream` needs the `DOM.AsyncIterable` lib, which the test tsconfigs do
+ * not enable; the reader is the portable spelling and needs no compiler
+ * relaxation.
+ */
 async function drain(stream: ReadableStream<Uint8Array>): Promise<void> {
-  for await (const _chunk of stream) {
-    /* discard */
+  const reader = stream.getReader();
+  for (;;) {
+    const { done } = await reader.read();
+    if (done) return;
   }
 }

@@ -209,6 +209,15 @@ describe("P2 contract — write-back derives from the binding-carrying conversio
 
 describe("P2 contract — corrected invariant 21 fails closed only on real ambiguity", () => {
   const rows = () => boundRowsFromConversion(ADJACENT);
+  /**
+   * The persisted id of a bound row.
+   *
+   * `BoundRow.message` is `unknown` on purpose — anything the converter produces
+   * can reach it — so reading `.id` needs a narrowing. The previous inline
+   * `rows()[0]!.message.id as string` did not compile precisely because the
+   * property access happened before any cast.
+   */
+  const idOf = (row: BoundRow): string => (row.message as { id?: string }).id ?? "";
 
   it("row count below persisted count is NOT a failure", () => {
     expect(rows().length).toBeLessThan(ADJACENT.length);
@@ -218,9 +227,9 @@ describe("P2 contract — corrected invariant 21 fails closed only on real ambig
   it("fails closed when a persisted identity would be duplicated", () => {
     const duplicated: BoundRow[] = [
       { message: rows()[0]!.message, parentId: null },
-      { message: rows()[1]!.message, parentId: rows()[0]!.message.id as string },
+      { message: rows()[1]!.message, parentId: idOf(rows()[0]!) },
       // The same bound row again: its m2/m3 identities repeat.
-      { message: rows()[1]!.message, parentId: rows()[0]!.message.id as string },
+      { message: rows()[1]!.message, parentId: idOf(rows()[0]!) },
     ];
     let error: WriteBackAmbiguityError | null = null;
     try {

@@ -64,8 +64,21 @@ describe("/compact is intercepted locally and never reaches the model", () => {
 
   it("reports a refused compaction instead of claiming success", () => {
     // Truthful failure: the error surfaces and no message was sent.
-    expect(composer).toContain("Couldn&apos;t compact the session");
-    expect(composer).toContain("Nothing was sent.");
+    //
+    // This copy used to be inlined in `Composer.tsx`. It now lives in
+    // `ComposerAlerts`, which `Composer` renders, so asserting against the
+    // Composer source was a STALE guard: it failed while the behaviour it claims
+    // to protect was intact and only the file ownership had moved. Read the file
+    // that now owns the string rather than deleting the check.
+    const alerts = fs.readFileSync(
+      path.join(SRC, "..", "..", "components", "composer", "ComposerAlerts.tsx"),
+      "utf8",
+    );
+    expect(alerts).toContain("Couldn&apos;t compact the session");
+    expect(alerts).toContain("Nothing was sent.");
+    // The Composer must still render that alert component, or the copy is
+    // present but unreachable.
+    expect(composer).toContain("ComposerAlerts");
   });
 
   it("the server's compaction lifecycle reaches the reducer", () => {

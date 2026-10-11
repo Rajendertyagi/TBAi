@@ -152,7 +152,7 @@ export interface RendererCpuReport {
 
 interface ProfileNode {
   id: number;
-  callFrame: { functionName: string; url: string };
+  callFrame: { functionName: string; url: string; lineNumber: number; columnNumber: number };
   children?: number[];
   parent?: number;
 }
