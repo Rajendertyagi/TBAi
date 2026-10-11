@@ -59,15 +59,26 @@ dev.err
 # containing a stray `chat/` tree.
 tmp-cri-*/
 data-verify-tmp*/
-web/test-results/
-playwright-report/
 
-# The Playwright suite's OWN server data and workspace (scripts/start-e2e-server.ts).
+# ── Test artifacts ───────────────────────────────────────────────────────────
+#
+# ONE entry for everything the suites write at runtime: the Playwright server's
+# data dir and workspace (scripts/start-e2e-server.ts), Playwright's own output
+# (traces, screenshots, error-context.md), and the HTML report when it is
+# enabled. They used to be four scattered entries at the repo root and under
+# `web/`, which is where a real project file would have lived.
+#
+# `tests/.artifacts/` is inside the test tree that owns it and is the only path
+# this repo has that is generated-but-never-committed.
+#
 # Separate from `data/` on purpose: the suite must never read or write the
-# maintainer's live database, and these two dirs are deleted and recreated on
-# every e2e start. Never commit either.
-.e2e-data/
-.e2e-workspace/
+# maintainer's live database, and these are deleted and recreated on every run.
+tests/.artifacts/
+
+# The HTML report still lands at the repo root when a run passes
+# `--reporter=html`, which bypasses `outputDir`. Ignored here rather than
+# redirected so an ad-hoc report can never be committed.
+playwright-report/
 
 # Local agent tooling state, not project source. `.superpowers/` holds per-task
 # progress notes for work still in flight; `prompt.txt` is a scratch task brief.
@@ -102,5 +113,6 @@ prompt.txt
 docs/tool-ui-atlas/
 docs/tool-ui-atlas.html
 
-# Debug screenshots written by the E2E suite belong in Playwright's artifact dir.
-web/e2e/*.png
+# Debug screenshots written by the E2E suite belong in Playwright's artifact dir
+# (`tests/.artifacts/playwright`, covered above). The old `web/e2e/*.png` rule is
+# gone: that directory no longer exists — the suite moved to `tests/e2e/`.

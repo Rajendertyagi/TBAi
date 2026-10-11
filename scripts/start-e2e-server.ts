@@ -37,8 +37,17 @@ import { seedStubProvider, startStubProvider } from "./e2e-stub-provider";
 import { assessWebBuild, describeBuildFreshness } from "./web-build-provenance";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const E2E_DATA_DIR = path.join(REPO_ROOT, ".e2e-data");
-const E2E_WORKSPACE_DIR = path.join(REPO_ROOT, ".e2e-workspace");
+/**
+ * Every test artifact this suite writes lives under `tests/.artifacts/`.
+ *
+ * They used to sit at the repo root (`.e2e-data/`, `.e2e-workspace/`) alongside
+ * real project files, so a `git status` full of ten megabytes of SQLite hid the
+ * handful of source changes that actually mattered. One directory, inside the
+ * test tree that owns it, is one line of `.gitignore` instead of four.
+ */
+const E2E_ARTIFACT_DIR = path.join(REPO_ROOT, "tests", ".artifacts");
+const E2E_DATA_DIR = path.join(E2E_ARTIFACT_DIR, "e2e-data");
+const E2E_WORKSPACE_DIR = path.join(E2E_ARTIFACT_DIR, "e2e-workspace");
 const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
 /** Fixed, and off the app's own port space, so it never collides. */
 const STUB_PORT = Number(process.env.TBAI_E2E_STUB_PORT ?? 3199);
