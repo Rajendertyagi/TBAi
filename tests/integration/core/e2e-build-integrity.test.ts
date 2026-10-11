@@ -194,21 +194,16 @@ describe("the E2E server refuses an artifact it cannot vouch for", () => {
   const START_SERVER = path.join(REPO_ROOT, "scripts", "start-e2e-server.ts");
 
   /**
-   * Run the real server launcher and report what it did.
-   *
-   * Only the refusal paths are exercised — each case must NOT reach the point of
-   * spawning the app, which is precisely the behaviour under test. A unique port
-   * is used so "did the app start?" is answerable by a real connection attempt
-   * rather than by trusting the exit code alone.
+   * Run the real launcher in check-only mode against isolated build inputs.
+   * Even if those inputs are current, check-only mode exits before any server
+   * starts, so test paths cannot bypass the shipped-artifact provenance guard.
    */
-  function startServerExpectingRefusal(port: number, webRoot: string, webDist: string) {
+  function runServerProvenanceCheck(webRoot: string, webDist: string) {
     const result = spawnSync(process.execPath, [START_SERVER], {
       cwd: REPO_ROOT,
       encoding: "utf8",
       env: {
         ...process.env,
-        TBAI_E2E_PORT: String(port),
-        TBAI_E2E_STUB_PORT: String(port + 1),
         TBAI_E2E_WEB_ROOT: webRoot,
         TBAI_E2E_WEB_DIST: webDist,
         TBAI_E2E_PROVENANCE_CHECK_ONLY: "1",
@@ -218,31 +213,37 @@ describe("the E2E server refuses an artifact it cannot vouch for", () => {
     return { code: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
   }
 
-  /** A port nothing is listening on, derived from a unique-ish base. */
-  const unusedPort = (base: number): number => base + Math.floor(process.pid % 500) * 2;
-
-  it("REFUSES an artifact with no build stamp and never starts the app", () => {
-    const port = unusedPort(41_000);
+  it("REFUSES an artifact with no build stamp", () => {
     const webRoot = makeFakeWebRoot();
     const webDist = makeFakeDist();
 
-    const { code, output } = startServerExpectingRefusal(port, webRoot, webDist);
+    const { code, output } = runServerProvenanceCheck(webRoot, webDist);
     expect(code).not.toBe(0);
     expect(output).toContain("refusing to start");
     expect(output).toContain("no build stamp");
   });
 
   it("REFUSES a stale stamp: an artifact built from different source", () => {
-    const port = unusedPort(43_000);
     const webRoot = makeFakeWebRoot();
     const webDist = makeFakeDist();
     // A stamp that is well-formed but describes source that is not this source.
     writeBuildStamp(webDist, "0".repeat(64), "test: deliberately stale");
 
-    const { code, output } = startServerExpectingRefusal(port, webRoot, webDist);
+    const { code, output } = runServerProvenanceCheck(webRoot, webDist);
     expect(code).not.toBe(0);
     expect(output).toContain("refusing to start");
     expect(output).toContain("different source");
+  });
+
+  it("check-only mode exits without starting the server for a current artifact", () => {
+    const webRoot = makeFakeWebRoot();
+    const webDist = makeFakeDist();
+    writeBuildStamp(webDist, hashWebSource(webRoot), "test: current artifact");
+
+    const { code, output } = runServerProvenanceCheck(webRoot, webDist);
+    expect(code).toBe(0);
+    expect(output).toContain("check-only mode, server not started");
+    expect(output).not.toContain("serving web build");
   });
 });
 
