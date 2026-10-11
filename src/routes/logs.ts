@@ -28,7 +28,7 @@ import { disableIdleTimeout } from "./shared";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+import { DATA_DIR } from "../config/data-dir";
 
 const LEVEL_RANK: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 

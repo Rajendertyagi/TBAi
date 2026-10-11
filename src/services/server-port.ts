@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { db } from "../db";
+import { DATA_DIR } from "../config/data-dir";
 
 export const DEFAULT_WEB_PORT = 3000;
 const PORT_SETTING_KEY = "server.port";
@@ -8,7 +9,7 @@ const PORT_FILE_NAME = "port";
 
 /** Data dir shared with db/index.ts (DATA_DIR env or ./data). Single place. */
 export function resolveDataDir(): string {
-  return process.env.DATA_DIR || path.join(process.cwd(), "data");
+  return DATA_DIR;
 }
 
 /** True when the environment owns the port (UI locks editing, like log env locks). */

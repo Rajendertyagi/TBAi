@@ -6,9 +6,11 @@ import { logger } from "../lib/logger";
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
 import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "../services/chat-streams/schema";
+import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "chat.db");
+// Anchored to the repository, not to `process.cwd()` — see src/config/data-dir.ts.
+const DATA_DIR = APP_DATA_DIR;
+const DB_PATH = APP_DB_PATH;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 

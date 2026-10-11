@@ -1,5 +1,6 @@
 import path from "path";
 import { ToolError } from "./tools";
+import { DATA_DIR } from "../config/data-dir";
 import type { BrowserReadArgs, BrowserActionArgs } from "../lib/validation";
 
 /** Executable that fronts the persistent agent-browser daemon (Chromium). */
@@ -46,7 +47,7 @@ export function hashNamespaceSeed(seed: string): string {
 export function resolveBrowserNamespace(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env[BROWSER_NAMESPACE_ENV]?.trim();
   if (explicit) return explicit;
-  const dir = path.resolve(env.DATA_DIR || path.join(process.cwd(), "data"));
+  const dir = path.resolve(env.DATA_DIR ?? DATA_DIR);
   return `${BROWSER_NAMESPACE_PREFIX}-${hashNamespaceSeed(dir)}`;
 }
 

@@ -1,6 +1,7 @@
 import path from "path";
 import app from "./routes";
 import { db } from "./db";
+import { DATA_DIR } from "./config/data-dir";
 import { registry } from "./config/providers";
 import { credentialStore } from "./services/credentials";
 import { mcpManager } from "./services/mcp/manager";
@@ -109,7 +110,7 @@ export async function startServer(port = resolveConfiguredPort().port) {
   const server: BunServer = bound.server;
   port = bound.port;
   logger.info("server", "started", {
-    message: `http://localhost:${port} data=${process.env.DATA_DIR || path.join(process.cwd(), "data")}`,
+    message: `http://localhost:${port} data=${DATA_DIR}`,
   });
 
   // Mirror for the Tauri shell (reads the port file before spawning us).

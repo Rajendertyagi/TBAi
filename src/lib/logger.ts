@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { generateId } from "./utils";
+import { LOG_PATH as DEFAULT_LOG_PATH } from "../config/data-dir";
 
 /**
  * Central structured logger for the TBAi server (Bun).
@@ -72,15 +73,25 @@ export interface LoggerConfig {
   keepFiles: number;
   maxTotalBytes: number;
   retentionMs: number;
-  /** Live-tail ring cap (entries). Bounded by design — overflow is counted. */
+
+/** Live-tail ring cap (entries). Bounded by design — overflow is counted. */
   bufferSize: number;
   /** File-sink backlog cap (lines). Overflow is counted, never blocking. */
   fileQueueLimit: number;
 }
 
-/** Default sink path for a data dir (production default; dev default is off). */
+/**
+ * Default sink path for a data dir (production default; dev default is off).
+ *
+ * The `env` parameter exists so a caller can supply an explicit override (the E2E
+ * harness does). With no override it defers to the single canonical
+ * `DATA_DIR`, which is anchored to the repository rather than to `process.cwd()`
+ * — a cwd-relative path built a second, empty database whenever the app was
+ * launched from a subdirectory. See `src/config/data-dir.ts`.
+ */
 export function defaultLogFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(env.DATA_DIR || path.join(process.cwd(), "data"), "tbai.log");
+  if (env.DATA_DIR) return path.join(env.DATA_DIR, "tbai.log");
+  return DEFAULT_LOG_PATH;
 }
 
 function numEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
