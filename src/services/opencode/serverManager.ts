@@ -1,7 +1,13 @@
 import { spawn, type Subprocess } from "bun";
-import fs from "fs";
+import fs from "node:fs";
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../config/opencode";
-import { getOpenCodeAuthHeaders, getOpenCodeAuthMetadata, getOpenCodeAuthPassword, isSupportedOpenCodeVersion, resolveAndValidateManagedBinary } from "./runtime";
+import {
+  getOpenCodeAuthHeaders,
+  getOpenCodeAuthMetadata,
+  getOpenCodeAuthPassword,
+  isSupportedOpenCodeVersion,
+  resolveAndValidateManagedBinary,
+} from "./runtime";
 export { OpenCodeBinaryMissingError } from "./runtime";
 import { logger } from "../../lib/logger";
 
@@ -12,7 +18,10 @@ export function appendTail(tail: string, chunk: string, maxBytes: number): strin
 }
 
 /** Builds the argv for `opencode serve` on the given port. Pure. */
-export function buildOpenCodeServeArgs(port: number, binary: string = OPENCODE_CONFIG.binaryName): string[] {
+export function buildOpenCodeServeArgs(
+  port: number,
+  binary: string = OPENCODE_CONFIG.binaryName,
+): string[] {
   return [binary, "serve", "--port", String(port)];
 }
 
@@ -48,9 +57,7 @@ export class OpenCodeProcessExitedError extends Error {
 /** Thrown when the server does not become reachable within the budget. */
 export class OpenCodeReadinessTimeoutError extends Error {
   constructor(timeoutMs: number, port: number | null) {
-    super(
-      `OpenCode server did not become ready within ${timeoutMs}ms (port ${port ?? "unknown"})`,
-    );
+    super(`OpenCode server did not become ready within ${timeoutMs}ms (port ${port ?? "unknown"})`);
     this.name = "OpenCodeReadinessTimeoutError";
   }
 }
@@ -124,7 +131,17 @@ export interface ReadinessDeps {
  * `timeoutMs` with short `pollMs` intervals.
  */
 export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
-  const { baseUrl, port, probePath, authHeaders, isSupportedVersion, timeoutMs, pollMs, getStopping, exited } = deps;
+  const {
+    baseUrl,
+    port,
+    probePath,
+    authHeaders,
+    isSupportedVersion,
+    timeoutMs,
+    pollMs,
+    getStopping,
+    exited,
+  } = deps;
   const startMs = Date.now();
   const probeTimeout = Math.min(pollMs * 4, timeoutMs);
   let attempt = 0;
@@ -159,13 +176,9 @@ export async function waitForHttpReady(deps: ReadinessDeps): Promise<void> {
     });
 
     const outcome = await Promise.race([
-      probeOpenCodeInfo(
-        baseUrl,
-        probePath,
-        probeTimeout,
-        authHeaders,
-        isSupportedVersion,
-      ).then((r) => ({ kind: "probe" as const, r })),
+      probeOpenCodeInfo(baseUrl, probePath, probeTimeout, authHeaders, isSupportedVersion).then(
+        (r) => ({ kind: "probe" as const, r }),
+      ),
       exitRejection,
     ]).catch((err: unknown) => {
       // A process exit must fail readiness immediately — never wait out the
@@ -301,9 +314,7 @@ export class OpenCodeServerManager {
     // Drain the child's pipes so a verbose server can never block on a full
     // stdout/stderr buffer. The readiness gate is the HTTP probe, not the log.
     this.drainStreams(child);
-    child.exited
-      .then((code) => this.onExit(child, code ?? -1))
-      .catch(() => undefined);
+    child.exited.then((code) => this.onExit(child, code ?? -1)).catch(() => undefined);
 
     const baseUrl = this.baseUrlFor(port);
     logger.info("opencode", "readiness.start", {
@@ -388,9 +399,7 @@ export class OpenCodeServerManager {
   }
 
   /** Bounded stdout/stderr tail captured for a child (diagnostics seam). */
-  protected diagnosticsFor(
-    child: Subprocess,
-  ): { stdout: string; stderr: string } | undefined {
+  protected diagnosticsFor(child: Subprocess): { stdout: string; stderr: string } | undefined {
     return this.childDiagnostics.get(child);
   }
 

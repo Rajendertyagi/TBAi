@@ -5,11 +5,7 @@ import type {
 } from "@opencode/client";
 import { OPENCODE_V2_HISTORY_PAGE_SIZE } from "@/config/opencode";
 import type { V2HistoryReader } from "./v2Client";
-import type {
-  V2HistorySnapshot,
-  V2MessagePartState,
-  V2MessageState,
-} from "./v2Types";
+import type { V2HistorySnapshot, V2MessagePartState, V2MessageState } from "./v2Types";
 import { deriveV2ToolCallId, type V2PermissionView } from "./v2Permissions";
 import type { V2HistoryProjection } from "./v2MessageProjection";
 
@@ -25,9 +21,10 @@ export async function loadV2History(
 
   do {
     if (options.signal?.aborted) throw new DOMException("History load aborted", "AbortError");
-    const input: MessageListInput = cursor === undefined
-      ? { sessionID: reader.sessionId, order: "desc", limit: OPENCODE_V2_HISTORY_PAGE_SIZE }
-      : { sessionID: reader.sessionId, cursor };
+    const input: MessageListInput =
+      cursor === undefined
+        ? { sessionID: reader.sessionId, order: "desc", limit: OPENCODE_V2_HISTORY_PAGE_SIZE }
+        : { sessionID: reader.sessionId, cursor };
     const response: SessionMessagesResponse = await reader.list(input);
     if (options.signal?.aborted) throw new DOMException("History load aborted", "AbortError");
     pages.push(response.data);
@@ -72,57 +69,92 @@ function messageTime(message: SessionMessageInfo): number {
 
 function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartState[] {
   if (message.type === "system") {
-    return [{
-      kind: "text",
-      id: `text:${message.id}:0`,
-      order: 0,
-      value: message.text,
-      status: "complete",
-    }];
+    return [
+      {
+        kind: "text",
+        id: `text:${message.id}:0`,
+        order: 0,
+        value: message.text,
+        status: "complete",
+      },
+    ];
   }
   if (message.type === "shell") {
     const output = message.output?.output ?? "";
-    return [{
-      kind: "text",
-      id: `text:${message.id}:0`,
-      order: 0,
-      value: output.length > 0 ? `${message.command}\n${output}` : message.command,
-      status: message.time.completed === undefined ? "streaming" : "complete",
-    }];
+    return [
+      {
+        kind: "text",
+        id: `text:${message.id}:0`,
+        order: 0,
+        value: output.length > 0 ? `${message.command}\n${output}` : message.command,
+        status: message.time.completed === undefined ? "streaming" : "complete",
+      },
+    ];
   }
   if (message.type === "user") {
     return message.text.length > 0
-      ? [{ kind: "text", id: `text:${message.id}:0`, order: 0, value: message.text, status: "complete" }]
+      ? [
+          {
+            kind: "text",
+            id: `text:${message.id}:0`,
+            order: 0,
+            value: message.text,
+            status: "complete",
+          },
+        ]
       : [];
   }
   if (message.type !== "assistant") return [];
   const parts: V2MessagePartState[] = [];
   message.content.forEach((content, index) => {
     if (content.type === "text") {
-      parts.push({ kind: "text", id: `text:${message.id}:${index}`, order: index, value: content.text, status: "complete" });
+      parts.push({
+        kind: "text",
+        id: `text:${message.id}:${index}`,
+        order: index,
+        value: content.text,
+        status: "complete",
+      });
     } else if (content.type === "reasoning") {
-      parts.push({ kind: "reasoning", id: `reasoning:${message.id}:${index}`, order: index, value: content.text, status: content.time?.completed === undefined ? "streaming" : "complete" });
+      parts.push({
+        kind: "reasoning",
+        id: `reasoning:${message.id}:${index}`,
+        order: index,
+        value: content.text,
+        status: content.time?.completed === undefined ? "streaming" : "complete",
+      });
     } else if (content.type === "tool") {
-      const status = content.state.status === "completed" ? "complete" : content.state.status === "error" ? "error" : content.state.status === "running" || content.state.status === "streaming" ? "running" : "pending";
+      const status =
+        content.state.status === "completed"
+          ? "complete"
+          : content.state.status === "error"
+            ? "error"
+            : content.state.status === "running" || content.state.status === "streaming"
+              ? "running"
+              : "pending";
       const metadata = "metadata" in content.state ? content.state.metadata : undefined;
       parts.push({
         kind: "tool",
         id: `tool:${message.id}:${content.id}`,
         order: index,
         name: content.name,
-        input: typeof content.state.input === "string"
-          ? { text: content.state.input }
-          : content.state.input ?? {},
-        output: content.state.status === "completed"
-           ? content.state.content
-           : content.state.status === "error"
-             ? {
-                 error: content.state.error.message,
-                 type: content.state.error.type,
-                 ...(content.state.content === undefined ? {} : { content: content.state.content }),
-               }
-             : undefined,
-         ...(metadata === undefined ? {} : { metadata }),
+        input:
+          typeof content.state.input === "string"
+            ? { text: content.state.input }
+            : (content.state.input ?? {}),
+        output:
+          content.state.status === "completed"
+            ? content.state.content
+            : content.state.status === "error"
+              ? {
+                  error: content.state.error.message,
+                  type: content.state.error.type,
+                  ...(content.state.content === undefined
+                    ? {}
+                    : { content: content.state.content }),
+                }
+              : undefined,
+        ...(metadata === undefined ? {} : { metadata }),
         status,
         permissionId: null,
         // The tool part carries its OWN clock: `time.created` is when the call
@@ -150,7 +182,12 @@ function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartSta
     }
   });
   if (message.retry !== undefined) {
-    parts.push({ kind: "retry", id: `retry:${message.id}`, order: parts.length, value: message.retry.error.message });
+    parts.push({
+      kind: "retry",
+      id: `retry:${message.id}`,
+      order: parts.length,
+      value: message.retry.error.message,
+    });
   }
   return parts;
 }
@@ -165,8 +202,12 @@ function attachPermissions(
     parts: message.parts.map((part) => {
       if (part.kind !== "tool" || part.id === null) return part;
       const permission = permissions.find((candidate) => {
-        if (candidate.sourceMessageID !== message.id || candidate.sourceToolId === null) return false;
-        return deriveV2ToolCallId(message.id, candidate.sourceToolId) === deriveV2ToolCallId(message.id, part.id.replace(`tool:${message.id}:`, ""));
+        if (candidate.sourceMessageID !== message.id || candidate.sourceToolId === null)
+          return false;
+        return (
+          deriveV2ToolCallId(message.id, candidate.sourceToolId) ===
+          deriveV2ToolCallId(message.id, part.id.replace(`tool:${message.id}:`, ""))
+        );
       });
       return permission ? { ...part, permissionId: permission.id } : part;
     }),

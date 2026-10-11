@@ -68,11 +68,7 @@ export const OPENCODE_V2_TOOLS = [
  * but they are listed so the coverage test can say so out loud rather than
  * failing on them.
  */
-export const OPENCODE_V2_MANAGEMENT_TOOLS = [
-  "models",
-  "session_move",
-  "session_rename",
-] as const;
+export const OPENCODE_V2_MANAGEMENT_TOOLS = ["models", "session_move", "session_rename"] as const;
 
 /**
  * v1 names v2 still accepts, mapped to what replaced them.

@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logger } from "../../lib/logger";
-import { classifyError } from "../../lib/errors";
 
 /** Joins a directory and a file name using the host's path separator. */
 const joinPath = join;
@@ -120,8 +119,8 @@ export function selectConfigDocument(
   const documents = entries.filter(
     (entry) => entry.type === "document" && typeof entry.path === "string",
   );
-  const withPermissions = documents.find(
-    (entry) => Array.isArray((entry.info as Record<string, unknown> | undefined)?.permissions),
+  const withPermissions = documents.find((entry) =>
+    Array.isArray((entry.info as Record<string, unknown> | undefined)?.permissions),
   );
   const chosen = withPermissions ?? documents[0];
   if (!chosen || typeof chosen.path !== "string") return null;
@@ -144,16 +143,12 @@ export async function readOpenCodeConfigDocument(
 ): Promise<OpenCodeConfigDocument> {
   const response = await fetch(new URL("/api/config", baseUrl), { headers });
   if (!response.ok) {
-    throw new OpenCodeConfigUnreadableError(
-      `OpenCode config read failed (${response.status})`,
-    );
+    throw new OpenCodeConfigUnreadableError(`OpenCode config read failed (${response.status})`);
   }
   const parsedJson: unknown = await response.json().catch(() => null);
   const entries = configResponseSchema.safeParse(parsedJson);
   if (!entries.success) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode returned an unreadable config response",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode returned an unreadable config response");
   }
   /**
    * A global config the server could not parse is DROPPED from its own listing.
@@ -185,9 +180,7 @@ export async function readOpenCodeConfigDocument(
 
   const selected = selectConfigDocument(entries.data);
   if (!selected) {
-    throw new OpenCodeConfigNotFoundError(
-      "OpenCode reported no configuration document",
-    );
+    throw new OpenCodeConfigNotFoundError("OpenCode reported no configuration document");
   }
 
   const discoveredPaths = discoveredPathsOf(entries.data);
@@ -246,9 +239,7 @@ async function readFileText(path: string): Promise<string | null> {
 }
 
 /** Every path the server reported, in the order it reported them. */
-function discoveredPathsOf(
-  entries: readonly z.infer<typeof configEntrySchema>[],
-): string[] {
+function discoveredPathsOf(entries: readonly z.infer<typeof configEntrySchema>[]): string[] {
   return entries
     .filter((entry) => typeof entry.path === "string")
     .map((entry) => entry.path as string);
@@ -291,8 +282,7 @@ async function findUnreadableGlobalConfig(
   entries: readonly z.infer<typeof configEntrySchema>[],
 ): Promise<{ path: string; raw: string } | null> {
   const configDirectory = entries.find(
-    (entry) =>
-      entry.type === "directory" && typeof entry.path === "string",
+    (entry) => entry.type === "directory" && typeof entry.path === "string",
   )?.path;
   if (typeof configDirectory !== "string") return null;
   for (const name of ["opencode.json", "opencode.jsonc"]) {
@@ -314,9 +304,7 @@ async function findUnreadableGlobalConfig(
  * produces a one-rule diff instead of reflowing the whole document. Key order
  * is insertion order, so a key that was already present keeps its position.
  */
-export function serializeOpenCodeConfig(
-  doc: Readonly<Record<string, unknown>>,
-): string {
+export function serializeOpenCodeConfig(doc: Readonly<Record<string, unknown>>): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
@@ -339,17 +327,12 @@ export function serializeOpenCodeConfig(
  * @throws {OpenCodeConfigUnreadableError} When `raw` is not a JSON object, or
  *   when `value` is not JSON-serializable. Never guesses a replacement.
  */
-export function setOpenCodeConfigValue(
-  raw: string,
-  key: string,
-  value: unknown,
-): string {
+export function setOpenCodeConfigValue(raw: string, key: string, value: unknown): string {
   const trimmed = raw.trim();
   // An absent file parses to an empty document, which is a legitimate base for
   // a first write. Anything present but unparsable is refused outright.
-  const base: Record<string, unknown> = trimmed.length === 0
-    ? {}
-    : parseConfigObjectOrThrow(trimmed);
+  const base: Record<string, unknown> =
+    trimmed.length === 0 ? {} : parseConfigObjectOrThrow(trimmed);
 
   const next: Record<string, unknown> = { ...base };
   if (value === undefined) {
@@ -390,9 +373,7 @@ export function setOpenCodePermissionEffect(
   effect: "allow" | "ask" | "deny",
 ): unknown {
   if (!Array.isArray(current)) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode permissions are not an array of rules",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
   const index = current.findIndex(
     (rule) =>
@@ -439,12 +420,14 @@ export function setOpenCodePermissionEffect(
  */
 export function appendOpenCodePermissionRule(
   current: unknown,
-  rule: { readonly action: string; readonly resource: string; readonly effect: "allow" | "ask" | "deny" },
+  rule: {
+    readonly action: string;
+    readonly resource: string;
+    readonly effect: "allow" | "ask" | "deny";
+  },
 ): unknown {
   if (!Array.isArray(current)) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode permissions are not an array of rules",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
   const duplicate = current.some(
     (entry) =>
@@ -483,9 +466,7 @@ export function removeOpenCodePermissionRule(
   expected: { readonly action: string; readonly resource: string; readonly effect: string },
 ): unknown {
   if (!Array.isArray(current)) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode permissions are not an array of rules",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
   const at = current[index];
   if (at === null || typeof at !== "object" || Array.isArray(at)) {
@@ -548,15 +529,10 @@ export async function writeOpenCodeConfigDocument(
   // rather than overwritten.
   const trimmed = nextText.trim();
   if (trimmed.length === 0) {
-    throw new OpenCodeConfigUnreadableError(
-      "Refusing to write an empty OpenCode configuration",
-    );
+    throw new OpenCodeConfigUnreadableError("Refusing to write an empty OpenCode configuration");
   }
   const reparsed = parseConfigObjectOrThrow(trimmed);
-  if (
-    current.permissions !== undefined &&
-    !Array.isArray(reparsed.permissions)
-  ) {
+  if (current.permissions !== undefined && !Array.isArray(reparsed.permissions)) {
     throw new OpenCodeConfigUnreadableError(
       "Refusing to write: permissions would no longer be a rule array",
     );

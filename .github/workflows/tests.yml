@@ -7,6 +7,10 @@ name: Verify
 # environment-dependent test can never block a release build, and a build never
 # waits on a suite it cannot act on.
 #
+# Two jobs, also independent of each other for the same reason:
+#   verify  typecheck, lint, backend suite, DOM contract suite (fast, hermetic)
+#   e2e     Playwright history specs (browser + spawned server, slower)
+#
 # Runs on every push to main and every PR, so suite feedback arrives on the
 # code push rather than at release time.
 
@@ -104,8 +108,19 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Both run the PINNED `@biomejs/biome` from node_modules (installed above
+      # by `bun install --frozen-lockfile`), not a `bunx` download, so a fresh
+      # runner resolves the same version this branch was written against.
+      #
+      # `--error-on-warnings` lives inside the `lint` script: a rule that reports
+      # a genuine defect must not be able to pass CI by being downgraded to a
+      # warning. `format:check` is its own step so a formatting failure is
+      # attributable alone, the way the DOM suite is.
       - name: Lint
         run: bun run lint
+
+      - name: Format check
+        run: bun run format:check
 
       # `bun run test`, NOT bare `bun test`. The bare form double-collects the
       # suites and cascades "Database has closed" across the shared test
@@ -122,11 +137,43 @@ jobs:
       # managed server now execute instead of self-skipping, so
       # src/services/opencode/codeViewSessionBoundary.test.ts is a real signal
       # rather than a silent pass.
+      # The test-location policy is a HARD gate, not a lint warning. Every other
+      # step here discovers tests by scoping to `tests/`, so a test file written
+      # outside it is never collected by any of them: `bun run test`, `test:dom`
+      # and Playwright all ignore it, and the suite stays green while quietly
+      # losing coverage. This step is what makes that fail loudly instead.
+      - name: Test location policy
+        run: bun run test:locations
+
       - name: Test
         run: |
           bun run test 2>&1 | Tee-Object -FilePath test-output.log
           $code = $LASTEXITCODE
           if ($code -ne 0) { exit $code }
+
+      # The DOM/contract suite (`web/tests-dom`). It is a SEPARATE step, not a
+      # suffix on `bun run test`, for two reasons: `bun run test` scopes its own
+      # paths and must keep its exit code intact for the diagnostic step above,
+      # and a DOM failure must be attributable on its own.
+      #
+      # This suite is CI-safe, and that is why it belongs here:
+      #   - hermetic: happy-dom only, no browser, no network, no live server;
+      #   - fast: ~4s for the whole suite;
+      #   - deterministic: no provider credentials and no OpenCode process.
+      #
+      # It carries the history contracts that `bun run test` structurally cannot
+      # reach, because they need a mounted React tree: the real
+      # `useRemoteThreadListRuntime` + `useChatRuntime` integration and the
+      # `loadFailed` snapshot identity contract. Those went unexecuted while a
+      # real empty-history defect shipped, so "not run" is not an acceptable
+      # state for them.
+      #
+      # The Playwright E2E suite runs in the dedicated `e2e` job below, not here.
+      # It needs browser binaries and a spawned server, which would make this
+      # job environment-dependent; keeping it separate means a slow or
+      # environment-dependent suite can never block the fast feedback above.
+      - name: Test (DOM contract)
+        run: bun run test:dom
 
       # DIAGNOSTIC ONLY - no test, production, or opencode behaviour changes.
       #
@@ -160,3 +207,75 @@ jobs:
           $head = "test-output.log present=$exists bytes=$size"
           $tailBody = ((@($head) + $tail) -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A'
           Write-Output "::error title=Test log tail::$tailBody"
+
+  # The Playwright E2E suite, as its own job.
+  #
+  # It is separate from `verify` for two independent reasons. It needs browser
+  # binaries and a spawned server, which makes it environment-dependent and slow;
+  # and a suite that cannot act on a result should not delay a fast one. There is
+  # deliberately NO `needs:` on `verify` — an E2E failure must not read as a
+  # backend or typecheck failure, and vice versa.
+  #
+  # The command performs the BUILD ITSELF. That is not a convenience: the suite
+  # serves `dist/web`, a build output, so a job that checked out the source and
+  # ran Playwright directly would test whatever bundle happened to be on disk —
+  # and on a fresh runner that is nothing at all. `bun run test:e2e` builds first,
+  # stops on failure before spawning a server, and the server independently
+  # refuses any artifact whose provenance stamp does not match the source
+  # (scripts/web-build-provenance.ts). See tests/integration/e2e-build-integrity.test.ts,
+  # which proves a failed build prevents startup.
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The one CI-only dependency here, and the reason this suite could not
+      # simply be appended to `verify`. Downloaded explicitly rather than assumed,
+      # because a missing browser surfaces as a confusing per-test timeout rather
+      # than as an obvious setup error.
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+
+      - name: Test location policy
+        # Repeated here because this job does NOT depend on the verify job. An
+        # E2E spec added outside `tests/` would not be collected by
+        # `playwright.config.ts` (its `testDir` is `../tests/e2e`), so without
+        # this check the job would pass having run fewer specs than exist.
+        run: bun run test:locations
+
+        # SCOPED, deliberately. These are the conversation-history and
+        # tool-persistence specs, which is where a silent stale-bundle run does the
+      # most damage: a recovery test that passes against last week's bundle
+      # reports the defect as fixed. The remaining specs are pre-existing work in
+      # progress and are not gated on here; widening this list is a deliberate
+      # decision, not an oversight.
+      #
+      # Every spec file gets its own server and its own database (scripts/run-e2e.ts),
+      # so adding files costs wall-clock time but never cross-test interference.
+      - name: E2E (conversation history and tool persistence)
+        run: >
+          bun run test:e2e
+          p2-history-load-recovery.spec.ts
+          p2-direct-history-window.spec.ts
+          p2-paging.spec.ts
+          p2-live-runtime.spec.ts
+          p2-tool-result-persistence.spec.ts
+          phase-8-tabs-navigation.spec.ts

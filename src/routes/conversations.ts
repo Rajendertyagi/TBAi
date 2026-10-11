@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { registry } from "../config/providers";
-import { ConversationNotFoundError, conversationService, messageService } from "../services/storage";
+import {
+  ConversationNotFoundError,
+  MessageOwnershipError,
+  conversationService,
+  messageService,
+} from "../services/storage";
 import type { Conversation } from "../types";
 import { terminateOpenCodeSession } from "../services/opencode/sessions";
 import { logger, normalizeError } from "../lib/logger";
@@ -11,6 +16,7 @@ import {
   conversationReconcileSchema,
   conversationUpdateSchema,
   messageUpsertSchema,
+  messageWindowQuerySchema,
 } from "../lib/validation";
 import { isContentlessAssistantMessage } from "../lib/message-persistence-policy";
 import { folderService } from "../services/folders";
@@ -100,8 +106,7 @@ app.post("/api/conversations", async (c) => {
     // value means "the user chose this" and must survive refresh/switching.
     // (Rows created before this contract carry baked defaults that are
     // indistinguishable from explicit choices; only new behavior is covered.)
-    const provider =
-      (parsed.providerId && registry.get(parsed.providerId)) || null;
+    const provider = (parsed.providerId && registry.get(parsed.providerId)) || null;
     const modelId = parsed.modelId ?? null;
     const reasoningLevel = parsed.reasoningLevel ?? null;
 
@@ -118,10 +123,7 @@ app.post("/api/conversations", async (c) => {
           reason: "folder_not_available",
           folderId: parsed.workspaceFolderId ?? null,
         });
-        return c.json(
-          { error: "Project folder is not available" },
-          400,
-        );
+        return c.json({ error: "Project folder is not available" }, 400);
       }
     }
 
@@ -302,6 +304,46 @@ app.get("/api/conversations/:id/messages", async (c) => {
   }
 });
 
+/**
+ * Bounded history window (P2). The window is a SEMANTIC slice of the selected
+ * chain, not a page of a listing: SQLite stays authoritative, and the walk
+ * proves contiguity on the selected branch.
+ *
+ * `complete` is the fail-closed signal. A client MUST NOT treat an incomplete
+ * slice as the conversation's history — a dangling `parent_id` or unparsable row
+ * stops the walk, and the caller keeps its last valid window instead.
+ */
+app.get("/api/conversations/:id/messages/window", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const conversation = await conversationService.get(id);
+    if (!conversation) {
+      return c.json({ error: "Conversation not found" }, 404);
+    }
+    const query = messageWindowQuerySchema.parse({
+      direction: c.req.query("direction") ?? undefined,
+      anchorId: c.req.query("anchorId") ?? null,
+      limit: c.req.query("limit") ?? undefined,
+    });
+    const slice = await messageService.getWindowSlice(id, {
+      direction: query.direction,
+      anchorId: query.anchorId,
+      limit: query.limit,
+    });
+    if (!slice.complete) {
+      logger.warn("conversations", "conversations.window_incomplete", {
+        conversationId: id,
+        direction: query.direction,
+        messageCount: slice.messages.length,
+      });
+    }
+    return c.json(slice);
+  } catch (e) {
+    // `storageError` maps ZodError to 400 and everything else to a 5xx.
+    return storageError(c, e);
+  }
+});
+
 app.post("/api/conversations/:id/messages", async (c) => {
   try {
     const id = c.req.param("id");
@@ -340,6 +382,12 @@ app.post("/api/conversations/:id/messages", async (c) => {
     });
     return c.json({ success: true, persisted: true });
   } catch (e) {
+    // A message id owned by another conversation is a client-side ownership
+    // conflict, not a server fault: answering 500 would invite an endless retry
+    // of a write that can never succeed, and would hide which row was refused.
+    if (e instanceof MessageOwnershipError) {
+      return storageError(c, e, 409);
+    }
     return storageError(c, e);
   }
 });
@@ -380,19 +428,14 @@ app.patch("/api/conversations/:id", async (c) => {
         ? null
         : (parsed.workspaceFolderId ?? oldFolderId);
     if (effectiveMode === "project") {
-      const folder = effectiveFolderId
-        ? await folderService.get(effectiveFolderId)
-        : null;
+      const folder = effectiveFolderId ? await folderService.get(effectiveFolderId) : null;
       if (!folder || folder.kind === "chat") {
         logger.warn("workspace", "workspace.rejected", {
           reason: "folder_not_available",
           conversationId: id,
           folderId: effectiveFolderId,
         });
-        return c.json(
-          { error: "Project folder is not available" },
-          400,
-        );
+        return c.json({ error: "Project folder is not available" }, 400);
       }
     }
 
@@ -409,7 +452,7 @@ app.patch("/api/conversations/:id", async (c) => {
           ? null
           : parsed.workspaceFolderId === null
             ? null
-            : parsed.workspaceFolderId ?? undefined,
+            : (parsed.workspaceFolderId ?? undefined),
     });
 
     // Cleanup old hidden chat folder when switching away from simple mode,

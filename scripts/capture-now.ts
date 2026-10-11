@@ -1,6 +1,6 @@
 // SCRATCH: recapture outbound Gemini body for current thread state.
 import { Database } from "bun:sqlite";
-import fs from "fs";
+import fs from "node:fs";
 
 const OUT = process.argv[2] ?? "D:\\Temp\\gemini-capture-now.json";
 const CONV = process.argv[3] ?? "v00fcvlb8cdis6pz8xwtl8ox";
@@ -18,10 +18,13 @@ globalThis.fetch = (async (input: any, init?: any) => {
       body = String(init?.body ?? "").slice(0, 200);
     }
     captured.push({ url, body });
-    return new Response('{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}\n', {
-      status: 400,
-      headers: { "content-type": "text/event-stream" },
-    });
+    return new Response(
+      '{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}\n',
+      {
+        status: 400,
+        headers: { "content-type": "text/event-stream" },
+      },
+    );
   }
   return realFetch(input, init);
 }) as typeof fetch;

@@ -74,7 +74,12 @@ const observations = new Map<string, ObservedContextWindow>();
  */
 function keyOf(key: ObservedLimitKey): string {
   const part = (value: string): string => `${value.length}:${value}`;
-  return [part(key.providerId), part(key.modelId), part(key.endpoint ?? ""), part(key.protocol ?? "")].join("|");
+  return [
+    part(key.providerId),
+    part(key.modelId),
+    part(key.endpoint ?? ""),
+    part(key.protocol ?? ""),
+  ].join("|");
 }
 
 /**
@@ -111,7 +116,9 @@ export function observeContextWindow(
  * "closest match" fallback: a near-miss here is a wrong window, which is worse than no
  * window.
  */
-export function readObservedContextWindow(key: ObservedLimitKey): ObservedContextWindow | undefined {
+export function readObservedContextWindow(
+  key: ObservedLimitKey,
+): ObservedContextWindow | undefined {
   return observations.get(keyOf(key));
 }
 

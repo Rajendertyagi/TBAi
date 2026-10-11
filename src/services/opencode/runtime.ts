@@ -7,10 +7,7 @@ const versionPattern = /(?:^|[\s v])(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?=\s|
 
 /** Thrown when no managed OpenCode binary candidate can be resolved. */
 export class OpenCodeBinaryMissingError extends Error {
-  constructor(
-    message: string = OPENCODE_CONFIG.binaryMissingError,
-    options?: ErrorOptions,
-  ) {
+  constructor(message: string = OPENCODE_CONFIG.binaryMissingError, options?: ErrorOptions) {
     super(message, options);
     this.name = "OpenCodeBinaryMissingError";
   }
@@ -59,7 +56,8 @@ function compareOpenCodeVersions(left: string, right: string): number | null {
   const parseParts = (version: string): number[] | null => {
     const [core] = version.split(/[-+]/, 1);
     const parts = core.split(".").map(Number);
-    return parts.length === OPENCODE_VERSION_PART_COUNT && parts.every((part) => Number.isInteger(part) && part >= 0)
+    return parts.length === OPENCODE_VERSION_PART_COUNT &&
+      parts.every((part) => Number.isInteger(part) && part >= 0)
       ? parts
       : null;
   };
@@ -98,10 +96,9 @@ export function detectOpenCodeVersion(
       stderr: "pipe",
     });
   } catch (error) {
-    throw new OpenCodeBinaryMissingError(
-      `OpenCode binary could not be started: ${binaryPath}`,
-      { cause: error },
-    );
+    throw new OpenCodeBinaryMissingError(`OpenCode binary could not be started: ${binaryPath}`, {
+      cause: error,
+    });
   }
   const output = new TextDecoder().decode(result.stdout);
   const version = parseOpenCodeVersion(output);
@@ -129,9 +126,7 @@ let authInitialized = false;
  * (`OPENCODE_SERVER_PASSWORD`). The current name wins when both are set, so an
  * operator can override a stale legacy value without unsetting it.
  */
-export function getOpenCodeAuthPassword(
-  config: OpenCodeConfig = OPENCODE_CONFIG,
-): string {
+export function getOpenCodeAuthPassword(config: OpenCodeConfig = OPENCODE_CONFIG): string {
   if (!authInitialized) {
     const configured =
       process.env[config.authPasswordEnvVar]?.trim() ||
@@ -149,9 +144,10 @@ export function getOpenCodeAuthPassword(
 }
 
 /** Reports non-secret auth state for lifecycle diagnostics. */
-export function getOpenCodeAuthMetadata(
-  config: OpenCodeConfig = OPENCODE_CONFIG,
-): { source: "environment" | "generated"; configured: boolean } {
+export function getOpenCodeAuthMetadata(config: OpenCodeConfig = OPENCODE_CONFIG): {
+  source: "environment" | "generated";
+  configured: boolean;
+} {
   getOpenCodeAuthPassword(config);
   return { source: authSource ?? "generated", configured: authSource === "environment" };
 }

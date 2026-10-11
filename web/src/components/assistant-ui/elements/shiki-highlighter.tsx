@@ -7,10 +7,7 @@ import { cn } from "@/lib/utils";
 /**
  * Props for the SyntaxHighlighter component
  */
-export type SyntaxHighlighterProps = Omit<
-  ShikiHighlighterProps,
-  "children" | "theme"
-> & {
+export type SyntaxHighlighterProps = Omit<ShikiHighlighterProps, "children" | "theme"> & {
   theme?: ShikiHighlighterProps["theme"];
   code: string;
   /** Skips tokenization and renders the plain code while `true`. */
@@ -63,11 +60,7 @@ export const SyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
 
   return (
     <div
-      className={cn(
-        containerClassName,
-        streaming && "aui-shiki-streaming",
-        className,
-      )}
+      className={cn(containerClassName, streaming && "aui-shiki-streaming", className)}
       style={style}
     >
       {streaming ? (
@@ -85,4 +78,3 @@ export const SyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
 };
 
 SyntaxHighlighter.displayName = "SyntaxHighlighter";
-

@@ -9,12 +9,14 @@ export function createV2ThreadListAdapter(
   return {
     threadId: state.sessionId,
     isLoading: state.load.type !== "ready",
-    threads: [{
-      status: "regular",
-      id: state.sessionId,
-      remoteId: state.sessionId,
-      externalId: state.sessionId,
-      custom: { conversationId },
-    }],
+    threads: [
+      {
+        status: "regular",
+        id: state.sessionId,
+        remoteId: state.sessionId,
+        externalId: state.sessionId,
+        custom: { conversationId },
+      },
+    ],
   };
 }

@@ -76,8 +76,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
     icon: Zap,
     name: "Every 5 minutes",
     description: "Frequent lightweight watch",
-    prompt:
-      "Check the workspace for errors or stuck work and report in one short paragraph.",
+    prompt: "Check the workspace for errors or stuck work and report in one short paragraph.",
     scheduleType: "cron",
     mode: "minutes",
     cronExpression: "*/5 * * * *",
@@ -88,8 +87,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
     icon: Sunset,
     name: "Daily summary",
     description: "End-of-day recap at midnight",
-    prompt:
-      "Write a short end-of-day summary of workspace activity and notable changes.",
+    prompt: "Write a short end-of-day summary of workspace activity and notable changes.",
     scheduleType: "cron",
     mode: "daily",
     cronExpression: "@daily",

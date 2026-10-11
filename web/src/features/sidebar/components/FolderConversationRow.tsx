@@ -188,19 +188,14 @@ const FolderConvRow = memo(function FolderConvRow({
               className="flex min-w-0 flex-1 items-center gap-1.5 outline-none"
             >
               <span className="relative shrink-0">
-                <MessageSquare
-                  aria-hidden="true"
-                  className="size-3.5 text-muted-foreground"
-                />
+                <MessageSquare aria-hidden="true" className="size-3.5 text-muted-foreground" />
                 <ThreadRunningDot
                   remoteId={remoteId}
                   size="xs"
                   className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
                 />
               </span>
-              <span className="min-w-0 flex-1 truncate text-sm">
-                {initialTitle}
-              </span>
+              <span className="min-w-0 flex-1 truncate text-sm">{initialTitle}</span>
             </button>
             <button
               type="button"
@@ -228,11 +223,7 @@ const FolderConvRow = memo(function FolderConvRow({
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem
-            onSelect={() =>
-              engine === "opencode"
-                ? openAgent(remoteId)
-                : openChat(remoteId)
-            }
+            onSelect={() => (engine === "opencode" ? openAgent(remoteId) : openChat(remoteId))}
           >
             <ExternalLink className="size-4" />
             {copy.openInNewTab}
@@ -265,10 +256,7 @@ const FolderConvRow = memo(function FolderConvRow({
             {copy.copyId}
           </ContextMenuItem>
           {historyConfig.deleteEnabled && (
-            <ContextMenuItem
-              variant="destructive"
-              onSelect={() => setDeleteOpen(true)}
-            >
+            <ContextMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
               <Trash2 className="size-4" />
               {copy.delete}
             </ContextMenuItem>
@@ -281,9 +269,7 @@ const FolderConvRow = memo(function FolderConvRow({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{copy.rename}</DialogTitle>
-            <DialogDescription>
-              Rename this conversation.
-            </DialogDescription>
+            <DialogDescription>Rename this conversation.</DialogDescription>
           </DialogHeader>
           <Input
             value={renameValue}
@@ -301,9 +287,7 @@ const FolderConvRow = memo(function FolderConvRow({
             <Button variant="outline" onClick={() => setRenameOpen(false)}>
               {copy.cancel}
             </Button>
-            <Button onClick={() => void handleConfirmRename()}>
-              {copy.save}
-            </Button>
+            <Button onClick={() => void handleConfirmRename()}>{copy.save}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -313,19 +297,14 @@ const FolderConvRow = memo(function FolderConvRow({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.deleteDescription(initialTitle)}
-            </AlertDialogDescription>
+            <AlertDialogDescription>{copy.deleteDescription(initialTitle)}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void handleDelete()}>
-              {copy.delete}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={() => void handleDelete()}>{copy.delete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>
   );
 });
-

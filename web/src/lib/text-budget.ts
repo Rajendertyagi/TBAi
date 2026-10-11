@@ -194,10 +194,7 @@ export function boundText(text: string, budget: TextBudget): BoundedText {
     // remaining budget, so a non-empty `kept` can never leave `bounded` empty -
     // an empty body would read as "this tool returned nothing" rather than "this
     // tool returned too much to show", and those are very different facts.
-    omittedChars = Math.max(
-      0,
-      keptChars() - (bounded.join("\n").length + trailing.length),
-    );
+    omittedChars = Math.max(0, keptChars() - (bounded.join("\n").length + trailing.length));
     kept = bounded;
   }
 

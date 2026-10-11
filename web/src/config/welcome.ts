@@ -172,8 +172,7 @@ export const welcomeConfig: WelcomeConfig = {
     projectFolderTitle: "With a project folder",
     noFoldersHint: "No folders registered yet. Add one to enable project chats.",
     manageFolders: "Manage folders",
-    folderConversations: (count: number) =>
-      count === 1 ? "1 chat" : `${count} chats`,
+    folderConversations: (count: number) => (count === 1 ? "1 chat" : `${count} chats`),
     invalidScopeFallback: "Saved folder is gone — fell back to a disposable workspace.",
     tips: TIPS,
   },
@@ -288,7 +287,5 @@ export const welcomeConfig: WelcomeConfig = {
 export const DEFAULT_QUICK_ACTION_TAB: QuickActionTabId = "coding";
 
 export function isQuickActionTabId(value: unknown): value is QuickActionTabId {
-  return (
-    value === "coding" || value === "office" || value === "research"
-  );
+  return value === "coding" || value === "office" || value === "research";
 }

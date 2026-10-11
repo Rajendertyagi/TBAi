@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>TBAi — Right-Hand Workspace Panel (PROPOSED MOCKUP)</title>
+<style>
+  /* ============================================================
+     PROPOSAL MOCKUP — standalone, zero dependencies.
+     Mirrors docs/right-hand-workspace-audit.md §7 target shell:
+       AppShell
+       ├── ActivityBar (left rail)
+       ├── Sidebar (resizable)
+       └── <main> flex-row   ← the ONE structural change
+           ├── Chat region (TabStrip + transcript + composer)
+           ├── Resize divider (drag)
+           └── RightWorkspace (Tabs: Explorer | Preview)
+     Placeholder data only — no backend, no real app code.
+     ============================================================ */
+  :root {
+    --bg: #0d0d10;
+    --surface: #141418;
+    --surface-2: #1a1a20;
+    --border: #26262e;
+    --fg: #e4e4e7;
+    --muted: #8b8b96;
+    --accent: #7c6cf0;
+    --accent-soft: rgba(124,108,240,.18);
+    --activity-bar-width: 48px;
+    --title-bar-height: 40px;
+    --sidebar-width: 240px;
+    --workspace-width: 340px;   /* ← persisted via desktopLayout (proposed) */
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--fg);
+    overflow: hidden;
+  }
+
+  /* ---------- AppShell ---------- */
+  .app-shell { display: flex; flex-direction: column; height: 100vh; }
+  .pane-row  { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+  /* ---------- ActivityBar (left rail, unchanged) ---------- */
+  .activity-bar {
+    width: var(--activity-bar-width); flex-shrink: 0;
+    background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center;
+    padding-top: 8px; gap: 4px;
+  }
+  .activity-btn {
+    width: 36px; height: 36px; border-radius: var(--radius);
+    display: grid; place-items: center; color: var(--muted);
+    cursor: pointer; border: none; background: transparent; font-size: 16px;
+  }
+  .activity-btn:hover { background: var(--surface-2); color: var(--fg); }
+  .activity-btn.active { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- Sidebar (existing, resizable) ---------- */
+  .sidebar {
+    width: var(--sidebar-width); flex-shrink: 0;
+    background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .sidebar-header {
+    height: var(--title-bar-height); display: flex; align-items: center;
+    justify-content: space-between; padding: 0 12px;
+    border-bottom: 1px solid var(--border); font-weight: 600; font-size: 12px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
+  }
+  .conv-list { padding: 6px; overflow-y: auto; flex: 1; }
+  .conv {
+    padding: 7px 10px; border-radius: var(--radius); cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--muted); font-size: 12.5px;
+  }
+  .conv:hover { background: var(--surface-2); color: var(--fg); }
+  .conv.active { background: var(--accent-soft); color: var(--fg); }
+
+  /* ---------- <main>: THE proposed change (flex-row) ---------- */
+  main { flex: 1; min-width: 0; display: flex; overflow: hidden; }  /* ← flex-row */
+  .chat-region {
+    flex: 1; min-width: 240px; display: flex; flex-direction: column;
+    overflow: hidden; background: var(--bg);
+  }
+
+  /* TabStrip band (unchanged) */
+  .tab-strip {
+    height: var(--title-bar-height); flex-shrink: 0; display: flex;
+    align-items: stretch; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .tab {
+    display: flex; align-items: center; gap: 6px; padding: 0 14px;
+    font-size: 12.5px; color: var(--muted); cursor: pointer;
+    border-right: 1px solid var(--border); user-select: none;
+  }
+  .tab.active { background: var(--bg); color: var(--fg); box-shadow: inset 0 2px 0 var(--accent); }
+  .tab .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; }
+  .tab-spacer { flex: 1; }
+  .workspace-toggle {
+    margin: auto 10px; padding: 4px 10px; font-size: 11.5px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--muted); cursor: pointer;
+  }
+  .workspace-toggle:hover { color: var(--fg); border-color: var(--accent); }
+
+  /* Transcript */
+  .transcript { flex: 1; overflow-y: auto; padding: 20px 18px; }
+  .msg { max-width: 78%; margin-bottom: 16px; }
+  .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .msg .bubble {
+    padding: 9px 13px; border-radius: 10px; font-size: 13px;
+    border: 1px solid var(--border); background: var(--surface);
+  }
+  .msg.user { margin-left: auto; text-align: right; }
+  .msg.user .bubble { background: var(--accent-soft); border-color: transparent; text-align: left; }
+  .tool-card {
+    margin-top: 6px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); padding: 8px 10px; font-size: 12px;
+    color: var(--muted); cursor: pointer;
+  }
+  .tool-card:hover { border-color: var(--accent); color: var(--fg); }
+  .tool-card b { color: var(--fg); }
+
+  /* Composer */
+  .composer {
+    flex-shrink: 0; padding: 10px 14px 14px; border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .composer-box {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  .composer-box:focus-within { border-color: var(--accent); }
+  .composer-box input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--fg); font: inherit;
+  }
+  .send-btn {
+    background: var(--accent); border: none; color: white;
+    width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+
+  /* ---------- Resize divider (reuse of SidebarResizeHandle pattern) ---------- */
+  .pane-divider {
+    width: 1px; flex-shrink: 0; cursor: col-resize; background: var(--border);
+    position: relative; transition: background .12s;
+  }
+  .pane-divider::after {           /* hit area wider than the visual line */
+    content: ""; position: absolute; inset: 0 -3px;
+  }
+  .pane-divider:hover, .pane-divider.dragging { background: var(--accent); }
+
+  /* ---------- RightWorkspace (PROPOSED) ---------- */
+  .right-workspace {
+    width: var(--workspace-width); flex-shrink: 0;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--surface);
+    min-width: 220px;
+  }
+  .right-workspace[hidden] { display: none; }
+
+  /* Radix-style Tabs (hand-ported, per audit §11) */
+  .ws-tabs {
+    height: var(--title-bar-height); flex-shrink: 0; display: flex;
+    align-items: stretch; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .ws-tab {
+    padding: 0 14px; display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); cursor: pointer; user-select: none;
+    border-bottom: 2px solid transparent;
+  }
+  .ws-tab:hover { color: var(--fg); }
+  .ws-tab[data-state="active"] {      /* Radix emits data-state — NOT data-open */
+    color: var(--fg); border-bottom-color: var(--accent);
+    background: var(--surface-2);
+  }
+  .ws-close {
+    margin-left: auto; margin-right: 8px; align-self: center;
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; font-size: 14px; padding: 4px 6px; border-radius: 4px;
+  }
+  .ws-close:hover { color: var(--fg); background: var(--surface-2); }
+
+  .ws-content { flex: 1; overflow-y: auto; min-height: 0; }
+  .ws-panel[hidden] { display: none; }
+
+  /* ---------- File tree (product component; virtualized in real build) ---------- */
+  .tree { padding: 6px 4px; }
+  .tree-row {
+    display: flex; align-items: center; gap: 5px; padding: 3px 6px;
+    border-radius: 4px; cursor: pointer; font-size: 12.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--fg);
+  }
+  .tree-row:hover { background: var(--surface-2); }
+  .tree-row.selected { background: var(--accent-soft); }
+  .tree-row .chev { width: 12px; font-size: 9px; color: var(--muted); flex-shrink: 0; transition: transform .12s; }
+  .tree-row .chev.open { transform: rotate(90deg); }
+  .tree-row .ico { font-size: 12px; flex-shrink: 0; }
+  .tree-row .label { overflow: hidden; text-overflow: ellipsis; }
+  .tree-children { padding-left: 14px; }
+  .tree-empty { padding: 10px 12px; color: var(--muted); font-size: 12px; }
+
+  /* ---------- Preview ---------- */
+  .preview-head {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--muted); display: flex; gap: 8px;
+    align-items: center; position: sticky; top: 0; background: var(--surface); z-index: 1;
+  }
+  .preview-head .path { color: var(--fg); font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .preview-body {
+    padding: 10px 12px; font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px; line-height: 1.6; white-space: pre; color: #c9c9d4;
+  }
+  .preview-body .ln { color: #4a4a56; display: inline-block; width: 26px; user-select: none; }
+  .preview-hint { padding: 16px 14px; color: var(--muted); font-size: 12.5px; }
+  .preview-hint b { color: var(--fg); }
+
+  /* status bar (unchanged) */
+  .status-bar {
+    height: 24px; flex-shrink: 0; display: flex; align-items: center;
+    gap: 16px; padding: 0 12px; font-size: 11px; color: var(--muted);
+    background: var(--surface); border-top: 1px solid var(--border);
+  }
+  .status-bar .right { margin-left: auto; display: flex; gap: 16px; }
+
+  .banner {
+    padding: 5px 14px; font-size: 11.5px; text-align: center;
+    background: var(--accent-soft); color: var(--fg);
+    border-bottom: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  PROPOSED STRUCTURE MOCKUP — placeholder data, not the real app.
+  Drag the divider ▎ · hover it · switch tabs · click a file · close/reopen the panel with the tab-strip button.
+</div>
+
+<div class="app-shell">
+  <div class="pane-row">
+
+    <!-- ========== ActivityBar (existing) ========== -->
+    <nav class="activity-bar">
+      <button class="activity-btn active" title="Chat">💬</button>
+      <button class="activity-btn" title="Code">⌨</button>
+      <button class="activity-btn" title="Folders">📁</button>
+      <button class="activity-btn" title="Settings">⚙</button>
+    </nav>
+
+    <!-- ========== Sidebar (existing) ========== -->
+    <aside class="sidebar">
+      <div class="sidebar-header"><span>Conversations</span><span>＋</span></div>
+      <div class="conv-list">
+        <div class="conv active">Refactor auth middleware</div>
+        <div class="conv">Fix streaming backpressure</div>
+        <div class="conv">SQLite migration plan</div>
+        <div class="conv">MCP tool approval flow</div>
+        <div class="conv">Workspace panel design</div>
+        <div class="conv">Scheduler cron edge cases</div>
+      </div>
+    </aside>
+
+    <!-- ========== <main> — proposed flex-row ========== -->
+    <main>
+      <!-- ---- Chat region (unchanged behavior) ---- -->
+      <section class="chat-region">
+        <div class="tab-strip">
+          <div class="tab active"><span class="dot"></span>Refactor auth middleware</div>
+          <div class="tab">Fix streaming backpressure</div>
+          <div class="tab">＋</div>
+          <div class="tab-spacer"></div>
+          <button class="workspace-toggle" id="toggleWs">🗔 Workspace</button>
+        </div>
+
+        <div class="transcript" id="transcript">
+          <div class="msg user">
+            <div class="who">You</div>
+            <div class="bubble">Where does token validation happen?</div>
+          </div>
+          <div class="msg">
+            <div class="who">Assistant</div>
+            <div class="bubble">
+              Validation lives in the auth middleware chain. I read the file for you:
+              <div class="tool-card" data-file="src/middleware/auth.ts">
+                ⬥ <b>read</b> · src/middleware/auth.ts — <i>42 lines returned</i>
+              </div>
+            </div>
+          </div>
+          <div class="msg user">
+            <div class="who">You</div>
+            <div class="bubble">Great — show me the session helper next.</div>
+          </div>
+          <div class="msg">
+            <div class="who">Assistant</div>
+            <div class="bubble">
+              Here it is:
+              <div class="tool-card" data-file="src/lib/session.ts">
+                ⬥ <b>read</b> · src/lib/session.ts — <i>57 lines returned</i>
+              </div>
+              Click either tool card to <b>reveal it in the workspace panel</b>.
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="composer-box">
+            <input placeholder="Message…  (Enter to send)" />
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- ---- Divider: reuse of SidebarResizeHandle pattern (audit §10) ---- -->
+      <div class="pane-divider" id="divider" title="Drag to resize · double-click to collapse"></div>
+
+      <!-- ---- RightWorkspace (PROPOSED) ---- -->
+      <aside class="right-workspace" id="workspace">
+        <div class="ws-tabs" role="tablist">
+          <div class="ws-tab" role="tab" data-tab="explorer" data-state="active">📁 Explorer</div>
+          <div class="ws-tab" role="tab" data-tab="preview" data-state="inactive">📄 Preview</div>
+          <button class="ws-close" id="closeWs" title="Close panel">✕</button>
+        </div>
+
+        <div class="ws-content">
+          <!-- Explorer panel -->
+          <div class="ws-panel" data-panel="explorer">
+            <div class="tree" id="tree"></div>
+          </div>
+          <!-- Preview panel -->
+          <div class="ws-panel" data-panel="preview" hidden>
+            <div class="preview-head">Preview · <span class="path" id="previewPath">—</span></div>
+            <div id="previewContent" class="preview-hint">
+              Select a file in <b>Explorer</b> — or click a tool card in the chat — to preview it here.
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- ========== StatusBar (unchanged) ========== -->
+  <div class="status-bar">
+    <span>main*</span><span>0 errors</span>
+    <span class="right"><span>panel: <b id="panelState">open · 340px</b></span><span>TBAi · mockup</span></span>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Behavior for the PROPOSED panel — mirrors the audit:
+   - Tabs (Radix-style data-state switching)
+   - Drag-to-resize via the existing SidebarResizeHandle pattern
+   - Close/reopen persistence (localStorage = desktopLayout's role)
+   - reveal-in-explorer from a chat tool card (CodeG reveal pattern)
+   - Lazy preview: content generated only on selection
+   ============================================================ */
+"use strict";
+
+/* placeholder workspace data (stands in for the read-only GET endpoint) */
+const FILE_CONTENTS = {
+  "src/middleware/auth.ts":
+`export function requireAuth(req, res, next) {
+  const token = readBearer(req);
+  if (!token) return res.status(401).end();
+  const claims = verify(token, SECRET);
+  if (!claims) return res.status(401).end();
+  req.user = claims;
+  next();
+}`,
+  "src/lib/session.ts":
+`export function createSession(userId) {
+  const id = randomUUID();
+  sessions.set(id, { userId, createdAt: Date.now(),
+    expiresAt: Date.now() + TTL_MS });
+  return id;
+}
+
+export function getSession(id) {
+  const s = sessions.get(id);
+  if (!s || s.expiresAt < Date.now()) return null;
+  return s;
+}`,
+};
+const TREE = [
+  { type: "dir", name: "src", children: [
+    { type: "dir", name: "middleware", children: [
+      { type: "file", name: "auth.ts", path: "src/middleware/auth.ts" },
+      { type: "file", name: "rateLimit.ts", path: "src/middleware/rateLimit.ts" },
+    ]},
+    { type: "dir", name: "lib", children: [
+      { type: "file", name: "session.ts", path: "src/lib/session.ts" },
+      { type: "file", name: "token.ts", path: "src/lib/token.ts" },
+    ]},
+    { type: "file", name: "server.ts", path: "src/server.ts" },
+  ]},
+  { type: "dir", name: "tests", children: [
+    { type: "file", name: "auth.test.ts", path: "tests/auth.test.ts" },
+  ]},
+  { type: "file", name: "package.json", path: "package.json" },
+];
+
+const $ = (id) => document.getElementById(id);
+const workspace = $("workspace"), divider = $("divider");
+
+/* ---------- Tabs ---------- */
+function selectTab(name) {
+  document.querySelectorAll(".ws-tab").forEach((t) =>
+    t.setAttribute("data-state", t.dataset.tab === name ? "active" : "inactive"));
+  document.querySelectorAll(".ws-panel").forEach((p) =>
+    (p.hidden = p.dataset.panel !== name));
+}
+document.querySelectorAll(".ws-tab").forEach((tab) =>
+  tab.addEventListener("click", () => selectTab(tab.dataset.tab)));
+
+/* ---------- Resize: same pointer pattern as SidebarResizeHandle ---------- */
+const MIN_W = 220, MAX_W = 720;
+divider.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  divider.classList.add("dragging");
+  const startX = e.clientX;
+  const startW = workspace.getBoundingClientRect().width;
+  const onMove = (ev) => {
+    const w = Math.min(MAX_W, Math.max(MIN_W, startW + (startX - ev.clientX)));
+    document.documentElement.style.setProperty("--workspace-width", w + "px");
+    updateStatus();
+  };
+  const onUp = () => {
+    divider.classList.remove("dragging");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    persist();
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+});
+divider.addEventListener("dblclick", () => setPanelOpen(workspace.hidden));
+
+
+/* ---------- Close / reopen ---------- */
+$("closeWs").addEventListener("click", () => setPanelOpen(false));
+$("toggleWs").addEventListener("click", () => setPanelOpen(workspace.hidden));
+function setPanelOpen(open) {
+  workspace.hidden = !open;
+  divider.style.display = open ? "" : "none";
+  updateStatus(); persist();
+}
+function updateStatus() {
+  const w = Math.round(workspace.getBoundingClientRect().width);
+  $("panelState").textContent = workspace.hidden ? "closed" : "open · " + w + "px";
+}
+function persist() {   /* stands in for desktopLayout persistence */
+  localStorage.setItem("mock:ws", JSON.stringify({
+    open: !workspace.hidden,
+    width: Math.round(workspace.getBoundingClientRect().width),
+  }));
+}
+(function restore() {   /* state restored before first interaction */
+  try {
+    const s = JSON.parse(localStorage.getItem("mock:ws") || "null");
+    if (s) {
+      if (s.width) document.documentElement.style.setProperty("--workspace-width", s.width + "px");
+      if (s.open === false) setPanelOpen(false);
+    }
+  } catch (_) {}
+  updateStatus();
+})();
+
+/* ---------- File tree (recursive; virtualize with @tanstack/react-virtual in real build) ---------- */
+function renderTree() {
+  const root = $("tree"); root.innerHTML = "";
+  const walk = (nodes, depth, host) => nodes.forEach((n) => {
+    const row = document.createElement("div");
+    row.className = "tree-row";
+    row.style.paddingLeft = (6 + depth * 14) + "px";
+    if (n.type === "dir") {
+      row.innerHTML = '<span class="chev">▶</span><span class="ico">📁</span><span class="label">' + n.name + "</span>";
+      const kids = document.createElement("div");
+      kids.className = "tree-children"; kids.hidden = true;
+      row.addEventListener("click", () => {
+        kids.hidden = !kids.hidden;
+        row.querySelector(".chev").classList.toggle("open", !kids.hidden);
+      });
+      host.appendChild(row); host.appendChild(kids);
+      walk(n.children, depth + 1, kids);
+    } else {
+      row.innerHTML = '<span class="chev"></span><span class="ico">📄</span><span class="label">' + n.name + "</span>";
+      row.addEventListener("click", () => openPreview(n.path, row));
+      host.appendChild(row);
+    }
+  });
+  walk(TREE, 0, root);
+}
+renderTree();
+
+/* ---------- Preview (lazy: rendered only on selection) ---------- */
+let selectedRow = null;
+function openPreview(path, row) {
+  if (selectedRow) selectedRow.classList.remove("selected");
+  selectedRow = row || null;
+  if (row) row.classList.add("selected");
+  $("previewPath").textContent = path;
+  const body = FILE_CONTENTS[path];
+  const el = $("previewContent");
+  if (body) {
+    el.className = "preview-body";
+    el.innerHTML = body.split("\n").map((l, i) =>
+      '<span class="ln">' + (i + 1) + "</span>" +
+      l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
+  } else {
+    el.className = "preview-hint";
+    el.innerHTML = "Preview for <b>" + path + "</b> would stream from the read-only workspace endpoint. (Mockup ships content for 2 files only.)";
+  }
+  selectTab("preview");
+}
+
+/* ---------- Reveal-from-chat (CodeG pendingRevealPath pattern) ---------- */
+document.querySelectorAll(".tool-card[data-file]").forEach((card) => {
+  card.addEventListener("click", () => {
+    setPanelOpen(true);
+    const path = card.dataset.file;
+    const row = [...document.querySelectorAll(".tree-row .label")]
+      .find((l) => l.textContent === path.split("/").pop());
+    openPreview(path, row ? row.closest(".tree-row") : null);
+  });
+});
+
+/* Ctrl+B toggles the panel (like VS Code) */
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "b") { e.preventDefault(); setPanelOpen(workspace.hidden); }
+});
+</script>
+</body>
+</html>
+

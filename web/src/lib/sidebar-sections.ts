@@ -20,9 +20,7 @@ function isSectionId(value: unknown): value is SidebarSectionId {
  * the value omits are appended in default order so a newly added section
  * appears instead of vanishing for existing users.
  */
-export function normalizeSectionOrder(
-  value: unknown,
-): readonly SidebarSectionId[] {
+export function normalizeSectionOrder(value: unknown): readonly SidebarSectionId[] {
   if (!Array.isArray(value)) return DEFAULT_SECTION_ORDER;
   const seen = new Set<SidebarSectionId>();
   const out: SidebarSectionId[] = [];

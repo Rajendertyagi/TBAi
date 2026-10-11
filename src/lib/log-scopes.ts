@@ -78,10 +78,7 @@ export const CLIENT_LOG_SCOPES = [
 
 export type ClientLogScope = (typeof CLIENT_LOG_SCOPES)[number];
 
-const KNOWN_SCOPE_ROOTS: readonly string[] = [
-  ...BACKEND_LOG_SCOPES,
-  ...CLIENT_LOG_SCOPES,
-];
+const KNOWN_SCOPE_ROOTS: readonly string[] = [...BACKEND_LOG_SCOPES, ...CLIENT_LOG_SCOPES];
 
 const CLIENT_SCOPE_ROOTS: readonly string[] = [...CLIENT_LOG_SCOPES];
 

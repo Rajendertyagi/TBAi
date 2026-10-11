@@ -19,6 +19,6 @@ export interface BackoffOptions {
 export function computeBackoffDelay(attempt: number, options: BackoffOptions): number {
   const factor = options.factor ?? 2;
   const safeAttempt = Math.max(0, Math.floor(attempt));
-  const cap = Math.min(options.maxMs, options.baseMs * Math.pow(factor, safeAttempt));
+  const cap = Math.min(options.maxMs, options.baseMs * factor ** safeAttempt);
   return Math.floor(Math.random() * (cap + 1));
 }

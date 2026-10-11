@@ -32,7 +32,10 @@ const SAFETY_REASON_TEXT: Record<string, string> = {
  *
  * Returns `null` for a memory that screened clean, so the caller renders nothing.
  */
-export function memoryStatusLine(memory: { safetyFlag?: true; safetyReason?: string }): string | null {
+export function memoryStatusLine(memory: {
+  safetyFlag?: true;
+  safetyReason?: string;
+}): string | null {
   if (!memory.safetyFlag) return null;
   const why = SAFETY_REASON_TEXT[memory.safetyReason ?? ""] ?? "did not pass a safety check";
   return `Not sent to the model — this memory ${why}. You can edit or delete it.`;
@@ -79,11 +82,7 @@ export function MemoryPanel() {
       title="Memory"
       description="Store important information that persists across conversations."
       actions={
-        <Button
-          size="sm"
-          onClick={() => addMemory(newMemory)}
-          disabled={!newMemory.trim()}
-        >
+        <Button size="sm" onClick={() => addMemory(newMemory)} disabled={!newMemory.trim()}>
           <Plus className="w-3 h-3 mr-1" />
           Add
         </Button>
@@ -96,7 +95,10 @@ export function MemoryPanel() {
       >
         <div className="space-y-2">
           {memories.map((memory) => (
-            <div key={memory.id} className="flex items-start justify-between gap-2 rounded-md border border-border bg-muted/30 p-3">
+            <div
+              key={memory.id}
+              className="flex items-start justify-between gap-2 rounded-md border border-border bg-muted/30 p-3"
+            >
               <div className="min-w-0 flex-1">
                 {editingId === memory.id ? (
                   <div className="space-y-2">
@@ -107,7 +109,11 @@ export function MemoryPanel() {
                       aria-label="Edit memory"
                     />
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => commitEdit(memory.id)} disabled={!editingContent.trim()}>
+                      <Button
+                        size="sm"
+                        onClick={() => commitEdit(memory.id)}
+                        disabled={!editingContent.trim()}
+                      >
                         Save
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
@@ -121,7 +127,9 @@ export function MemoryPanel() {
                     {memoryStatusLine(memory) ? (
                       // The memory is stored and editable; it is simply not sent to
                       // the model. Stating both halves is the honest description.
-                      <p className="mt-1 text-xs text-muted-foreground">{memoryStatusLine(memory)}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {memoryStatusLine(memory)}
+                      </p>
                     ) : null}
                   </>
                 )}
@@ -137,7 +145,12 @@ export function MemoryPanel() {
                     <Pencil className="w-3 h-3" />
                   </Button>
                 )}
-                <Button size="sm" variant="ghost" onClick={() => deleteMemory(memory.id)} aria-label="Delete memory">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => deleteMemory(memory.id)}
+                  aria-label="Delete memory"
+                >
                   <Trash2 className="w-3 h-3" />
                 </Button>
               </div>

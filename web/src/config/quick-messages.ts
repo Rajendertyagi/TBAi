@@ -80,8 +80,7 @@ export const quickMessagesConfig: QuickMessagesConfig = {
     contentLabel: "Content",
     contentPlaceholder: "Write the message content here",
     deleteTitle: "Delete quick message?",
-    deleteDescription: (name: string) =>
-      `This will permanently delete "${name}". Are you sure?`,
+    deleteDescription: (name: string) => `This will permanently delete "${name}". Are you sure?`,
     cancel: "Cancel",
     confirmDelete: "Delete",
     created: "Quick message created",

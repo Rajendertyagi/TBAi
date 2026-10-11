@@ -1,14 +1,18 @@
 import { Database } from "bun:sqlite";
-import path from "path";
-import fs from "fs";
+import fs from "node:fs";
 import { logger } from "../lib/logger";
 // Leaf module (no app imports) that owns the chat-stream DDL, so the boot
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
-import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "../services/chat-streams/schema";
+import {
+  applyChatStreamsSchema,
+  addChatStreamsColumnsIfMissing,
+} from "../services/chat-streams/schema";
+import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "chat.db");
+// Anchored to the repository, not to `process.cwd()` — see src/config/data-dir.ts.
+const DATA_DIR = APP_DATA_DIR;
+const DB_PATH = APP_DB_PATH;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -73,7 +77,9 @@ sqlite.run(`
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   )
 `);
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_compactions_created ON conversation_compactions (created_at)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_compactions_created ON conversation_compactions (created_at)",
+);
 
 // Create tables
 sqlite.run(`
@@ -194,7 +200,10 @@ function addColumnIfNotExists(table: string, column: string, definition: string)
   }
 }
 
-const messagesColumns = sqlite.query("PRAGMA table_info(messages)").all() as Array<{ name: string; notnull: number }>;
+const messagesColumns = sqlite.query("PRAGMA table_info(messages)").all() as Array<{
+  name: string;
+  notnull: number;
+}>;
 const messagesHadOrderSeq = messagesColumns.some((c) => c.name === "order_seq");
 const roleIsNotNull = (messagesColumns.find((c) => c.name === "role")?.notnull ?? 0) === 1;
 
@@ -213,10 +222,10 @@ try {
     | { sql: string }
     | undefined;
   const needsRebuild =
-    !!def?.sql &&
-    !/CHECK\s*\(\s*status\s+IN\s*\(\s*'regular'\s*,\s*'archived'\s*\)/i.test(def.sql);
+    !!def?.sql && !/CHECK\s*\(\s*status\s+IN\s*\(\s*'regular'\s*,\s*'archived'\s*\)/i.test(def.sql);
   if (needsRebuild) {
-    const before = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number }).c;
+    const before = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number })
+      .c;
     sqlite.run("PRAGMA foreign_keys=OFF");
     try {
       sqlite.run("BEGIN");
@@ -253,18 +262,23 @@ try {
       `);
       sqlite.run("DROP TABLE conversations");
       sqlite.run("ALTER TABLE conversations_new RENAME TO conversations");
-      sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)");
+      sqlite.run(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)",
+      );
       sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
       sqlite.run("COMMIT");
     } catch (e) {
       try {
         sqlite.run("ROLLBACK");
-      } catch { /* already rolled back */ }
+      } catch {
+        /* already rolled back */
+      }
       throw e;
     } finally {
       sqlite.run("PRAGMA foreign_keys=ON");
     }
-    const after = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number }).c;
+    const after = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number })
+      .c;
     logger.info("db", "conversations_status_check_rebuilt", {
       message: `conversations=${before}->${after}`,
     });
@@ -280,7 +294,11 @@ addColumnIfNotExists("messages", "order_seq", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfNotExists("messages", "status", "TEXT");
 addColumnIfNotExists("messages", "format", "TEXT");
 addColumnIfNotExists("messages", "updated_at", "INTEGER NOT NULL DEFAULT 0");
-addColumnIfNotExists("conversations", "title_source", "TEXT CHECK(title_source IN ('auto', 'user'))");
+addColumnIfNotExists(
+  "conversations",
+  "title_source",
+  "TEXT CHECK(title_source IN ('auto', 'user'))",
+);
 // Per-conversation AI configuration (conversation default, SQLite source of truth).
 addColumnIfNotExists("conversations", "model_id", "TEXT");
 addColumnIfNotExists("conversations", "reasoning_level", "TEXT");
@@ -338,9 +356,9 @@ if (roleIsNotNull) {
 // Migrate away from plaintext API keys: drop the legacy api_key column (if present
 // from an earlier schema) and ensure the encrypted columns exist. Existing plaintext
 // keys are intentionally not carried over — they must be re-entered (secure by design).
-const providerColumns = sqlite
-  .query("PRAGMA table_info(provider_configs)")
-  .all() as Array<{ name: string }>;
+const providerColumns = sqlite.query("PRAGMA table_info(provider_configs)").all() as Array<{
+  name: string;
+}>;
 if (providerColumns.some((c) => c.name === "api_key")) {
   sqlite.run("ALTER TABLE provider_configs DROP COLUMN api_key");
 }
@@ -394,10 +412,16 @@ sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(
 // Composite index for repairSchedulerThreadChains: its correlated
 // (conversation_id, order_seq) subquery sorts without this and degrades to a
 // per-row scan (O(N^2) over scheduler threads).
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_seq ON messages(conversation_id, order_seq)");
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_messages_conv_seq ON messages(conversation_id, order_seq)",
+);
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)",
+);
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_content ON messages(conversation_id, content)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_messages_conv_content ON messages(conversation_id, content)",
+);
 
 // Full-text search sidecar (additive; existing DBs keep all rows). FTS5 is
 // bundled with bun:sqlite. Triggers keep the index in sync; backfill runs once.
@@ -571,9 +595,13 @@ try {
   /* column already exists; ignore */
 }
 
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job ON scheduler_runs(job_id, started_at DESC)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job ON scheduler_runs(job_id, started_at DESC)",
+);
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_status ON scheduler_runs(status)");
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next ON scheduler_jobs(enabled, next_run_at)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next ON scheduler_jobs(enabled, next_run_at)",
+);
 
 // One-time repair: scheduler runs used to persist every message with
 // parent_id NULL, building a forest of disconnected roots the thread view

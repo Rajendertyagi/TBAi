@@ -79,10 +79,7 @@ export const COMPACT_COMMAND = "/compact";
 export const COMPACT_COMMAND_ALIASES: readonly string[] = ["/compress"];
 
 /** Every accepted spelling, canonical first. The single source of truth for matching. */
-export const COMPACT_COMMANDS: readonly string[] = [
-  COMPACT_COMMAND,
-  ...COMPACT_COMMAND_ALIASES,
-];
+export const COMPACT_COMMANDS: readonly string[] = [COMPACT_COMMAND, ...COMPACT_COMMAND_ALIASES];
 
 /**
  * A parsed `/compact` invocation.
@@ -352,10 +349,7 @@ type AssemblerCompaction = NonNullable<AssembleContextInput["compaction"]>;
 type SummarizerModel = AssemblerCompaction["summarizerModel"];
 
 /** Neutral fields for a result that never reached the compaction seam. */
-function unattemptedResult(
-  operationId: string,
-  reason: string,
-): ManualCompactResult {
+function unattemptedResult(operationId: string, reason: string): ManualCompactResult {
   return {
     kind: "tbai-compact",
     version: 1,
@@ -469,9 +463,7 @@ export interface ManualCompactInput {
  * render for it. Assembly, summariser and persistence faults are all reported as
  * `failed` with the underlying reason preserved in the log.
  */
-export async function runManualCompaction(
-  input: ManualCompactInput,
-): Promise<ManualCompactResult> {
+export async function runManualCompaction(input: ManualCompactInput): Promise<ManualCompactResult> {
   const log = logger.child({
     requestId: input.requestId,
     conversationId: input.conversationId,
@@ -489,11 +481,15 @@ export async function runManualCompaction(
     return unattemptedResult(input.operationId, "not_attempted");
   }
 
+  // Bound to a `string`: the guard above proves it is present, but TypeScript
+  // cannot carry that proof into the closures below (`releaseLatch`, `persist`).
+  const conversationId: string = input.conversationId;
+
   const startedAt = Date.now();
   try {
     const assembled = await assembleContext({
       forceCompaction: true,
-      conversationId: input.conversationId,
+      conversationId,
       submittedMessages: input.submittedMessages,
       runId: input.operationId,
       provider: input.provider,
@@ -502,9 +498,9 @@ export async function runManualCompaction(
       toolSignal: input.signal,
       compaction: {
         policy: DEFAULT_COMPACTION_POLICY,
-        existingRecord: compactionStore.get(input.conversationId),
+        existingRecord: compactionStore.get(conversationId),
         persist: (record) => compactionStore.record(record),
-        releaseLatch: () => compactionStore.releaseLatch(input.conversationId),
+        releaseLatch: () => compactionStore.releaseLatch(conversationId),
         // The SAME model the next turn will read the summary with. Summarising
         // with a different model would make the summary a translation rather than
         // a record of this conversation.

@@ -14,12 +14,7 @@ import {
 import { schedulerStore } from "../services/scheduler/schedulerStore";
 import type { JobCreate } from "../services/scheduler/schedulerStore";
 import { conversationService } from "../services/storage";
-import {
-  cancelRun,
-  runJobNow,
-  scheduleJob,
-  unscheduleJob,
-} from "../services/scheduler/scheduler";
+import { cancelRun, runJobNow, scheduleJob, unscheduleJob } from "../services/scheduler/scheduler";
 import {
   assertValidTimezone,
   computeNextRuns,
@@ -28,7 +23,6 @@ import {
   isValidCron,
 } from "../services/scheduler/cron";
 import {
-  checkExistingThread,
   checkProvider,
   checkScheduleFields,
   normalizeCron,
@@ -62,10 +56,7 @@ app.post("/jobs", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const parsed = schedulerJobCreateSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid scheduler job", issues: parsed.error.issues },
-      400,
-    );
+    return c.json({ error: "Invalid scheduler job", issues: parsed.error.issues }, 400);
   }
   const v = parsed.data;
   const scheduleErr = checkScheduleFields({
@@ -84,16 +75,10 @@ app.post("/jobs", async (c) => {
   // Fail fast when targeting an existing thread: a thread id that does not
   // resolve would otherwise fail silently at fire time (retargets used to
   // be stripped by validation and never saved at all).
-  if (
-    (v.conversationPolicy ?? "dedicated_thread") === "existing_thread" &&
-    v.conversationId
-  ) {
+  if ((v.conversationPolicy ?? "dedicated_thread") === "existing_thread" && v.conversationId) {
     const target = await conversationService.get(v.conversationId);
     if (!target) {
-      return c.json(
-        { error: "Target conversation not found. Pick an existing thread." },
-        400,
-      );
+      return c.json({ error: "Target conversation not found. Pick an existing thread." }, 400);
     }
   }
 
@@ -106,9 +91,7 @@ app.post("/jobs", async (c) => {
       // Macros are normalized to canonical 5-field form so timers,
       // previews, and stored values always agree.
       cronExpression:
-        v.scheduleType === "cron" && v.cronExpression
-          ? normalizeCron(v.cronExpression)
-          : null,
+        v.scheduleType === "cron" && v.cronExpression ? normalizeCron(v.cronExpression) : null,
       execAt: v.execAt ?? null,
       timezone: v.timezone,
       providerId: v.providerId,
@@ -134,11 +117,7 @@ app.post("/jobs", async (c) => {
   try {
     scheduleJob(created);
   } catch (err) {
-    schedulerStore.update(
-      created.id,
-      { enabled: false, status: "failed", nextRunAt: null },
-      db,
-    );
+    schedulerStore.update(created.id, { enabled: false, status: "failed", nextRunAt: null }, db);
     return c.json(
       {
         error: err instanceof Error ? err.message : "Failed to schedule job",
@@ -163,10 +142,7 @@ app.patch("/jobs/:id", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const parsed = schedulerJobUpdateSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid scheduler job", issues: parsed.error.issues },
-      400,
-    );
+    return c.json({ error: "Invalid scheduler job", issues: parsed.error.issues }, 400);
   }
   const v = parsed.data;
   const merged = {
@@ -185,17 +161,13 @@ app.patch("/jobs/:id", async (c) => {
     });
     if (providerErr) return c.json({ error: providerErr }, 400);
   }
-  const mergedPolicy =
-    v.conversationPolicy ?? existing.conversationPolicy;
+  const mergedPolicy = v.conversationPolicy ?? existing.conversationPolicy;
   const mergedConversationId =
     v.conversationId !== undefined ? v.conversationId : existing.conversationId;
   if (mergedPolicy === "existing_thread" && mergedConversationId) {
     const target = await conversationService.get(mergedConversationId);
     if (!target) {
-      return c.json(
-        { error: "Target conversation not found. Pick an existing thread." },
-        400,
-      );
+      return c.json({ error: "Target conversation not found. Pick an existing thread." }, 400);
     }
   }
   // Switching schedule type clears the other type's field; editing a
@@ -204,10 +176,7 @@ app.patch("/jobs/:id", async (c) => {
   if (typeof patch.cronExpression === "string") {
     patch.cronExpression = normalizeCron(patch.cronExpression);
   }
-  if (
-    v.scheduleType !== undefined &&
-    v.scheduleType !== existing.scheduleType
-  ) {
+  if (v.scheduleType !== undefined && v.scheduleType !== existing.scheduleType) {
     if (v.scheduleType === "cron") patch.execAt = null;
     else patch.cronExpression = null;
   }
@@ -225,15 +194,8 @@ app.patch("/jobs/:id", async (c) => {
   try {
     scheduleJob(updated);
   } catch (err) {
-    schedulerStore.update(
-      id,
-      { enabled: false, status: "failed", nextRunAt: null },
-      db,
-    );
-    return c.json(
-      { error: err instanceof Error ? err.message : "Failed to schedule job" },
-      400,
-    );
+    schedulerStore.update(id, { enabled: false, status: "failed", nextRunAt: null }, db);
+    return c.json({ error: err instanceof Error ? err.message : "Failed to schedule job" }, 400);
   }
   const fresh = schedulerStore.get(id, db);
   return c.json(fullJobPublic(fresh ?? updated));
@@ -261,15 +223,9 @@ app.post("/jobs/:id/enable", (c) => {
   // straight to missed. Tell the user the real options instead.
   // Deleted jobs stay deleted (their history is retained, the job is gone).
   if (existing.status === "deleted") {
-    return c.json(
-      { error: "This job was deleted. Duplicate it to run again." },
-      400,
-    );
+    return c.json({ error: "This job was deleted. Duplicate it to run again." }, 400);
   }
-  if (
-    existing.scheduleType === "once" &&
-    (existing.execAt ?? 0) <= Date.now()
-  ) {
+  if (existing.scheduleType === "once" && (existing.execAt ?? 0) <= Date.now()) {
     return c.json(
       {
         error:
@@ -278,20 +234,13 @@ app.post("/jobs/:id/enable", (c) => {
       400,
     );
   }
-  const updated = schedulerStore.update(
-    id,
-    { enabled: true, status: "active" },
-    db,
-  );
+  const updated = schedulerStore.update(id, { enabled: true, status: "active" }, db);
   logger.info("scheduler", "scheduler.admin", { action: "enabled", jobId: id });
   if (updated) {
     try {
       scheduleJob(updated);
     } catch (err) {
-      return c.json(
-        { error: err instanceof Error ? err.message : "Failed to schedule job" },
-        400,
-      );
+      return c.json({ error: err instanceof Error ? err.message : "Failed to schedule job" }, 400);
     }
   }
   const fresh = schedulerStore.get(id, db);
@@ -333,15 +282,8 @@ app.post("/jobs/:id/runs/:runId/cancel", (c) => {
 // ---- Runs ----
 
 app.get("/summary", (c) => {
-  const days = Math.min(
-    Math.max(Number(c.req.query("days") ?? 7), 1),
-    30,
-  );
-  const problems = schedulerStore.listProblemRuns(
-    Date.now() - days * 24 * 3600_000,
-    50,
-    db,
-  );
+  const days = Math.min(Math.max(Number(c.req.query("days") ?? 7), 1), 30);
+  const problems = schedulerStore.listProblemRuns(Date.now() - days * 24 * 3600_000, 50, db);
   const jobs = schedulerStore.list(db);
   return c.json({
     problemRuns: problems.map((r) => ({
@@ -362,19 +304,13 @@ app.get("/jobs/:id/runs", (c) => {
   const id = c.req.param("id");
   const existing = schedulerStore.get(id, db);
   if (!existing) return c.json({ error: "Job not found" }, 404);
-  const limit = Math.min(
-    Math.max(Number(c.req.query("limit") ?? 50), 1),
-    200,
-  );
+  const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50), 1), 200);
   const offset = Math.max(Number(c.req.query("offset") ?? 0), 0);
   return c.json(schedulerStore.listRuns(id, limit, offset, db));
 });
 
 app.get("/runs", (c) => {
-  const limit = Math.min(
-    Math.max(Number(c.req.query("limit") ?? 100), 1),
-    200,
-  );
+  const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 100), 1), 200);
   const offset = Math.max(Number(c.req.query("offset") ?? 0), 0);
   return c.json(schedulerStore.listRecentRuns(limit, offset, db));
 });
@@ -391,10 +327,7 @@ app.post("/preview", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const parsed = schedulerPreviewSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid preview request", issues: parsed.error.issues },
-      400,
-    );
+    return c.json({ error: "Invalid preview request", issues: parsed.error.issues }, 400);
   }
   const v = parsed.data;
   try {
@@ -405,17 +338,9 @@ app.post("/preview", async (c) => {
   try {
     if (v.scheduleType === "cron") {
       if (!v.cronExpression || !isValidCron(v.cronExpression)) {
-        return c.json(
-          { error: "A valid 5-field cron expression is required" },
-          400,
-        );
+        return c.json({ error: "A valid 5-field cron expression is required" }, 400);
       }
-      const nextRuns = computeNextRuns(
-        v.cronExpression,
-        v.timezone,
-        Date.now(),
-        v.count ?? 3,
-      );
+      const nextRuns = computeNextRuns(v.cronExpression, v.timezone, Date.now(), v.count ?? 3);
       return c.json({
         description: describeCron(v.cronExpression),
         timezone: v.timezone,
@@ -424,10 +349,7 @@ app.post("/preview", async (c) => {
       });
     }
     if (typeof v.execAt !== "number" || v.execAt <= 0) {
-      return c.json(
-        { error: "An absolute execAt timestamp is required" },
-        400,
-      );
+      return c.json({ error: "An absolute execAt timestamp is required" }, 400);
     }
     return c.json({
       description: `Once at ${new Date(v.execAt).toISOString()}`,
@@ -435,10 +357,7 @@ app.post("/preview", async (c) => {
       nextRuns: [v.execAt],
     });
   } catch (err) {
-    return c.json(
-      { error: err instanceof Error ? err.message : "Preview failed" },
-      400,
-    );
+    return c.json({ error: err instanceof Error ? err.message : "Preview failed" }, 400);
   }
 });
 
@@ -446,27 +365,16 @@ app.post("/compute-next-run", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const parsed = schedulerPreviewSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid request", issues: parsed.error.issues },
-      400,
-    );
+    return c.json({ error: "Invalid request", issues: parsed.error.issues }, 400);
   }
   const v = parsed.data;
   try {
     assertValidTimezone(v.timezone);
     if (v.scheduleType === "cron") {
       if (!v.cronExpression || !isValidCron(v.cronExpression)) {
-        return c.json(
-          { error: "A valid 5-field cron expression is required" },
-          400,
-        );
+        return c.json({ error: "A valid 5-field cron expression is required" }, 400);
       }
-      const [nextRun] = computeNextRuns(
-        v.cronExpression,
-        v.timezone,
-        Date.now(),
-        1,
-      );
+      const [nextRun] = computeNextRuns(v.cronExpression, v.timezone, Date.now(), 1);
       return c.json({ nextRun });
     }
     if (typeof v.execAt !== "number" || v.execAt <= 0) {
@@ -474,10 +382,7 @@ app.post("/compute-next-run", async (c) => {
     }
     return c.json({ nextRun: v.execAt });
   } catch (err) {
-    return c.json(
-      { error: err instanceof Error ? err.message : "Computation failed" },
-      400,
-    );
+    return c.json({ error: err instanceof Error ? err.message : "Computation failed" }, 400);
   }
 });
 

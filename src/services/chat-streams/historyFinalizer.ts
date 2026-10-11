@@ -49,11 +49,7 @@ export interface FinalUIMessage {
 }
 
 /** Why a completed run was not written to history. Never carries content. */
-export type HistorySkipReason =
-  | "aborted"
-  | "no_message"
-  | "invalid_message"
-  | "no_conversation";
+export type HistorySkipReason = "aborted" | "no_message" | "invalid_message" | "no_conversation";
 
 /** What the finalizer did. `not_claimed` means another finalizer already owned it. */
 export type HistoryFinalizeOutcome =

@@ -28,10 +28,12 @@ function PermissionCard({ request }: { request: V2PermissionView }) {
   const description = request.resources.join("  ·  ");
   const submit = (decision: "once" | "always" | "reject") => {
     if (busy) return;
-    setBusy(true); setError(null);
+    setBusy(true);
+    setError(null);
     runWithExit(async () => {
-      try { await extras.replyToPermission(request.id, decision); }
-      catch (cause) {
+      try {
+        await extras.replyToPermission(request.id, decision);
+      } catch (cause) {
         // Gone for good: the store update unmounts this card, so there is
         // nothing left to show an error on. Anything else stays retryable.
         if (reportGone(cause)) return;
@@ -41,12 +43,38 @@ function PermissionCard({ request }: { request: V2PermissionView }) {
       }
     });
   };
-  return <ApprovalCard title={title} leaving={leaving}>
-    {description && <p className="mb-1 break-all text-muted-foreground">{description}</p>}
-    {error && <div className="mt-1 text-xs text-destructive" role="alert">{error}</div>}
-    <ApprovalActions busy={busy} approveLabel="Approve once" denyLabel="Deny" approveAria={`Approve once: ${title}`} denyAria={`Deny: ${title}`} onApprove={() => submit("once")} onDeny={() => submit("reject")} />
-    {request.savePatterns.length > 0 && <div className="mt-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => submit("always")} aria-label={`Always allow: ${title}`}><ShieldCheck className="size-3.5" /> Always (remembered by OpenCode, all chats)</Button></div>}
-  </ApprovalCard>;
+  return (
+    <ApprovalCard title={title} leaving={leaving}>
+      {description && <p className="mb-1 break-all text-muted-foreground">{description}</p>}
+      {error && (
+        <div className="mt-1 text-xs text-destructive" role="alert">
+          {error}
+        </div>
+      )}
+      <ApprovalActions
+        busy={busy}
+        approveLabel="Approve once"
+        denyLabel="Deny"
+        approveAria={`Approve once: ${title}`}
+        denyAria={`Deny: ${title}`}
+        onApprove={() => submit("once")}
+        onDeny={() => submit("reject")}
+      />
+      {request.savePatterns.length > 0 && (
+        <div className="mt-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => submit("always")}
+            aria-label={`Always allow: ${title}`}
+          >
+            <ShieldCheck className="size-3.5" /> Always (remembered by OpenCode, all chats)
+          </Button>
+        </div>
+      )}
+    </ApprovalCard>
+  );
 }
 
 /** Native permission fallback panel; linked permissions render on their tool cards. */
@@ -60,5 +88,11 @@ export function OpenCodePermissions() {
     (permission) => permission.toolCallId === null && !isStaleApproval(permission.id, staleIds),
   );
   if (unlinked.length === 0) return null;
-  return <div className="flex flex-col gap-2 px-3 py-2">{unlinked.map((request) => <PermissionCard key={request.id} request={request} />)}</div>;
+  return (
+    <div className="flex flex-col gap-2 px-3 py-2">
+      {unlinked.map((request) => (
+        <PermissionCard key={request.id} request={request} />
+      ))}
+    </div>
+  );
 }

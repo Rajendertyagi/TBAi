@@ -1,11 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  GripVertical,
-  Loader2,
-  Plus,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { GripVertical, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { quickMessagesConfig } from "@/config/quick-messages";
 import { useQuickMessagesStore } from "@/stores/quickMessagesStore";
@@ -64,9 +58,7 @@ export function QuickMessagesPage() {
     const q = search.trim().toLowerCase();
     if (!q) return messages;
     return messages.filter(
-      (m) =>
-        m.title.toLowerCase().includes(q) ||
-        m.content.toLowerCase().includes(q),
+      (m) => m.title.toLowerCase().includes(q) || m.content.toLowerCase().includes(q),
     );
   }, [messages, search]);
 
@@ -81,15 +73,14 @@ export function QuickMessagesPage() {
 
   // Sync drafts when the selection moves; never while dirty (a background
   // reload must not discard unsent edits).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset the draft only when a DIFFERENT message is selected. Depending on `selected` itself would discard whatever the user has typed every time the object is re-created.
   useEffect(() => {
     setDraftTitle(selected?.title ?? "");
     setDraftContent(selected?.content ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
   const isDirty =
-    selected != null &&
-    (draftTitle !== selected.title || draftContent !== selected.content);
+    selected != null && (draftTitle !== selected.title || draftContent !== selected.content);
 
   const anyBusy = busy !== null;
 
@@ -142,9 +133,7 @@ export function QuickMessagesPage() {
         }
       } else {
         toast.error(copy.deleteFailed, {
-          description:
-            result.error ??
-            copy.deleteDescription(target?.title || copy.untitled),
+          description: result.error ?? copy.deleteDescription(target?.title || copy.untitled),
         });
       }
     } finally {
@@ -179,9 +168,7 @@ export function QuickMessagesPage() {
   };
 
   const deleteTargetMessage =
-    deleteTargetId !== null
-      ? (messages.find((m) => m.id === deleteTargetId) ?? null)
-      : null;
+    deleteTargetId !== null ? (messages.find((m) => m.id === deleteTargetId) ?? null) : null;
 
   if (loading && messages.length === 0) {
     return (
@@ -401,15 +388,11 @@ export function QuickMessagesPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
             <AlertDialogDescription>
-              {copy.deleteDescription(
-                deleteTargetMessage?.title || copy.untitled,
-              )}
+              {copy.deleteDescription(deleteTargetMessage?.title || copy.untitled)}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy === "delete"}>
-              {copy.cancel}
-            </AlertDialogCancel>
+            <AlertDialogCancel disabled={busy === "delete"}>{copy.cancel}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(event) => {
                 event.preventDefault();

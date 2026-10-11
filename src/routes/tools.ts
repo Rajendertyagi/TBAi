@@ -2,10 +2,39 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { newRequestId } from "../lib/logger";
 import { sanitizeStreamError } from "../lib/redact";
-import { runRead, runWrite, runEdit, previewEdit, runBash, runList, runSearch, runStat, runDelete, runProcesses, runKill, runSysinfo, ToolError, WORKSPACE_DIR, inspectTarget } from "../services/tools";
+import {
+  runRead,
+  runWrite,
+  runEdit,
+  previewEdit,
+  runBash,
+  runList,
+  runSearch,
+  runStat,
+  runDelete,
+  runProcesses,
+  runKill,
+  runSysinfo,
+  ToolError,
+  WORKSPACE_DIR,
+  inspectTarget,
+} from "../services/tools";
 import { mintGrant } from "../services/grants";
 import { resolveConversationWorkspace, WorkspaceError } from "../services/workspace";
-import { toolReadSchema, toolWriteSchema, toolEditSchema, toolBashSchema, toolListSchema, toolSearchSchema, toolStatSchema, toolDeleteSchema, toolKillSchema, outsideCheckSchema, outsideGrantSchema, outsideRunGrantedSchema } from "../lib/validation";
+import {
+  toolReadSchema,
+  toolWriteSchema,
+  toolEditSchema,
+  toolBashSchema,
+  toolListSchema,
+  toolSearchSchema,
+  toolStatSchema,
+  toolDeleteSchema,
+  toolKillSchema,
+  outsideCheckSchema,
+  outsideGrantSchema,
+  outsideRunGrantedSchema,
+} from "../lib/validation";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
 
@@ -19,24 +48,32 @@ function toolHandler<T>(schema: z.ZodType<T>, fn: (args: T) => unknown | Promise
       const body = await c.req.json().catch(() => ({}));
       const parsed = schema.safeParse(body);
       if (!parsed.success) {
-        return c.json({ error: "Invalid tool arguments", issues: parsed.error.issues, requestId }, 400);
+        return c.json(
+          { error: "Invalid tool arguments", issues: parsed.error.issues, requestId },
+          400,
+        );
       }
       const out = await fn(parsed.data);
       return c.json(out);
     } catch (e) {
-      if (e instanceof ToolError)
-        return c.json({ error: e.message, requestId }, 400);
-      return c.json(
-        { error: sanitizeStreamError(e), requestId },
-        500,
-      );
+      if (e instanceof ToolError) return c.json({ error: e.message, requestId }, 400);
+      return c.json({ error: sanitizeStreamError(e), requestId }, 500);
     }
   };
 }
 
-app.post("/api/tools/read", toolHandler(toolReadSchema, (args) => runRead(args, WORKSPACE_DIR)));
-app.post("/api/tools/write", toolHandler(toolWriteSchema, (args) => runWrite(args, WORKSPACE_DIR)));
-app.post("/api/tools/edit", toolHandler(toolEditSchema, (args) => runEdit(args, WORKSPACE_DIR)));
+app.post(
+  "/api/tools/read",
+  toolHandler(toolReadSchema, (args) => runRead(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/write",
+  toolHandler(toolWriteSchema, (args) => runWrite(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/edit",
+  toolHandler(toolEditSchema, (args) => runEdit(args, WORKSPACE_DIR)),
+);
 // Read-only. Shows the change an `edit` WOULD make, so the approval gate can
 // render a diff instead of the model's find/replace pair - the same thing the
 // Code surface gets for free, because OpenCode precomputes the patch and ships
@@ -49,14 +86,38 @@ app.post(
   "/api/tools/edit-preview",
   toolHandler(toolEditSchema, (args) => previewEdit(args, WORKSPACE_DIR)),
 );
-app.post("/api/tools/bash", toolHandler(toolBashSchema, (args) => runBash(args, WORKSPACE_DIR)));
-app.post("/api/tools/list", toolHandler(toolListSchema, (args) => runList(args, WORKSPACE_DIR)));
-app.post("/api/tools/search", toolHandler(toolSearchSchema, (args) => runSearch(args, WORKSPACE_DIR)));
-app.post("/api/tools/stat", toolHandler(toolStatSchema, (args) => runStat(args, WORKSPACE_DIR)));
-app.post("/api/tools/delete", toolHandler(toolDeleteSchema, (args) => runDelete(args, WORKSPACE_DIR)));
-app.post("/api/tools/processes", toolHandler(z.object({}), () => runProcesses()));
-app.post("/api/tools/kill", toolHandler(toolKillSchema, (args) => runKill(args)));
-app.post("/api/tools/sysinfo", toolHandler(z.object({}), () => runSysinfo()));
+app.post(
+  "/api/tools/bash",
+  toolHandler(toolBashSchema, (args) => runBash(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/list",
+  toolHandler(toolListSchema, (args) => runList(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/search",
+  toolHandler(toolSearchSchema, (args) => runSearch(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/stat",
+  toolHandler(toolStatSchema, (args) => runStat(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/delete",
+  toolHandler(toolDeleteSchema, (args) => runDelete(args, WORKSPACE_DIR)),
+);
+app.post(
+  "/api/tools/processes",
+  toolHandler(z.object({}), () => runProcesses()),
+);
+app.post(
+  "/api/tools/kill",
+  toolHandler(toolKillSchema, (args) => runKill(args)),
+);
+app.post(
+  "/api/tools/sysinfo",
+  toolHandler(z.object({}), () => runSysinfo()),
+);
 
 // ---- One-shot outside-workspace authorization (chat approval flow) ----
 // ---- One-shot outside-workspace authorization (chat approval flow) ----
@@ -123,7 +184,10 @@ app.post("/api/tools/grant", async (c) => {
 // call. Destructive tools and run_command keep the gate flow and are refused
 // here. The frontend attaches the returned output to the SAME tool call via
 // addResult, so the run continues without a resend.
-const grantedReadRunners: Record<string, (args: unknown, ws: string, scope: { conversationId: string; tool: string }) => unknown> = {
+const grantedReadRunners: Record<
+  string,
+  (args: unknown, ws: string, scope: { conversationId: string; tool: string }) => unknown
+> = {
   read_file: (args, ws, scope) => {
     const parsed = toolReadSchema.safeParse(args);
     if (!parsed.success) throw new ToolError("Invalid read_file arguments");

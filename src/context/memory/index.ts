@@ -29,7 +29,12 @@ export { evaluateMemorySafety, type MemorySafetyReason, type MemorySafetyVerdict
 
 export { memoryEnabled, MEMORY_ENV } from "./enablement";
 
-export { boundMemoryContent, countExclusions, selectMemories, type SelectionOutcome } from "./select";
+export {
+  boundMemoryContent,
+  countExclusions,
+  selectMemories,
+  type SelectionOutcome,
+} from "./select";
 
 export {
   createLocalMemoryProvider,

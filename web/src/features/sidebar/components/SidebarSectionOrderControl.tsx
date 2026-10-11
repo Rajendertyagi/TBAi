@@ -1,15 +1,8 @@
 import { useEffect, useRef } from "react";
 import { ChevronDown, ChevronUp, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  DropdownMenuItem,
-  DropdownMenuShortcut,
-} from "@/components/ui/dropdown-menu";
-import {
-  sectionLabel,
-  sidebarConfig,
-  type SidebarSectionId,
-} from "@/config/sidebar";
+import { DropdownMenuItem, DropdownMenuShortcut } from "@/components/ui/dropdown-menu";
+import { sectionLabel, sidebarConfig, type SidebarSectionId } from "@/config/sidebar";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 
 /**
@@ -29,6 +22,7 @@ export function SidebarSectionOrderControl() {
   // after it changes slots (DOM moves don't guarantee focus retention).
   const pendingFocusRef = useRef<SidebarSectionId | null>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `order` is not read in the body on purpose - it is the re-trigger. The effect restores focus to the row that was just moved, and the move is observable only through the resulting order, not through `pendingFocusRef` (which is cleared here).
   useEffect(() => {
     const pending = pendingFocusRef.current;
     if (!pending) return;

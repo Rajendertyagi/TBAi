@@ -5,7 +5,6 @@ import {
   type ResumableStreamAcquisition,
   type ResumableStreamEntry,
   type ResumableStreamLease,
-  type ResumableStreamRole,
   type ResumableStreamStatus,
   type ResumableStreamStore,
 } from "assistant-stream/resumable";
@@ -372,6 +371,19 @@ export interface PendingHistoryRow {
 
 let leaseCounter = 0;
 
+/**
+ * Monotonic lease/boot counter, rendered base-36.
+ *
+ * A named function rather than an inline `(leaseCounter += 1)` inside the
+ * default-parameter expressions below: an assignment inside an expression is
+ * invisible at the call site, and these two defaults are evaluated in an order
+ * a reader has to reconstruct to know which lease gets which number.
+ */
+function nextLeaseSuffix(): string {
+  leaseCounter += 1;
+  return leaseCounter.toString(36);
+}
+
 export function createSqliteResumableStreamStore(
   options: SqliteResumableStreamStoreOptions,
 ): SqliteResumableStreamStore {
@@ -381,8 +393,8 @@ export function createSqliteResumableStreamStore(
     now = Date.now,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     terminalMarkers = UI_MESSAGE_TERMINAL_MARKERS,
-    generateLeaseToken = () => `lease_${Date.now().toString(36)}_${(leaseCounter += 1).toString(36)}`,
-    bootId = `boot_${Date.now().toString(36)}_${(leaseCounter += 1).toString(36)}`,
+    generateLeaseToken = () => `lease_${Date.now().toString(36)}_${nextLeaseSuffix()}`,
+    bootId = `boot_${Date.now().toString(36)}_${nextLeaseSuffix()}`,
   } = options;
 
   const pollMs = Math.max(MIN_POLL_INTERVAL_MS, pollIntervalMs);
@@ -392,11 +404,12 @@ export function createSqliteResumableStreamStore(
   assertSchema(db);
 
   const rowOf = (streamId: string): ChatStreamRow | undefined =>
+    // `get` returns null for a missing row; the callers below treat a missing
+    // row as "absent", which `| undefined` expresses. Reconciled here so no
+    // caller has to handle both spellings of the same state.
     db
-      .query<ChatStreamRow, SQLQueryBindings[]>(
-        "SELECT * FROM chat_streams WHERE stream_id = ?",
-      )
-      .get(streamId);
+      .query<ChatStreamRow, SQLQueryBindings[]>("SELECT * FROM chat_streams WHERE stream_id = ?")
+      .get(streamId) ?? undefined;
 
   const isExpired = (row: ChatStreamRow): boolean => row.expires_at <= now();
 
@@ -524,9 +537,7 @@ export function createSqliteResumableStreamStore(
     const timestamp = now();
     const token = generateLeaseToken();
     const leaseTtlMs = acquireOptions?.ttlMs ?? ttlMs;
-    const produced = db.transaction(() =>
-      acquireLeaseTx(streamId, leaseTtlMs, timestamp, token),
-    )();
+    const produced = db.transaction(() => acquireLeaseTx(streamId, leaseTtlMs, timestamp, token))();
     if (!produced) return { role: "consumer" };
     notify();
     return { role: "producer", lease: { token } };
@@ -862,11 +873,7 @@ export function createSqliteResumableStreamStore(
 
     acquireLease,
 
-    async append(
-      streamId: string,
-      chunk: Uint8Array,
-      lease?: ResumableStreamLease,
-    ): Promise<void> {
+    async append(streamId: string, chunk: Uint8Array, lease?: ResumableStreamLease): Promise<void> {
       assertValidStreamId(streamId);
       const timestamp = now();
       db.transaction(() => {
@@ -879,16 +886,14 @@ export function createSqliteResumableStreamStore(
           );
         }
         if (row.status !== "streaming") {
-          throw new ResumableStreamError(
-            "finalized",
-            `Stream already finalized: ${streamId}`,
-          );
+          throw new ResumableStreamError("finalized", `Stream already finalized: ${streamId}`);
         }
         const seq = row.next_seq;
-        db.run(
-          "INSERT INTO chat_stream_chunks (stream_id, seq, chunk) VALUES (?, ?, ?)",
-          [streamId, seq, chunk],
-        );
+        db.run("INSERT INTO chat_stream_chunks (stream_id, seq, chunk) VALUES (?, ?, ?)", [
+          streamId,
+          seq,
+          chunk,
+        ]);
         // Same round trip as the insert, and guarded by the lease and the live
         // status, so a superseded producer cannot leave a chunk behind.
         const written = db.run(
@@ -899,10 +904,7 @@ export function createSqliteResumableStreamStore(
           [seq + 1, chunk.byteLength, timestamp + ttlMs, timestamp, streamId, row.lease_token],
         );
         if (written.changes !== 1) {
-          throw new ResumableStreamError(
-            "missing",
-            `Stream superseded during append: ${streamId}`,
-          );
+          throw new ResumableStreamError("missing", `Stream superseded during append: ${streamId}`);
         }
       })();
       notify();
@@ -1049,7 +1051,10 @@ export function createSqliteResumableStreamStore(
       // is involved: a liveness timeout would mislabel a slow-but-healthy
       // producer, and at boot there is no producer to be slow.
       const orphans = db
-        .query<{ stream_id: string; terminal_kind: ChatStreamTerminalKind | null }, SQLQueryBindings[]>(
+        .query<
+          { stream_id: string; terminal_kind: ChatStreamTerminalKind | null },
+          SQLQueryBindings[]
+        >(
           "SELECT stream_id, terminal_kind FROM chat_streams WHERE status = 'streaming' AND boot_id <> ? ORDER BY created_at ASC",
         )
         .all(bootId);

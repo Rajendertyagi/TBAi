@@ -27,7 +27,10 @@ export function readComposerDraft(threadKey: string | null | undefined): Compose
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ComposerDraft>;
     if (typeof parsed.text !== "string" || parsed.text.length === 0) return null;
-    return { text: parsed.text, updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0 };
+    return {
+      text: parsed.text,
+      updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+    };
   } catch {
     return null;
   }

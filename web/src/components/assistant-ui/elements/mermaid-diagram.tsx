@@ -160,11 +160,7 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
       const viewport = viewportRef.current;
       if (!viewport) return;
       const rect = viewport.getBoundingClientRect();
-      zoomBy(
-        Math.exp(-e.deltaY * 0.0015),
-        e.clientX - rect.left,
-        e.clientY - rect.top,
-      );
+      zoomBy(Math.exp(-e.deltaY * 0.0015), e.clientX - rect.left, e.clientY - rect.top);
     },
     [zoomBy],
   );
@@ -195,10 +191,7 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
   }, []);
 
   return (
-    <div
-      data-slot="mermaid-zoom-wrap"
-      className="aui-mermaid-zoom-wrap group/mermaid relative"
-    >
+    <div data-slot="mermaid-zoom-wrap" className="aui-mermaid-zoom-wrap group/mermaid relative">
       {children}
       <button
         ref={triggerRef}
@@ -231,11 +224,11 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
             >
               <div
                 data-slot="mermaid-zoom-content"
-                className="aui-mermaid-zoom-content flex h-full w-full items-center justify-center [&_svg]:max-h-[80vh] [&_svg]:max-w-[90vw]"
+                className="aui-mermaid-zoom-content flex h-full w-full origin-top-left items-center justify-center [&_svg]:max-h-[80vh] [&_svg]:max-w-[90vw]"
                 style={{
                   transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-                  transformOrigin: "0 0",
                 }}
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: SVG comes from beautiful-mermaid's renderMermaidSVG and React has no API for injecting SVG output. The library escapes `&`, `<` and `>` in label text (dist/index.js escapeHtml), so model-authored diagram source cannot inject markup.
                 dangerouslySetInnerHTML={{ __html: zoomSvg }}
               />
             </div>
@@ -294,11 +287,7 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
  * the synchronous version - before, a failure to load was impossible because
  * there was no load.
  */
-const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
-  code,
-  className,
-  streaming = false,
-}) => {
+const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({ code, className, streaming = false }) => {
   const [result, setResult] = useState<MermaidRender | null>(null);
 
   useEffect(() => {
@@ -347,6 +336,7 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
     return (
       <div
         data-slot="mermaid-skeleton"
+        role="status"
         aria-label="Rendering diagram"
         className={cn(
           "aui-mermaid-skeleton bg-muted flex h-32 animate-pulse items-center justify-center gap-3 rounded-b-lg p-4",
@@ -366,10 +356,7 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
     return (
       <div
         data-slot="mermaid-fallback"
-        className={cn(
-          "aui-mermaid-fallback bg-muted/75 rounded-b-lg",
-          className,
-        )}
+        className={cn("aui-mermaid-fallback bg-muted/75 rounded-b-lg", className)}
       >
         <pre className="overflow-x-auto p-4 text-sm">{code.trim()}</pre>
         <p className="text-muted-foreground border-border border-t px-4 py-1.5 text-xs">
@@ -387,15 +374,14 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
           "aui-mermaid-diagram bg-muted overflow-x-auto rounded-b-lg p-2 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full",
           className,
         )}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: same renderer and same justification as the zoom viewport above - SVG injection is the only way to display this output.
         dangerouslySetInnerHTML={{ __html: result.svg }}
       />
     </MermaidZoom>
   );
 };
 
-const MermaidDiagram = memo(
-  MermaidDiagramImpl,
-) as unknown as FC<MermaidDiagramProps> & {
+const MermaidDiagram = memo(MermaidDiagramImpl) as unknown as FC<MermaidDiagramProps> & {
   Zoom: typeof MermaidZoom;
 };
 

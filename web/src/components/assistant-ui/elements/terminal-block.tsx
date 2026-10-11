@@ -69,16 +69,11 @@ export function TerminalBlock({
         "w-full overflow-hidden rounded-2xl font-mono text-xs",
         className,
       )}
-
       {...props}
     >
       <div className="flex items-center justify-between px-4 pt-3 pb-1.5">
         <span
-          className={cn(
-            ink
-              ? "text-background/90 dark:text-foreground/90"
-              : "text-foreground/90",
-          )}
+          className={cn(ink ? "text-background/90 dark:text-foreground/90" : "text-foreground/90")}
         >
           {command}
         </span>
@@ -89,9 +84,7 @@ export function TerminalBlock({
               <span
                 className={cn(
                   mono,
-                  ink
-                    ? "text-background/40 dark:text-foreground/40"
-                    : "text-foreground/40",
+                  ink ? "text-background/40 dark:text-foreground/40" : "text-foreground/40",
                 )}
               >
                 failed
@@ -103,9 +96,7 @@ export function TerminalBlock({
               <span
                 className={cn(
                   mono,
-                  ink
-                    ? "text-background/40 dark:text-foreground/40"
-                    : "text-foreground/40",
+                  ink ? "text-background/40 dark:text-foreground/40" : "text-foreground/40",
                 )}
               >
                 exit 0
@@ -116,9 +107,7 @@ export function TerminalBlock({
           <Loader2Icon
             className={cn(
               "size-3 animate-spin motion-reduce:animate-none",
-              ink
-                ? "text-background/35 dark:text-foreground/35"
-                : "text-foreground/35",
+              ink ? "text-background/35 dark:text-foreground/35" : "text-foreground/35",
             )}
           />
         )}
@@ -126,22 +115,19 @@ export function TerminalBlock({
       <div
         className={cn(
           "flex flex-col gap-1 px-4 pt-1 pb-3.5",
-          ink
-            ? "text-background/55 dark:text-foreground/50"
-            : "text-foreground/50",
+          ink ? "text-background/55 dark:text-foreground/50" : "text-foreground/50",
         )}
       >
         {take(lines, visibleCount).map((line, i) => {
           const isLast = i === lines.length - 1;
           return (
             <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: terminal output repeats identical lines constantly (blank prompts, repeated log lines), so the index is required to keep keys unique. The buffer is append-only and existing rows never move.
               key={`${i}-${line}`}
               className={cn(
                 "fade-in animate-in fill-mode-both duration-300",
                 isLast &&
-                  (ink
-                    ? "text-background/90 dark:text-foreground/90"
-                    : "text-foreground/90"),
+                  (ink ? "text-background/90 dark:text-foreground/90" : "text-foreground/90"),
               )}
             >
               {line}

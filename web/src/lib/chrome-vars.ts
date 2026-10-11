@@ -33,14 +33,8 @@ export interface ChromeVars {
 export function syncChromeVars(vars: ChromeVars): void {
   const root = document.documentElement.style;
   root.setProperty("--sidebar-width", `${vars.sidebarWidth}px`);
-  root.setProperty(
-    "--left-chrome-width",
-    `${leftChromeWidth(vars.searchOpen)}px`,
-  );
-  root.setProperty(
-    "--right-chrome-reserve",
-    `${rightChromeReserve(vars.captionStrip)}px`,
-  );
+  root.setProperty("--left-chrome-width", `${leftChromeWidth(vars.searchOpen)}px`);
+  root.setProperty("--right-chrome-reserve", `${rightChromeReserve(vars.captionStrip)}px`);
   root.setProperty("--title-bar-height", `${TITLE_BAR_HEIGHT}px`);
   root.setProperty("--activity-bar-width", `${ACTIVITY_BAR_WIDTH}px`);
   root.setProperty("--caption-button-width", `${CAPTION_BUTTON_WIDTH}px`);

@@ -64,7 +64,8 @@ export const chatRequestSchema = z
     tools: z.unknown().optional(),
     callSettings: z.unknown().optional(),
     config: z.unknown().optional(),
-  }).strict();
+  })
+  .strict();
 
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(120),
@@ -138,39 +139,41 @@ export type MemoryUpdate = z.infer<typeof memoryUpdateSchema>;
 export const memoryIdSchema = z.string().trim().min(1).max(200);
 
 // Conversation persistence (assistant-ui RemoteThreadListAdapter)
-export const conversationCreateSchema = z.object({
-  title: z.string().min(1).max(200).optional(),
-  providerId: z.string().optional().nullable(),
-  modelId: z.string().max(200).optional().nullable(),
-  reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
-  systemPrompt: z.string().optional(),
-  // Two-mode workspace model (codeg-aligned). Simple Chat = disposable per-
-  // conversation workspace; Project Chat = attached to a registered folder.
-  workspaceMode: z.enum(["simple", "project"]).optional().default("simple"),
-  workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
-  // OpenCode session id for Code mode (set by the backend, accepted on create/update).
-  opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
-  // Engine selection + OpenCode agent/model chosen at creation (unified picker).
-  engine: z.enum(["direct", "opencode"]).optional(),
-  opencodeAgent: z.string().min(1).max(200).optional().nullable(),
-  opencodeModel: z.string().min(1).max(200).optional().nullable(),
-  opencodeVariant: z.string().min(1).max(100).optional().nullable(),
-  // Idempotency identity for draft materialization (Phase 4): the client
-  // generates one key per draft and replays it on retry, so a create that
-  // committed but whose response was lost resolves to the same conversation
-  // instead of minting a duplicate row. Opaque to the server otherwise.
-  clientRequestId: z.string().min(1).max(200).optional(),
-  // Per-conversation Auto Approval shield (Phase 6D-B). Strictly boolean; a
-  // malformed or absent value must not arm Auto.
-  opencodeAutoApprove: z.boolean().optional(),
-}).superRefine((value, ctx) => {
-  if (value.workspaceMode === "project" && !value.workspaceFolderId) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "workspaceFolderId is required for project chats",
-    });
-  }
-});
+export const conversationCreateSchema = z
+  .object({
+    title: z.string().min(1).max(200).optional(),
+    providerId: z.string().optional().nullable(),
+    modelId: z.string().max(200).optional().nullable(),
+    reasoningLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
+    systemPrompt: z.string().optional(),
+    // Two-mode workspace model (codeg-aligned). Simple Chat = disposable per-
+    // conversation workspace; Project Chat = attached to a registered folder.
+    workspaceMode: z.enum(["simple", "project"]).optional().default("simple"),
+    workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
+    // OpenCode session id for Code mode (set by the backend, accepted on create/update).
+    opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
+    // Engine selection + OpenCode agent/model chosen at creation (unified picker).
+    engine: z.enum(["direct", "opencode"]).optional(),
+    opencodeAgent: z.string().min(1).max(200).optional().nullable(),
+    opencodeModel: z.string().min(1).max(200).optional().nullable(),
+    opencodeVariant: z.string().min(1).max(100).optional().nullable(),
+    // Idempotency identity for draft materialization (Phase 4): the client
+    // generates one key per draft and replays it on retry, so a create that
+    // committed but whose response was lost resolves to the same conversation
+    // instead of minting a duplicate row. Opaque to the server otherwise.
+    clientRequestId: z.string().min(1).max(200).optional(),
+    // Per-conversation Auto Approval shield (Phase 6D-B). Strictly boolean; a
+    // malformed or absent value must not arm Auto.
+    opencodeAutoApprove: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.workspaceMode === "project" && !value.workspaceFolderId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "workspaceFolderId is required for project chats",
+      });
+    }
+  });
 
 export const conversationUpdateSchema = z.object({
   title: z.string().min(1).max(200).optional(),
@@ -284,6 +287,21 @@ export const streamStatusQuerySchema = z
 
 export const messageUpsertSchema = z.object({
   message: storedMessageSchema,
+});
+
+/**
+ * Query for a bounded history window (P2).
+ *
+ * `direction` selects the walk: `older` walks back from `anchorId` toward the
+ * root, `newer` walks down from the authoritative tip toward the anchor. A null
+ * `anchorId` means "start at the tip", which is what an initial load asks for.
+ * `limit` is a message count, not a page size — the server returns the window it
+ * can prove, plus the boundaries the client needs to decide the next move.
+ */
+export const messageWindowQuerySchema = z.object({
+  direction: z.enum(["older", "newer"]).default("older"),
+  anchorId: z.string().min(1).max(256).nullable().default(null),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
 });
 
 // Agentic tool request bodies (server-executed in the workspace sandbox)
@@ -492,7 +510,9 @@ export const mcpElicitResolveSchema = z.object({
   serverId: z.string().min(1),
   elicitationId: z.string().min(1),
   action: z.enum(["accept", "decline", "cancel"]),
-  content: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).optional(),
+  content: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]))
+    .optional(),
 });
 
 export type McpResourceRead = z.infer<typeof mcpResourceReadSchema>;
@@ -591,6 +611,14 @@ const schedulerGetSchema = z
 const schedulerUpdateSchema = z.object({
   action: z.literal("update"),
   jobId: z.string().min(1).max(200),
+  /**
+   * Pause/resume is reachable through this tool: the `update` handler forwards
+   * the parsed args to the store, which owns `status`, and `list` filters on
+   * it. Declaring it here makes the VALIDATED contract match what the handler
+   * already does — previously `status` reached the store unvalidated, because
+   * Zod strips unknown keys silently instead of rejecting them.
+   */
+  status: z.enum(["active", "paused", "cancelled"]).optional(),
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(2000).optional().nullable(),
   enabled: z.boolean().optional(),
@@ -746,7 +774,11 @@ export const logFileSchema = z.object({
   maxMb: z.number().positive().max(1024).default(5),
   keepFiles: z.number().int().min(1).max(100).default(20),
   maxTotalMb: z.number().positive().max(4096).default(100),
-  retentionHours: z.number().positive().max(24 * 30).default(24),
+  retentionHours: z
+    .number()
+    .positive()
+    .max(24 * 30)
+    .default(24),
 });
 export const logSettingsSchema = z.object({
   level: logLevelFilterSchema,
@@ -788,7 +820,10 @@ export const clientLogEventSchema = z.object({
   message: z.string().max(2000).optional(),
   /** Client epoch ms — the ordering key across the browser/backend boundary. */
   ts: z.number().int().nonnegative(),
-  operationId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+  operationId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,64}$/)
+    .optional(),
   threadId: z.string().max(200).optional(),
   conversationId: z.string().max(200).optional(),
   fields: z

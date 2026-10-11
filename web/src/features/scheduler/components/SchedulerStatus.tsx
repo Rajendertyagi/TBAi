@@ -42,15 +42,11 @@ function Chip({ tone, label }: { tone: string; label: string }) {
 }
 
 export function JobStatusChip({ status }: { status: SchedulerJobStatus }) {
-  return (
-    <Chip tone={JOB_TONES[status] ?? "bg-muted text-muted-foreground"} label={status} />
-  );
+  return <Chip tone={JOB_TONES[status] ?? "bg-muted text-muted-foreground"} label={status} />;
 }
 
 export function RunStatusChip({ status }: { status: SchedulerRunStatus }) {
-  return (
-    <Chip tone={RUN_TONES[status] ?? "bg-muted text-muted-foreground"} label={status} />
-  );
+  return <Chip tone={RUN_TONES[status] ?? "bg-muted text-muted-foreground"} label={status} />;
 }
 
 /** Dot color for list rows (muted when the job is disabled, else last-run tone). */

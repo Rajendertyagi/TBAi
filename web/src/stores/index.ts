@@ -62,9 +62,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     })),
   updateProvider: (id, updates) =>
     set((state) => ({
-      providers: state.providers.map((p) =>
-        p.id === id ? { ...p, ...updates } : p
-      ),
+      providers: state.providers.map((p) => (p.id === id ? { ...p, ...updates } : p)),
     })),
   removeProvider: (id) =>
     set((state) => {

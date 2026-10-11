@@ -1,6 +1,6 @@
 import { create } from "zustand";
+import { apiJson, errorText } from "../lib/api";
 import { logger } from "../lib/logger";
-import { apiFetch } from "../lib/platform";
 
 export interface QuickMessage {
   id: string;
@@ -23,26 +23,9 @@ interface QuickMessagesState {
   /** Reload the list. `silent` skips the page error banner (menu refreshes). */
   load: (opts?: { silent?: boolean }) => Promise<void>;
   create: () => Promise<{ message: QuickMessage | null } & MutationResult>;
-  update: (
-    id: string,
-    data: { title?: string; content?: string },
-  ) => Promise<MutationResult>;
+  update: (id: string, data: { title?: string; content?: string }) => Promise<MutationResult>;
   remove: (id: string) => Promise<MutationResult>;
   reorder: (ids: string[]) => Promise<MutationResult>;
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data as T;
-}
-
-function toMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /**
@@ -59,10 +42,10 @@ export const useQuickMessagesStore = create<QuickMessagesState>((set, get) => ({
   load: async (opts) => {
     set({ loading: true, error: opts?.silent ? get().error : null });
     try {
-      const messages = await api<QuickMessage[]>("/api/quick-messages");
+      const messages = await apiJson<QuickMessage[]>("/api/quick-messages");
       set({ messages });
     } catch (e) {
-      const message = toMessage(e);
+      const message = errorText(e, "Request failed");
       logger.warn("quick-messages.ui", "load_failed", { message });
       if (!opts?.silent) set({ error: message });
     } finally {
@@ -72,14 +55,14 @@ export const useQuickMessagesStore = create<QuickMessagesState>((set, get) => ({
 
   create: async () => {
     try {
-      const message = await api<QuickMessage>("/api/quick-messages", {
+      const message = await apiJson<QuickMessage>("/api/quick-messages", {
         method: "POST",
         body: JSON.stringify({ title: "", content: "" }),
       });
       await get().load();
       return { ok: true as const, message };
     } catch (e) {
-      const message = toMessage(e);
+      const message = errorText(e, "Request failed");
       logger.warn("quick-messages.ui", "create_failed", { message });
       return { ok: false as const, message: null, error: message };
     }
@@ -87,14 +70,14 @@ export const useQuickMessagesStore = create<QuickMessagesState>((set, get) => ({
 
   update: async (id, data) => {
     try {
-      await api(`/api/quick-messages/${id}`, {
+      await apiJson(`/api/quick-messages/${id}`, {
         method: "PATCH",
         body: JSON.stringify(data),
       });
       await get().load();
       return { ok: true as const };
     } catch (e) {
-      const message = toMessage(e);
+      const message = errorText(e, "Request failed");
       logger.warn("quick-messages.ui", "save_failed", { message });
       return { ok: false as const, error: message };
     }
@@ -102,11 +85,11 @@ export const useQuickMessagesStore = create<QuickMessagesState>((set, get) => ({
 
   remove: async (id) => {
     try {
-      await api(`/api/quick-messages/${id}`, { method: "DELETE" });
+      await apiJson(`/api/quick-messages/${id}`, { method: "DELETE" });
       await get().load();
       return { ok: true as const };
     } catch (e) {
-      const message = toMessage(e);
+      const message = errorText(e, "Request failed");
       logger.warn("quick-messages.ui", "delete_failed", { message });
       return { ok: false as const, error: message };
     }
@@ -129,13 +112,13 @@ export const useQuickMessagesStore = create<QuickMessagesState>((set, get) => ({
     }
     set({ messages: next });
     try {
-      await api("/api/quick-messages/reorder", {
+      await apiJson("/api/quick-messages/reorder", {
         method: "POST",
         body: JSON.stringify({ ids }),
       });
       return { ok: true as const };
     } catch (e) {
-      const message = toMessage(e);
+      const message = errorText(e, "Request failed");
       logger.warn("quick-messages.ui", "reorder_failed", { message });
       set({ messages: baseline });
       return { ok: false as const, error: message };

@@ -47,14 +47,7 @@ export interface UseConversationsListResult {
 export function useConversationsList(
   options: UseConversationsListOptions = {},
 ): UseConversationsListResult {
-  const {
-    search = "",
-    order = "updated",
-    status,
-    limit = 20,
-    workspaceMode,
-    folderId,
-  } = options;
+  const { search = "", order = "updated", status, limit = 20, workspaceMode, folderId } = options;
 
   const [items, setItems] = useState<ConversationItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -82,6 +75,7 @@ export function useConversationsList(
     }
   }, [hasMore, isLoading]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `refreshTrigger` is a counter that is never read in the body - it is the refetch trigger. It is how a caller says "the list changed underneath you, ask the server again" when none of the query inputs (search, status, order, page) have moved.
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
@@ -132,10 +126,7 @@ export function useConversationsList(
         // At the request ceiling there may be more rows, but we will not ask
         // for them — hide the button rather than offer a click that changes
         // nothing.
-        setHasMore(
-          rawThreads.length >= queryLimit &&
-            queryLimit < sidebarConfig.maxListPageSize,
-        );
+        setHasMore(rawThreads.length >= queryLimit && queryLimit < sidebarConfig.maxListPageSize);
         setIsLoading(false);
       })
       .catch((err: unknown) => {

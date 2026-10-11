@@ -55,13 +55,9 @@ export {
   type MaybeCompactInput,
 } from "./orchestrate";
 
-export {
-  isCompactionLatched,
-} from "./orchestrate";
+export { isCompactionLatched } from "./orchestrate";
 
-export {
-  describeCompactionOutcome,
-} from "./outcome";
+export { describeCompactionOutcome } from "./outcome";
 
 /**
  * Default policy.

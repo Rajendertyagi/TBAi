@@ -4,11 +4,7 @@ import { conversationService } from "../storage";
 import { resolveConversationWorkspace } from "../workspace";
 import { openCodeServerManager } from "./serverManager";
 import { resolveOpenCodeModelRef } from "./capabilities";
-import {
-  fetchServerDefaultModel,
-  pickSessionModel,
-  resolveStoredModel,
-} from "./sessionModel";
+import { fetchServerDefaultModel, pickSessionModel, resolveStoredModel } from "./sessionModel";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 
@@ -36,9 +32,7 @@ export class EngineMismatchError extends Error {
     readonly conversationId: string,
     readonly engine: string,
   ) {
-    super(
-      `Conversation ${conversationId} uses the ${engine} engine, not OpenCode`,
-    );
+    super(`Conversation ${conversationId} uses the ${engine} engine, not OpenCode`);
     this.name = "EngineMismatchError";
   }
 }
@@ -110,10 +104,7 @@ async function fetchOpenCodeSession(
   try {
     const session = await client.session.get({ sessionID: sessionId });
     if (typeof session?.id !== "string" || session.id.length === 0) {
-      throw new OpenCodeError(
-        "malformed",
-        "OpenCode session response carried no session id",
-      );
+      throw new OpenCodeError("malformed", "OpenCode session response carried no session id");
     }
     return {
       id: session.id,
@@ -121,9 +112,10 @@ async function fetchOpenCodeSession(
       // The session's current model, so adopting it can tell "already has one"
       // from "has none" without a second request. OpenCode reports an unset
       // model as an empty/absent field, so anything non-string is "none".
-      model: typeof session.model?.id === "string" && session.model.id.length > 0
-        ? session.model.id
-        : null,
+      model:
+        typeof session.model?.id === "string" && session.model.id.length > 0
+          ? session.model.id
+          : null,
     };
   } catch (error) {
     // The status is the evidence, and it is checked BEFORE the thrown error is
@@ -240,9 +232,7 @@ export async function ensureOpenCodeSession(
 
 const sessionEnsuresInFlight = new Map<string, Promise<OpenCodeSessionBinding>>();
 
-async function ensureOpenCodeSessionInner(
-  conversationId: string,
-): Promise<OpenCodeSessionBinding> {
+async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenCodeSessionBinding> {
   const conversation = await conversationService.get(conversationId);
   if (!conversation) {
     throw new Error(`Conversation not found: ${conversationId}`);
@@ -251,10 +241,7 @@ async function ensureOpenCodeSessionInner(
   // server, no session, no pointer write). Absent engine reads as Direct —
   // legacy conversations predate the engine column and are all Direct.
   if (conversation.engine !== "opencode") {
-    throw new EngineMismatchError(
-      conversationId,
-      conversation.engine ?? "direct",
-    );
+    throw new EngineMismatchError(conversationId, conversation.engine ?? "direct");
   }
 
   const resolved = await resolveConversationWorkspace(conversationId);

@@ -62,7 +62,7 @@ export async function bootstrapOpenCodeSession(
     return existing;
   }
 
-  let promiseRef: { current: Promise<OpenCodeSessionBootstrapResult> | null } = { current: null };
+  const promiseRef: { current: Promise<OpenCodeSessionBootstrapResult> | null } = { current: null };
   const promise = (async () => {
     const histStart = Date.now();
     logger.debug("opencode", "history.load_start", {

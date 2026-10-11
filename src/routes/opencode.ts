@@ -6,7 +6,11 @@ import {
   terminateOpenCodeSession,
 } from "../services/opencode/sessions";
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
-import { OpenCodeBinaryMissingError, openCodeServerManager, stripOpenCodeProxyPrefix } from "../services/opencode/serverManager";
+import {
+  OpenCodeBinaryMissingError,
+  openCodeServerManager,
+  stripOpenCodeProxyPrefix,
+} from "../services/opencode/serverManager";
 import { getOpenCodeAuthHeaders } from "../services/opencode/runtime";
 import {
   appendOpenCodePermissionRule,
@@ -69,9 +73,7 @@ app.post("/session", async (c) => {
     return c.json({ error: "conversationId is required" }, 400);
   }
   try {
-    const { sessionId, directory } = await ensureOpenCodeSession(
-      parsed.data.conversationId,
-    );
+    const { sessionId, directory } = await ensureOpenCodeSession(parsed.data.conversationId);
     return c.json({ sessionId, directory });
   } catch (err) {
     logger.error("opencode", "opencode.session_error", { ...classifyError(err) });
@@ -156,10 +158,7 @@ async function configServerTarget(): Promise<{
  */
 async function applyPermissionChange(
   transform: (current: unknown) => unknown,
-): Promise<
-  | Response
-  | { readonly path: string; readonly changed: boolean }
-> {
+): Promise<Response | { readonly path: string; readonly changed: boolean }> {
   const target = await configServerTarget();
   const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
   if (document.malformed) {
@@ -285,9 +284,7 @@ app.delete("/config/permissions", async (c) => {
 });
 
 app.put("/config/permissions", async (c) => {
-  const parsed = permissionEffectSchema.safeParse(
-    await c.req.json().catch(() => ({})),
-  );
+  const parsed = permissionEffectSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) {
     return c.json({ error: "action, resource and effect are required" }, 400);
   }
@@ -357,9 +354,8 @@ app.all("*", async (c) => {
     return c.json({ error: mapped.message }, mapped.status);
   }
   const targetPath = stripOpenCodeProxyPrefix(c.req.path);
-  const upstreamPath = targetPath === "/api" || targetPath.startsWith("/api/")
-    ? targetPath
-    : `/api${targetPath}`;
+  const upstreamPath =
+    targetPath === "/api" || targetPath.startsWith("/api/") ? targetPath : `/api${targetPath}`;
   const url = new URL(upstreamPath, baseUrl);
   url.search = new URL(c.req.url).search;
 
@@ -425,8 +421,7 @@ app.all("*", async (c) => {
 
   const upstreamHeaders = new Headers(upstream.headers);
   const contentType = upstreamHeaders.get("content-type") ?? "";
-  const isSSE =
-    contentType.includes("text/event-stream") || url.pathname.includes("/event");
+  const isSSE = contentType.includes("text/event-stream") || url.pathname.includes("/event");
 
   // B. upstream response diagnostics (original metadata, before stripping)
   logger.debug("opencode", "proxy.upstream_response", {
@@ -558,8 +553,13 @@ function observeBody(
 
   const parseEvents = (text: string) => {
     buffer += text;
-    let idx: number;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+    // Find each `\n\n` frame terminator, consume it, and re-scan: the buffer
+    // shrinks as frames are taken, so the next terminator has to be located
+    // again on each pass. Assigning outside the condition keeps the loop
+    // condition a plain comparison (an assignment-in-condition is a classic
+    // place for an off-by-one to hide).
+    let idx = buffer.indexOf("\n\n");
+    while (idx !== -1) {
       const raw = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 2);
       const type = extractEventType(raw);
@@ -579,6 +579,7 @@ function observeBody(
           log("sse.event_sampling_started", { eventsObserved: eventCount });
         }
       }
+      idx = buffer.indexOf("\n\n");
     }
   };
 
@@ -589,7 +590,11 @@ function observeBody(
         const { done, value } = await reader.read();
         if (done) {
           finish("stream-complete");
-          try { controller.close(); } catch { /* already closed */ }
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
           return;
         }
         if (firstByteMs === null) {
@@ -618,7 +623,11 @@ function observeBody(
           });
         }
         finished = true;
-        try { controller.error(err); } catch { /* already closed */ }
+        try {
+          controller.error(err);
+        } catch {
+          /* already closed */
+        }
       }
     },
     cancel(reason) {

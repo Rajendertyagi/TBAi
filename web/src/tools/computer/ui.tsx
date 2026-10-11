@@ -1,7 +1,4 @@
-import type {
-  ToolCallMessagePartComponent,
-  ToolCallMessagePartProps,
-} from "@assistant-ui/react";
+import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
 import { BackendToolView } from "../filesystem/ui";
 import { FieldsOrJson, ResultList, ResultRow } from "@/tools/result-fields";
 import { toolsConfig } from "@/config/tools";
@@ -31,8 +28,14 @@ type AnyProps = ToolCallMessagePartProps<AnyArgs, AnyResult>;
  */
 export function processSummary(result: AnyResult) {
   const r = result as any;
-  const list = (r?.processes ?? []) as { pid: number; name: string; cpuSeconds: number | null; memoryMB: number | null }[];
-  if (list.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.noProcesses}</span>;
+  const list = (r?.processes ?? []) as {
+    pid: number;
+    name: string;
+    cpuSeconds: number | null;
+    memoryMB: number | null;
+  }[];
+  if (list.length === 0)
+    return <span className="text-muted-foreground">{toolsConfig.copy.status.noProcesses}</span>;
   const maxRows = toolsConfig.limits.processRowMaxRows;
   const shown = list.slice(0, maxRows);
   return (

@@ -64,12 +64,12 @@ export const OPENCODE_V2_COMPATIBLE_PACKAGE = "@opencode/ai/providers/openai-com
  * @param baseURL The stub's `/v1` base URL.
  * @param apiKey Placeholder, because the openai-compatible provider requires the
  *   field to be present and the stub never checks it. Deliberately NOT shaped
- *   like a credential: an earlier value was `sk-stub-not-a-real-key`, which is
- *   fake but matches every `sk-` secret-scanner rule and would have to be
- *   allow-listed in each one. OpenCode authenticates the SERVER with HTTP Basic
- *   (`OPENCODE_PASSWORD`, set by the harness); this field never leaves the
- *   loopback stub, so an obviously non-secret value carries the same behaviour
- *   with none of the scanner noise.
+ *   like a credential, and the previous value is deliberately not quoted here
+ *   either: it was fake, but it matched every `sk-` secret-scanner rule and would
+ *   have had to be allow-listed in each one. OpenCode authenticates the SERVER
+ *   with HTTP Basic (`OPENCODE_PASSWORD`, set by the harness); this field never
+ *   leaves the loopback stub, so an obviously non-secret value carries the same
+ *   behaviour with none of the scanner noise.
  * @returns A config document OpenCode v2 accepts.
  */
 export function buildStubOpenCodeConfig(

@@ -23,9 +23,7 @@ import {
 import type { SchedulerJob, SchedulerRun } from "../../types";
 
 type Mode = "detail" | "gallery" | "editor";
-type EditorTarget =
-  | { kind: "seed"; seed: TemplateSeed }
-  | { kind: "edit"; job: SchedulerJob };
+type EditorTarget = { kind: "seed"; seed: TemplateSeed } | { kind: "edit"; job: SchedulerJob };
 
 /** Last-seen timestamp for the failure badge (cleared on view). */
 function readSeenTs(): number {
@@ -47,8 +45,7 @@ export function SchedulerPage() {
   const copy = schedulerViewConfig.copy;
   const navigate = useNavigate();
   const location = useLocation();
-  const { jobs, runsByJob, loading, error, loadJobs, loadRuns, setError } =
-    useSchedulerStore();
+  const { jobs, runsByJob, loading, error, loadJobs, loadRuns, setError } = useSchedulerStore();
   const { providers, loadProviders } = useSettingsStore();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -61,9 +58,9 @@ export function SchedulerPage() {
   const [conversations, setConversations] = useState<
     Array<{ id: string; title: string; engine?: string | null }>
   >([]);
-  const [problems, setProblems] = useState<
-    Array<{ id: string; jobId: string; startedAt: number }>
-  >([]);
+  const [problems, setProblems] = useState<Array<{ id: string; jobId: string; startedAt: number }>>(
+    [],
+  );
   const [seenTs, setSeenTs] = useState<number>(readSeenTs);
   const [runningByJob, setRunningByJob] = useState<Record<string, boolean>>({});
   // Frozen at mount — relative labels ("in 3h") anchor to when the page
@@ -76,6 +73,7 @@ export function SchedulerPage() {
   // Entry loads: jobs, providers, failure summary (+ auto-mark seen, so the
   // rail badge stops nagging while the failures are on screen), thread list
   // (existing-thread picker + labels).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: entry loads for the page: jobs, providers, failure summary and the thread list. This is the initial load for a route visit, not a subscription to those callbacks, which are re-created every render.
   useEffect(() => {
     loadJobs();
     loadProviders();
@@ -93,23 +91,22 @@ export function SchedulerPage() {
     );
     apiFetch("/api/conversations?status=regular")
       .then((r) => r.json())
-      .then(
-        (data) =>
-          setConversations(
-            (
-              data as {
-                threads: Array<{ id: string; title: string; engine?: string | null }>;
-              }
-            ).threads ?? [],
-          ),
+      .then((data) =>
+        setConversations(
+          (
+            data as {
+              threads: Array<{ id: string; title: string; engine?: string | null }>;
+            }
+          ).threads ?? [],
+        ),
       )
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Live running state (5s poll, page-local): spinner on rows, Run-now
   // gating in detail, and history refresh the moment a run settles while
   // its job is selected.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 5s poll for live running state. The poll is owned by this effect for the life of the page; re-creating it on every render would reset the interval and never fire.
   useEffect(() => {
     let cancelled = false;
     const poll = () => {
@@ -138,14 +135,13 @@ export function SchedulerPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Runs for the selected job (reset the selected run on switch).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reload the run history when the SELECTED JOB changes. Depending on `loadRuns` itself would refetch on every render, because it is re-created each time.
   useEffect(() => {
     setSelectedRunId(null);
     if (selectedId) void loadRuns(selectedId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
   function markSeen() {
@@ -163,12 +159,9 @@ export function SchedulerPage() {
   // The shown job: explicit selection, else the first row, so the detail
   // pane is never blank when jobs exist. Derived (no effect) so a deleted
   // selection cleanly falls back instead of dangling.
-  const current =
-    jobs.find((j) => j.id === selectedId) ?? jobs[0] ?? null;
+  const current = jobs.find((j) => j.id === selectedId) ?? jobs[0] ?? null;
   const visibleJobs = jobs.filter(
-    (j) =>
-      statusFilter === "all" ||
-      (statusFilter === "enabled" ? j.enabled : !j.enabled),
+    (j) => statusFilter === "all" || (statusFilter === "enabled" ? j.enabled : !j.enabled),
   );
   const runs = current ? (runsByJob[current.id] ?? []) : [];
 
@@ -186,10 +179,7 @@ export function SchedulerPage() {
   }): string | null => {
     if (job.conversationPolicy !== "existing_thread") return null;
     if (!job.conversationId) return null;
-    return (
-      conversations.find((c) => c.id === job.conversationId)?.title ??
-      job.conversationId
-    );
+    return conversations.find((c) => c.id === job.conversationId)?.title ?? job.conversationId;
   };
 
   const openGallery = () => {
@@ -314,8 +304,7 @@ export function SchedulerPage() {
   // unknown engine falls back to the Direct route (legacy default).
   // Re-opening the shown conversation pushes no duplicate history entry.
   const openThread = (conversationId: string) => {
-    const engine =
-      conversations.find((c) => c.id === conversationId)?.engine ?? null;
+    const engine = conversations.find((c) => c.id === conversationId)?.engine ?? null;
     if (shouldNavigateToThread(location.pathname, conversationId, engine)) {
       navigate(threadUrl(conversationId, engine));
     }
@@ -338,9 +327,7 @@ export function SchedulerPage() {
         onSaved={handleSaved}
         onError={setError}
         onCancel={closeToDetail}
-        onBackToTemplates={
-          editorTarget.kind === "seed" ? openGallery : undefined
-        }
+        onBackToTemplates={editorTarget.kind === "seed" ? openGallery : undefined}
         startScheduleCollapsed={scheduleStartCollapsed}
       />
     ) : null;
@@ -408,9 +395,7 @@ export function SchedulerPage() {
               <div className="h-full min-w-0 flex-1 bg-card/50">
                 {mode === "editor" && editorTarget ? (
                   <div className="h-full overflow-y-auto">
-                    <div className="mx-auto w-full max-w-2xl p-4">
-                      {editorPane}
-                    </div>
+                    <div className="mx-auto w-full max-w-2xl p-4">{editorPane}</div>
                   </div>
                 ) : mode === "gallery" ? (
                   <div className="h-full overflow-y-auto">
@@ -431,9 +416,7 @@ export function SchedulerPage() {
                     conversationId={current.conversationId}
                     loadingRuns={loading}
                     selectedRunId={selectedRunId}
-                    onSelectRun={(run: SchedulerRun | null) =>
-                      setSelectedRunId(run?.id ?? null)
-                    }
+                    onSelectRun={(run: SchedulerRun | null) => setSelectedRunId(run?.id ?? null)}
                     onEdit={() => void handleEdit(current.id)}
                     onRunNow={() => void handleRunNow(current)}
                     onToggleEnabled={() => void handleToggle(current)}

@@ -28,11 +28,7 @@ declare module "typo-js" {
      * @param affData - Contents of the dictionary's `.aff` file.
      * @param wordsData - Contents of the dictionary's `.dic` file.
      */
-    constructor(
-      dictionary?: string,
-      affData?: string | null,
-      wordsData?: string | null,
-    );
+    constructor(dictionary?: string, affData?: string | null, wordsData?: string | null);
 
     /** True once the `.aff` and `.dic` data have been parsed into the table. */
     loaded: boolean;

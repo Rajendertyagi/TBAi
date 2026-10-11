@@ -9,11 +9,7 @@ import {
   useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import {
-  SortableContext,
-  horizontalListSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
+import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   ContextMenu,
@@ -32,10 +28,7 @@ import {
   urlForTab,
   useChatTabsStore,
 } from "../features/chat/state/chatTabs";
-import {
-  evictIfGone,
-  isConfirmedGone,
-} from "../features/chat/state/tabReconciliation";
+import { evictIfGone, isConfirmedGone } from "../features/chat/state/tabReconciliation";
 
 /**
  * Tab label, from the conversation row the server already returns.
@@ -100,8 +93,9 @@ function SortableTab({
   onSelect: () => void;
   onClose: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: tab.key });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: tab.key,
+  });
   const title = useTabTitle(tab.ref);
   const running = useTabRunning(tab.ref);
   const nodeRef = useRef<HTMLDivElement | null>(null);
@@ -143,6 +137,20 @@ function SortableTab({
           }
         }}
         role="tab"
+        // Roving tabindex, set AFTER the dnd-kit spread so it wins. The tabs
+        // pattern requires exactly one tab stop for the whole strip: the active
+        // tab is reachable, the rest are reached with the arrow keys. Only a
+        // PointerSensor is configured, so nothing here depends on dnd-kit's own
+        // `tabIndex` from `attributes`.
+        tabIndex={active ? 0 : -1}
+        onKeyDown={(e) => {
+          // Enter/Space activate, because this is a `div` acting as a button and
+          // therefore gets none of the native keyboard behaviour for free.
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
         aria-selected={active}
         title={title}
         data-active={active || undefined}
@@ -162,14 +170,13 @@ function SortableTab({
         >
           {running && (
             <span
+              role="img"
               aria-label={tabStripConfig.copy.running}
               title={tabStripConfig.copy.running}
               className="size-1.5 shrink-0 animate-pulse rounded-full bg-success"
             />
           )}
-          <span className="tab-title-fade min-w-0 flex-1 whitespace-nowrap">
-            {title}
-          </span>
+          <span className="tab-title-fade min-w-0 flex-1 whitespace-nowrap">{title}</span>
           <button
             type="button"
             onClick={(e) => {
@@ -210,9 +217,7 @@ export function TabStrip() {
   const close = useChatTabsStore((s) => s.close);
   const reorder = useChatTabsStore((s) => s.reorder);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
@@ -232,20 +237,28 @@ export function TabStrip() {
 
   const closeOthers = (key: string) => {
     const current = useChatTabsStore.getState().tabs;
-    current.filter((t) => t.key !== key).forEach((t) => close(t.key));
+    current
+      .filter((t) => t.key !== key)
+      .forEach((t) => {
+        close(t.key);
+      });
   };
 
   const closeToRight = (key: string) => {
     const current = useChatTabsStore.getState().tabs;
     const idx = current.findIndex((t) => t.key === key);
-    current.slice(idx + 1).forEach((t) => close(t.key));
+    current.slice(idx + 1).forEach((t) => {
+      close(t.key);
+    });
   };
 
   const closeAll = () => {
     // Composed from `close`: the store's never-zero-tabs rule leaves a fresh
     // draft behind, so the workbench always has a conversation to type in.
     const current = useChatTabsStore.getState().tabs;
-    current.forEach((t) => close(t.key));
+    current.forEach((t) => {
+      close(t.key);
+    });
   };
 
   const copyLink = (tab: Tab) => {
@@ -258,15 +271,8 @@ export function TabStrip() {
       aria-label="Chat tabs"
       className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto"
     >
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={onDragEnd}
-      >
-        <SortableContext
-          items={tabs.map((t) => t.key)}
-          strategy={horizontalListSortingStrategy}
-        >
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={tabs.map((t) => t.key)} strategy={horizontalListSortingStrategy}>
           {tabs.map((tab) => (
             <ContextMenu key={tab.key}>
               <SortableTab

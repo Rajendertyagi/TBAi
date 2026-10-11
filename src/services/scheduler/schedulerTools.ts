@@ -91,10 +91,7 @@ export const schedulerToolHandlers = {
         description: v.description ?? null,
         enabled: v.enabled ?? true,
         scheduleType: v.scheduleType as "once" | "cron",
-        cronExpression:
-          v.scheduleType === "cron"
-            ? normalizeCron(v.cronExpression ?? null)
-            : null,
+        cronExpression: v.scheduleType === "cron" ? normalizeCron(v.cronExpression ?? null) : null,
         execAt: v.execAt ?? null,
         timezone: v.timezone!,
         providerId: v.providerId!,
@@ -121,14 +118,8 @@ export const schedulerToolHandlers = {
     try {
       scheduleJob(created);
     } catch (err) {
-      schedulerStore.update(
-        created.id,
-        { enabled: false, status: "failed", nextRunAt: null },
-        db,
-      );
-      throw new Error(
-        err instanceof Error ? err.message : "Failed to schedule job",
-      );
+      schedulerStore.update(created.id, { enabled: false, status: "failed", nextRunAt: null }, db);
+      throw new Error(err instanceof Error ? err.message : "Failed to schedule job");
     }
     return { created: true, job: toJobSummary(created) };
   },
@@ -155,16 +146,12 @@ export const schedulerToolHandlers = {
     if (!existing) throw new Error(`Scheduler job not found: ${id}`);
 
     const merged = {
-      scheduleType:
-        (args.scheduleType as string | undefined) ?? existing.scheduleType,
+      scheduleType: (args.scheduleType as string | undefined) ?? existing.scheduleType,
       cronExpression:
         args.cronExpression !== undefined
           ? (args.cronExpression as string | null)
           : existing.cronExpression,
-      execAt:
-        args.execAt !== undefined
-          ? (args.execAt as number | null)
-          : existing.execAt,
+      execAt: args.execAt !== undefined ? (args.execAt as number | null) : existing.execAt,
       timezone: (args.timezone as string | undefined) ?? existing.timezone,
     };
     const scheduleErr = checkScheduleFields(merged);
@@ -179,8 +166,7 @@ export const schedulerToolHandlers = {
       if (providerErr) throw new Error(providerErr);
     }
 
-    const mergedPolicy =
-      (args.conversationPolicy as string) ?? existing.conversationPolicy;
+    const mergedPolicy = (args.conversationPolicy as string) ?? existing.conversationPolicy;
     const mergedConversationId =
       args.conversationId !== undefined
         ? (args.conversationId as string | null)
@@ -196,10 +182,7 @@ export const schedulerToolHandlers = {
     if (typeof patch.cronExpression === "string") {
       patch.cronExpression = normalizeCron(patch.cronExpression);
     }
-    if (
-      args.scheduleType !== undefined &&
-      args.scheduleType !== existing.scheduleType
-    ) {
+    if (args.scheduleType !== undefined && args.scheduleType !== existing.scheduleType) {
       if (args.scheduleType === "cron") patch.execAt = null;
       else patch.cronExpression = null;
     }
@@ -218,14 +201,8 @@ export const schedulerToolHandlers = {
     try {
       scheduleJob(updated);
     } catch (err) {
-      schedulerStore.update(
-        id,
-        { enabled: false, status: "failed", nextRunAt: null },
-        db,
-      );
-      throw new Error(
-        err instanceof Error ? err.message : "Failed to schedule job",
-      );
+      schedulerStore.update(id, { enabled: false, status: "failed", nextRunAt: null }, db);
+      throw new Error(err instanceof Error ? err.message : "Failed to schedule job");
     }
     return { updated: true, job: toJobSummary(updated) };
   },
@@ -259,7 +236,14 @@ export type SchedulerResult =
       ok: true;
       action: SchedulerArgs["action"];
       summary: string;
-      job?: SchedulerJobView;
+      /**
+       * `get` returns the full job WITH its prompt (the handler spreads
+       * `toJobSummary(job)` plus `prompt`), while the other actions return the
+       * summary shape. Typed as optional rather than required so the type matches
+       * what the other actions actually return, and so a test asserting the prompt
+       * is checked against the real return type instead of failing to compile.
+       */
+      job?: SchedulerJobView & { prompt?: string };
       jobs?: SchedulerJobView[];
       id?: string;
       runId?: string;

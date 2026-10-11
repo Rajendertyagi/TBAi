@@ -60,10 +60,7 @@ export function StatusBarQuickActions() {
           {areas.map((item) => {
             const Icon = item.icon;
             return (
-              <DropdownMenuItem
-                key={item.id}
-                onSelect={() => handleOpenArea(item.route)}
-              >
+              <DropdownMenuItem key={item.id} onSelect={() => handleOpenArea(item.route)}>
                 <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
                 {item.label}
               </DropdownMenuItem>
@@ -72,9 +69,7 @@ export function StatusBarQuickActions() {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem onSelect={() => toggleSidebar()}>
-            {copy.toggleSidebar}
-          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => toggleSidebar()}>{copy.toggleSidebar}</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => toggleStatusBar()}>
             {copy.toggleStatusBar}
           </DropdownMenuItem>

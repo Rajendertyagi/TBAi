@@ -20,9 +20,7 @@ export interface DeleteConversationResult {
  *
  * @param threadKey - thread remoteId (bound) or runtime id; null when unknown.
  */
-export async function cancelActiveRun(
-  threadKey: string | null | undefined,
-): Promise<boolean> {
+export async function cancelActiveRun(threadKey: string | null | undefined): Promise<boolean> {
   const streamId = readDirectResumableStreamId(threadKey);
   if (!streamId) return false;
   try {
@@ -30,10 +28,9 @@ export async function cancelActiveRun(
     // server side would otherwise keep burning tokens. Logged before the call
     // so the request exists in the timeline even if the response never lands.
     logger.info("chat", "run.cancel_requested", { streamId });
-    const res = await apiFetch(
-      `/api/chat/cancel/${encodeURIComponent(streamId)}`,
-      { method: "POST" },
-    );
+    const res = await apiFetch(`/api/chat/cancel/${encodeURIComponent(streamId)}`, {
+      method: "POST",
+    });
     if (!res.ok) {
       logger.warn("chat", "run.cancel_rejected", { streamId, status: res.status });
     }
@@ -63,9 +60,7 @@ export async function cancelActiveRun(
  *
  * @param ref - conversation id (remoteId) being deleted.
  */
-export async function deleteConversation(
-  ref: string,
-): Promise<DeleteConversationResult> {
+export async function deleteConversation(ref: string): Promise<DeleteConversationResult> {
   const runCancelled = await cancelActiveRun(ref);
 
   let opencodeTerminated = false;
@@ -110,9 +105,7 @@ export async function deleteConversation(
  * active-key change, so this hook never navigates. Rejects with the
  * coordinator error for the caller to surface.
  */
-export function useDeleteConversation(): (
-  ref: string,
-) => Promise<DeleteConversationResult> {
+export function useDeleteConversation(): (ref: string) => Promise<DeleteConversationResult> {
   return useCallback(async (ref: string) => {
     const result = await deleteConversation(ref);
     useChatTabsStore.getState().closeByRef(ref);

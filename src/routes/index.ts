@@ -1,11 +1,16 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { sanitizeStreamError } from "../lib/redact";
 import { db } from "../db";
 import { accountingMiddleware, metricsText, logLossMetricsText } from "../services/http-metrics";
-import { logger, runWithRequestContext, getRequestContext, resolveInboundCorrelation } from "../lib/logger";
+import {
+  logger,
+  runWithRequestContext,
+  getRequestContext,
+  resolveInboundCorrelation,
+} from "../lib/logger";
 import { errorLogFields } from "../lib/errors";
 import mcpApp from "./mcp";
 import logsApp from "./logs";
@@ -51,11 +56,7 @@ app.use(
       "x-opencode-directory",
       "x-request-id",
     ],
-    exposeHeaders: [
-      "x-resumable-stream-id",
-      "x-request-id",
-      "Content-Type",
-    ],
+    exposeHeaders: ["x-resumable-stream-id", "x-request-id", "Content-Type"],
   }),
 );
 
@@ -155,8 +156,7 @@ app.route("/api/server", serverApp);
 // Raw exception text never crosses either boundary.
 app.onError((err, c) => {
   const ctx = getRequestContext();
-  const requestId =
-    (c.get("requestId") as string | undefined) ?? ctx?.requestId ?? "req_unknown";
+  const requestId = (c.get("requestId") as string | undefined) ?? ctx?.requestId ?? "req_unknown";
   logger.error("http", "http.error", {
     requestId,
     ...(ctx?.operationId ? { operationId: ctx.operationId } : {}),
@@ -234,7 +234,7 @@ function cacheControlFor(rel: string): string | null {
 // — the SPA fallback then takes over.
 function safeStaticPath(rel: string): string | null {
   const normalized = path.posix.normalize(rel).replace(/^(\.\.(\/|\\|$))+/, "");
-  const resolved = path.resolve(DIST_DIR, "." + normalized);
+  const resolved = path.resolve(DIST_DIR, `.${normalized}`);
   if (resolved !== DIST_DIR && !resolved.startsWith(DIST_DIR + path.sep)) {
     return null;
   }
@@ -255,15 +255,21 @@ app.get("/readyz", async (c) => {
     // Cheap DB liveness probe: if SQLite is healthy the query succeeds.
     db.query("SELECT 1 AS ok").get();
   } catch {
-    return Response.json({ ready: false, error: "db_unavailable" }, {
-      status: 503,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-    });
+    return Response.json(
+      { ready: false, error: "db_unavailable" },
+      {
+        status: 503,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      },
+    );
   }
-  return Response.json({ ready: true }, {
-    status: 200,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
+  return Response.json(
+    { ready: true },
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    },
+  );
 });
 
 app.get("/metrics", (c) => {

@@ -13,6 +13,28 @@
     // emit: the backend bundles with `bun build`, the web app builds with vite,
     // and `typecheck` already passes `--noEmit` explicitly.
     "noEmit": true,
+    // Strict null checking, enabled 2026-10-11.
+    //
+    // The two halves are separate decisions and both matter:
+    //
+    //   "strict": true              the whole family (null, implicit any, etc.)
+    //   "strictNullChecks": true    restated explicitly because it is the one
+    //                               that changes what the compiler PROVES.
+    //
+    // Without strictNullChecks TypeScript does not narrow a discriminated
+    // union at all, which is why `chat/types.ts` needed `?: never` markers to
+    // make `PhaseResult` readable. With it on, the phase contract is enforced
+    // rather than documented, and the 19 "possibly null" sites this surfaced
+    // are real: each one is a value read before anything proved it exists.
+    //
+    // Enabling this was a deliberate, measured step: 57 errors across 17 files,
+    // all now fixed. Two of them were genuine latent bugs rather than type
+    // noise - TS2783 "specified more than once, so this usage will be
+    // overwritten" in `services/mcp/manager.ts` and `services/scheduler/
+    // schedulerExecution.ts` - i.e. object literals where a field was
+    // assigned twice and the first value was silently discarded.
+    "strict": true,
+    "strictNullChecks": true,
     // Matches web/tsconfig: declaration files (node_modules) are the
     // packages' contract, not our source. A dependency minor bump otherwise
     // breaks the build on third-party .d.ts drift in code paths we never

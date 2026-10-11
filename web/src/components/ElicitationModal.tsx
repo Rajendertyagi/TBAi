@@ -4,6 +4,15 @@ import { apiFetch } from "../lib/platform";
 import type { McpPendingElicitation } from "../types";
 
 /**
+ * DOM id for a requested field's control, so its `<label htmlFor>` can point at
+ * the control it names. Without this the label is a sibling of the input and
+ * names nothing, so a screen reader announces an unlabelled field.
+ */
+function fieldId(name: string): string {
+  return `mcp-elicit-field-${name}`;
+}
+
+/**
  * Global modal that surfaces MCP server-initiated elicitation requests. When a connected
  * server asks the user a question mid-tool-call, the backend holds the request and exposes
  * it via GET /api/mcp/elicit/pending. This component polls for it and lets the user answer.
@@ -89,12 +98,13 @@ export function ElicitationModal() {
           <div className="mb-3 space-y-2">
             {(pending.fields ?? []).map((f) => (
               <div key={f.name} className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">
+                <label className="text-xs text-muted-foreground" htmlFor={fieldId(f.name)}>
                   {f.title ?? f.name}
                   {f.description ? ` — ${f.description}` : ""}
                 </label>
                 {f.enum ? (
                   <select
+                    id={fieldId(f.name)}
                     value={values[f.name] ?? ""}
                     onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
                     className="rounded-md border border-input bg-transparent px-2 py-1 text-sm"
@@ -108,6 +118,7 @@ export function ElicitationModal() {
                   </select>
                 ) : (
                   <Input
+                    id={fieldId(f.name)}
                     value={values[f.name] ?? ""}
                     onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
                   />

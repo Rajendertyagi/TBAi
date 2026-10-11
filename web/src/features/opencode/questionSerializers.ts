@@ -107,8 +107,10 @@ function answerHint(field: V2FormFieldView): string | null {
   if (field.type === "integer") return toolsConfig.copy.form.copyAnswerInteger;
   // Only the no-option case needs a hint: with options on screen the choices
   // already say what may be answered.
-  if (field.type === "multiselect" && v2FormFieldOptions(field) === null) return toolsConfig.copy.form.copyAnswerList;
-  if (field.type === "string" && v2FormFieldOptions(field) === null) return toolsConfig.copy.form.copyAnswerText;
+  if (field.type === "multiselect" && v2FormFieldOptions(field) === null)
+    return toolsConfig.copy.form.copyAnswerList;
+  if (field.type === "string" && v2FormFieldOptions(field) === null)
+    return toolsConfig.copy.form.copyAnswerText;
   return null;
 }
 
@@ -124,9 +126,12 @@ function fieldAsMarkdown(field: V2FormFieldView): string {
   }
   // Exactly one hint, and never both: with choices on screen only the escape
   // hatch is unstated, and without them the type of answer is.
-  const hint = choices.length > 0
-    ? (v2FormFieldAllowsCustom(field) ? toolsConfig.copy.form.customEntryLabel : null)
-    : answerHint(field);
+  const hint =
+    choices.length > 0
+      ? v2FormFieldAllowsCustom(field)
+        ? toolsConfig.copy.form.customEntryLabel
+        : null
+      : answerHint(field);
   if (hint) lines.push(hint);
   return lines.join(BLANK_LINE);
 }
@@ -168,9 +173,14 @@ export function questionAsJson(form: V2FormView): string {
       description: field.description,
       required: field.required,
       type: field.type,
-      options: options === null
-        ? null
-        : options.map((option) => ({ value: option.value, label: option.label, description: option.description })),
+      options:
+        options === null
+          ? null
+          : options.map((option) => ({
+              value: option.value,
+              label: option.label,
+              description: option.description,
+            })),
       freeText: v2FormFieldAllowsCustom(field),
     };
   });

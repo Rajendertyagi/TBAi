@@ -1,6 +1,6 @@
-import path from "path";
+import path from "node:path";
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+import { DATA_DIR } from "./data-dir";
 
 /**
  * Centralized OpenCode integration configuration. Every value that would

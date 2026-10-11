@@ -1,4 +1,9 @@
-import { type ProgressStage, type ProgressData, resolveStage, type ProgressStatus } from "./progress-stages";
+import {
+  type ProgressStage,
+  type ProgressData,
+  resolveStage,
+  type ProgressStatus,
+} from "./progress-stages";
 
 /**
  * Per-request progress tracker.

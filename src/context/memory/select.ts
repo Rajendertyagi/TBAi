@@ -131,7 +131,8 @@ export function selectMemories(
   const byRank = new Map(ranked.map((candidate, index) => [candidate.id, index]));
   for (const candidate of ranked) {
     if (overBudget.has(candidate.id)) excluded.push({ id: candidate.id, reason: "over_budget" });
-    else if (overCount.has(candidate.id)) excluded.push({ id: candidate.id, reason: "max_selected" });
+    else if (overCount.has(candidate.id))
+      excluded.push({ id: candidate.id, reason: "max_selected" });
   }
   excluded.sort((a, b) => (byRank.get(a.id) ?? 0) - (byRank.get(b.id) ?? 0));
 
@@ -143,7 +144,9 @@ export function selectMemories(
 }
 
 /** Count exclusions by reason, for diagnostics. */
-export function countExclusions(excluded: readonly ExcludedMemory[]): Record<MemoryExclusionReason, number> {
+export function countExclusions(
+  excluded: readonly ExcludedMemory[],
+): Record<MemoryExclusionReason, number> {
   const counts: Record<MemoryExclusionReason, number> = {
     invalid: 0,
     safety: 0,

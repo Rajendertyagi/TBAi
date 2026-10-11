@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { FolderPlus, Link2, Pencil, Palette, FolderInput, Trash2, Layers } from "lucide-react";
-import { SettingsPage, SettingsSection, SettingRow, SettingsError } from "@/components/shared/settings";
+import {
+  SettingsPage,
+  SettingsSection,
+  SettingRow,
+  SettingsError,
+} from "@/components/shared/settings";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -79,7 +84,7 @@ export function FoldersPage() {
               <DropdownMenuItem
                 onSelect={() => {
                   const color = window.prompt("Set color (hex, e.g. #6b7280)", f.color);
-                  if (color && color.trim())
+                  if (color?.trim())
                     void updateFolder(f.id, { color: color.trim() }).catch(() =>
                       setError("Failed to update color"),
                     );
@@ -145,7 +150,9 @@ export function FoldersPage() {
                     variant="ghost"
                     size="sm"
                     className="h-5 px-1"
-                    onClick={() => void deleteGroup(group.id).catch(() => setError("Failed to delete group"))}
+                    onClick={() =>
+                      void deleteGroup(group.id).catch(() => setError("Failed to delete group"))
+                    }
                   >
                     <Trash2 className="size-3.5" />
                   </Button>
@@ -168,7 +175,8 @@ export function FoldersPage() {
             size="sm"
             onClick={() => {
               const name = window.prompt("New group name");
-              if (name && name.trim()) void createGroup(name.trim()).catch(() => setError("Failed to create group"));
+              if (name?.trim())
+                void createGroup(name.trim()).catch(() => setError("Failed to create group"));
             }}
           >
             <Layers className="size-4" />
@@ -183,7 +191,9 @@ export function FoldersPage() {
               <button
                 type="button"
                 className="text-muted-foreground hover:text-destructive"
-                onClick={() => void deleteGroup(g.id).catch(() => setError("Failed to delete group"))}
+                onClick={() =>
+                  void deleteGroup(g.id).catch(() => setError("Failed to delete group"))
+                }
                 aria-label={`Delete ${g.name}`}
               >
                 <Trash2 className="size-3" />
@@ -194,7 +204,11 @@ export function FoldersPage() {
       </SettingsSection>
 
       <WorkspaceFolderDialog open={addOpen} onOpenChange={setAddOpen} />
-      <WorkspaceFolderDialog open={!!manageFolder} onOpenChange={(o) => !o && setManageFolder(null)} folder={manageFolder} />
+      <WorkspaceFolderDialog
+        open={!!manageFolder}
+        onOpenChange={(o) => !o && setManageFolder(null)}
+        folder={manageFolder}
+      />
     </SettingsPage>
   );
 }

@@ -17,7 +17,14 @@ data/
 .DS_Store
 Thumbs.db
 *.log
-logs/
+# Anchored to the repo root. A bare `logs/` matches a directory of that name at
+# ANY depth, and the only directories it was actually hiding were the test
+# suites: tests/unit/logs, tests/integration/logs and tests/e2e/logs. Seven
+# real tests ran in CI while being invisible to `git add`, so they were never
+# committed and never reviewed. No runtime or build step writes a `logs/`
+# directory - the app's /api/logs route is code, not a directory - and `*.log`
+# above already covers log files, so the root-only rule is all that is needed.
+/logs/
 .bun/
 .cottontail-tmp/
 .hutch/
@@ -52,15 +59,26 @@ dev.err
 # containing a stray `chat/` tree.
 tmp-cri-*/
 data-verify-tmp*/
-web/test-results/
-playwright-report/
 
-# The Playwright suite's OWN server data and workspace (scripts/start-e2e-server.ts).
+# ── Test artifacts ───────────────────────────────────────────────────────────
+#
+# ONE entry for everything the suites write at runtime: the Playwright server's
+# data dir and workspace (scripts/start-e2e-server.ts), Playwright's own output
+# (traces, screenshots, error-context.md), and the HTML report when it is
+# enabled. They used to be four scattered entries at the repo root and under
+# `web/`, which is where a real project file would have lived.
+#
+# `tests/.artifacts/` is inside the test tree that owns it and is the only path
+# this repo has that is generated-but-never-committed.
+#
 # Separate from `data/` on purpose: the suite must never read or write the
-# maintainer's live database, and these two dirs are deleted and recreated on
-# every e2e start. Never commit either.
-.e2e-data/
-.e2e-workspace/
+# maintainer's live database, and these are deleted and recreated on every run.
+tests/.artifacts/
+
+# The HTML report still lands at the repo root when a run passes
+# `--reporter=html`, which bypasses `outputDir`. Ignored here rather than
+# redirected so an ad-hoc report can never be committed.
+playwright-report/
 
 # Local agent tooling state, not project source. `.superpowers/` holds per-task
 # progress notes for work still in flight; `prompt.txt` is a scratch task brief.
@@ -95,5 +113,18 @@ prompt.txt
 docs/tool-ui-atlas/
 docs/tool-ui-atlas.html
 
-# Debug screenshots written by the E2E suite belong in Playwright's artifact dir.
-web/e2e/*.png
+# Debug screenshots written by the E2E suite belong in Playwright's artifact dir
+# (`tests/.artifacts/playwright`, covered above). The old `web/e2e/*.png` rule is
+# gone: that directory no longer exists — the suite moved to `tests/e2e/`.
+
+# A screenshot of the Logs settings surface, taken during visual QA and
+# committed by an emergency `git add -A` rather than by a decision. Nothing in
+# the repository references it, and the rule at `docs/tool-ui-atlas/` already
+# records this repo's position: a screenshot is evidence for a decision already
+# made, and once the decision is in the code and its tests the pixels are dead
+# weight in every clone (same reasoning as ab8b380 for the E2E PNGs).
+#
+# The ignore rule is REQUIRED, not decorative: `.gitignore` cannot suppress an
+# already-tracked path, so without it the next bulk commit re-adds the file.
+# Anchored to the repo root so no nested directory of that name is caught.
+/logs-viewer.png

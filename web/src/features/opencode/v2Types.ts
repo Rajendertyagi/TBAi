@@ -89,7 +89,7 @@ export type V2MessagePartState =
       readonly name: string;
       readonly input: Readonly<Record<string, unknown>>;
       readonly output: unknown;
-       readonly metadata?: Readonly<Record<string, unknown>>;
+      readonly metadata?: Readonly<Record<string, unknown>>;
       readonly status: V2ToolStatus;
       readonly permissionId: string | null;
       /**

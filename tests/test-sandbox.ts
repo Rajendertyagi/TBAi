@@ -20,10 +20,10 @@
  * still sees its own writes across its `it()`s) because the directory is
  * resolved once, before the file's modules load.
  */
-import { createHash } from "crypto";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 /**
  * Directory-name prefix. Suites assert `DATA_DIR` contains it
@@ -114,8 +114,7 @@ export function resolveTestSandbox(testFilePath: string | undefined, pid: number
       workspaceDir: path.join(runRoot, WORKSPACE_SUBDIR),
       runRoot,
       isolated: false,
-      fallbackReason:
-        `argv[1] is not a collected test file (got ${JSON.stringify(testFilePath ?? null)})`,
+      fallbackReason: `argv[1] is not a collected test file (got ${JSON.stringify(testFilePath ?? null)})`,
     };
   }
   const dataDir = path.join(runRoot, slug);

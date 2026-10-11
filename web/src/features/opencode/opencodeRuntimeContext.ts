@@ -35,7 +35,10 @@ export interface OpenCodeRuntimeContextValue {
   /** Native V2 compaction admission seam. */
   compact?: () => Promise<void>;
   /** Native V2 selection and recovery seams. */
-  setDesiredSelection?: (selection: { model: { providerID: string; modelID: string; variant?: string } | null; agent: string | null }) => void;
+  setDesiredSelection?: (selection: {
+    model: { providerID: string; modelID: string; variant?: string } | null;
+    agent: string | null;
+  }) => void;
   reconcileStagedRevert?: () => Promise<void>;
   /** The optional live model variant selected by the native runtime. */
   variant?: string;

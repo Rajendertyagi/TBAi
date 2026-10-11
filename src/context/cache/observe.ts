@@ -104,7 +104,9 @@ export function observeCacheUsage(input: {
 
   const read = count(usage.cacheReadTokens);
   const write = count(usage.cacheWriteTokens);
-  const uncached = count(usage.noCacheTokens) ?? (read === undefined && write === undefined ? count(usage.inputTokens) : undefined);
+  const uncached =
+    count(usage.noCacheTokens) ??
+    (read === undefined && write === undefined ? count(usage.inputTokens) : undefined);
 
   const readObserved = read !== undefined && read > 0;
   const writeObserved = write !== undefined && write > 0;

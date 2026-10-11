@@ -1,7 +1,4 @@
-import {
-  createResumableSessionStorage,
-  type ResumableClientStorage,
-} from "@assistant-ui/ai-sdk";
+import { createResumableSessionStorage, type ResumableClientStorage } from "@assistant-ui/ai-sdk";
 
 const DIRECT_RESUME_KEY_PREFIX = "tbai-resume:";
 
@@ -27,9 +24,7 @@ export function createDirectResumableStorage(
 }
 
 /** Read a Direct stream pointer without duplicating session-storage protocol. */
-export function readDirectResumableStreamId(
-  threadId: string | null | undefined,
-): string | null {
+export function readDirectResumableStreamId(threadId: string | null | undefined): string | null {
   if (!threadId) return null;
   try {
     return createDirectResumableStorage(() => threadId).getStreamId(threadId);

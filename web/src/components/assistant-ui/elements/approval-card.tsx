@@ -88,11 +88,7 @@ export function ApprovalCard({
   return (
     <div
       data-slot="approval-card"
-      className={cn(
-        paper,
-        "flex w-full max-w-sm flex-col gap-3.5 rounded-[20px] p-4",
-        className,
-      )}
+      className={cn(paper, "flex w-full max-w-sm flex-col gap-3.5 rounded-[20px] p-4", className)}
       {...props}
     >
       <div className="flex items-center gap-3">
@@ -105,12 +101,7 @@ export function ApprovalCard({
         </div>
       </div>
 
-      <div
-        className={cn(
-          field,
-          "text-foreground/70 rounded-xl px-3.5 py-2.5 font-mono text-xs",
-        )}
-      >
+      <div className={cn(field, "text-foreground/70 rounded-xl px-3.5 py-2.5 font-mono text-xs")}>
         {command}
       </div>
 

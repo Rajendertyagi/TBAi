@@ -33,9 +33,7 @@ function sweep(now = Date.now()): void {
 }
 
 const sameTarget = (a: string, b: string): boolean =>
-  process.platform === "win32"
-    ? a.toLowerCase() === b.toLowerCase()
-    : a === b;
+  process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 export function mintGrant(opts: {
   conversationId: string;

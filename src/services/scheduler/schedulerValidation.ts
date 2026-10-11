@@ -1,10 +1,3 @@
-/**
- * Scheduler input validation shared by the REST boundary (routes/scheduler.ts)
- * and the AI-tool handlers (services/scheduler/schedulerTools.ts). Keeping these
- * here means a model-driven job and a UI-created job validate through the exact
- * same rules — no drift between the two entry points.
- */
-import { db } from "../../db";
 import { registry } from "../../config/providers";
 import { conversationService } from "../storage";
 import { assertValidTimezone, isValidCron, expandMacro } from "./cron";
@@ -44,10 +37,7 @@ export function checkScheduleFields(value: {
 }
 
 /** Validate that a referenced provider exists. Sync. */
-export function checkProvider(value: {
-  providerId?: string;
-  modelId?: string;
-}): string | null {
+export function checkProvider(value: { providerId?: string; modelId?: string }): string | null {
   if (value.providerId === undefined) return null;
   if (!registry.get(value.providerId)) {
     return `Provider "${value.providerId}" does not exist`;

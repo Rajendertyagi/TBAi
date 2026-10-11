@@ -35,7 +35,6 @@ import type {
   LimitCandidateField,
   LimitCandidateRecord,
   LimitCandidateRejection,
-  LimitSource,
   OutputReservation,
 } from "./types";
 
@@ -135,7 +134,9 @@ export function selectModelOption(
  * decision, not one taken silently here.
  */
 function validTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /**
@@ -146,11 +147,20 @@ function validTokenCount(value: unknown): number | undefined {
  * vanishing — which is the whole defect this replaces, where `Math.floor`
  * turned `1000.9` into an authoritative `1000`.
  */
-function checkLimitCandidate(value: unknown): {
-  readonly ok: boolean;
-  readonly value: number | null;
-  readonly rejectionReason: LimitCandidateRejection | null;
-} {
+/**
+ * The result of validating one candidate limit figure.
+ *
+ * A discriminated union, not `{ok: boolean, value: number | null}`. With the
+ * flat shape a caller that checked `ok` still could not prove `value` was a
+ * number, so every accepted branch had to re-narrow a value the checker had
+ * already proved. Here `value` exists only on the ok branch, which is what
+ * makes `observedCheck.ok` sufficient to use it.
+ */
+type LimitCandidateCheck =
+  | { readonly ok: true; readonly value: number; readonly rejectionReason: null }
+  | { readonly ok: false; readonly value: null; readonly rejectionReason: LimitCandidateRejection };
+
+function checkLimitCandidate(value: unknown): LimitCandidateCheck {
   if (typeof value !== "number") {
     return { ok: false, value: null, rejectionReason: "not_a_number" };
   }
@@ -341,7 +351,10 @@ export function resolveContextLimit(input: {
    */
   const withDiagnostics = (
     limit: ContextLimit,
-    annotations: ReadonlyMap<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>,
+    annotations: ReadonlyMap<
+      number,
+      { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+    >,
   ): ContextLimit => {
     // ALWAYS attached, including on the fallback path. That path is precisely
     // where the records matter most: it is the only route by which a reader
@@ -381,9 +394,16 @@ export function resolveContextLimit(input: {
     const observedIndex = records.findIndex((record) => record.field === "observedContextWindow");
 
     if (observedCheck.ok) {
-      const annotations = new Map<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>();
-      if (observedIndex >= 0) annotations.set(observedIndex, { selected: true, outcome: "not_compared" });
-      return withDiagnostics({ ...base, maxInputTokens: observedCheck.value, source: "observed" }, annotations);
+      const annotations = new Map<
+        number,
+        { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+      >();
+      if (observedIndex >= 0)
+        annotations.set(observedIndex, { selected: true, outcome: "not_compared" });
+      return withDiagnostics(
+        { ...base, maxInputTokens: observedCheck.value, source: "observed" },
+        annotations,
+      );
     }
 
     // No real figure. Report the conservative ceiling as a stood-in-for value,
@@ -503,7 +523,8 @@ export function resolveGenerationCap(input: {
 }): GenerationCap {
   const documented = validTokenCount(input.modelOutputTokens);
   const desired = documented ?? DEFAULT_GENERATION_CAP;
-  const source: GenerationCap["source"] = documented !== undefined ? "provider_reported" : "conservative_default";
+  const source: GenerationCap["source"] =
+    documented !== undefined ? "provider_reported" : "conservative_default";
 
   if (input.ceilingTokens === undefined || input.usableInputTokens === undefined) {
     return { tokens: desired, source, boundedByRemainingWindow: false };
@@ -511,11 +532,19 @@ export function resolveGenerationCap(input: {
 
   // Room the window can still give the model after input has been sized.
   const remaining = Math.floor(input.ceilingTokens - input.usableInputTokens);
-  if (remaining <= 0) return { tokens: DEFAULT_GENERATION_CAP, source: "conservative_default", boundedByRemainingWindow: true };
+  if (remaining <= 0)
+    return {
+      tokens: DEFAULT_GENERATION_CAP,
+      source: "conservative_default",
+      boundedByRemainingWindow: true,
+    };
 
   return {
     tokens: Math.min(desired, remaining),
-    source: documented !== undefined && desired <= remaining ? "provider_reported" : "conservative_default",
+    source:
+      documented !== undefined && desired <= remaining
+        ? "provider_reported"
+        : "conservative_default",
     boundedByRemainingWindow: documented !== undefined && desired > remaining,
   };
 }

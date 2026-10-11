@@ -15,11 +15,13 @@ export function useOpenCodeRuntime(
 ) {
   const [clientEpoch, setClientEpoch] = useState(0);
   const scopedSessionId = sessionId ?? "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `clientEpoch` is a state counter that is never read in the body - it is the rebuild trigger. Incrementing it forces a fresh client (and therefore a fresh controller) when the transport has to be replaced even though the session id and directory are unchanged.
   const client = useMemo(
-    () => createOpenCodeV2Client(
-      { sessionId: scopedSessionId, directory: eventDirectory ?? null },
-      getApiBaseUrl() || window.location.origin,
-    ),
+    () =>
+      createOpenCodeV2Client(
+        { sessionId: scopedSessionId, directory: eventDirectory ?? null },
+        getApiBaseUrl() || window.location.origin,
+      ),
     [eventDirectory, scopedSessionId, clientEpoch],
   );
   const controller = useMemo(() => createV2ThreadController(client), [client]);
@@ -41,7 +43,11 @@ export function useOpenCodeRuntime(
     if (defaultModel || defaultAgent) {
       controller.setDesiredSelection({
         model: defaultModel
-          ? { providerID: defaultModel.providerID, modelID: defaultModel.modelID, ...(defaultModel.variant ? { variant: defaultModel.variant } : {}) }
+          ? {
+              providerID: defaultModel.providerID,
+              modelID: defaultModel.modelID,
+              ...(defaultModel.variant ? { variant: defaultModel.variant } : {}),
+            }
           : null,
         agent: defaultAgent ?? null,
       });

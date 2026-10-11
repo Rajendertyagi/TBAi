@@ -61,8 +61,8 @@ export function AppearancePage() {
             requires the notice to be retained; several palettes credit their own
             upstream author too. */}
         <p className="text-3xs text-muted-foreground">
-          Colour palettes from OpenChamber (MIT, Copyright (c) 2025 Bohdan Triapitsyn).
-          Classic is TBAi's own.
+          Colour palettes from OpenChamber (MIT, Copyright (c) 2025 Bohdan Triapitsyn). Classic is
+          TBAi's own.
         </p>
       </SettingsSection>
 

@@ -78,10 +78,7 @@ function referencedConversationIds(): string[] {
  * @param conversationId - The conversation whose tabs may be closed.
  * @param status - Verdict from the shared existence contract.
  */
-export function evictIfGone(
-  conversationId: string,
-  status: ConversationExistence,
-): void {
+export function evictIfGone(conversationId: string, status: ConversationExistence): void {
   if (status !== "gone") return;
   const store = useChatTabsStore.getState();
   if (!store.tabs.some((tab) => tab.ref === conversationId)) return;

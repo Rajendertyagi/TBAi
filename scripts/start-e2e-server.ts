@@ -20,16 +20,34 @@
  *
  * Opt out with `TBAI_E2E_BASE_URL`, which points the suite at a server you
  * manage yourself. Nothing here runs in that case.
+ *
+ * ## Provenance
+ *
+ * The bundle served here is a build output, so this script verifies it was built
+ * from the current source (`scripts/web-build-provenance.ts`) and refuses to
+ * start otherwise. That check is not redundant with `run-e2e.ts` rebuilding
+ * first: this script can be run directly, and a guard that only holds on the
+ * path someone remembers to take is not a guard.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { seedStubProvider, startStubProvider } from "./e2e-stub-provider";
+import { assessWebBuild, describeBuildFreshness } from "./web-build-provenance";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const E2E_DATA_DIR = path.join(REPO_ROOT, ".e2e-data");
-const E2E_WORKSPACE_DIR = path.join(REPO_ROOT, ".e2e-workspace");
+/**
+ * Every test artifact this suite writes lives under `tests/.artifacts/`.
+ *
+ * They used to sit at the repo root (`.e2e-data/`, `.e2e-workspace/`) alongside
+ * real project files, so a `git status` full of ten megabytes of SQLite hid the
+ * handful of source changes that actually mattered. One directory, inside the
+ * test tree that owns it, is one line of `.gitignore` instead of four.
+ */
+const E2E_ARTIFACT_DIR = path.join(REPO_ROOT, "tests", ".artifacts");
+const E2E_DATA_DIR = path.join(E2E_ARTIFACT_DIR, "e2e-data");
+const E2E_WORKSPACE_DIR = path.join(E2E_ARTIFACT_DIR, "e2e-workspace");
 const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
 /** Fixed, and off the app's own port space, so it never collides. */
 const STUB_PORT = Number(process.env.TBAI_E2E_STUB_PORT ?? 3199);
@@ -37,7 +55,17 @@ const STUB_PORT = Number(process.env.TBAI_E2E_STUB_PORT ?? 3199);
 /** The frontend the server serves. Built output, never a dev server. */
 // The SPA ships into the same `dist/` that holds the compiled server, so the e2e
 // suite exercises the layout that actually ships rather than a parallel one.
-const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
+const PROVENANCE_CHECK_ONLY = process.env.TBAI_E2E_PROVENANCE_CHECK_ONLY === "1";
+/** Overrides are allowed only in check-only mode, which exits before starting any server. */
+const WEB_DIST =
+  PROVENANCE_CHECK_ONLY && process.env.TBAI_E2E_WEB_DIST
+    ? process.env.TBAI_E2E_WEB_DIST
+    : path.join(REPO_ROOT, "dist", "web");
+/** Build inputs, used to verify `WEB_DIST` was built from the current source. */
+const WEB_ROOT =
+  PROVENANCE_CHECK_ONLY && process.env.TBAI_E2E_WEB_ROOT
+    ? process.env.TBAI_E2E_WEB_ROOT
+    : path.join(REPO_ROOT, "web");
 
 function fail(message: string): never {
   process.stderr.write(`[e2e-server] ${message}\n`);
@@ -57,9 +85,33 @@ for (const dir of ["xdg-config", "xdg-data", "xdg-cache", "xdg-state"]) {
   fs.mkdirSync(path.join(E2E_DATA_DIR, dir), { recursive: true });
 }
 
-if (!fs.existsSync(path.join(WEB_DIST, "index.html"))) {
-  fail(`dist/web is missing. Run \`bun run build:web\` before \`bun run test:e2e\`.`);
+/**
+ * Refuse to serve a bundle that was not built from the source on disk.
+ *
+ * This is the gate that makes a stale-artifact run IMPOSSIBLE rather than merely
+ * discouraged. `run-e2e.ts` rebuilds first, but a rebuild is a convenience: it can
+ * be skipped, interrupted, or forgotten by whoever runs the server script
+ * directly. So the provenance stamp is checked HERE, at the point of use.
+ *
+ * Existence is not enough. `dist/web/index.html` persists across a failed build,
+ * so the previous check admitted a half-written or outdated bundle and the suite
+ * reported confident results for code that was not in the tree. Every non-current
+ * outcome is fatal, including a MISSING stamp: an artifact whose provenance
+ * cannot be established is precisely the artifact that must not be served.
+ */
+const freshness = assessWebBuild(WEB_ROOT, WEB_DIST);
+if (freshness.status !== "current") {
+  fail(`${describeBuildFreshness(freshness)}\n[e2e-server] refusing to start.`);
 }
+if (PROVENANCE_CHECK_ONLY) {
+  process.stdout.write(
+    "[e2e-server] provenance check passed; check-only mode, server not started.\n",
+  );
+  process.exit(0);
+}
+process.stdout.write(
+  `[e2e-server] serving web build ${freshness.stamp.sourceHash} (built ${freshness.stamp.builtAt})\n`,
+);
 
 const stub = startStubProvider(STUB_PORT);
 

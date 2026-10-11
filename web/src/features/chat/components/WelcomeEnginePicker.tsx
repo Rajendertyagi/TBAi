@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  useWelcomeEngineStore,
-  type WelcomeEngine,
-} from "../state/welcomeEngine";
+import { useWelcomeEngineStore, type WelcomeEngine } from "../state/welcomeEngine";
 import { EnginePicker } from "@/components/EnginePicker";
 
 /**

@@ -8,7 +8,14 @@ async function main() {
   let r = await fetch(`${BASE}/api/mcp/servers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "api2", transport: "stdio", command: BUN, args: [SCRIPT], enabled: true, autoConnect: true }),
+    body: JSON.stringify({
+      name: "api2",
+      transport: "stdio",
+      command: BUN,
+      args: [SCRIPT],
+      enabled: true,
+      autoConnect: true,
+    }),
   });
   const srv = await r.json();
   console.log("[api2] created", r.status, srv.id);
@@ -51,4 +58,7 @@ async function main() {
   await fetch(`${BASE}/api/mcp/servers/${srv.id}`, { method: "DELETE" });
   console.log("[api2] PASS");
 }
-main().catch((e) => { console.error("[api2] FAIL", e); process.exit(1); });
+main().catch((e) => {
+  console.error("[api2] FAIL", e);
+  process.exit(1);
+});

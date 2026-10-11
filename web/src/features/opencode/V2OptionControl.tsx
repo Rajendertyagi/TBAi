@@ -40,7 +40,9 @@ function finiteBound(value: number | string | null): number | null {
  * then crash mapping it. So the control does not depend on having been
  * projected: it treats only a non-empty array as options.
  */
-function normalizeOptions(options: readonly V2FormOptionView[] | null | undefined): readonly V2FormOptionView[] | null {
+function normalizeOptions(
+  options: readonly V2FormOptionView[] | null | undefined,
+): readonly V2FormOptionView[] | null {
   return options != null && options.length > 0 ? options : null;
 }
 
@@ -108,6 +110,7 @@ function AnswerTextarea({
   label: string;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `value` is not read in the body on purpose - it is the re-trigger. The effect resizes the textarea to its CONTENT, and the content is the value; without it the box would never grow with what the user types.
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
@@ -117,19 +120,22 @@ function AnswerTextarea({
     // the screen or the transcript to nothing.
     element.style.overflowY = formTextareaOverflows(height) ? "auto" : "hidden";
   }, [value]);
-  return <textarea
-    ref={ref}
-    id={id}
-    aria-label={label}
-    rows={1}
-    autoFocus={autoFocus}
-    disabled={disabled}
-    placeholder={placeholder}
-    value={value}
-    onChange={(event) => onChange(event.target.value)}
-    onKeyDown={onKeyDown}
-    className="w-full resize-none overflow-y-hidden rounded-md border border-border bg-transparent px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-  />;
+  return (
+    <textarea
+      ref={ref}
+      id={id}
+      aria-label={label}
+      rows={1}
+      // biome-ignore lint/a11y/noAutofocus: `autoFocus` is a caller-supplied prop, so whether this field takes focus is the caller's decision, not an unconditional page-load focus grab. The rule reads the attribute and cannot see the conditional.
+      autoFocus={autoFocus}
+      disabled={disabled}
+      placeholder={placeholder}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={onKeyDown}
+      className="w-full resize-none overflow-y-hidden rounded-md border border-border bg-transparent px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+    />
+  );
 }
 
 /** The shared visual treatment of an option row and the Other row. */
@@ -152,27 +158,35 @@ function OptionRow({
   onSelect: () => void;
   disabled?: boolean;
 }) {
-  return <button
-    type="button"
-    role={multiple ? "checkbox" : "radio"}
-    aria-checked={selected}
-    disabled={disabled}
-    onClick={onSelect}
-    className={cn(ROW_BASE, selected ? ROW_SELECTED : ROW_UNSELECTED)}
-  >
-    <span
-      aria-hidden="true"
-      className={cn(
-        "mt-0.5 size-3.5 shrink-0 border",
-        multiple ? "rounded-[4px]" : "rounded-full",
-        selected ? "border-primary bg-primary" : "border-border",
-      )}
-    />
-    <span className="min-w-0 flex-1">
-      <span className="block break-words font-medium text-foreground">{option.label}</span>
-      {option.description ? <span className="mt-0.5 block break-words text-xs text-muted-foreground">{option.description}</span> : null}
-    </span>
-  </button>;
+  /* biome-ignore-start lint/a11y/useAriaPropsSupportedByRole: false positive. `role` is a ternary over "checkbox" and "radio" and BOTH support `aria-checked`, but Biome cannot narrow the expression, so it falls back to the implicit `button` role, which does not. A RANGE suppression, because the formatter rewrites `return <button ...>` into a wrapped form and a line suppression does not survive that. */
+  return (
+    <button
+      type="button"
+      role={multiple ? "checkbox" : "radio"}
+      aria-checked={selected}
+      disabled={disabled}
+      onClick={onSelect}
+      className={cn(ROW_BASE, selected ? ROW_SELECTED : ROW_UNSELECTED)}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 size-3.5 shrink-0 border",
+          multiple ? "rounded-[4px]" : "rounded-full",
+          selected ? "border-primary bg-primary" : "border-border",
+        )}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block break-words font-medium text-foreground">{option.label}</span>
+        {option.description ? (
+          <span className="mt-0.5 block break-words text-xs text-muted-foreground">
+            {option.description}
+          </span>
+        ) : null}
+      </span>
+    </button>
+  );
+  /* biome-ignore-end lint/a11y/useAriaPropsSupportedByRole: end of the option row whose dynamic role Biome cannot narrow. */
 }
 
 /**
@@ -201,7 +215,13 @@ function OptionRow({
  * "Expected string array for form field: e"), so a typed entry is APPENDED to
  * the selection rather than replacing it.
  */
-export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }: V2OptionControlProps) {
+export function V2OptionControl({
+  field,
+  value,
+  onChange,
+  onKeyDown,
+  disabled,
+}: V2OptionControlProps) {
   const options = normalizeOptions(v2FormFieldOptions(field));
   const allowsCustom = v2FormFieldAllowsCustom(field);
   const multiple = field.type === "multiselect";
@@ -223,7 +243,10 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
   // dock, a second form carrying the same default — would hold text that
   // nothing on screen showed. Picking an option sets the value to a listed one,
   // which closes the row on its own, so the two cannot both read as chosen.
-  const offListAnswer = !multiple && selectedText.length > 0 && !(options ?? []).some((option) => option.value === selectedText);
+  const offListAnswer =
+    !multiple &&
+    selectedText.length > 0 &&
+    !(options ?? []).some((option) => option.value === selectedText);
   const otherOpen = otherChosen || offListAnswer;
 
   // Options present → draw them. Nothing about `custom` participates here.
@@ -235,77 +258,110 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
     // The draft is kept, so tabbing back shows exactly what was typed.
     const commitDraft = () => {
       const entry = draft.trim();
-      if (entry.length === 0 || selectedList.includes(entry)) { setDraft(""); return; }
+      if (entry.length === 0 || selectedList.includes(entry)) {
+        setDraft("");
+        return;
+      }
       onChange([...selectedList, entry]);
       setDraft("");
     };
     const rows = options.map((option) => {
       // While the reader is typing their own answer for a single-select, no
       // option may read as chosen — the typed text is the answer.
-      const selected = multiple ? selectedList.includes(option.value) : !otherOpen && selectedText === option.value;
+      const selected = multiple
+        ? selectedList.includes(option.value)
+        : !otherOpen && selectedText === option.value;
       const onSelect = () => {
         if (multiple) {
-          onChange(selected ? selectedList.filter((entry) => entry !== option.value) : [...selectedList, option.value]);
+          onChange(
+            selected
+              ? selectedList.filter((entry) => entry !== option.value)
+              : [...selectedList, option.value],
+          );
           return;
         }
         setOtherChosen(false);
         onChange(option.value);
       };
-      return <OptionRow key={option.value} option={option} selected={selected} multiple={multiple} onSelect={onSelect} disabled={disabled} />;
+      return (
+        <OptionRow
+          key={option.value}
+          option={option}
+          selected={selected}
+          multiple={multiple}
+          onSelect={onSelect}
+          disabled={disabled}
+        />
+      );
     });
 
-    return <div role={multiple ? "group" : "radiogroup"} aria-label={toolsConfig.copy.form.optionGroupLabel(label)} className="flex flex-col gap-1" id={groupId}>
-      {rows}
-      {allowsCustom ? multiple ? <div className="flex items-center gap-2 pt-1">
-        <input
-          id={textId}
-          aria-label={toolsConfig.copy.form.customEntryLabel}
-          disabled={disabled}
-          placeholder={toolsConfig.copy.form.customEntryPlaceholder}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            // `isPlainEnter`, not `event.key === "Enter"`. Accepting an IME
-            // candidate also fires a keydown, so the bare check committed the
-            // PINYIN draft and closed the box instead of keeping the kanji the
-            // reader actually typed.
-            //
-            // This site is worse than a missing guard, because of the `return`:
-            // the event never reaches `onKeyDown`, so the dock's own IME-guarded
-            // handler in `V2FormCard` never sees it either. Nothing downstream
-            // could have caught it -- the guard has to be right here.
-            if (isPlainEnter(event)) { event.preventDefault(); commitDraft(); return; }
-            onKeyDown?.(event);
-          }}
-          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-        />
-      </div> : <div className="pt-1">
-        <button
-          type="button"
-          aria-expanded={otherOpen}
-          disabled={disabled}
-          onClick={() => {
-            setOtherChosen(true);
-            // Choosing to type your own answer must not start you off with the
-            // option you happened to click a moment ago pre-filled in the box.
-            // The reference client clears the selection on the same transition
-            // (`{ custom: true, selected: [] }`).
-            //
-            // Only a LISTED option is cleared. An answer that names no option is
-            // already the reader's own text — a re-opened dock, a second form
-            // carrying the same default — and clearing that would silently
-            // destroy an answer the reader never retyped. That case is exactly
-            // what `offListAnswer` exists to preserve.
-            // Only a LISTED option is cleared; an off-list answer is already the
-            // reader's own text and must survive. See
-            // `shouldClearOnOpeningCustom`.
-            if (shouldClearOnOpeningCustom(selectedText, options)) onChange(undefined);
-          }}
-          className={cn(ROW_BASE, otherOpen ? ROW_SELECTED : ROW_UNSELECTED)}
-        >
-          <span className="font-medium">{toolsConfig.copy.form.other}</span>
-        </button>
-        {/*
+    /* biome-ignore-start lint/a11y/useAriaPropsSupportedByRole: false positive, same cause as the option rows: `role` is a ternary over "group" and "radiogroup" and BOTH support `aria-label`, but Biome cannot narrow it and falls back to the implicit `generic` role, which does not. A RANGE suppression, because the formatter wraps the returned element onto its own line. */
+    return (
+      <div
+        role={multiple ? "group" : "radiogroup"}
+        aria-label={toolsConfig.copy.form.optionGroupLabel(label)}
+        className="flex flex-col gap-1"
+        id={groupId}
+      >
+        {rows}
+        {allowsCustom ? (
+          multiple ? (
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                id={textId}
+                aria-label={toolsConfig.copy.form.customEntryLabel}
+                disabled={disabled}
+                placeholder={toolsConfig.copy.form.customEntryPlaceholder}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  // `isPlainEnter`, not `event.key === "Enter"`. Accepting an IME
+                  // candidate also fires a keydown, so the bare check committed the
+                  // PINYIN draft and closed the box instead of keeping the kanji the
+                  // reader actually typed.
+                  //
+                  // This site is worse than a missing guard, because of the `return`:
+                  // the event never reaches `onKeyDown`, so the dock's own IME-guarded
+                  // handler in `V2FormCard` never sees it either. Nothing downstream
+                  // could have caught it -- the guard has to be right here.
+                  if (isPlainEnter(event)) {
+                    event.preventDefault();
+                    commitDraft();
+                    return;
+                  }
+                  onKeyDown?.(event);
+                }}
+                className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              />
+            </div>
+          ) : (
+            <div className="pt-1">
+              <button
+                type="button"
+                aria-expanded={otherOpen}
+                disabled={disabled}
+                onClick={() => {
+                  setOtherChosen(true);
+                  // Choosing to type your own answer must not start you off with the
+                  // option you happened to click a moment ago pre-filled in the box.
+                  // The reference client clears the selection on the same transition
+                  // (`{ custom: true, selected: [] }`).
+                  //
+                  // Only a LISTED option is cleared. An answer that names no option is
+                  // already the reader's own text — a re-opened dock, a second form
+                  // carrying the same default — and clearing that would silently
+                  // destroy an answer the reader never retyped. That case is exactly
+                  // what `offListAnswer` exists to preserve.
+                  // Only a LISTED option is cleared; an off-list answer is already the
+                  // reader's own text and must survive. See
+                  // `shouldClearOnOpeningCustom`.
+                  if (shouldClearOnOpeningCustom(selectedText, options)) onChange(undefined);
+                }}
+                className={cn(ROW_BASE, otherOpen ? ROW_SELECTED : ROW_UNSELECTED)}
+              >
+                <span className="font-medium">{toolsConfig.copy.form.other}</span>
+              </button>
+              {/*
           The row and the box are two things, and this is what stops them reading
           as one control. Drawn as siblings they were both full width, 4px apart,
           with a filled row directly above a bordered box — every edge lined up,
@@ -316,34 +372,46 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
           so the two are never touching. Both are kept: the row still shows that
           you are in custom mode, which is worth keeping.
         */}
-        {otherOpen ? <div className="pt-2 pl-8">
-          <AnswerTextarea
-            id={textId}
-            label={toolsConfig.copy.form.customEntryLabel}
-            placeholder={toolsConfig.copy.form.customEntryPlaceholder}
-            autoFocus
-            disabled={disabled}
-            value={selectedText}
-            onChange={(next) => onChange(next.length > 0 ? next : undefined)}
-            onKeyDown={onKeyDown}
-          />
-        </div> : null}
-      </div> : null}
-    </div>;
+              {otherOpen ? (
+                <div className="pt-2 pl-8">
+                  <AnswerTextarea
+                    id={textId}
+                    label={toolsConfig.copy.form.customEntryLabel}
+                    placeholder={toolsConfig.copy.form.customEntryPlaceholder}
+                    autoFocus
+                    disabled={disabled}
+                    value={selectedText}
+                    onChange={(next) => onChange(next.length > 0 ? next : undefined)}
+                    onKeyDown={onKeyDown}
+                  />
+                </div>
+              ) : null}
+            </div>
+          )
+        ) : null}
+      </div>
+    );
+    /* biome-ignore-end lint/a11y/useAriaPropsSupportedByRole: end of the option group whose dynamic role Biome cannot narrow. */
   }
 
   // No options: free text IS the control. `custom` is not consulted, because a
   // field with nothing to pick from has nothing to add an escape hatch to.
   if (field.type === "string") {
-    return <AnswerTextarea
-      id={textId}
-      label={label}
-      placeholder={field.format === "date-time" ? toolsConfig.copy.form.customEntryPlaceholder : toolsConfig.copy.form.yourAnswer}
-      disabled={disabled}
-      value={selectedText}
-      onChange={(next) => onChange(next.length > 0 ? next : undefined)}
-      onKeyDown={onKeyDown}
-    />;
+    return (
+      <AnswerTextarea
+        id={textId}
+        label={label}
+        placeholder={
+          field.format === "date-time"
+            ? toolsConfig.copy.form.customEntryPlaceholder
+            : toolsConfig.copy.form.yourAnswer
+        }
+        disabled={disabled}
+        value={selectedText}
+        onChange={(next) => onChange(next.length > 0 ? next : undefined)}
+        onKeyDown={onKeyDown}
+      />
+    );
   }
 
   // A number carries no options and no `custom`, so the input IS the control.
@@ -351,19 +419,23 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
   // may carry the JSON stand-ins 'Infinity' | '-Infinity' | 'NaN', so they are
   // narrowed the same way `v2Forms.numericBound` does before reaching the DOM.
   if (field.type === "number" || field.type === "integer") {
-    return <input
-      id={textId}
-      type="number"
-      inputMode={field.type === "integer" ? "numeric" : "decimal"}
-      step={field.type === "integer" ? 1 : "any"}
-      min={finiteBound(field.minimum) ?? undefined}
-      max={finiteBound(field.maximum) ?? undefined}
-      disabled={disabled}
-      value={typeof value === "number" ? value : ""}
-      onChange={(event) => onChange(event.target.value === "" ? undefined : Number(event.target.value))}
-      onKeyDown={onKeyDown}
-      className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-    />;
+    return (
+      <input
+        id={textId}
+        type="number"
+        inputMode={field.type === "integer" ? "numeric" : "decimal"}
+        step={field.type === "integer" ? 1 : "any"}
+        min={finiteBound(field.minimum) ?? undefined}
+        max={finiteBound(field.maximum) ?? undefined}
+        disabled={disabled}
+        value={typeof value === "number" ? value : ""}
+        onChange={(event) =>
+          onChange(event.target.value === "" ? undefined : Number(event.target.value))
+        }
+        onKeyDown={onKeyDown}
+        className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+      />
+    );
   }
 
   // A boolean is a two-value choice, so it is drawn as two option rows rather
@@ -374,20 +446,30 @@ export function V2OptionControl({ field, value, onChange, onKeyDown, disabled }:
       { value: true, label: toolsConfig.copy.form.trueLabel },
       { value: false, label: toolsConfig.copy.form.falseLabel },
     ];
-    return <div role="radiogroup" aria-label={label} className="flex flex-col gap-1">
-      {choices.map((choice) => <button
-        key={String(choice.value)}
-        type="button"
-        role="radio"
-        aria-checked={value === choice.value}
-        disabled={disabled}
-        onClick={() => onChange(choice.value)}
-        className={cn(ROW_BASE, value === choice.value ? ROW_SELECTED : ROW_UNSELECTED)}
-      >
-        <span aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0 rounded-full border", value === choice.value ? "border-primary bg-primary" : "border-border")} />
-        <span className="font-medium text-foreground">{choice.label}</span>
-      </button>)}
-    </div>;
+    return (
+      <div role="radiogroup" aria-label={label} className="flex flex-col gap-1">
+        {choices.map((choice) => (
+          <button
+            key={String(choice.value)}
+            type="button"
+            role="radio"
+            aria-checked={value === choice.value}
+            disabled={disabled}
+            onClick={() => onChange(choice.value)}
+            className={cn(ROW_BASE, value === choice.value ? ROW_SELECTED : ROW_UNSELECTED)}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "mt-0.5 size-3.5 shrink-0 rounded-full border",
+                value === choice.value ? "border-primary bg-primary" : "border-border",
+              )}
+            />
+            <span className="font-medium text-foreground">{choice.label}</span>
+          </button>
+        ))}
+      </div>
+    );
   }
 
   // An external field must be completed in OpenCode itself; there is nothing to

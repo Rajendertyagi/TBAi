@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { unstable_useComposerInput } from "@assistant-ui/react";
 import { ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react";
-import {
-  welcomeConfig,
-  type QuickActionAccent,
-  type QuickActionItem,
-} from "@/config/welcome";
+import { welcomeConfig, type QuickActionAccent, type QuickActionItem } from "@/config/welcome";
 import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,8 +19,7 @@ import { Button } from "@/components/ui/button";
 const ACCENTS: Record<QuickActionAccent, { icon: string; surface: string }> = {
   green: {
     icon: "text-green-600 dark:text-green-400",
-    surface:
-      "border-green-500/20 hover:border-green-500/40 hover:bg-green-500/5",
+    surface: "border-green-500/20 hover:border-green-500/40 hover:bg-green-500/5",
   },
   blue: {
     icon: "text-blue-600 dark:text-blue-400",
@@ -32,28 +27,23 @@ const ACCENTS: Record<QuickActionAccent, { icon: string; surface: string }> = {
   },
   orange: {
     icon: "text-orange-600 dark:text-orange-400",
-    surface:
-      "border-orange-500/20 hover:border-orange-500/40 hover:bg-orange-500/5",
+    surface: "border-orange-500/20 hover:border-orange-500/40 hover:bg-orange-500/5",
   },
   amber: {
     icon: "text-amber-600 dark:text-amber-400",
-    surface:
-      "border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/5",
+    surface: "border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/5",
   },
   pink: {
     icon: "text-pink-600 dark:text-pink-400",
-    surface:
-      "border-pink-500/20 hover:border-pink-500/40 hover:bg-pink-500/5",
+    surface: "border-pink-500/20 hover:border-pink-500/40 hover:bg-pink-500/5",
   },
   purple: {
     icon: "text-purple-600 dark:text-purple-400",
-    surface:
-      "border-purple-500/20 hover:border-purple-500/40 hover:bg-purple-500/5",
+    surface: "border-purple-500/20 hover:border-purple-500/40 hover:bg-purple-500/5",
   },
   violet: {
     icon: "text-violet-600 dark:text-violet-400",
-    surface:
-      "border-violet-500/20 hover:border-violet-500/40 hover:bg-violet-500/5",
+    surface: "border-violet-500/20 hover:border-violet-500/40 hover:bg-violet-500/5",
   },
 };
 
@@ -71,9 +61,7 @@ function BigCard({ item, onSelect }: { item: QuickActionItem; onSelect: () => vo
     >
       <Icon aria-hidden="true" className={cn("h-4 w-4 transition-colors", a.icon)} />
       <span className="text-sm font-medium text-foreground">{item.title}</span>
-      <span className="line-clamp-1 text-xs text-muted-foreground">
-        {item.description}
-      </span>
+      <span className="line-clamp-1 text-xs text-muted-foreground">{item.description}</span>
     </button>
   );
 }
@@ -91,9 +79,7 @@ function SkillBar({ item, onSelect }: { item: QuickActionItem; onSelect: () => v
         aria-hidden="true"
         className="h-4 w-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
       />
-      <span className="whitespace-nowrap text-xs font-medium text-foreground/90">
-        {item.title}
-      </span>
+      <span className="whitespace-nowrap text-xs font-medium text-foreground/90">{item.title}</span>
     </button>
   );
 }
@@ -132,7 +118,13 @@ function RailArrow({
 }
 
 /** Bounded horizontal rail: arrows live exactly while scroll runway remains. */
-function SkillRail({ items, onSelect }: { items: QuickActionItem[]; onSelect: (item: QuickActionItem) => void }) {
+function SkillRail({
+  items,
+  onSelect,
+}: {
+  items: QuickActionItem[];
+  onSelect: (item: QuickActionItem) => void;
+}) {
   const copy = welcomeConfig.copy;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -148,6 +140,7 @@ function SkillRail({ items, onSelect }: { items: QuickActionItem[]; onSelect: (i
     setCanEnd(travelled < max - 1);
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `items.length` is not read in the body on purpose - it is the re-measure trigger. Adding or removing a row changes the rendered height without changing `measure`, and the pill has to reposition.
   useEffect(() => {
     measure();
     const viewport = viewportRef.current;
@@ -214,7 +207,11 @@ export function QuickActions() {
 
   return (
     <section aria-label={copy.quickActionsLabel} className="flex flex-col gap-2">
-      <div role="tablist" aria-label={copy.quickActionsLabel} className={cn(layout.tabRowClass, "justify-center")}>
+      <div
+        role="tablist"
+        aria-label={copy.quickActionsLabel}
+        className={cn(layout.tabRowClass, "justify-center")}
+      >
         {welcomeConfig.tabs.map((t) => {
           const Icon = t.icon;
           const active = t.id === tab.id;

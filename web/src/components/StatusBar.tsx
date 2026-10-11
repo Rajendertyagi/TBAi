@@ -45,9 +45,7 @@ export function StatusBar() {
     : copy.noProvider;
 
   const isCode = pathname.startsWith("/code");
-  const codeConfig = useOpenCodeConversationConfig(
-    isCode ? agentId : undefined,
-  );
+  const codeConfig = useOpenCodeConversationConfig(isCode ? agentId : undefined);
   const codeLabel = codeConfig
     ? [codeConfig.opencodeAgent, codeConfig.opencodeModel]
         .filter((v): v is string => !!v)
@@ -81,8 +79,7 @@ export function StatusBar() {
 
   const openProviders = () =>
     navigate(getNavItem("providers")?.route ?? appConfig.settingsIndexRoute);
-  const openServer = () =>
-    navigate(getNavItem("desktop")?.route ?? appConfig.settingsIndexRoute);
+  const openServer = () => navigate(getNavItem("desktop")?.route ?? appConfig.settingsIndexRoute);
 
   return (
     <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-statusbar pl-2 pr-4 text-xs text-muted-foreground">
@@ -106,9 +103,7 @@ export function StatusBar() {
             )}
           />
           <span>{availabilityLabel}</span>
-          <span className="tabular-nums">
-            {serverPort != null ? `:${serverPort}` : "…"}
-          </span>
+          <span className="tabular-nums">{serverPort != null ? `:${serverPort}` : "…"}</span>
         </button>
       </div>
       <div className="flex min-w-0 items-center gap-3">

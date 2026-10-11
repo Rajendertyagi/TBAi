@@ -84,60 +84,60 @@ export interface ThemeDefinition {
 }
 
 const CLASSIC_LIGHT: ThemePalette = {
-    primary: {
-      base: "#18181b",
-      foreground: "#fafafa",
-    },
-    surface: {
-      background: "#ffffff",
-      foreground: "#09090b",
-      muted: "#f4f4f5",
-      mutedForeground: "#71717a",
-      elevated: "#ffffff",
-      subtle: "#f4f4f5",
-    },
-    interactive: {
-      border: "#e4e4e7",
-      selection: "#f4f4f5",
-      focusRing: "#a1a1aa",
-    },
-    status: {
-      error: "#ef4444",
-      errorForeground: "#fafafa",
-      warning: "#d97706",
-      warningForeground: "#fafafa",
-      success: "#16a34a",
-      successForeground: "#fafafa",
-    },
-  };
+  primary: {
+    base: "#18181b",
+    foreground: "#fafafa",
+  },
+  surface: {
+    background: "#ffffff",
+    foreground: "#09090b",
+    muted: "#f4f4f5",
+    mutedForeground: "#71717a",
+    elevated: "#ffffff",
+    subtle: "#f4f4f5",
+  },
+  interactive: {
+    border: "#e4e4e7",
+    selection: "#f4f4f5",
+    focusRing: "#a1a1aa",
+  },
+  status: {
+    error: "#ef4444",
+    errorForeground: "#fafafa",
+    warning: "#d97706",
+    warningForeground: "#fafafa",
+    success: "#16a34a",
+    successForeground: "#fafafa",
+  },
+};
 
 const CLASSIC_DARK: ThemePalette = {
-    primary: {
-      base: "oklch(0.87 0 0)",
-      foreground: "oklch(0.205 0 0)",
-    },
-    surface: {
-      background: "#0a0a0a",
-      foreground: "oklch(0.985 0 0)",
-      muted: "oklch(0.269 0 0)",
-      mutedForeground: "oklch(0.708 0 0)",
-      elevated: "oklch(0.205 0 0)",
-      subtle: "oklch(0.371 0 0)",
-    },
-    interactive: {
-      border: "oklch(1 0 0 / 10%)",
-      selection: "oklch(0.371 0 0)",
-      focusRing: "oklch(0.556 0 0)",
-    },
-    status: {
-      error: "oklch(0.704 0.191 22.216)",
-      errorForeground: "#fafafa",
-      warning: "#fbbf24",
-      warningForeground: "#0a0a0a",
-      success: "#4ade80",
-      successForeground: "#0a0a0a",
-    },
-  };
+  primary: {
+    base: "oklch(0.87 0 0)",
+    foreground: "oklch(0.205 0 0)",
+  },
+  surface: {
+    background: "#0a0a0a",
+    foreground: "oklch(0.985 0 0)",
+    muted: "oklch(0.269 0 0)",
+    mutedForeground: "oklch(0.708 0 0)",
+    elevated: "oklch(0.205 0 0)",
+    subtle: "oklch(0.371 0 0)",
+  },
+  interactive: {
+    border: "oklch(1 0 0 / 10%)",
+    selection: "oklch(0.371 0 0)",
+    focusRing: "oklch(0.556 0 0)",
+  },
+  status: {
+    error: "oklch(0.704 0.191 22.216)",
+    errorForeground: "#fafafa",
+    warning: "#fbbf24",
+    warningForeground: "#0a0a0a",
+    success: "#4ade80",
+    successForeground: "#0a0a0a",
+  },
+};
 
 /** The theme used when nothing is stored, and what a reset returns to. */
 export const DEFAULT_THEME_ID = "classic";

@@ -66,9 +66,7 @@ export function WebSearch({
       </span>
       <div className="text-foreground/45 text-xs">
         {searching ? (
-          <ShimmerLabel className="relative inline-block leading-none">
-            Searching
-          </ShimmerLabel>
+          <ShimmerLabel className="relative inline-block leading-none">Searching</ShimmerLabel>
         ) : (
           <span className="fade-in animate-in duration-300">
             Read {results.length} source{results.length === 1 ? "" : "s"}
@@ -87,9 +85,7 @@ export function WebSearch({
             <span className="text-foreground/90 min-w-0 flex-1 truncate text-[13.5px]">
               {result.title}
             </span>
-            <span className={cn(mono, "text-foreground/35 shrink-0")}>
-              {result.domain}
-            </span>
+            <span className={cn(mono, "text-foreground/35 shrink-0")}>{result.domain}</span>
           </div>
         ))}
       </div>

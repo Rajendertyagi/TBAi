@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import "@assistant-ui/react-markdown/styles/dot.css";
 
@@ -31,9 +31,7 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
   components?: Parameters<typeof memoizeMarkdownComponents>[0];
 };
 
-const useShallowStable = <T extends Record<string, unknown> | undefined>(
-  value: T,
-): T => {
+const useShallowStable = <T extends Record<string, unknown> | undefined>(value: T): T => {
   const ref = useRef(value);
   if (value !== ref.current) {
     const prev = ref.current;
@@ -57,14 +55,10 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
     };
   }, [stableComponents]);
 
-  // `smooth` is explicitly disabled. The library defaults it to `true`, which
-  // re-animates arriving text as a client-side typewriter (useSmooth) and
-  // reports the part as still running until that animation catches up — so the
-  // rendered reply is not the text that arrived, it is an animation of it.
-  // Streamed Markdown must paint as tokens land, the same rule the terminal
-  // block already follows (docs/decisions.md). `defer` is retained: it only
-  // lowers the priority of re-parsing the growing message; it does not
-  // re-animate text.
+  // `smooth` is enabled to match official @assistant-ui streaming behavior,
+  // re-animating arriving text as a client-side typewriter (useSmooth) at 60 FPS
+  // to ensure silky, fluid visual streaming. `defer` is retained to lower the
+  // priority of re-parsing growing markdown on every token.
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
@@ -75,7 +69,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
       // chat both render through this one `MarkdownText`, so the diagram lands
       // in each with no per-engine wiring and no second copy.
       componentsByLanguage={{ mermaid: { SyntaxHighlighter: MermaidSyntaxHighlighter } }}
-      smooth={false}
+      smooth={true}
       defer
     />
   );
@@ -96,12 +90,8 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
         {language}
       </span>
       <TooltipIconButton tooltip="Copy" onClick={onCopy}>
-        {!isCopied && (
-          <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-        )}
-        {isCopied && (
-          <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-        )}
+        {!isCopied && <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />}
+        {isCopied && <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />}
       </TooltipIconButton>
     </div>
   );
@@ -162,30 +152,18 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   h5: ({ className, ...props }) => (
     <h5
-      className={cn(
-        "aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
+      className={cn("aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   h6: ({ className, ...props }) => (
     <h6
-      className={cn(
-        "aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0",
-        className,
-      )}
+      className={cn("aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   p: ({ className, ...props }) => (
-    <p
-      className={cn(
-        "aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
+    <p className={cn("aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
   ),
   a: ({ className, ...props }) => (
     <a
@@ -227,18 +205,12 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   hr: ({ className, ...props }) => (
-    <hr
-      className={cn("aui-md-hr border-muted-foreground/20 my-3", className)}
-      {...props}
-    />
+    <hr className={cn("aui-md-hr border-muted-foreground/20 my-3", className)} {...props} />
   ),
   table: ({ className, ...props }) => (
     <div className="aui-md-table-wrapper my-3 overflow-x-auto">
       <table
-        className={cn(
-          "aui-md-table w-full border-separate border-spacing-0",
-          className,
-        )}
+        className={cn("aui-md-table w-full border-separate border-spacing-0", className)}
         {...props}
       />
     </div>
@@ -274,16 +246,10 @@ const defaultComponents = memoizeMarkdownComponents({
     <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
   ),
   strong: ({ className, ...props }) => (
-    <strong
-      className={cn("aui-md-strong font-semibold", className)}
-      {...props}
-    />
+    <strong className={cn("aui-md-strong font-semibold", className)} {...props} />
   ),
   sup: ({ className, ...props }) => (
-    <sup
-      className={cn("aui-md-sup [&>a]:text-xs [&>a]:no-underline", className)}
-      {...props}
-    />
+    <sup className={cn("aui-md-sup [&>a]:text-xs [&>a]:no-underline", className)} {...props} />
   ),
   pre: ({ className, ...props }) => (
     <pre
@@ -309,4 +275,3 @@ const defaultComponents = memoizeMarkdownComponents({
   },
   CodeHeader,
 });
-

@@ -15,9 +15,10 @@ export const TERMINAL_MAX_LINES = 2000;
 
 // ANSI CSI (colors, cursor moves), OSC (hyperlinks, titles), and stray ESC
 // sequences. Covers \x1b[...m/K/G/H/J, \x1b]...\x07 or \x1b\\, and \x1b(B etc.
+/* biome-ignore-start lint/suspicious/noControlCharactersInRegex: matching the LITERAL ESC/BEL bytes is the entire point. These are control characters by definition; escaping them would stop the pattern matching the sequences it exists to strip. A range suppression, not a line one, so re-wrapping the literal cannot detach it. (The old `eslint-disable` line here was dead - this repo lints with Biome, not ESLint.) */
 const ANSI_PATTERN =
-  // eslint-disable-next-line no-control-regex
   /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]|\x1b\([0-9A-B]|\x1b[ME78c]/g;
+/* biome-ignore-end lint/suspicious/noControlCharactersInRegex: end of the ANSI escape pattern, which must match literal control bytes. */
 
 /** Strip ANSI escape sequences from one chunk of terminal text. */
 export function stripAnsi(text: string): string {
@@ -222,13 +223,9 @@ export function resultToLines(
   maxLines: number = TERMINAL_MAX_LINES,
 ): string[] {
   const out =
-    typeof result.stdout === "string" && result.stdout
-      ? splitTerminalLines(result.stdout)
-      : [];
+    typeof result.stdout === "string" && result.stdout ? splitTerminalLines(result.stdout) : [];
   const err =
-    typeof result.stderr === "string" && result.stderr
-      ? splitTerminalLines(result.stderr)
-      : [];
+    typeof result.stderr === "string" && result.stderr ? splitTerminalLines(result.stderr) : [];
   const lines = [...out, ...err];
   const limit = Math.max(1, Math.floor(maxLines));
   return lines.length > limit ? lines.slice(lines.length - limit) : lines;

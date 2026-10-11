@@ -1,9 +1,10 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { generateId } from "../lib/utils";
 import { db } from "../db";
+import { DATA_DIR, DEFAULT_DATA_DIR } from "../config/data-dir";
 import { conversationService } from "../services/storage";
-import { folderService, addChatFolder } from "../services/folders";
+import { addChatFolder } from "../services/folders";
 import { canonicalizeRoot, WORKSPACE_DIR } from "../services/tools";
 import { logger } from "../lib/logger";
 
@@ -51,14 +52,18 @@ export interface ResolvedWorkspace {
   folderName: string;
 }
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const CHAT_DIR = path.join(DATA_DIR, "chat");
 
 /** New-layout root: conversation-owned workspaces live here. */
 const CHATS_DIR = path.join(WORKSPACE_DIR, "chats");
 
 /** Where the app keeps its data when the operator has relocated nothing. */
-const DEFAULT_DATA_DIR = path.join(process.cwd(), "data");
+/**
+ * The default data dir this module falls back to, for the relocated-install
+ * safety check below. Deliberately NOT `DATA_DIR`: that already honours the
+ * override, so aliasing it here would make "was this relocated?" always false.
+ */
+const DEFAULT_DATA_DIR_VALUE = DEFAULT_DATA_DIR;
 
 /** Why the orphan sweep stood down. `null` means it may run. */
 export type OrphanSweepSkipReason = "relocated_data_dir";
@@ -135,9 +140,7 @@ const CHAT_SCRATCH_STALE_MS = 10 * 60 * 1000; // 10 minutes
  * falls back to the legacy `data/chat/<uuid>` scratch shape.
  * Returns the folder detail so the caller can bind the conversation to it.
  */
-export async function createChatWorkspace(
-  conversationId?: string,
-): Promise<{
+export async function createChatWorkspace(conversationId?: string): Promise<{
   folderId: string;
   dir: string;
 }> {
@@ -211,7 +214,7 @@ export function gcOrphanChatDirs(): number {
   // exactly like a healthy one until it has been used to authorise deletions.
   const safety = evaluateOrphanSweepSafety(
     DATA_DIR,
-    DEFAULT_DATA_DIR,
+    DEFAULT_DATA_DIR_VALUE,
     Boolean(process.env.WORKSPACE_DIR),
   );
   if (safety.skip) {
@@ -336,16 +339,10 @@ export function verifyTreeCopy(src: string, dst: string): void {
       s = fs.statSync(full);
       t = fs.statSync(twin);
     } catch {
-      throw new WorkspaceError(
-        "migration_verify_failed",
-        `Migrated copy is missing ${rel}`,
-      );
+      throw new WorkspaceError("migration_verify_failed", `Migrated copy is missing ${rel}`);
     }
     if (s.isDirectory() !== t.isDirectory() || s.size !== t.size) {
-      throw new WorkspaceError(
-        "migration_verify_failed",
-        `Migrated copy differs at ${rel}`,
-      );
+      throw new WorkspaceError("migration_verify_failed", `Migrated copy differs at ${rel}`);
     }
   }
 }
@@ -364,10 +361,7 @@ async function migrateChatWorkspace(
 ): Promise<void> {
   const next = chatWorkspaceDir(conversationId);
   fs.mkdirSync(next, { recursive: true });
-  if (
-    fs.existsSync(legacyPath) &&
-    fs.statSync(legacyPath).isDirectory()
-  ) {
+  if (fs.existsSync(legacyPath) && fs.statSync(legacyPath).isDirectory()) {
     fs.cpSync(legacyPath, next, { recursive: true, force: true });
     verifyTreeCopy(legacyPath, next);
     // Grace retention: touch the legacy tree so GC spares it for at least one
@@ -384,11 +378,7 @@ async function migrateChatWorkspace(
       legacyPath,
     });
   }
-  db.run("UPDATE folders SET path = ?, updated_at = ? WHERE id = ?", [
-    next,
-    Date.now(),
-    folderId,
-  ]);
+  db.run("UPDATE folders SET path = ?, updated_at = ? WHERE id = ?", [next, Date.now(), folderId]);
   logger.info("workspace", "workspace_migrated", {
     conversationId,
     folderId,
@@ -423,10 +413,7 @@ export async function resolveConversationWorkspace(
 
   const conv = await conversationService.get(conversationId);
   if (!conv) {
-    throw new WorkspaceError(
-      "conversation_missing",
-      `Conversation ${conversationId} not found`,
-    );
+    throw new WorkspaceError("conversation_missing", `Conversation ${conversationId} not found`);
   }
 
   // Legacy migration: conversation without a workspace_folder_id.
@@ -443,7 +430,14 @@ export async function resolveConversationWorkspace(
   // Resolve via the folder table (both simple and project modes).
   const row = db
     .query<
-      { id: string; name: string; alias: string | null; path: string; kind: string; deleted_at: number | null },
+      {
+        id: string;
+        name: string;
+        alias: string | null;
+        path: string;
+        kind: string;
+        deleted_at: number | null;
+      },
       [string]
     >("SELECT id, name, alias, path, kind, deleted_at FROM folders WHERE id = ?")
     .get(conv.workspaceFolderId);

@@ -76,10 +76,7 @@ export const FORM_DOCK_CHROME_PX = 96;
  *   viewport's top, already resolved by the caller.
  * @returns The available height in pixels, never negative.
  */
-export function formDockAvailablePx(
-  bodyBottomPx: number,
-  boundaryTopPx: number,
-): number {
+export function formDockAvailablePx(bodyBottomPx: number, boundaryTopPx: number): number {
   return Math.max(0, Math.floor(bodyBottomPx - boundaryTopPx - FORM_DOCK_BOUNDARY_GAP_PX));
 }
 

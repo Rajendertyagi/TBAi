@@ -23,13 +23,8 @@ export function PageTitleStrip({ title }: { title: string }) {
       >
         <MessagesSquare aria-hidden="true" className="size-3.5" />
       </button>
-      <ChevronRight
-        aria-hidden="true"
-        className="size-3 shrink-0 text-muted-foreground/50"
-      />
-      <h1 className="min-w-0 truncate pl-1 text-sm font-semibold leading-none">
-        {title}
-      </h1>
+      <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/50" />
+      <h1 className="min-w-0 truncate pl-1 text-sm font-semibold leading-none">{title}</h1>
     </div>
   );
 }

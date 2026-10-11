@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   ActionBarPrimitive,
   ErrorPrimitive,
@@ -32,6 +32,8 @@ import { toolsConfig } from "../config/tools";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import { ScrollPill } from "./ScrollPill";
+import { VirtualizedTranscript } from "./VirtualizedTranscript";
+import { DirectViewportBridge } from "../features/chat/history/DirectViewportBridge";
 import { ThreadBootSkeleton } from "./assistant-ui/elements/thread-boot-skeleton";
 import { CompactionDivider } from "./assistant-ui/elements/compaction-divider";
 import { DIRECT_COMPACT_DATA_NAME } from "../features/chat/compactCommand";
@@ -152,6 +154,33 @@ export function ChatWindow({
   const showAgentScopeChip = mode === "agent";
   const composer = <Composer isWelcomeDraft={showWelcome} isCodeSurface={isCodeSurface} />;
 
+  // The row renderer for the virtualized timeline. It switches on assistant-ui's
+  // own row type, so the timeline decides only WHICH rows are mounted, never
+  // what a row looks like — every case reuses an existing component, and the
+  // part case shares `AssistantPart` with the ordinary message renderer.
+  //
+  // Its identity is stable (memoized on `mode`): the timeline invokes it for
+  // every mounted row, so a fresh function per render re-renders the list.
+  const renderRow = useCallback<
+    NonNullable<React.ComponentProps<typeof ThreadPrimitive.Row>["children"]>
+  >(
+    (info) => {
+      switch (info.type) {
+        case "message":
+          return info.message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />;
+        case "part":
+          return <AssistantPart part={info.part}>{info.children}</AssistantPart>;
+        case "turn-end":
+          // TBAi renders no turn footer; the action bar already lives on the
+          // message. Returning null keeps the row from adding an empty cell.
+          return null;
+        default:
+          return null;
+      }
+    },
+    [mode],
+  );
+
   return (
     <ThreadPrimitive.Root className="relative flex h-full min-h-0 flex-col">
       {showWelcome ? (
@@ -160,16 +189,41 @@ export function ChatWindow({
         </ThreadPrimitive.Viewport>
       ) : (
         <>
-          <ThreadPrimitive.Viewport className="flex-1 space-y-4 overflow-y-auto px-4 py-6 pb-4">
-            {showBoot ? <ThreadBootSkeleton /> : null}
-            <ThreadPrimitive.Messages>
-              {({ message }) =>
-                message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />
-              }
-            </ThreadPrimitive.Messages>
-          </ThreadPrimitive.Viewport>
-
-          <ScrollPill />
+          {/* P2 rebased architecture: one virtualized timeline for history AND
+              the live streaming tail, so there is a single scroll position.
+              `ThreadPrimitive.Viewport` is deliberately NOT used — its auto-scroll
+              assumes every message is mounted, which is exactly what
+              virtualization removes. The bridge supplies measurements and the
+              paging control; it holds no window policy. */}
+          <VirtualizedTranscript
+            // The vertical spacing is MARGIN, not padding, and that is load-bearing.
+            //
+            // Padding on a scroll container is part of its scrollable overflow, so
+            // `py-6 pb-4` added 40px to `scrollHeight` that the virtualizer's
+            // `getTotalSize()` cannot see. That made the scrollport's end-distance
+            // disagree with virtual-core's by exactly 40px, which is why
+            // `resizeItem`'s `wasAtEnd` reported "at end" while the viewport was
+            // not. Margin is outside the border box and contributes nothing to the
+            // scrollable region, so the spacing is identical and the geometry is
+            // exact: `scrollHeight === getTotalSize()`.
+            //
+            // Horizontal padding is untouched - it affects scrollWidth, not the
+            // vertical geometry this corrects.
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 mt-6 mb-4"
+            renderRow={renderRow}
+            // The scroll-to-latest control lives INSIDE the transcript, next to
+            // the paging control: it reads the virtualizer through context, and
+            // that context only exists below the transcript that owns it. It is
+            // passed as `overlay`, not `header`, because it is a fixed chip that
+            // floats over the transcript - the header slot is the paging bar.
+            header={
+              <>
+                {showBoot ? <ThreadBootSkeleton /> : null}
+                <DirectViewportBridge />
+              </>
+            }
+            overlay={<ScrollPill />}
+          />
 
           <div className="mx-auto w-full max-w-3xl px-4 pb-4">
             {/* In flow, between the transcript and the composer, so the
@@ -226,9 +280,7 @@ function UserMessage() {
         <MessagePrimitive.Parts />
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
-        {timeStr && (
-          <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>
-        )}
+        {timeStr && <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>}
         <TurnCopyButton />
       </div>
     </MessagePrimitive.Root>
@@ -247,7 +299,17 @@ function UserMessage() {
 // `display: "standalone"` keeps its approval card out of a collapsed group, and
 // it is why the `tool-call` case below is reachable at all — every other tool
 // call arrives as a `group-tool` node.
-const groupedBy = groupPartByType({
+//
+// `TKey` is stated explicitly because it cannot be inferred from this literal.
+// `groupPartByType<TKey>` takes every array as `readonly TKey[]`, and inference
+// fixes `TKey` from the FIRST property before the later ones are checked, so
+// `reasoning: ["group-reasoning"]` alone narrowed it and `"tool-call"` then
+// failed as not assignable. Naming the union states the intent the map already
+// had and matches the upstream `groupPartByType` example, which lists several
+// distinct group keys.
+type TChatGroupKey = "group-reasoning" | "group-tool";
+
+const groupedBy = groupPartByType<TChatGroupKey>({
   reasoning: ["group-reasoning"],
   "tool-call": ["group-tool"],
   "standalone-tool-call": [],
@@ -266,12 +328,12 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
     (s) =>
       (s.message.role === "assistant"
         ? (s.message.metadata?.custom as
-             | {
-              usage?: { totalTokens?: number };
-              modelId?: string;
-              providerId?: string;
-              reasoningLevel?: string;
-            }
+            | {
+                usage?: { totalTokens?: number };
+                modelId?: string;
+                providerId?: string;
+                reasoningLevel?: string;
+              }
             | undefined)
         : undefined) ?? undefined,
   );
@@ -281,13 +343,10 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   const total = custom?.usage?.totalTokens;
   const modelId = custom?.modelId;
   const providerName = custom?.providerId
-    ? (providers.find((p) => p.id === custom.providerId)?.name ??
-      custom.providerId)
+    ? (providers.find((p) => p.id === custom.providerId)?.name ?? custom.providerId)
     : undefined;
   const thinking =
-    custom?.reasoningLevel && custom.reasoningLevel !== "off"
-      ? custom.reasoningLevel
-      : undefined;
+    custom?.reasoningLevel && custom.reasoningLevel !== "off" ? custom.reasoningLevel : undefined;
   const isStreaming = timing?.totalStreamTime == null && threadIsRunning;
   // Routed through `formatDuration`, the one owner of how a span is written.
   //
@@ -296,9 +355,10 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   // rendered `299.0s` in this footer while the tool badge on the same card read
   // `4m 59s`. Two spellings of the same fact on one screen, one of them
   // unreadable. Caught by looking at a live subagent capture, not by a test.
-  const durationSec = !isStreaming && timing?.totalStreamTime != null
-    ? formatDuration(timing.totalStreamTime)
-    : undefined;
+  const durationSec =
+    !isStreaming && timing?.totalStreamTime != null
+      ? formatDuration(timing.totalStreamTime)
+      : undefined;
   const timeStr =
     createdAt instanceof Date
       ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -306,7 +366,10 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
 
   const [liveMs, setLiveMs] = useState(0);
   useEffect(() => {
-    if (!isStreaming) { setLiveMs(0); return; }
+    if (!isStreaming) {
+      setLiveMs(0);
+      return;
+    }
     const interval = setInterval(() => setLiveMs((m) => m + 1000), 1000);
     return () => clearInterval(interval);
   }, [isStreaming]);
@@ -356,91 +419,11 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
             the count is structurally always 0 and the line reads as a bug. See
             {@link shouldShowSessionTimeline}. */}
         {shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
+        {/* `GroupedParts` takes a render FUNCTION, so the shared part renderer is
+            passed as a reference — the same one the virtualized row renderer
+            uses, so an assistant part is rendered by one implementation. */}
         <MessagePrimitive.GroupedParts groupBy={groupedBy}>
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-reasoning": {
-                // `counts` rather than one part's status: a run of reasoning
-                // stays marked as streaming while ANY part is still arriving.
-                const running = part.counts.running > 0;
-                // `defaultOpen`: the thinking block is expanded and STAYS
-                // expanded once the stream ends. Without it the disclosure
-                // falls back to collapsed the moment `streaming` goes false,
-                // so the reasoning a reader just watched stream in vanished
-                // behind a one-line trigger. A manual toggle still wins — see
-                // `ReasoningRoot`'s `userOpen ?? (streaming || initialOpen)`.
-                return (
-                  <ReasoningRoot streaming={running} defaultOpen>
-                    <ReasoningTrigger active={running} />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
-                );
-              }
-              case "group-tool":
-                return (
-                  <AutoOpenToolGroup
-                    active={part.counts.running > 0}
-                    // A group holding a tool that needs approval is not settled,
-                    // even though it is not running. Opening it is what makes a
-                    // permission card visible rather than hiding it inside a
-                    // collapsed block.
-                    pending={part.counts.requiresAction > 0}
-                    count={part.indices.length}
-                  >
-                    {children}
-                  </AutoOpenToolGroup>
-                );
-              case "text":
-                return (
-                  <MarkdownText
-                    components={{
-                      SyntaxHighlighter: HighlightingSyntax,
-                      a: ({ className, ...props }) => (
-                        <a {...props} className={className} target="_blank" rel="noreferrer" />
-                      ),
-                    }}
-                  />
-                );
-              case "reasoning":
-                return <Reasoning {...part} />;
-              case "tool-call":
-                return (
-                  part.toolUI ?? (
-                    <ToolFallback
-                      {...part}
-                      toolName={prettyToolName(part.toolName)}
-                    />
-                  )
-                );
-              // Data parts are LEAF parts: `children` is a sentinel that throws
-              // (see the library's `GroupedParts` docs — `children` is only
-              // meaningful for `group-…` cases), so the part must render itself.
-              // This is what makes the Direct compaction divider appear at all;
-              // before this case it fell into `default` below and rendered
-              // nothing. Keyed on the part name rather than rendering every data
-              // part, so an unregistered name still renders nothing.
-              case "data":
-                return part.name === DIRECT_COMPACT_DATA_NAME ? (
-                  <CompactionDivider {...part} />
-                ) : null;
-              // Trailing streaming affordance emitted by GroupedParts (default
-              // mode "no-text"). Previously unhandled, so it rendered nothing.
-              //
-              // Gated on the THREAD, not just the message: the library's
-              // condition is per-message, so a message left marked `running`
-              // (an errored turn that never produced text) emits this forever
-              // while the thread is idle — a permanent "still working" pulse
-              // next to a live composer. `thread.isRunning` is the same
-              // authoritative signal the composer uses to unmount its send
-              // button, so the affordance can only appear while work is real.
-              case "indicator":
-                return threadIsRunning ? <ThinkingIndicator /> : null;
-              default:
-                return null;
-            }
-          }}
+          {AssistantPartSlot}
         </MessagePrimitive.GroupedParts>
         <AssistantError />
       </div>
@@ -484,6 +467,7 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
             </span>
             {metadataChips.map((chip, i) => (
               <span
+                // biome-ignore lint/suspicious/noArrayIndexKey: the chips are a fixed set of slots (total, provider, model, thinking) pushed in a constant order and never reordered or removed, so position IS the identity. A content key would collide whenever two slots hold the same string.
                 key={i}
                 className="text-[10px] tabular-nums text-muted-foreground/70"
                 title={chip}
@@ -505,6 +489,105 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
  * hides the approval card inside it, which is how a permission ended up
  * invisible inside a nested block.
  */
+/**
+ * Renders ONE assistant part (or part group).
+ *
+ * Shared by the ordinary message renderer (`MessagePrimitive.GroupedParts`) and
+ * the virtualized timeline's `ThreadPrimitive.Row`, so there is exactly ONE
+ * implementation of how an assistant part looks. The two renderers differ only
+ * in what wraps them, never in the part itself.
+ *
+ * `part`/`children` are `MessagePrimitive.GroupedParts`' own props, which is
+ * also what a row's `part` case carries, so this fits both without adaptation.
+ */
+function AssistantPart({
+  part,
+  children,
+}: {
+  part: Parameters<
+    NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>
+  >[0]["part"];
+  children?: ReactNode;
+}) {
+  // Thread-level, so it is read here rather than threaded down from the message:
+  // the streaming affordance below is about the THREAD still working, and the
+  // library's per-message condition would keep it lit forever after an errored
+  // turn that produced no text.
+  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+
+  switch (part.type) {
+    case "group-reasoning": {
+      // `counts` rather than one part's status: a run of reasoning stays marked
+      // as streaming while ANY part is still arriving.
+      const running = part.counts.running > 0;
+      // `defaultOpen`: the thinking block is expanded and STAYS expanded once the
+      // stream ends. Without it the disclosure falls back to collapsed the moment
+      // `streaming` goes false, so the reasoning a reader just watched stream in
+      // vanished behind a one-line trigger. A manual toggle still wins — see
+      // `ReasoningRoot`'s `userOpen ?? (streaming || initialOpen)`.
+      return (
+        <ReasoningRoot streaming={running} defaultOpen>
+          <ReasoningTrigger active={running} />
+          <ReasoningContent aria-busy={running}>
+            <ReasoningText>{children}</ReasoningText>
+          </ReasoningContent>
+        </ReasoningRoot>
+      );
+    }
+    case "group-tool":
+      return (
+        <AutoOpenToolGroup
+          active={part.counts.running > 0}
+          // A group holding a tool that needs approval is not settled, even
+          // though it is not running. Opening it is what makes a permission card
+          // visible rather than hiding it inside a collapsed block.
+          pending={part.counts.requiresAction > 0}
+          count={part.indices.length}
+        >
+          {children}
+        </AutoOpenToolGroup>
+      );
+    case "text":
+      return (
+        <MarkdownText
+          components={{
+            SyntaxHighlighter: HighlightingSyntax,
+            a: ({ className, ...props }) => (
+              <a {...props} className={className} target="_blank" rel="noreferrer" />
+            ),
+          }}
+        />
+      );
+    case "reasoning":
+      return <Reasoning {...part} />;
+    case "tool-call":
+      return part.toolUI ?? <ToolFallback {...part} toolName={prettyToolName(part.toolName)} />;
+    // Data parts are LEAF parts: `children` is a sentinel that throws (see the
+    // library's `GroupedParts` docs — `children` is only meaningful for
+    // `group-…` cases), so the part must render itself. This is what makes the
+    // Direct compaction divider appear at all. Keyed on the part name rather
+    // than rendering every data part, so an unregistered name renders nothing.
+    case "data":
+      return part.name === DIRECT_COMPACT_DATA_NAME ? <CompactionDivider {...part} /> : null;
+    // Trailing streaming affordance emitted by GroupedParts (default mode
+    // "no-text"). Gated on the THREAD (see above) so it can only appear while
+    // work is real.
+    case "indicator":
+      return threadIsRunning ? <ThinkingIndicator /> : null;
+    default:
+      return null;
+  }
+}
+
+/** `GroupedParts` render-function form, for use as its child. */
+function AssistantPartSlot(
+  props: Parameters<
+    NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>
+  >[0],
+) {
+  return <AssistantPart part={props.part}>{props.children}</AssistantPart>;
+}
+
 function AutoOpenToolGroup({
   active,
   pending = false,
@@ -573,9 +656,9 @@ function HighlightingSyntax(props: {
     // matching how the legacy viewer rendered one block per file.
     return (
       <div data-slot="code-diff-list" className="w-full space-y-2">
-        {files.map((file, index) => (
+        {files.map((file) => (
           <CodeDiff
-            key={`${index}-${file.filename}`}
+            key={file.filename}
             filename={file.filename}
             additions={file.additions}
             deletions={file.deletions}

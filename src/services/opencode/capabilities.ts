@@ -133,8 +133,10 @@ async function fetchDefaultModel(
     if (
       model === null ||
       typeof model !== "object" ||
-      typeof model.id !== "string" || model.id.length === 0 ||
-      typeof model.providerID !== "string" || model.providerID.length === 0
+      typeof model.id !== "string" ||
+      model.id.length === 0 ||
+      typeof model.providerID !== "string" ||
+      model.providerID.length === 0
     ) {
       return undefined;
     }
@@ -181,7 +183,9 @@ const CATALOGUE_LOADING_WINDOW_MS = 10_000;
 const CATALOGUE_LOADING_POLL_MS = 250;
 
 interface RawCapabilities {
-  readonly agents: Awaited<ReturnType<ReturnType<typeof createOpenCodeClient>["agent"]["list"]>>["data"];
+  readonly agents: Awaited<
+    ReturnType<ReturnType<typeof createOpenCodeClient>["agent"]["list"]>
+  >["data"];
   readonly models: ModelInfo[];
 }
 
@@ -265,11 +269,13 @@ export async function getOpenCodeCapabilities(): Promise<OpenCodeCapabilities> {
     ) {
       return [];
     }
-    return [{
-      id: agent.id,
-      name: agent.name,
-      description: agent.description,
-    }];
+    return [
+      {
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+      },
+    ];
   });
 
   const models = rawModels.map((m) => {
@@ -323,9 +329,7 @@ export async function resolveOpenCodeModelRef(
  *
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
  */
-export async function listOpenCodeModelVariants(
-  modelId: string,
-): Promise<string[]> {
+export async function listOpenCodeModelVariants(modelId: string): Promise<string[]> {
   const models = await fetchModels();
   const match =
     models.find((m) => `${m.providerID}/${m.id}` === modelId) ??

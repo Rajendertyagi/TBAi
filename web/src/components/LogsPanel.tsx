@@ -1,4 +1,13 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ChevronRight,
   Download,
@@ -11,19 +20,14 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Virtualizer } from "virtua";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Switch } from "./ui/switch";
 import { maxSeq, mergeLogEntries, serializeLogEntries } from "../lib/log-entries";
 import { apiFetch, resolveApiUrl } from "../lib/platform";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
+import { SCROLL_END_THRESHOLD_PX } from "../config/virtualization";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 /**
  * Runtime log settings + live viewer (local-only).
@@ -80,6 +84,40 @@ const CAPTURE_LEVELS: CaptureLevel[] = ["off", "error", "warn", "info", "debug"]
 // View filter: minimum severity to display (client-side). "all" keeps every
 // record currently in the buffer.
 const VIEW_LEVELS = ["all", "error", "warn", "info", "debug"] as const;
+
+/**
+ * Rows mounted beyond the viewport on each side, so a fast flick over a live
+ * tail never shows a blank band. Matches the value the chat transcript uses and
+ * the one in TanStack's published chat composition.
+ */
+const LOG_OVERSCAN_ROWS = 6;
+
+/**
+ * Initial row-height guess — and only a guess. `measureElement` records each
+ * row's real height as it mounts, so this governs offsets only until a row has
+ * been measured.
+ *
+ * TanStack documents estimating the LARGEST plausible size when measuring
+ * dynamically, because an undersized estimate costs a correction frame for every
+ * row that mounts. Measured against the running server (348 collapsed rows and
+ * one expanded row sampled through the real UI):
+ *
+ *   collapsed  min/p50/p95/max = 29/29/29/29   (`leading-5` 20px + `py-1` 8px
+ *                                               + `border-b` 1px — no variance)
+ *   expanded   = 79px                            (collapsed + the detail grid)
+ *
+ * So the distribution is bimodal: 29px for the overwhelming majority, ~79px when
+ * a row is opened. This is set just above the measured expanded height, leaving
+ * headroom for the message cell (`whitespace-pre-wrap break-all`) wrapping a long
+ * line, rather than far above it — a guess several times the common case makes
+ * the scrollbar that much longer than reality for every row not yet visited.
+ *
+ * `anchorTo: "end"` absorbs the estimate→actual correction while the reader is
+ * pinned, so the choice is about scrollbar honesty, not about avoiding a jump.
+ * Revisit if the log mix changes; the detector is the no-overlap assertion in
+ * `web/e2e/logs-viewer.spec.ts`.
+ */
+const LOG_ROW_ESTIMATE_PX = 80;
 
 // Scope paths are dot-separated idents; an override matches its scope and
 // everything below it. Rows failing this are flagged and excluded from saves.
@@ -218,7 +256,9 @@ const LogRow = memo(function LogRow({
             aria-expanded={expanded}
             aria-label="Toggle details"
           >
-            <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`} />
+            <ChevronRight
+              className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+            />
           </button>
         ) : (
           <span className="w-3 shrink-0" />
@@ -226,14 +266,12 @@ const LogRow = memo(function LogRow({
         <span className="shrink-0 tabular-nums text-muted-foreground">
           {formatTime(record.time)}
         </span>
-        <span className={`w-12 shrink-0 font-semibold uppercase ${levelBadgeClasses(record.level)}`}>
+        <span
+          className={`w-12 shrink-0 font-semibold uppercase ${levelBadgeClasses(record.level)}`}
+        >
           {record.level}
         </span>
-        <span
-          className="shrink-0 truncate text-muted-foreground/80"
-          style={{ maxWidth: "12rem" }}
-          title={record.scope}
-        >
+        <span className="shrink-0 max-w-48 truncate text-muted-foreground/80" title={record.scope}>
           {record.scope}
         </span>
         <span className="min-w-0 flex-1 whitespace-pre-wrap break-all text-foreground/90">
@@ -280,7 +318,6 @@ export function LogsPanel() {
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
 
   const listRef = useRef<HTMLDivElement>(null);
-  const wasNearBottomRef = useRef(true);
   const lastSeqRef = useRef(0);
   // Mirror of entries for merge decisions outside setState updaters, plus the
   // server boot the rows belong to (seqs restart at 0 on every boot).
@@ -311,12 +348,6 @@ export function LogsPanel() {
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const inFlightRef = useRef(0);
 
-  const scrollToBottom = useCallback(() => {
-    const el = listRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, []);
-
   const toggleExpanded = useCallback((seq: number) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -324,12 +355,6 @@ export function LogsPanel() {
       else next.add(seq);
       return next;
     });
-  }, []);
-
-  const onScroll = useCallback(() => {
-    const el = listRef.current;
-    if (!el) return;
-    wasNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   }, []);
 
   const applyIncoming = useCallback((incoming: LogEntry[], bootId: string) => {
@@ -472,17 +497,47 @@ export function LogsPanel() {
     [entries, viewLevel, search, range],
   );
 
-  // Follow new records to the bottom while live-tailing, but only when the
-  // reader is already near the bottom — never yank someone reading history.
-  const latestSeq = entries.length > 0 ? entries[entries.length - 1].seq : null;
-  const seenSeqRef = useRef<number | null>(null);
-  useEffect(() => {
-    const prev = seenSeqRef.current;
-    seenSeqRef.current = latestSeq;
-    if (latestSeq == null || prev == null || latestSeq <= prev) return;
-    if (!liveTail || !wasNearBottomRef.current) return;
-    scrollToBottom();
-  }, [latestSeq, liveTail, scrollToBottom]);
+  /**
+   * The list's virtualizer. Configured as TanStack's documented chat/log
+   * composition — this is a reverse feed, not a top-anchored list:
+   *
+   * - `anchorTo: "end"` makes the live edge the anchor, so an end-pinned
+   *   viewport stays pinned as the last row grows and as the 5000-entry cap
+   *   trims rows off the front.
+   * - `followOnAppend` follows new output ONLY when the reader was already at
+   *   the end, so someone scrolling up through history is never pulled down.
+   *   This replaces the previous hand-rolled `wasNearBottomRef` flag, which
+   *   could disagree with the offset the range is actually computed from.
+   * - `getItemKey` is the record's `seq`, so keys stay stable across filtering
+   *   and live insertion. It is a proven invariant, not a hopeful one: the
+   *   backend assigns `seq`, the route echoes it, the type is non-optional, and
+   *   `mergeLogEntries` drops any entry failing `seq > maxSeq(prev)`.
+   */
+  const getItemKey = useCallback((index: number) => visible[index].seq, [visible]);
+  const virtualizer = useVirtualizer<HTMLDivElement, Element>({
+    count: visible.length,
+    getItemKey,
+    estimateSize: () => LOG_ROW_ESTIMATE_PX,
+    getScrollElement: () => listRef.current,
+    overscan: LOG_OVERSCAN_ROWS,
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: SCROLL_END_THRESHOLD_PX,
+  });
+
+  /**
+   * The panel's one scroll primitive. Every caller goes through the library:
+   * the open-scroll below and the "End" key handler both use it, so there is no
+   * second, divergent notion of "where the newest entry is".
+   */
+  const scrollToNewest = useCallback(() => {
+    // "instant", never smooth: this jumps to a live position, and a smooth
+    // scroll aims at an offset computed once and then spends time travelling
+    // toward a target the stream has already moved past. It also suppresses the
+    // virtualizer's own end-anchoring while in flight, so the next batch would
+    // pull the reader off the end. See VirtualizedTranscript.scrollTranscriptToEnd.
+    virtualizer.scrollToEnd({ behavior: "instant" });
+  }, [virtualizer]);
 
   // A true reset (records emptied via Clear) re-arms the open-scroll so the
   // next records to arrive snap to the newest.
@@ -490,12 +545,30 @@ export function LogsPanel() {
     if (entries.length === 0) didInitialScrollRef.current = false;
   }, [entries.length]);
 
+  // True exactly when the scroll container is in the DOM.
+  //
+  // `visible.length > 0` is NOT sufficient. The SSE tail connects on mount and
+  // can deliver entries while the panel is still showing its loading spinner,
+  // and the spinner replaces the whole list — so there can be visible rows and
+  // no scroll element at the same time. `getMaxScrollOffset()` returns 0 when
+  // `scrollElement` is null, so scrolling in that window silently "succeeds"
+  // at offset 0 and spends the one-shot guard; the list then mounts at the top
+  // and never re-arms.
+  const listMounted = !loading && visible.length > 0;
+
   // Open at the newest record once the list mounts with content.
-  useEffect(() => {
-    if (didInitialScrollRef.current || visible.length === 0) return;
+  //
+  // A layout effect, not a passive one, and keyed on the virtualizer instance:
+  // `useVirtualizer` registers its own layout effect (which attaches the scroll
+  // element) before this one, so by the time this runs the scroll element
+  // exists and `scrollToEnd` has something to scroll. In a passive effect the
+  // element is attached too, but the jump would land after paint.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `virtualizer` is never read in the body - it is an ORDERING dependency, and the only correct fix for an ordering dependency is to name it. `useVirtualizer` attaches the scroll element in its own layout effect, which runs first only because this effect is keyed on the instance it created.
+  useLayoutEffect(() => {
+    if (didInitialScrollRef.current || !listMounted) return;
     didInitialScrollRef.current = true;
-    scrollToBottom();
-  }, [visible.length, scrollToBottom]);
+    scrollToNewest();
+  }, [virtualizer, listMounted, scrollToNewest]);
 
   // Refresh only the throttle snapshot after saves (never level/targets —
   // those may hold unsaved edits).
@@ -600,12 +673,12 @@ export function LogsPanel() {
         ev.preventDefault();
         document.getElementById("log-search")?.focus();
       } else if (ev.key === "End") {
-        scrollToBottom();
+        scrollToNewest();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scrollToBottom]);
+  }, [scrollToNewest]);
 
   const handleDownload = useCallback(async (file: LogFileInfo) => {
     try {
@@ -641,8 +714,8 @@ export function LogsPanel() {
         <section className="space-y-1">
           <h1 className="text-sm font-semibold">Logs</h1>
           <p className="text-xs text-muted-foreground">
-            View and configure runtime logs. Entries are redacted server-side —
-            this view never receives secrets.
+            View and configure runtime logs. Entries are redacted server-side — this view never
+            receives secrets.
           </p>
         </section>
 
@@ -683,8 +756,8 @@ export function LogsPanel() {
           )}
           {throttled.length > 0 && (
             <p className="text-2xs text-amber-500">
-              Throttling {throttled.map((t) => `${t.scope} (${t.dropped} shed)`).join(", ")} —
-              over the 1/sec info budget. Quiet the source or raise its capture level.
+              Throttling {throttled.map((t) => `${t.scope} (${t.dropped} shed)`).join(", ")} — over
+              the 1/sec info budget. Quiet the source or raise its capture level.
             </p>
           )}
 
@@ -714,8 +787,8 @@ export function LogsPanel() {
               <div className="space-y-0.5">
                 <h3 className="text-xs font-semibold">Per-scope overrides</h3>
                 <p className="text-2xs leading-4 text-muted-foreground">
-                  Raise or silence individual scopes. An override matches its scope and
-                  everything below it.
+                  Raise or silence individual scopes. An override matches its scope and everything
+                  below it.
                 </p>
               </div>
               <Button size="sm" variant="outline" onClick={handleAddTarget} disabled={envLocked}>
@@ -729,7 +802,11 @@ export function LogsPanel() {
                   const trimmed = row.scope.trim();
                   const invalid = trimmed !== "" && !SCOPE_RE.test(trimmed);
                   return (
-                    <div key={i} className="flex items-center gap-2">
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: these are editable rows - the index is the identity of the row the user is typing into, and re-keying them on every keystroke of their own value would destroy focus and caret position mid-edit.
+                      key={i}
+                      className="flex items-center gap-2"
+                    >
                       <Input
                         value={row.scope}
                         onChange={(e) =>
@@ -807,7 +884,11 @@ export function LogsPanel() {
               {liveTail && streamState === "reconnecting" && (
                 <span className="text-xs text-amber-500">Reconnecting…</span>
               )}
-              <Button size="sm" variant={liveTail ? "default" : "outline"} onClick={() => setLiveTail((v) => !v)}>
+              <Button
+                size="sm"
+                variant={liveTail ? "default" : "outline"}
+                onClick={() => setLiveTail((v) => !v)}
+              >
                 {liveTail ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 {liveTail ? "Pause" : "Live"}
               </Button>
@@ -892,21 +973,31 @@ export function LogsPanel() {
                 No entries match the current filters.
               </div>
             ) : (
-              <div
-                ref={listRef}
-                onScroll={onScroll}
-                className="h-full overflow-y-auto overflow-x-hidden"
-              >
-                <Virtualizer scrollRef={listRef} itemSize={28}>
-                  {visible.map((e) => (
-                    <LogRow
-                      key={e.seq}
-                      record={e}
-                      expanded={expanded.has(e.seq)}
-                      onToggle={toggleExpanded}
-                    />
+              <div ref={listRef} className="h-full overflow-y-auto overflow-x-hidden">
+                {/*
+                  The total-size container IS the coordinate system: as tall as
+                  the whole logical list, with each row positioned inside it by
+                  its virtual offset. Rows are measured on mount via
+                  `measureElement`, which needs BOTH the `data-index` attribute
+                  (it reads the index off the element) and the ref.
+                */}
+                <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+                  {virtualizer.getVirtualItems().map((item) => (
+                    <div
+                      key={item.key}
+                      ref={virtualizer.measureElement}
+                      data-index={item.index}
+                      className="absolute w-full"
+                      style={{ transform: `translateY(${item.start}px)` }}
+                    >
+                      <LogRow
+                        record={visible[item.index]}
+                        expanded={expanded.has(visible[item.index].seq)}
+                        onToggle={toggleExpanded}
+                      />
+                    </div>
                   ))}
-                </Virtualizer>
+                </div>
               </div>
             )}
           </div>
@@ -917,8 +1008,8 @@ export function LogsPanel() {
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">Log files</h2>
             <p className="text-xs leading-5 text-muted-foreground">
-              On-disk history beyond the memory buffer. Empty while file logging is off
-              (the development default).
+              On-disk history beyond the memory buffer. Empty while file logging is off (the
+              development default).
             </p>
             {retention && (
               <p className="text-2xs text-muted-foreground">

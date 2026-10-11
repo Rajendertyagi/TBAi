@@ -36,7 +36,12 @@
  */
 
 import type { UIMessage } from "ai";
-import type { ContextCategory, InputSizeEstimate, MechanismOutcome, ReductionReport } from "./types";
+import type {
+  ContextCategory,
+  InputSizeEstimate,
+  MechanismOutcome,
+  ReductionReport,
+} from "./types";
 
 /**
  * Per-result character ceiling for the request.
@@ -73,7 +78,8 @@ export const REQUEST_REASONING_MAX_CHARS = 4096;
 
 /** Marker appended to a reduced result so the truncation is visible to the model. */
 const TRUNCATION_NOTICE_PREFIX = "\n\n[truncated by TBAi context budget: ";
-const TRUNCATION_NOTICE_SUFFIX = " of the tool result were omitted from this request. The full value is stored and can be re-read by a follow-up tool call.]";
+const TRUNCATION_NOTICE_SUFFIX =
+  " of the tool result were omitted from this request. The full value is stored and can be re-read by a follow-up tool call.]";
 
 type LoosePart = {
   type?: string;
@@ -86,19 +92,26 @@ type LoosePart = {
 
 function isToolPart(part: LoosePart): boolean {
   const type = typeof part.type === "string" ? part.type : "";
-  return type === "tool-call" || type === "dynamic-tool" || (type.startsWith("tool-") && type !== "tool-approval-response");
+  return (
+    type === "tool-call" ||
+    type === "dynamic-tool" ||
+    (type.startsWith("tool-") && type !== "tool-approval-response")
+  );
 }
 
 function hasResult(part: LoosePart): boolean {
-  return part.output !== undefined || part.state === "output-error" || part.state === "output-denied";
+  return (
+    part.output !== undefined || part.state === "output-error" || part.state === "output-denied"
+  );
 }
 
 function resultChars(part: LoosePart): number {
-  if (part.state === "output-error") return typeof part.errorText === "string" ? part.errorText.length : 0;
+  if (part.state === "output-error")
+    return typeof part.errorText === "string" ? part.errorText.length : 0;
   return typeof part.output === "string" ? part.output.length : 0;
 }
 
-function isMcpPart(part: LoosePart): boolean {
+function _isMcpPart(part: LoosePart): boolean {
   const type = typeof part.type === "string" ? part.type : "";
   return type === "dynamic-tool" || type.startsWith("tool-mcp__");
 }
@@ -148,7 +161,10 @@ function reduceResultText(text: string, maxChars: number): { text: string; remov
   // Unreachable in practice; returns a strictly bounded result rather than
   // silently exceeding the cap.
   const fallbackNotice = `${TRUNCATION_NOTICE_PREFIX}output omitted${TRUNCATION_NOTICE_SUFFIX}`;
-  return { text: text.slice(0, Math.max(0, maxChars - fallbackNotice.length)) + fallbackNotice, removedChars: text.length };
+  return {
+    text: text.slice(0, Math.max(0, maxChars - fallbackNotice.length)) + fallbackNotice,
+    removedChars: text.length,
+  };
 }
 
 /** Whether a part is a model-internal reasoning trace (a separate, non-load-bearing part). */
@@ -157,7 +173,10 @@ function isReasoningPart(part: LoosePart): boolean {
 }
 
 /** Capped reasoning text with the omission made explicit to the model. */
-function reduceReasoningText(text: string, maxChars: number): { text: string; removedChars: number } {
+function reduceReasoningText(
+  text: string,
+  maxChars: number,
+): { text: string; removedChars: number } {
   if (text.length <= maxChars) return { text, removedChars: 0 };
   const head = text.slice(0, maxChars);
   const omitted = text.length - maxChars;

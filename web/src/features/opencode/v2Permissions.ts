@@ -4,10 +4,7 @@ import type {
   ToolApprovalOption,
   ToolCallMessagePart,
 } from "@assistant-ui/react";
-import {
-  bindApprovalOptions,
-  hostResponseFor,
-} from "@/features/permissions/approvalOptionMapping";
+import { bindApprovalOptions, hostResponseFor } from "@/features/permissions/approvalOptionMapping";
 
 /** The stable host option ids used by the native V2 permission bridge. */
 export const V2_PERMISSION_OPTION_IDS = {
@@ -56,10 +53,7 @@ export class V2PermissionResponseError extends Error {
 }
 
 /** Derives a collision-safe assistant-ui tool-call id from official identities. */
-export function deriveV2ToolCallId(
-  assistantMessageId: string,
-  officialToolId: string,
-): string {
+export function deriveV2ToolCallId(assistantMessageId: string, officialToolId: string): string {
   return `${V2_TOOL_CALL_ID_PREFIX}${encodeURIComponent(assistantMessageId)}:${encodeURIComponent(officialToolId)}`;
 }
 
@@ -105,9 +99,7 @@ function permissionFileDiffs(
 }
 
 /** Projects a valid official permission, preserving linked tool identity. */
-export function projectV2Permission(
-  request: PermissionRequest,
-): V2PermissionView | null {
+export function projectV2Permission(request: PermissionRequest): V2PermissionView | null {
   if (
     typeof request.id !== "string" ||
     typeof request.sessionID !== "string" ||
@@ -207,7 +199,9 @@ export function toV2PermissionReply(
     ) {
       return "reject";
     }
-    throw new V2PermissionResponseError("Permission rejection does not match the projected reject option.");
+    throw new V2PermissionResponseError(
+      "Permission rejection does not match the projected reject option.",
+    );
   }
 
   if (response.approved !== true) {
@@ -238,7 +232,9 @@ export function toV2PermissionReply(
   ) {
     return "always";
   }
-  throw new V2PermissionResponseError("The selected permission option does not match its projected grants.");
+  throw new V2PermissionResponseError(
+    "The selected permission option does not match its projected grants.",
+  );
 }
 
 /** Returns the assistant-ui option mapping used by the native approval renderer. */

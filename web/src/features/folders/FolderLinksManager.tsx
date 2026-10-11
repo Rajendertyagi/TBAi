@@ -24,11 +24,14 @@ export function FolderLinksManager({ folderId }: { folderId: string }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const refresh = () => listLinks(folderId).then(setLinks).catch(() => {});
+  const refresh = () =>
+    listLinks(folderId)
+      .then(setLinks)
+      .catch(() => {});
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reload the folder's links when the FOLDER changes. `refresh` is re-created every render, so depending on it would refetch in a loop.
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folderId]);
 
   const handleAdd = async () => {
@@ -48,9 +51,7 @@ export function FolderLinksManager({ folderId }: { folderId: string }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">
-          Linked / allowed paths
-        </span>
+        <span className="text-xs font-medium text-muted-foreground">Linked / allowed paths</span>
         {!adding && (
           <Button variant="ghost" size="sm" onClick={() => setAdding(true)}>
             <Plus aria-hidden="true" className="size-3.5" />
@@ -81,7 +82,7 @@ export function FolderLinksManager({ folderId }: { folderId: string }) {
               size="sm"
               onClick={() => {
                 const next = window.prompt("Rename link", l.name);
-                if (next && next.trim()) void renameLink(folderId, l.id, next.trim()).then(refresh);
+                if (next?.trim()) void renameLink(folderId, l.id, next.trim()).then(refresh);
               }}
               title="Rename"
             >

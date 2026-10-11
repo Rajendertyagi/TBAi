@@ -12,16 +12,21 @@
  * they achieved, so its verdict is binary and honest: accept / reject.
  */
 
-import { describeLimitSource, isPhase3ExperimentEligible, resolveGenerationCap, resolveOutputReservation } from "./limits";
+import {
+  describeLimitSource,
+  isPhase3ExperimentEligible,
+  resolveGenerationCap,
+  resolveOutputReservation,
+} from "./limits";
 import { REQUEST_REDUCIBLE_CATEGORIES } from "./reduce";
 import type { ContextLimit, LimitSource } from "./types";
-import {
-  type BudgetDecision,
-  type ContextBudget,
-  type ContextCategory,
-  type InputSizeEstimate,
-  type MessagesLayer,
-  type ReductionRecord,
+import type {
+  BudgetDecision,
+  ContextBudget,
+  ContextCategory,
+  InputSizeEstimate,
+  MessagesLayer,
+  ReductionRecord,
 } from "./types";
 
 /**
@@ -63,7 +68,11 @@ export const SAFETY_MARGIN_FRACTION = 0.25;
 export const REDUCIBLE_CATEGORIES: readonly ContextCategory[] = REQUEST_REDUCIBLE_CATEGORIES;
 
 /** Categories that must never be reduced. */
-export const PROTECTED_CATEGORIES: readonly ContextCategory[] = ["instructions", "tool_definitions", "user_text"];
+export const PROTECTED_CATEGORIES: readonly ContextCategory[] = [
+  "instructions",
+  "tool_definitions",
+  "user_text",
+];
 
 /**
  * Compute the budget for a request.
@@ -115,7 +124,13 @@ export function computeBudget(input: {
     usableInputTokens,
   });
 
-  return { usableInputTokens, safetyMarginTokens, outputReservation, generationCap, enforceable: true };
+  return {
+    usableInputTokens,
+    safetyMarginTokens,
+    outputReservation,
+    generationCap,
+    enforceable: true,
+  };
 }
 
 /**
@@ -164,7 +179,11 @@ export function decideBudget(input: {
   const usable = budget.usableInputTokens;
   const { estimatedTokens: point, range } = estimate;
 
-  const accept = (headroomTokens: number): BudgetDecision => ({ action: "accept", headroomTokens, reduction });
+  const accept = (headroomTokens: number): BudgetDecision => ({
+    action: "accept",
+    headroomTokens,
+    reduction,
+  });
 
   // P-1: a stand-in ceiling is advisory, never terminal.
   //

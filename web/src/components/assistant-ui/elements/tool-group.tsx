@@ -1,21 +1,11 @@
 ﻿"use client";
 
-import {
-  memo,
-  useCallback,
-  useRef,
-  useState,
-  type FC,
-  type PropsWithChildren,
-} from "react";
+import { memo, useCallback, useRef, useState, type FC, type PropsWithChildren } from "react";
 import { ChevronDownIcon, LoaderIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { useTranscriptOwnsScrollCompensation } from "@/components/VirtualizedTranscript";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
 const ANIMATION_DURATION = 200;
@@ -53,19 +43,23 @@ function ToolGroupRoot({
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
   const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
+  // Inside a virtualized transcript the virtualizer already compensates a row that
+  // changes size above the fold; the lock would overwrite that compensation on
+  // every scroll event. See reasoning.aui.tsx for the full explanation.
+  const ownsScroll = useTranscriptOwnsScrollCompensation();
 
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      lockScroll();
+      if (!ownsScroll) lockScroll();
       if (!isControlled) {
         setUncontrolledOpen(open);
       }
       controlledOnOpenChange?.(open);
     },
-    [lockScroll, isControlled, controlledOnOpenChange],
+    [lockScroll, isControlled, controlledOnOpenChange, ownsScroll],
   );
 
   return (
@@ -75,11 +69,7 @@ function ToolGroupRoot({
       data-variant={variant ?? "outline"}
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn(
-        toolGroupVariants({ variant }),
-        "group/tool-group-root",
-        className,
-      )}
+      className={cn(toolGroupVariants({ variant }), "group/tool-group-root", className)}
       style={
         {
           "--animation-duration": `${ANIMATION_DURATION}ms`,
@@ -158,10 +148,10 @@ function ToolGroupContent({
       className={cn(
         "aui-tool-group-content relative overflow-hidden text-sm outline-none",
         "group/collapsible-content ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
-        "data-closed:animate-collapsible-up",
-        "data-open:animate-collapsible-down",
-        "data-closed:fill-mode-forwards",
-        "data-closed:pointer-events-none",
+        "data-[state=closed]:animate-collapsible-up",
+        "data-[state=open]:animate-collapsible-down",
+        "data-[state=closed]:fill-mode-forwards",
+        "data-[state=closed]:pointer-events-none",
         "[--tw-duration:var(--animation-duration)]",
         className,
       )}
@@ -187,17 +177,17 @@ function ToolGroupContent({
   );
 }
 
-type ToolGroupComponent = FC<
-  PropsWithChildren<{ startIndex: number; endIndex: number }>
-> & {
+type ToolGroupComponent = FC<PropsWithChildren<{ startIndex: number; endIndex: number }>> & {
   Root: typeof ToolGroupRoot;
   Trigger: typeof ToolGroupTrigger;
   Content: typeof ToolGroupContent;
 };
 
-const ToolGroupImpl: FC<
-  PropsWithChildren<{ startIndex: number; endIndex: number }>
-> = ({ children, startIndex, endIndex }) => {
+const ToolGroupImpl: FC<PropsWithChildren<{ startIndex: number; endIndex: number }>> = ({
+  children,
+  startIndex,
+  endIndex,
+}) => {
   const toolCount = endIndex - startIndex + 1;
 
   return (
@@ -221,11 +211,4 @@ ToolGroup.Root = ToolGroupRoot;
 ToolGroup.Trigger = ToolGroupTrigger;
 ToolGroup.Content = ToolGroupContent;
 
-export {
-  ToolGroup,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-  ToolGroupContent,
-  toolGroupVariants,
-};
-
+export { ToolGroup, ToolGroupRoot, ToolGroupTrigger, ToolGroupContent, toolGroupVariants };

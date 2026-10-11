@@ -1,0 +1,26 @@
+{
+  // Resolution rules for the canonical test tree. NOT a typecheck project.
+  //
+  // Two things use this file:
+  //   1. Bun's runtime resolver, which reads the nearest `tsconfig.json` above the
+  //      importing file. Without it, `@web/...` fails at RUNTIME with
+  //      "Cannot find module" even though `tsc` resolves it, because the typed
+  //      projects are named tsconfig.backend.json / tsconfig.web.json and Bun
+  //      only looks for `tsconfig.json`.
+  //   2. Documentation of the aliases the test tree relies on.
+  //
+  // The actual typechecking lives in tsconfig.backend.json and tsconfig.web.json,
+  // which cannot both live here: one program cannot map `@/*` to the backend `src/`
+  // and the web `src/` at once, because both contain the same module paths.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../src/*"],
+      "@backend/*": ["../src/*"],
+      "@web/*": ["../web/src/*"],
+      "@web/testing/*": ["./helpers/web/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
+}

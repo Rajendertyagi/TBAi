@@ -10,28 +10,13 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
-import {
-  ArrowUp,
-  Bot,
-  Brain,
-  Check,
-  ChevronDown,
-  File,
-  Image,
-  Mic,
-  Paperclip,
-  Square,
-} from "lucide-react";
-import { composerConfig, streamRecoveryCopy } from "../config/composer";
+import { ArrowUp, File, Image, Mic, Paperclip, Square } from "lucide-react";
+import { composerConfig } from "../config/composer";
 import { logger } from "../lib/logger";
 import { useSettingsStore } from "../stores";
-import type { ReasoningLevel } from "../types";
 import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
 import { useChatTabsStore } from "../features/chat/state/chatTabs";
-import {
-  captureDraftSnapshot,
-  materializeDraft,
-} from "../features/chat/state/materializeDraft";
+import { captureDraftSnapshot, materializeDraft } from "../features/chat/state/materializeDraft";
 import { setPendingFirstMessage } from "../features/chat/state/pendingFirstMessage";
 import { useStreamRecoveryStore } from "../features/chat/state/streamRecovery";
 import { useAvailabilityStore } from "../features/availability/availabilityStore";
@@ -42,12 +27,7 @@ import {
 } from "../features/chat/state/composerDraft";
 import { useMcpStore } from "../stores/mcpStore";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "./ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { ComposerContextMenu } from "./chat/ComposerContextMenu";
 import { cancelActiveRun } from "../features/chat/state/deleteConversation";
 import {
@@ -59,17 +39,12 @@ import {
 } from "../features/chat/compactCommand";
 import { buildDirectCompactEntries } from "../features/chat/directCompactEntries";
 import { useKeyboardClaimed } from "../lib/focus";
-import { ModelOptionList } from "./chat/ModelOptionList";
-import { buildModelGroups, resolveModelOwner } from "../lib/model-groups";
 import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
 import { OpenCodeModelChip } from "../features/opencode/OpenCodeModelChip";
 import { OpenCodeThinkingChip } from "../features/opencode/OpenCodeThinkingChip";
 import { OpenCodeShieldChip } from "../features/opencode/OpenCodeShieldChip";
 import { useCommandsStore } from "../features/opencode/commandsStore";
-import {
-  applyCommandSelection,
-  toSlashCommands,
-} from "../features/opencode/slashCommands";
+import { applyCommandSelection, toSlashCommands } from "../features/opencode/slashCommands";
 import {
   buildCompactEntry,
   isCompactCommandText,
@@ -87,219 +62,8 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
-
-/**
- * The four levels, `Off` included.
- *
- * `Off` is a level, not a "default" placeholder: with it selected the provider
- * receives no thinking option and no reasoning part can come back. Naming the
- * off state honestly is what lets a reader tell thinking is disabled.
- */
-const THINKING_OPTIONS: ReadonlyArray<{ id: ReasoningLevel; label: string }> = [
-  { id: "off", label: composerConfig.copy.thinkingOff },
-  { id: "low", label: composerConfig.copy.thinkingLow },
-  { id: "medium", label: composerConfig.copy.thinkingMedium },
-  { id: "high", label: composerConfig.copy.thinkingHigh },
-];
-
-type ConversationCustom = {
-  providerId?: string | null;
-  modelId?: string | null;
-  reasoningLevel?: ReasoningLevel | null;
-  engine?: "direct" | "opencode";
-};
-
-function ModelChip() {
-  const {
-    providers,
-    activeProviderId,
-    selectedProviderId,
-    selectedModelId,
-    selectChatTarget,
-  } = useSettingsStore();
-  const aui = useAui();
-  const custom = useAuiState((s) => s.threadListItem.custom) as
-    | ConversationCustom
-    | undefined;
-  const [open, setOpen] = useState(false);
-
-  // Every provider's models, grouped under its name (single source in
-  // lib/model-groups — the picker list consumes the same groups).
-  const groups = buildModelGroups(providers, activeProviderId);
-
-  // Effective selection: one-shot picker override wins, else the conversation
-  // default (custom), else the global active provider's model.
-  let currentProviderId =
-    selectedProviderId ?? custom?.providerId ?? activeProviderId;
-  let currentModelId: string | undefined;
-  if (selectedModelId) {
-    const owner = resolveModelOwner(groups, selectedModelId);
-    if (owner) {
-      currentProviderId = owner.providerId;
-      currentModelId = owner.modelId;
-    }
-  }
-  currentModelId ??= custom?.modelId ?? undefined;
-  const currentProvider = providers.find((p) => p.id === currentProviderId);
-  currentModelId ??= currentProvider?.model ?? "";
-  const currentModel =
-    groups
-      .flatMap((g) => g.models)
-      .find((m) => m.id === currentModelId) ?? undefined;
-  const label = currentModel?.label ?? currentModelId ?? composerConfig.copy.selectModel;
-
-  const handleSelect = (providerId: string, modelId: string) => {
-    // Set the one-shot override for the NEXT message, AND persist it as this
-    // conversation's default (SQLite source of truth) so it survives reloads
-    // and is the baseline for subsequent messages. On a draft there is no
-    // server row yet: the one-shot plus the initialize() carry own the pick,
-    // so skip the PATCH (the SDK throws updateCustom on unbound threads).
-    selectChatTarget(providerId, modelId);
-    let remoteId: string | null = null;
-    try {
-      remoteId = (aui.threadListItem.getState() as { remoteId?: string | null }).remoteId ?? null;
-    } catch {
-      remoteId = null;
-    }
-    if (!remoteId) {
-      setOpen(false);
-      return;
-    }
-    const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
-    aui.threadListItem.updateCustom({
-      ...base,
-      providerId,
-      modelId,
-    });
-    setOpen(false);
-  };
-
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex items-center gap-1.5 h-7 rounded-full",
-            "px-2.5 text-xs text-muted-foreground hover:text-foreground",
-            "hover:bg-accent/50 transition-colors cursor-pointer",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          )}
-        >
-          <Bot className="size-3.5 shrink-0" />
-          <span className="max-w-30 truncate">{label}</span>
-          <ChevronDown className="size-3 shrink-0 opacity-50" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="min-w-55 p-0">
-        {groups.length === 0 ||
-        groups.every((g) => g.models.length === 0) ? (
-          <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-            {composerConfig.copy.noModels}
-          </div>
-        ) : (
-          <ModelOptionList
-            groups={groups}
-            currentProviderId={currentProviderId ?? undefined}
-            currentModelId={currentModelId}
-            onSelect={(providerId, modelId) => handleSelect(providerId, modelId)}
-            searchPlaceholder={composerConfig.copy.modelSearchPlaceholder}
-            searchAriaLabel={composerConfig.copy.modelSearchAria}
-            listAriaLabel={composerConfig.copy.modelListAria}
-            emptyLabel={composerConfig.copy.modelEmpty}
-          />
-        )}
-        {currentProvider && (
-          <>
-            <DropdownMenuSeparator />
-            <div className="px-2 py-1.5 text-xs text-muted-foreground">
-              {composerConfig.copy.nextMessage(
-                currentProvider.name,
-                currentModelId || composerConfig.copy.defaultSuffix,
-              )}
-            </div>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function ThinkingChip() {
-  const [open, setOpen] = useState(false);
-  const aui = useAui();
-  const custom = useAuiState((s) => s.threadListItem.custom) as
-    | ConversationCustom
-    | undefined;
-  // Display follows: one-shot override > conversation default > provider default.
-  const stored = useSettingsStore((s) => s.selectedReasoningLevel);
-  const providerDefault = useSettingsStore((s) => {
-    const pid = s.selectedProviderId ?? custom?.providerId ?? s.activeProviderId;
-    return s.providers.find((p) => p.id === pid)?.thinking ?? "off";
-  });
-  // Show the level that will actually be used. The old code mapped "off" onto a
-  // "Default" label, so a conversation with thinking disabled still read as if
-  // something would happen.
-  const selected: ReasoningLevel =
-    stored ?? custom?.reasoningLevel ?? providerDefault;
-
-  const handleSelect = (level: ReasoningLevel) => {
-    setOpen(false);
-    // Persist the chosen level as the conversation default AND as the one-shot
-    // pick, so the very next message uses exactly what was chosen. Drafts have
-    // no server row yet (one-shot + initialize() carry own the pick), so skip
-    // the PATCH there — the SDK throws updateCustom on unbound threads.
-    useSettingsStore.getState().setSelectedReasoningLevel(level);
-    let remoteId: string | null = null;
-    try {
-      remoteId = (aui.threadListItem.getState() as { remoteId?: string | null }).remoteId ?? null;
-    } catch {
-      remoteId = null;
-    }
-    if (!remoteId) return;
-    const base = (aui.threadListItem.getState().custom ?? {}) as ConversationCustom;
-    aui.threadListItem.updateCustom({ ...base, reasoningLevel: level });
-  };
-
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex items-center gap-1.5 h-7 rounded-full",
-            "px-2.5 text-xs text-muted-foreground hover:text-foreground",
-            "hover:bg-accent/50 transition-colors cursor-pointer",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          )}
-        >
-          <Brain className="size-3.5 shrink-0" />
-          <span className="max-w-20 truncate">
-            {THINKING_OPTIONS.find((o) => o.id === selected)?.label ?? composerConfig.copy.thinking}
-          </span>
-          <ChevronDown className="size-3 shrink-0 opacity-50" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="min-w-30">
-        {THINKING_OPTIONS.map((opt) => (
-          <DropdownMenuItem
-            key={opt.id}
-            className={cn(
-              "justify-between",
-              opt.id === selected && "bg-accent text-accent-foreground",
-            )}
-            onSelect={() => handleSelect(opt.id)}
-          >
-            {opt.label}
-            {opt.id === selected && (
-              <Check aria-hidden="true" className="ml-auto size-3.5 shrink-0" />
-            )}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
+import { ModelChip, ThinkingChip } from "./composer/DirectChips";
+import { ComposerAlerts } from "./composer/ComposerAlerts";
 
 function AttachDropdown() {
   const handlePickImage = async () => {
@@ -472,11 +236,11 @@ function Composer({
   // The rows are built by a pure function rather than inline here, so the token→name
   // conversion the palette depends on is executable by a test. It was previously a
   // source-string assertion, which passed while the entry still inserted `//compact `.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: false positive. The body passes `composerConfig.copy.compactCommandDescription` straight into `buildDirectCompactEntries`, but Biome does not match this nested member expression against the same expression in the dependency list.
   const directSlashEntries = useMemo(
     () =>
-      buildDirectCompactEntries(
-        composerConfig.copy.compactCommandDescription,
-        (name) => setText(applyCommandSelection(composerText, name)),
+      buildDirectCompactEntries(composerConfig.copy.compactCommandDescription, (name) =>
+        setText(applyCommandSelection(composerText, name)),
       ),
     [composerConfig.copy.compactCommandDescription, composerText, setText],
   );
@@ -485,37 +249,32 @@ function Composer({
     () => [
       ...(slashCommandsEnabled
         ? toSlashCommands(openCodeCommands, (command) => {
-          // Selection inserts `/name ` and leaves the composer to the user:
-          // the command runs when they send, so arguments stay editable.
-          setText(applyCommandSelection(composerText, command.name));
-          logger.info("opencode", "command.selected", {
-            name: command.name,
-            source: command.source,
-          });
-        })
+            // Selection inserts `/name ` and leaves the composer to the user:
+            // the command runs when they send, so arguments stay editable.
+            setText(applyCommandSelection(composerText, command.name));
+            logger.info("opencode", "command.selected", {
+              name: command.name,
+              source: command.source,
+            });
+          })
         : []),
       // Built-in compact: selection also only inserts the text — the submit
       // interception below performs the summarize, so palette and typed input
       // share one execution path and selection alone never sends anything.
       ...(canCompact
-        ? [buildCompactEntry((name) => {
-          setText(applyCommandSelection(composerText, name));
-          logger.info("opencode", "command.selected", {
-            name,
-            source: "builtin",
-          });
-        })]
+        ? [
+            buildCompactEntry((name) => {
+              setText(applyCommandSelection(composerText, name));
+              logger.info("opencode", "command.selected", {
+                name,
+                source: "builtin",
+              });
+            }),
+          ]
         : []),
       ...(slashCommandsEnabled ? [] : directSlashEntries),
     ],
-    [
-      slashCommandsEnabled,
-      openCodeCommands,
-      canCompact,
-      composerText,
-      setText,
-      directSlashEntries,
-    ],
+    [slashCommandsEnabled, openCodeCommands, canCompact, composerText, setText, directSlashEntries],
   );
   const slash = unstable_useSlashCommandAdapter({
     commands: slashEntries,
@@ -564,12 +323,14 @@ function Composer({
   // the next submit can happen.
   const directThreadMessages = useAuiState(
     (s) =>
-      (s.thread.messages as ReadonlyArray<{
-        id?: unknown;
-        role?: unknown;
-        parts?: unknown;
-        metadata?: unknown;
-      }> | undefined) ?? [],
+      (s.thread.messages as
+        | ReadonlyArray<{
+            id?: unknown;
+            role?: unknown;
+            parts?: unknown;
+            metadata?: unknown;
+          }>
+        | undefined) ?? [],
   );
   // The command leaves its result IN THE TRANSCRIPT, not in composer state. That is
   // the whole point: a compaction is an event in the conversation, so it is a
@@ -634,6 +395,7 @@ function Composer({
   // the user with no divider until a reload.
   //
   // Offered only on the Direct surface, where the command exists at all.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `runDirectCompactCommand` is a plain async function declared in this component body, so a new identity is created on every render. Depending on it would make this memo useless (it would recompute every render). The memo is keyed on the conversation it acts on instead.
   const compactFromPanel = useMemo(() => {
     if (isCodeSurface) return undefined;
     return () => {
@@ -729,67 +491,67 @@ function Composer({
       {/* The trigger-popover root groups the `/` declaration below and owns the
           shared input plugin registry. It renders nothing itself. */}
       <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root
-        // No onContextMenu guard here on purpose. The composer's own right-click
-        // menu is triggered by `ComposerContextMenu`, which wraps this form -
-        // so a stopPropagation() on this inner element ran FIRST and killed the
-        // event before it could ever reach that trigger. The page-menu guard
-        // lives on the trigger instead (see ComposerContextMenu), where it still
-        // suppresses the app-shell menu without eating the composer's own.
-        // Non-mouse presses keep bubbling so panel selection bookkeeping is
-        // untouched.
-        onPointerDown={(event) => {
-          if (event.pointerType !== "mouse") event.stopPropagation();
-        }}
-        // The SINGLE send funnel, and the reason the Send button is a plain submit:
-        // the library's own send cannot be intercepted from here, so the Composer
-        // owns sending outright and invokes the library's send itself. See
-        // `handleComposerSubmit` for the measured reason.
-        onSubmit={handleComposerSubmit}
-        className={cn(
-          "relative flex flex-col",
-          "rounded-xl border-none glass-surface shadow-floating",
-          "transition-shadow duration-200 ease-in-out",
-          "focus-within:ring-1 focus-within:ring-ring",
-        )}
-      >
-        {/* Textarea: the primitive owns auto-resize (controlled by the
+        <ComposerPrimitive.Root
+          // No onContextMenu guard here on purpose. The composer's own right-click
+          // menu is triggered by `ComposerContextMenu`, which wraps this form -
+          // so a stopPropagation() on this inner element ran FIRST and killed the
+          // event before it could ever reach that trigger. The page-menu guard
+          // lives on the trigger instead (see ComposerContextMenu), where it still
+          // suppresses the app-shell menu without eating the composer's own.
+          // Non-mouse presses keep bubbling so panel selection bookkeeping is
+          // untouched.
+          onPointerDown={(event) => {
+            if (event.pointerType !== "mouse") event.stopPropagation();
+          }}
+          // The SINGLE send funnel, and the reason the Send button is a plain submit:
+          // the library's own send cannot be intercepted from here, so the Composer
+          // owns sending outright and invokes the library's send itself. See
+          // `handleComposerSubmit` for the measured reason.
+          onSubmit={handleComposerSubmit}
+          className={cn(
+            "relative flex flex-col",
+            "rounded-xl border-none glass-surface shadow-floating",
+            "transition-shadow duration-200 ease-in-out",
+            "focus-within:ring-1 focus-within:ring-ring",
+          )}
+        >
+          {/* Textarea: the primitive owns auto-resize (controlled by the
             runtime, including programmatic clears on send) — no hand-rolled
             height hook, so paste-then-send always shrinks back. */}
-        <div className="px-3 pb-1 pt-3">
-          <ComposerPrimitive.Input
-            autoFocus
-            submitMode="enter"
-            // Yield the keyboard while a decision card holds it. Both of these
-            // default to TRUE in the library and TBAi never overrode them, so
-            // scrolling to the bottom or starting a run would pull focus off
-            // the card -- and Enter would then send an empty message instead of
-            // approving. Restored as soon as the last card goes, so the
-            // convenience is unchanged whenever nothing is being decided.
-            unstable_focusOnScrollToBottom={!keyboardClaimed}
-            unstable_focusOnRunStart={!keyboardClaimed}
-            // Touch-primary devices get Return = newline instead of send, so a
-            // half-typed message can't be submitted by the on-screen key
-            // (matches ChatGPT / Slack / WhatsApp). Desktop is unchanged: the
-            // flag only downgrades the default "enter" mode.
-            unstable_insertNewlineOnTouchEnter
-            // The platform's own spell checker — no bundled dictionary, no
-            // library. User-controlled from Settings > Appearance, and on by
-            // default (which is also the bare-textarea default, so omitting
-            // the attribute would behave identically).
-            spellCheck={spellCheckEnabled}
-            placeholder="Send a message…  (Enter to send)"
-            rows={1}
-            className={cn(
-              "w-full resize-none bg-transparent text-sm text-foreground",
-              "placeholder:text-muted-foreground",
-              "min-h-[2.5rem] max-h-40",
-              "outline-none",
-            )}
-          />
-        </div>
+          <div className="px-3 pb-1 pt-3">
+            <ComposerPrimitive.Input
+              autoFocus
+              submitMode="enter"
+              // Yield the keyboard while a decision card holds it. Both of these
+              // default to TRUE in the library and TBAi never overrode them, so
+              // scrolling to the bottom or starting a run would pull focus off
+              // the card -- and Enter would then send an empty message instead of
+              // approving. Restored as soon as the last card goes, so the
+              // convenience is unchanged whenever nothing is being decided.
+              unstable_focusOnScrollToBottom={!keyboardClaimed}
+              unstable_focusOnRunStart={!keyboardClaimed}
+              // Touch-primary devices get Return = newline instead of send, so a
+              // half-typed message can't be submitted by the on-screen key
+              // (matches ChatGPT / Slack / WhatsApp). Desktop is unchanged: the
+              // flag only downgrades the default "enter" mode.
+              unstable_insertNewlineOnTouchEnter
+              // The platform's own spell checker — no bundled dictionary, no
+              // library. User-controlled from Settings > Appearance, and on by
+              // default (which is also the bare-textarea default, so omitting
+              // the attribute would behave identically).
+              spellCheck={spellCheckEnabled}
+              placeholder="Send a message…  (Enter to send)"
+              rows={1}
+              className={cn(
+                "w-full resize-none bg-transparent text-sm text-foreground",
+                "placeholder:text-muted-foreground",
+                "min-h-[2.5rem] max-h-40",
+                "outline-none",
+              )}
+            />
+          </div>
 
-        {/* Slash-command palette. The library owns trigger detection, filtering
+          {/* Slash-command palette. The library owns trigger detection, filtering
             and keyboard routing (plugins get first refusal on keydown, so
             Enter picks an item instead of submitting while the popover is
             open); this only supplies the items and the execute action. Mounted
@@ -800,56 +562,53 @@ function Composer({
             hides the box when the item group is empty (Enter then submits the
             text normally); it depends only on the group being empty, never on
             library internals beyond the wrapper it renders. */}
-        {slashEntries.length > 0 && (
-          <ComposerPrimitive.Unstable_TriggerPopover
-            char="/"
-            adapter={slash.adapter}
-            className={cn(
-              "absolute bottom-full left-0 z-50 mb-1 max-h-72 w-full overflow-y-auto",
-              "rounded-xl border-none p-1 glass-surface shadow-floating",
-              "has-[.slash-command-items:empty]:hidden",
-            )}
-          >
-            <ComposerPrimitive.Unstable_TriggerPopover.Action
-              {...slash.action}
-              removeOnExecute
-            />
-            <ComposerPrimitive.Unstable_TriggerPopoverItems className="slash-command-items">
-              {(items) =>
-                items.length === 0
-                  ? null
-                  : items.map((item, index) => (
-                      // Single-line rows (label + inline truncated description),
-                      // not stacked two-line cards: 24 mixed command/skill rows
-                      // scan as names first. Highlight MUST key on
-                      // `data-highlighted` — that is the attribute the library
-                      // sets on keyboard navigation (`data-selected` is never
-                      // set, so styling it leaves arrow-key movement invisible).
-                      <ComposerPrimitive.Unstable_TriggerPopoverItem
-                        key={item.id}
-                        item={item}
-                        index={index}
-                        className={cn(
-                          "flex cursor-pointer flex-row items-baseline gap-2 rounded-lg px-2 py-1.5",
-                          "text-sm text-popover-foreground",
-                          "hover:bg-accent hover:text-accent-foreground",
-                          "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
-                        )}
-                      >
-                        <span className="shrink-0 font-medium">{item.label}</span>
-                        {item.description ? (
-                          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                            {item.description}
-                          </span>
-                        ) : null}
-                      </ComposerPrimitive.Unstable_TriggerPopoverItem>
-                    ))
-              }
-            </ComposerPrimitive.Unstable_TriggerPopoverItems>
-          </ComposerPrimitive.Unstable_TriggerPopover>
-        )}
+          {slashEntries.length > 0 && (
+            <ComposerPrimitive.Unstable_TriggerPopover
+              char="/"
+              adapter={slash.adapter}
+              className={cn(
+                "absolute bottom-full left-0 z-50 mb-1 max-h-72 w-full overflow-y-auto",
+                "rounded-xl border-none p-1 glass-surface shadow-floating",
+                "has-[.slash-command-items:empty]:hidden",
+              )}
+            >
+              <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} removeOnExecute />
+              <ComposerPrimitive.Unstable_TriggerPopoverItems className="slash-command-items">
+                {(items) =>
+                  items.length === 0
+                    ? null
+                    : items.map((item, index) => (
+                        // Single-line rows (label + inline truncated description),
+                        // not stacked two-line cards: 24 mixed command/skill rows
+                        // scan as names first. Highlight MUST key on
+                        // `data-highlighted` — that is the attribute the library
+                        // sets on keyboard navigation (`data-selected` is never
+                        // set, so styling it leaves arrow-key movement invisible).
+                        <ComposerPrimitive.Unstable_TriggerPopoverItem
+                          key={item.id}
+                          item={item}
+                          index={index}
+                          className={cn(
+                            "flex cursor-pointer flex-row items-baseline gap-2 rounded-lg px-2 py-1.5",
+                            "text-sm text-popover-foreground",
+                            "hover:bg-accent hover:text-accent-foreground",
+                            "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
+                          )}
+                        >
+                          <span className="shrink-0 font-medium">{item.label}</span>
+                          {item.description ? (
+                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                              {item.description}
+                            </span>
+                          ) : null}
+                        </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                      ))
+                }
+              </ComposerPrimitive.Unstable_TriggerPopoverItems>
+            </ComposerPrimitive.Unstable_TriggerPopover>
+          )}
 
-        {/*
+          {/*
           In-flight marker for a Direct `/compact`.
 
           Its OWN line between the textarea and the button row, deliberately: the
@@ -865,60 +624,63 @@ function Composer({
           No outcome is shown here, ever. The outcome is the divider in the
           transcript; a composer-level verdict is the toast this replaced.
         */}
-        {directCompacting ? (
-          <p
-            role="status"
-            className="mx-3 mb-1 text-xs text-muted-foreground select-none"
-          >
-            {composerConfig.copy.compactingContext}
-          </p>
-        ) : null}
+          {directCompacting ? (
+            <p role="status" className="mx-3 mb-1 text-xs text-muted-foreground select-none">
+              {composerConfig.copy.compactingContext}
+            </p>
+          ) : null}
 
-        {/* Button row: attach on left, thinking/model/voice/send-stop on right */}
-        <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
-          {/* Left: attach */}
-          <div className="flex items-end gap-1.5">
-            <AttachDropdown />
-          </div>
+          {/* Button row: attach on left, thinking/model/voice/send-stop on right */}
+          <div className="flex items-end justify-between gap-1.5 px-3 pb-3 pt-2">
+            {/* Left: attach */}
+            <div className="flex items-end gap-1.5">
+              <AttachDropdown />
+            </div>
 
-          {/* Right: thinking, model, voice, send/stop (single slot) */}
-          <div className="flex items-center gap-1.5">
-            {/* Thinking chip: persists to the conversation default ("Default" =
+            {/* Right: thinking, model, voice, send/stop (single slot) */}
+            <div className="flex items-center gap-1.5">
+              {/* Thinking chip: persists to the conversation default ("Default" =
                  the provider's saved level); also sets a one-shot override for the
                  immediate next message. */}
-            {/* OpenCode (both the started Code chat and the new-chat draft) renders
+              {/* OpenCode (both the started Code chat and the new-chat draft) renders
                  the same three independent chips — Agent, Model, Thinking — each
                  persisting to its own store column (bound conversation, or the
                  welcome-engine store in draft). Never the Direct provider chips,
                  and the Thinking chip auto-hides when the model exposes no
                  variants. Direct chat uses the thinking+model chips. */}
-            {(isCodeSurface || showOpenCodeDraft) ? (
-              <>
-                <OpenCodeAgentChip />
-                <OpenCodeModelChip />
-                <OpenCodeThinkingChip />
-                <OpenCodeShieldChip />
-              </>
-            ) : (
-              <>
-                <ThinkingChip />
-                {/* Model chip */}
-                <ModelChip />
-              </>
-            )}
-            {/* Context ring: newest-message token totals against the
+              {isCodeSurface || showOpenCodeDraft ? (
+                <>
+                  <OpenCodeAgentChip />
+                  <OpenCodeModelChip />
+                  <OpenCodeThinkingChip />
+                  <OpenCodeShieldChip />
+                </>
+              ) : (
+                <>
+                  <ThinkingChip />
+                  {/* Model chip */}
+                  <ModelChip />
+                </>
+              )}
+              {/* Context ring: newest-message token totals against the
                 model window (Direct: route metadata; Code: projected message
                 tokens). Hidden until usage exists; beside send in all modes. */}
-            {isCodeSurface || showOpenCodeDraft ? (
-              <OpenCodeContextRing />
-            ) : (
-              <DirectContextRing {...(compactFromPanel === undefined ? {} : { onCompact: compactFromPanel })} />
-            )}
-            {/* Voice — always visible, disabled (no DictationAdapter) */}
-            <TooltipIconButton tooltip="Voice not available" side="top" className="opacity-40 pointer-events-none">
-              <Mic className="size-3.5" />
-            </TooltipIconButton>
-            {/* Single action slot (docs idiom): exactly one of Send / Cancel
+              {isCodeSurface || showOpenCodeDraft ? (
+                <OpenCodeContextRing />
+              ) : (
+                <DirectContextRing
+                  {...(compactFromPanel === undefined ? {} : { onCompact: compactFromPanel })}
+                />
+              )}
+              {/* Voice — always visible, disabled (no DictationAdapter) */}
+              <TooltipIconButton
+                tooltip="Voice not available"
+                side="top"
+                className="opacity-40 pointer-events-none"
+              >
+                <Mic className="size-3.5" />
+              </TooltipIconButton>
+              {/* Single action slot (docs idiom): exactly one of Send / Cancel
                 is mounted — arrow when idle, square Stop while generating.
                 Same footprint, so the row never shifts on swap. While the
                 backend is offline the Send primitive is replaced by an inert
@@ -930,137 +692,111 @@ function Composer({
                 clicks. Enter (which submits the form) and any programmatic
                 `aui.composer.send()` are held shut by `isSendDisabled` on the
                 runtime; this swap exists for the copy and the affordance. */}
-            <AuiIf condition={(s) => !s.thread.isRunning}>
-              {isOffline ? (
-                <button
-                  type="button"
-                  disabled
-                  aria-label={composerConfig.copy.sendOffline}
-                  title={composerConfig.copy.sendOfflineTitle}
-                  className={cn(
-                    "size-7 rounded-full flex items-center justify-center",
-                    "bg-accent text-accent-foreground",
-                    "disabled:opacity-30 disabled:pointer-events-none",
-                  )}
-                >
-                  <ArrowUp className="size-3.5" />
-                </button>
-              ) : showOpenCodeDraft ? (
-                <button
-                  type="button"
-                  onClick={() => void sendOpenCodeDraft()}
-                  disabled={codeSending || !composerText.trim()}
-                  aria-label={composerConfig.copy.sendMessage}
-                  title={codeSendError ?? composerConfig.copy.sendMessage}
-                  className={cn(
-                    "size-7 rounded-full flex items-center justify-center",
-                    "bg-accent text-accent-foreground",
-                    "hover:bg-accent/90 active:scale-95",
-                    "transition-all duration-150",
-                    "disabled:opacity-30 disabled:pointer-events-none",
-                  )}
-                >
-                  <ArrowUp className="size-3.5" />
-                </button>
-              ) : (
-                // A PLAIN submit button, not `ComposerPrimitive.Send`.
-                //
-                // The primitive sends from its own click handler, which fires before
-                // the form's submit event, so it cannot be intercepted from here and
-                // would create the `/compact` message before the funnel ever ran.
-                // Same footprint, same affordance, same disabled styling as its
-                // offline sibling above; the funnel above is the only sender.
-                // While a run is active this whole branch is unmounted (see the
-                // `AuiIf` on `!thread.isRunning`), so no re-entrant send is possible
-                // here, and `sendViaRuntime` remains the library's own send.
-                <button
-                  type="submit"
-                  aria-label={composerConfig.copy.sendMessage}
-                  disabled={!composerText.trim()}
-                  className={cn(
-                    "size-7 rounded-full flex items-center justify-center",
-                    "bg-accent text-accent-foreground",
-                    "hover:bg-accent/90 active:scale-95",
-                    "transition-all duration-150",
-                    "disabled:opacity-30 disabled:pointer-events-none",
-                  )}
-                >
-                  <ArrowUp className="size-3.5" />
-                </button>
-              )}
-            </AuiIf>
-            <AuiIf condition={(s) => s.thread.isRunning}>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ComposerPrimitive.Cancel asChild>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Explicit server cancel: runs are server-owned, so
-                          // the browser abort alone merely detaches. Shared
-                          // helper looks up the resumable-store stream id and
-                          // cancels it; fire-and-forget so the local cancel
-                          // proceeds regardless of the outcome.
-                          const item = aui.threadListItem.getState() as {
-                            remoteId?: string | null;
-                            id?: string | null;
-                          };
-                          void cancelActiveRun(item.remoteId ?? item.id);
-                        }}
-                        aria-label={composerConfig.copy.stopGenerating}
-                        className={cn(
-                          "size-7 rounded-full flex items-center justify-center",
-                          "bg-destructive text-destructive-foreground",
-                          "hover:bg-destructive/90 active:scale-95",
-                          "transition-all duration-150",
-                          "disabled:opacity-30 disabled:pointer-events-none",
-                        )}
-                      >
-                        <Square className="size-3.5" />
-                      </button>
-                    </ComposerPrimitive.Cancel>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    {composerConfig.copy.stopGenerating}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </AuiIf>
+              <AuiIf condition={(s) => !s.thread.isRunning}>
+                {isOffline ? (
+                  <button
+                    type="button"
+                    disabled
+                    aria-label={composerConfig.copy.sendOffline}
+                    title={composerConfig.copy.sendOfflineTitle}
+                    className={cn(
+                      "size-7 rounded-full flex items-center justify-center",
+                      "bg-accent text-accent-foreground",
+                      "disabled:opacity-30 disabled:pointer-events-none",
+                    )}
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </button>
+                ) : showOpenCodeDraft ? (
+                  <button
+                    type="button"
+                    onClick={() => void sendOpenCodeDraft()}
+                    disabled={codeSending || !composerText.trim()}
+                    aria-label={composerConfig.copy.sendMessage}
+                    title={codeSendError ?? composerConfig.copy.sendMessage}
+                    className={cn(
+                      "size-7 rounded-full flex items-center justify-center",
+                      "bg-accent text-accent-foreground",
+                      "hover:bg-accent/90 active:scale-95",
+                      "transition-all duration-150",
+                      "disabled:opacity-30 disabled:pointer-events-none",
+                    )}
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </button>
+                ) : (
+                  // A PLAIN submit button, not `ComposerPrimitive.Send`.
+                  //
+                  // The primitive sends from its own click handler, which fires before
+                  // the form's submit event, so it cannot be intercepted from here and
+                  // would create the `/compact` message before the funnel ever ran.
+                  // Same footprint, same affordance, same disabled styling as its
+                  // offline sibling above; the funnel above is the only sender.
+                  // While a run is active this whole branch is unmounted (see the
+                  // `AuiIf` on `!thread.isRunning`), so no re-entrant send is possible
+                  // here, and `sendViaRuntime` remains the library's own send.
+                  <button
+                    type="submit"
+                    aria-label={composerConfig.copy.sendMessage}
+                    disabled={!composerText.trim()}
+                    className={cn(
+                      "size-7 rounded-full flex items-center justify-center",
+                      "bg-accent text-accent-foreground",
+                      "hover:bg-accent/90 active:scale-95",
+                      "transition-all duration-150",
+                      "disabled:opacity-30 disabled:pointer-events-none",
+                    )}
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </button>
+                )}
+              </AuiIf>
+              <AuiIf condition={(s) => s.thread.isRunning}>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ComposerPrimitive.Cancel asChild>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Explicit server cancel: runs are server-owned, so
+                            // the browser abort alone merely detaches. Shared
+                            // helper looks up the resumable-store stream id and
+                            // cancels it; fire-and-forget so the local cancel
+                            // proceeds regardless of the outcome.
+                            const item = aui.threadListItem.getState() as {
+                              remoteId?: string | null;
+                              id?: string | null;
+                            };
+                            void cancelActiveRun(item.remoteId ?? item.id);
+                          }}
+                          aria-label={composerConfig.copy.stopGenerating}
+                          className={cn(
+                            "size-7 rounded-full flex items-center justify-center",
+                            "bg-destructive text-destructive-foreground",
+                            "hover:bg-destructive/90 active:scale-95",
+                            "transition-all duration-150",
+                            "disabled:opacity-30 disabled:pointer-events-none",
+                          )}
+                        >
+                          <Square className="size-3.5" />
+                        </button>
+                      </ComposerPrimitive.Cancel>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{composerConfig.copy.stopGenerating}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </AuiIf>
+            </div>
+            <ComposerAlerts
+              codeSendError={codeSendError}
+              compactError={compactError}
+              recovery={recovery}
+              retrying={retrying}
+              onRetry={retryInterruptedRun}
+            />
           </div>
-          {codeSendError && (
-            <div className="px-3 pb-3" role="alert">
-              <p className="text-xs text-destructive">
-                Couldn&apos;t start the Code chat: {codeSendError} Your text is kept above.
-              </p>
-            </div>
-          )}
-          {compactError && (
-            <div className="px-3 pb-3" role="alert">
-              <p className="text-xs text-destructive">
-                Couldn&apos;t compact the session: {compactError} Nothing was sent.
-              </p>
-            </div>
-          )}
-          {recovery && (
-            <div className="px-3 pb-3" role="alert">
-              <p className="text-xs text-destructive">
-                {streamRecoveryCopy(recovery.reason)}
-              </p>
-              {recovery.canRetry && (
-                <button
-                  type="button"
-                  className="mt-1 text-xs font-medium underline underline-offset-2"
-                  onClick={retryInterruptedRun}
-                  disabled={retrying}
-                >
-                  {retrying ? composerConfig.copy.streamRetrying : composerConfig.copy.streamRetry}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </ComposerPrimitive.Root>
+        </ComposerPrimitive.Root>
       </ComposerPrimitive.Unstable_TriggerPopoverRoot>
     </ComposerContextMenu>
   );

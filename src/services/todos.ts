@@ -22,6 +22,26 @@ function now(): number {
   return Date.now();
 }
 
+/**
+ * Read a field the schema already required for this action.
+ *
+ * `TodoArgs` is a FLAT shape - `id`, `text` and `done` are all optional at the
+ * type level - because the schema enforces "add needs text, update/toggle/
+ * remove need id" in a `superRefine`. TypeScript cannot see that per-action
+ * refinement, so the guarantee has to be re-asserted at the point of use.
+ *
+ * This throws rather than casting. A missing field here would otherwise reach
+ * SQLite as NULL and violate the column, so failing loudly at the boundary is
+ * the honest outcome, and it can only fire if the schema's own refinement was
+ * bypassed.
+ */
+function required(value: string | undefined, field: string, action: string): string {
+  if (value === undefined) {
+    throw new ToolError(`todo ${action} requires "${field}"`);
+  }
+  return value;
+}
+
 function readItems(threadId: string, filter?: string): TodoListResult {
   const rows = db
     .query("SELECT id, text, done, position FROM todos WHERE thread_id = ? ORDER BY position ASC")
@@ -50,10 +70,14 @@ function readItems(threadId: string, filter?: string): TodoListResult {
  * the row write are atomic.
  */
 export function runTodo(args: TodoArgs, ctx?: TodoContext): TodoListResult {
-  const threadId = ctx?.threadId;
-  if (!threadId) {
+  const ctxThreadId = ctx?.threadId;
+  if (!ctxThreadId) {
     throw new ToolError("todo requires an active conversation/thread context");
   }
+  // Bound to a `string`, not `string | undefined`: the guard above proves it,
+  // but `ctx?.threadId` keeps its wider type and TypeScript cannot carry that
+  // proof into the transaction closure below.
+  const threadId: string = ctxThreadId;
 
   const execute = db.transaction((action: TodoArgs): TodoListResult => {
     switch (action.action) {
@@ -67,7 +91,7 @@ export function runTodo(args: TodoArgs, ctx?: TodoContext): TodoListResult {
         const timestamp = now();
         db.run(
           "INSERT INTO todos (id, thread_id, position, text, done, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)",
-          [id, threadId, position, action.text, timestamp, timestamp],
+          [id, threadId, position, required(action.text, "text", "add"), timestamp, timestamp],
         );
         return readItems(threadId);
       }
@@ -87,7 +111,7 @@ export function runTodo(args: TodoArgs, ctx?: TodoContext): TodoListResult {
         if (assignments.length > 0) {
           db.run(
             `UPDATE todos SET ${assignments.join(", ")}, updated_at = ? WHERE id = ? AND thread_id = ?`,
-            [...values, now(), action.id, threadId],
+            [...values, now(), required(action.id, "id", "update"), threadId],
           );
         }
         return readItems(threadId);
@@ -95,12 +119,15 @@ export function runTodo(args: TodoArgs, ctx?: TodoContext): TodoListResult {
       case "toggle": {
         db.run(
           "UPDATE todos SET done = CASE done WHEN 1 THEN 0 ELSE 1 END, updated_at = ? WHERE id = ? AND thread_id = ?",
-          [now(), action.id, threadId],
+          [now(), required(action.id, "id", "toggle"), threadId],
         );
         return readItems(threadId);
       }
       case "remove": {
-        db.run("DELETE FROM todos WHERE id = ? AND thread_id = ?", [action.id, threadId]);
+        db.run("DELETE FROM todos WHERE id = ? AND thread_id = ?", [
+          required(action.id, "id", "remove"),
+          threadId,
+        ]);
         return readItems(threadId);
       }
       case "clear": {

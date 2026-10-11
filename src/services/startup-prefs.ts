@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { db } from "../db";
 import { resolveDataDir } from "./server-port";
 
@@ -14,9 +14,9 @@ const START_MIN_FILE = "start-minimized";
  */
 export function getPersistedStartMinimized(): boolean {
   try {
-    const row = db
-      .query("SELECT value FROM app_settings WHERE key = ?")
-      .get(START_MIN_KEY) as { value: string } | undefined;
+    const row = db.query("SELECT value FROM app_settings WHERE key = ?").get(START_MIN_KEY) as
+      | { value: string }
+      | undefined;
     if (!row) return false;
     const parsed: unknown = JSON.parse(row.value);
     return parsed === true;

@@ -11,14 +11,9 @@ export type SidebarSectionId = "folders" | "chats" | "recent";
 export type SidebarSortMode = "updated" | "created";
 
 /** All reorderable sections, in default top-to-bottom order. */
-export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
-  "folders",
-  "chats",
-  "recent",
-];
+export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = ["folders", "chats", "recent"];
 
-export const DEFAULT_SECTION_ORDER: readonly SidebarSectionId[] =
-  SIDEBAR_SECTION_IDS;
+export const DEFAULT_SECTION_ORDER: readonly SidebarSectionId[] = SIDEBAR_SECTION_IDS;
 
 export const DEFAULT_SORT_MODE: SidebarSortMode = "updated";
 
@@ -118,7 +113,7 @@ export interface SidebarConfig {
 export const sidebarConfig: SidebarConfig = {
   defaultSectionOrder: DEFAULT_SECTION_ORDER,
   defaultSort: DEFAULT_SORT_MODE,
-    showRecentByDefault: true,
+  showRecentByDefault: true,
   recentSectionLimit: 10,
   searchResultLimit: 20,
   maxListPageSize: 500,
@@ -237,4 +232,3 @@ export const chatHeaderConfig = {
     save: "Save",
   },
 };
-

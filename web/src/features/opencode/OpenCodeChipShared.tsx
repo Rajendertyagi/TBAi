@@ -14,10 +14,7 @@ import {
 } from "./useOpenCodeConversationConfig";
 import { useWelcomeEngineStore } from "../chat/state/welcomeEngine";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
-import {
-  mergeOpenCodeSelectionState,
-  type OpenCodeSelectionPatch,
-} from "./opencodeSelection";
+import { mergeOpenCodeSelectionState, type OpenCodeSelectionPatch } from "./opencodeSelection";
 import { findChipModelInfo, resolveChipModelSource } from "./chipModelSource";
 
 /**
@@ -125,13 +122,14 @@ export function useOpenCodeChipState(conversationId: string) {
       if (nativeExtras) {
         const [providerID, ...modelParts] = nextSelection.model.split("/");
         nativeExtras.setDesiredSelection({
-          model: providerID && modelParts.length > 0
-            ? {
-                providerID,
-                modelID: modelParts.join("/"),
-                ...(nextSelection.variant ? { variant: nextSelection.variant } : {}),
-              }
-            : null,
+          model:
+            providerID && modelParts.length > 0
+              ? {
+                  providerID,
+                  modelID: modelParts.join("/"),
+                  ...(nextSelection.variant ? { variant: nextSelection.variant } : {}),
+                }
+              : null,
           agent: nextSelection.agent || null,
         });
       }
@@ -198,6 +196,11 @@ function ChevronDownMini({ open }: { open: boolean }) {
       height="12"
       viewBox="0 0 24 24"
       fill="none"
+      // Decorative: the chevron only repeats the state the adjacent label and
+      // `aria-expanded` on the trigger already convey, so it is hidden from the
+      // accessibility tree rather than given a title a screen reader would read
+      // out of context.
+      aria-hidden="true"
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
@@ -229,9 +232,7 @@ export function OpenCodeChipMenuContent({
   }
   if (error) {
     return (
-      <div className="px-3 py-6 text-center text-sm text-destructive">
-        {copy.capabilitiesError}
-      </div>
+      <div className="px-3 py-6 text-center text-sm text-destructive">{copy.capabilitiesError}</div>
     );
   }
   return <>{children}</>;
@@ -252,7 +253,8 @@ export function OpenCodeChipOption({
   return (
     <button
       type="button"
-      role="listitem"
+      role="option"
+      aria-selected={active}
       onClick={onSelect}
       className={cn(
         "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",

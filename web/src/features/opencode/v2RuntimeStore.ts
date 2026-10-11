@@ -5,25 +5,22 @@ import {
   type ExternalStoreAdapter,
   type ThreadMessage,
 } from "@assistant-ui/react";
-import {
-  projectV2Permission,
-  toV2PermissionReply,
-  type V2PermissionView,
-} from "./v2Permissions";
-import {
-  createV2RuntimeExtras,
-  type V2RuntimeExtras,
-} from "./v2RuntimeExtras";
-import {
-  projectV2RepositoryItems,
-  repositoryHeadId,
-} from "./v2MessageProjection";
+import { projectV2Permission, toV2PermissionReply, type V2PermissionView } from "./v2Permissions";
+import { createV2RuntimeExtras, type V2RuntimeExtras } from "./v2RuntimeExtras";
+import { projectV2RepositoryItems, repositoryHeadId } from "./v2MessageProjection";
 import { createV2ThreadListAdapter } from "./v2ThreadList";
 import type { V2ThreadController } from "./v2ThreadController";
 import type { V2ThreadState } from "./v2Types";
 
 function executionIsRunning(state: V2ThreadState): boolean {
-  return state.execution.type === "submitting" || state.execution.type === "admitted" || state.execution.type === "reconciling" || state.execution.type === "executing" || state.execution.type === "streaming" || state.execution.type === "cancelling";
+  return (
+    state.execution.type === "submitting" ||
+    state.execution.type === "admitted" ||
+    state.execution.type === "reconciling" ||
+    state.execution.type === "executing" ||
+    state.execution.type === "streaming" ||
+    state.execution.type === "cancelling"
+  );
 }
 
 function permissionViews(state: V2ThreadState): readonly V2PermissionView[] {
@@ -128,15 +125,17 @@ type RepositoryCacheEntry = {
 export function createV2RuntimeStoreFactory(
   controller: V2ThreadController,
   conversationId: string | null,
-): (state: V2ThreadState) => ExternalStoreAdapter<ThreadMessage> & { readonly extras: V2RuntimeExtras } {
+): (
+  state: V2ThreadState,
+) => ExternalStoreAdapter<ThreadMessage> & { readonly extras: V2RuntimeExtras } {
   let cache: RepositoryCacheEntry | null = null;
 
   return (state: V2ThreadState) => {
     if (
-      cache === null
-      || cache.messages !== state.messages
-      || cache.messageOrder !== state.messageOrder
-      || cache.permissions !== state.permissions
+      cache === null ||
+      cache.messages !== state.messages ||
+      cache.messageOrder !== state.messageOrder ||
+      cache.permissions !== state.permissions
     ) {
       const items = projectV2RepositoryItems(state);
       cache = {

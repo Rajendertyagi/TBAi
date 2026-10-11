@@ -32,9 +32,7 @@ const observedResponses = new WeakMap<OpenCodeClient, ObservedResponse[]>();
  * client still parses bodies exactly as it always would. Only the status is
  * observed, which is the one thing the client provably cannot report.
  */
-function createObservingTransport(
-  record: ObservedResponse[],
-): typeof globalThis.fetch {
+function createObservingTransport(record: ObservedResponse[]): typeof globalThis.fetch {
   const observing = async (
     input: Parameters<typeof transport>[0],
     init?: Parameters<typeof transport>[1],

@@ -85,6 +85,16 @@ function formFromProvider(p: ProviderConfig): FormState {
   };
 }
 
+/**
+ * DOM id for one provider-form control, so its `<label htmlFor>` can point at
+ * it. Matches the `edit-mp-*` / `add-mp-*` ids already used by the name,
+ * endpoint and key fields, and is scoped by `mode` because the add and edit
+ * dialogs are the same component.
+ */
+function mpFieldId(mode: "add" | "edit", field: string): string {
+  return `${mode}-mp-${field}`;
+}
+
 interface ProviderDialogProps {
   mode: "add" | "edit";
   /** Edit target; null for add mode. */
@@ -236,7 +246,10 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
     } catch (e) {
       setTestResult({
         ok: false,
-        message: e instanceof DOMException && e.name === "AbortError" ? "Test timed out" : "Request failed",
+        message:
+          e instanceof DOMException && e.name === "AbortError"
+            ? "Test timed out"
+            : "Request failed",
       });
     } finally {
       clearTimeout(timer);
@@ -299,7 +312,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
 
   const handleRemoveModel = (id: string) => {
     const merged = form.models.filter((m) => m.id !== id);
-    setForm({ ...form, models: merged, model: form.model === id ? (merged[0]?.id ?? "") : form.model });
+    setForm({
+      ...form,
+      models: merged,
+      model: form.model === id ? (merged[0]?.id ?? "") : form.model,
+    });
   };
 
   /**
@@ -349,7 +366,10 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <label htmlFor={mode === "edit" ? "edit-mp-name" : "add-mp-name"} className="text-xs font-medium">
+            <label
+              htmlFor={mode === "edit" ? "edit-mp-name" : "add-mp-name"}
+              className="text-xs font-medium"
+            >
               Name
             </label>
             <Input
@@ -361,7 +381,9 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">Type</label>
+            <label className="text-xs font-medium" htmlFor={mpFieldId(mode, "type")}>
+              Type
+            </label>
             <Select
               value={form.type}
               onValueChange={(v) => {
@@ -369,7 +391,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                 setForm({ ...form, type, apiProtocol: defaultApiProtocol(type) });
               }}
             >
-              <SelectTrigger className="h-8 text-xs">
+              <SelectTrigger id={mpFieldId(mode, "type")} className="h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -384,12 +406,14 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
 
           {form.type !== "google" && form.type !== "anthropic" && (
             <div className="space-y-1.5">
-              <label className="text-xs font-medium">API protocol</label>
+              <label className="text-xs font-medium" htmlFor={mpFieldId(mode, "api-protocol")}>
+                API protocol
+              </label>
               <Select
                 value={form.apiProtocol}
                 onValueChange={(v) => setForm({ ...form, apiProtocol: v as ApiProtocol })}
               >
-                <SelectTrigger className="h-8 text-xs">
+                <SelectTrigger id={mpFieldId(mode, "api-protocol")} className="h-8 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -405,7 +429,10 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
           )}
 
           <div className="space-y-1.5">
-            <label htmlFor={mode === "edit" ? "edit-mp-endpoint" : "add-mp-endpoint"} className="text-xs font-medium">
+            <label
+              htmlFor={mode === "edit" ? "edit-mp-endpoint" : "add-mp-endpoint"}
+              className="text-xs font-medium"
+            >
               Endpoint
             </label>
             <Input
@@ -426,7 +453,10 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
           )}
 
           <div className="space-y-1.5">
-            <label htmlFor={mode === "edit" ? "edit-mp-key" : "add-mp-key"} className="text-xs font-medium">
+            <label
+              htmlFor={mode === "edit" ? "edit-mp-key" : "add-mp-key"}
+              className="text-xs font-medium"
+            >
               API key
             </label>
             <Input
@@ -439,12 +469,14 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">Thinking</label>
+            <label className="text-xs font-medium" htmlFor={mpFieldId(mode, "thinking")}>
+              Thinking
+            </label>
             <Select
               value={form.thinking}
               onValueChange={(v) => setForm({ ...form, thinking: v as FormState["thinking"] })}
             >
-              <SelectTrigger className="h-8 text-xs">
+              <SelectTrigger id={mpFieldId(mode, "thinking")} className="h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -458,9 +490,17 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">Models</label>
+            {/* A caption for the group below (a discover action plus a list of
+                checkboxes), not a label for one control - each checkbox carries
+                its own `<label>`, so a `<label>` here would name nothing. */}
+            <div className="text-xs font-medium">Models</div>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="ghost" onClick={() => void handleDiscover()} disabled={discovering}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void handleDiscover()}
+                disabled={discovering}
+              >
                 {discovering ? "Findingâ€¦" : "Find models"}
               </Button>
               {discoverError && <span className="text-xs text-destructive">{discoverError}</span>}
@@ -494,7 +534,11 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                   ))}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={() => mergeModels([...picked])} disabled={picked.size === 0}>
+                  <Button
+                    size="sm"
+                    onClick={() => mergeModels([...picked])}
+                    disabled={picked.size === 0}
+                  >
                     Add selected ({picked.size})
                   </Button>
                   <Button
@@ -515,7 +559,12 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                 value={manualModel}
                 onChange={(e) => setManualModel(e.target.value)}
               />
-              <Button size="sm" variant="ghost" onClick={handleAddManual} disabled={!manualModel.trim()}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleAddManual}
+                disabled={!manualModel.trim()}
+              >
                 Add
               </Button>
             </div>
@@ -527,7 +576,9 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                     key={m.id}
                     className={cn(
                       "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
-                      m.id === form.model ? "border-foreground/40 bg-foreground/10" : "border-border",
+                      m.id === form.model
+                        ? "border-foreground/40 bg-foreground/10"
+                        : "border-border",
                     )}
                   >
                     <button type="button" onClick={() => setForm({ ...form, model: m.id })}>
@@ -540,9 +591,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                       <Input
                         autoFocus
                         value={editingWindow.draft}
-                        onChange={(e) =>
-                          setEditingWindow({ id: m.id, draft: e.target.value })
-                        }
+                        onChange={(e) => setEditingWindow({ id: m.id, draft: e.target.value })}
                         onBlur={commitWindow}
                         onKeyDown={(e) => {
                           // Both keys belong to the IME while a candidate is
@@ -551,9 +600,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                           if (isPlainEnter(e)) commitWindow();
                           else if (isPlainEscape(e)) setEditingWindow(null);
                         }}
-                        placeholder={
-                          m.contextWindow ? String(m.contextWindow) : "tokens"
-                        }
+                        placeholder={m.contextWindow ? String(m.contextWindow) : "tokens"}
                         aria-label={`Context window for ${m.id}`}
                         className="h-5 w-20 px-1 text-[10px]"
                       />
@@ -566,11 +613,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                             draft: m.contextWindow ? String(m.contextWindow) : "",
                           })
                         }
-                        title={
-                          m.contextWindow
-                            ? "Edit context window"
-                            : "Set context window"
-                        }
+                        title={m.contextWindow ? "Edit context window" : "Set context window"}
                         className="text-[10px] text-muted-foreground hover:text-foreground"
                       >
                         {m.contextWindow ? formatContextWindow(m.contextWindow) : "set window"}
@@ -631,7 +674,15 @@ export function AddProviderDialog({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
-  return <ProviderDialog mode="add" provider={null} open={open} onOpenChange={onOpenChange} onSaved={onSaved} />;
+  return (
+    <ProviderDialog
+      mode="add"
+      provider={null}
+      open={open}
+      onOpenChange={onOpenChange}
+      onSaved={onSaved}
+    />
+  );
 }
 
 export function EditProviderDialog({
