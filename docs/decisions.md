@@ -4274,3 +4274,76 @@ from `scrollTop 271` to `0` and failed R2 with no product change involved. A
 **This evidence is preliminary: two consecutive runs were observed, which is a
 suggestion, not a flake-rate measurement.** Treat the step as a starting point,
 not a settled value.
+
+---
+
+## 2026-10-11 — Biome as a pinned dependency, and a lint gate that can fail
+
+**Context.** The lint step could not fail. `biome.json` set
+`linter.rules.preset: "none"`, enabled exactly one rule at `"warn"`, disabled the
+formatter, and scoped `files.includes` to `src/**`, `web/src/**` and `tests/**` —
+so `scripts/**` was never linted at all. `biome check .` exited **0** while
+reporting 30 warnings. The CI `Lint` step therefore passed having checked nothing,
+and nothing in the repository could have told you, because the gate was green.
+
+**Decision 1 — pin the tool as an exact devDependency, not a `bunx` specifier.**
+An intermediate fix on this branch pinned the version inside the `bunx` specifier
+(`bunx --bun @biomejs/biome@2.5.14`). That was rejected. It fixes which version
+runs, but the tool is still resolved from the network at lint time, which is the
+failure mode being repaired: a fresh CI runner still downloads it, and an offline
+or partially-cached runner differs from a developer machine. `@biomejs/biome` is now
+`"2.5.15"` — exact, no range — in `devDependencies`, with the eight platform
+packages and their integrity hashes in `bun.lock`, and the scripts invoke the local
+binary. `bun install --frozen-lockfile` reproduces the gate exactly.
+
+**Decision 2 — the config became `biome.jsonc`.** Biome rejects comments in the
+`biome.json` form. Every non-obvious decision here needs its reason recorded next
+to it — which rules are off, and why the rule is wrong for this repository — and
+that is not expressible in strict JSON. Keeping the rationale in the config rather
+than only in this file is what stops the next person from re-enabling a rule that
+cannot work.
+
+**Decision 3 — recommended preset as the baseline, with a named `off` list.** The
+bar for switching a rule off is that it produces false positives or fights a
+deliberate convention here. "We do not like it" is not a bar. Two are worth naming:
+
+- `noNonNullAssertion` (610 sites) — a non-null assertion is a claim made *after*
+  TypeScript proved the value is non-null. `strictNullChecks` is already on and
+  already proves every one of those sites, so the lint adds no signal, and removing
+  them is a large risky refactor that catches nothing.
+- `noExplicitAny` (161 sites) — this flags the *annotation*, not a defect. An
+  explicit `any` is a deliberate, visible decision, and it is already visible in
+  review. What actually catches accidents is *implicit* any, which `noImplicitAny`
+  and Biome's `noImplicitAnyLet` both cover.
+
+The genuinely broken ARIA usage was **fixed by changing the role**, not by silencing
+a rule: the OpenCode chips used `role="list"` with `<button role="listitem">`, which
+strips the button's semantics from the accessibility tree. They are now
+`listbox`/`option` with `aria-selected`.
+
+**Decision 4 — formatting is enabled, and its run is one commit.** 738 of 826 files
+changed under the measured settings (`lineWidth: 100` was the smallest of the four
+widths tried: 80 → 780, 100 → 740, 120 → 772, 140 → 782). Every other formatter
+option was matched to the style already in use so it contributes no diff of its own.
+
+The reformat is *not* whitespace-only, and is not claimed to be: Biome also moves a
+leading `|` in a union type and trailing commas. The evidence that it changed no
+behaviour is the full typecheck (four projects, zero errors) plus the whole suite,
+not a textual diff. Four source-text guards had encoded the old layout and were
+retargeted at the invariant; each was checked by making the defect and confirming the
+guard still fails.
+
+**Alternatives considered.**
+
+- *Disable the whole `a11y` group.* 43 of the 45 a11y findings were real defects in
+  a UI-heavy product, so this was rejected in favour of fixing them. One rule,
+  `useSemanticElements`, was disabled: it demands `<fieldset>`/`<ul>` for
+  `<div role="group|listbox|radiogroup">`, which the WAI-ARIA Authoring Practices
+  prescribe as-is. Following it would have made the accessibility tree *less*
+  correct.
+- *Leave `lint` warning-only.* Rejected. That is the configuration that made the
+  gate inert; `--error-on-warnings` exists so the choice cannot be made quietly.
+- *A `.gitattributes` LF normalisation.* Not taken. The formatter is set to
+  `lineEnding: "auto"`, which agrees with whatever the platform checkout produced and
+  therefore cannot disagree between a Windows developer and a CI runner. A blanket
+  `eol=lf` would have renormalised the working tree for no gate benefit.

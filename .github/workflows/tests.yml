@@ -108,8 +108,19 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Both run the PINNED `@biomejs/biome` from node_modules (installed above
+      # by `bun install --frozen-lockfile`), not a `bunx` download, so a fresh
+      # runner resolves the same version this branch was written against.
+      #
+      # `--error-on-warnings` lives inside the `lint` script: a rule that reports
+      # a genuine defect must not be able to pass CI by being downgraded to a
+      # warning. `format:check` is its own step so a formatting failure is
+      # attributable alone, the way the DOM suite is.
       - name: Lint
         run: bun run lint
+
+      - name: Format check
+        run: bun run format:check
 
       # `bun run test`, NOT bare `bun test`. The bare form double-collects the
       # suites and cascades "Database has closed" across the shared test

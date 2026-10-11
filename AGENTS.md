@@ -221,10 +221,14 @@ Typecheck → build → start → real AI request works → streaming works → 
 
 ## Documentation
 
-Maintain `docs/`: `architecture.md`, `development-rules.md`, `ai-integration.md`,
-`provider-system.md`, `state-management.md`, `security.md`, `mcp.md`, `roadmap.md`,
-`decisions.md`, `performance.md`. Record architectural decisions in
-`docs/decisions.md`.
+Maintain `docs/`: `architecture.md`, `development-rules.md`, `engineering-quality.md`,
+`ai-integration.md`, `provider-system.md`, `state-management.md`, `security.md`,
+`mcp.md`, `roadmap.md`, `decisions.md`, `performance.md`. Record architectural
+decisions in `docs/decisions.md`.
+
+`docs/engineering-quality.md` defines the mandatory local and CI checks and is the
+executable form of the rules in §6b. Keep it accurate: if a gate changes, that file
+changes in the same commit.
 
 `docs/performance.md` is the performance guideline: how to build software that stays
 fast. Every rule is marked **Always** (correct by default, follow it while writing
@@ -354,6 +358,58 @@ sites, which is worse than the problem it claims to solve.
 - If the diff adds more "fix this later" notes than it removes, it's not done.
 - Run the full test suite. Report the actual numbers, not "should be fine."
 
+### 6b. Quality gates — the enforceable rules
+
+**`docs/engineering-quality.md` is the executable form of this section.** Read it
+before starting work; it lists every mandatory check, what each one catches, and how
+each is enforced in CI. Run them all with `bun run verify`.
+
+These are gates, not recommendations. Each one is enforced by a CI step, and
+several of them are traps that have already been fallen into in this repository:
+
+1. **No feature implementation until the required quality gates pass.** A red gate
+   is the next piece of work, not a follow-up.
+2. **Read-only investigation before modifying unfamiliar or concurrently-changed
+   work.** `git status`, `git log`, and the file itself. Another agent's in-flight
+   changes are not yours to overwrite, and formatting a file mid-edit destroys the
+   edit.
+3. **A reproducible defect or a clear requirement precedes a production change.**
+4. **Tests cover meaningful behaviour**, including failure paths and how features
+   interact — not just the happy path.
+5. **Root-cause fixes.** No suppression, no arbitrary retries, no weakened
+   assertion standing in for a fix. If the honest answer is "the rule is wrong
+   here", the suppression must state why.
+6. **Never delete a test to make a check pass.** Deletion is only correct with
+   evidence that the test is obsolete, duplicated, invalid, or superseded, and that
+   evidence goes in the commit message.
+7. **Never weaken TypeScript or lint settings to get a green check.** No `any`, no
+   `as unknown as`, no `@ts-ignore`/`@ts-nocheck`, no relaxing `strict`, no adding a
+   file to an `exclude` list, and no downgrading a lint rule to `warn`. `bun run
+   lint` runs with `--error-on-warnings` precisely so this cannot be done quietly.
+8. **A gate must be able to fail.** A check whose reported result and exit code
+   disagree is broken, not noisy. This is not hypothetical: `biome check` once
+   exited 0 while reporting 30 warnings, so the CI lint step passed having checked
+   nothing.
+9. **A test that passes intermittently hides a real race.** Find the race; do not
+   retune the timing. One such test is currently known and documented in
+   `docs/development-rules.md` §8.
+10. **Review the full diff** for unintended changes and regressions.
+11. **Report exact commands and real results**, including every skip and every
+    unresolved failure.
+12. **Compilation, or a passing test count, is not completion.**
+
+Two further traps, both specific to this repository's tooling:
+
+- **A suppression comment is anchored to the expression on the next line.** If a
+  formatter re-wraps that expression, the suppression silently detaches and the rule
+  starts reporting again. Use a range suppression (`biome-ignore-start` /
+  `-end`) whenever the formatter can move the line.
+- **Source-text guards must assert the invariant, not the layout.** Many tests here
+  match the text of a source file. A pattern that also pins the line wrapping will
+  fail the next time the formatter runs, for a contract that never changed. When you
+  change such a guard, make the defect, confirm the test fails, then revert — a
+  guard that cannot fail is worse than none.
+
 ### Definition of DONE (binding on every agent + the planner)
 
 A phase is complete only when ALL hold:
@@ -394,10 +450,3 @@ extending it. Never again:
   step, anchored to the reference app ("same as CodeG's new-chat tab, except
   an Engine row on top") — file lists come last. If it can't be described as
   visible behavior, it isn't specified clearly enough.
-
-## Agent division of labor (applies alongside the standards above)
-
-- Any agent can implement features, author test files, and run the test suite.
-- The coding agent's "done" report still uses the Output format above, with
-  the tests section stating the actual suite numbers where applicable, and its
-  verification is `bun run typecheck` → `bun run build` with actual output.

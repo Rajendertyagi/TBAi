@@ -116,3 +116,15 @@ docs/tool-ui-atlas.html
 # Debug screenshots written by the E2E suite belong in Playwright's artifact dir
 # (`tests/.artifacts/playwright`, covered above). The old `web/e2e/*.png` rule is
 # gone: that directory no longer exists — the suite moved to `tests/e2e/`.
+
+# A screenshot of the Logs settings surface, taken during visual QA and
+# committed by an emergency `git add -A` rather than by a decision. Nothing in
+# the repository references it, and the rule at `docs/tool-ui-atlas/` already
+# records this repo's position: a screenshot is evidence for a decision already
+# made, and once the decision is in the code and its tests the pixels are dead
+# weight in every clone (same reasoning as ab8b380 for the E2E PNGs).
+#
+# The ignore rule is REQUIRED, not decorative: `.gitignore` cannot suppress an
+# already-tracked path, so without it the next bulk commit re-adds the file.
+# Anchored to the repo root so no nested directory of that name is caught.
+/logs-viewer.png

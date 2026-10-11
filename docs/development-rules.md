@@ -105,15 +105,25 @@ Before declaring a feature complete: typecheck, build, start the app, verify a r
 AI request works, verify streaming works, verify errors are handled, and verify
 provider switching works when applicable.
 
-- The suite has a documented baseline of **259 unique failing tests** from
-  cross-file SQLite contention (all test files in a process share one database via
-  `tests/setup.ts`). A failure in-suite is therefore not evidence of a regression.
-  **Verify a suspected regression by running the single file in isolation** before
-  believing or dismissing it. The known cause is `tests/unit/db.test.ts` opening
-  that shared database three times concurrently.
-- Because the gate cannot currently fail for the right reason, do not add a CI
-  performance or size gate until the baseline is fixed — it inherits the same
-  noise, and a gate that cries wolf gets disabled. See `performance.md`.
+The mandatory gates and what each one catches are in **`docs/engineering-quality.md`**.
+Run them all with `bun run verify`.
+
+- The suite is **green**: 3975 pass / 43 skip / 0 fail across 4018 tests
+  (measured 2026-10-11 at `quality/foundation-2026-10-11`). An earlier note here
+  claimed a baseline of "259 unique failing tests" from cross-file SQLite
+  contention; that is no longer true and was removed rather than left to mislead.
+- **A failure in-suite is still not automatically a regression.** One test is
+  timing-sensitive under full-suite load and fails intermittently on its own:
+  `MCP lifecycle (Phase 4) > disconnectAll on a mid-connect connection` in
+  `tests/integration/mcp/mcp-v2.test.ts`. Its cause is real — `connect()` in
+  `src/services/mcp/manager.ts` promotes a connection to `"connected"` without
+  checking it is still the current, still-connecting entry, so an interrupted
+  connect resurrects a connection that `disconnectAll` just closed. **Verify a
+  suspected regression by running the single file in isolation** before believing
+  or dismissing it.
+- Because the gate can currently fail for the wrong reason (above), do not add a CI
+  performance or size gate until that is fixed — it inherits the same noise, and a
+  gate that cries wolf gets disabled. See `performance.md`.
 
 ## 9. Performance
 
