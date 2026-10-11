@@ -97,6 +97,12 @@ const _SSE_PROBE_TIMEOUT_MS = 3000;
 export class McpManager {
   private static instance: McpManager;
   private connections = new Map<string, McpConnection>();
+  /**
+   * Identity token for the latest connect attempt for each server. Disconnect
+   * invalidates it before awaiting transport shutdown, so late continuations
+   * cannot resurrect a closed connection or schedule a retry.
+   */
+  private connectionAttemptTokens = new Map<string, symbol>();
   private initialized = false;
 
   static getInstance(): McpManager {
@@ -218,9 +224,32 @@ export class McpManager {
 
   // ---- Connection lifecycle ----
 
+  private beginConnectionAttempt(id: string): symbol {
+    const token = Symbol(`mcp-connect:${id}`);
+    this.connectionAttemptTokens.set(id, token);
+    return token;
+  }
+
+  private isCurrentConnectionAttempt(
+    id: string,
+    token: symbol,
+    conn?: McpConnection,
+  ): boolean {
+    return (
+      this.connectionAttemptTokens.get(id) === token &&
+      (conn === undefined || this.connections.get(id) === conn)
+    );
+  }
+
   async connect(id: string): Promise<void> {
+    const token = this.beginConnectionAttempt(id);
     const loaded = readStoredRow(id);
-    if (!loaded) return;
+    if (!loaded) {
+      if (this.connectionAttemptTokens.get(id) === token) {
+        this.connectionAttemptTokens.delete(id);
+      }
+      return;
+    }
     const { row, authToken } = loaded;
     const config = storedRowToConfig(row);
 
@@ -238,6 +267,8 @@ export class McpManager {
       } catch {
         /* ignore */
       }
+      // A disconnect or newer connect may have won while close was pending.
+      if (!this.isCurrentConnectionAttempt(id, token)) return;
     }
 
     const client = new Client(
@@ -262,6 +293,8 @@ export class McpManager {
       reconnectAttempts: prior?.reconnectAttempts ?? 0,
     };
     this.connections.set(id, conn);
+    const isCurrentConnecting = () =>
+      this.isCurrentConnectionAttempt(id, token, conn) && conn.status === "connecting";
 
     try {
       // SSE-only diagnostic probe: a short read-only GET against the endpoint
@@ -269,6 +302,14 @@ export class McpManager {
       // its EventSource. The probe is diagnostic, never the transport itself.
       if (config.transport === "sse" && config.url) {
         const probe = await probeSseEndpoint(config.url, buildHeaders(config, authToken));
+        if (!isCurrentConnecting()) {
+          try {
+            await client.close();
+          } catch {
+            /* ignore stale-client cleanup failures */
+          }
+          return;
+        }
         const reason = classifySseFailure(probe, undefined, authToken !== undefined);
         if (
           probe.kind === "unreachable" ||
@@ -287,6 +328,16 @@ export class McpManager {
       this.registerRequestHandlers(id);
 
       await client.connect(transport);
+      // connect() may settle after disconnect() or a newer attempt. Only the
+      // current attempt may publish connected state or begin discovery.
+      if (!isCurrentConnecting()) {
+        try {
+          await client.close();
+        } catch {
+          /* ignore stale-client cleanup failures */
+        }
+        return;
+      }
 
       conn.status = "connected";
       conn.error = undefined;
@@ -305,6 +356,12 @@ export class McpManager {
       );
 
       await this.discoverCapabilities(id);
+      if (
+        !this.isCurrentConnectionAttempt(id, token, conn) ||
+        conn.status !== "connected"
+      ) {
+        return;
+      }
       logger.info("mcp", "mcp.operation", {
         op: "connect",
         outcome: "ok",
@@ -313,6 +370,20 @@ export class McpManager {
         message: `tools=${conn.tools.length} resources=${conn.resources.length} prompts=${conn.prompts.length} era=${conn.protocolEra ?? "unknown"}`,
       });
     } catch (err) {
+      // A failed in-flight connect can settle after disconnect() closed it.
+      // Stale attempts must not overwrite "disconnected" or schedule retries.
+      if (
+        !this.isCurrentConnectionAttempt(id, token, conn) ||
+        conn.status === "disconnected"
+      ) {
+        try {
+          await client.close();
+        } catch {
+          /* ignore stale-client cleanup failures */
+        }
+        return;
+      }
+
       const message = err instanceof Error ? err.message : String(err);
       // SSE endpoints get a post-hoc classification too: the probe was
       // inconclusive, so map the SDK error shape onto a failure reason.
@@ -394,6 +465,9 @@ export class McpManager {
   }
 
   async disconnect(id: string): Promise<void> {
+    // Invalidate any pending connect before the first await. Its eventual
+    // success or failure is no longer allowed to mutate lifecycle state.
+    this.connectionAttemptTokens.delete(id);
     const conn = this.connections.get(id);
     if (!conn) return;
     if (conn.reconnectTimer) {

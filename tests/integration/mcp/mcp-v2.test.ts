@@ -388,36 +388,71 @@ async function expectReconnectsBounded(
 }
 
 describe("MCP lifecycle (Phase 4)", () => {
-  it("close/reconnect race: disconnectAll wins, no resurrection timer (connecting → error)", async () => {
+  it("disconnectAll wins over a pending HTTP connect; late failure cannot resurrect it", async () => {
     const cutoff = logger.lastSeq;
-    const good = await createStdioFixture("p4-race-good");
-    const badId = badCommandConfig("p4-race-bad");
-    await mcpManager.connect(badId);
-    for (let i = 0; i < 25; i++) {
-      const st = statusOf(badId);
-      if (st === "connecting" || st === "error" || st === "disconnected") break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    // Shut down immediately mid-connect/error: whichever state the failing
-    // server is in (connecting, error, or a scheduled timer), disconnectAll
-    // must settle it and clear any reconnect timer.
-    await mcpManager.disconnectAll();
-    await waitForStatus(badId, "disconnected");
-    expect(statusOf(good)).toBe("disconnected");
-    // Past the 5s reconnect delay: the cleared timer did NOT fire — no
-    // resurrection and no reconnect log line for the bad server.
-    await new Promise((r) => setTimeout(r, 6000));
-    expect(statusOf(badId)).toBe("disconnected");
-    expect(statusOf(good)).toBe("disconnected");
-    expect(
-      logger
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    let releaseResponse!: () => void;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        if (new URL(request.url).pathname !== "/mcp") {
+          return new Response("not found", { status: 404 });
+        }
+        markRequestStarted();
+        await responseGate;
+        return new Response("connect intentionally interrupted", { status: 503 });
+      },
+    });
+    const created = mcpManager.createConfig({
+      name: "p4-race-pending-http",
+      transport: "http",
+      url: `http://127.0.0.1:${server.port}/mcp`,
+      enabled: true,
+      autoConnect: false,
+    });
+    createdIds.push(created.id);
+
+    const connectAttempt = mcpManager.connect(created.id);
+    try {
+      const didStart = await Promise.race([
+        requestStarted.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+      ]);
+      expect(didStart, "HTTP initialize request should be pending before disconnect").toBe(true);
+      expect(statusOf(created.id)).toBe("connecting");
+
+      // Calling disconnectAll synchronously invalidates the in-flight attempt
+      // before any transport-close await. Release the request immediately after
+      // starting shutdown, so either a late rejection or late resolution is
+      // exercised without depending on scheduler timing.
+      const disconnecting = mcpManager.disconnectAll();
+      releaseResponse();
+      await disconnecting;
+      await connectAttempt;
+
+      await new Promise((r) => setTimeout(r, RECONNECT_DELAY_MS + 1000));
+      expect(statusOf(created.id)).toBe("disconnected");
+      const reconnects = logger
         .getRecentEntries(cutoff)
         .filter(
           (e) =>
-            e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "p4-race-bad",
-        ).length,
-    ).toBe(0);
-  }, 60000);
+            e.event === "mcp.operation" &&
+            e.op === "reconnect" &&
+            e.mcpServer === "p4-race-pending-http",
+        );
+      expect(reconnects).toHaveLength(0);
+    } finally {
+      releaseResponse();
+      await Promise.allSettled([connectAttempt, mcpManager.disconnect(created.id)]);
+      server.stop(true);
+    }
+  }, 20000);
 
   it("error state: disconnectAll covers connecting/error, no reconnect timer fires afterward", async () => {
     const good = await createStdioFixture("p4-err-good");
