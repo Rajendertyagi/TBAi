@@ -40,25 +40,32 @@ async function seedConversation(request: APIRequestContext): Promise<string> {
   });
   const { id } = (await created.json()) as { id: string };
 
-  for (let batch = 0; batch < SEEDED_MESSAGES; batch += 10) {
-    await Promise.all(
-      Array.from({ length: Math.min(10, SEEDED_MESSAGES - batch) }, (_, offset) => {
-        const index = batch + offset;
-        const role = index % 2 === 0 ? "user" : "assistant";
-        return request.post(`/api/conversations/${id}/messages`, {
-          data: {
-            message: storedMessage(
-              `seed-${index}`,
-              index === 0 ? null : `seed-${index - 1}`,
-              `seeded-body-${index}`,
-              role,
-            ),
-          },
-        });
-      }),
-    );
+  try {
+    // This fixture is a single parent-linked chain. The storage layer allocates
+    // order_seq from MAX(order_seq) + 1 on each insert, while history chooses
+    // the selected tip by that persisted ordering. Parallel POSTs can therefore
+    // commit in a different order from their parent links and make a middle
+    // message look like the tip. Serialize the writes so the fixture models a
+    // real append-only conversation deterministically.
+    for (let index = 0; index < SEEDED_MESSAGES; index += 1) {
+      const role = index % 2 === 0 ? "user" : "assistant";
+      const response = await request.post(`/api/conversations/${id}/messages`, {
+        data: {
+          message: storedMessage(
+            `seed-${index}`,
+            index === 0 ? null : `seed-${index - 1}`,
+            `seeded-body-${index}`,
+            role,
+          ),
+        },
+      });
+      expect(response.ok(), `seeding message ${index} should succeed`).toBe(true);
+    }
+    return id;
+  } catch (error) {
+    await request.delete(`/api/conversations/${id}`).catch(() => undefined);
+    throw error;
   }
-  return id;
 }
 
 const sse = (chunk: unknown) => `data: ${JSON.stringify(chunk)}\n\n`;
