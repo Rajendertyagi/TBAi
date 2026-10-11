@@ -14,10 +14,12 @@
     "build:web:profile": "cd web && TBAI_PROFILE_BUILD=1 bun run build",
     "profile:web": "bun run scripts/profile-web.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tests/tsconfig.backend.json && tsc --noEmit -p tests/tsconfig.web.json && cd web && tsc --noEmit",
-    "lint": "bunx --bun @biomejs/biome@2.5.14 check .",
-    "format": "bunx --bun @biomejs/biome@2.5.14 format --write .",
+    "lint": "biome ci --error-on-warnings --max-diagnostics=none .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
     "security": "semgrep scan --config auto",
-    "verify": "bun run typecheck && bun run lint && bun test && bun run build",
+    "verify": "bun run typecheck && bun run lint && bun run format:check && bun test && bun run build",
     "verify:full": "bun run verify && bun run security",
     "test": "bun test --isolate ./tests/unit ./tests/integration --path-ignore-patterns \"**/shutdown-lifecycle.test.ts\" --timeout=30000",
     "test:locations": "bun scripts/check-test-location.ts",
@@ -27,6 +29,7 @@
     "gen:icon": "bun run scripts/gen-icon.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@happy-dom/global-registrator": "^20.14.5",
     "@modelcontextprotocol/server": "2.0.0",
     "@playwright/test": "^1.63.0",
