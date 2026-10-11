@@ -1,7 +1,4 @@
-import type {
-  AppendMessage,
-  CreateAppendMessage,
-} from "@assistant-ui/react";
+import type { AppendMessage, CreateAppendMessage } from "@assistant-ui/react";
 import type {
   FormInfo,
   PermissionRequest,
@@ -25,23 +22,10 @@ import {
 } from "@/features/permissions/permissionPolicy";
 import { getAutoPolicy } from "./sessionAutoPolicy";
 import { loadV2History, projectV2History } from "./v2History";
-import {
-  createInitialV2ThreadState,
-  mapEventError,
-  reduceV2ThreadState,
-} from "./v2Events";
-import {
-  toV2PromptInput,
-} from "./v2MessageProjection";
-import {
-  projectV2Permission,
-  type V2PermissionView,
-} from "./v2Permissions";
-import type {
-  OpenCodeV2Client,
-  OpenCodeV2Generation,
-  V2ConnectionSignals,
-} from "./v2Client";
+import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
+import { toV2PromptInput } from "./v2MessageProjection";
+import { projectV2Permission, type V2PermissionView } from "./v2Permissions";
+import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
 import type {
   V2DesiredSelection,
   V2HistorySnapshot,
@@ -116,7 +100,10 @@ export function createV2MessageId(): string {
 
 /** Copies a preallocated message id into assistant-ui's append metadata. */
 export function attachV2PromptMessageId(message: string, messageId: string): string;
-export function attachV2PromptMessageId<T extends CreateAppendMessage>(message: T, messageId: string): T;
+export function attachV2PromptMessageId<T extends CreateAppendMessage>(
+  message: T,
+  messageId: string,
+): T;
 export function attachV2PromptMessageId(
   message: CreateAppendMessage,
   messageId: string,
@@ -159,20 +146,37 @@ function safeError(error: unknown, fallback: string): V2SafeError {
         status: candidate.status,
       };
     }
-    if (typeof candidate.message === "string") return { kind: "network", message: candidate.message };
+    if (typeof candidate.message === "string")
+      return { kind: "network", message: candidate.message };
   }
   return { kind: "unknown", message: fallback };
 }
 
 function isDefinitiveFailure(error: unknown): boolean {
-  const status = error !== null && typeof error === "object" && "status" in error && typeof error.status === "number"
-    ? error.status
-    : undefined;
-  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 409 && status !== 425 && status !== 429;
+  const status =
+    error !== null &&
+    typeof error === "object" &&
+    "status" in error &&
+    typeof error.status === "number"
+      ? error.status
+      : undefined;
+  return (
+    status !== undefined &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 409 &&
+    status !== 425 &&
+    status !== 429
+  );
 }
 
 function modelChanged(current: V2ModelSelection | null, desired: V2ModelSelection | null): boolean {
-  return current?.providerID !== desired?.providerID || current?.modelID !== desired?.modelID || current?.variant !== desired?.variant;
+  return (
+    current?.providerID !== desired?.providerID ||
+    current?.modelID !== desired?.modelID ||
+    current?.variant !== desired?.variant
+  );
 }
 
 function agentChanged(current: string | null, desired: string | null): boolean {
@@ -180,7 +184,13 @@ function agentChanged(current: string | null, desired: string | null): boolean {
 }
 
 function isAssistantMessageEvent(event: V2Event): boolean {
-  return event.type.startsWith("session.text.") || event.type.startsWith("session.reasoning.") || event.type.startsWith("session.tool.") || event.type.startsWith("session.step.") || event.type === "session.retry.scheduled";
+  return (
+    event.type.startsWith("session.text.") ||
+    event.type.startsWith("session.reasoning.") ||
+    event.type.startsWith("session.tool.") ||
+    event.type.startsWith("session.step.") ||
+    event.type === "session.retry.scheduled"
+  );
 }
 
 function inboxRecordFromUser(item: SessionInboxUser): V2InboxRecord {
@@ -192,21 +202,37 @@ function inboxRecordFromUser(item: SessionInboxUser): V2InboxRecord {
   };
 }
 
-function optimisticMessage(message: AppendMessage, messageId: string): V2ThreadState["messages"][string] {
+function optimisticMessage(
+  message: AppendMessage,
+  messageId: string,
+): V2ThreadState["messages"][string] {
   const payload = toV2PromptInput(message);
   return {
     id: messageId,
     parentId: message.parentId,
     role: "user",
     createdAt: Date.now(),
-    parts: payload.text.length > 0
-      ? [{ kind: "text", id: `text:${messageId}:0`, order: 0, value: payload.text, status: "complete" }]
-      : [],
+    parts:
+      payload.text.length > 0
+        ? [
+            {
+              kind: "text",
+              id: `text:${messageId}:0`,
+              order: 0,
+              value: payload.text,
+              status: "complete",
+            },
+          ]
+        : [],
     source: null,
   };
 }
 
-function modelInput(model: V2ModelSelection): { readonly id: string; readonly providerID: string; readonly variant?: string } {
+function modelInput(model: V2ModelSelection): {
+  readonly id: string;
+  readonly providerID: string;
+  readonly variant?: string;
+} {
   return {
     id: model.modelID,
     providerID: model.providerID,
@@ -253,7 +279,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     notify();
   }
 
-  function rejectAdmission(messageId: string, result: V2PromptAdmissionResult, submission: V2PromptSubmission | null = null): void {
+  function rejectAdmission(
+    messageId: string,
+    result: V2PromptAdmissionResult,
+    submission: V2PromptSubmission | null = null,
+  ): void {
     const record = admissions.get(messageId);
     if (!record || (record.result !== null && record.result !== "ambiguous")) return;
     record.result = result;
@@ -336,13 +366,14 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       type: "user",
       delivery: item.delivery,
     };
-    const activeMessageId = state.execution.type === "submitting" || state.execution.type === "reconciling"
-      ? state.execution.userMessageId
-      : state.execution.type === "admitted" && state.execution.inboxId === event.data.inboxID
+    const activeMessageId =
+      state.execution.type === "submitting" || state.execution.type === "reconciling"
         ? state.execution.userMessageId
-        : state.execution.type === "cancelling"
+        : state.execution.type === "admitted" && state.execution.inboxId === event.data.inboxID
           ? state.execution.userMessageId
-          : undefined;
+          : state.execution.type === "cancelling"
+            ? state.execution.userMessageId
+            : undefined;
     dispatch({ type: "inbox_recorded", record });
     if (typeof activeMessageId === "string") {
       dispatch({ type: "prompt_admitted", userMessageId: activeMessageId, inbox: record });
@@ -388,7 +419,9 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
         event.data.action,
       );
     } catch (error) {
-      logger.warn("opencode", "runtime.auto_approve_policy_unreadable", { errorType: error instanceof Error ? error.name : typeof error });
+      logger.warn("opencode", "runtime.auto_approve_policy_unreadable", {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
       return;
     }
     if (!eligible) return;
@@ -398,7 +431,9 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     autoApproveAttempted.add(event.data.id);
     void replyToPermission(event.data.id, AUTO_RESPONSE).catch((error: unknown) => {
       if (disposed) return;
-      logger.warn("opencode", "runtime.auto_approve_reply_failed", { errorType: error instanceof Error ? error.name : typeof error });
+      logger.warn("opencode", "runtime.auto_approve_reply_failed", {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
     });
   }
 
@@ -408,7 +443,9 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       if (isHydrating) {
         eventBuffer.push({ ordinal: eventOrdinal, event });
         if (eventBuffer.length > OPENCODE_V2_EVENT_BUFFER_LIMIT) {
-          eventBuffer = eventBuffer.filter((entry) => !isAssistantMessageEvent(entry.event)).slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);
+          eventBuffer = eventBuffer
+            .filter((entry) => !isAssistantMessageEvent(entry.event))
+            .slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);
         }
         return;
       }
@@ -443,7 +480,10 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     connectionController?.abort();
     if (failedGeneration) void failedGeneration.events.close();
     loadPromise = null;
-    dispatch({ type: "connection_changed", connection: { type: "reconnecting", attempt: reconnectAttempt + 1 } });
+    dispatch({
+      type: "connection_changed",
+      connection: { type: "reconnecting", attempt: reconnectAttempt + 1 },
+    });
     dispatch({ type: "load_failed", error });
     rejectReady?.(new V2ControllerError(error));
     rejectReady = null;
@@ -481,27 +521,46 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
    * permissions endpoint that is briefly unavailable must not also cost the
    * reader their forms.
    */
-  async function loadAuxiliary(currentGeneration: OpenCodeV2Generation): Promise<V2AuxiliarySnapshot> {
+  async function loadAuxiliary(
+    currentGeneration: OpenCodeV2Generation,
+  ): Promise<V2AuxiliarySnapshot> {
     const requestOrdinal = ordinal;
     const [inbox, permissions, forms] = await Promise.all([
-      currentGeneration.operations.inboxList({ sessionID: client.sessionId }).catch((cause: unknown) => {
-        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "inbox", errorType: cause instanceof Error ? cause.name : typeof cause });
-        return [] as SessionInboxInfo[];
-      }),
-      currentGeneration.operations.permissionList({ sessionID: client.sessionId }).catch((cause: unknown) => {
-        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "permission", errorType: cause instanceof Error ? cause.name : typeof cause });
-        return [] as PermissionRequest[];
-      }),
-      currentGeneration.operations.formList({ sessionID: client.sessionId }).catch((cause: unknown) => {
-        logger.warn("opencode", "runtime.auxiliary_hydration_failed", { kind: "form", errorType: cause instanceof Error ? cause.name : typeof cause });
-        return [] as FormInfo[];
-      }),
+      currentGeneration.operations
+        .inboxList({ sessionID: client.sessionId })
+        .catch((cause: unknown) => {
+          logger.warn("opencode", "runtime.auxiliary_hydration_failed", {
+            kind: "inbox",
+            errorType: cause instanceof Error ? cause.name : typeof cause,
+          });
+          return [] as SessionInboxInfo[];
+        }),
+      currentGeneration.operations
+        .permissionList({ sessionID: client.sessionId })
+        .catch((cause: unknown) => {
+          logger.warn("opencode", "runtime.auxiliary_hydration_failed", {
+            kind: "permission",
+            errorType: cause instanceof Error ? cause.name : typeof cause,
+          });
+          return [] as PermissionRequest[];
+        }),
+      currentGeneration.operations
+        .formList({ sessionID: client.sessionId })
+        .catch((cause: unknown) => {
+          logger.warn("opencode", "runtime.auxiliary_hydration_failed", {
+            kind: "form",
+            errorType: cause instanceof Error ? cause.name : typeof cause,
+          });
+          return [] as FormInfo[];
+        }),
     ]);
     return {
       requestOrdinal,
-      inbox: inbox.map((item) => (item.type === "user"
-        ? inboxRecordFromUser(item)
-        : { id: item.id, sessionId: item.sessionID, type: item.type, delivery: item.delivery })),
+      inbox: inbox.map((item) =>
+        item.type === "user"
+          ? inboxRecordFromUser(item)
+          : { id: item.id, sessionId: item.sessionID, type: item.type, delivery: item.delivery },
+      ),
       permissions,
       forms,
     };
@@ -517,7 +576,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
    * list still returns.
    */
   function applyAuxiliary(snapshot: V2AuxiliarySnapshot): void {
-    dispatch({ type: "inbox_hydrated", records: snapshot.inbox, requestOrdinal: snapshot.requestOrdinal });
+    dispatch({
+      type: "inbox_hydrated",
+      records: snapshot.inbox,
+      requestOrdinal: snapshot.requestOrdinal,
+    });
     dispatch({
       type: "permissions_hydrated",
       requests: snapshot.permissions.filter((request) => !answeredPermissions.has(request.id)),
@@ -530,10 +593,16 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     });
   }
 
-  async function hydrate(currentGeneration: OpenCodeV2Generation, signals: V2ConnectionSignals): Promise<void> {
+  async function hydrate(
+    currentGeneration: OpenCodeV2Generation,
+    signals: V2ConnectionSignals,
+  ): Promise<void> {
     const serverInfo = await currentGeneration.operations.serverInfo();
     if (disposed || generation !== currentGeneration) return;
-    dispatch({ type: "connection_changed", connection: { type: "connected", serverVersion: serverInfo.version } });
+    dispatch({
+      type: "connection_changed",
+      connection: { type: "connected", serverVersion: serverInfo.version },
+    });
     dispatch({ type: "load_started" });
     const session = await currentGeneration.operations.sessionGet({ sessionID: client.sessionId });
     if (disposed || generation !== currentGeneration) return;
@@ -541,18 +610,37 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     if (session.revert !== undefined) {
       dispatch({ type: "revert_recovery_clearing", userMessageId: session.revert.messageID });
       await currentGeneration.operations.revertClear({ sessionID: client.sessionId });
-      const verified = await currentGeneration.operations.sessionGet({ sessionID: client.sessionId });
-      if (verified.revert !== undefined) throw new V2ControllerError({ kind: "recovery-required", message: "OpenCode V2 staged revert could not be cleared" });
+      const verified = await currentGeneration.operations.sessionGet({
+        sessionID: client.sessionId,
+      });
+      if (verified.revert !== undefined)
+        throw new V2ControllerError({
+          kind: "recovery-required",
+          message: "OpenCode V2 staged revert could not be cleared",
+        });
       dispatch({ type: "revert_recovery_cleared" });
     }
     const historyRequestOrdinal = ordinal;
-    const snapshot = await loadV2History(currentGeneration.history, { signal: signals.connectionSignal });
+    const snapshot = await loadV2History(currentGeneration.history, {
+      signal: signals.connectionSignal,
+    });
     if (disposed || generation !== currentGeneration) return;
     lastHistorySnapshot = snapshot;
     const projection = projectV2History(snapshot, currentPermissions());
-    dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
+    dispatch({
+      type: "history_loaded",
+      messages: projection.messages,
+      messageOrder: projection.messageOrder,
+      pages: projection.pages,
+    });
     const buffered = eventBuffer.filter((entry) => entry.ordinal > historyRequestOrdinal);
-    for (const entry of buffered) dispatch({ type: "v2_event", event: entry.event, ordinal: entry.ordinal, mode: "observe-and-apply" });
+    for (const entry of buffered)
+      dispatch({
+        type: "v2_event",
+        event: entry.event,
+        ordinal: entry.ordinal,
+        mode: "observe-and-apply",
+      });
     eventBuffer = [];
     isHydrating = false;
     const auxiliary = await loadAuxiliary(currentGeneration);
@@ -562,7 +650,12 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     // Reproject once so tool calls restored from history carry their approval
     // gate instead of appearing permanently stuck.
     const permissionProjection = projectV2History(snapshot, currentPermissions());
-    dispatch({ type: "history_loaded", messages: permissionProjection.messages, messageOrder: permissionProjection.messageOrder, pages: permissionProjection.pages });
+    dispatch({
+      type: "history_loaded",
+      messages: permissionProjection.messages,
+      messageOrder: permissionProjection.messageOrder,
+      pages: permissionProjection.pages,
+    });
     dispatch({ type: "load_completed" });
   }
 
@@ -596,9 +689,16 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       // tool card would keep reading as permanently stuck.
       if (state.permissions === previous.permissions || lastHistorySnapshot === null) return;
       const projection = projectV2History(lastHistorySnapshot, currentPermissions());
-      dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
+      dispatch({
+        type: "history_loaded",
+        messages: projection.messages,
+        messageOrder: projection.messageOrder,
+        pages: projection.pages,
+      });
     } catch (error) {
-      logger.warn("opencode", "runtime.auxiliary_resync_failed", { errorType: error instanceof Error ? error.name : typeof error });
+      logger.warn("opencode", "runtime.auxiliary_resync_failed", {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
     } finally {
       resyncInFlight = false;
     }
@@ -666,7 +766,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
 
   async function refresh(): Promise<void> {
     await ensureLoaded();
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     dispatch({ type: "load_started" });
     try {
       const session = await generation.operations.sessionGet({ sessionID: client.sessionId });
@@ -674,7 +778,12 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       const snapshot = await loadV2History(generation.history);
       lastHistorySnapshot = snapshot;
       const projection = projectV2History(snapshot, currentPermissions());
-      dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
+      dispatch({
+        type: "history_loaded",
+        messages: projection.messages,
+        messageOrder: projection.messageOrder,
+        pages: projection.pages,
+      });
       dispatch({ type: "load_completed" });
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 refresh failed");
@@ -690,7 +799,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
 
   async function reconcileStagedRevert(): Promise<void> {
     await awaitReady();
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     try {
       const session = await generation.operations.sessionGet({ sessionID: client.sessionId });
       dispatch({ type: "session_hydrated", session });
@@ -702,21 +815,35 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       const snapshot = await loadV2History(generation.history);
       lastHistorySnapshot = snapshot;
       const projection = projectV2History(snapshot, currentPermissions());
-      dispatch({ type: "history_loaded", messages: projection.messages, messageOrder: projection.messageOrder, pages: projection.pages });
+      dispatch({
+        type: "history_loaded",
+        messages: projection.messages,
+        messageOrder: projection.messageOrder,
+        pages: projection.pages,
+      });
       if (verified.revert !== undefined) throw new Error("staged revert remains");
       dispatch({ type: "revert_recovery_cleared" });
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 staged recovery failed");
-      dispatch({ type: "revert_recovery_failed", userMessageId: state.execution.type === "reverting" ? state.execution.userMessageId : null, error: safe });
+      dispatch({
+        type: "revert_recovery_failed",
+        userMessageId: state.execution.type === "reverting" ? state.execution.userMessageId : null,
+        error: safe,
+      });
       throw new V2ControllerError(safe);
     }
   }
 
-  async function reconcilePendingPrompt(messageId: string): Promise<"admitted" | "absent" | "unresolved"> {
+  async function reconcilePendingPrompt(
+    messageId: string,
+  ): Promise<"admitted" | "absent" | "unresolved"> {
     await awaitReady();
-    const inbox = Object.values(state.inboxById).find((record) => record.id === messageId || record.id === state.inboxById[messageId]?.id);
+    const inbox = Object.values(state.inboxById).find(
+      (record) => record.id === messageId || record.id === state.inboxById[messageId]?.id,
+    );
     if (inbox !== undefined) return "admitted";
-    if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId)) return "admitted";
+    if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId))
+      return "admitted";
     const record = admissions.get(messageId);
     if (record?.result === "ambiguous") {
       rejectAdmission(messageId, "definitive-failure");
@@ -732,30 +859,55 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
   }
 
   async function applySelection(): Promise<void> {
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     if (state.execution.type !== "idle" && state.execution.type !== "error") return;
     if (modelChanged(state.model, state.desiredModel) && state.desiredModel !== null) {
-      await generation.operations.switchModel({ sessionID: client.sessionId, model: modelInput(state.desiredModel) });
+      await generation.operations.switchModel({
+        sessionID: client.sessionId,
+        model: modelInput(state.desiredModel),
+      });
     }
     if (agentChanged(state.agent, state.desiredAgent) && state.desiredAgent !== null) {
-      await generation.operations.switchAgent({ sessionID: client.sessionId, agent: state.desiredAgent });
+      await generation.operations.switchAgent({
+        sessionID: client.sessionId,
+        agent: state.desiredAgent,
+      });
     }
   }
 
-  async function sendMessage(message: AppendMessage, options: V2PromptOptions = {}): Promise<V2PromptSubmission> {
+  async function sendMessage(
+    message: AppendMessage,
+    options: V2PromptOptions = {},
+  ): Promise<V2PromptSubmission> {
     await awaitReady();
-    if (state.revertRecovery.type !== "none") throw new V2ControllerError({ kind: "recovery-required", message: V2_RECOVERY_REQUIRED_MESSAGE });
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (state.revertRecovery.type !== "none")
+      throw new V2ControllerError({
+        kind: "recovery-required",
+        message: V2_RECOVERY_REQUIRED_MESSAGE,
+      });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     const activeGeneration = generation;
     const customId = message.metadata?.custom?.[V2_PROMPT_MESSAGE_ID_KEY];
-    const messageId = options.messageId ?? (typeof customId === "string" ? customId : createV2MessageId());
-    if (!messageId.startsWith(V2_MESSAGE_ID_PREFIX)) throw new TypeError("OpenCode V2 prompt message id must start with msg_");
+    const messageId =
+      options.messageId ?? (typeof customId === "string" ? customId : createV2MessageId());
+    if (!messageId.startsWith(V2_MESSAGE_ID_PREFIX))
+      throw new TypeError("OpenCode V2 prompt message id must start with msg_");
     await applySelection();
     const payload = toV2PromptInput(message);
     const localMessage = optimisticMessage(message, messageId);
     const record = createAdmission(messageId);
     dispatch({ type: "prompt_submitting", message: localMessage });
-    const admissionPromise = new Promise<V2PromptAdmissionResult>((resolve) => { record.settle = resolve; });
+    const admissionPromise = new Promise<V2PromptAdmissionResult>((resolve) => {
+      record.settle = resolve;
+    });
     const input: SessionPromptInput = {
       sessionID: client.sessionId,
       id: messageId,
@@ -790,7 +942,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
           rejectAdmission(messageId, "definitive-failure");
           return;
         }
-        dispatch({ type: "prompt_reconciling", userMessageId: messageId, cancelRequested: state.execution.type === "cancelling" });
+        dispatch({
+          type: "prompt_reconciling",
+          userMessageId: messageId,
+          cancelRequested: state.execution.type === "cancelling",
+        });
         markAdmissionAmbiguous(messageId);
       });
     // The request remains owned by this generation after an inbox event admits
@@ -802,7 +958,10 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     if (result === "disposed") throw { kind: "disposed" } satisfies V2PromptSendError;
     throw {
       kind: "definitive-failure",
-      error: definitiveError ?? { kind: "network", message: "OpenCode V2 prompt admission could not be proven" },
+      error: definitiveError ?? {
+        kind: "network",
+        message: "OpenCode V2 prompt admission could not be proven",
+      },
     } satisfies V2PromptSendError;
   }
 
@@ -811,36 +970,105 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     if (state.execution.type === "idle" || state.execution.type === "error") return;
     const current = state.execution;
     if (current.type === "submitting" || current.type === "reconciling") {
-      dispatch({ type: "cancel_requested", phase: "prompt-request", userMessageId: current.userMessageId, inboxId: null, assistantMessageId: null });
+      dispatch({
+        type: "cancel_requested",
+        phase: "prompt-request",
+        userMessageId: current.userMessageId,
+        inboxId: null,
+        assistantMessageId: null,
+      });
       return;
     }
     if (current.type === "admitted") {
-      dispatch({ type: "cancel_requested", phase: "queued", userMessageId: current.userMessageId, inboxId: current.inboxId, assistantMessageId: null });
-      await generation.operations.inboxCancel({ sessionID: client.sessionId, inboxID: current.inboxId });
+      dispatch({
+        type: "cancel_requested",
+        phase: "queued",
+        userMessageId: current.userMessageId,
+        inboxId: current.inboxId,
+        assistantMessageId: null,
+      });
+      await generation.operations.inboxCancel({
+        sessionID: client.sessionId,
+        inboxID: current.inboxId,
+      });
       dispatch({ type: "execution_settled" });
       return;
     }
-    dispatch({ type: "cancel_requested", phase: "execution", userMessageId: current.type === "executing" || current.type === "streaming" || current.type === "cancelling" ? current.userMessageId : null, inboxId: current.type === "executing" || current.type === "streaming" || current.type === "cancelling" ? current.inboxId : null, assistantMessageId: current.type === "streaming" || current.type === "cancelling" ? current.assistantMessageId : null });
+    dispatch({
+      type: "cancel_requested",
+      phase: "execution",
+      userMessageId:
+        current.type === "executing" ||
+        current.type === "streaming" ||
+        current.type === "cancelling"
+          ? current.userMessageId
+          : null,
+      inboxId:
+        current.type === "executing" ||
+        current.type === "streaming" ||
+        current.type === "cancelling"
+          ? current.inboxId
+          : null,
+      assistantMessageId:
+        current.type === "streaming" || current.type === "cancelling"
+          ? current.assistantMessageId
+          : null,
+    });
     const result = await generation.operations.interrupt({ sessionID: client.sessionId });
     if (!result.interrupted) await refresh();
   }
 
   async function compact(): Promise<void> {
     await awaitReady();
-    if (state.revertRecovery.type !== "none") throw new V2ControllerError({ kind: "recovery-required", message: V2_RECOVERY_REQUIRED_MESSAGE });
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (state.revertRecovery.type !== "none")
+      throw new V2ControllerError({
+        kind: "recovery-required",
+        message: V2_RECOVERY_REQUIRED_MESSAGE,
+      });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     const id = createV2MessageId();
-    const result = await generation.operations.compact({ sessionID: client.sessionId, id, delivery: "steer" });
-    dispatch({ type: "compaction_admitted", inbox: { id: result.id, sessionId: result.sessionID, type: "compaction", delivery: result.delivery } });
+    const result = await generation.operations.compact({
+      sessionID: client.sessionId,
+      id,
+      delivery: "steer",
+    });
+    dispatch({
+      type: "compaction_admitted",
+      inbox: {
+        id: result.id,
+        sessionId: result.sessionID,
+        type: "compaction",
+        delivery: result.delivery,
+      },
+    });
   }
 
-  async function replyToPermission(requestId: string, decision: "once" | "always" | "reject"): Promise<void> {
+  async function replyToPermission(
+    requestId: string,
+    decision: "once" | "always" | "reject",
+  ): Promise<void> {
     if (answeredPermissions.has(requestId)) return;
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     const request = state.permissions.find((candidate) => candidate.id === requestId);
-    if (!request) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 permission was not found" });
+    if (!request)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 permission was not found",
+      });
     try {
-      await generation.operations.permissionReply({ sessionID: client.sessionId, requestID: requestId, decision });
+      await generation.operations.permissionReply({
+        sessionID: client.sessionId,
+        requestID: requestId,
+        decision,
+      });
       answeredPermissions.add(requestId);
       dispatch({ type: "permission_answered", requestId });
     } catch (error) {
@@ -862,16 +1090,29 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     let count = 0;
     for (const request of state.permissions) {
       const projected = projectV2Permission(request);
-      if (projected === null || projected.toolCallId === null || answeredPermissions.has(request.id)) continue;
-      if (!shouldAutoApprove(getAutoPolicy(client.sessionId) ? AUTO : MANUAL, projected.action)) continue;
+      if (
+        projected === null ||
+        projected.toolCallId === null ||
+        answeredPermissions.has(request.id)
+      )
+        continue;
+      if (!shouldAutoApprove(getAutoPolicy(client.sessionId) ? AUTO : MANUAL, projected.action))
+        continue;
       await replyToPermission(request.id, AUTO_RESPONSE);
       count += 1;
     }
     return count;
   }
 
-  async function replyToForm(formId: string, answer: SessionFormReplyInput["answer"]): Promise<void> {
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+  async function replyToForm(
+    formId: string,
+    answer: SessionFormReplyInput["answer"],
+  ): Promise<void> {
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     if (formReplies.has(formId)) return;
     await generation.operations.formReply({ sessionID: client.sessionId, formID: formId, answer });
     formReplies.add(formId);
@@ -879,7 +1120,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
   }
 
   async function rejectForm(formId: string): Promise<void> {
-    if (!generation) throw new V2ControllerError({ kind: "not-found", message: "OpenCode V2 generation is unavailable" });
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     if (formReplies.has(formId)) return;
     await generation.operations.formCancel({ sessionID: client.sessionId, formID: formId });
     formReplies.add(formId);
@@ -888,17 +1133,33 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
 
   async function regenerate(selectedAssistantParentId: string | null): Promise<void> {
     await awaitReady();
-    if (state.revertRecovery.type !== "none") throw new V2ControllerError({ kind: "recovery-required", message: V2_RECOVERY_REQUIRED_MESSAGE });
+    if (state.revertRecovery.type !== "none")
+      throw new V2ControllerError({
+        kind: "recovery-required",
+        message: V2_RECOVERY_REQUIRED_MESSAGE,
+      });
     const candidateId = selectedAssistantParentId ?? state.messageOrder.at(-1) ?? null;
-    if (!candidateId || !generation) throw new V2ControllerError({ kind: "not-found", message: "No assistant message is available to regenerate" });
+    if (!candidateId || !generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "No assistant message is available to regenerate",
+      });
     let user: V2MessageState | undefined = state.messages[candidateId];
     while (user && user.role !== "user") {
       user = user.parentId === null ? undefined : state.messages[user.parentId];
     }
-    if (user === undefined || user.source?.type !== "user") throw new V2ControllerError({ kind: "not-found", message: "No preceding user message is available to regenerate" });
+    if (user === undefined || user.source?.type !== "user")
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "No preceding user message is available to regenerate",
+      });
     dispatch({ type: "revert_recovery_staging", userMessageId: user.id });
     try {
-      await generation.operations.revertStage({ sessionID: client.sessionId, messageID: user.id, files: true });
+      await generation.operations.revertStage({
+        sessionID: client.sessionId,
+        messageID: user.id,
+        files: true,
+      });
       await generation.operations.revertCommit({ sessionID: client.sessionId });
       await refresh();
       dispatch({ type: "revert_recovery_cleared" });
@@ -947,7 +1208,8 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     reconcileAutoApprove,
     replyToForm,
     rejectForm,
-    reconcileRuntimeMessageIds: (messageIds) => dispatch({ type: "runtime_messages_reconciled", messageIds }),
+    reconcileRuntimeMessageIds: (messageIds) =>
+      dispatch({ type: "runtime_messages_reconciled", messageIds }),
     dispose,
   };
 }

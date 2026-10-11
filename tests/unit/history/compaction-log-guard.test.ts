@@ -26,8 +26,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { REPO_ROOT } from "../../helpers/repo-root";
 
 /**
@@ -45,8 +45,6 @@ const LOGGING_FILES: Record<string, string> = {
   command: "src/routes/direct-compact-command.ts",
 };
 
-
-
 function readSource(relative: string): string {
   return fs.readFileSync(path.join(REPO_ROOT, relative), "utf8");
 }
@@ -60,7 +58,8 @@ function readSource(relative: string): string {
  */
 function loggerCallBodies(source: string): string[] {
   const bodies: string[] = [];
-  const pattern = /\b(?:logger|log|chatLog|assemblyLog)\s*\.\s*(?:trace|debug|info|warn|error)\s*\(/g;
+  const pattern =
+    /\b(?:logger|log|chatLog|assemblyLog)\s*\.\s*(?:trace|debug|info|warn|error)\s*\(/g;
   for (const match of source.matchAll(pattern)) {
     const open = source.indexOf("(", match.index);
     let depth = 0;
@@ -118,7 +117,9 @@ describe("compaction logs carry counts, never content", () => {
     // Positive assertion: the safe substitute must actually be there, or the guards
     // above could be satisfied by simply logging nothing. Scoped to the files that
     // actually emit `chat_compact_*` — the route entry and its gate phase.
-    const chat = [sources.chat, sources.gate].map((src) => loggerCallBodies(src).join("\n")).join("\n");
+    const chat = [sources.chat, sources.gate]
+      .map((src) => loggerCallBodies(src).join("\n"))
+      .join("\n");
     expect(chat).toContain("compactionSummarySize");
     expect(chat).toContain("compactionReclaimedSize");
   });

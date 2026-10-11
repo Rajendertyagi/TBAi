@@ -30,7 +30,9 @@ export class ProviderRegistry {
   }
 
   async loadFromDb(db: Database): Promise<void> {
-    const rows = db.query<ProviderConfigRow, SQLQueryBindings[]>("SELECT * FROM provider_configs").all();
+    const rows = db
+      .query<ProviderConfigRow, SQLQueryBindings[]>("SELECT * FROM provider_configs")
+      .all();
     this.providers.clear();
     for (const row of rows) {
       let models: ModelOption[] = [];

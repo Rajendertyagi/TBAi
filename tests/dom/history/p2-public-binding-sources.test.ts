@@ -28,7 +28,11 @@ import {
   ExternalStoreThreadRuntimeCore,
   getExternalStoreMessages,
 } from "../../helpers/dom/resolve.ts";
-import { deriveWriteBack, WriteBackAmbiguityError, type BoundRow } from "@web/features/chat/history/windowWriteBack.ts";
+import {
+  deriveWriteBack,
+  WriteBackAmbiguityError,
+  type BoundRow,
+} from "@web/features/chat/history/windowWriteBack.ts";
 
 /** m2/m3 are adjacent assistant messages, so the converter merges them. */
 const ADJACENT = [
@@ -36,12 +40,28 @@ const ADJACENT = [
   {
     id: "m2",
     role: "assistant" as const,
-    parts: [{ type: "tool-read" as const, toolCallId: "call-a", state: "output-available" as const, input: { p: 1 }, output: { ok: true } }],
+    parts: [
+      {
+        type: "tool-read" as const,
+        toolCallId: "call-a",
+        state: "output-available" as const,
+        input: { p: 1 },
+        output: { ok: true },
+      },
+    ],
   },
   {
     id: "m3",
     role: "assistant" as const,
-    parts: [{ type: "tool-read" as const, toolCallId: "call-b", state: "output-available" as const, input: { p: 2 }, output: { ok: true } }],
+    parts: [
+      {
+        type: "tool-read" as const,
+        toolCallId: "call-b",
+        state: "output-available" as const,
+        input: { p: 2 },
+        output: { ok: true },
+      },
+    ],
   },
   { id: "m4", role: "user" as const, parts: [{ type: "text" as const, text: "done" }] },
 ];
@@ -52,10 +72,13 @@ const contextProvider = {
 } as never;
 
 const convert = () =>
-  AISDKMessageConverter.toThreadMessages(ADJACENT as never, false, {} as never) as never as Array<{ id: string }>;
+  AISDKMessageConverter.toThreadMessages(ADJACENT as never, false, {} as never) as never as Array<{
+    id: string;
+  }>;
 
 const recovered = (m: unknown) =>
-  (getExternalStoreMessages(m as never) as Array<{ id: string }>).map((x) => x.id).join(",") || "(none)";
+  (getExternalStoreMessages(m as never) as Array<{ id: string }>).map((x) => x.id).join(",") ||
+  "(none)";
 
 /**
  * The production construction, transcribed from
@@ -102,14 +125,21 @@ const spikeRepository = (
 describe("P2 — binding survival by repository construction", () => {
   it("production construction keeps the binding; fromBranchableArray loses it", () => {
     const converted = convert();
-    const rows = converted.map((m, i) => ({ message: m, parentId: i === 0 ? null : converted[i - 1]!.id }));
+    const rows = converted.map((m, i) => ({
+      message: m,
+      parentId: i === 0 ? null : converted[i - 1]!.id,
+    }));
 
     const production = productionRepository(rows);
     const spike = spikeRepository(rows);
 
     console.log("\n=== binding by construction ===");
-    console.log(`  production rows: ${production.messages.map((r) => `${r.message.id}=${recovered(r.message)}`).join(" | ")}`);
-    console.log(`  fromBranchable : ${spike.messages.map((r) => `${r.message.id}=${recovered(r.message)}`).join(" | ")}`);
+    console.log(
+      `  production rows: ${production.messages.map((r) => `${r.message.id}=${recovered(r.message)}`).join(" | ")}`,
+    );
+    console.log(
+      `  fromBranchable : ${spike.messages.map((r) => `${r.message.id}=${recovered(r.message)}`).join(" | ")}`,
+    );
 
     expect(production.messages.map((r) => recovered(r.message))).toEqual(["m1", "m2,m3", "m4"]);
     expect(spike.messages.map((r) => recovered(r.message))).toEqual(["(none)", "(none)", "(none)"]);
@@ -117,7 +147,10 @@ describe("P2 — binding survival by repository construction", () => {
 
   it("a repository built the production way keeps the binding through the runtime", () => {
     const converted = convert();
-    const rows = converted.map((m, i) => ({ message: m, parentId: i === 0 ? null : converted[i - 1]!.id }));
+    const rows = converted.map((m, i) => ({
+      message: m,
+      parentId: i === 0 ? null : converted[i - 1]!.id,
+    }));
 
     const core = new ExternalStoreThreadRuntimeCore(contextProvider, {
       messageRepository: productionRepository(rows) as never,
@@ -138,7 +171,9 @@ describe("P2 — binding survival by repository construction", () => {
     const window = deriveWriteBack(asRows);
 
     console.log(`  write-back ids    : ${window.messages.map((m) => m.id).join(",")}`);
-    console.log(`  write-back parents: ${JSON.stringify(window.messages.map((m) => [m.id, m.parentId]))}`);
+    console.log(
+      `  write-back parents: ${JSON.stringify(window.messages.map((m) => [m.id, m.parentId]))}`,
+    );
     expect(window.messages.map((m) => m.id)).toEqual(["m1", "m2", "m3", "m4"]);
     expect(Object.fromEntries(window.messages.map((m) => [m.id, m.parentId]))).toEqual({
       m1: null,
@@ -151,7 +186,10 @@ describe("P2 — binding survival by repository construction", () => {
 
   it("the same window built the spike way still fails closed (never an empty write)", () => {
     const converted = convert();
-    const rows = converted.map((m, i) => ({ message: m, parentId: i === 0 ? null : converted[i - 1]!.id }));
+    const rows = converted.map((m, i) => ({
+      message: m,
+      parentId: i === 0 ? null : converted[i - 1]!.id,
+    }));
 
     const core = new ExternalStoreThreadRuntimeCore(contextProvider, {
       messageRepository: spikeRepository(rows) as never,

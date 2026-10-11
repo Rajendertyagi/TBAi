@@ -180,7 +180,9 @@ describe("http edge coverage", () => {
     expect(ok.status).toBe(200);
     const fresh = logger.getRecentEntries(since);
     const failed = fresh.find(
-      (e) => e.event === "http.error" && String(e.message ?? "").includes("/api/conversations/does-not-exist"),
+      (e) =>
+        e.event === "http.error" &&
+        String(e.message ?? "").includes("/api/conversations/does-not-exist"),
     );
     expect(failed).toBeTruthy();
     expect(failed?.level).toBe("warn");
@@ -198,7 +200,8 @@ describe("http edge coverage", () => {
     expect(res.status).toBe(200);
     const fresh = logger.getRecentEntries(since);
     const line = fresh.find(
-      (e) => e.event === "http.request" && String(e.message ?? "").includes("/api/mcp/elicit/pending"),
+      (e) =>
+        e.event === "http.request" && String(e.message ?? "").includes("/api/mcp/elicit/pending"),
     );
     expect(line).toBeTruthy();
     expect(line?.level).toBe("debug");

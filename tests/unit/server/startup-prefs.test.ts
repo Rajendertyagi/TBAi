@@ -20,8 +20,8 @@
  * are cleaned up per test.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { db } from "@/db";
 import { resolveDataDir } from "@/services/server-port.ts";
 import {
@@ -99,10 +99,7 @@ describe("persistStartMinimized — DB + mirror roundtrip", () => {
   it("true roundtrips: DB row + mirror file `1`", () => {
     persistStartMinimized(true);
     expect(getPersistedStartMinimized()).toBe(true);
-    const mirror = fs.readFileSync(
-      path.join(resolveDataDir(), MIRROR_FILE),
-      "utf8",
-    ).trim();
+    const mirror = fs.readFileSync(path.join(resolveDataDir(), MIRROR_FILE), "utf8").trim();
     expect(mirror).toBe("1");
     expect(readStartMinimizedMirror()).toBe(true);
   });
@@ -110,10 +107,7 @@ describe("persistStartMinimized — DB + mirror roundtrip", () => {
   it("false roundtrips: DB row + mirror file `0`", () => {
     persistStartMinimized(false);
     expect(getPersistedStartMinimized()).toBe(false);
-    const mirror = fs.readFileSync(
-      path.join(resolveDataDir(), MIRROR_FILE),
-      "utf8",
-    ).trim();
+    const mirror = fs.readFileSync(path.join(resolveDataDir(), MIRROR_FILE), "utf8").trim();
     expect(mirror).toBe("0");
     expect(readStartMinimizedMirror()).toBe(false);
   });
@@ -124,10 +118,7 @@ describe("persistStartMinimized — DB + mirror roundtrip", () => {
     persistStartMinimized(false);
     expect(getPersistedStartMinimized()).toBe(false);
     expect(readStartMinimizedMirror()).toBe(false);
-    const mirror = fs.readFileSync(
-      path.join(resolveDataDir(), MIRROR_FILE),
-      "utf8",
-    ).trim();
+    const mirror = fs.readFileSync(path.join(resolveDataDir(), MIRROR_FILE), "utf8").trim();
     expect(mirror).toBe("0");
   });
 });

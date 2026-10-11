@@ -90,10 +90,10 @@ function jsonCompletion(content: string): Response {
 }
 
 function jsonError(status: number, message: string): Response {
-  return new Response(
-    JSON.stringify({ error: { message, type: "invalid_request_error" } }),
-    { status, headers: { "Content-Type": "application/json" } },
-  );
+  return new Response(JSON.stringify({ error: { message, type: "invalid_request_error" } }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function sseText(content: string): Response {
@@ -225,22 +225,32 @@ function outcomeOf(sseText: string): string | undefined {
 }
 
 async function newConversation(title: string): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title,
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title,
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 
-async function post(conversationId: string, messages: Array<Record<string, unknown>>): Promise<string> {
+async function post(
+  conversationId: string,
+  messages: Array<Record<string, unknown>>,
+): Promise<string> {
   const res = await app.request("/api/chat", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ providerId: PROVIDER_ID, model: MODEL_ID, id: conversationId, messages }),
+    body: JSON.stringify({
+      providerId: PROVIDER_ID,
+      model: MODEL_ID,
+      id: conversationId,
+      messages,
+    }),
   });
   return await res.text();
 }
@@ -277,7 +287,9 @@ afterAll(async () => {
 
 describe("B1/B2 — detection and interception", () => {
   it("TEST 1: exact `/compact` is intercepted and never becomes a model attempt", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("should not happen")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("should not happen"),
+    );
     const id = await newConversation("b1-exact");
     try {
       const body = await post(id, [...wideHistory(), userMessage("cmd", "/compact")]);
@@ -296,7 +308,9 @@ describe("B1/B2 — detection and interception", () => {
   }, 90000);
 
   it("surrounding whitespace is tolerated and the outcome is unchanged", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("should not happen")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("should not happen"),
+    );
     const id = await newConversation("b1-whitespace");
     try {
       const body = await post(id, [...wideHistory(), userMessage("cmd", "   /compact   ")]);
@@ -310,7 +324,9 @@ describe("B1/B2 — detection and interception", () => {
   }, 90000);
 
   it("TEST 7: the command creates NO chat run and NO durable stream row", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused"),
+    );
     const id = await newConversation("b-run-lifecycle");
     try {
       const before = chatRuns.counts();
@@ -334,7 +350,9 @@ describe("B1/B2 — detection and interception", () => {
 
 describe("B3/B4/B5/B7 — compaction, outcomes and durability", () => {
   it("TEST 2: success applies real compaction, writes a checkpoint, and emits no message part", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused"),
+    );
     const id = await newConversation("b2-success");
     try {
       expect(compactionStore.has(id)).toBe(false);
@@ -399,9 +417,7 @@ describe("B3/B4/B5/B7 — compaction, outcomes and durability", () => {
       // than an assumption.
       expect(status?.anchorMessageId).toBe(
         db
-          .query<{ id: string }, [string]>(
-            "SELECT id FROM messages WHERE conversation_id = ?",
-          )
+          .query<{ id: string }, [string]>("SELECT id FROM messages WHERE conversation_id = ?")
           .get(id)?.id,
       );
 
@@ -418,7 +434,9 @@ describe("B3/B4/B5/B7 — compaction, outcomes and durability", () => {
   }, 90000);
 
   it("TEST 3: nothing compactable is `skipped` and fabricates no checkpoint", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused"),
+    );
     const id = await newConversation("b3-noop");
     try {
       const body = await post(id, tinyHistory());
@@ -441,9 +459,7 @@ describe("B3/B4/B5/B7 — compaction, outcomes and durability", () => {
 
   it("TEST 4: a summariser failure is `failed` with no false success and no dangling state", async () => {
     await seed((kind) =>
-      kind === "summariser"
-        ? jsonError(500, "summariser backend unavailable")
-        : sseText("unused"),
+      kind === "summariser" ? jsonError(500, "summariser backend unavailable") : sseText("unused"),
     );
     const id = await newConversation("b4-summariser-failure");
     try {
@@ -488,7 +504,9 @@ describe("B3/B4/B5/B7 — compaction, outcomes and durability", () => {
 
 describe("B1 — command safety", () => {
   it("TEST 5: text that merely MENTIONS `/compact` is ordinary model input", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("model answered")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("model answered"),
+    );
     const id = await newConversation("b5-safety");
     try {
       // `/compact now` is deliberately absent: since `/compact <instructions>` landed,
@@ -513,7 +531,9 @@ describe("B1 — command safety", () => {
   }, 90000);
 
   it("a `/compact` quoted in an assistant message cannot trigger the command", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("model answered")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("model answered"),
+    );
     const id = await newConversation("b5-assistant-quote");
     try {
       const body = await post(id, [
@@ -538,7 +558,9 @@ describe("B1 — command safety", () => {
 
 describe("B8 — the next turn consumes compacted context", () => {
   it("TEST 6: after a successful compact the follow-up turn reads the summary, not the old span", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("follow-up answer")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("follow-up answer"),
+    );
     const id = await newConversation("b6-next-turn");
     try {
       const compactBody = await post(id, [...wideHistory(), userMessage("cmd", "/compact")]);
@@ -603,12 +625,17 @@ describe("B8 — the next turn consumes compacted context", () => {
 async function seedWithWindow(behaviour: Behaviour, contextWindow: number): Promise<void> {
   await seed(behaviour);
   const models = JSON.stringify([
-    { id: MODEL_ID, label: MODEL_ID, provider: "ollama", contextWindow, contextWindowSource: "configured", maxOutputTokens: 512, maxOutputTokensSource: "configured" },
+    {
+      id: MODEL_ID,
+      label: MODEL_ID,
+      provider: "ollama",
+      contextWindow,
+      contextWindowSource: "configured",
+      maxOutputTokens: 512,
+      maxOutputTokensSource: "configured",
+    },
   ]);
-  db.run(
-    `UPDATE provider_configs SET models = ? WHERE id = ?`,
-    [models, PROVIDER_ID],
-  );
+  db.run(`UPDATE provider_configs SET models = ? WHERE id = ?`, [models, PROVIDER_ID]);
   await registry.loadFromDb(db);
 }
 
@@ -644,10 +671,14 @@ describe("AUTOMATIC — the engine's own compaction reaches the transcript", () 
           "SELECT content FROM messages WHERE conversation_id = ? ORDER BY order_seq",
         )
         .all(id)
-        .map((r) => JSON.parse(r.content) as { role: string; parts: Array<{ type: string; data?: Record<string, unknown> }> });
-      const divider = rows.find(
-        (r) => r.parts[0]?.type === "data-tbai-compact",
-      );
+        .map(
+          (r) =>
+            JSON.parse(r.content) as {
+              role: string;
+              parts: Array<{ type: string; data?: Record<string, unknown> }>;
+            },
+        );
+      const divider = rows.find((r) => r.parts[0]?.type === "data-tbai-compact");
       expect(divider).toBeDefined();
       expect(divider?.role).toBe("assistant");
       expect(divider?.parts[0]?.data?.origin).toBe("automatic");
@@ -679,7 +710,10 @@ describe("AUTOMATIC — the engine's own compaction reaches the transcript", () 
         ...wideHistory(12),
         userMessage("live-1", "the first question"),
       ]);
-      const gen1Part = (partsOfType(first, "data-tbai-compact")[0]?.data ?? {}) as Record<string, unknown>;
+      const gen1Part = (partsOfType(first, "data-tbai-compact")[0]?.data ?? {}) as Record<
+        string,
+        unknown
+      >;
       const gen1Record = compactionStore.get(id);
       expect(gen1Part.origin).toBe("automatic");
       expect(gen1Part.generation).toBe(1);
@@ -772,71 +806,73 @@ describe("AUTOMATIC — the engine's own compaction reaches the transcript", () 
   }, 90000);
 });
 it("a second `/compact` adds exactly ONE more row, never a duplicate of the first", async () => {
-    // The count half of the manual persistence invariant. The client also appends a
-    // divider to the live thread, and that append is deliberately non-persisting, so
-    // the server's write is the only one that decides how many rows exist. Two
-    // commands must therefore produce exactly two rows, each keyed by its own
-    // operation — never four (client + server both persisting), never one (the second
-    // clobbering the first).
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
-    const id = await newConversation("b-two-compactions");
-    try {
-      const dividerRows = (): Array<Record<string, unknown>> =>
-        db
-          .query<{ content: string }, [string]>(
-            "SELECT content FROM messages WHERE conversation_id = ? AND content LIKE '%tbai-compact%' ORDER BY order_seq",
-          )
-          .all(id)
-          .map(
-            (r) =>
-              (
-                JSON.parse(r.content) as {
-                  parts: Array<{ data?: Record<string, unknown> }>;
-                }
-              ).parts[0]?.data ?? {},
-          );
-
-      const first = await post(id, [...wideHistory(), userMessage("cmd-1", "/compact")]);
-      expect(compactStatus(first)?.anchorMessageId).toBeTruthy();
-      const afterFirst = dividerRows();
-      expect(afterFirst).toHaveLength(1);
-
-      // A second command on the SAME conversation. Its span may no longer be eligible
-      // — that is irrelevant here; what matters is that it still reports one honest
-      // outcome and still leaves exactly one row.
-      const second = await post(id, [...wideHistory(), userMessage("cmd-2", "/compact")]);
-      const secondStatus = compactStatus(second);
-      // The outcome comes off a JSON body, so it is `unknown`. Narrow it first:
-  // `toContain` on an `unknown` member fails to compile, and asserting the
-  // container first without narrowing would accept anything.
-  const outcome = secondStatus?.outcome;
-  expect(typeof outcome).toBe("string");
-  expect(["compacted", "skipped", "failed"]).toContain(outcome as string);
-      const afterSecond = dividerRows();
-      expect(afterSecond).toHaveLength(2);
-
-      // Two distinct operations, so the rows cannot be the same compaction.
-      const opIds = afterSecond.map((d) => d.operationId);
-      expect(new Set(opIds).size).toBe(2);
-      // And each row's id is the operation-derived key, one row per operation.
-      const ids = db
-        .query<{ id: string }, [string]>(
-          "SELECT id FROM messages WHERE conversation_id = ? AND content LIKE '%tbai-compact%' ORDER BY order_seq",
+  // The count half of the manual persistence invariant. The client also appends a
+  // divider to the live thread, and that append is deliberately non-persisting, so
+  // the server's write is the only one that decides how many rows exist. Two
+  // commands must therefore produce exactly two rows, each keyed by its own
+  // operation — never four (client + server both persisting), never one (the second
+  // clobbering the first).
+  await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
+  const id = await newConversation("b-two-compactions");
+  try {
+    const dividerRows = (): Array<Record<string, unknown>> =>
+      db
+        .query<{ content: string }, [string]>(
+          "SELECT content FROM messages WHERE conversation_id = ? AND content LIKE '%tbai-compact%' ORDER BY order_seq",
         )
         .all(id)
-        .map((r) => r.id);
-      expect(new Set(ids).size).toBe(2);
-      for (const rowId of ids) {
-        expect(rowId).toMatch(/^data-tbai-compact-/);
-      }
-    } finally {
-      await conversationService.delete(id);
+        .map(
+          (r) =>
+            (
+              JSON.parse(r.content) as {
+                parts: Array<{ data?: Record<string, unknown> }>;
+              }
+            ).parts[0]?.data ?? {},
+        );
+
+    const first = await post(id, [...wideHistory(), userMessage("cmd-1", "/compact")]);
+    expect(compactStatus(first)?.anchorMessageId).toBeTruthy();
+    const afterFirst = dividerRows();
+    expect(afterFirst).toHaveLength(1);
+
+    // A second command on the SAME conversation. Its span may no longer be eligible
+    // — that is irrelevant here; what matters is that it still reports one honest
+    // outcome and still leaves exactly one row.
+    const second = await post(id, [...wideHistory(), userMessage("cmd-2", "/compact")]);
+    const secondStatus = compactStatus(second);
+    // The outcome comes off a JSON body, so it is `unknown`. Narrow it first:
+    // `toContain` on an `unknown` member fails to compile, and asserting the
+    // container first without narrowing would accept anything.
+    const outcome = secondStatus?.outcome;
+    expect(typeof outcome).toBe("string");
+    expect(["compacted", "skipped", "failed"]).toContain(outcome as string);
+    const afterSecond = dividerRows();
+    expect(afterSecond).toHaveLength(2);
+
+    // Two distinct operations, so the rows cannot be the same compaction.
+    const opIds = afterSecond.map((d) => d.operationId);
+    expect(new Set(opIds).size).toBe(2);
+    // And each row's id is the operation-derived key, one row per operation.
+    const ids = db
+      .query<{ id: string }, [string]>(
+        "SELECT id FROM messages WHERE conversation_id = ? AND content LIKE '%tbai-compact%' ORDER BY order_seq",
+      )
+      .all(id)
+      .map((r) => r.id);
+    expect(new Set(ids).size).toBe(2);
+    for (const rowId of ids) {
+      expect(rowId).toMatch(/^data-tbai-compact-/);
     }
-  }, 120000);
+  } finally {
+    await conversationService.delete(id);
+  }
+}, 120000);
 
 describe("INSTRUCTIONS — `/compact <instructions>` reaches the summariser", () => {
   it("adds the user's words to the summariser prompt", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused"),
+    );
     const id = await newConversation("compact-instructions");
     try {
       const body = await post(id, [
@@ -857,7 +893,9 @@ describe("INSTRUCTIONS — `/compact <instructions>` reaches the summariser", ()
   }, 90000);
 
   it("leaves the prompt untouched when no instructions were given", async () => {
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused")));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : sseText("unused"),
+    );
     const id = await newConversation("compact-no-instructions");
     try {
       const body = await post(id, [...wideHistory(), userMessage("cmd", "/compact")]);
@@ -872,4 +910,3 @@ describe("INSTRUCTIONS — `/compact <instructions>` reaches the summariser", ()
     }
   }, 90000);
 });
-

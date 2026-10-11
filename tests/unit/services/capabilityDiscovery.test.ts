@@ -58,7 +58,16 @@ describe("only a usable token count is ever accepted", () => {
   });
 
   it("rejects every shape a malformed listing can produce", () => {
-    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, null, undefined, "200000", {}]) {
+    for (const bad of [
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      null,
+      undefined,
+      "200000",
+      {},
+    ]) {
       expect(validTokenCount(bad)).toBeUndefined();
     }
   });
@@ -71,8 +80,12 @@ describe("only a usable token count is ever accepted", () => {
   });
 
   it("still reads a numeric string off a listing, because Ollama sends one", () => {
-    expect(extractCapabilities({ id: "m", context_length: "32768" }).contextWindow?.value).toBe(32_768);
-    expect(extractCapabilities({ id: "m", context_length: "not-a-number" }).contextWindow).toBeUndefined();
+    expect(extractCapabilities({ id: "m", context_length: "32768" }).contextWindow?.value).toBe(
+      32_768,
+    );
+    expect(
+      extractCapabilities({ id: "m", context_length: "not-a-number" }).contextWindow,
+    ).toBeUndefined();
     expect(extractCapabilities({ id: "m", context_length: "" }).contextWindow).toBeUndefined();
   });
 });
@@ -97,7 +110,11 @@ describe("a published limit is found regardless of the field it uses", () => {
   });
 
   it("reads context and output independently", () => {
-    const found = extractCapabilities({ id: "m", context_length: 1_000_000, max_completion_tokens: 16_384 });
+    const found = extractCapabilities({
+      id: "m",
+      context_length: 1_000_000,
+      max_completion_tokens: 16_384,
+    });
     expect(found.contextWindow?.value).toBe(1_000_000);
     expect(found.maxOutputTokens?.value).toBe(16_384);
   });
@@ -122,9 +139,10 @@ describe("a published limit is found regardless of the field it uses", () => {
 
   it("falls back to the flat layout for an unknown provider type", () => {
     expect(limitRuleFor("some-future-provider").wrappers).toEqual([]);
-    expect(extractCapabilities({ id: "m", context_length: 8_000 }, limitRuleFor("x")).contextWindow?.value).toBe(
-      8_000,
-    );
+    expect(
+      extractCapabilities({ id: "m", context_length: 8_000 }, limitRuleFor("x")).contextWindow
+        ?.value,
+    ).toBe(8_000);
   });
 });
 
@@ -194,8 +212,14 @@ describe("discovery records limits with provider_reported provenance", () => {
   const NOW = 1_800_000_000_000;
 
   it("picks up context_length from an OpenAI-compatible listing", async () => {
-    installListingMock({ data: [{ id: "agnes-3.0-flash", context_length: 1_000_000, max_completion_tokens: 32_768 }] });
-    const [model] = await discoverModels({ type: "custom", endpoint: "http://a/v1", now: () => NOW });
+    installListingMock({
+      data: [{ id: "agnes-3.0-flash", context_length: 1_000_000, max_completion_tokens: 32_768 }],
+    });
+    const [model] = await discoverModels({
+      type: "custom",
+      endpoint: "http://a/v1",
+      now: () => NOW,
+    });
     expect(model?.contextWindow).toBe(1_000_000);
     expect(model?.contextWindowSource).toBe("provider_reported");
     expect(model?.maxOutputTokens).toBe(32_768);
@@ -204,23 +228,41 @@ describe("discovery records limits with provider_reported provenance", () => {
   });
 
   it("still reads Anthropic's max_input_tokens (no regression)", async () => {
-    installListingMock({ data: [{ id: "claude-x", max_input_tokens: 200_000, max_output_tokens: 8_192 }] });
-    const [model] = await discoverModels({ type: "anthropic", endpoint: "http://a", apiKey: "k", now: () => NOW });
+    installListingMock({
+      data: [{ id: "claude-x", max_input_tokens: 200_000, max_output_tokens: 8_192 }],
+    });
+    const [model] = await discoverModels({
+      type: "anthropic",
+      endpoint: "http://a",
+      apiKey: "k",
+      now: () => NOW,
+    });
     expect(model?.contextWindow).toBe(200_000);
     expect(model?.contextWindowSource).toBe("provider_reported");
     expect(model?.maxOutputTokens).toBe(8_192);
   });
 
   it("reads Google's camelCased limits", async () => {
-    installListingMock({ models: [{ name: "models/gemini-x", inputTokenLimit: 1_048_576, outputTokenLimit: 8_192 }] });
-    const [model] = await discoverModels({ type: "google", endpoint: "http://a", apiKey: "k", now: () => NOW });
+    installListingMock({
+      models: [{ name: "models/gemini-x", inputTokenLimit: 1_048_576, outputTokenLimit: 8_192 }],
+    });
+    const [model] = await discoverModels({
+      type: "google",
+      endpoint: "http://a",
+      apiKey: "k",
+      now: () => NOW,
+    });
     expect(model?.contextWindow).toBe(1_048_576);
     expect(model?.maxOutputTokens).toBe(8_192);
   });
 
   it("leaves an identity-only listing with NO value and NO stance", async () => {
     installListingMock({ data: [{ id: "agnes-3.0-flash", object: "model", owned_by: "agnes" }] });
-    const [model] = await discoverModels({ type: "custom", endpoint: "http://a/v1", now: () => NOW });
+    const [model] = await discoverModels({
+      type: "custom",
+      endpoint: "http://a/v1",
+      now: () => NOW,
+    });
     // The critical assertion: no window, and crucially NO source claiming one.
     expect(model?.contextWindow).toBeUndefined();
     expect(model?.contextWindowSource).toBeUndefined();
@@ -231,7 +273,11 @@ describe("discovery records limits with provider_reported provenance", () => {
 
   it("shares one timestamp across a single listing pass", async () => {
     installListingMock({ data: [{ id: "flash-a", context_length: 1 }, { id: "flash-b" }] });
-    const models = await discoverModels({ type: "custom", endpoint: "http://a/v1", now: () => NOW });
+    const models = await discoverModels({
+      type: "custom",
+      endpoint: "http://a/v1",
+      now: () => NOW,
+    });
     expect(models.map((m) => m.discoveredAt)).toEqual([NOW, NOW]);
   });
 
@@ -239,9 +285,17 @@ describe("discovery records limits with provider_reported provenance", () => {
     // Same model id, two endpoints, different advertised windows. Discovery is
     // per-call and carries no cross-provider state, so this is structural.
     installListingMock({ data: [{ id: "agnes-2.5-pro", context_length: 200_000 }] });
-    const [first] = await discoverModels({ type: "custom", endpoint: "http://a/v1", now: () => NOW });
+    const [first] = await discoverModels({
+      type: "custom",
+      endpoint: "http://a/v1",
+      now: () => NOW,
+    });
     installListingMock({ data: [{ id: "agnes-2.5-pro", context_length: 1_000_000 }] });
-    const [second] = await discoverModels({ type: "custom", endpoint: "http://b/v1", now: () => NOW });
+    const [second] = await discoverModels({
+      type: "custom",
+      endpoint: "http://b/v1",
+      now: () => NOW,
+    });
     expect(first?.contextWindow).toBe(200_000);
     expect(second?.contextWindow).toBe(1_000_000);
   });

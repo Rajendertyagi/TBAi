@@ -1,7 +1,7 @@
 import { db } from "../../db";
 import { generateId } from "../../lib/utils";
 import type { SQLQueryBindings } from "bun:sqlite";
-import type { Conversation, ConversationStatus, Message, Memory, WorkspaceMode } from "../../types";
+import type { Conversation, ConversationStatus, Memory, WorkspaceMode } from "../../types";
 import { createChatWorkspace } from "../workspace";
 
 interface ConversationRow {
@@ -215,9 +215,7 @@ export const conversationService = {
    * @param clientRequestId - The client's idempotency key.
    * @returns The conversation row, or `null` if no row carries the key.
    */
-  async findByClientRequestId(
-    clientRequestId: string,
-  ): Promise<Conversation | null> {
+  async findByClientRequestId(clientRequestId: string): Promise<Conversation | null> {
     const row = db
       .query<ConversationRow, SQLQueryBindings[]>(
         "SELECT * FROM conversations WHERE client_request_id = ?",
@@ -270,15 +268,16 @@ export const conversationService = {
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     // Whitelisted column branch (never interpolated input) — `created` is
     // newest-first by creation, `updated` (default) by last activity.
-    const orderBy =
-      order === "created" ? "c.created_at DESC" : "c.updated_at DESC";
+    const orderBy = order === "created" ? "c.created_at DESC" : "c.updated_at DESC";
     const rows = db
       .query<ConversationRow, SQLQueryBindings[]>(
         `SELECT c.* FROM conversations c ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset);
     const totalRow = db
-      .query<{ c: number }, SQLQueryBindings[]>(`SELECT COUNT(*) as c FROM conversations c ${where}`)
+      .query<{ c: number }, SQLQueryBindings[]>(
+        `SELECT COUNT(*) as c FROM conversations c ${where}`,
+      )
       .get(...params);
     const total = totalRow?.c ?? 0;
     const threads = rows.map(mapConversation);
@@ -287,7 +286,9 @@ export const conversationService = {
   },
 
   async get(id: string): Promise<Conversation | null> {
-    const row = db.query<ConversationRow, SQLQueryBindings[]>("SELECT * FROM conversations WHERE id = ?").get(id);
+    const row = db
+      .query<ConversationRow, SQLQueryBindings[]>("SELECT * FROM conversations WHERE id = ?")
+      .get(id);
     return row ? mapConversation(row) : null;
   },
 
@@ -327,7 +328,26 @@ export const conversationService = {
 
   async update(
     id: string,
-    data: Partial<Pick<Conversation, "title" | "providerId" | "modelId" | "reasoningLevel" | "systemPrompt" | "status" | "titleSource" | "workspaceMode" | "workspaceFolderId" | "opencodeSessionId" | "engine" | "opencodeAgent" | "opencodeModel" | "opencodeVariant" | "opencodeAutoApprove">>,
+    data: Partial<
+      Pick<
+        Conversation,
+        | "title"
+        | "providerId"
+        | "modelId"
+        | "reasoningLevel"
+        | "systemPrompt"
+        | "status"
+        | "titleSource"
+        | "workspaceMode"
+        | "workspaceFolderId"
+        | "opencodeSessionId"
+        | "engine"
+        | "opencodeAgent"
+        | "opencodeModel"
+        | "opencodeVariant"
+        | "opencodeAutoApprove"
+      >
+    >,
   ): Promise<Conversation> {
     const updates: string[] = [];
     const values: SQLQueryBindings[] = [];
@@ -366,8 +386,7 @@ export const conversationService = {
     }
     if (data.workspaceFolderId !== undefined) {
       // A simple chat must not retain a folder; a project chat keeps its id.
-      const folderId =
-        data.workspaceMode === "simple" ? null : (data.workspaceFolderId ?? null);
+      const folderId = data.workspaceMode === "simple" ? null : (data.workspaceFolderId ?? null);
       updates.push("workspace_folder_id = ?");
       values.push(folderId);
     }
@@ -665,13 +684,26 @@ export const messageService = {
       // `complete` stays `false`: it answers a different question ("did the walk
       // reach a legitimate root"), and no walk happened. Keeping the two signals
       // distinct is the whole point of having both.
-      if (!tip) return { messages: [], hasMoreBefore: false, hasMoreAfter: false, complete: false, contiguous: true };
+      if (!tip)
+        return {
+          messages: [],
+          hasMoreBefore: false,
+          hasMoreAfter: false,
+          complete: false,
+          contiguous: true,
+        };
 
       // A caller-supplied anchor that names no row in THIS conversation is a
       // different case and stays fail-closed: the client asked for a position it
       // cannot vouch for, and silently substituting an empty answer would hide a
       // stale or cross-conversation anchor.
-      const empty = { messages: [], hasMoreBefore: false, hasMoreAfter: false, complete: false, contiguous: false };
+      const empty = {
+        messages: [],
+        hasMoreBefore: false,
+        hasMoreAfter: false,
+        complete: false,
+        contiguous: false,
+      };
 
       // Older paging anchors on an explicit id and walks back toward the root.
       // Newer paging MUST walk from the tip instead: "which child of the anchor
@@ -681,7 +713,8 @@ export const messageService = {
       // window, and walking `older` from the tip is exactly the bounded tail.
       // (Reading the anchor only for `older` made the initial load return an
       // empty, incomplete slice, so a bounded thread never rendered at all.)
-      const startId = params.anchorId === null || params.direction === "newer" ? tip : params.anchorId;
+      const startId =
+        params.anchorId === null || params.direction === "newer" ? tip : params.anchorId;
       if (startId === null) return empty;
 
       const anchoredRow = db
@@ -710,7 +743,7 @@ export const messageService = {
         )
         .all(conversationId, startId, depthLimit);
 
-      let messages: HeadChainMessage[] = [];
+      const messages: HeadChainMessage[] = [];
       let complete = true;
 
       // A gap in the walk means a parent row is missing: the walk cannot prove
@@ -952,7 +985,7 @@ export const messageService = {
         )
         .get(conversationId);
       if (conv && (conv.title === "New Conversation" || conv.title_source === "auto")) {
-        const title = userText.length > 50 ? userText.slice(0, 50) + "…" : userText;
+        const title = userText.length > 50 ? `${userText.slice(0, 50)}…` : userText;
         db.run("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?", [
           title,
           now,
@@ -994,7 +1027,10 @@ export const messageService = {
   },
 
   async deleteThreadMessage(conversationId: string, messageId: string): Promise<void> {
-    db.run("DELETE FROM messages WHERE conversation_id = ? AND id = ?", [conversationId, messageId]);
+    db.run("DELETE FROM messages WHERE conversation_id = ? AND id = ?", [
+      conversationId,
+      messageId,
+    ]);
   },
 
   async deleteByConversation(conversationId: string): Promise<void> {
@@ -1004,7 +1040,9 @@ export const messageService = {
 
 export const memoryService = {
   async list(): Promise<Memory[]> {
-    const rows = db.query<MemoryRow, SQLQueryBindings[]>("SELECT * FROM memories ORDER BY updated_at DESC").all();
+    const rows = db
+      .query<MemoryRow, SQLQueryBindings[]>("SELECT * FROM memories ORDER BY updated_at DESC")
+      .all();
     return rows.map((row) => ({
       id: row.id,
       content: row.content,

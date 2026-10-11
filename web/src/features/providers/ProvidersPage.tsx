@@ -48,11 +48,11 @@ export function ProvidersPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load the provider list once on mount; this is the initial fetch, not a subscription.
   useEffect(() => {
     loadProviders()
       .catch(() => toast.error("Could not load providers."))
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const visibleProviders = useMemo(
@@ -100,8 +100,8 @@ export function ProvidersPage() {
         <div>
           <h1 className="text-sm font-semibold">Providers</h1>
           <p className="text-sm text-muted-foreground">
-            Model providers, endpoints, and credentials. API keys are encrypted on the
-            server and never shown here.
+            Model providers, endpoints, and credentials. API keys are encrypted on the server and
+            never shown here.
           </p>
         </div>
       </section>
@@ -157,7 +157,9 @@ export function ProvidersPage() {
                       )}
                     </div>
                     <div className="truncate font-mono text-xs text-muted-foreground">
-                      {provider.models?.length ? `${provider.models.length} model(s)` : provider.model}
+                      {provider.models?.length
+                        ? `${provider.models.length} model(s)`
+                        : provider.model}
                       {provider.endpoint && ` · ${provider.endpoint}`}
                     </div>
                   </div>

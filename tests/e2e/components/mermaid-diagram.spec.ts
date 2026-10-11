@@ -39,22 +39,16 @@ import { expect, test } from "@playwright/test";
  * the header line, which the renderer rejects outright.
  */
 const FENCE = "```";
-const MERMAID_BLOCK = [
-  FENCE + "mermaid",
-  "flowchart TD",
-  "  A[Start] --> B[Done]",
-  FENCE,
-].join("\n");
+const MERMAID_BLOCK = [`${FENCE}mermaid`, "flowchart TD", "  A[Start] --> B[Done]", FENCE].join(
+  "\n",
+);
 
 /** A valid diagram that this renderer REJECTS, to pin the limitation. */
-const SEMICOLON_BLOCK = [
-  FENCE + "mermaid",
-  "graph TD;",
-  "  A[Start] --> B[Done];",
-  FENCE,
-].join("\n");
+const SEMICOLON_BLOCK = [`${FENCE}mermaid`, "graph TD;", "  A[Start] --> B[Done];", FENCE].join(
+  "\n",
+);
 
-const BROKEN_BLOCK = [FENCE + "mermaid", "graph TD; A[[[-->", FENCE].join("\n");
+const BROKEN_BLOCK = [`${FENCE}mermaid`, "graph TD; A[[[-->", FENCE].join("\n");
 
 /** Create a Direct conversation and append one user turn. */
 async function seedConversation(
@@ -99,26 +93,19 @@ async function seedAssistantReply(
   expect(reply.ok()).toBe(true);
 }
 
-test("a mermaid fence renders as a diagram, not a code block", async ({
-  page,
-  request,
-}) => {
+test("a mermaid fence renders as a diagram, not a code block", async ({ page, request }) => {
   test.setTimeout(120_000);
 
   const label = `mermaid diagram ${Date.now()}`;
   const conversationId = await seedConversation(request, label);
 
   try {
-    await seedAssistantReply(
-      request,
-      conversationId,
-      `Here is the flow.\n\n${MERMAID_BLOCK}\n`,
-    );
+    await seedAssistantReply(request, conversationId, `Here is the flow.\n\n${MERMAID_BLOCK}\n`);
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     // 1. The diagram mounts and yields a real SVG.
     const diagram = page.locator('[data-slot="mermaid-diagram"]');
@@ -133,9 +120,7 @@ test("a mermaid fence renders as a diagram, not a code block", async ({
 
     // The zoom affordance is part of the element, so its presence also proves
     // the full component mounted rather than a bare SVG.
-    await expect(
-      page.getByRole("button", { name: "Expand diagram" }),
-    ).toBeAttached();
+    await expect(page.getByRole("button", { name: "Expand diagram" })).toBeAttached();
   } finally {
     await request.delete(`/api/conversations/${conversationId}`).catch(() => {});
   }
@@ -151,25 +136,19 @@ test("malformed mermaid falls back to the source instead of blanking", async ({
   const conversationId = await seedConversation(request, label);
 
   try {
-    await seedAssistantReply(
-      request,
-      conversationId,
-      `Broken one.\n\n${BROKEN_BLOCK}\n`,
-    );
+    await seedAssistantReply(request, conversationId, `Broken one.\n\n${BROKEN_BLOCK}\n`);
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     // The fallback carries the notice AND the original source, so the reader can
     // see what failed. The message must not be swallowed.
     await expect(page.locator('[data-slot="mermaid-fallback"]')).toBeVisible({
       timeout: 30000,
     });
-    await expect(
-      page.getByText("diagram could not be rendered"),
-    ).toBeVisible();
+    await expect(page.getByText("diagram could not be rendered")).toBeVisible();
     // The surrounding text still renders, proving the failure was contained.
     await expect(page.getByText("Broken one.")).toBeVisible();
   } finally {
@@ -197,9 +176,9 @@ test("a semicolon-terminated header renders (normalised, not rejected)", async (
     await seedAssistantReply(request, conversationId, `Semi.\n\n${SEMICOLON_BLOCK}\n`);
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     const diagram = page.locator('[data-slot="mermaid-diagram"]');
     await expect(diagram).toBeVisible({ timeout: 30000 });

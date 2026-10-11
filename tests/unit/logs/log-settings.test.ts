@@ -1,14 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import {
-  logger,
-  type LogLevelFilter,
-  type LogTargetDirective,
-} from "@/lib/logger.ts";
-import {
-  logFileNameSchema,
-  logRecentQuerySchema,
-  logSettingsSchema,
-} from "@/lib/validation.ts";
+import { logger, type LogLevelFilter, type LogTargetDirective } from "@/lib/logger.ts";
+import { logFileNameSchema, logRecentQuerySchema, logSettingsSchema } from "@/lib/validation.ts";
 import {
   applyPersistedLogSettings,
   getPersistedLogSettings,
@@ -89,8 +81,10 @@ describe("log settings validation", () => {
 
   it("rejects bad scopes and levels", () => {
     expect(
-      logSettingsSchema.safeParse({ level: "info", targets: [{ scope: "has space", level: "debug" }] })
-        .success,
+      logSettingsSchema.safeParse({
+        level: "info",
+        targets: [{ scope: "has space", level: "debug" }],
+      }).success,
     ).toBe(false);
     expect(
       logSettingsSchema.safeParse({ level: "info", targets: [{ scope: "a::b", level: "debug" }] })
@@ -98,8 +92,10 @@ describe("log settings validation", () => {
     ).toBe(false);
     expect(logSettingsSchema.safeParse({ level: "trace", targets: [] }).success).toBe(false);
     expect(
-      logSettingsSchema.safeParse({ level: "debug", targets: [{ scope: "mcp.client", level: "off" }] })
-        .success,
+      logSettingsSchema.safeParse({
+        level: "debug",
+        targets: [{ scope: "mcp.client", level: "off" }],
+      }).success,
     ).toBe(true);
   });
 

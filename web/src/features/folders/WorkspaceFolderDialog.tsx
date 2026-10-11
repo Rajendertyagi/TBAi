@@ -65,9 +65,7 @@ export function WorkspaceFolderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>
-            {folder ? "Manage folder" : "Add workspace folder"}
-          </DialogTitle>
+          <DialogTitle>{folder ? "Manage folder" : "Add workspace folder"}</DialogTitle>
           <DialogDescription>
             {view === "root"
               ? "Choose the project directory to register. Its path is resolved server-side; conversations attach by folder id, never by raw path."

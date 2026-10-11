@@ -15,10 +15,7 @@ import {
 } from "@web/adapters/threadHistoryAdapter.ts";
 import { useSettingsStore } from "@web/stores";
 import { statusBarConfig } from "@web/config/statusBar.ts";
-import {
-  readComposerDraft,
-  writeComposerDraft,
-} from "@web/features/chat/state/composerDraft.ts";
+import { readComposerDraft, writeComposerDraft } from "@web/features/chat/state/composerDraft.ts";
 import type { ProviderConfig } from "@web/types";
 
 const realFetch = globalThis.fetch;
@@ -123,9 +120,7 @@ describe("computeBackoffDelay bounds (Phase 3.2)", () => {
 
   it("[P3-backoff-c] honors a custom factor and clamps negative attempts to 0", () => {
     Math.random = () => 0.999999;
-    expect(
-      computeBackoffDelay(2, { baseMs: 100, maxMs: 10000, factor: 3 }),
-    ).toBe(900);
+    expect(computeBackoffDelay(2, { baseMs: 100, maxMs: 10000, factor: 3 })).toBe(900);
     expect(computeBackoffDelay(-5, { baseMs: 1000, maxMs: 30000 })).toBe(1000);
   });
 
@@ -141,8 +136,7 @@ describe("computeBackoffDelay bounds (Phase 3.2)", () => {
 
 describe("availability poller — /readyz mapping (Phase 3.1/3.2)", () => {
   it("[P3-01] healthy /readyz (200 + ready:true) → online", async () => {
-    globalThis.fetch = (async () =>
-      okJson(200, { ready: true })) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okJson(200, { ready: true })) as unknown as typeof fetch;
     await useAvailabilityStore.getState().probeNow();
     const s = useAvailabilityStore.getState();
     expect(s.status).toBe("online");
@@ -152,8 +146,7 @@ describe("availability poller — /readyz mapping (Phase 3.1/3.2)", () => {
   });
 
   it("[P3-01b] reachable-but-not-ready (200 + ready:false) → degraded, never offline", async () => {
-    globalThis.fetch = (async () =>
-      okJson(200, { ready: false })) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okJson(200, { ready: false })) as unknown as typeof fetch;
     await useAvailabilityStore.getState().probeNow();
     await useAvailabilityStore.getState().probeNow();
     const s = useAvailabilityStore.getState();
@@ -202,13 +195,10 @@ describe("availability recovery transitions (Phase 3.8)", () => {
     expect(useAvailabilityStore.getState().status).toBe("degraded");
 
     let calls = 0;
-    const unsub = useAvailabilityStore
-      .getState()
-      .onRecovered(() => {
-        calls += 1;
-      });
-    globalThis.fetch = (async () =>
-      okJson(200, { ready: true })) as unknown as typeof fetch;
+    const unsub = useAvailabilityStore.getState().onRecovered(() => {
+      calls += 1;
+    });
+    globalThis.fetch = (async () => okJson(200, { ready: true })) as unknown as typeof fetch;
     await useAvailabilityStore.getState().probeNow();
 
     expect(useAvailabilityStore.getState().status).toBe("online");
@@ -225,13 +215,10 @@ describe("availability recovery transitions (Phase 3.8)", () => {
     const unsub1 = useAvailabilityStore.getState().onRecovered(() => {
       throw new Error("listener boom");
     });
-    const unsub2 = useAvailabilityStore
-      .getState()
-      .onRecovered(() => {
-        survivorCalls += 1;
-      });
-    globalThis.fetch = (async () =>
-      okJson(200, { ready: true })) as unknown as typeof fetch;
+    const unsub2 = useAvailabilityStore.getState().onRecovered(() => {
+      survivorCalls += 1;
+    });
+    globalThis.fetch = (async () => okJson(200, { ready: true })) as unknown as typeof fetch;
     await useAvailabilityStore.getState().probeNow();
 
     expect(useAvailabilityStore.getState().status).toBe("online");
@@ -242,8 +229,7 @@ describe("availability recovery transitions (Phase 3.8)", () => {
 
   it("[P3-10] concurrent recoveries coalesce — singleflight runs the listener once", async () => {
     // Settle online first (boot transition consumes epoch 1, no listeners).
-    globalThis.fetch = (async () =>
-      okJson(200, { ready: true })) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okJson(200, { ready: true })) as unknown as typeof fetch;
     await useAvailabilityStore.getState().probeNow();
     expect(useAvailabilityStore.getState().recoveryEpoch).toBe(1);
 
@@ -300,13 +286,9 @@ describe("availability copy presence (Phase 3.3)", () => {
   it("[P3-copy] status-bar availability copy never presents cache as authoritative", () => {
     expect(statusBarConfig.copy.availabilityOnline.length).toBeGreaterThan(0);
     expect(statusBarConfig.copy.availabilityDegraded).toContain("…");
-    expect(statusBarConfig.copy.availabilityDegradedTitle).toContain(
-      "last known",
-    );
+    expect(statusBarConfig.copy.availabilityDegradedTitle).toContain("last known");
     expect(statusBarConfig.copy.availabilityOffline).toBe("Offline");
-    expect(statusBarConfig.copy.availabilityOfflineTitle).toContain(
-      "last known",
-    );
+    expect(statusBarConfig.copy.availabilityOfflineTitle).toContain("last known");
   });
 });
 
@@ -338,10 +320,8 @@ describe("outage integration — stale retained, restore refreshes (e2e-equivale
         if (down) throw new TypeError("fetch failed");
         if (u === "/readyz") return okJson(200, { ready: true });
         if (u === "/api/providers") return okJson(200, providers);
-        if (u === "/api/conversations/c1/messages")
-          return okJson(200, { messages });
-        if (u.startsWith("/api/conversations?"))
-          return okJson(200, { threads, nextCursor: null });
+        if (u === "/api/conversations/c1/messages") return okJson(200, { messages });
+        if (u.startsWith("/api/conversations?")) return okJson(200, { threads, nextCursor: null });
         throw new Error(`unexpected fetch ${u}`);
       }) as unknown as typeof fetch;
 
@@ -375,9 +355,7 @@ describe("outage integration — stale retained, restore refreshes (e2e-equivale
       const staleHistory = await historyAdapter.load();
       expect(staleHistory.messages).toHaveLength(1);
       await useSettingsStore.getState().loadProviders();
-      expect(
-        useSettingsStore.getState().providers.map((p) => p.id),
-      ).toEqual(["p1"]);
+      expect(useSettingsStore.getState().providers.map((p) => p.id)).toEqual(["p1"]);
       expect(readComposerDraft("c1")?.text).toBe("unsent hello");
 
       // Backend returns with NEW authoritative state (empty + new provider).
@@ -391,9 +369,7 @@ describe("outage integration — stale retained, restore refreshes (e2e-equivale
       expect(s.status).toBe("online");
       expect(s.recoveryEpoch).toBe(1);
       // Coordinated recovery reloaded providers (failure-tolerant, ran here).
-      expect(
-        useSettingsStore.getState().providers.map((p) => p.id),
-      ).toEqual(["p2"]);
+      expect(useSettingsStore.getState().providers.map((p) => p.id)).toEqual(["p2"]);
       // Fresh reads are authoritative: stale cache was replaced, not merged.
       expect((await listAdapter.list()).threads).toEqual([]);
       expect((await historyAdapter.load()).messages).toEqual([]);
@@ -405,9 +381,7 @@ describe("outage integration — stale retained, restore refreshes (e2e-equivale
       expect((await historyAdapter.load()).messages).toEqual([]);
 
       // [P3-19] recovery never auto-resends: no chat/transport fetch happened.
-      expect(
-        calls.some((u) => u.includes("/api/chat")),
-      ).toBe(false);
+      expect(calls.some((u) => u.includes("/api/chat"))).toBe(false);
       // [P3-20] the saved composer draft survived the whole sequence untouched.
       expect(readComposerDraft("c1")?.text).toBe("unsent hello");
 

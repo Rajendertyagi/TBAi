@@ -67,9 +67,10 @@ describe("resolveInboundCorrelation", () => {
   });
 
   it("rejects an over-long operation id instead of truncating it", () => {
-    const long = "op_" + "a".repeat(200);
-    expect(resolveInboundCorrelation(incoming({ [OPERATION_ID_HEADER]: long })).operationId)
-      .toBeUndefined();
+    const long = `op_${"a".repeat(200)}`;
+    expect(
+      resolveInboundCorrelation(incoming({ [OPERATION_ID_HEADER]: long })).operationId,
+    ).toBeUndefined();
   });
 });
 

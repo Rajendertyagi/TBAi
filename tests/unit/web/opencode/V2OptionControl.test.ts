@@ -2,9 +2,16 @@ import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { FormInfo } from "@opencode/client";
-import { V2OptionControl, shouldClearOnOpeningCustom } from "@web/features/opencode/V2OptionControl.tsx";
+import {
+  V2OptionControl,
+  shouldClearOnOpeningCustom,
+} from "@web/features/opencode/V2OptionControl.tsx";
 import { capturedQuestionForm } from "@web/testing/question-payloads";
-import { v2FormFieldOptions, type V2FormFieldView, type V2FormOptionView } from "@web/features/opencode/v2Forms.ts";
+import {
+  v2FormFieldOptions,
+  type V2FormFieldView,
+  type V2FormOptionView,
+} from "@web/features/opencode/v2Forms.ts";
 import { toolsConfig } from "@web/config/tools";
 
 /**
@@ -24,8 +31,8 @@ import { toolsConfig } from "@web/config/tools";
 /** A single-select field offering options AND a free-text escape hatch. */
 function fieldWithOptions(): V2FormFieldView {
   const form = capturedQuestionForm as unknown as FormInfo;
-  const field = form.fields.find((candidate) =>
-    (candidate as { options?: unknown[] }).options !== undefined,
+  const field = form.fields.find(
+    (candidate) => (candidate as { options?: unknown[] }).options !== undefined,
   );
   if (!field) throw new Error("fixture has no field with options");
   return field as unknown as V2FormFieldView;

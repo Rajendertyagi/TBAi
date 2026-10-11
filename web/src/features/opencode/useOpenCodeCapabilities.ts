@@ -64,10 +64,7 @@ export function buildOpenCodeThinkingOptions(
   model: OpenCodeModelOption | null | undefined,
 ): OpenCodeThinkingOption[] {
   if (!model || model.variants.length === 0) return [];
-  return [
-    { id: "", label: "Default" },
-    ...model.variants.map((v) => ({ id: v, label: v })),
-  ];
+  return [{ id: "", label: "Default" }, ...model.variants.map((v) => ({ id: v, label: v }))];
 }
 
 /**
@@ -87,6 +84,7 @@ export function useOpenCodeCapabilities(enabled = true) {
   // when the backend returns. Failure retains the previous lists.
   const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `recoveryEpoch` is a store counter that is never read in the body - it is the refetch trigger. Availability recovery changes no prop this effect observes, but the capabilities that were fetched against a dead server have to be fetched again once the server is back.
   useEffect(() => {
     if (!enabled) {
       setAgents([]);
@@ -112,16 +110,19 @@ export function useOpenCodeCapabilities(enabled = true) {
         // become a model reference that the server rejects on the first turn,
         // which is the exact failure this default exists to prevent.
         setDefaultModel(
-          data.defaultModel
-            && typeof data.defaultModel.providerID === "string" && data.defaultModel.providerID.length > 0
-            && typeof data.defaultModel.modelID === "string" && data.defaultModel.modelID.length > 0
+          data.defaultModel &&
+            typeof data.defaultModel.providerID === "string" &&
+            data.defaultModel.providerID.length > 0 &&
+            typeof data.defaultModel.modelID === "string" &&
+            data.defaultModel.modelID.length > 0
             ? {
-              providerID: data.defaultModel.providerID,
-              modelID: data.defaultModel.modelID,
-              name: typeof data.defaultModel.name === "string" && data.defaultModel.name.length > 0
-                ? data.defaultModel.name
-                : data.defaultModel.modelID,
-            }
+                providerID: data.defaultModel.providerID,
+                modelID: data.defaultModel.modelID,
+                name:
+                  typeof data.defaultModel.name === "string" && data.defaultModel.name.length > 0
+                    ? data.defaultModel.name
+                    : data.defaultModel.modelID,
+              }
             : undefined,
         );
         // Keep the optional variants field total for the picker contract.

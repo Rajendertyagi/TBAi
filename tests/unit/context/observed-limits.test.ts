@@ -33,7 +33,12 @@ const PROVIDER = "prov-a";
 const OTHER_PROVIDER = "prov-b";
 const ENDPOINT = "https://gateway.example/v1";
 
-function model(id: string): { providerId: string; modelId: string; endpoint: string; protocol: string } {
+function model(id: string): {
+  providerId: string;
+  modelId: string;
+  endpoint: string;
+  protocol: string;
+} {
   return { providerId: PROVIDER, modelId: id, endpoint: ENDPOINT, protocol: "chat-completions" };
 }
 
@@ -49,7 +54,9 @@ describe("an observation is scoped to exactly one provider, model and endpoint",
 
   it("does not cross to another provider", () => {
     observeContextWindow(model("m1"), 524_288);
-    expect(readObservedContextWindow({ ...model("m1"), providerId: OTHER_PROVIDER })).toBeUndefined();
+    expect(
+      readObservedContextWindow({ ...model("m1"), providerId: OTHER_PROVIDER }),
+    ).toBeUndefined();
   });
 
   it("does not cross to another model on the same provider", () => {
@@ -59,7 +66,9 @@ describe("an observation is scoped to exactly one provider, model and endpoint",
 
   it("does not cross to another endpoint", () => {
     observeContextWindow(model("m1"), 524_288);
-    expect(readObservedContextWindow({ ...model("m1"), endpoint: "https://other.example/v1" })).toBeUndefined();
+    expect(
+      readObservedContextWindow({ ...model("m1"), endpoint: "https://other.example/v1" }),
+    ).toBeUndefined();
   });
 
   it("does not cross to another protocol", () => {
@@ -70,7 +79,9 @@ describe("an observation is scoped to exactly one provider, model and endpoint",
   it("cannot be made to collide by shifting characters between fields", () => {
     // Length-prefixed keys, so `("ab","c")` and `("a","bc")` cannot produce one key.
     observeContextWindow({ providerId: "ab", modelId: "c", endpoint: "", protocol: "" }, 200_000);
-    expect(readObservedContextWindow({ providerId: "a", modelId: "bc", endpoint: "", protocol: "" })).toBeUndefined();
+    expect(
+      readObservedContextWindow({ providerId: "a", modelId: "bc", endpoint: "", protocol: "" }),
+    ).toBeUndefined();
   });
 
   it("supersedes rather than accumulating when the provider changes its window", () => {
@@ -96,7 +107,12 @@ describe("an observation is scoped to exactly one provider, model and endpoint",
 });
 
 describe("the resolution hierarchy", () => {
-  const bare = { providerType: "custom" as const, providerId: PROVIDER, endpoint: ENDPOINT, protocol: "chat-completions" };
+  const bare = {
+    providerType: "custom" as const,
+    providerId: PROVIDER,
+    endpoint: ENDPOINT,
+    protocol: "chat-completions",
+  };
 
   it("falls back to the conservative stand-in when nothing is known", () => {
     const limit = resolveContextLimit({ ...bare, modelId: "m1" });
@@ -118,8 +134,18 @@ describe("the resolution hierarchy", () => {
   });
 
   it("does NOT let an observation override declared provider metadata", () => {
-    const declared = { id: "m1", provider: "custom", contextWindow: 200_000, contextWindowSource: "provider_reported" } as unknown as ModelOption;
-    const limit = resolveContextLimit({ ...bare, modelId: "m1", model: declared, observedContextWindow: 524_288 });
+    const declared = {
+      id: "m1",
+      provider: "custom",
+      contextWindow: 200_000,
+      contextWindowSource: "provider_reported",
+    } as unknown as ModelOption;
+    const limit = resolveContextLimit({
+      ...bare,
+      modelId: "m1",
+      model: declared,
+      observedContextWindow: 524_288,
+    });
     expect(limit.maxInputTokens).toBe(200_000);
     expect(limit.source).toBe("provider_reported");
   });
@@ -137,8 +163,19 @@ describe("the resolution hierarchy", () => {
 
   it("still resolves a declared/conflict the way it did before observations existed", () => {
     // configured beats a provider listing, and the loser is recorded rather than lost.
-    const declared = { id: "m1", provider: "custom", contextWindow: 200_000, contextWindowSource: "provider_reported" } as unknown as ModelOption;
-    const limit = resolveContextLimit({ ...bare, modelId: "m1", model: declared, configuredContextWindow: 64_000, observedContextWindow: 524_288 });
+    const declared = {
+      id: "m1",
+      provider: "custom",
+      contextWindow: 200_000,
+      contextWindowSource: "provider_reported",
+    } as unknown as ModelOption;
+    const limit = resolveContextLimit({
+      ...bare,
+      modelId: "m1",
+      model: declared,
+      configuredContextWindow: 64_000,
+      observedContextWindow: 524_288,
+    });
     expect(limit.maxInputTokens).toBe(64_000);
     expect(limit.source).toBe("configured");
     expect(limit.divergent).toBe(true);
@@ -149,7 +186,11 @@ describe("the resolution hierarchy", () => {
     // R1 admits ONLY `provider_reported`. An error-derived figure must not silently
     // authorise cache sizing or a cache experiment. Asserting the gate itself, not
     // the source string, so a future widening of R1 has to fail here deliberately.
-    const observed = resolveContextLimit({ ...bare, modelId: "m1", observedContextWindow: 524_288 });
+    const observed = resolveContextLimit({
+      ...bare,
+      modelId: "m1",
+      observedContextWindow: 524_288,
+    });
     expect(observed.source).toBe("observed");
     expect(isPhase3ExperimentEligible(observed)).toBe(false);
 

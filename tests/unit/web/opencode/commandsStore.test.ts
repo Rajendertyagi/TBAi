@@ -59,7 +59,11 @@ function failing(status: number) {
 }
 
 function rejectingJson() {
-  return { ok: true, status: 200, json: async () => Promise.reject(new Error("bad json")) } as unknown as Response;
+  return {
+    ok: true,
+    status: 200,
+    json: async () => Promise.reject(new Error("bad json")),
+  } as unknown as Response;
 }
 
 function deferred() {
@@ -246,10 +250,7 @@ describe("commandsStore — TTL, single-flight, failure retention", () => {
     nowMs += 30_000;
     await useCommandsStore.getState().load();
     expect(fetchCalls).toBe(1);
-    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual([
-      "init",
-      "officecli",
-    ]);
+    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual(["init", "officecli"]);
   });
 
   it("concurrent loads share a single fetch", async () => {
@@ -315,20 +316,11 @@ describe("commandsStore — TTL, single-flight, failure retention", () => {
     await load();
     expect(useCommandsStore.getState().commands).toHaveLength(4);
     await load();
-    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual([
-      "init",
-      "officecli",
-    ]);
+    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual(["init", "officecli"]);
     await load();
-    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual([
-      "init",
-      "officecli",
-    ]);
+    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual(["init", "officecli"]);
     await load();
-    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual([
-      "init",
-      "officecli",
-    ]);
+    expect(useCommandsStore.getState().commands.map((c) => c.name)).toEqual(["init", "officecli"]);
     await load();
     expect(useCommandsStore.getState().commands).toHaveLength(4);
     // The cache is never observed empty once populated.

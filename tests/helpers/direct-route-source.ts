@@ -36,10 +36,7 @@ import { REPO_ROOT } from "./repo-root";
  *
  * Deliberately not auto-discovered. See the module note above.
  */
-export const DIRECT_ROUTE_MODULES = [
-  "validate-and-resolve.ts",
-  "assemble-run.ts",
-] as const;
+export const DIRECT_ROUTE_MODULES = ["validate-and-resolve.ts", "assemble-run.ts"] as const;
 
 export type DirectRouteModule = (typeof DIRECT_ROUTE_MODULES)[number];
 

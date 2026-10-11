@@ -104,9 +104,9 @@ test("an oversized tool result is shortened, and says so", async ({ page, reques
     ]);
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
     await expandToolGroup(page);
 
     const note = page.locator(".aui-tool-body-truncated");
@@ -125,9 +125,7 @@ test("an oversized tool result is shortened, and says so", async ({ page, reques
     // 3. The head is present, so the card leads with the start of the file.
     expect(rendered).toContain(bodyLine(0));
     // And the bound itself held, in the DOM and not merely in a claim.
-    expect(rendered.split("\n").length).toBeLessThanOrEqual(
-      toolsConfig.limits.toolBodyMaxLines,
-    );
+    expect(rendered.split("\n").length).toBeLessThanOrEqual(toolsConfig.limits.toolBodyMaxLines);
   } finally {
     await removeConversation(request, conversationId);
   }
@@ -158,9 +156,9 @@ test("an ordinary small tool result is untouched - no note, nothing dropped", as
     ]);
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     await expandToolGroup(page);
 

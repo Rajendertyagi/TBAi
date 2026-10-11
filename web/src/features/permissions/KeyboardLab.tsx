@@ -73,10 +73,9 @@ export function KeyboardLab() {
       <header>
         <h1 className="text-lg font-medium">Keyboard lab</h1>
         <p className="text-muted-foreground text-sm">
-          Real ApprovalActions in the real ApprovalCard. Focus goes to the{" "}
-          <b>topmost</b> pending request. Enter approves, Escape denies, Tab walks
-          the buttons. Deciding a card removes it, so you can watch the keyboard
-          hand on to the next one.
+          Real ApprovalActions in the real ApprovalCard. Focus goes to the <b>topmost</b> pending
+          request. Enter approves, Escape denies, Tab walks the buttons. Deciding a card removes it,
+          so you can watch the keyboard hand on to the next one.
         </p>
       </header>
 
@@ -159,6 +158,7 @@ export function KeyboardLab() {
         <p data-lab="count">{log.length}</p>
         <ul className="font-mono text-sm">
           {log.map((entry, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: repeated keystroke entries are the normal case in this lab, so the index is what keeps keys unique. The log is append-only.
             <li key={`${entry}-${index}`}>{entry}</li>
           ))}
         </ul>

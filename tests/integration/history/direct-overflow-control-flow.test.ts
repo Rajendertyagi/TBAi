@@ -150,14 +150,22 @@ const ADEQUATE_SUMMARY = Array.from(
 function longHistory(): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
   for (let i = 0; i < 12; i += 1) {
-    messages.push({ id: `u${i}`, role: "user", parts: [{ type: "text", text: `question ${i} ${"detail ".repeat(40)}` }] });
+    messages.push({
+      id: `u${i}`,
+      role: "user",
+      parts: [{ type: "text", text: `question ${i} ${"detail ".repeat(40)}` }],
+    });
     messages.push({
       id: `a${i}`,
       role: "assistant",
       parts: [{ type: "text", text: `answer ${i} ${"reply ".repeat(40)}`, state: "done" }],
     });
   }
-  messages.push({ id: "live", role: "user", parts: [{ type: "text", text: "the current question" }] });
+  messages.push({
+    id: "live",
+    role: "user",
+    parts: [{ type: "text", text: "the current question" }],
+  });
   return messages;
 }
 
@@ -192,14 +200,16 @@ afterAll(async () => {
 describe("CONTROL FLOW: overflow → compact → rebuild → retry", () => {
   it("issues a second provider attempt and streams only the recovered answer", async () => {
     await seed();
-    const conv = await conversationService.create(conversationInput({
-      title: "recovery-proof",
-      providerId: PROVIDER_ID,
-      modelId: MODEL_ID,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "recovery-proof",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const res = await app.request("/api/chat", {

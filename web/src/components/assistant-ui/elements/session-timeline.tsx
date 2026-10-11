@@ -164,10 +164,19 @@ export function toStats(parts: readonly ToolCallMessagePart[]): TimelineStat[] {
     }
     // A tool that reports its own counts still gets them; nothing is lost.
     const result = part.result as
-      | { file?: unknown; filePath?: unknown; path?: unknown; added?: unknown; removed?: unknown; linesAdded?: unknown; linesRemoved?: unknown }
+      | {
+          file?: unknown;
+          filePath?: unknown;
+          path?: unknown;
+          added?: unknown;
+          removed?: unknown;
+          linesAdded?: unknown;
+          linesRemoved?: unknown;
+        }
       | undefined;
     if (!result || typeof result !== "object") continue;
-    const file = firstString(result.file) ?? firstString(result.filePath) ?? firstString(result.path);
+    const file =
+      firstString(result.file) ?? firstString(result.filePath) ?? firstString(result.path);
     if (!file) continue;
     const added = numberOrUndefined(result.added ?? result.linesAdded);
     const removed = numberOrUndefined(result.removed ?? result.linesRemoved);

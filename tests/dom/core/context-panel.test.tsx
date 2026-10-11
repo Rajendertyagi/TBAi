@@ -44,8 +44,8 @@ import { stripComments } from "@web/testing/source-scope";
  * silently different one.
  */
 async function read(relative: string): Promise<string> {
-  const { readFileSync } = await import("fs");
-  const { resolve } = await import("path");
+  const { readFileSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
   const { REPO_ROOT } = await import("../../helpers/repo-root");
   return readFileSync(resolve(REPO_ROOT, relative), "utf8");
 }
@@ -74,7 +74,9 @@ describe("the ring's action slot is genuinely optional", () => {
   });
 
   it("renders the supplied node, separated from the readings above it", () => {
-    const html = renderSlot(createElement("button", null, contextPanelCopy.compactNow));
+    const html = renderSlot(
+      createElement("button", { type: "button" }, contextPanelCopy.compactNow),
+    );
     expect(html).toContain(contextPanelCopy.compactNow);
     expect(html).toContain("<button");
     expect(html).toContain("border-t");
@@ -88,11 +90,7 @@ describe("the ring's action slot is genuinely optional", () => {
     const src = await read("web/src/components/assistant-ui/elements/context-display.tsx");
     const content = src.slice(src.indexOf("function ContextDisplayContent("));
     const body = content.slice(0, content.indexOf("</TooltipContent>"));
-    for (const reading of [
-      "modelContextWindow",
-      "windowSource",
-      "getContextSegments",
-    ]) {
+    for (const reading of ["modelContextWindow", "windowSource", "getContextSegments"]) {
       expect(body).toContain(reading);
     }
     // The slot itself computes nothing.
@@ -145,15 +143,15 @@ describe("Change 3 does not reintroduce the superseded Popover approach", () => 
   });
 
   it("the deleted panel component is gone", async () => {
-    const { existsSync } = await import("fs");
-    const { resolve } = await import("path");
+    const { existsSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
     const { REPO_ROOT } = await import("../../helpers/repo-root");
     // Checked where the component would have lived. Anchored to the repository
     // root, because a check relative to this test's own directory would pass
     // whether or not the component still exists.
-    expect(
-      existsSync(resolve(REPO_ROOT, "web/src/components/chat/ContextPanelContent.tsx")),
-    ).toBe(false);
+    expect(existsSync(resolve(REPO_ROOT, "web/src/components/chat/ContextPanelContent.tsx"))).toBe(
+      false,
+    );
   });
 });
 

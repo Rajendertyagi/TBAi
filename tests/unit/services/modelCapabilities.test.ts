@@ -57,9 +57,7 @@ function installOllamaMock(tags: string[], shows: Record<string, ShowBehavior | 
 
 /** Cloud-listing mock: serves one listing payload for models endpoints. */
 function installCloudMock(payload: unknown): void {
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (
-    input: RequestInfo | URL,
-  ) => {
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : String(input);
     if (url.includes("/models")) return jsonResponse(payload);
     throw new Error(`unexpected fetch in cloud mock: ${url}`);
@@ -181,9 +179,7 @@ describe("Phase 1 model capabilities — truthful foundation", () => {
     expect(restored.find((m) => m.id === "qwen-think")?.capabilities?.reasoning.support).toBe(
       "supported",
     );
-    expect(restored.find((m) => m.id === "plain")?.capabilities?.reasoning.support).toBe(
-      "unknown",
-    );
+    expect(restored.find((m) => m.id === "plain")?.capabilities?.reasoning.support).toBe("unknown");
     // Same round-trip through the provider create shape carrying models.
     const provider = providerCreateSchema.parse({
       name: "o",
@@ -234,9 +230,7 @@ describe("Phase 1 model capabilities — truthful foundation", () => {
     expect(valid.capabilities?.reasoning.support).toBe("unknown");
 
     for (const bad of ["maybe", "", "SUPPORTED", true, 42, null]) {
-      expect(() =>
-        reasoningCapabilitySchema.parse({ support: bad }),
-      ).toThrow();
+      expect(() => reasoningCapabilitySchema.parse({ support: bad })).toThrow();
     }
     // Missing required reasoning stance is rejected — a capabilities object
     // must take an explicit stance.

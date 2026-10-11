@@ -16,9 +16,7 @@ function chatCompletionBody(text: string): string {
     object: "chat.completion",
     created: 0,
     model: "m",
-    choices: [
-      { index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" },
-    ],
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   });
 }
@@ -43,16 +41,14 @@ function responsesBody(text: string): string {
 }
 
 function sseStream(text: string): string {
-  const chunks = text
-    .split("")
-    .map((ch) =>
-      JSON.stringify({
-        id: "c",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { content: ch }, finish_reason: null }],
-      }),
-    );
-  return chunks.map((c) => `data: ${c}\n`).join("") + "data: [DONE]\n\n";
+  const chunks = text.split("").map((ch) =>
+    JSON.stringify({
+      id: "c",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { content: ch }, finish_reason: null }],
+    }),
+  );
+  return `${chunks.map((c) => `data: ${c}\n`).join("")}data: [DONE]\n\n`;
 }
 
 function installFetch() {
@@ -96,7 +92,12 @@ async function capture(fn: () => Promise<unknown>): Promise<{ url: string | null
 }
 
 const openaiModel = (proto?: ApiProtocol) =>
-  getModel({ type: "openai", model: "gpt-x", apiKey: "k", ...(proto ? { apiProtocol: proto } : {}) });
+  getModel({
+    type: "openai",
+    model: "gpt-x",
+    apiKey: "k",
+    ...(proto ? { apiProtocol: proto } : {}),
+  });
 
 const customModel = (proto?: ApiProtocol) =>
   getModel({
@@ -115,36 +116,58 @@ describe("ai model factory — apiProtocol resolution", () => {
   afterEach(() => restore());
 
   it("native OpenAI explicit 'responses' → /responses", async () => {
-    const { url } = await capture(() => generateText({ model: openaiModel("responses"), messages: [{ role: "user", content: "hi" }] }));
+    const { url } = await capture(() =>
+      generateText({
+        model: openaiModel("responses"),
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
     expect(url).toContain("/responses");
     expect(url).not.toContain("/chat/completions");
   });
 
   it("native OpenAI defaults to 'responses'", async () => {
-    const { url } = await capture(() => generateText({ model: openaiModel(), messages: [{ role: "user", content: "hi" }] }));
+    const { url } = await capture(() =>
+      generateText({ model: openaiModel(), messages: [{ role: "user", content: "hi" }] }),
+    );
     expect(url).toContain("/responses");
   });
 
   it("custom explicit 'chat-completions' → /chat/completions", async () => {
-    const { url } = await capture(() => generateText({ model: customModel("chat-completions"), messages: [{ role: "user", content: "hi" }] }));
+    const { url } = await capture(() =>
+      generateText({
+        model: customModel("chat-completions"),
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
     expect(url).toContain("/chat/completions");
     expect(url).not.toContain("/responses");
   });
 
   it("custom (Agnes) defaults to 'chat-completions'", async () => {
-    const { url } = await capture(() => generateText({ model: customModel(), messages: [{ role: "user", content: "hi" }] }));
+    const { url } = await capture(() =>
+      generateText({ model: customModel(), messages: [{ role: "user", content: "hi" }] }),
+    );
     expect(url).toContain("/chat/completions");
   });
 
   it("ollama defaults to 'chat-completions'", async () => {
     const { url } = await capture(() =>
-      generateText({ model: getModel({ type: "ollama", model: "llama3", endpoint: "http://localhost:11434/v1" }), messages: [{ role: "user", content: "hi" }] }),
+      generateText({
+        model: getModel({ type: "ollama", model: "llama3", endpoint: "http://localhost:11434/v1" }),
+        messages: [{ role: "user", content: "hi" }],
+      }),
     );
     expect(url).toContain("/chat/completions");
   });
 
   it("custom provider is configurable to 'responses'", async () => {
-    const { url } = await capture(() => generateText({ model: customModel("responses"), messages: [{ role: "user", content: "hi" }] }));
+    const { url } = await capture(() =>
+      generateText({
+        model: customModel("responses"),
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
     expect(url).toContain("/responses");
   });
 

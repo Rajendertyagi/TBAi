@@ -272,14 +272,16 @@ function resolveSeededWindow(): {
 }
 
 async function runTurn(messages: Array<Record<string, unknown>>): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title: "observed-window",
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title: "observed-window",
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   try {
     const res = await app.request("/api/chat", {
       method: "POST",
@@ -366,7 +368,9 @@ describe("a provider's stated window reaches the recovery it triggers", () => {
     expect(
       readObservedContextWindow({ ...observedKey(), endpoint: "http://127.0.0.1:1/v1" }),
     ).toBeUndefined();
-    expect(readObservedContextWindow({ ...observedKey(), providerId: "prov-elsewhere" })).toBeUndefined();
+    expect(
+      readObservedContextWindow({ ...observedKey(), providerId: "prov-elsewhere" }),
+    ).toBeUndefined();
     expect(readObservedContextWindow({ ...observedKey(), modelId: "other-model" })).toBeUndefined();
   }, 60000);
 });
@@ -375,7 +379,9 @@ describe("a second rejection still terminates normally", () => {
   it("does not attempt a third time, and still records what the provider stated", async () => {
     // Both kinds overflow. The summariser MUST still answer, or this would be testing a
     // failed compaction rather than the two-attempt bound.
-    await seed((kind) => (kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : overflowResponse()));
+    await seed((kind) =>
+      kind === "summariser" ? jsonCompletion(SUMMARY_TEXT) : overflowResponse(),
+    );
 
     const sse = await runTurn(wideHistory());
 

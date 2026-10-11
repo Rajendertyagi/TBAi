@@ -6,10 +6,7 @@ import {
   persistConfiguredPort,
   resolveConfiguredPort,
 } from "../services/server-port";
-import {
-  getPersistedStartMinimized,
-  persistStartMinimized,
-} from "../services/startup-prefs";
+import { getPersistedStartMinimized, persistStartMinimized } from "../services/startup-prefs";
 import { getActivePort, getInstanceId, restartListener } from "../services/server-listener";
 import { logger } from "../lib/logger";
 
@@ -65,9 +62,7 @@ app.post("/restart", async (c) => {
   }
   const body = await c.req.json().catch(() => ({}));
   const port =
-    body && body.port !== undefined
-      ? body.port
-      : (resolveConfiguredPort().port ?? getActivePort());
+    body && body.port !== undefined ? body.port : (resolveConfiguredPort().port ?? getActivePort());
   const parsed = serverPortBodySchema.safeParse({ port });
   if (!parsed.success) {
     return c.json({ error: "Invalid port (1-65535)", issues: parsed.error.issues }, 400);
@@ -84,10 +79,7 @@ app.post("/restart", async (c) => {
     if (isBindConflict(err)) {
       return c.json({ error: `Port ${parsed.data.port} is already in use` }, 409);
     }
-    return c.json(
-      { error: err instanceof Error ? err.message : "Restart failed" },
-      500,
-    );
+    return c.json({ error: err instanceof Error ? err.message : "Restart failed" }, 500);
   }
 });
 

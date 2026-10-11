@@ -43,22 +43,35 @@ function install() {
     getOpenCodeCapabilities: async () => ({
       agents: [],
       models: [],
-      defaultModel: { providerID: "openrouter", modelID: "perceptron/perceptron-mk1.5", name: "Perceptron Mk1.5" },
+      defaultModel: {
+        providerID: "openrouter",
+        modelID: "perceptron/perceptron-mk1.5",
+        name: "Perceptron Mk1.5",
+      },
     }),
     // Resolves only a stored value that the catalogue knows; anything else is
     // "no choice", which is what lets the default apply.
     resolveOpenCodeModelRef: async (modelId: string) =>
-      modelId === "agnes/agnes-3.0-flash" ? { providerID: "agnes", modelID: "agnes-3.0-flash" } : null,
+      modelId === "agnes/agnes-3.0-flash"
+        ? { providerID: "agnes", modelID: "agnes-3.0-flash" }
+        : null,
   }));
   mock.module("@/services/opencode/client", () => ({
     createOpenCodeClient: () => ({
       session: {
-        get: async () => ({ id: "ses_bound", location: { directory: "D:/tmp/x" }, model: boundModel }),
+        get: async () => ({
+          id: "ses_bound",
+          location: { directory: "D:/tmp/x" },
+          model: boundModel,
+        }),
         create: async (params: Record<string, unknown>) => {
           creates.push(params);
           return { id: "ses_new", location: { directory: "D:/tmp/x" } };
         },
-        switchModel: async (input: { sessionID: string; model: { id: string; providerID: string } }) => {
+        switchModel: async (input: {
+          sessionID: string;
+          model: { id: string; providerID: string };
+        }) => {
           switches.push(input);
         },
       },
@@ -88,7 +101,10 @@ describe("the adopt seam — a bound session with no model", () => {
     await ensureOpenCodeSession("conv-1");
     expect(switches).toHaveLength(1);
     expect(switches[0].sessionID).toBe("ses_bound");
-    expect(switches[0].model).toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
+    expect(switches[0].model).toEqual({
+      id: "perceptron/perceptron-mk1.5",
+      providerID: "openrouter",
+    });
   });
 
   it("is given the STORED model when one exists, never the default", async () => {
@@ -122,7 +138,9 @@ describe("the adopt seam — a bound session with no model", () => {
         session: {
           get: async () => ({ id: "ses_bound", location: { directory: "D:/tmp/x" }, model: null }),
           create: async () => ({ id: "ses_new" }),
-          switchModel: async () => { throw new Error("server refused"); },
+          switchModel: async () => {
+            throw new Error("server refused");
+          },
         },
       }),
     }));
@@ -136,11 +154,18 @@ describe("the create seam — a conversation with no stored choice", () => {
     storedConversation = { ...storedConversation, opencodeSessionId: null };
     await ensureOpenCodeSession("conv-1");
     expect(creates).toHaveLength(1);
-    expect(creates[0].model).toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
+    expect(creates[0].model).toEqual({
+      id: "perceptron/perceptron-mk1.5",
+      providerID: "openrouter",
+    });
   });
 
   it("is created with the STORED model when one exists", async () => {
-    storedConversation = { ...storedConversation, opencodeSessionId: null, opencodeModel: "agnes/agnes-3.0-flash" };
+    storedConversation = {
+      ...storedConversation,
+      opencodeSessionId: null,
+      opencodeModel: "agnes/agnes-3.0-flash",
+    };
     await ensureOpenCodeSession("conv-1");
     expect(creates[0].model).toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
   });
@@ -155,7 +180,11 @@ describe("the create seam — a conversation with no stored choice", () => {
       opencodeVariant: "high",
     };
     await ensureOpenCodeSession("conv-1");
-    expect(creates[0].model).toEqual({ id: "agnes-3.0-flash", providerID: "agnes", variant: "high" });
+    expect(creates[0].model).toEqual({
+      id: "agnes-3.0-flash",
+      providerID: "agnes",
+      variant: "high",
+    });
   });
 
   it("is created with no model when there is neither a choice nor a default", async () => {
@@ -171,7 +200,11 @@ describe("the create seam — a conversation with no stored choice", () => {
   it("never runs the default branch when a stored model was already set", async () => {
     // Non-vacuity for the `if (!params.model)` guard: with a stored model the
     // default lookup must not even be consulted.
-    storedConversation = { ...storedConversation, opencodeSessionId: null, opencodeModel: "agnes/agnes-3.0-flash" };
+    storedConversation = {
+      ...storedConversation,
+      opencodeSessionId: null,
+      opencodeModel: "agnes/agnes-3.0-flash",
+    };
     await ensureOpenCodeSession("conv-1");
     expect(switches).toHaveLength(0);
     expect(creates[0].model).toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });

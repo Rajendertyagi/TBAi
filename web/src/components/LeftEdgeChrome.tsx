@@ -45,12 +45,14 @@ export function LeftEdgeChrome() {
 
   // Focus the input on open / shortcut request (the overlay re-renders, so
   // autoFocus alone is not enough for repeat shortcut presses).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `searchFocusRequest` is not read in the body on purpose - it is the re-trigger. It is a request counter that increments on every shortcut press, and this effect exists to re-focus the input on each one, so removing it as "unused" would silently break repeat shortcut presses.
   useEffect(() => {
     if (searchOpen) inputRef.current?.focus();
   }, [searchOpen, searchFocusRequest]);
 
   // Global conversation-search shortcut (Ctrl/⌘K). Ignored while typing in an
   // editable element so composer/input shortcuts keep working.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: global keydown listener, registered once on mount. The callback closes over state that is read at event time, not capture time; depending on it would tear the listener down and re-add it mid-interaction on every render.
   useEffect(() => {
     if (!historyConfig.searchEnabled) return;
     const onKey = (e: KeyboardEvent) => {
@@ -70,7 +72,6 @@ export function LeftEdgeChrome() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -100,11 +101,7 @@ export function LeftEdgeChrome() {
               aria-label={copy.searchLabel}
               className="h-6 min-w-0 flex-1 border-transparent bg-transparent px-1.5 text-xs shadow-none focus-visible:border-ring"
             />
-            <TooltipIconButton
-              tooltip={copy.clearSearch}
-              side="bottom"
-              onClick={closeSearch}
-            >
+            <TooltipIconButton tooltip={copy.clearSearch} side="bottom" onClick={closeSearch}>
               <X className="size-3.5" />
             </TooltipIconButton>
           </>

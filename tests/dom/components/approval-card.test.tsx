@@ -54,10 +54,10 @@ const OUTLINE_RING = "ring-card-outline";
 
 const renderApprovalCard = () =>
   renderToStaticMarkup(
-    createElement(
-      ApprovalCard as unknown as (props: Record<string, unknown>) => ReactElement,
-      { title: "shell", children: "body" },
-    ),
+    createElement(ApprovalCard as unknown as (props: Record<string, unknown>) => ReactElement, {
+      title: "shell",
+      children: "body",
+    }),
   );
 
 const renderDecisionRow = () =>
@@ -171,9 +171,7 @@ describe("vendored elements — the width cap is gone", () => {
     const terminal = rootClasses(
       renderToStaticMarkup(createElement(TerminalBlock, { ...TERMINAL })),
     );
-    const diff = rootClasses(
-      renderToStaticMarkup(createElement(CodeDiff, { ...DIFF })),
-    );
+    const diff = rootClasses(renderToStaticMarkup(createElement(CodeDiff, { ...DIFF })));
 
     for (const [name, tokens] of [
       ["terminal-block", terminal],
@@ -207,9 +205,7 @@ describe("globals.css — the card surface tokens", () => {
   let darkBlock = "";
 
   beforeAll(async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/styles/globals.css"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/styles/globals.css")).text();
 
     /**
      * The declarations of one top-level scheme block, brace-matched.
@@ -249,7 +245,7 @@ describe("globals.css — the card surface tokens", () => {
      * to the terminating semicolon. Comments are stripped first, so a comment
      * mentioning the value cannot satisfy the assertion.
      */
-    const valueOf = (block: string, token: string): string => {
+    const readTokenValue = (block: string, token: string): string => {
       const source = stripComments(block);
       const at = source.indexOf(`${token}:`);
       if (at === -1) throw new Error(`${token} not declared`);
@@ -258,8 +254,8 @@ describe("globals.css — the card surface tokens", () => {
     };
 
     for (const token of ["--card-soft", "--card-outline"]) {
-      const light = valueOf(rootBlock, token);
-      const dark = valueOf(darkBlock, token);
+      const light = readTokenValue(rootBlock, token);
+      const dark = readTokenValue(darkBlock, token);
       expect(light, `${token} in :root`).not.toBe("");
       expect(dark, `${token} in .dark`).not.toBe("");
       // Light steps DOWN from white, dark steps UP from near-black. A copy here
@@ -269,17 +265,19 @@ describe("globals.css — the card surface tokens", () => {
 
     // The soft fill and the ring are DIFFERENT steps of the same family, so the
     // edge reads as a hint rather than a second fill.
-    expect(valueOf(rootBlock, "--card-soft")).not.toBe(valueOf(rootBlock, "--card-outline"));
-    expect(valueOf(darkBlock, "--card-soft")).not.toBe(valueOf(darkBlock, "--card-outline"));
+    expect(readTokenValue(rootBlock, "--card-soft")).not.toBe(
+      readTokenValue(rootBlock, "--card-outline"),
+    );
+    expect(readTokenValue(darkBlock, "--card-soft")).not.toBe(
+      readTokenValue(darkBlock, "--card-outline"),
+    );
   });
 
   it("exposes both tokens to Tailwind, so the classes resolve", async () => {
     // `bg-card-soft` / `ring-card-outline` are generated from these. Without the
     // `@theme` entries the classes render as nothing at all — invisible in a
     // source grep, obvious only in the browser.
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/styles/globals.css"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/styles/globals.css")).text();
     expect(source).toContain("--color-card-soft: var(--card-soft);");
     expect(source).toContain("--color-card-outline: var(--card-outline);");
   });

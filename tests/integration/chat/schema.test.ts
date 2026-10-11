@@ -146,9 +146,7 @@ describe("chat-stream schema — existing database", () => {
       .query<
         { stream_id: string; history_state: string; final_message_json: string | null },
         SQLQueryBindings[]
-      >(
-        "SELECT stream_id, history_state, final_message_json FROM chat_streams WHERE stream_id = ?",
-      )
+      >("SELECT stream_id, history_state, final_message_json FROM chat_streams WHERE stream_id = ?")
       .get("run_legacy")!;
     expect(row.stream_id).toBe("run_legacy");
     expect(row.history_state).toBe("pending");

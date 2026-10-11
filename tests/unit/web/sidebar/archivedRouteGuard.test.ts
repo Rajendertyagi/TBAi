@@ -2,10 +2,7 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
 import { normalizeSectionOrder } from "@web/lib/sidebar-sections";
-import {
-  SIDEBAR_SECTION_IDS,
-  type SidebarSectionId,
-} from "@web/config/sidebar";
+import { SIDEBAR_SECTION_IDS, type SidebarSectionId } from "@web/config/sidebar";
 
 /**
  * Guards for the Archived page: route registration order, rail presence,
@@ -21,15 +18,9 @@ let navigationSource = "";
 let sidebarConfigSource = "";
 
 beforeAll(async () => {
-  routerSource = await Bun.file(
-    path.join(REPO_ROOT, "web/src/app/router.tsx"),
-  ).text();
-  navigationSource = await Bun.file(
-    path.join(REPO_ROOT, "web/src/config/navigation.ts"),
-  ).text();
-  sidebarConfigSource = await Bun.file(
-    path.join(REPO_ROOT, "web/src/config/sidebar.ts"),
-  ).text();
+  routerSource = await Bun.file(path.join(REPO_ROOT, "web/src/app/router.tsx")).text();
+  navigationSource = await Bun.file(path.join(REPO_ROOT, "web/src/config/navigation.ts")).text();
+  sidebarConfigSource = await Bun.file(path.join(REPO_ROOT, "web/src/config/sidebar.ts")).text();
 });
 describe("/archived route registered after scheduler", () => {
   it("registers /scheduler before /archived in the router", () => {
@@ -54,17 +45,11 @@ describe("/archived route registered after scheduler", () => {
 describe("rail entry for Archived is present", () => {
   it("navigation.ts declares an archived nav item with a rail-visible default", () => {
     // The item must not opt out of the rail (railVisible: false).
-    expect(navigationSource).toMatch(
-      /id: "archived",[\s\S]*?route: "\/archived"/,
-    );
+    expect(navigationSource).toMatch(/id: "archived",[\s\S]*?route: "\/archived"/);
     // Confirm the archived entry does not carry `railVisible: false`.
-    const archivedBlock = navigationSource.match(
-      /id: "archived",[\s\S]*?order: \d+/,
-    );
+    const archivedBlock = navigationSource.match(/id: "archived",[\s\S]*?order: \d+/);
     expect(archivedBlock, "archived nav item must exist").not.toBeNull();
-    expect(archivedBlock![0], "archived must be rail-visible").not.toContain(
-      "railVisible: false",
-    );
+    expect(archivedBlock![0], "archived must be rail-visible").not.toContain("railVisible: false");
   });
 });
 
@@ -98,21 +83,9 @@ describe("normalizeSectionOrder drops unknown ids, dedupes, and re-adds missing"
   });
 
   it("returns the default order for a non-array value", () => {
-    expect(normalizeSectionOrder("not-an-array")).toEqual([
-      "folders",
-      "chats",
-      "recent",
-    ]);
-    expect(normalizeSectionOrder(null)).toEqual([
-      "folders",
-      "chats",
-      "recent",
-    ]);
-    expect(normalizeSectionOrder(undefined)).toEqual([
-      "folders",
-      "chats",
-      "recent",
-    ]);
+    expect(normalizeSectionOrder("not-an-array")).toEqual(["folders", "chats", "recent"]);
+    expect(normalizeSectionOrder(null)).toEqual(["folders", "chats", "recent"]);
+    expect(normalizeSectionOrder(undefined)).toEqual(["folders", "chats", "recent"]);
   });
 
   it("returns a full permutation even when the persisted array is empty", () => {

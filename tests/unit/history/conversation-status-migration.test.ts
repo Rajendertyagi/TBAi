@@ -10,9 +10,9 @@
  * at import time, so in-process testing cannot stage a legacy file first).
  */
 import { describe, it, expect } from "bun:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Database } from "bun:sqlite";
 import { $ } from "bun";
 
@@ -35,11 +35,7 @@ function conversationsDDL(statusFragment: string): string {
 `;
 }
 
-function stageDb(
-  dir: string,
-  ddl: string,
-  convRows: Array<[string, string, string]>,
-): void {
+function stageDb(dir: string, ddl: string, convRows: Array<[string, string, string]>): void {
   const db = new Database(path.join(dir, "chat.db"));
   db.run(ddl);
   db.run(
@@ -93,10 +89,9 @@ async function runMigration(
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-legacy-"));
   stageDb(dir, ddl, convRows);
   const repo = process.cwd();
-  const out =
-    await $`bun -e ${PROBE.replaceAll("$repo", JSON.stringify(repo))}`
-      .env({ ...process.env, DATA_DIR: dir })
-      .text();
+  const out = await $`bun -e ${PROBE.replaceAll("$repo", JSON.stringify(repo))}`
+    .env({ ...process.env, DATA_DIR: dir })
+    .text();
   return JSON.parse(out.trim().split("\n").pop() as string) as ProbeResult;
 }
 

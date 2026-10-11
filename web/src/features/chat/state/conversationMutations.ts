@@ -13,10 +13,7 @@ export interface SetConversationStatusOptions {
  * Domain operation for renaming a conversation.
  * Issues a PATCH request to /api/conversations/:id.
  */
-export async function renameConversation(
-  conversationId: string,
-  title: string,
-): Promise<void> {
+export async function renameConversation(conversationId: string, title: string): Promise<void> {
   const cleanTitle = title.trim();
   if (!cleanTitle) {
     throw new Error("Title cannot be empty");

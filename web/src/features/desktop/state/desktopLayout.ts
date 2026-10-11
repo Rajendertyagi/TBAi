@@ -12,10 +12,7 @@ import {
   type SidebarSectionId,
   type SidebarSortMode,
 } from "../../../config/sidebar";
-import {
-  moveSectionInOrder,
-  normalizeSectionOrder,
-} from "../../../lib/sidebar-sections";
+import { moveSectionInOrder, normalizeSectionOrder } from "../../../lib/sidebar-sections";
 
 /**
  * Desktop chrome layout + sidebar view preferences (VS Code–like). UI-only
@@ -158,13 +155,9 @@ function migratePersisted(persisted: unknown): DesktopLayoutState {
     ...defaults,
     ...transient,
     sidebarVisible:
-      typeof p.sidebarVisible === "boolean"
-        ? p.sidebarVisible
-        : defaults.sidebarVisible,
+      typeof p.sidebarVisible === "boolean" ? p.sidebarVisible : defaults.sidebarVisible,
     statusBarVisible:
-      typeof p.statusBarVisible === "boolean"
-        ? p.statusBarVisible
-        : defaults.statusBarVisible,
+      typeof p.statusBarVisible === "boolean" ? p.statusBarVisible : defaults.statusBarVisible,
     sidebarWidth:
       typeof p.sidebarWidth === "number" && Number.isFinite(p.sidebarWidth)
         ? clamp(p.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
@@ -175,14 +168,9 @@ function migratePersisted(persisted: unknown): DesktopLayoutState {
       typeof p.sectionCollapsed === "object" && p.sectionCollapsed !== null
         ? (p.sectionCollapsed as SidebarSectionCollapsed)
         : defaults.sectionCollapsed,
-    showRecent:
-      typeof p.showRecent === "boolean" ? p.showRecent : defaults.showRecent,
-    showCompleted:
-      typeof p.showCompleted === "boolean"
-        ? p.showCompleted
-        : defaults.showCompleted,
-    spellCheck:
-      typeof p.spellCheck === "boolean" ? p.spellCheck : defaults.spellCheck,
+    showRecent: typeof p.showRecent === "boolean" ? p.showRecent : defaults.showRecent,
+    showCompleted: typeof p.showCompleted === "boolean" ? p.showCompleted : defaults.showCompleted,
+    spellCheck: typeof p.spellCheck === "boolean" ? p.spellCheck : defaults.spellCheck,
   } as DesktopLayoutState;
 }
 
@@ -195,12 +183,10 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
       searchOpen: false,
       searchFocusRequest: 0,
       toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
-      toggleStatusBar: () =>
-        set((s) => ({ statusBarVisible: !s.statusBarVisible })),
+      toggleStatusBar: () => set((s) => ({ statusBarVisible: !s.statusBarVisible })),
       setSidebar: (v) => set({ sidebarVisible: v }),
       setStatusBar: (v) => set({ statusBarVisible: v }),
-      setSidebarWidth: (w) =>
-        set({ sidebarWidth: clamp(w, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
+      setSidebarWidth: (w) => set({ sidebarWidth: clamp(w, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
       setSidebarSort: (sort) => set({ sidebarSort: sort }),
       // Reorder through the shared pure helper so the store and the sidebar
       // cannot drift on edge cases (out-of-range delta, unknown id). The helper
@@ -244,8 +230,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         set({ searchInput: q, searchQuery: q });
       },
       setSearchOpen: (open) => set({ searchOpen: open }),
-      requestSearchFocus: () =>
-        set((s) => ({ searchFocusRequest: s.searchFocusRequest + 1 })),
+      requestSearchFocus: () => set((s) => ({ searchFocusRequest: s.searchFocusRequest + 1 })),
     }),
     {
       name: "tbai:desktopLayout",

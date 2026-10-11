@@ -39,9 +39,7 @@ describe("ThreadBootSkeleton — single shared implementation", () => {
 
   it("ChatWindow imports the shared component", () => {
     // ChatWindow sits beside the element directory, so it reaches it relatively.
-    expect(chatWindowSource).toContain(
-      `import { ThreadBootSkeleton } from "./${SHARED_PATH}";`,
-    );
+    expect(chatWindowSource).toContain(`import { ThreadBootSkeleton } from "./${SHARED_PATH}";`);
   });
 
   it("OpenCodeView imports the same shared component", () => {
@@ -82,40 +80,40 @@ describe("ThreadBootSkeleton — single shared implementation", () => {
  */
 describe("shouldShowThreadBoot — visibility matrix", () => {
   it("chat, existing conversation, history loading → skeleton renders", () => {
-    expect(
-      shouldShowThreadBoot({ mode: "chat", isDraft: false, isHistoryLoading: true }),
-    ).toBe(true);
+    expect(shouldShowThreadBoot({ mode: "chat", isDraft: false, isHistoryLoading: true })).toBe(
+      true,
+    );
   });
 
   it("agent, existing conversation, history loading → skeleton renders", () => {
-    expect(
-      shouldShowThreadBoot({ mode: "agent", isDraft: false, isHistoryLoading: true }),
-    ).toBe(true);
+    expect(shouldShowThreadBoot({ mode: "agent", isDraft: false, isHistoryLoading: true })).toBe(
+      true,
+    );
   });
 
   it("agent, history loading settled → skeleton disappears", () => {
-    expect(
-      shouldShowThreadBoot({ mode: "agent", isDraft: false, isHistoryLoading: false }),
-    ).toBe(false);
+    expect(shouldShowThreadBoot({ mode: "agent", isDraft: false, isHistoryLoading: false })).toBe(
+      false,
+    );
   });
 
   it("chat, history loading settled → skeleton disappears", () => {
-    expect(
-      shouldShowThreadBoot({ mode: "chat", isDraft: false, isHistoryLoading: false }),
-    ).toBe(false);
+    expect(shouldShowThreadBoot({ mode: "chat", isDraft: false, isHistoryLoading: false })).toBe(
+      false,
+    );
   });
 
   it("draft behavior unchanged: a draft never shows the boot skeleton", () => {
-    expect(
-      shouldShowThreadBoot({ mode: "chat", isDraft: true, isHistoryLoading: true }),
-    ).toBe(false);
-    expect(
-      shouldShowThreadBoot({ mode: "chat", isDraft: true, isHistoryLoading: false }),
-    ).toBe(false);
+    expect(shouldShowThreadBoot({ mode: "chat", isDraft: true, isHistoryLoading: true })).toBe(
+      false,
+    );
+    expect(shouldShowThreadBoot({ mode: "chat", isDraft: true, isHistoryLoading: false })).toBe(
+      false,
+    );
     // Defensive: agent surfaces have no draft state, and one must never
     // show the skeleton merely for being agent mode.
-    expect(
-      shouldShowThreadBoot({ mode: "agent", isDraft: true, isHistoryLoading: true }),
-    ).toBe(false);
+    expect(shouldShowThreadBoot({ mode: "agent", isDraft: true, isHistoryLoading: true })).toBe(
+      false,
+    );
   });
 });

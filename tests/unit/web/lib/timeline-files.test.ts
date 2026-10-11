@@ -99,7 +99,11 @@ function projectedPart(
 ): ToolCallMessagePart {
   const [item] = projectV2RepositoryItems(stateWithTool(name, input, metadata, status));
   const part: unknown = item?.message.content[0];
-  if (part === null || typeof part !== "object" || (part as { type?: unknown }).type !== "tool-call") {
+  if (
+    part === null ||
+    typeof part !== "object" ||
+    (part as { type?: unknown }).type !== "tool-call"
+  ) {
     throw new Error(`expected a tool-call part, got ${JSON.stringify(part)}`);
   }
   return part as ToolCallMessagePart;
@@ -107,9 +111,13 @@ function projectedPart(
 
 describe("the timeline's file count, end to end", () => {
   it("counts the lines a real edit patch changes", () => {
-    const part = projectedPart("edit", { filePath: "src/alpha.ts" }, {
-      files: [{ file: "src/alpha.ts", patch: EDIT_PATCH }],
-    });
+    const part = projectedPart(
+      "edit",
+      { filePath: "src/alpha.ts" },
+      {
+        files: [{ file: "src/alpha.ts", patch: EDIT_PATCH }],
+      },
+    );
     // Through the timeline's own reader, not through the artifact directly.
     expect(toStats([part])).toEqual([{ file: "src/alpha.ts", added: 1, removed: 1 }]);
   });
@@ -117,16 +125,24 @@ describe("the timeline's file count, end to end", () => {
   it("counts a whole-file write, which the live payload does carry a patch for", () => {
     // The old comment here claimed `write` had no patch at all. It does, and a new
     // file is the easiest case: 3 additions, 0 deletions.
-    const part = projectedPart("write", { filePath: "src/beta.ts" }, {
-      files: [{ file: "src/beta.ts", patch: WRITE_PATCH }],
-    });
+    const part = projectedPart(
+      "write",
+      { filePath: "src/beta.ts" },
+      {
+        files: [{ file: "src/beta.ts", patch: WRITE_PATCH }],
+      },
+    );
     expect(toStats([part])).toEqual([{ file: "src/beta.ts", added: 3, removed: 0 }]);
   });
 
   it("puts the real number in the label the reader sees", () => {
-    const part = projectedPart("edit", { filePath: "src/alpha.ts" }, {
-      files: [{ file: "src/alpha.ts", patch: EDIT_PATCH }],
-    });
+    const part = projectedPart(
+      "edit",
+      { filePath: "src/alpha.ts" },
+      {
+        files: [{ file: "src/alpha.ts", patch: EDIT_PATCH }],
+      },
+    );
     const label = buildRestingLabel(4, toStats([part]).length, 0);
     // The old behaviour produced "4 steps · 0 files changed" on every coding turn.
     expect(label).not.toContain("0 files changed");
@@ -143,9 +159,13 @@ describe("the timeline's file count, end to end", () => {
       " const beta = 2;",
       " const gamma = 3;",
     ].join("\n");
-    const part = projectedPart("edit", { filePath: "src/alpha.ts" }, {
-      files: [{ file: "src/alpha.ts", patch: noop }],
-    });
+    const part = projectedPart(
+      "edit",
+      { filePath: "src/alpha.ts" },
+      {
+        files: [{ file: "src/alpha.ts", patch: noop }],
+      },
+    );
     expect(toStats([part])).toEqual([{ file: "src/alpha.ts", added: 0, removed: 0 }]);
   });
 });

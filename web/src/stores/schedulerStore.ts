@@ -56,9 +56,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   loadRecentRuns: async () => {
     try {
-      const result = await apiResult<{ runs?: SchedulerRun[] }>(
-        "/api/scheduler/runs?limit=100",
-      );
+      const result = await apiResult<{ runs?: SchedulerRun[] }>("/api/scheduler/runs?limit=100");
       if (!result.ok) return;
       set({ recentRuns: result.data.runs ?? [] });
     } catch {

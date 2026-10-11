@@ -85,12 +85,14 @@ export const capturedQuestionForm = {
         {
           value: "SQLite",
           label: "SQLite",
-          description: "SQLite — file-based, zero-config, ideal for a small app with minimal ops overhead",
+          description:
+            "SQLite — file-based, zero-config, ideal for a small app with minimal ops overhead",
         },
         {
           value: "Postgres",
           label: "Postgres",
-          description: "Postgres — a full relational database server, better for multi-client or heavy workloads",
+          description:
+            "Postgres — a full relational database server, better for multi-client or heavy workloads",
         },
       ],
       // The field that broke the renderer: present, and true, on the same field.
@@ -130,11 +132,13 @@ export const capturedQuestionPart = {
           header: "Database choice",
           options: [
             {
-              description: "SQLite — file-based, zero-config, ideal for a small app with minimal ops overhead",
+              description:
+                "SQLite — file-based, zero-config, ideal for a small app with minimal ops overhead",
               label: "SQLite",
             },
             {
-              description: "Postgres — a full relational database server, better for multi-client or heavy workloads",
+              description:
+                "Postgres — a full relational database server, better for multi-client or heavy workloads",
               label: "Postgres",
             },
           ],
@@ -145,8 +149,7 @@ export const capturedQuestionPart = {
     content: [
       {
         type: "text" as const,
-        text:
-          "User has answered your questions: \"Which database should you use?\"=\"Postgres\". You can now continue with the user's answers in mind.",
+        text: 'User has answered your questions: "Which database should you use?"="Postgres". You can now continue with the user\'s answers in mind.',
       },
     ],
     metadata: {

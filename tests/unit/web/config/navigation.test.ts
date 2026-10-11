@@ -82,10 +82,12 @@ describe("settings navigation", () => {
     // The nav half cannot prove the route exists — a nav entry pointing at a
     // route nobody registered is the mirror image of the original bug, so the
     // router source is read directly.
-    return Bun.file(path.join(REPO_ROOT, "web/src/app/router.tsx")).text().then((source) => {
-      expect(source).toContain('path: "opencode-config"');
-      expect(source).toContain("OpenCodeConfigPage");
-    });
+    return Bun.file(path.join(REPO_ROOT, "web/src/app/router.tsx"))
+      .text()
+      .then((source) => {
+        expect(source).toContain('path: "opencode-config"');
+        expect(source).toContain("OpenCodeConfigPage");
+      });
   });
 
   it("keeps every nav item's view a known ViewId", () => {

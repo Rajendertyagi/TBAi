@@ -4,11 +4,7 @@ import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 
 describe("welcome config — no hardcoded UI values", () => {
   it("exposes copy, layout tokens, and three quick-action tabs", () => {
-    expect(welcomeConfig.tabs.map((t) => t.id)).toEqual([
-      "coding",
-      "office",
-      "research",
-    ]);
+    expect(welcomeConfig.tabs.map((t) => t.id)).toEqual(["coding", "office", "research"]);
     for (const tab of welcomeConfig.tabs) {
       expect(tab.items.length).toBeGreaterThan(0);
       for (const item of tab.items) {

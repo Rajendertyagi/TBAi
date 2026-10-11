@@ -115,7 +115,11 @@ describe("deduplication", () => {
 describe("stale / incomplete handling", () => {
   it("drops input-available calls with no decision and no output", () => {
     const stale = toolPart("call-7", { state: "input-available" });
-    const { messages, stats } = pruneStaleMessages([user("hi"), assistant("a1", [stale]), user("next")]);
+    const { messages, stats } = pruneStaleMessages([
+      user("hi"),
+      assistant("a1", [stale]),
+      user("next"),
+    ]);
     expect(stats.removedToolParts).toEqual(["call-7"]);
     expect(messages.length).toBe(1);
   });
@@ -130,7 +134,10 @@ describe("stale / incomplete handling", () => {
   });
 
   it("keeps output-denied parts", () => {
-    const denied = toolPart("call-1", { state: "output-denied", approval: { id: "ap-1", approved: false } });
+    const denied = toolPart("call-1", {
+      state: "output-denied",
+      approval: { id: "ap-1", approved: false },
+    });
     const { messages } = pruneStaleMessages([user("hi"), assistant("a1", [denied])]);
     expect((messages[1].parts as unknown[])[0]).toEqual(denied);
   });

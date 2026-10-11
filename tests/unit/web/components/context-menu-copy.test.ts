@@ -77,10 +77,7 @@ const composerContent = composer.slice(composer.indexOf("<ContextMenuContent"));
  * `renders no raw element in either top-level menu` for why it is excluded
  * here rather than silently swept up.
  */
-const composerTopLevel = composerContent.slice(
-  0,
-  composerContent.indexOf("<ContextMenuSub"),
-);
+const composerTopLevel = composerContent.slice(0, composerContent.indexOf("<ContextMenuSub"));
 
 /** The page menu's menu content. */
 const pageMenuContent = pageMenu.slice(pageMenu.indexOf("<ContextMenuContent"));
@@ -197,15 +194,11 @@ describe("composer context menu — spelling wiring", () => {
     // search key unless the item pins one. Without this, typing "b" matches
     // "Paste as plain text Ctrl+V". aria-hidden does not help here — textContent
     // ignores ARIA entirely.
-    const items = [...composerContent.matchAll(/<ContextMenuItem\b[^>]*>/g)].map(
-      (m) => m[0],
-    );
+    const items = [...composerContent.matchAll(/<ContextMenuItem\b[^>]*>/g)].map((m) => m[0]);
     expect(items.length).toBeGreaterThan(0);
     for (const item of items) expect(item).toContain("textValue");
 
-    const pageItems = [...pageMenuContent.matchAll(/<ContextMenuItem\b[^>]*>/g)].map(
-      (m) => m[0],
-    );
+    const pageItems = [...pageMenuContent.matchAll(/<ContextMenuItem\b[^>]*>/g)].map((m) => m[0]);
     expect(pageItems.length).toBeGreaterThan(0);
     for (const item of pageItems) expect(item).toContain("textValue");
   });
@@ -230,9 +223,7 @@ describe("composer context menu — spelling wiring", () => {
     // else, so the two toggles and Settings must NOT claim a shortcut. An
     // unbound key advertised to assistive tech is the opposite of the truth.
     expect(pageMenuContent).toContain('aria-keyshortcuts="Control+T"');
-    const pageItems = [...pageMenuContent.matchAll(/<ContextMenuItem\b[^>]*>/g)].map(
-      (m) => m[0],
-    );
+    const pageItems = [...pageMenuContent.matchAll(/<ContextMenuItem\b[^>]*>/g)].map((m) => m[0]);
     const labelled = pageItems.filter((i) => i.includes("aria-keyshortcuts"));
     expect(labelled.length).toBe(2);
     for (const item of labelled) expect(item).toContain("Control+");
@@ -340,9 +331,7 @@ describe("page context menu — copy wiring", () => {
   });
 
   it("enables Copy only when the captured text is copyable", () => {
-    expect(constBody(pageMenu, "handleCopySelection")).toContain(
-      "canCopySelection(selectedText)",
-    );
+    expect(constBody(pageMenu, "handleCopySelection")).toContain("canCopySelection(selectedText)");
     const content = pageMenu.slice(pageMenu.indexOf("<ContextMenuContent"));
     expect(content).toContain("disabled={!canCopySelection(selectedText)}");
   });

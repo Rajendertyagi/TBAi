@@ -120,7 +120,11 @@ describe("registerDecisionSurface", () => {
         this.focusCount += 1;
       },
     };
-    return element as unknown as HTMLElement & { order: number; focusCount: number; focused: boolean };
+    return element as unknown as HTMLElement & {
+      order: number;
+      focusCount: number;
+      focused: boolean;
+    };
   }
 
   /** The pick is deferred to a microtask, so let it run. */

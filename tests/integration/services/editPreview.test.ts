@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { previewEdit, runEdit, ToolError } from "@/services/tools.ts";
 
 /**
@@ -59,7 +59,9 @@ describe("previewEdit never writes", () => {
 
   it("does not create a file that does not exist", () => {
     const missing = join(dir, "nope.ts");
-    expect(() => previewEdit({ path: missing, oldText: "a", newText: "b" }, dir)).toThrow(ToolError);
+    expect(() => previewEdit({ path: missing, oldText: "a", newText: "b" }, dir)).toThrow(
+      ToolError,
+    );
     expect(() => readFileSync(missing, "utf8")).toThrow();
   });
 });
@@ -100,7 +102,10 @@ describe("previewEdit describes what runEdit does", () => {
   });
 
   it("carries a hunk header a standard parser accepts", () => {
-    const { patch } = previewEdit({ path: file, oldText: "const two = 2;", newText: "const two = 22;" }, dir);
+    const { patch } = previewEdit(
+      { path: file, oldText: "const two = 2;", newText: "const two = 22;" },
+      dir,
+    );
     expect(patch).toContain("--- ");
     expect(patch).toContain("+++ ");
     expect(patch).toMatch(/^@@ -\d+,\d+ \+\d+,\d+ @@$/m);
@@ -154,9 +159,9 @@ describe("previewEdit refuses exactly what runEdit refuses", () => {
   });
 
   it("refuses a missing file", () => {
-    expect(() => previewEdit({ path: join(dir, "gone.ts"), oldText: "a", newText: "b" }, dir)).toThrow(
-      ToolError,
-    );
+    expect(() =>
+      previewEdit({ path: join(dir, "gone.ts"), oldText: "a", newText: "b" }, dir),
+    ).toThrow(ToolError);
   });
 
   it("refuses text that does not match, so it cannot promise a doomed edit", () => {

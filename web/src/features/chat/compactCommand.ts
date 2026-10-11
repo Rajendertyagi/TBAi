@@ -264,9 +264,8 @@ export function isDirectCompactCommand(text: string): boolean {
  * equivalent; dropping them loses nothing the summariser reads.
  */
 function translateAssistantToolPart(record: Record<string, unknown>): Record<string, unknown> {
-  const toolName = typeof record.toolName === "string" && record.toolName.length > 0
-    ? record.toolName
-    : "unknown";
+  const toolName =
+    typeof record.toolName === "string" && record.toolName.length > 0 ? record.toolName : "unknown";
   const input = record.args;
   const result = record.result;
   const hasResult = result !== undefined && result !== null;
@@ -359,17 +358,25 @@ export function projectThreadMessages(
 ): Array<Record<string, unknown>> {
   return messages.map((message, index) => {
     const projected: Record<string, unknown> = {
-      id: typeof message.id === "string" && message.id.length > 0 ? message.id : `compact-hist-${index}`,
+      id:
+        typeof message.id === "string" && message.id.length > 0
+          ? message.id
+          : `compact-hist-${index}`,
       // Only the three roles the Direct route accepts. Anything else is dropped
       // rather than forwarded into a validated conversation array.
-      role: message.role === "assistant" || message.role === "user" || message.role === "system"
-        ? message.role
-        : "user",
+      role:
+        message.role === "assistant" || message.role === "user" || message.role === "system"
+          ? message.role
+          : "user",
       parts: Array.isArray(message.parts) ? projectParts(message.parts) : [],
     };
     // Metadata is forwarded only as a plain object: the route validates it against
     // its own schema, and a non-object would be rejected as invalid metadata.
-    if (message.metadata != null && typeof message.metadata === "object" && !Array.isArray(message.metadata)) {
+    if (
+      message.metadata != null &&
+      typeof message.metadata === "object" &&
+      !Array.isArray(message.metadata)
+    ) {
       projected.metadata = message.metadata;
     }
     return projected;
@@ -563,9 +570,7 @@ export interface DirectCompactInput {
  * A compaction that ran and failed resolves as `outcome: "failed"`, because that
  * is a result the UI must render, not an exception.
  */
-export async function runDirectCompact(
-  input: DirectCompactInput,
-): Promise<DirectCompactStatus> {
+export async function runDirectCompact(input: DirectCompactInput): Promise<DirectCompactStatus> {
   const commandId = `compact-${globalThis.crypto.randomUUID()}`;
   const { messages } = buildCompactRequestBody(input.messages, commandId, input.command?.text);
   let response: Response;
@@ -581,9 +586,7 @@ export async function runDirectCompact(
       ...(input.signal ? { signal: input.signal } : {}),
     });
   } catch (error) {
-    throw new CompactTransportError(
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new CompactTransportError(error instanceof Error ? error.message : String(error));
   }
   if (!response.ok) {
     // SHAPE ONLY — never message text. A rejection is a contract mismatch between
@@ -595,11 +598,13 @@ export async function runDirectCompact(
       messageCount: messages.length,
       shapes: messages.map(
         (message) =>
-          `${String(message.role)}:${Array.isArray(message.parts)
-            ? message.parts
-                .map((part) => String((part as { type?: unknown } | null)?.type))
-                .join("+")
-            : "none"}`,
+          `${String(message.role)}:${
+            Array.isArray(message.parts)
+              ? message.parts
+                  .map((part) => String((part as { type?: unknown } | null)?.type))
+                  .join("+")
+              : "none"
+          }`,
       ),
     });
     throw new CompactTransportError(`Compaction request failed (${response.status})`);

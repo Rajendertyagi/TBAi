@@ -4,7 +4,12 @@ import {
   limitRuleFor,
   type ExtractedCapabilities,
 } from "./capabilityDiscovery";
-import { providerReportedLimit, type ModelCapabilities, type ModelOption, type ProviderConfig } from "../types";
+import {
+  providerReportedLimit,
+  type ModelCapabilities,
+  type ModelOption,
+  type ProviderConfig,
+} from "../types";
 
 export type DiscoverInput = {
   type: ProviderConfig["type"];
@@ -51,7 +56,9 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs = 15000): Pro
  * of discovery filtering ("is this usable as a model?").
  */
 function isExcludedModality(lowerId: string): boolean {
-  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-/.test(lowerId);
+  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-/.test(
+    lowerId,
+  );
 }
 
 /**
@@ -62,7 +69,11 @@ function isExcludedModality(lowerId: string): boolean {
  * handled by richer discovery, not by extending this expression.
  */
 function isKnownChatFamily(lowerId: string, type: string): boolean {
-  return /gpt|claude|gemini|llama|qwen|mistral|deepseek|codestral|sonnet|opus|haiku|flash|pro|yi|grok|phi|command|nighttales/.test(lowerId) || type === "ollama";
+  return (
+    /gpt|claude|gemini|llama|qwen|mistral|deepseek|codestral|sonnet|opus|haiku|flash|pro|yi|grok|phi|command|nighttales/.test(
+      lowerId,
+    ) || type === "ollama"
+  );
 }
 
 function isChatModel(id: string, type: string): boolean {
@@ -115,7 +126,11 @@ async function fetchOllamaModel(
 /** Bounded parallel fan-out (no dependency, no retries, no sleeps). */
 const OLLAMA_SHOW_CONCURRENCY = 5;
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const out: R[] = new Array<R>(items.length);
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -142,15 +157,24 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
  * decision and not discovery's.
  */
 function withExtractedLimits(
-  base: Omit<ModelOption, "contextWindow" | "contextWindowSource" | "maxOutputTokens" | "maxOutputTokensSource">,
+  base: Omit<
+    ModelOption,
+    "contextWindow" | "contextWindowSource" | "maxOutputTokens" | "maxOutputTokensSource"
+  >,
   limits: ExtractedCapabilities,
   discoveredAt: number,
 ): ModelOption {
-  const contextWindow = limits.contextWindow ? providerReportedLimit(limits.contextWindow.value) : undefined;
-  const maxOutputTokens = limits.maxOutputTokens ? providerReportedLimit(limits.maxOutputTokens.value) : undefined;
+  const contextWindow = limits.contextWindow
+    ? providerReportedLimit(limits.contextWindow.value)
+    : undefined;
+  const maxOutputTokens = limits.maxOutputTokens
+    ? providerReportedLimit(limits.maxOutputTokens.value)
+    : undefined;
   return {
     ...base,
-    ...(contextWindow ? { contextWindow: contextWindow.value, contextWindowSource: contextWindow.source } : {}),
+    ...(contextWindow
+      ? { contextWindow: contextWindow.value, contextWindowSource: contextWindow.source }
+      : {}),
     ...(maxOutputTokens
       ? { maxOutputTokens: maxOutputTokens.value, maxOutputTokensSource: maxOutputTokens.source }
       : {}),
@@ -160,20 +184,22 @@ function withExtractedLimits(
 
 function normalizeOpenAI(raw: any, provider: string, discoveredAt: number): ModelOption[] {
   const data = Array.isArray(raw?.data) ? raw.data : [];
-  return data
-    // R2: the entry is read for its LIMITS, not just its id. A listing that omits
-    // them yields no value and no stance — still unknown, never invented.
-    .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m as Record<string, unknown> }))
-    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
-    .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
-      withExtractedLimits(
-        // OpenAI-compatible listings expose no reasoning metadata, so that half
-        // stays unknown.
-        { id, provider, capabilities: unknownReasoning() },
-        extractCapabilities(raw, limitRuleFor(provider)),
-        discoveredAt,
-      ),
-    );
+  return (
+    data
+      // R2: the entry is read for its LIMITS, not just its id. A listing that omits
+      // them yields no value and no stance — still unknown, never invented.
+      .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m as Record<string, unknown> }))
+      .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
+      .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
+        withExtractedLimits(
+          // OpenAI-compatible listings expose no reasoning metadata, so that half
+          // stays unknown.
+          { id, provider, capabilities: unknownReasoning() },
+          extractCapabilities(raw, limitRuleFor(provider)),
+          discoveredAt,
+        ),
+      )
+  );
 }
 
 function normalizeAnthropic(raw: any, provider: string, discoveredAt: number): ModelOption[] {
@@ -206,7 +232,9 @@ function normalizeGoogle(raw: any, provider: string, discoveredAt: number): Mode
   const data = Array.isArray(raw?.models) ? raw.models : [];
   return data
     .map((m: any) => ({
-      id: String(m?.name ?? "").replace(/^models\//, "").trim(),
+      id: String(m?.name ?? "")
+        .replace(/^models\//, "")
+        .trim(),
       raw: m as Record<string, unknown>,
     }))
     .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
@@ -225,9 +253,7 @@ function normalizeGoogle(raw: any, provider: string, discoveredAt: number): Mode
 /** Ollama tag listing: identity only. Capabilities resolve per model via /api/show. */
 function normalizeOllama(raw: any): string[] {
   const data = Array.isArray(raw?.models) ? raw.models : [];
-  return data
-    .map((m: any) => String(m?.name ?? "").trim())
-    .filter(Boolean);
+  return data.map((m: any) => String(m?.name ?? "").trim()).filter(Boolean);
 }
 
 export async function discoverModels(input: DiscoverInput): Promise<ModelOption[]> {
@@ -245,7 +271,7 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
     case "openai":
     case "custom": {
       const headers: Record<string, string> = {};
-      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
       const raw = await fetchJson(joinBase(base, "models"), { headers });
       return normalizeOpenAI(raw, type, discoveredAt);
     }

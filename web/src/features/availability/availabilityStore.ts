@@ -174,7 +174,10 @@ function scheduleNext(): void {
   const delay =
     status === "online" || status === "unknown"
       ? HEALTHY_POLL_MS
-      : computeBackoffDelay(consecutiveFailures, { baseMs: BACKOFF_BASE_MS, maxMs: BACKOFF_MAX_MS });
+      : computeBackoffDelay(consecutiveFailures, {
+          baseMs: BACKOFF_BASE_MS,
+          maxMs: BACKOFF_MAX_MS,
+        });
   timer = setTimeout(async () => {
     await probeOnce();
     scheduleNext();

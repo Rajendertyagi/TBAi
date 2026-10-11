@@ -57,7 +57,9 @@ export const router = createHashRouter([
       {
         path: "scheduler",
         lazy: () =>
-          import("../features/scheduler/SchedulerPage").then((m) => ({ Component: m.SchedulerPage })),
+          import("../features/scheduler/SchedulerPage").then((m) => ({
+            Component: m.SchedulerPage,
+          })),
       },
       // Archived conversations (rail surface; the sidebar keeps
       // Folders → Chats → Recent only).
@@ -71,7 +73,8 @@ export const router = createHashRouter([
         children: [
           {
             path: "memory",
-            lazy: () => import("../components/MemoryPanel").then((m) => ({ Component: m.MemoryPanel })),
+            lazy: () =>
+              import("../components/MemoryPanel").then((m) => ({ Component: m.MemoryPanel })),
           },
           {
             path: "mcp",
@@ -96,22 +99,30 @@ export const router = createHashRouter([
           {
             path: "providers",
             lazy: () =>
-              import("../features/providers/ProvidersPage").then((m) => ({ Component: m.ProvidersPage })),
+              import("../features/providers/ProvidersPage").then((m) => ({
+                Component: m.ProvidersPage,
+              })),
           },
           {
             path: "appearance",
             lazy: () =>
-              import("../features/appearance/AppearancePage").then((m) => ({ Component: m.AppearancePage })),
+              import("../features/appearance/AppearancePage").then((m) => ({
+                Component: m.AppearancePage,
+              })),
           },
           {
             path: "desktop",
             lazy: () =>
-              import("../features/desktop/DesktopSettings").then((m) => ({ Component: m.DesktopSettings })),
+              import("../features/desktop/DesktopSettings").then((m) => ({
+                Component: m.DesktopSettings,
+              })),
           },
           {
             path: "workspace",
             lazy: () =>
-              import("../features/workspace/WorkspacePage").then((m) => ({ Component: m.WorkspacePage })),
+              import("../features/workspace/WorkspacePage").then((m) => ({
+                Component: m.WorkspacePage,
+              })),
           },
           {
             path: "opencode-config",

@@ -383,14 +383,16 @@ async function createDirectConversation(overrides: {
   title: string;
   systemPrompt?: string | null;
 }): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title: overrides.title,
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: overrides.systemPrompt ?? null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title: overrides.title,
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: overrides.systemPrompt ?? null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 
@@ -483,11 +485,7 @@ function renderEntry(entry: LogEntry): string {
 }
 
 /** Poll a condition the server reaches on its own; fails loudly on timeout. */
-async function waitFor(
-  predicate: () => boolean,
-  what: string,
-  timeoutMs = 10000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, what: string, timeoutMs = 10000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
@@ -634,9 +632,7 @@ describe("Direct request — UIMessage validation", () => {
         providerId: PROVIDER_ID,
         model: MODEL_ID,
         id: conversationId,
-        messages: [
-          { id: "msg-user-1", role: "user", parts: [{ type: "text" }] },
-        ],
+        messages: [{ id: "msg-user-1", role: "user", parts: [{ type: "text" }] }],
       });
 
       expect(res.status).toBe(400);
@@ -1032,10 +1028,7 @@ describe("Direct run settlement — client detach", () => {
       // on the gate) before the connection goes away.
       await waitFor(() => captured.length >= 1, "the provider request");
       await res.body!.cancel();
-      await waitFor(
-        () => chatRuns.get(streamId)?.detachedAt !== null,
-        "the run's detached mark",
-      );
+      await waitFor(() => chatRuns.get(streamId)?.detachedAt !== null, "the run's detached mark");
       expect(chatRuns.get(streamId)?.status).toBe("running");
 
       // Now let the producer fail: the failure is observed only after detach.
@@ -1073,10 +1066,7 @@ describe("Direct run settlement — client detach", () => {
 
       await waitFor(() => captured.length >= 1, "the provider request");
       await res.body!.cancel();
-      await waitFor(
-        () => chatRuns.get(streamId)?.detachedAt !== null,
-        "the run's detached mark",
-      );
+      await waitFor(() => chatRuns.get(streamId)?.detachedAt !== null, "the run's detached mark");
       expect(chatRuns.get(streamId)?.status).toBe("running");
 
       gate?.open();

@@ -23,10 +23,7 @@ interface QuickMessagesState {
   /** Reload the list. `silent` skips the page error banner (menu refreshes). */
   load: (opts?: { silent?: boolean }) => Promise<void>;
   create: () => Promise<{ message: QuickMessage | null } & MutationResult>;
-  update: (
-    id: string,
-    data: { title?: string; content?: string },
-  ) => Promise<MutationResult>;
+  update: (id: string, data: { title?: string; content?: string }) => Promise<MutationResult>;
   remove: (id: string) => Promise<MutationResult>;
   reorder: (ids: string[]) => Promise<MutationResult>;
 }

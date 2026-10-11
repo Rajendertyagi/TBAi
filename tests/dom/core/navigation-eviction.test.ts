@@ -36,7 +36,11 @@ describe("Q3 — historical navigation is presentation, and restoring it is loss
     console.log("  submission length:", submission?.ids.length);
     console.log("  first submitted  :", submission?.ids[0]);
     console.log("  parent used      :", h.headId());
-    console.log("  P1' will restore :", AUTHORITATIVE.length - (submission?.ids.length ?? 0), "prefix messages");
+    console.log(
+      "  P1' will restore :",
+      AUTHORITATIVE.length - (submission?.ids.length ?? 0),
+      "prefix messages",
+    );
 
     expect(h.headId()).toBe("m500");
     expect(submission?.ids[0]).toBe("m451");
@@ -69,7 +73,10 @@ describe("Q3 — historical navigation is presentation, and restoring it is loss
  * ------------------------------------------------------------------ */
 
 /** An assistant message carrying a completed tool call + result. */
-function toolMessage(id: string, toolCallId: string): {
+function toolMessage(
+  id: string,
+  toolCallId: string,
+): {
   id: string;
   role: "assistant";
   parts: unknown[];
@@ -146,9 +153,7 @@ describe("Q4 — eviction is presentation-only, and children are orphaned silent
     console.log("  error         :", error ?? "(none — silent)");
 
     const exported = h.repository.export();
-    const parentOf = new Map(
-      exported.messages.map((entry) => [entry.message.id, entry.parentId]),
-    );
+    const parentOf = new Map(exported.messages.map((entry) => [entry.message.id, entry.parentId]));
     console.log("  repository parents:", [...parentOf].map(([id, p]) => `${id}<-${p}`).join(" "));
 
     expect(error).toBeNull();
@@ -177,7 +182,10 @@ describe("Q4 — eviction is presentation-only, and children are orphaned silent
     const visible = h.visibleIds();
     console.log("\n=== Q4.3 removing a middle message ===");
     console.log("  requested: m1..m9 + m11..m20 (20 minus m10)");
-    console.log("  visible  :", `${visible[0]}..${visible[visible.length - 1]} (${visible.length})`);
+    console.log(
+      "  visible  :",
+      `${visible[0]}..${visible[visible.length - 1]} (${visible.length})`,
+    );
     console.log("  head     :", h.headId());
 
     // assistant-ui parent-links each message to the PREVIOUS ARRAY ELEMENT

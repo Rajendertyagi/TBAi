@@ -1,5 +1,9 @@
 import { describe, it, expect } from "bun:test";
-import { chatErrorCopy, classifyChatError, TRANSPORT_ERROR_COPY } from "@web/lib/transport-errors.ts";
+import {
+  chatErrorCopy,
+  classifyChatError,
+  TRANSPORT_ERROR_COPY,
+} from "@web/lib/transport-errors.ts";
 
 describe("classifyChatError", () => {
   it("maps raw transport kills", () => {

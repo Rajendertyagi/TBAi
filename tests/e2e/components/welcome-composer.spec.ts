@@ -1,14 +1,11 @@
 import { expect, test } from "@playwright/test";
-import {
-  removeConversation,
-  seedConversation,
-} from "../helpers/seedConversation";
+import { removeConversation, seedConversation } from "../helpers/seedConversation";
 
 test("new-chat screen has exactly one composer", async ({ page }, testInfo) => {
   await page.goto("/#/chat/new");
-  await expect(
-    page.getByRole("heading", { name: /what do you want to build/i }),
-  ).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
+    timeout: 15000,
+  });
 
   const boxes = page.getByRole("textbox", { name: /Send a message/ });
   await expect(boxes).toHaveCount(1);
@@ -25,7 +22,7 @@ test("new-chat screen has exactly one composer", async ({ page }, testInfo) => {
       };
     }),
   );
-  console.log("TEXTAREAS:" + JSON.stringify(detail));
+  console.log(`TEXTAREAS:${JSON.stringify(detail)}`);
   // Debug capture into Playwright's gitignored artifact dir rather than beside
   // the spec, so running the suite leaves no trace in the working tree.
   await page.screenshot({ path: testInfo.outputPath("welcome.png") });
@@ -33,9 +30,9 @@ test("new-chat screen has exactly one composer", async ({ page }, testInfo) => {
 
 test("welcome and docked composers share one box size", async ({ page }) => {
   await page.goto("/#/chat/new");
-  await expect(
-    page.getByRole("heading", { name: /what do you want to build/i }),
-  ).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
+    timeout: 15000,
+  });
   const welcomeBox = await page.getByRole("textbox", { name: /Send a message/ }).boundingBox();
   expect(welcomeBox).not.toBeNull();
 
@@ -45,16 +42,14 @@ test("welcome and docked composers share one box size", async ({ page }) => {
 
   try {
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
     const dockedBox = await page.getByRole("textbox", { name: /Send a message/ }).boundingBox();
     expect(dockedBox).not.toBeNull();
-    console.log(
-      "BOXES:" +
-        JSON.stringify({ welcome: welcomeBox, docked: dockedBox }),
-    );
+    console.log(`BOXES:${JSON.stringify({ welcome: welcomeBox, docked: dockedBox })}`);
     expect(Math.round(dockedBox!.width)).toBe(Math.round(welcomeBox!.width));
   } finally {
     await removeConversation(page.request, conversationId);
   }
 });
-

@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { SQLQueryBindings } from "bun:sqlite";
-import fs from "fs";
-import path from "path";
-import os from "os";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 
 // Test isolation: tests/setup.ts (bunfig preload) already redirects DATA_DIR to
 // a per-run tmp dir. Only fall back to a private tmp dir when running this file
@@ -35,9 +35,7 @@ function seedProvider(id: string, type = "openai") {
   );
 }
 
-function readToolApprovalSecretSetting():
-  | { value: string; updated_at: number }
-  | undefined {
+function readToolApprovalSecretSetting(): { value: string; updated_at: number } | undefined {
   return db
     .query<{ value: string; updated_at: number }, SQLQueryBindings[]>(
       "SELECT value, updated_at FROM app_settings WHERE key = ?",
@@ -49,9 +47,7 @@ function restoreToolApprovalSecretSetting(
   original: { value: string; updated_at: number } | undefined,
 ): void {
   if (!original) {
-    db.run("DELETE FROM app_settings WHERE key = ?", [
-      TOOL_APPROVAL_SECRET_SETTING_KEY,
-    ]);
+    db.run("DELETE FROM app_settings WHERE key = ?", [TOOL_APPROVAL_SECRET_SETTING_KEY]);
     return;
   }
   db.run("UPDATE app_settings SET value = ?, updated_at = ? WHERE key = ?", [
@@ -80,7 +76,9 @@ afterAll(() => {
 describe("CredentialStore (local DEK encryption)", () => {
   it("generates and persists a local data-encryption key on first init", () => {
     const row = db
-      .query<{ key_hex: string }, SQLQueryBindings[]>("SELECT key_hex FROM credential_key WHERE id = 1")
+      .query<{ key_hex: string }, SQLQueryBindings[]>(
+        "SELECT key_hex FROM credential_key WHERE id = 1",
+      )
       .get();
     expect(row).toBeDefined();
     expect(row!.key_hex.length).toBe(64); // 32 bytes hex
@@ -113,10 +111,9 @@ describe("CredentialStore (local DEK encryption)", () => {
 
   it("fails safely on corrupted ciphertext", () => {
     seedProvider("p2");
-    db.run(
-      `UPDATE provider_configs SET encrypted_api_key = ? WHERE id = 'p2'`,
-      [JSON.stringify({ v: 1, nonce: "00".repeat(12), ct: "00".repeat(32) })],
-    );
+    db.run(`UPDATE provider_configs SET encrypted_api_key = ? WHERE id = 'p2'`, [
+      JSON.stringify({ v: 1, nonce: "00".repeat(12), ct: "00".repeat(32) }),
+    ]);
     expect(() => credentialStore.get("p2")).toThrow(/Failed to decrypt/);
   });
 
@@ -126,9 +123,7 @@ describe("CredentialStore (local DEK encryption)", () => {
     try {
       const since = logger.lastSeq;
       expect(() => credentialStore.get("p2")).toThrow(/Failed to decrypt/);
-      const entry = logger
-        .getRecentEntries(since)
-        .find((e) => e.event === "credential.error");
+      const entry = logger.getRecentEntries(since).find((e) => e.event === "credential.error");
       expect(entry).toBeTruthy();
       expect(entry?.level).toBe("error");
       expect((entry as { providerId?: string }).providerId).toBe("p2");
@@ -185,12 +180,8 @@ describe("CredentialStore (local DEK encryption)", () => {
 
       const restartedStore = new CredentialStore();
       expect(() => restartedStore.getToolApprovalSecret()).toThrow(CredentialError);
-      expect(() => restartedStore.getToolApprovalSecret()).toThrow(
-        /data may be corrupted/i,
-      );
-      expect(readToolApprovalSecretSetting()?.value).toBe(
-        CORRUPTED_TOOL_APPROVAL_SECRET,
-      );
+      expect(() => restartedStore.getToolApprovalSecret()).toThrow(/data may be corrupted/i);
+      expect(readToolApprovalSecretSetting()?.value).toBe(CORRUPTED_TOOL_APPROVAL_SECRET);
     } finally {
       restoreToolApprovalSecretSetting(originalRow);
     }

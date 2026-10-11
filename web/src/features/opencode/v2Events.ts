@@ -1,8 +1,4 @@
-import type {
-  SessionInboxItem,
-  SessionMessageInfo,
-  V2Event,
-} from "@opencode/client";
+import type { SessionInboxItem, SessionMessageInfo, V2Event } from "@opencode/client";
 import {
   OPENCODE_V2_DIAGNOSTIC_COUNT_CAP,
   OPENCODE_V2_RECENT_EVENT_ID_WINDOW,
@@ -172,10 +168,7 @@ function getMessage(
   );
 }
 
-function withMessage(
-  state: V2ThreadState,
-  message: V2MessageState,
-): V2ThreadState {
+function withMessage(state: V2ThreadState, message: V2MessageState): V2ThreadState {
   const exists = state.messageOrder.includes(message.id);
   return {
     ...state,
@@ -184,16 +177,14 @@ function withMessage(
   };
 }
 
-function replacePart(
-  message: V2MessageState,
-  part: V2MessagePartState,
-): V2MessageState {
+function replacePart(message: V2MessageState, part: V2MessagePartState): V2MessageState {
   const index = message.parts.findIndex((candidate) => candidate.id === part.id);
-  const parts = index < 0
-    ? [...message.parts, part]
-    : message.parts.map((candidate, candidateIndex) =>
-        candidateIndex === index ? part : candidate,
-      );
+  const parts =
+    index < 0
+      ? [...message.parts, part]
+      : message.parts.map((candidate, candidateIndex) =>
+          candidateIndex === index ? part : candidate,
+        );
   return { ...message, parts };
 }
 
@@ -207,16 +198,25 @@ function executionCancelRequested(state: V2ExecutionState): boolean {
     : false;
 }
 
-function currentUserAndInbox(
-  state: V2ThreadState,
-): { userMessageId: string | null; inboxId: string | null } {
-  if (state.execution.type === "submitting" || state.execution.type === "admitted" || state.execution.type === "reconciling") {
+function currentUserAndInbox(state: V2ThreadState): {
+  userMessageId: string | null;
+  inboxId: string | null;
+} {
+  if (
+    state.execution.type === "submitting" ||
+    state.execution.type === "admitted" ||
+    state.execution.type === "reconciling"
+  ) {
     return {
       userMessageId: state.execution.userMessageId,
       inboxId: state.execution.type === "admitted" ? state.execution.inboxId : null,
     };
   }
-  if (state.execution.type === "executing" || state.execution.type === "streaming" || state.execution.type === "cancelling") {
+  if (
+    state.execution.type === "executing" ||
+    state.execution.type === "streaming" ||
+    state.execution.type === "cancelling"
+  ) {
     return {
       userMessageId: state.execution.userMessageId,
       inboxId: state.execution.inboxId,
@@ -225,10 +225,7 @@ function currentUserAndInbox(
   return { userMessageId: null, inboxId: null };
 }
 
-function recordInbox(
-  state: V2ThreadState,
-  record: V2InboxRecord,
-): V2ThreadState {
+function recordInbox(state: V2ThreadState, record: V2InboxRecord): V2ThreadState {
   const next: V2ThreadState = {
     ...state,
     inboxById: { ...state.inboxById, [record.id]: record },
@@ -257,13 +254,14 @@ function inboxRecordFromItem(
   inboxId: string,
   item: SessionInboxItem,
 ): V2InboxRecord {
-  const type = item.type === "compaction"
-    ? "compaction"
-    : item.type === "synthetic"
-      ? "synthetic"
-      : item.type === "move"
-        ? "move"
-        : "user";
+  const type =
+    item.type === "compaction"
+      ? "compaction"
+      : item.type === "synthetic"
+        ? "synthetic"
+        : item.type === "move"
+          ? "move"
+          : "user";
   return { id: inboxId, sessionId, type, delivery: item.delivery };
 }
 
@@ -276,9 +274,7 @@ function inboxRecordFromItem(
  *
  * @returns The safe error, carrying the server's own message and status.
  */
-export function mapEventError(
-  error: { message: string; status?: number },
-): V2SafeError {
+export function mapEventError(error: { message: string; status?: number }): V2SafeError {
   return {
     kind: error.status && error.status >= 500 ? "server" : "unknown",
     message: error.message,
@@ -286,11 +282,17 @@ export function mapEventError(
   };
 }
 
-function applyModelEvent(state: V2ThreadState, event: Extract<V2Event, { type: "session.model.selected" }>): V2ThreadState {
+function applyModelEvent(
+  state: V2ThreadState,
+  event: Extract<V2Event, { type: "session.model.selected" }>,
+): V2ThreadState {
   return { ...state, model: modelRefToV2Selection(event.data.model) };
 }
 
-function applyAgentEvent(state: V2ThreadState, event: Extract<V2Event, { type: "session.agent.selected" }>): V2ThreadState {
+function applyAgentEvent(
+  state: V2ThreadState,
+  event: Extract<V2Event, { type: "session.agent.selected" }>,
+): V2ThreadState {
   return { ...state, agent: event.data.agent };
 }
 
@@ -304,11 +306,14 @@ function applyExecutionStarted(state: V2ThreadState): V2ThreadState {
       userMessageId: ids.userMessageId,
       inboxId: ids.inboxId,
       assistantMessageId: null,
-      cancelRequested: state.execution.type === "cancelling"
-        ? true
-        : state.execution.type === "submitting" || state.execution.type === "admitted" || state.execution.type === "reconciling"
-          ? state.execution.cancelRequested
-          : false,
+      cancelRequested:
+        state.execution.type === "cancelling"
+          ? true
+          : state.execution.type === "submitting" ||
+              state.execution.type === "admitted" ||
+              state.execution.type === "reconciling"
+            ? state.execution.cancelRequested
+            : false,
     },
   };
 }
@@ -334,16 +339,18 @@ function assistantToolPart(
 ): V2ToolPartState {
   const message = getMessage(state, assistantMessageId);
   const existing = message.parts.find((part) => part.id === `tool:${assistantMessageId}:${toolId}`);
-  return existing?.kind === "tool" ? existing : {
-    kind: "tool",
-    id: `tool:${assistantMessageId}:${toolId}`,
-    order: message.parts.length,
-    name: "unknown",
-    input: {},
-    output: undefined,
-    status: "running",
-    permissionId: null,
-  };
+  return existing?.kind === "tool"
+    ? existing
+    : {
+        kind: "tool",
+        id: `tool:${assistantMessageId}:${toolId}`,
+        order: message.parts.length,
+        name: "unknown",
+        input: {},
+        output: undefined,
+        status: "running",
+        permissionId: null,
+      };
 }
 
 function updateAssistantTool(
@@ -436,7 +443,10 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         usage: { cost: event.data.cost, tokens: event.data.tokens },
       };
     case "session.inbox.enqueued":
-      return recordInbox(state, inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item));
+      return recordInbox(
+        state,
+        inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item),
+      );
     case "session.inbox.cancelled": {
       const record = state.inboxById[event.data.inboxID];
       return record ? { ...state, inboxById: { ...state.inboxById, [record.id]: record } } : state;
@@ -446,14 +456,17 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "session.execution.succeeded":
     case "session.execution.interrupted":
     case "session.idle":
-      return isTerminalExecution(state.execution) ? state : { ...state, execution: { type: "idle" } };
+      return isTerminalExecution(state.execution)
+        ? state
+        : { ...state, execution: { type: "idle" } };
     case "session.execution.failed":
       return {
         ...state,
         execution: {
           type: "error",
           userMessageId: currentUserAndInbox(state).userMessageId,
-          assistantMessageId: state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
+          assistantMessageId:
+            state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
           error: mapEventError(event.data.error),
         },
       };
@@ -491,7 +504,9 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "permission.replied":
       return {
         ...state,
-        permissions: state.permissions.filter((permission) => permission.id !== event.data.requestID),
+        permissions: state.permissions.filter(
+          (permission) => permission.id !== event.data.requestID,
+        ),
         answeredPermissionIds: appendId(state.answeredPermissionIds, event.data.requestID),
       };
     case "session.text.started":
@@ -536,7 +551,10 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     }
     case "session.text.ended": {
       const message = getMessage(state, event.data.assistantMessageID);
-      const part = message.parts.find((candidate) => candidate.id === `text:${event.data.assistantMessageID}:${event.data.ordinal}`);
+      const part = message.parts.find(
+        (candidate) =>
+          candidate.id === `text:${event.data.assistantMessageID}:${event.data.ordinal}`,
+      );
       if (part?.kind !== "text") return state;
       return updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
@@ -546,7 +564,10 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     }
     case "session.reasoning.ended": {
       const message = getMessage(state, event.data.assistantMessageID);
-      const part = message.parts.find((candidate) => candidate.id === `reasoning:${event.data.assistantMessageID}:${event.data.ordinal}`);
+      const part = message.parts.find(
+        (candidate) =>
+          candidate.id === `reasoning:${event.data.assistantMessageID}:${event.data.ordinal}`,
+      );
       if (part?.kind !== "reasoning") return state;
       return updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
@@ -564,19 +585,18 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
       // "unknown" for the rest of the session after one compaction.
       const occupancyTokens = event.data.tokens ?? state.occupancyTokens;
       if (part?.kind !== "step") {
-        return event.data.tokens
-          ? { ...state, occupancyTokens, occupancyStale: false }
-          : state;
+        return event.data.tokens ? { ...state, occupancyTokens, occupancyStale: false } : state;
       }
       const next = updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
         status: event.type === "session.step.failed" ? "error" : "finished",
       });
-      const usage = event.type === "session.step.ended"
-        ? { cost: event.data.cost, tokens: event.data.tokens }
-        : event.data.cost !== undefined && event.data.tokens !== undefined
+      const usage =
+        event.type === "session.step.ended"
           ? { cost: event.data.cost, tokens: event.data.tokens }
-          : next.usage;
+          : event.data.cost !== undefined && event.data.tokens !== undefined
+            ? { cost: event.data.cost, tokens: event.data.tokens }
+            : next.usage;
       // A step's usage is measured against the CURRENT prompt, so it clears any
       // compaction invalidation. Without this the meter would stay unknown for
       // the rest of the session after one compaction.
@@ -589,7 +609,11 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         ...next,
         usage,
         occupancyTokens,
-        ...(event.data.tokens ? { occupancyStale: false } : measured ? { occupancyStale: false } : {}),
+        ...(event.data.tokens
+          ? { occupancyStale: false }
+          : measured
+            ? { occupancyStale: false }
+            : {}),
       };
     }
     case "session.tool.input.started":
@@ -693,7 +717,11 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
     case "load_completed":
       return { ...state, load: { type: "ready" } };
     case "load_failed":
-      return { ...state, load: { type: "error", error: action.error }, execution: { type: "idle" } };
+      return {
+        ...state,
+        load: { type: "error", error: action.error },
+        execution: { type: "idle" },
+      };
     case "session_hydrated":
       // The server's own snapshot is authoritative on reload, including about
       // compactions it has already performed, so nothing is stale here. This is
@@ -717,9 +745,7 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
             selectionGeneration: action.generation,
           };
     case "history_loaded": {
-      const messages = Object.fromEntries(
-        action.messages.map((message) => [message.id, message]),
-      );
+      const messages = Object.fromEntries(action.messages.map((message) => [message.id, message]));
       const optimistic = state.optimisticMessageIds
         .filter((messageId) => !(messageId in messages))
         .map((messageId) => state.messages[messageId])
@@ -739,10 +765,13 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         messages: Object.fromEntries(merged.map((message) => [message.id, message])),
         messageOrder: [
           ...action.messageOrder,
-          ...optimistic.map((message) => message.id).filter((id) => !action.messageOrder.includes(id)),
+          ...optimistic
+            .map((message) => message.id)
+            .filter((id) => !action.messageOrder.includes(id)),
         ],
         occupancyTokens: occupancy?.state === "measured" ? occupancy.tokens : state.occupancyTokens,
-        occupancyStale: occupancy?.state === "unknown" ? true : occupancy === null ? state.occupancyStale : false,
+        occupancyStale:
+          occupancy?.state === "unknown" ? true : occupancy === null ? state.occupancyStale : false,
       };
     }
     case "inbox_hydrated":
@@ -802,9 +831,10 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
               userMessageId: action.userMessageId,
               inboxId: action.inbox.id,
               delivery: action.inbox.delivery,
-              cancelRequested: next.execution.type === "cancelling"
-                ? true
-                : executionCancelRequested(next.execution),
+              cancelRequested:
+                next.execution.type === "cancelling"
+                  ? true
+                  : executionCancelRequested(next.execution),
             },
           };
     }
@@ -844,7 +874,8 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
     case "execution_started":
       return applyExecutionStarted(state);
     case "execution_streaming": {
-      if (isTerminalExecution(state.execution) || state.execution.type === "reverting") return state;
+      if (isTerminalExecution(state.execution) || state.execution.type === "reverting")
+        return state;
       const ids = currentUserAndInbox(state);
       return {
         ...state,
@@ -858,7 +889,9 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       };
     }
     case "execution_settled":
-      return isTerminalExecution(state.execution) ? state : { ...state, execution: { type: "idle" } };
+      return isTerminalExecution(state.execution)
+        ? state
+        : { ...state, execution: { type: "idle" } };
     case "execution_failed":
       return {
         ...state,
@@ -890,7 +923,8 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         execution: {
           type: "error",
           userMessageId: action.userMessageId,
-          assistantMessageId: state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
+          assistantMessageId:
+            state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
           error: action.error,
         },
       };
@@ -919,7 +953,10 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         answeredPermissionIds: appendId(state.answeredPermissionIds, action.requestId),
       };
     case "permission_retired":
-      return { ...state, permissions: state.permissions.filter((permission) => permission.id !== action.requestId) };
+      return {
+        ...state,
+        permissions: state.permissions.filter((permission) => permission.id !== action.requestId),
+      };
     case "form_retired":
       return { ...state, forms: state.forms.filter((form) => form.id !== action.formId) };
     case "runtime_messages_reconciled": {
@@ -979,10 +1016,7 @@ export function reduceV2Event(
 }
 
 /** Reduces a typed state action without I/O or React dependencies. */
-export function reduceV2ThreadState(
-  state: V2ThreadState,
-  action: V2ThreadAction,
-): V2ThreadState {
+export function reduceV2ThreadState(state: V2ThreadState, action: V2ThreadAction): V2ThreadState {
   return reduceAction(state, action);
 }
 

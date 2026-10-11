@@ -25,7 +25,7 @@ describe("v2 client over InMemoryTransport (era negotiation)", () => {
 
     const client = new Client(
       { name: "tbai-test", version: "1.0.0" },
-      { versionNegotiation: { mode: "auto" }, capabilities: { roots: { listChanged: true } } }
+      { versionNegotiation: { mode: "auto" }, capabilities: { roots: { listChanged: true } } },
     );
     await client.connect(clientTransport);
 
@@ -78,7 +78,7 @@ describe("v2 client over InMemoryTransport (era negotiation)", () => {
     await server.connect(serverTransport);
     const client = new Client(
       { name: "tbai-test", version: "1.0.0" },
-      { capabilities: { roots: { listChanged: true } } }
+      { capabilities: { roots: { listChanged: true } } },
     );
     client.setRequestHandler("roots/list", () => ({
       roots: [{ uri: "file:///tmp" }],
@@ -93,11 +93,9 @@ describe("v2 client over InMemoryTransport (era negotiation)", () => {
 describe("Streamable HTTP round-trip (real Bun server)", () => {
   it("connects, negotiates and calls a tool over HTTP", async () => {
     const server = new McpServer({ name: "fixture-http", version: "1.0.0" });
-    server.registerTool(
-      "ping_tool",
-      { description: "Returns pong." },
-      async () => ({ content: [{ type: "text" as const, text: "pong" }] })
-    );
+    server.registerTool("ping_tool", { description: "Returns pong." }, async () => ({
+      content: [{ type: "text" as const, text: "pong" }],
+    }));
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
@@ -113,10 +111,10 @@ describe("Streamable HTTP round-trip (real Bun server)", () => {
     try {
       const client = new Client(
         { name: "tbai-test", version: "1.0.0" },
-        { versionNegotiation: { mode: "auto" } }
+        { versionNegotiation: { mode: "auto" } },
       );
       await client.connect(
-        new StreamableHTTPClientTransport(new URL(`http://localhost:${httpServer.port}/mcp`))
+        new StreamableHTTPClientTransport(new URL(`http://localhost:${httpServer.port}/mcp`)),
       );
       expect(client.getProtocolEra()).toBe("legacy");
       const result = await client.callTool({ name: "ping_tool", arguments: {} });
@@ -199,9 +197,9 @@ describe("canonical manager lifecycle over STDIO (v2)", () => {
       const tools = mcpManager.getAiTools();
       const pending = tools[`mcp__${id}__ask_user`].execute(
         {},
-        { toolCallId: "t-elicit", messages: [] }
+        { toolCallId: "t-elicit", messages: [] },
       );
-      let info;
+      let info: ReturnType<typeof mcpManager.getPendingElicitation>;
       for (let i = 0; i < 100; i++) {
         info = mcpManager.getPendingElicitation();
         if (info?.serverId === id) break;
@@ -268,9 +266,7 @@ describe("canonical manager lifecycle over STDIO (v2)", () => {
       if (st?.status === "error") break;
       await new Promise((r) => setTimeout(r, 200));
     }
-    expect(
-      mcpManager.getStatuses().find((s) => s.id === created.id)?.status
-    ).toBe("error");
+    expect(mcpManager.getStatuses().find((s) => s.id === created.id)?.status).toBe("error");
 
     const id = await createStdioFixture("v2-toggle");
     mcpManager.setEnabled(id, false);
@@ -296,12 +292,10 @@ describe("canonical manager lifecycle over STDIO (v2)", () => {
       const controller = new AbortController();
       controller.abort();
       const settled = await Promise.race([
-        tools[`mcp__${id}__echo`]
-          .execute({ text: "x" }, { abortSignal: controller.signal })
-          .then(
-            () => "resolved" as const,
-            () => "rejected" as const
-          ),
+        tools[`mcp__${id}__echo`].execute({ text: "x" }, { abortSignal: controller.signal }).then(
+          () => "resolved" as const,
+          () => "rejected" as const,
+        ),
         new Promise((r) => setTimeout(() => r("timeout" as const), 15000)),
       ]);
       expect(settled).not.toBe("timeout");
@@ -366,7 +360,7 @@ async function expectReconnectsBounded(
   id: string,
   serverName: string,
   maxAttempts: number,
-  delayMs: number
+  delayMs: number,
 ): Promise<void> {
   const cutoff = logger.lastSeq;
   const windowMs = reconcileWindowMs(maxAttempts, delayMs);
@@ -385,11 +379,12 @@ async function expectReconnectsBounded(
   const reconnects = logger
     .getRecentEntries(cutoff)
     .filter(
-      (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === serverName
+      (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === serverName,
     );
-  expect(reconnects.length, `expected <= ${maxAttempts} reconnects for ${serverName}`).toBeLessThanOrEqual(
-    maxAttempts
-  );
+  expect(
+    reconnects.length,
+    `expected <= ${maxAttempts} reconnects for ${serverName}`,
+  ).toBeLessThanOrEqual(maxAttempts);
 }
 
 describe("MCP lifecycle (Phase 4)", () => {
@@ -415,9 +410,12 @@ describe("MCP lifecycle (Phase 4)", () => {
     expect(statusOf(badId)).toBe("disconnected");
     expect(statusOf(good)).toBe("disconnected");
     expect(
-      logger.getRecentEntries(cutoff).filter(
-        (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "p4-race-bad"
-      ).length
+      logger
+        .getRecentEntries(cutoff)
+        .filter(
+          (e) =>
+            e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "p4-race-bad",
+        ).length,
     ).toBe(0);
   }, 60000);
 
@@ -441,7 +439,7 @@ describe("MCP lifecycle (Phase 4)", () => {
     const reconnects = logger
       .getRecentEntries(cutoff)
       .filter(
-        (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "p4-err-bad"
+        (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "p4-err-bad",
       );
     expect(reconnects.length).toBe(0);
     await mcpManager.disconnectAll();
@@ -523,9 +521,9 @@ describe("MCP lifecycle (Phase 4)", () => {
       const tools = mcpManager.getAiTools();
       const pending = tools[`mcp__${id}__ask_user`].execute(
         {},
-        { toolCallId: "t-elicit-reconnect", messages: [] }
+        { toolCallId: "t-elicit-reconnect", messages: [] },
       );
-      let info;
+      let info: ReturnType<typeof mcpManager.getPendingElicitation>;
       for (let i = 0; i < 100; i++) {
         info = mcpManager.getPendingElicitation();
         if (info?.serverId === id) break;
@@ -548,7 +546,7 @@ describe("MCP lifecycle (Phase 4)", () => {
       const settled = await Promise.race([
         pending.then(
           (out) => ({ outcome: "resolved" as const, out: String(out) }),
-          () => ({ outcome: "rejected" as const, out: "" })
+          () => ({ outcome: "rejected" as const, out: "" }),
         ),
         new Promise<null>((r) => setTimeout(() => r(null), 10000)),
       ]);
@@ -568,9 +566,9 @@ describe("MCP lifecycle (Phase 4)", () => {
       const tools = mcpManager.getAiTools();
       const pending = tools[`mcp__${id}__ask_user`].execute(
         {},
-        { toolCallId: "t-elicit-race", messages: [] }
+        { toolCallId: "t-elicit-race", messages: [] },
       );
-      let info;
+      let info: ReturnType<typeof mcpManager.getPendingElicitation>;
       for (let i = 0; i < 100; i++) {
         info = mcpManager.getPendingElicitation();
         if (info?.serverId === id) break;
@@ -607,9 +605,9 @@ describe("MCP lifecycle (Phase 4)", () => {
     // connection in a stable disconnected state (SDK close during connect is
     // safe — the in-flight connect rejects with CONNECTION_CLOSED).
     // `createConfig` returns the created CONFIG; every other call in this file takes
-// its `id`, so keep this one consistent rather than passing the object where a
-// server id is expected.
-const id = mcpManager.createConfig({
+    // its `id`, so keep this one consistent rather than passing the object where a
+    // server id is expected.
+    const id = mcpManager.createConfig({
       name: "p4-midconnect",
       transport: "stdio",
       command: "bun",
@@ -630,7 +628,7 @@ const id = mcpManager.createConfig({
     // "missing" (the getStatuses fallback) once the in-memory entry is gone.
     // "disconnected" and "missing" are both the stable, no-connection state —
     // the invariant we assert is "not connected and not reconnecting".
-await connectP.catch(() => {});
+    await connectP.catch(() => {});
     const st = statusOf(id);
     expect(
       st !== "connected" && st !== "reconnecting",
@@ -684,7 +682,7 @@ describe("disconnectAll (shutdown spine)", () => {
         {},
         { toolCallId: "t-elicit-shutdown", messages: [] },
       );
-      let info;
+      let info: ReturnType<typeof mcpManager.getPendingElicitation>;
       for (let i = 0; i < 100; i++) {
         info = mcpManager.getPendingElicitation();
         if (info?.serverId === id) break;

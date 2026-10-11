@@ -6,12 +6,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { db } from "../../db";
 import { generateId } from "../../lib/utils";
-import type {
-  JobStatus,
-  RunStatus,
-  SchedulerJob,
-  SchedulerRun,
-} from "./schedulerTypes";
+import type { JobStatus, RunStatus, SchedulerJob, SchedulerRun } from "./schedulerTypes";
 
 interface JobRow {
   id: string;
@@ -75,8 +70,7 @@ function mapJob(row: JobRow): SchedulerJob {
     thinkingLevel: row.thinking_level as SchedulerJob["thinkingLevel"],
     workspacePath: row.workspace_path,
     prompt: row.prompt,
-    conversationPolicy:
-      row.conversation_policy as SchedulerJob["conversationPolicy"],
+    conversationPolicy: row.conversation_policy as SchedulerJob["conversationPolicy"],
     conversationId: row.conversation_id,
     overlapPolicy: row.overlap_policy as SchedulerJob["overlapPolicy"],
     maxRetries: row.max_retries,
@@ -193,9 +187,7 @@ export const schedulerStore = {
 
   get(id: string, database: Database = db): SchedulerJob | null {
     const row = database
-      .query<JobRow, SQLQueryBindings[]>(
-        `SELECT ${JOB_COLUMNS} FROM scheduler_jobs WHERE id = ?`,
-      )
+      .query<JobRow, SQLQueryBindings[]>(`SELECT ${JOB_COLUMNS} FROM scheduler_jobs WHERE id = ?`)
       .get(id);
     return row ? mapJob(row) : null;
   },
@@ -223,11 +215,7 @@ export const schedulerStore = {
     return rows.map(mapJob);
   },
 
-  update(
-    id: string,
-    patch: JobUpdate,
-    database: Database = db,
-  ): SchedulerJob | null {
+  update(id: string, patch: JobUpdate, database: Database = db): SchedulerJob | null {
     const sets: string[] = [];
     const values: SQLQueryBindings[] = [];
     const push = (col: string, v: SQLQueryBindings): void => {
@@ -246,22 +234,21 @@ export const schedulerStore = {
     if (patch.thinkingLevel !== undefined) push("thinking_level", patch.thinkingLevel);
     if (patch.workspacePath !== undefined) push("workspace_path", patch.workspacePath);
     if (patch.prompt !== undefined) push("prompt", patch.prompt);
-    if (patch.conversationPolicy !== undefined) push("conversation_policy", patch.conversationPolicy);
+    if (patch.conversationPolicy !== undefined)
+      push("conversation_policy", patch.conversationPolicy);
     if (patch.conversationId !== undefined) push("conversation_id", patch.conversationId);
     if (patch.overlapPolicy !== undefined) push("overlap_policy", patch.overlapPolicy);
     if (patch.maxRetries !== undefined) push("max_retries", patch.maxRetries);
     if (patch.retryDelaySeconds !== undefined) push("retry_delay_seconds", patch.retryDelaySeconds);
     if (patch.timeoutSeconds !== undefined) push("timeout_seconds", patch.timeoutSeconds);
-    if (patch.missedGraceSeconds !== undefined) push("missed_grace_seconds", patch.missedGraceSeconds);
+    if (patch.missedGraceSeconds !== undefined)
+      push("missed_grace_seconds", patch.missedGraceSeconds);
     if (patch.nextRunAt !== undefined) push("next_run_at", patch.nextRunAt);
     if (patch.lastRunAt !== undefined) push("last_run_at", patch.lastRunAt);
     if (patch.status !== undefined) push("status", patch.status);
     push("updated_at", Date.now());
     values.push(id);
-    database.run(
-      `UPDATE scheduler_jobs SET ${sets.join(", ")} WHERE id = ?`,
-      values,
-    );
+    database.run(`UPDATE scheduler_jobs SET ${sets.join(", ")} WHERE id = ?`, values);
     return this.get(id, database);
   },
 
@@ -319,9 +306,7 @@ export const schedulerStore = {
       return null;
     }
     const row = database
-      .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs WHERE id = ?",
-      )
+      .query<RunRow, SQLQueryBindings[]>("SELECT * FROM scheduler_runs WHERE id = ?")
       .get(id);
     return row ? mapRun(row) : null;
   },
@@ -364,19 +349,25 @@ export const schedulerStore = {
       return null;
     }
     const row = database
-      .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs WHERE id = ?",
-      )
+      .query<RunRow, SQLQueryBindings[]>("SELECT * FROM scheduler_runs WHERE id = ?")
       .get(id);
     return row ? mapRun(row) : null;
   },
 
   updateRun(
     id: string,
-    patch: Partial<Pick<
-      SchedulerRun,
-      "status" | "error" | "outputExcerpt" | "attempt" | "completedAt" | "durationMs" | "conversationId"
-    >>,
+    patch: Partial<
+      Pick<
+        SchedulerRun,
+        | "status"
+        | "error"
+        | "outputExcerpt"
+        | "attempt"
+        | "completedAt"
+        | "durationMs"
+        | "conversationId"
+      >
+    >,
     database: Database = db,
   ): void {
     const sets: string[] = [];
@@ -411,17 +402,12 @@ export const schedulerStore = {
     }
     if (sets.length === 0) return;
     values.push(id);
-    database.run(
-      `UPDATE scheduler_runs SET ${sets.join(", ")} WHERE id = ?`,
-      values,
-    );
+    database.run(`UPDATE scheduler_runs SET ${sets.join(", ")} WHERE id = ?`, values);
   },
 
   getRun(id: string, database: Database = db): SchedulerRun | null {
     const row = database
-      .query<RunRow, SQLQueryBindings[]>(
-        `SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`,
-      )
+      .query<RunRow, SQLQueryBindings[]>(`SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`)
       .get(id);
     return row ? mapRun(row) : null;
   },
@@ -459,9 +445,7 @@ export const schedulerStore = {
       )
       .all(limit, offset);
     const totalRow = database
-      .query<{ c: number }, SQLQueryBindings[]>(
-        "SELECT COUNT(*) as c FROM scheduler_runs",
-      )
+      .query<{ c: number }, SQLQueryBindings[]>("SELECT COUNT(*) as c FROM scheduler_runs")
       .get();
     return {
       runs: rows.map(mapRun),
@@ -498,10 +482,7 @@ export const schedulerStore = {
    * Delete terminal runs older than `olderThanMs` (default 30 days, codeg
    * parity). Running/scheduled rows are never touched. Returns deleted count.
    */
-  pruneOldRuns(
-    olderThanMs: number = 30 * 24 * 3600_000,
-    database: Database = db,
-  ): number {
+  pruneOldRuns(olderThanMs: number = 30 * 24 * 3600_000, database: Database = db): number {
     const cutoff = Date.now() - olderThanMs;
     const before =
       database
@@ -531,10 +512,7 @@ export const schedulerStore = {
     }
   > {
     const rows = database
-      .query<
-        RunRow & { job_name: string | null },
-        SQLQueryBindings[]
-      >(
+      .query<RunRow & { job_name: string | null }, SQLQueryBindings[]>(
         `SELECT r.*, j.name as job_name FROM scheduler_runs r
          LEFT JOIN scheduler_jobs j ON j.id = r.job_id
          WHERE r.started_at >= ? AND r.status IN ('failed','interrupted','missed')

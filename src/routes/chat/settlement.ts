@@ -11,9 +11,8 @@
  * without a cycle.
  */
 import { errorLogFields } from "../../lib/errors";
-import { logger } from "../../lib/logger";
+import type { logger } from "../../lib/logger";
 import { chatStreamStore } from "../../lib/resumable";
-import { chatRuns } from "../../services/chat-runs";
 import type { ChatStreamTerminalKind } from "../../services/chat-streams/schema";
 
 /** A run's terminal state, matching the registry's settlement vocabulary. */

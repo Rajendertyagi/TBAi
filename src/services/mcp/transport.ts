@@ -36,16 +36,13 @@ const SSE_PROBE_TIMEOUT_MS = 3000;
  * token stored against an `authType` of `none` must not be sent, or it would
  * leak a credential to a server that never asked for one.
  */
-export function buildHeaders(
-  config: McpServerConfig,
-  authToken?: string,
-): Record<string, string> {
+export function buildHeaders(config: McpServerConfig, authToken?: string): Record<string, string> {
   const headers: Record<string, string> = { ...(config.headers ?? {}) };
   if (authToken && config.authType !== "none") {
     if (config.authType === "bearer" || config.authType === "oauth") {
-      headers["Authorization"] = `Bearer ${authToken}`;
+      headers.Authorization = `Bearer ${authToken}`;
     } else if (config.authType === "basic") {
-      headers["Authorization"] = `Basic ${Buffer.from(authToken).toString("base64")}`;
+      headers.Authorization = `Basic ${Buffer.from(authToken).toString("base64")}`;
     }
   }
   return headers;
@@ -67,14 +64,14 @@ export function buildTransport(config: McpServerConfig, authToken?: string): Tra
       command: config.command,
       args: config.args ?? [],
       // `process.env` is typed `string | undefined` per entry, while the SDK wants
-    // `string`. Values that are genuinely absent must not reach the child as the
-    // string "undefined", so they are dropped — which is what the environment
-    // already means by them.
-    env: Object.fromEntries(
-      Object.entries({ ...process.env, ...(config.env ?? {}) }).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
+      // `string`. Values that are genuinely absent must not reach the child as the
+      // string "undefined", so they are dropped — which is what the environment
+      // already means by them.
+      env: Object.fromEntries(
+        Object.entries({ ...process.env, ...(config.env ?? {}) }).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
       ),
-    ),
       cwd: process.cwd(),
       stderr: "ignore",
     }) as unknown as Transport;
@@ -130,10 +127,7 @@ export async function probeSseEndpoint(
 }
 
 /** Masked hint that an auth type is configured, for a settings screen. */
-export function authHintFor(
-  authType: McpAuthType,
-  authConfigured: boolean,
-): string | undefined {
+export function authHintFor(authType: McpAuthType, authConfigured: boolean): string | undefined {
   if (!authConfigured || authType === "none") return undefined;
   const label = authType === "bearer" ? "Bearer" : authType === "basic" ? "Basic" : "OAuth";
   return `${label} ••••••`;

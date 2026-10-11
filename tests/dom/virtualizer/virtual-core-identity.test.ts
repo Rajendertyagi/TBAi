@@ -135,7 +135,8 @@ describe("P2 — @tanstack/virtual-core identity (headless harness prerequisite)
     }
 
     console.log("\n=== @tanstack/virtual-core reachable copies (G-5) ===");
-    for (const [label, version] of reachable) console.log(`  ${version ?? "(unresolvable)"}  <-  ${label}`);
+    for (const [label, version] of reachable)
+      console.log(`  ${version ?? "(unresolvable)"}  <-  ${label}`);
 
     // Cache directories, reported for diagnosis but no longer asserted on.
     const store = path.join(repoRoot, "node_modules", ".bun");
@@ -144,7 +145,9 @@ describe("P2 — @tanstack/virtual-core identity (headless harness prerequisite)
         .readdirSync(store)
         .filter((name) => name.startsWith("@tanstack+virtual-core@"))
         .map((name) => name.slice("@tanstack+virtual-core@".length));
-      console.log(`  bun store cache entries (not loadable instances): ${cached.join(", ") || "none"}`);
+      console.log(
+        `  bun store cache entries (not loadable instances): ${cached.join(", ") || "none"}`,
+      );
     }
 
     const loadable = [...reachable.values()].filter((v): v is string => v !== undefined);

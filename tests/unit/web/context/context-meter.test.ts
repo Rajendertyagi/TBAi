@@ -14,9 +14,12 @@
  */
 import { describe, expect, it } from "bun:test";
 import path from "node:path";
-import fs from "fs";
+import fs from "node:fs";
 
-import { parseCurrentContext, readingApplies } from "@web/features/chat/context/useCurrentContext.ts";
+import {
+  parseCurrentContext,
+  readingApplies,
+} from "@web/features/chat/context/useCurrentContext.ts";
 import { stripComments } from "@web/testing/source-scope";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 
@@ -81,8 +84,11 @@ describe("server-measured current context is what the meter reads", () => {
 
   it("reads it from metadata.custom too, since assistant-ui relocates unknown keys", () => {
     expect(
-      parseCurrentContext({ custom: { context: { usedTokens: 10, windowTokens: 100, windowSource: "provider_reported" } } })
-        ?.usedTokens,
+      parseCurrentContext({
+        custom: {
+          context: { usedTokens: 10, windowTokens: 100, windowSource: "provider_reported" },
+        },
+      })?.usedTokens,
     ).toBe(10);
   });
 
@@ -150,10 +156,15 @@ describe("THE REGRESSION: cumulative usage must not be the numerator", () => {
   it("the meter drops immediately after compaction", () => {
     // Post-compaction the server ships a smaller usedTokens; the ring reads it
     // directly, so no separate "refresh" path can lag behind.
-    const before = parseCurrentContext({ context: { usedTokens: 900_000, windowTokens: 1_000_000, windowSource: "configured" } });
-    const after = parseCurrentContext({ context: { usedTokens: 76_000, windowTokens: 1_000_000, windowSource: "configured" } });
+    const before = parseCurrentContext({
+      context: { usedTokens: 900_000, windowTokens: 1_000_000, windowSource: "configured" },
+    });
+    const after = parseCurrentContext({
+      context: { usedTokens: 76_000, windowTokens: 1_000_000, windowSource: "configured" },
+    });
     expect(before!.usedTokens).toBeGreaterThan(after!.usedTokens);
-    const pct = (c: { usedTokens: number; windowTokens: number }) => (c.usedTokens / c.windowTokens) * 100;
+    const pct = (c: { usedTokens: number; windowTokens: number }) =>
+      (c.usedTokens / c.windowTokens) * 100;
     expect(pct(after!)).toBeLessThan(pct(before!));
   });
 
@@ -187,9 +198,7 @@ describe("the denominator is the same window the budget enforced", () => {
     );
     // Comments are stripped so a prohibition cannot be satisfied - or broken - merely by
     // prose. The ring documents the fallback it removed; the CODE must not contain it.
-    const code = ringComponent
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const code = ringComponent.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
     // The denominator and the numerator both come from the server's resolution.
     expect(code).toContain("modelContextWindow={serverContext.windowTokens}");
     expect(code).toContain("contextTokens={serverContext.usedTokens}");
@@ -229,12 +238,16 @@ describe("a reading whose resolution no longer applies is withheld", () => {
   const conversation = { providerId: "prov-1", modelId: "model-a" };
 
   it("parses the resolution identity the server published", () => {
-    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-a" }) });
+    const parsed = parseCurrentContext({
+      context: reading({ providerId: "prov-1", modelId: "model-a" }),
+    });
     expect(parsed?.resolvedFor).toEqual({ providerId: "prov-1", modelId: "model-a" });
   });
 
   it("keeps a reading that matches the conversation", () => {
-    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-a" }) });
+    const parsed = parseCurrentContext({
+      context: reading({ providerId: "prov-1", modelId: "model-a" }),
+    });
     expect(parsed).toBeDefined();
     expect(readingApplies(parsed!, conversation)).toBe(true);
   });
@@ -242,19 +255,25 @@ describe("a reading whose resolution no longer applies is withheld", () => {
   it("withholds a reading taken for a DIFFERENT model", () => {
     // The conversation was re-pointed. The old reading's window and occupancy belong
     // to a model this conversation no longer uses.
-    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-b" }) });
+    const parsed = parseCurrentContext({
+      context: reading({ providerId: "prov-1", modelId: "model-b" }),
+    });
     expect(readingApplies(parsed!, conversation)).toBe(false);
   });
 
   it("withholds a reading taken for a DIFFERENT provider on the same model", () => {
-    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-2", modelId: "model-a" }) });
+    const parsed = parseCurrentContext({
+      context: reading({ providerId: "prov-2", modelId: "model-a" }),
+    });
     expect(readingApplies(parsed!, conversation)).toBe(false);
   });
 
   it("keeps a reading when the caller has no binding to check against", () => {
     // Discarding an authoritative measurement because nobody asked would remove a true
     // number, which is worse than showing it.
-    const parsed = parseCurrentContext({ context: reading({ providerId: "prov-1", modelId: "model-a" }) });
+    const parsed = parseCurrentContext({
+      context: reading({ providerId: "prov-1", modelId: "model-a" }),
+    });
     expect(readingApplies(parsed!, undefined)).toBe(true);
   });
 
@@ -267,7 +286,9 @@ describe("a reading whose resolution no longer applies is withheld", () => {
   });
 
   it("does not compare provider identity when the server omitted it", () => {
-    const parsed = parseCurrentContext({ context: reading({ providerId: undefined, modelId: "model-a" }) });
+    const parsed = parseCurrentContext({
+      context: reading({ providerId: undefined, modelId: "model-a" }),
+    });
     expect(readingApplies(parsed!, conversation)).toBe(true);
   });
 
@@ -284,10 +305,7 @@ describe("the Direct ring never resolves a window itself", () => {
     // Comments are stripped first: this file's prose documents the 128k fallback it
     // no longer has, and writing about a removed constant is not having one.
     const ring = stripComments(
-      fs.readFileSync(
-        path.join(REPO_ROOT, "web/src/components/context-ring.tsx"),
-        "utf8",
-      ),
+      fs.readFileSync(path.join(REPO_ROOT, "web/src/components/context-ring.tsx"), "utf8"),
     );
     // The denominator comes from the server reading, full stop.
     expect(ring).toContain("modelContextWindow={serverContext.windowTokens}");

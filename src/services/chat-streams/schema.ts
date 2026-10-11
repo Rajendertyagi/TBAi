@@ -31,12 +31,7 @@ export const CHAT_STREAM_TERMINAL_KINDS = [
 export type ChatStreamTerminalKind = (typeof CHAT_STREAM_TERMINAL_KINDS)[number];
 
 /** Guarded history-finalization state (design §9). */
-export const CHAT_STREAM_HISTORY_STATES = [
-  "pending",
-  "claimed",
-  "done",
-  "skipped",
-] as const;
+export const CHAT_STREAM_HISTORY_STATES = ["pending", "claimed", "done", "skipped"] as const;
 export type ChatStreamHistoryState = (typeof CHAT_STREAM_HISTORY_STATES)[number];
 
 /**

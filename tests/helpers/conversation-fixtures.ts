@@ -64,7 +64,9 @@ function nextClientRequestId(): string {
  * @param overrides Only the fields this test actually exercises; everything else
  *   takes the default that a plain Direct chat would have.
  */
-export function conversationInput(overrides: Partial<ConversationCreateInput> = {}): ConversationCreateInput {
+export function conversationInput(
+  overrides: Partial<ConversationCreateInput> = {},
+): ConversationCreateInput {
   return {
     title: "Test conversation",
     clientRequestId: nextClientRequestId(),

@@ -65,21 +65,16 @@ async function rmFolder(page: Page, id: string, dir?: string): Promise<void> {
   // is still registered.
   if (!dir) return;
   const fs = await import("node:fs");
-  await fs.promises
-    .rm(dir, { recursive: true, force: true, maxRetries: 3 })
-    .catch(() => {
-      /* best effort on Windows: a locked handle must not fail the test */
-    });
+  await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => {
+    /* best effort on Windows: a locked handle must not fail the test */
+  });
 }
 
 async function rmConv(page: Page, id: string): Promise<void> {
   await page.request.delete(`/api/conversations/${id}`).catch(() => {});
 }
 
-async function getConv(
-  page: Page,
-  id: string,
-): Promise<Record<string, unknown>> {
+async function getConv(page: Page, id: string): Promise<Record<string, unknown>> {
   const res = await page.request.get(`/api/conversations/${id}`);
   expect(res.ok(), `get conv ${id} → ${res.status()}`).toBe(true);
   return (await res.json()) as Record<string, unknown>;
@@ -91,18 +86,11 @@ async function waitDraft(page: Page): Promise<void> {
     .getByRole("heading", { name: /what do you want to build/i })
     .first()
     .waitFor({ timeout: 30000 });
-  await expect(
-    page.getByRole("group", { name: "Engine" }),
-  ).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("group", { name: "Engine" })).toBeVisible({ timeout: 10000 });
 }
 
-async function setDraftEngine(
-  page: Page,
-  engine: "Direct" | "OpenCode",
-): Promise<void> {
-  const pill = page
-    .getByRole("group", { name: "Engine" })
-    .getByRole("button", { name: engine });
+async function setDraftEngine(page: Page, engine: "Direct" | "OpenCode"): Promise<void> {
+  const pill = page.getByRole("group", { name: "Engine" }).getByRole("button", { name: engine });
   if ((await pill.getAttribute("aria-pressed")) !== "true") {
     await pill.click();
     await expect(pill).toHaveAttribute("aria-pressed", "true");
@@ -149,30 +137,24 @@ async function seedUserMessage(
   seedId: string,
   text: string,
 ): Promise<void> {
-  const res = await page.request.post(
-    `/api/conversations/${convId}/messages`,
-    {
-      data: {
-        message: {
-          id: seedId,
-          parent_id: null,
-          format: "ai-sdk/v6",
-          content: {
-            role: "user",
-            parts: [{ type: "text", text }],
-            metadata: { custom: {} },
-          },
+  const res = await page.request.post(`/api/conversations/${convId}/messages`, {
+    data: {
+      message: {
+        id: seedId,
+        parent_id: null,
+        format: "ai-sdk/v6",
+        content: {
+          role: "user",
+          parts: [{ type: "text", text }],
+          metadata: { custom: {} },
         },
       },
     },
-  );
+  });
   expect(res.ok(), `seed ${seedId} → ${res.status()}`).toBe(true);
 }
 
-async function createConv(
-  page: Page,
-  body: Record<string, unknown>,
-): Promise<{ id: string }> {
+async function createConv(page: Page, body: Record<string, unknown>): Promise<{ id: string }> {
   const res = await page.request.post("/api/conversations", { data: body });
   expect(res.ok(), `createConv → ${res.status()}`).toBe(true);
   return (await res.json()) as { id: string };
@@ -181,9 +163,7 @@ async function createConv(
 // ---------------------------------------------------------------------------
 // D1 Direct + simple
 // ---------------------------------------------------------------------------
-test("D1 Direct Chat-mode: draft send routes /chat, reload resumes, delete", async ({
-  page,
-}) => {
+test("D1 Direct Chat-mode: draft send routes /chat, reload resumes, delete", async ({ page }) => {
   // This test does a live draft send, a reload and a history resume. Playwright's
   // default test budget is 30s, and the resume assertion below alone asks for
   // 30s — so the assertion could never win its own race and the failure surfaced
@@ -210,9 +190,9 @@ test("D1 Direct Chat-mode: draft send routes /chat, reload resumes, delete", asy
     // runs a live send plus a reload under accumulated machine load. The
     // behaviour under test is "history resumes after a reload", so the budget
     // has to cover a loaded browser rather than an idle one.
-    await expect(
-      page.getByText("matrix check D1", { exact: false }).first(),
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByText("matrix check D1", { exact: false }).first()).toBeVisible({
+      timeout: 60000,
+    });
   } finally {
     if (convId) await rmConv(page, convId);
   }
@@ -238,17 +218,15 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
   try {
     await page.goto("/#/");
     await waitDraft(page);
-    const header = page
-      .getByRole("button", { name: new RegExp(folder.name, "i") })
-      .first();
+    const header = page.getByRole("button", { name: new RegExp(folder.name, "i") }).first();
     await expect(header).toBeVisible({ timeout: 10000 });
     const headerRow = page.locator("div.group", { has: header }).first();
     await headerRow.hover();
     await headerRow.locator('button[title="New Chat"]').click();
     await expect(page).toHaveURL(/#\/chat\/new/);
-    await expect(
-      page.locator(`button[title="Working folder: ${folder.name}"]`),
-    ).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(`button[title="Working folder: ${folder.name}"]`)).toBeVisible({
+      timeout: 20000,
+    });
 
     // Unique per run: `folder.name` carries this run's suffix, so the title is a
     // run-scoped identity for the row. Captured once and reused by the
@@ -282,9 +260,9 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
     // a real creation would have produced. Reloading is the honest equivalent —
     // it weakens no assertion below and asserts nothing about reload behaviour.
     await page.reload();
-    await expect(
-      page.getByText("seed check D2", { exact: false }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("seed check D2", { exact: false }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     // Wait for the folder list to actually LOAD before asserting anything about
     // its highlight. `FolderConversationRow` renders `noConversations` whenever
@@ -327,9 +305,9 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
     await expect(page).toHaveURL(new RegExp(`#/chat/${convId}$`));
 
     await page.reload();
-    await expect(
-      page.getByText("seed check D2", { exact: false }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("seed check D2", { exact: false }).first()).toBeVisible({
+      timeout: 30000,
+    });
   } finally {
     if (convId) await rmConv(page, convId);
     await rmFolder(page, folder.id, folder.dir);
@@ -351,9 +329,9 @@ test("D3 Code Chat-mode: session binds on open, reload resumes pointer, terminat
   const convId = created.id;
   try {
     await page.goto(`/#/code/${convId}`);
-    await expect(
-      page.getByRole("textbox", { name: /send a message/i }).first(),
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole("textbox", { name: /send a message/i }).first()).toBeVisible({
+      timeout: 60000,
+    });
 
     const row = await getConv(page, convId);
     expect(row.engine).toBe("opencode");
@@ -363,9 +341,9 @@ test("D3 Code Chat-mode: session binds on open, reload resumes pointer, terminat
     // Reload: same session pointer (resume, not recreate), surface live.
     await page.reload();
     await expect(page).toHaveURL(/#\/code\//, { timeout: 20000 });
-    await expect(
-      page.getByRole("textbox", { name: /send a message/i }).first(),
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole("textbox", { name: /send a message/i }).first()).toBeVisible({
+      timeout: 60000,
+    });
     const rowAfter = await getConv(page, convId);
     expect(rowAfter.opencodeSessionId).toBe(sessionA);
 
@@ -385,9 +363,7 @@ test("D3 Code Chat-mode: session binds on open, reload resumes pointer, terminat
 // D4 OpenCode + project (quota-free: dialog entry is phase-ua-a (b)'s;
 // here an API-created Code folder row proves highlight + reload + terminate).
 // ---------------------------------------------------------------------------
-test("D4 Code folder chat: row routes /code, reload resumes, terminate", async ({
-  page,
-}) => {
+test("D4 Code folder chat: row routes /code, reload resumes, terminate", async ({ page }) => {
   const folder = await mkFolder(page, "d4");
   const created = await createConv(page, {
     title: `ua-d D4 ${folder.name}`,
@@ -403,9 +379,9 @@ test("D4 Code folder chat: row routes /code, reload resumes, terminate", async (
     expect(conv.workspaceFolderId).toBe(folder.id);
 
     await page.goto(`/#/code/${convId}`);
-    await expect(
-      page.getByRole("textbox", { name: /send a message/i }).first(),
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole("textbox", { name: /send a message/i }).first()).toBeVisible({
+      timeout: 60000,
+    });
 
     // No sidebar highlight assertion here BY DESIGN: CodeShell renders
     // focused chrome only (no Sidebar), so folder rows can't highlight on
@@ -415,9 +391,9 @@ test("D4 Code folder chat: row routes /code, reload resumes, terminate", async (
 
     await page.reload();
     await expect(page).toHaveURL(/#\/code\//, { timeout: 20000 });
-    await expect(
-      page.getByRole("textbox", { name: /send a message/i }).first(),
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole("textbox", { name: /send a message/i }).first()).toBeVisible({
+      timeout: 60000,
+    });
   } finally {
     await page.request
       .post("/api/opencode/session/terminate", {

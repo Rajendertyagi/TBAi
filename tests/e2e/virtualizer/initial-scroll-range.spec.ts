@@ -32,11 +32,7 @@
  * recorded, which are real and reproducible.
  */
 import { expect, test, type Page } from "@playwright/test";
-import {
-  SCROLLER,
-  seedTextConversation,
-  waitForStableScrollHeight,
-} from "./transcriptAnchoring";
+import { SCROLLER, seedTextConversation, waitForStableScrollHeight } from "./transcriptAnchoring";
 
 interface RangeSample {
   readonly scrollHeight: number;
@@ -64,11 +60,7 @@ test.describe("initial scroll range", () => {
       request,
     }) => {
       test.setTimeout(180_000);
-      const conversationId = await seedTextConversation(
-        request,
-        `range-${turns}`,
-        turns * 2,
-      );
+      const conversationId = await seedTextConversation(request, `range-${turns}`, turns * 2);
 
       await page.goto(`/#/chat/${conversationId}`);
       await page.waitForSelector(SCROLLER);

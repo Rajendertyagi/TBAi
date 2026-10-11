@@ -84,10 +84,7 @@ const actionDescriptions: Record<string, string> = {
  * @returns A sentence describing what the action covers.
  */
 export function actionDescription(action: string): string {
-  return (
-    actionDescriptions[action] ??
-    "An action this app does not have a description for."
-  );
+  return actionDescriptions[action] ?? "An action this app does not have a description for.";
 }
 
 /** UI copy for the page. */
@@ -113,8 +110,7 @@ export const openCodeConfigCopy = {
       "OpenCode evaluates these rules in order and the last matching rule wins, so position is part of each rule's meaning.",
     effect: "Effect",
     empty: "This configuration has no permission rules, so OpenCode uses its own defaults.",
-    noKey:
-      "This configuration has no permissions key. OpenCode is using its built-in defaults.",
+    noKey: "This configuration has no permissions key. OpenCode is using its built-in defaults.",
     skipped: (count: number) =>
       `${count} rule${count === 1 ? "" : "s"} could not be read and ${count === 1 ? "is" : "are"} not shown. Nothing was changed.`,
     notConfigurable: (action: string) =>
@@ -162,8 +158,7 @@ export const openCodeConfigCopy = {
       `Remove the rule "${subject}"? Everything else keeps its position.`,
     removing: "Removing…",
     removed: "Rule removed.",
-    backToDefault:
-      "With the rule gone, OpenCode decides this one using its own default.",
+    backToDefault: "With the rule gone, OpenCode decides this one using its own default.",
   },
   states: {
     loading: "Reading the OpenCode configuration…",

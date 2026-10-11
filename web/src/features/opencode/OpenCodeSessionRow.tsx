@@ -84,12 +84,11 @@ export function OpenCodeSessionRow() {
 
   if (!identity) return null;
 
-  const engineLabel =
-    ENGINE_LABELS[identity.engine ?? ""] ?? identity.engine ?? "OpenCode";
+  const engineLabel = ENGINE_LABELS[identity.engine ?? ""] ?? identity.engine ?? "OpenCode";
   const isProject = identity.workspaceMode === "project";
   const folder =
     isProject && identity.workspaceFolderId
-      ? folders.find((f) => f.id === identity.workspaceFolderId) ?? null
+      ? (folders.find((f) => f.id === identity.workspaceFolderId) ?? null)
       : null;
   const scopeLabel = isProject
     ? folder?.alias || folder?.name || welcomeConfig.copy.folderRemoved

@@ -43,7 +43,8 @@ describe("previewFiles: what counts as a usable preview", () => {
     // The whole reason this exists. If a future change drops the context lines
     // from the server's patch, the gate silently stops being more informative
     // than the pair it replaced.
-    const kinds = previewFiles({ patch: PATCH, occurrences: 1 })?.[0].lines.map((l) => l.kind) ?? [];
+    const kinds =
+      previewFiles({ patch: PATCH, occurrences: 1 })?.[0].lines.map((l) => l.kind) ?? [];
     expect(kinds).toEqual(["context", "removed", "added", "context"]);
   });
 

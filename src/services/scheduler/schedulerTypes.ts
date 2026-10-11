@@ -76,12 +76,7 @@ export interface SchedulerRun {
   createdAt: number;
 }
 
-export const TERMINAL_JOB_STATUSES: JobStatus[] = [
-  "completed",
-  "missed",
-  "cancelled",
-  "deleted",
-];
+export const TERMINAL_JOB_STATUSES: JobStatus[] = ["completed", "missed", "cancelled", "deleted"];
 
 export function isTerminalJobStatus(status: JobStatus): boolean {
   return (TERMINAL_JOB_STATUSES as string[]).includes(status);

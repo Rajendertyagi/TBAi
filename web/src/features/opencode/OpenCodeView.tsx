@@ -19,10 +19,7 @@ import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { shouldReconnectForEpoch } from "./recoveryEpoch";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { FirstPromptHandoff } from "./FirstPromptHandoff";
-import {
-  bootstrapOpenCodeSession,
-  invalidateBootstrap,
-} from "./sessionBootstrap";
+import { bootstrapOpenCodeSession, invalidateBootstrap } from "./sessionBootstrap";
 import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
@@ -70,7 +67,11 @@ export function OpenCodeView() {
   // different things and conflating them is how the blank state reappears.
   const config = useOpenCodeConversationConfig(agentId);
   const { models, defaultModel: serverDefault } = useOpenCodeCapabilities();
-  const defaultModel = useResolvedOpenCodeModel(config?.opencodeModel ?? null, models, serverDefault);
+  const defaultModel = useResolvedOpenCodeModel(
+    config?.opencodeModel ?? null,
+    models,
+    serverDefault,
+  );
   const defaultAgent = config?.opencodeAgent ?? undefined;
   const defaultModelWithVariant = defaultModel
     ? { ...defaultModel, ...(config?.opencodeVariant ? { variant: config.opencodeVariant } : {}) }
@@ -85,8 +86,9 @@ export function OpenCodeView() {
     setAttempt((n) => n + 1);
   }, [agentId]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `sessionId` is SET by this effect (line below), so depending on it would re-run the whole session bootstrap as soon as the id arrives - bootstrapping a second session for the one it just created. The bootstrap is keyed on `agentId` and on `attempt` (the retry lever) by design.
   useEffect(() => {
-    if (!agentId || !agentId.trim()) {
+    if (!agentId?.trim()) {
       // No auto-created conversation: Code mode shares the welcome draft
       // with normal chat (engine picker). The first send with the OpenCode
       // engine mints the conversation and routes here, so visiting /code
@@ -253,10 +255,7 @@ function AgentRuntime({
   // model context, but the OpenCode runtime never reads model context (it
   // builds prompts server-side from OpenCode's own tool list), so that half is
   // inert here. Only the renderer half takes effect.
-  const config = useMemo(
-    () => AuiConfig({ tools: Tools({ toolkit: appToolkit }) }),
-    [],
-  );
+  const config = useMemo(() => AuiConfig({ tools: Tools({ toolkit: appToolkit }) }), []);
 
   // The composer's session-dependent seams read from here (the Shield chip's
   // reconcile path, and the built-in `/compact` action's session/directory/
@@ -271,7 +270,11 @@ function AgentRuntime({
       setDesiredSelection: controller.setDesiredSelection,
       reconcileStagedRevert: controller.reconcileStagedRevert,
       ...(defaultModel
-        ? { providerID: defaultModel.providerID, modelID: defaultModel.modelID, ...(defaultModel.variant ? { variant: defaultModel.variant } : {}) }
+        ? {
+            providerID: defaultModel.providerID,
+            modelID: defaultModel.modelID,
+            ...(defaultModel.variant ? { variant: defaultModel.variant } : {}),
+          }
         : {}),
     }),
     [sessionId, reconcileAutoApprove, eventDirectory, defaultModel, controller],
@@ -294,9 +297,7 @@ function AgentRuntime({
               <ChatWindow
                 mode="agent"
                 aboveComposerExtra={<OpenCodeQuestions />}
-                belowComposerExtra={
-                  <OpenCodeStatus compact onReconnect={reconnect} />
-                }
+                belowComposerExtra={<OpenCodeStatus compact onReconnect={reconnect} />}
               />
             </div>
           </div>

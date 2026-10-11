@@ -85,7 +85,9 @@ export function isTypingInto(element: Element | null | undefined): boolean {
  * @param element - Defaults to the currently focused element; injectable for tests.
  */
 export function canTakeFocusSafely(
-  element: Element | null | undefined = typeof document === "undefined" ? null : document.activeElement,
+  element: Element | null | undefined = typeof document === "undefined"
+    ? null
+    : document.activeElement,
 ): boolean {
   if (!element) return true;
   if (isTypingInto(element)) return false;
@@ -276,7 +278,10 @@ const subscribeFocus = (listener: () => void) => {
  * `useSyncExternalStore` with a primitive snapshot per field, so no amount of
  * re-rendering can loop on an unstable object identity.
  */
-export function useDecisionSurfaceFocus(element: HTMLElement | null): { count: number; isOwner: boolean } {
+export function useDecisionSurfaceFocus(element: HTMLElement | null): {
+  count: number;
+  isOwner: boolean;
+} {
   const count = useSyncExternalStore(subscribeFocus, decisionSurfaceCount, () => 0);
   const isOwner = useSyncExternalStore(
     subscribeFocus,

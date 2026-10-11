@@ -40,9 +40,7 @@ describe("useOpenCodeConversationConfig — override merge", () => {
   it("merges the conversation's override over the fetched config", () => {
     // The return value must spread the override on top of the base config so
     // every mounted reader re-reads last-confirmed server writes.
-    expect(configSource).toMatch(
-      /return\s*\{\s*\.\.\.config,\s*\.\.\.override\s*\}/,
-    );
+    expect(configSource).toMatch(/return\s*\{\s*\.\.\.config,\s*\.\.\.override\s*\}/);
   });
 
   it("publishes the override version to all subscribers on update", () => {
@@ -84,9 +82,7 @@ describe("OpenCodeChipShared — model chip display source", () => {
     // resolver has no Case-B input and the fix silently does nothing.
     const call = chipSharedSource.match(/resolveChipModelSource\(\{[\s\S]*?\}\)/)?.[0] ?? "";
     expect(call, "resolver call must exist").toContain("nativeModel:");
-    expect(call, "native model must come from the runtime extras").toContain(
-      "nativeExtras?.model",
-    );
+    expect(call, "native model must come from the runtime extras").toContain("nativeExtras?.model");
     expect(call, "stored column must still be an input, as the authority").toContain(
       "storedModel:",
     );
@@ -96,9 +92,7 @@ describe("OpenCodeChipShared — model chip display source", () => {
     // The chip's own `models.find(...)` was moved into `findChipModelInfo` so
     // the resolution is testable and the hook cannot drift from the tests.
     const info = chipSharedSource.match(/const currentModelInfo = [^;]+;/)?.[0] ?? "";
-    expect(info, "currentModelInfo must use the shared lookup").toContain(
-      "findChipModelInfo",
-    );
+    expect(info, "currentModelInfo must use the shared lookup").toContain("findChipModelInfo");
     expect(chipSharedSource).toContain('from "./chipModelSource"');
   });
 
@@ -127,9 +121,7 @@ describe("OpenCodeChipShared.persist — publish-on-success only", () => {
     expect(okIdx).toBeLessThan(echoIdx);
     expect(echoIdx).toBeLessThan(pubIdx);
     // The draft branch (no conversationId) must NOT call updateConversationConfig.
-    const draftBranch = chipSharedSource.match(
-      /if \(draft\) \{[\s\S]*?return;[\s\S]*?\}/,
-    );
+    const draftBranch = chipSharedSource.match(/if \(draft\) \{[\s\S]*?return;[\s\S]*?\}/);
     expect(draftBranch, "draft branch must exist").not.toBeNull();
     expect(draftBranch![0], "draft branch must not publish to override map").not.toContain(
       "updateConversationConfig",
@@ -138,9 +130,7 @@ describe("OpenCodeChipShared.persist — publish-on-success only", () => {
 
   it("fails closed on a non-ok response (no state change)", () => {
     // A non-ok response must `return` before any publish.
-    const resOkGuard = chipSharedSource.match(
-      /if \(!res\.ok\) \{[\s\S]*?return;[\s\S]*?\}/,
-    );
+    const resOkGuard = chipSharedSource.match(/if \(!res\.ok\) \{[\s\S]*?return;[\s\S]*?\}/);
     expect(resOkGuard, "res.ok guard must exist").not.toBeNull();
   });
 
@@ -183,9 +173,7 @@ describe("OpenCodeChipMenu — outside-click and Escape close", () => {
     expect(chipSharedSource).toMatch(
       /document\.removeEventListener\("pointerdown",\s*onPointerDown\)/,
     );
-    expect(chipSharedSource).toMatch(
-      /document\.removeEventListener\("keydown",\s*onKeyDown\)/,
-    );
+    expect(chipSharedSource).toMatch(/document\.removeEventListener\("keydown",\s*onKeyDown\)/);
   });
 
   it("gates the effect on the `open` flag (no listeners when closed)", () => {
@@ -201,9 +189,7 @@ describe("OpenCodeChipMenu — outside-click and Escape close", () => {
 describe("OpenCodeModelChip — provider groups, search, empty state", () => {
   it("groups models by providerID, preserving first-seen order", () => {
     // The `ordered` array must record first-seen providers as they appear.
-    expect(modelChipSource).toMatch(
-      /ordered\.push\(\{\s*provider: key,\s*options: list\s*\}\)/,
-    );
+    expect(modelChipSource).toMatch(/ordered\.push\(\{\s*provider: key,\s*options: list\s*\}\)/);
   });
 
   it("filters models by name or id (case-insensitive)", () => {

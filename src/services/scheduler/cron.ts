@@ -17,12 +17,28 @@ const FIELD_RANGES: Array<[number, number]> = [
 ];
 
 const MONTH_NAMES: Record<string, number> = {
-  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
 };
 
 const DOW_NAMES: Record<string, number> = {
-  sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
 };
 
 function parseToken(
@@ -40,11 +56,7 @@ function parseToken(
   return n;
 }
 
-function parseField(
-  field: string,
-  index: number,
-  names?: Record<string, number>,
-): Set<number> {
+function parseField(field: string, index: number, names?: Record<string, number>): Set<number> {
   const [min, max] = FIELD_RANGES[index]!;
   const out = new Set<number>();
   const chunks = field.split(",");
@@ -151,7 +163,10 @@ function validateTimezone(tz: string): void {
 
 const tzPartFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
-function tzParts(date: Date, tz: string): {
+function tzParts(
+  date: Date,
+  tz: string,
+): {
   year: number;
   month: number;
   day: number;
@@ -175,8 +190,7 @@ function tzParts(date: Date, tz: string): {
     tzPartFormatterCache.set(tz, fmt);
   }
   const parts = fmt.formatToParts(date);
-  const get = (type: string): string =>
-    parts.find((p) => p.type === type)?.value ?? "";
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
   // "24" hour can appear at midnight in some locales; normalize.
   let hour = Number(get("hour"));
   if (hour === 24) hour = 0;
@@ -208,8 +222,7 @@ export function tzOffsetMinutes(instant: Date, tz: string): number {
     hour12: false,
   });
   const parts = dtf.formatToParts(instant);
-  const get = (t: string): number =>
-    Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const get = (t: string): number => Number(parts.find((p) => p.type === t)?.value ?? 0);
   let hour = get("hour");
   if (hour === 24) hour = 0;
   const asUTC = Date.UTC(
@@ -294,8 +307,7 @@ export function computeNextRun(
     const utc = zonedTimeToUtc(y, mo, d, h, mi, timezone);
     if (utc >= startUtc) {
       const p = tzParts(new Date(utc), timezone);
-      const dowMatch =
-        cron.dow.has(p.weekday) || (p.weekday === 0 && cron.dow.has(7));
+      const dowMatch = cron.dow.has(p.weekday) || (p.weekday === 0 && cron.dow.has(7));
       if (
         cron.minute.has(p.minute) &&
         cron.hour.has(p.hour) &&
@@ -376,11 +388,7 @@ export function presetWeekdays(hour: number, minute: number): string {
   return `${minute} ${hour} * * 1-5`;
 }
 
-export function presetWeekly(
-  weekday: number,
-  hour: number,
-  minute: number,
-): string {
+export function presetWeekly(weekday: number, hour: number, minute: number): string {
   assertHourMinute(hour, minute);
   if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
     throw new Error("Weekday must be 0 (Sun) - 6 (Sat)");
@@ -433,12 +441,8 @@ export function describeCron(expression: string): string {
   const p2 = (n: number): string => String(n).padStart(2, "0");
   const at = (h: number, m: number): string => `${p2(h)}:${p2(m)}`;
 
-  const dailyTime =
-    minutes.length === 1 && hours.length === 1
-      ? at(hours[0]!, minutes[0]!)
-      : null;
-  const isEveryDay =
-    cron.dom.size === 31 && cron.month.size === 12;
+  const dailyTime = minutes.length === 1 && hours.length === 1 ? at(hours[0]!, minutes[0]!) : null;
+  const isEveryDay = cron.dom.size === 31 && cron.month.size === 12;
 
   if (!isEveryDay) {
     if (cron.dom.size === 1 && cron.month.size === 12 && dailyTime) {

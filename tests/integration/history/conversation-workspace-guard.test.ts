@@ -20,9 +20,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Hono } from "hono";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { logger } from "@/lib/logger.ts";
 import { conversationService } from "@/services/storage";
 import { folderService } from "@/services/folders.ts";
@@ -48,7 +48,11 @@ async function call(pathname: string, init: RequestInit = {}) {
 const create = (body: unknown) =>
   call("/api/conversations", { method: "POST", headers: jsonHeaders, body: JSON.stringify(body) });
 const patch = (id: string, body: unknown) =>
-  call(`/api/conversations/${id}`, { method: "PATCH", headers: jsonHeaders, body: JSON.stringify(body) });
+  call(`/api/conversations/${id}`, {
+    method: "PATCH",
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
 const get = (id: string) => call(`/api/conversations/${id}`);
 
 /** A real registered project folder (kind='regular') on a temp dir. */
@@ -186,9 +190,7 @@ describe("PATCH guard: validated against the EFFECTIVE state", () => {
   });
 
   it("still preserves unrelated fields when the guard rejects", async () => {
-    const created = (
-      await create({ title: "Keep", modelId: "m1", reasoningLevel: "low" })
-    ).body;
+    const created = (await create({ title: "Keep", modelId: "m1", reasoningLevel: "low" })).body;
     await patch(created.id, { workspaceMode: "project" });
     const after = (await get(created.id)).body;
     expect(after.title).toBe("Keep");
@@ -203,9 +205,7 @@ describe("the rejection is observable", () => {
     const since = logger.lastSeq;
     await patch(created.id, { workspaceMode: "project" });
 
-    const rejected = logger
-      .getRecentEntries(since)
-      .filter((e) => e.event === "workspace.rejected");
+    const rejected = logger.getRecentEntries(since).filter((e) => e.event === "workspace.rejected");
     expect(rejected).toHaveLength(1);
     expect(rejected[0].reason).toBe("folder_not_available");
     expect(rejected[0].conversationId).toBe(created.id);

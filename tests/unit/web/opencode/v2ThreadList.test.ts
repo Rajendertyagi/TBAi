@@ -56,9 +56,7 @@ describe("createV2ThreadListAdapter", () => {
 
 describe("Code approval conversation identity", () => {
   it("uses the shared resolver for both precheck and outside-workspace grant", async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/tools/filesystem/ui.tsx"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/tools/filesystem/ui.tsx")).text();
     const resolverCalls = source.match(/resolveThreadConversationId\(/g) ?? [];
     expect(resolverCalls.length).toBeGreaterThanOrEqual(2);
     expect(source).not.toContain("item.remoteId ?? item.id");

@@ -71,8 +71,16 @@ describe("selectConfigDocument", () => {
         info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
       },
       { type: "directory", path: "D:\\IT\\Coding\\OpenCode\\.config\\opencode" },
-      { type: "document", path: "D:\\Temp\\openchamber\\.chamber-data\\opencode.managed.json", info: { plugins: [] } },
-      { type: "document", path: "D:\\Temp\\ai-chat-app\\data\\opencode-home\\opencode.json", info: { model: "agnes/agnes-2.5-flash" } },
+      {
+        type: "document",
+        path: "D:\\Temp\\openchamber\\.chamber-data\\opencode.managed.json",
+        info: { plugins: [] },
+      },
+      {
+        type: "document",
+        path: "D:\\Temp\\ai-chat-app\\data\\opencode-home\\opencode.json",
+        info: { model: "agnes/agnes-2.5-flash" },
+      },
     ]);
     expect(selected?.path).toBe("D:\\IT\\Coding\\OpenCode\\.config\\opencode\\opencode.json");
   });
@@ -155,9 +163,7 @@ describe("setOpenCodePermissionEffect", () => {
   });
 
   it("keeps an unknown extra field on the edited rule", () => {
-    const current = [
-      { action: "question", resource: "*", effect: "ask", futureField: 42 },
-    ];
+    const current = [{ action: "question", resource: "*", effect: "ask", futureField: 42 }];
     const next = setOpenCodePermissionEffect(
       current,
       { action: "question", resource: "*" },
@@ -168,7 +174,11 @@ describe("setOpenCodePermissionEffect", () => {
 
   it("refuses a permissions value that is not an array", () => {
     expect(() =>
-      setOpenCodePermissionEffect({ question: "ask" }, { action: "question", resource: "*" }, "allow"),
+      setOpenCodePermissionEffect(
+        { question: "ask" },
+        { action: "question", resource: "*" },
+        "allow",
+      ),
     ).toThrow(OpenCodeConfigUnreadableError);
   });
 });
@@ -202,9 +212,7 @@ describe("setOpenCodeConfigValue", () => {
       ),
     );
     for (const [action, resource] of PROTECTED) {
-      const rule = rulesOf(next).find(
-        (r) => r.action === action && r.resource === resource,
-      );
+      const rule = rulesOf(next).find((r) => r.action === action && r.resource === resource);
       expect(rule?.effect).toBe("deny");
     }
   });
@@ -256,9 +264,9 @@ describe("writeOpenCodeConfigDocument", () => {
   const current = { permissions: [{ action: "question", resource: "*", effect: "ask" }] };
 
   it("refuses an empty document", async () => {
-    await expect(
-      writeOpenCodeConfigDocument("unused", "   ", current),
-    ).rejects.toThrow(OpenCodeConfigUnreadableError);
+    await expect(writeOpenCodeConfigDocument("unused", "   ", current)).rejects.toThrow(
+      OpenCodeConfigUnreadableError,
+    );
   });
 
   it("refuses a write that would drop the permissions array", async () => {
@@ -404,7 +412,10 @@ describe("appendOpenCodePermissionRule", () => {
 
   it("refuses when permissions is not an array", () => {
     expect(() =>
-      appendOpenCodePermissionRule({ question: "ask" }, { action: "a", resource: "*", effect: "ask" }),
+      appendOpenCodePermissionRule(
+        { question: "ask" },
+        { action: "a", resource: "*", effect: "ask" },
+      ),
     ).toThrow(OpenCodeConfigUnreadableError);
   });
 });
@@ -496,9 +507,7 @@ describe("removeOpenCodePermissionRule", () => {
       effect: "ask",
     }) as Array<Record<string, unknown>>;
     for (const [action, resource] of PROTECTED) {
-      expect(
-        next.find((r) => r.action === action && r.resource === resource)?.effect,
-      ).toBe("deny");
+      expect(next.find((r) => r.action === action && r.resource === resource)?.effect).toBe("deny");
     }
   });
 });
@@ -632,7 +641,11 @@ describe("readOpenCodeConfigDocument", () => {
     await Bun.write(first, JSON.stringify({ shell: "powershell" }, null, 2));
     await Bun.write(
       second,
-      JSON.stringify({ permissions: [{ action: "question", resource: "*", effect: "ask" }] }, null, 2),
+      JSON.stringify(
+        { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
+        null,
+        2,
+      ),
     );
     globalThis.fetch = stubServer([
       { type: "document", path: first, info: { shell: "powershell" } },

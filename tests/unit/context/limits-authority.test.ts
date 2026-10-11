@@ -21,7 +21,12 @@
 import { describe, expect, it } from "bun:test";
 import { computeBudget, decideBudget } from "@/context/budget.ts";
 import { CHARS_PER_TOKEN_ESTIMATE } from "@/context/index.ts";
-import { resolveContextLimit, resolveGenerationCap, resolveOutputReservation, UNKNOWN_LIMIT_CEILING } from "@/context/limits.ts";
+import {
+  resolveContextLimit,
+  resolveGenerationCap,
+  resolveOutputReservation,
+  UNKNOWN_LIMIT_CEILING,
+} from "@/context/limits.ts";
 import type { ContextCategory, InputSizeEstimate, ReductionRecord } from "@/context/types.ts";
 import { CONTEXT_CATEGORIES } from "@/context/types.ts";
 
@@ -59,9 +64,9 @@ describe("one resolution, one answer, for every consumer", () => {
     // and safety margin held back — and never independently chosen. This identity is
     // what makes "the meter and the budget cannot disagree" checkable rather than a
     // claim: the budget is a pure function of the one resolved number.
-    expect(budget.usableInputTokens! + budget.safetyMarginTokens + budget.outputReservation.tokens).toBe(
-      limit.maxInputTokens,
-    );
+    expect(
+      budget.usableInputTokens! + budget.safetyMarginTokens + budget.outputReservation.tokens,
+    ).toBe(limit.maxInputTokens);
     expect(budget.usableInputTokens!).toBeLessThan(limit.maxInputTokens!);
   });
 
@@ -82,7 +87,10 @@ describe("one resolution, one answer, for every consumer", () => {
       // Every category accounted for, as the measurement contract requires. Only
       // `user_text` carries weight here; this test is about the SIZE verdict, not the
       // breakdown.
-      const zeros = Object.fromEntries(CONTEXT_CATEGORIES.map((c) => [c, 0])) as Record<ContextCategory, number>;
+      const zeros = Object.fromEntries(CONTEXT_CATEGORIES.map((c) => [c, 0])) as Record<
+        ContextCategory,
+        number
+      >;
       const byCategory = { ...zeros, user_text: chars };
       return {
         estimatedTokens: tokens,
@@ -94,12 +102,17 @@ describe("one resolution, one answer, for every consumer", () => {
       };
     };
 
-    const fits = decideBudget({ estimate: estimate(usable), budget, reduction: NO_MECHANISM_LEFT, limitSource: "provider_reported" });
+    const fits = decideBudget({
+      estimate: estimate(usable),
+      budget,
+      reduction: NO_MECHANISM_LEFT,
+      limitSource: "provider_reported",
+    });
     const overflows = decideBudget({
       estimate: estimate(usable + 1),
       budget,
       reduction: NO_MECHANISM_LEFT,
-    limitSource: "provider_reported",
+      limitSource: "provider_reported",
     });
 
     expect(fits.action).toBe("accept");
@@ -117,7 +130,10 @@ describe("one resolution, one answer, for every consumer", () => {
       model: { contextWindow: 512_000, contextWindowSource: "configured" },
     });
     const fallbackBudget = computeBudget({ limit: fallbackLimit, modelOutputTokens: undefined });
-    const configuredBudget = computeBudget({ limit: configuredLimit, modelOutputTokens: undefined });
+    const configuredBudget = computeBudget({
+      limit: configuredLimit,
+      modelOutputTokens: undefined,
+    });
 
     // This is the whole point of the regression: the 128k fallback produced a usable
     // budget that rejected valid requests, and configuration moves it without a code
@@ -247,7 +263,11 @@ describe("no model name influences any resolution", () => {
   it("resolution is a function of stored values, never of the model's identity", () => {
     const stored = { contextWindow: 256_000, contextWindowSource: "configured" as const };
     const agnes = resolveContextLimit({ providerType: "custom", modelId: MODEL, model: stored });
-    const nonsense = resolveContextLimit({ providerType: "custom", modelId: "zzz-9000-turbo", model: stored });
+    const nonsense = resolveContextLimit({
+      providerType: "custom",
+      modelId: "zzz-9000-turbo",
+      model: stored,
+    });
     const empty = resolveContextLimit({ providerType: "custom", modelId: "", model: stored });
 
     // Identical stored metadata yields an identical answer regardless of the id. If any

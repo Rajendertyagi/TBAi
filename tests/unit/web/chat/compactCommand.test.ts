@@ -226,10 +226,14 @@ describe("TEST 7 — the server status part is consumed, not rendered", () => {
   it("reads compacted, skipped and failed outcomes", () => {
     expect(parseCompactStatus(statusBody(compacted))?.outcome).toBe("compacted");
     expect(
-      parseCompactStatus(statusBody({ ...compacted, outcome: "skipped", reason: "no_compactable_span" })),
+      parseCompactStatus(
+        statusBody({ ...compacted, outcome: "skipped", reason: "no_compactable_span" }),
+      ),
     ).toMatchObject({ outcome: "skipped", reason: "no_compactable_span" });
     expect(
-      parseCompactStatus(statusBody({ ...compacted, outcome: "failed", reason: "summarize_failed:x" })),
+      parseCompactStatus(
+        statusBody({ ...compacted, outcome: "failed", reason: "summarize_failed:x" }),
+      ),
     ).toMatchObject({ outcome: "failed", reason: "summarize_failed:x" });
   });
 
@@ -244,7 +248,9 @@ describe("TEST 7 — the server status part is consumed, not rendered", () => {
   });
 
   it("rejects an unknown outcome rather than trusting it", () => {
-    expect(parseCompactStatus(statusBody({ ...compacted, outcome: "totally-fine" }))).toBeUndefined();
+    expect(
+      parseCompactStatus(statusBody({ ...compacted, outcome: "totally-fine" })),
+    ).toBeUndefined();
   });
 
   it("reads the summary off the wire, so the divider survives the round trip", () => {
@@ -261,7 +267,9 @@ describe("TEST 7 — the server status part is consumed, not rendered", () => {
 
   it("refuses a non-string summary rather than stringifying it", () => {
     // A malformed payload must not reach the transcript as `[object Object]`.
-    expect(parseCompactStatus(statusBody({ ...compacted, summary: { text: "hi" } }))?.summary).toBeNull();
+    expect(
+      parseCompactStatus(statusBody({ ...compacted, summary: { text: "hi" } }))?.summary,
+    ).toBeNull();
     expect(parseCompactStatus(statusBody({ ...compacted, summary: 42 }))?.summary).toBeNull();
   });
 
@@ -291,8 +299,9 @@ describe("TEST 8 — post-compact conversation is unaffected", () => {
   it("a second compact after the first still sends one command message", async () => {
     const seen = stubFetch(statusBody({ ...compacted, generation: 2 }));
     await runDirectCompact({ conversationId: "conv-1", messages: conversation() });
-    expect(seen[0]?.payload.messages.filter((m: any) => m.parts?.[0]?.text === DIRECT_COMPACT_COMMAND))
-      .toHaveLength(1);
+    expect(
+      seen[0]?.payload.messages.filter((m: any) => m.parts?.[0]?.text === DIRECT_COMPACT_COMMAND),
+    ).toHaveLength(1);
   });
 });
 
@@ -463,12 +472,22 @@ describe("request shaping", () => {
         id: "t1",
         role: "assistant",
         parts: [
-          { type: "tool-run_command", toolCallId: "call-1", state: "output-available", input: { cmd: "ls" } },
+          {
+            type: "tool-run_command",
+            toolCallId: "call-1",
+            state: "output-available",
+            input: { cmd: "ls" },
+          },
         ],
       },
     ]);
     expect(projected[0]?.parts).toEqual([
-      { type: "tool-run_command", toolCallId: "call-1", state: "output-available", input: { cmd: "ls" } },
+      {
+        type: "tool-run_command",
+        toolCallId: "call-1",
+        state: "output-available",
+        input: { cmd: "ls" },
+      },
     ]);
   });
 
@@ -493,7 +512,7 @@ describe("request shaping", () => {
         ],
       },
     ]);
-    const part = (projected[0]?.parts as Array<Record<string, unknown>>)[0];
+    const part = (projected[0]?.parts as Array<Record<string, unknown>> | undefined)?.[0];
     expect(part?.state).toBe("output-available");
     expect(part?.toolCallId).toBe("call-1");
     expect(part?.input).toEqual({ cmd: "ls" });
@@ -505,19 +524,23 @@ describe("request shaping", () => {
       {
         id: "a1",
         role: "assistant",
-        parts: [
-          { type: "tool-foo", toolCallId: "c2", state: "input-available", input: { a: 1 } },
-        ],
+        parts: [{ type: "tool-foo", toolCallId: "c2", state: "input-available", input: { a: 1 } }],
       },
     ]);
-    expect((projected[0]?.parts as Array<Record<string, unknown>>)[0]?.state).toBe("input-available");
+    expect((projected[0]?.parts as Array<Record<string, unknown>> | undefined)?.[0]?.state).toBe(
+      "input-available",
+    );
   });
 
   it("STILL strips transient state from text parts", () => {
     // The opposite rule, deliberately: a text part's `output-available` /
     // `submitted` labels are what the validator rejects.
     const projected = projectThreadMessages([
-      { id: "a1", role: "assistant", parts: [{ type: "text", text: "done", state: "output-available" }] },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "done", state: "output-available" }],
+      },
       { id: "u1", role: "user", parts: [{ type: "text", text: "hi", state: "submitted" }] },
     ]);
     expect(projected[0]?.parts).toEqual([{ type: "text", text: "done" }]);
@@ -623,7 +646,9 @@ describe("request shaping", () => {
         ],
       },
     ]);
-    expect((projected[0]?.parts as Array<Record<string, unknown>>)[0]?.providerMetadata).toEqual({
+    expect(
+      (projected[0]?.parts as Array<Record<string, unknown>> | undefined)?.[0]?.providerMetadata,
+    ).toEqual({
       openai: { itemId: "fc_1" },
     });
   });
@@ -660,7 +685,9 @@ describe("request shaping", () => {
       metadataSchema: z.record(z.string(), z.unknown()).optional(),
     } as never);
     if ("error" in result) {
-      throw new Error(`projection rejected by the AI SDK: ${JSON.stringify(result.error).slice(0, 400)}`);
+      throw new Error(
+        `projection rejected by the AI SDK: ${JSON.stringify(result.error).slice(0, 400)}`,
+      );
     }
     expect("error" in result).toBe(false);
   });
@@ -674,7 +701,9 @@ describe("request shaping", () => {
   });
 
   it("omits the conversation id when there is none, and the server answers skipped", async () => {
-    const seen = stubFetch(statusBody({ ...compacted, outcome: "skipped", reason: "no_conversation" }));
+    const seen = stubFetch(
+      statusBody({ ...compacted, outcome: "skipped", reason: "no_conversation" }),
+    );
     const status = await runDirectCompact({ conversationId: null, messages: conversation() });
     expect(status.outcome).toBe("skipped");
     expect(seen[0]?.payload.id).toBeUndefined();
@@ -731,9 +760,7 @@ describe("`/compact <instructions>`", () => {
     });
     // The deciding message is the user's own text, instructions included — not a
     // bare `/compact` plus a second parameter that could disagree with it.
-    expect(seen[0]?.payload.messages.at(-1)?.parts[0].text).toBe(
-      "/compact keep the API decisions",
-    );
+    expect(seen[0]?.payload.messages.at(-1)?.parts[0].text).toBe("/compact keep the API decisions");
   });
 
   it("sends the bare canonical command when there are no instructions", async () => {

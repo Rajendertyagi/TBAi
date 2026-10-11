@@ -91,10 +91,7 @@ export type MessageRepositorySeed = {
 };
 
 /** Why a window could not be established. Never message text. */
-export type WindowFailure =
-  | "incomplete-slice"
-  | "not-found"
-  | "write-back-unrecoverable";
+export type WindowFailure = "incomplete-slice" | "not-found" | "write-back-unrecoverable";
 
 export class WindowControllerError extends Error {
   readonly failure: WindowFailure;
@@ -239,7 +236,10 @@ export class WindowController {
     // Fail-closed: a slice that cannot prove its own integrity must not replace
     // a valid window. `contiguous`, not `complete` — see `WindowSliceResponse`.
     if (!slice.contiguous) {
-      throw new WindowControllerError("incomplete-slice", slice.messages.map((m) => m.id));
+      throw new WindowControllerError(
+        "incomplete-slice",
+        slice.messages.map((m) => m.id),
+      );
     }
     if (slice.messages.length === 0) {
       // Walking `newer` from the tip legitimately returns nothing: the caller is
@@ -274,7 +274,10 @@ export class WindowController {
     // afterwards would still be safe (no state is assigned until below) but
     // would read as though the commit had already happened.
     if (!checkWindowInvariants({ ...this.#state, window: candidate }).satisfied) {
-      throw new WindowControllerError("incomplete-slice", rows.map((m) => m.id));
+      throw new WindowControllerError(
+        "incomplete-slice",
+        rows.map((m) => m.id),
+      );
     }
 
     const committed = commitWindow(
@@ -295,7 +298,15 @@ export class WindowController {
     this.#rows = this.#state.window.flatMap((m) => {
       const stored = this.#messagesById.get(m.id);
       if (!stored) return [];
-      return [{ id: m.id, parentId: m.parentId, format: m.format, content: m.content, message: stored.message }];
+      return [
+        {
+          id: m.id,
+          parentId: m.parentId,
+          format: m.format,
+          content: m.content,
+          message: stored.message,
+        },
+      ];
     });
     this.#historical = options.historical ?? this.#historical;
     if (!this.#historical) this.#authoritativeTip = rows.at(-1)?.id ?? this.#authoritativeTip;
@@ -319,7 +330,11 @@ export class WindowController {
   async loadOlder(options: { historical?: boolean } = {}): Promise<void> {
     const anchorId = this.#state.window[0]?.id ?? this.#authoritativeTip;
     if (anchorId === null) throw new WindowControllerError("not-found");
-    await this.#commit("older", { direction: "older", anchorId }, { historical: options.historical });
+    await this.#commit(
+      "older",
+      { direction: "older", anchorId },
+      { historical: options.historical },
+    );
   }
 
   /** Load the run back toward the tip. */
@@ -338,7 +353,11 @@ export class WindowController {
    * active tip, and the authoritative tip is preserved for the restore.
    */
   async goHistorical(targetId: string): Promise<void> {
-    await this.#commit("explicit", { direction: "older", anchorId: targetId }, { historical: true });
+    await this.#commit(
+      "explicit",
+      { direction: "older", anchorId: targetId },
+      { historical: true },
+    );
   }
 
   /** C. Restore the active tip window. */
@@ -347,7 +366,11 @@ export class WindowController {
       await this.loadTip();
       return;
     }
-    await this.#commit("newer", { direction: "newer", anchorId: this.#authoritativeTip }, { allowEmpty: true });
+    await this.#commit(
+      "newer",
+      { direction: "newer", anchorId: this.#authoritativeTip },
+      { allowEmpty: true },
+    );
     this.#historical = false;
   }
 
@@ -362,7 +385,11 @@ export class WindowController {
    */
   async resolveTarget(targetId: string): Promise<string> {
     if (this.#state.window.some((m) => m.id === targetId)) return targetId;
-    const slice = await this.#fetchWindow({ direction: "older", anchorId: targetId, limit: this.#limit });
+    const slice = await this.#fetchWindow({
+      direction: "older",
+      anchorId: targetId,
+      limit: this.#limit,
+    });
     // `contiguous`, not `complete`: the walk from a mid-conversation target is
     // expected to stop short of the root, so requiring `complete` would report
     // every reachable out-of-window target as missing.

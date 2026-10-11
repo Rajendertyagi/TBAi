@@ -50,18 +50,12 @@ import {
   toUIMessageStream,
 } from "ai";
 import { RESUMABLE_STREAM_ID_HEADER } from "assistant-stream/resumable";
-import {
-  classifyError,
-  errorLogFields,
-  providerErrorCodeFields,
-} from "../../lib/errors";
-import { sanitizeAiRequest } from "../../lib/ai-diagnostics";
+import { classifyError, errorLogFields, providerErrorCodeFields } from "../../lib/errors";
 import { sanitizeStreamError } from "../../lib/redact";
 import { observedContextLength } from "../../lib/context-window-observation";
-import { logger } from "../../lib/logger";
 import { createProgressTracker } from "../../lib/progress-tracker";
 import type { ProgressData } from "../../lib/progress-stages";
-import { nativeTools, type NativeToolSet } from "../../tools";
+import type { NativeToolSet } from "../../tools";
 import { resumableContext, chatStreamStore } from "../../lib/resumable";
 import { createTerminalBatcher } from "../../lib/terminal-stream";
 import { chatRuns } from "../../services/chat-runs";
@@ -96,7 +90,6 @@ import {
   type UiStreamOutcome,
 } from "./settlement";
 import { contextStateForUi } from "./assemble-run";
-
 
 /** The sink assembly wires into `run_command`'s execute. */
 export type TerminalTap = (toolCallId: string, event: BashOutputEvent) => void;
@@ -152,8 +145,18 @@ export async function executeDirectStream(
   streamWriter: StreamWriterHolder,
 ): Promise<Response> {
   const { chatLog, chatStartedAt, publishCompactionDivider, compactionPart, automaticPart } = gate;
-  const { requestId, threadId, conversation, provider, modelConfig, reasoning, approvalSecret, languageModel, providerOptions, messages } = setup;
-  const { run, streamId, workspaceDir, attemptErrors } = state;
+  const {
+    requestId,
+    threadId,
+    provider,
+    modelConfig,
+    reasoning,
+    approvalSecret,
+    languageModel,
+    providerOptions,
+    messages,
+  } = setup;
+  const { run, streamId, attemptErrors } = state;
   const { tap: terminalTap } = terminal;
 
   // Narrow the assembled context once, for the whole phase.
@@ -174,229 +177,227 @@ export async function executeDirectStream(
     throw new Error(`chat: stream phase reached with no assembled context (${requestId})`);
   }
 
-    const progress = createProgressTracker();
+  const progress = createProgressTracker();
 
-    // `streamWriter` is the HOLDER the route created, not a private copy. The
-    // route's terminal batcher closes over this same object, so the writer
-    // installed below is the one terminal output actually drains into. A second
-    // local binding here would silently drop every terminal part.
-  
-    // ── Diagnostic tracking state ─────────────────────────────────────────────
-    let firstChunkAt: number | null = null;
-    let chunkCount = 0;
-    let streamErrorCaught: unknown = null;
-    let originalStreamError: unknown = null;
-    let clientDisconnected = false;
-    let responseLogged = false;
-    let errorLogged = false;
-    let modelFinishReason: string | undefined;
-    let modelUsage: { totalTokens?: number } | undefined;
+  // `streamWriter` is the HOLDER the route created, not a private copy. The
+  // route's terminal batcher closes over this same object, so the writer
+  // installed below is the one terminal output actually drains into. A second
+  // local binding here would silently drop every terminal part.
 
-    /** Bind the hoisted durable mirror to this run's correlation context. */
-    const mirrorSettlement = (status: DirectRunSettlement): void => {
-      mirrorRunToDurableStream(streamId, status, {
-        log: chatLog,
-        providerType: provider.type,
-        finishReason: modelFinishReason ?? null,
-        failureError: originalStreamError,
-        runStatus: chatRuns.get(streamId)?.status ?? "unknown",
-      });
-    };
+  // ── Diagnostic tracking state ─────────────────────────────────────────────
+  let firstChunkAt: number | null = null;
+  let chunkCount = 0;
+  let streamErrorCaught: unknown = null;
+  let originalStreamError: unknown = null;
+  let clientDisconnected = false;
+  let responseLogged = false;
+  let errorLogged = false;
+  let modelFinishReason: string | undefined;
+  let modelUsage: { totalTokens?: number } | undefined;
 
-    const settleRun = (status: DirectRunSettlement): boolean => {
-      const effectiveStatus: DirectRunSettlement =
-        status === "cancelled" && chatRuns.get(streamId)?.timedOut
-          ? "failed"
-          : status;
-      let won: boolean;
-      if (effectiveStatus === "completed") won = chatRuns.markCompleted(streamId);
-      else if (effectiveStatus === "failed") won = chatRuns.markFailed(streamId);
-      else won = chatRuns.markCancelled(streamId);
-      // Mirror only when this call is the single winner, so a losing racer can
-      // never settle the durable row.
-      if (won) mirrorSettlement(effectiveStatus);
-      return won;
-    };
+  /** Bind the hoisted durable mirror to this run's correlation context. */
+  const mirrorSettlement = (status: DirectRunSettlement): void => {
+    mirrorRunToDurableStream(streamId, status, {
+      log: chatLog,
+      providerType: provider.type,
+      finishReason: modelFinishReason ?? null,
+      failureError: originalStreamError,
+      runStatus: chatRuns.get(streamId)?.status ?? "unknown",
+    });
+  };
 
-    const logAiError = (error: unknown): void => {
-      if (errorLogged) return;
-      errorLogged = true;
-      const effective = error ?? new Error("Direct stream failed");
-      chatLog.error("ai", "ai.error", {
-        streamId,
-        ...errorLogFields(effective, { provider: provider.type }),
-        elapsedMs: Date.now() - chatStartedAt,
-        firstChunkArrived: firstChunkAt !== null,
-        firstChunkElapsedMs: firstChunkAt !== null ? firstChunkAt - chatStartedAt : null,
-        chunkCount,
-      });
-      logProviderErrorCode(effective, streamId);
-      logOverflowRecovery(effective, streamId);
-    };
+  const settleRun = (status: DirectRunSettlement): boolean => {
+    const effectiveStatus: DirectRunSettlement =
+      status === "cancelled" && chatRuns.get(streamId)?.timedOut ? "failed" : status;
+    let won: boolean;
+    if (effectiveStatus === "completed") won = chatRuns.markCompleted(streamId);
+    else if (effectiveStatus === "failed") won = chatRuns.markFailed(streamId);
+    else won = chatRuns.markCancelled(streamId);
+    // Mirror only when this call is the single winner, so a losing racer can
+    // never settle the durable row.
+    if (won) mirrorSettlement(effectiveStatus);
+    return won;
+  };
 
-    /**
-     * The bounded overflow-recovery verdict for this request.
-     *
-     * Consulted for every provider failure so the decision is observable, and so
-     * the executor that compacts-and-re-issues has ONE tested policy to call
-     * rather than re-deriving the conditions. `overflowRecoveryAttempted` is the
-     * bound: it flips on the first recovery and is never cleared within a request.
-     */
-    const logOverflowRecovery = (error: unknown, streamId: string): void => {
-      const decision = decideOverflowRecovery({
-        category: classifyError(error, { provider: provider.type }).category,
-        alreadyAttempted: state.overflowRecoveryAttempted,
-        compactionEnabled: compactionEnabled(),
-        hasConversation: threadId !== undefined,
-      });
-      if (decision.outcome === "not_context_overflow") return;
-      chatLog.warn("context", "context_overflow_recovery", {
-        streamId,
-        outcome: decision.outcome,
-        shouldRecover: decision.shouldRecover,
-        alreadyAttempted: state.overflowRecoveryAttempted,
-        compactionEnabled: compactionEnabled(),
-        hasConversation: threadId !== undefined,
-      });
-    };
+  const logAiError = (error: unknown): void => {
+    if (errorLogged) return;
+    errorLogged = true;
+    const effective = error ?? new Error("Direct stream failed");
+    chatLog.error("ai", "ai.error", {
+      streamId,
+      ...errorLogFields(effective, { provider: provider.type }),
+      elapsedMs: Date.now() - chatStartedAt,
+      firstChunkArrived: firstChunkAt !== null,
+      firstChunkElapsedMs: firstChunkAt !== null ? firstChunkAt - chatStartedAt : null,
+      chunkCount,
+    });
+    logProviderErrorCode(effective, streamId);
+    logOverflowRecovery(effective, streamId);
+  };
 
-    /**
-     * Publish the provider error for the attempt that turned out to be FINAL.
-     *
-     * Reproduces exactly what the attempt-level `onError` used to do, and is called by
-     * the gate at the moment it commits to forwarding an attempt's error — never before.
-     * Keeping the behaviour identical is the point: an ordinary provider error must reach
-     * the user through precisely the path it always has, or this feature would have
-     * silently regressed every non-overflow failure.
-     *
-     * `logAiError` is guarded by `errorLogged`, so this cannot double-log or double-settle.
-     */
-    const publishFinalProviderError = (attempt: number, error: unknown): void => {
-      if (!attemptErrors.has(attempt)) attemptErrors.set(attempt, error);
-      const captured = attemptErrors.get(attempt);
-      if (captured === undefined) return;
-      originalStreamError = captured;
-      streamErrorCaught = captured;
-      const detachedClientAbort =
-        clientDisconnected && classifyError(captured).category === "cancelled";
-      if (!detachedClientAbort) logAiError(captured);
-    };
+  /**
+   * The bounded overflow-recovery verdict for this request.
+   *
+   * Consulted for every provider failure so the decision is observable, and so
+   * the executor that compacts-and-re-issues has ONE tested policy to call
+   * rather than re-deriving the conditions. `overflowRecoveryAttempted` is the
+   * bound: it flips on the first recovery and is never cleared within a request.
+   */
+  const logOverflowRecovery = (error: unknown, streamId: string): void => {
+    const decision = decideOverflowRecovery({
+      category: classifyError(error, { provider: provider.type }).category,
+      alreadyAttempted: state.overflowRecoveryAttempted,
+      compactionEnabled: compactionEnabled(),
+      hasConversation: threadId !== undefined,
+    });
+    if (decision.outcome === "not_context_overflow") return;
+    chatLog.warn("context", "context_overflow_recovery", {
+      streamId,
+      outcome: decision.outcome,
+      shouldRecover: decision.shouldRecover,
+      alreadyAttempted: state.overflowRecoveryAttempted,
+      compactionEnabled: compactionEnabled(),
+      hasConversation: threadId !== undefined,
+    });
+  };
 
-    /**
-     * The provider's own machine identifiers for a rejected request, on their own
-     * event so `ai.error` stays exactly as narrow as it was.
-     *
-     * Emitted only for a status-bearing provider call (`4xx`/`5xx`), because that
-     * is the only case where the provider named a cause. The fields are the
-     * allowlisted scalars from `providerErrorCodeFields` — never the response
-     * body, never the request body, never the error prose. `ai.error` continues to
-     * omit the message by design and this does not weaken that: the diagnostic
-     * exists so an engineer can see *which field* a provider rejected without any
-     * user data crossing the boundary.
-     */
-    const logProviderErrorCode = (error: unknown, streamId: string): void => {
-      const status = classifyError(error, { provider: provider.type }).statusCode;
-      if (status === undefined || status < 400) return;
-      const codes = providerErrorCodeFields(error);
-      if (Object.keys(codes).length === 0) return;
-      chatLog.warn("ai", "ai.provider_error_code", {
-        streamId,
-        provider: provider.type,
-        model: modelConfig.model,
-        statusCode: status,
-        ...codes,
-      });
-    };
+  /**
+   * Publish the provider error for the attempt that turned out to be FINAL.
+   *
+   * Reproduces exactly what the attempt-level `onError` used to do, and is called by
+   * the gate at the moment it commits to forwarding an attempt's error — never before.
+   * Keeping the behaviour identical is the point: an ordinary provider error must reach
+   * the user through precisely the path it always has, or this feature would have
+   * silently regressed every non-overflow failure.
+   *
+   * `logAiError` is guarded by `errorLogged`, so this cannot double-log or double-settle.
+   */
+  const publishFinalProviderError = (attempt: number, error: unknown): void => {
+    if (!attemptErrors.has(attempt)) attemptErrors.set(attempt, error);
+    const captured = attemptErrors.get(attempt);
+    if (captured === undefined) return;
+    originalStreamError = captured;
+    streamErrorCaught = captured;
+    const detachedClientAbort =
+      clientDisconnected && classifyError(captured).category === "cancelled";
+    if (!detachedClientAbort) logAiError(captured);
+  };
 
-    const logAiResponse = (finishReason: string | undefined): void => {
-      if (responseLogged) return;
-      responseLogged = true;
-      chatLog.info("ai", "ai.response", {
-        streamId,
-        outcome: "completed",
-        runStatus: chatRuns.get(streamId)?.status ?? "completed",
-        ...(finishReason ? { finishReason } : {}),
-        durationMs: Date.now() - chatStartedAt,
-        chunkCount,
-        ...(modelUsage?.totalTokens !== undefined
-          ? { totalTokens: modelUsage.totalTokens }
-          : {}),
-      });
-    };
+  /**
+   * The provider's own machine identifiers for a rejected request, on their own
+   * event so `ai.error` stays exactly as narrow as it was.
+   *
+   * Emitted only for a status-bearing provider call (`4xx`/`5xx`), because that
+   * is the only case where the provider named a cause. The fields are the
+   * allowlisted scalars from `providerErrorCodeFields` — never the response
+   * body, never the request body, never the error prose. `ai.error` continues to
+   * omit the message by design and this does not weaken that: the diagnostic
+   * exists so an engineer can see *which field* a provider rejected without any
+   * user data crossing the boundary.
+   */
+  const logProviderErrorCode = (error: unknown, streamId: string): void => {
+    const status = classifyError(error, { provider: provider.type }).statusCode;
+    if (status === undefined || status < 400) return;
+    const codes = providerErrorCodeFields(error);
+    if (Object.keys(codes).length === 0) return;
+    chatLog.warn("ai", "ai.provider_error_code", {
+      streamId,
+      provider: provider.type,
+      model: modelConfig.model,
+      statusCode: status,
+      ...codes,
+    });
+  };
 
-    const settleFromUiOutcome = (
-      outcome: UiStreamOutcome,
-      finishReason?: string,
-    ): { settlement: DirectRunSettlement; didSettle: boolean } => {
-      const effectiveFinishReason = finishReason ?? modelFinishReason;
-      let settlement: DirectRunSettlement;
-      if (effectiveFinishReason === "error" || !isSuccessfulDirectFinishReason(effectiveFinishReason)) {
-        if (outcome.status === "aborted" && effectiveFinishReason !== "error") {
-          settlement = "cancelled";
-        } else {
-          settlement = "failed";
-        }
-      } else if (outcome.status === "completed") {
-        settlement = "completed";
-      } else if (outcome.status === "aborted") {
+  const logAiResponse = (finishReason: string | undefined): void => {
+    if (responseLogged) return;
+    responseLogged = true;
+    chatLog.info("ai", "ai.response", {
+      streamId,
+      outcome: "completed",
+      runStatus: chatRuns.get(streamId)?.status ?? "completed",
+      ...(finishReason ? { finishReason } : {}),
+      durationMs: Date.now() - chatStartedAt,
+      chunkCount,
+      ...(modelUsage?.totalTokens !== undefined ? { totalTokens: modelUsage.totalTokens } : {}),
+    });
+  };
+
+  const settleFromUiOutcome = (
+    outcome: UiStreamOutcome,
+    finishReason?: string,
+  ): { settlement: DirectRunSettlement; didSettle: boolean } => {
+    const effectiveFinishReason = finishReason ?? modelFinishReason;
+    let settlement: DirectRunSettlement;
+    if (
+      effectiveFinishReason === "error" ||
+      !isSuccessfulDirectFinishReason(effectiveFinishReason)
+    ) {
+      if (outcome.status === "aborted" && effectiveFinishReason !== "error") {
         settlement = "cancelled";
       } else {
         settlement = "failed";
       }
+    } else if (outcome.status === "completed") {
+      settlement = "completed";
+    } else if (outcome.status === "aborted") {
+      settlement = "cancelled";
+    } else {
+      settlement = "failed";
+    }
 
-      const didSettle = settleRun(settlement);
-      if (settlement === "failed") {
-        if (didSettle) logAiError(outcome.error ?? originalStreamError);
-      } else if (settlement === "completed" && didSettle) {
-        logAiResponse(effectiveFinishReason);
+    const didSettle = settleRun(settlement);
+    if (settlement === "failed") {
+      if (didSettle) logAiError(outcome.error ?? originalStreamError);
+    } else if (settlement === "completed" && didSettle) {
+      logAiResponse(effectiveFinishReason);
+    }
+    return { settlement, didSettle };
+  };
+
+  // Terminal diagnostic for `chat_response_closed`: a real provider/merge error
+  // or a run that settled failed. Recoverable tool-error parts deliberately do
+  // not set this — they are reported by the tool funnel instead.
+  const runHadError = (): boolean =>
+    streamErrorCaught !== null || (chatRuns.get(streamId)?.status ?? "unknown") === "failed";
+
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) => {
+      streamWriter.current = writer;
+      writer.write({
+        type: "data-tbai-progress",
+        id: "progress",
+        data: { kind: "tbai-progress" as const, version: 1 as const, stages: [] },
+      });
+
+      // Automatic compaction, as a part of THIS turn's message rather than a
+      // message of its own. Written before any provider output, so the divider sits
+      // above the reply it applies to. Rendered by the same `CompactionDivider` as a
+      // manual compaction and as an overflow recovery — the client needs no separate
+      // path for any of them.
+      if (automaticPart) {
+        writer.write(automaticPart);
       }
-      return { settlement, didSettle };
-    };
 
-    // Terminal diagnostic for `chat_response_closed`: a real provider/merge error
-    // or a run that settled failed. Recoverable tool-error parts deliberately do
-    // not set this — they are reported by the tool funnel instead.
-    const runHadError = (): boolean =>
-      streamErrorCaught !== null ||
-      (chatRuns.get(streamId)?.status ?? "unknown") === "failed";
+      // ── AI funnel: request ────────────────────────────────────────────────
+      chatLog.debug("ai", "ai.request", {
+        streamId,
+        provider: provider.type,
+        model: modelConfig.model,
+        endpointConfigured: Boolean(provider.endpoint),
+        protocol: (modelConfig as { apiProtocol?: string }).apiProtocol || "default",
+        streamRetries: DIRECT_STREAM_RETRIES,
+        maxRetries: DIRECT_MAX_RETRIES,
+        abortSignalAborted: c.req.raw.signal.aborted,
+        elapsedMs: Date.now() - chatStartedAt,
+      });
 
-    const stream = createUIMessageStream({
-      execute: async ({ writer }) => {
-        streamWriter.current = writer;
-        writer.write({
-          type: "data-tbai-progress",
-          id: "progress",
-          data: { kind: "tbai-progress" as const, version: 1 as const, stages: [] },
-        });
-
-        // Automatic compaction, as a part of THIS turn's message rather than a
-        // message of its own. Written before any provider output, so the divider sits
-        // above the reply it applies to. Rendered by the same `CompactionDivider` as a
-        // manual compaction and as an overflow recovery — the client needs no separate
-        // path for any of them.
-        if (automaticPart) {
-          writer.write(automaticPart);
-        }
-
-        // ── AI funnel: request ────────────────────────────────────────────────
-        chatLog.debug("ai", "ai.request", {
-          streamId,
-          provider: provider.type,
-          model: modelConfig.model,
-          endpointConfigured: Boolean(provider.endpoint),
-          protocol: (modelConfig as { apiProtocol?: string }).apiProtocol || "default",
-          streamRetries: DIRECT_STREAM_RETRIES,
-          maxRetries: DIRECT_MAX_RETRIES,
-          abortSignalAborted: c.req.raw.signal.aborted,
-          elapsedMs: Date.now() - chatStartedAt,
-        });
-
-        // The explicit generic binds `toolsContext` to the native tools'
-        // `contextSchema`s. Without it the MCP spread (`Record<string, any>`)
-        // would erase the context types and `toolsContext` would collapse to
-        // `never`; with it the map is checked per tool name at compile time.
-        const startAttempt = (attempt: number): ReadableStream<never> => {
-          const result = streamText<NativeToolSet>({
+      // The explicit generic binds `toolsContext` to the native tools'
+      // `contextSchema`s. Without it the MCP spread (`Record<string, any>`)
+      // would erase the context types and `toolsContext` would collapse to
+      // `never`; with it the map is checked per tool name at compile time.
+      const startAttempt = (attempt: number): ReadableStream<never> => {
+        const result = streamText<NativeToolSet>({
           model: languageModel,
           messages: modelMessages,
           maxRetries: DIRECT_MAX_RETRIES,
@@ -415,8 +416,7 @@ export async function executeDirectStream(
           // `providerOptions` object, so a second spread would be silently
           // overwritten by whichever came last — and a dropped cache control is
           // indistinguishable from caching that simply did not happen.
-          ...
-          (Object.keys(providerOptions).length || state.cacheControl?.providerOptions
+          ...(Object.keys(providerOptions).length || state.cacheControl?.providerOptions
             ? {
                 providerOptions: {
                   ...providerOptions,
@@ -463,7 +463,10 @@ export async function executeDirectStream(
             readonly usage?: unknown;
             readonly model?: { readonly provider?: string; readonly modelId?: string };
             readonly response?: { readonly id?: string };
-            readonly content?: ReadonlyArray<{ readonly type?: string; readonly toolCallId?: string }>;
+            readonly content?: ReadonlyArray<{
+              readonly type?: string;
+              readonly toolCallId?: string;
+            }>;
           }) => {
             state.lastStepOccupancy = providerOccupancyFromStepUsage(step.usage);
 
@@ -556,9 +559,7 @@ export async function executeDirectStream(
               data: progress.onFinish() as unknown as ProgressData,
             });
             const id = (toolCall as { toolCallId?: string } | undefined)?.toolCallId;
-            const out = toolOutput as
-              | { exitCode?: number; timedOut?: boolean }
-              | undefined;
+            const out = toolOutput as { exitCode?: number; timedOut?: boolean } | undefined;
             if (id) {
               terminal.complete(
                 id,
@@ -593,10 +594,17 @@ export async function executeDirectStream(
                 // merged with it. `null` when nothing is documented — a stand-in
                 // number here would be indistinguishable from a vendor fact.
                 documentedMinimumPrefix:
-                  state.cacheCapability.status === "documented" ? state.cacheCapability.documentedMinimumPrefixTokens : null,
-                documentedSource: state.cacheCapability.status === "documented" ? state.cacheCapability.source : null,
+                  state.cacheCapability.status === "documented"
+                    ? state.cacheCapability.documentedMinimumPrefixTokens
+                    : null,
+                documentedSource:
+                  state.cacheCapability.status === "documented"
+                    ? state.cacheCapability.source
+                    : null,
                 documentedVerifiedOn:
-                  state.cacheCapability.status === "documented" ? state.cacheCapability.verifiedOn : null,
+                  state.cacheCapability.status === "documented"
+                    ? state.cacheCapability.verifiedOn
+                    : null,
                 // R1's binding rule, evaluated per request: a conservative or
                 // configured context ceiling may bound safety but must never size a
                 // cache experiment.
@@ -619,7 +627,7 @@ export async function executeDirectStream(
             const rec = chatRuns.get(streamId);
             // A terminal record means the cancel endpoint or wall clock already
             // settled this run; log nothing twice.
-            if (!rec || rec.status !== "running") return;
+            if (rec?.status !== "running") return;
             const elapsedMs = Date.now() - chatStartedAt;
             if (rec.timedOut) {
               if (chatRuns.markFailed(streamId)) mirrorSettlement("failed");
@@ -652,176 +660,177 @@ export async function executeDirectStream(
             });
           },
         });
-          return result.fullStream as unknown as ReadableStream<never>;
-        };
+        return result.fullStream as unknown as ReadableStream<never>;
+      };
 
-        /**
-         * Record a context window the provider stated for itself in this rejection.
-         *
-         * Some providers publish no window metadata, so resolution falls back to a
-         * conservative stand-in that refuses part of the window the model actually has.
-         * The rejection is the one place the real figure appears, so it is read here and
-         * kept for subsequent assemblies.
-         *
-         * Three properties are deliberate:
-         *
-         *  - It runs on the RAW provider error, before recovery acts, so the compaction
-         *    recovery forces is planned against the real window rather than the stand-in.
-         *  - It is scoped to this provider configuration, model and endpoint, so a figure
-         *    learned from one endpoint is never applied to another.
-         *  - Only a NUMBER is ever logged. The provider's text never crosses this
-         *    boundary, so an observation cannot leak a message body into a log line.
-         *
-         * A provider that states nothing simply leaves no observation, which is the
-         * existing behaviour.
-         */
-        const noteProviderStatedLimit = (error: unknown): void => {
-          const limitTokens = observedContextLength(error);
-          if (limitTokens === undefined) return;
-          observeContextWindow(
-            {
-              providerId: modelConfig.id,
-              modelId: modelConfig.model,
-              endpoint: modelConfig.endpoint,
-              protocol: modelConfig.apiProtocol,
-            },
-            limitTokens,
-          );
-          chatLog.info("context", "context_window_observed", {
+      /**
+       * Record a context window the provider stated for itself in this rejection.
+       *
+       * Some providers publish no window metadata, so resolution falls back to a
+       * conservative stand-in that refuses part of the window the model actually has.
+       * The rejection is the one place the real figure appears, so it is read here and
+       * kept for subsequent assemblies.
+       *
+       * Three properties are deliberate:
+       *
+       *  - It runs on the RAW provider error, before recovery acts, so the compaction
+       *    recovery forces is planned against the real window rather than the stand-in.
+       *  - It is scoped to this provider configuration, model and endpoint, so a figure
+       *    learned from one endpoint is never applied to another.
+       *  - Only a NUMBER is ever logged. The provider's text never crosses this
+       *    boundary, so an observation cannot leak a message body into a log line.
+       *
+       * A provider that states nothing simply leaves no observation, which is the
+       * existing behaviour.
+       */
+      const noteProviderStatedLimit = (error: unknown): void => {
+        const limitTokens = observedContextLength(error);
+        if (limitTokens === undefined) return;
+        observeContextWindow(
+          {
             providerId: modelConfig.id,
             modelId: modelConfig.model,
-            source: "provider_overflow",
-          });
-        };
-
-        /**
-         * THE RECOVERY GATE.
-         *
-         * Wraps the RAW provider stream, never the composed UI stream. That placement is
-         * measured, not assumed: the composed `createUIMessageStream.onError` settles the
-         * run, and a provider `error` part never reaches it anyway (proved by
-         * `tests/integration/direct-error-ownership.test.ts`), so upstream of the
-         * composition is the only place where the surviving attempt can be chosen.
-         */
-        const gatedStream = withOverflowRecovery<never>({
-          startAttempt: (attempt) => startAttempt(attempt),
-          isErrorPart: (part) => {
-            const candidate = part as { type?: unknown; error?: unknown };
-            return candidate?.type === "error" ? candidate.error : undefined;
+            endpoint: modelConfig.endpoint,
+            protocol: modelConfig.apiProtocol,
           },
-          // Real SDK lifecycle vocabulary. `start` / `start-step` / `finish-step` carry
-          // nothing the user can read; anything else commits the attempt.
-          isLifecyclePart: (part) =>
-            LIFECYCLE_PART_TYPES.has((part as { type?: unknown })?.type as string),
-          decide: (error) => {
-            // Recorded BEFORE the decision is acted on, and therefore before `recover()`
-            // runs: the gate calls `decide` on the raw provider error and only then
-            // compacts. Recovery re-assembles through `assembleForRequest`, which reads
-            // the observation — so the compaction it forces is planned against the
-            // window the provider just stated instead of the conservative stand-in.
-            noteProviderStatedLimit(error);
-            const decision = decideOverflowRecovery({
-              category: classifyError(error, { provider: provider.type }).category,
-              alreadyAttempted: state.overflowRecoveryAttempted,
-              compactionEnabled: compactionEnabled(),
-              hasConversation: threadId !== undefined,
-            });
-            if (decision.shouldRecover) state.overflowRecoveryAttempted = true;
-            return decision;
-          },
-          /**
-           * Compact, then rebuild through the SAME assembly seam — there is no second
-           * context path. `forceCompaction` is required: the local trigger is derived
-           * from an estimate that already passed pre-flight, so it has nothing to fire
-           * on. The provider's rejection is the evidence that the size problem is real.
-           *
-           * A rejection here propagates, and the gate then forwards the ORIGINAL
-           * overflow: recovery is a remedy, and a failed remedy must not replace the
-           * real diagnosis with a vague one.
-           */
-          recover: async () => {
-            chatLog.warn("context", "overflow_recovery_compaction_entered", {});
-            await assembleForRequest(setup, state, terminalTap, {
-              forceCompaction: true,
-            });
-            // SAFETY INVARIANT, kept even though the compaction path is now correct.
-            //
-            // Compaction is CONTAINED: a summariser failure, a lost race, or simply nothing
-            // eligible is REPORTED, not thrown. So `assembleForRequest` resolving is NOT
-            // evidence that anything was compacted - and treating it as such would re-send
-            // the identical oversized history to the same provider, which can only overflow
-            // again. The explicit boolean is the only acceptable proof.
-            //
-            // Throwing makes the gate forward the ORIGINAL provider overflow and skip the
-            // retry, so a no-op compaction can never be mistaken for a recovery.
-            //
-            // Re-read through `state`. `assembleForRequest` REPLACES
-            // `state.assembled` (see `assemble-run.ts`), so the phase-scope
-            // `assembled` above is a PRE-recovery snapshot. Reading it here
-            // would report the overflowing assembly that recovery just replaced
-            // — exactly the "pre-recovery assembly" the comment below says this
-            // report must not describe.
-            const rebuilt = state.assembled;
-            if (!rebuilt) {
-              throw new Error(`chat: overflow recovery left no assembled context (${requestId})`);
-            }
-            if (rebuilt.diagnostics.compactionApplied !== true) {
-              throw new Error(`compaction_not_applied:${rebuilt.diagnostics.compactionReason}`);
-            }
-            chatLog.warn("context", "overflow_recovery_context_rebuilt", {
-              compactionApplied: true,
-              compactionGeneration: rebuilt.diagnostics.compactionGeneration,
-              compactionSpanMessages: rebuilt.diagnostics.compactionSpanMessages,
-            });
-            // Recovery compaction is now VISIBLE, through the one publisher every other
-            // trigger uses. It runs after the rebuild above, so the report it reads is the
-            // recovery's own — generation, span and reason describe the compaction that
-            // actually happened, not the pre-recovery assembly.
-            //
-            // `origin: "recovery"` is the only thing that distinguishes it, which is the
-            // point: same durable row, same part, same renderer as automatic and manual.
-            //
-            // The divider is emitted only because `compactionApplied` was just proven
-            // true; a failed or no-op recovery throws above and never reaches here, so it
-            // cannot leave a divider claiming a compaction that did not happen.
-            //
-            // Written to `streamWriter` rather than to the stream's `writer`: recovery
-            // fires mid-stream, and this is the writer the stream installed when it
-            // opened. The part lands above the RETRIED reply, which is the turn the
-            // recovery made possible.
-            const recoveryOperationId = `${streamId}-recovery`;
-            const published = await publishCompactionDivider(
-              "recovery",
-              recoveryOperationId,
-              chatLog,
-            );
-            if (published) {
-              const part = compactionPart("recovery", recoveryOperationId);
-              if (part) streamWriter.current?.write(part);
-            }
-          },
-          /**
-           * The gate has decided to KEEP this attempt and forward its error, so this is
-           * the moment the logical request publishes its terminal failure — once, through
-           * exactly the path an ordinary provider error always took.
-           */
-          onFinalError: (attempt, error) => {
-            publishFinalProviderError(attempt, error);
-          },
-          onEvent: (event) => {
-            if (event.type === "retry_started") {
-              chatLog.warn("context", "overflow_recovery_retry_started", { attempt: event.attempt });
-              return;
-            }
-            if (event.type === "recovery_failed") {
-              chatLog.warn("context", "overflow_recovery_failed", { failure: event.failure });
-              return;
-            }
-            chatLog.warn("context", "overflow_recovery_event", { event: event.type });
-          },
+          limitTokens,
+        );
+        chatLog.info("context", "context_window_observed", {
+          providerId: modelConfig.id,
+          modelId: modelConfig.model,
+          source: "provider_overflow",
         });
+      };
 
-        writer.merge(toUIMessageStream({
+      /**
+       * THE RECOVERY GATE.
+       *
+       * Wraps the RAW provider stream, never the composed UI stream. That placement is
+       * measured, not assumed: the composed `createUIMessageStream.onError` settles the
+       * run, and a provider `error` part never reaches it anyway (proved by
+       * `tests/integration/direct-error-ownership.test.ts`), so upstream of the
+       * composition is the only place where the surviving attempt can be chosen.
+       */
+      const gatedStream = withOverflowRecovery<never>({
+        startAttempt: (attempt) => startAttempt(attempt),
+        isErrorPart: (part) => {
+          const candidate = part as { type?: unknown; error?: unknown };
+          return candidate?.type === "error" ? candidate.error : undefined;
+        },
+        // Real SDK lifecycle vocabulary. `start` / `start-step` / `finish-step` carry
+        // nothing the user can read; anything else commits the attempt.
+        isLifecyclePart: (part) =>
+          LIFECYCLE_PART_TYPES.has((part as { type?: unknown })?.type as string),
+        decide: (error) => {
+          // Recorded BEFORE the decision is acted on, and therefore before `recover()`
+          // runs: the gate calls `decide` on the raw provider error and only then
+          // compacts. Recovery re-assembles through `assembleForRequest`, which reads
+          // the observation — so the compaction it forces is planned against the
+          // window the provider just stated instead of the conservative stand-in.
+          noteProviderStatedLimit(error);
+          const decision = decideOverflowRecovery({
+            category: classifyError(error, { provider: provider.type }).category,
+            alreadyAttempted: state.overflowRecoveryAttempted,
+            compactionEnabled: compactionEnabled(),
+            hasConversation: threadId !== undefined,
+          });
+          if (decision.shouldRecover) state.overflowRecoveryAttempted = true;
+          return decision;
+        },
+        /**
+         * Compact, then rebuild through the SAME assembly seam — there is no second
+         * context path. `forceCompaction` is required: the local trigger is derived
+         * from an estimate that already passed pre-flight, so it has nothing to fire
+         * on. The provider's rejection is the evidence that the size problem is real.
+         *
+         * A rejection here propagates, and the gate then forwards the ORIGINAL
+         * overflow: recovery is a remedy, and a failed remedy must not replace the
+         * real diagnosis with a vague one.
+         */
+        recover: async () => {
+          chatLog.warn("context", "overflow_recovery_compaction_entered", {});
+          await assembleForRequest(setup, state, terminalTap, {
+            forceCompaction: true,
+          });
+          // SAFETY INVARIANT, kept even though the compaction path is now correct.
+          //
+          // Compaction is CONTAINED: a summariser failure, a lost race, or simply nothing
+          // eligible is REPORTED, not thrown. So `assembleForRequest` resolving is NOT
+          // evidence that anything was compacted - and treating it as such would re-send
+          // the identical oversized history to the same provider, which can only overflow
+          // again. The explicit boolean is the only acceptable proof.
+          //
+          // Throwing makes the gate forward the ORIGINAL provider overflow and skip the
+          // retry, so a no-op compaction can never be mistaken for a recovery.
+          //
+          // Re-read through `state`. `assembleForRequest` REPLACES
+          // `state.assembled` (see `assemble-run.ts`), so the phase-scope
+          // `assembled` above is a PRE-recovery snapshot. Reading it here
+          // would report the overflowing assembly that recovery just replaced
+          // — exactly the "pre-recovery assembly" the comment below says this
+          // report must not describe.
+          const rebuilt = state.assembled;
+          if (!rebuilt) {
+            throw new Error(`chat: overflow recovery left no assembled context (${requestId})`);
+          }
+          if (rebuilt.diagnostics.compactionApplied !== true) {
+            throw new Error(`compaction_not_applied:${rebuilt.diagnostics.compactionReason}`);
+          }
+          chatLog.warn("context", "overflow_recovery_context_rebuilt", {
+            compactionApplied: true,
+            compactionGeneration: rebuilt.diagnostics.compactionGeneration,
+            compactionSpanMessages: rebuilt.diagnostics.compactionSpanMessages,
+          });
+          // Recovery compaction is now VISIBLE, through the one publisher every other
+          // trigger uses. It runs after the rebuild above, so the report it reads is the
+          // recovery's own — generation, span and reason describe the compaction that
+          // actually happened, not the pre-recovery assembly.
+          //
+          // `origin: "recovery"` is the only thing that distinguishes it, which is the
+          // point: same durable row, same part, same renderer as automatic and manual.
+          //
+          // The divider is emitted only because `compactionApplied` was just proven
+          // true; a failed or no-op recovery throws above and never reaches here, so it
+          // cannot leave a divider claiming a compaction that did not happen.
+          //
+          // Written to `streamWriter` rather than to the stream's `writer`: recovery
+          // fires mid-stream, and this is the writer the stream installed when it
+          // opened. The part lands above the RETRIED reply, which is the turn the
+          // recovery made possible.
+          const recoveryOperationId = `${streamId}-recovery`;
+          const published = await publishCompactionDivider(
+            "recovery",
+            recoveryOperationId,
+            chatLog,
+          );
+          if (published) {
+            const part = compactionPart("recovery", recoveryOperationId);
+            if (part) streamWriter.current?.write(part);
+          }
+        },
+        /**
+         * The gate has decided to KEEP this attempt and forward its error, so this is
+         * the moment the logical request publishes its terminal failure — once, through
+         * exactly the path an ordinary provider error always took.
+         */
+        onFinalError: (attempt, error) => {
+          publishFinalProviderError(attempt, error);
+        },
+        onEvent: (event) => {
+          if (event.type === "retry_started") {
+            chatLog.warn("context", "overflow_recovery_retry_started", { attempt: event.attempt });
+            return;
+          }
+          if (event.type === "recovery_failed") {
+            chatLog.warn("context", "overflow_recovery_failed", { failure: event.failure });
+            return;
+          }
+          chatLog.warn("context", "overflow_recovery_event", { event: event.type });
+        },
+      });
+
+      writer.merge(
+        toUIMessageStream({
           stream: gatedStream as unknown as Parameters<typeof toUIMessageStream>[0]["stream"],
           originalMessages: messages,
           generateMessageId: () => generateId(),
@@ -887,148 +896,149 @@ export async function executeDirectStream(
               },
               contextStateForUi(state),
             ),
-        }));
-      },
-      generateId: () => generateId(),
-      // ── Diagnostic: stream failed ─────────────────────────────────────────
-      onError: (error) => {
-        // The composed stream reports error chunks and merge failures here. The
-        // inner conversion's onEnd remains authoritative for normal producer
-        // completion, including detached clients.
-        const effectiveError = originalStreamError ?? error;
-        streamErrorCaught = effectiveError;
-        const detachedClientAbort =
-          clientDisconnected && classifyError(effectiveError).category === "cancelled";
-        if (!detachedClientAbort) {
-          const didSettle = settleRun("failed");
-          if (didSettle) logAiError(effectiveError);
-        }
-        return `${sanitizeStreamError(effectiveError)} [ref:${requestId}]`;
-      },
-    });
+        }),
+      );
+    },
+    generateId: () => generateId(),
+    // ── Diagnostic: stream failed ─────────────────────────────────────────
+    onError: (error) => {
+      // The composed stream reports error chunks and merge failures here. The
+      // inner conversion's onEnd remains authoritative for normal producer
+      // completion, including detached clients.
+      const effectiveError = originalStreamError ?? error;
+      streamErrorCaught = effectiveError;
+      const detachedClientAbort =
+        clientDisconnected && classifyError(effectiveError).category === "cancelled";
+      if (!detachedClientAbort) {
+        const didSettle = settleRun("failed");
+        if (didSettle) logAiError(effectiveError);
+      }
+      return `${sanitizeStreamError(effectiveError)} [ref:${requestId}]`;
+    },
+  });
 
-    let wrappedStream: ReadableStream<Uint8Array>;
-    try {
-      const response = createUIMessageStreamResponse({ stream });
-      if (!response.body) {
-        throw new Error("UI message stream response has no body");
-      }
-      wrappedStream = await resumableContext.run(streamId, () => response.body!);
-      // The row exists from here on: `run` awaits the store's acquire before it
-      // returns. The official contract knows nothing about conversations, so bind
-      // the run's own metadata now — server-side history finalization may be the
-      // only writer, and it must not depend on a process-local registry that a
-      // restart would empty. With no conversation in the request there is no
-      // history target, so the row stays unbound and finalization skips explicitly.
-      if (threadId) {
-        chatStreamStore.bindRunContext(streamId, {
-          conversationId: threadId,
-          requestId,
-          providerId: provider.id,
-          modelId: modelConfig.model,
-        });
-      }
-    } catch (error) {
-      const didSettle = settleRun("failed");
-      if (didSettle) logAiError(error);
-      throw error;
+  let wrappedStream: ReadableStream<Uint8Array>;
+  try {
+    const response = createUIMessageStreamResponse({ stream });
+    if (!response.body) {
+      throw new Error("UI message stream response has no body");
     }
+    wrappedStream = await resumableContext.run(streamId, () => response.body!);
+    // The row exists from here on: `run` awaits the store's acquire before it
+    // returns. The official contract knows nothing about conversations, so bind
+    // the run's own metadata now — server-side history finalization may be the
+    // only writer, and it must not depend on a process-local registry that a
+    // restart would empty. With no conversation in the request there is no
+    // history target, so the row stays unbound and finalization skips explicitly.
+    if (threadId) {
+      chatStreamStore.bindRunContext(streamId, {
+        conversationId: threadId,
+        requestId,
+        providerId: provider.id,
+        modelId: modelConfig.model,
+      });
+    }
+  } catch (error) {
+    const didSettle = settleRun("failed");
+    if (didSettle) logAiError(error);
+    throw error;
+  }
 
-    // ── Diagnostic: true response-closed ───────────────────────────────────
-    // Monitor the response body stream to detect when the client has consumed
-    // all bytes (natural drain) or when the connection drops (error/cancel).
-    // This replaces the previous premature log that fired before any bytes
-    // were actually sent.
-    let responseBytesSent = 0;
-    let monitorCancelled = false;
-    const sourceReader = wrappedStream.getReader();
-    const monitorStream = new ReadableStream({
-      async pull(controller) {
-        try {
-          const { done, value } = await sourceReader.read();
-          if (done) {
-            sourceReader.releaseLock();
-            controller.close();
-            // The producer outcome is authoritative. A response drain is only a
-            // transport observation; it must never turn an error/unknown stream
-            // into a successful run.
-            chatLog.info("chat", "chat_response_closed", {
-              closedBy: "drain",
-              elapsedMs: Date.now() - chatStartedAt,
-              streamId,
-              runStatus: chatRuns.get(streamId)?.status ?? "unknown",
-              chunkCount,
-              responseBytesSent,
-              hadError: runHadError(),
-            });
-            return;
-          }
-          responseBytesSent += value.byteLength;
-          controller.enqueue(value);
-        } catch (err) {
+  // ── Diagnostic: true response-closed ───────────────────────────────────
+  // Monitor the response body stream to detect when the client has consumed
+  // all bytes (natural drain) or when the connection drops (error/cancel).
+  // This replaces the previous premature log that fired before any bytes
+  // were actually sent.
+  let responseBytesSent = 0;
+  let monitorCancelled = false;
+  const sourceReader = wrappedStream.getReader();
+  const monitorStream = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await sourceReader.read();
+        if (done) {
           sourceReader.releaseLock();
-          if (!monitorCancelled) {
-            // Observation died, not necessarily the run: mark detached so the
-            // run continues and remains resumable.
-            if (chatRuns.markDetached(streamId)) {
-              chatLog.warn("ai", "ai.run_detached", {
-                streamId,
-                threadId,
-                reason: "read-error",
-                elapsedMs: Date.now() - chatStartedAt,
-                chunkCount,
-                responseBytesSent,
-              });
-            }
-            chatLog.warn("chat", "chat_response_closed", {
-              closedBy: "error",
-              elapsedMs: Date.now() - chatStartedAt,
-              streamId,
-              runStatus: chatRuns.get(streamId)?.status ?? "unknown",
-              chunkCount,
-              responseBytesSent,
-              hadError: runHadError(),
-              errorType: err instanceof Error ? err.name : typeof err,
-            });
-          }
-          controller.error(err);
-        }
-      },
-      cancel() {
-        monitorCancelled = true;
-        clientDisconnected = true;
-        sourceReader.cancel().catch(() => {});
-        sourceReader.releaseLock();
-        // The connection is gone but the run may be alive: detach (don't kill).
-        // An explicit cancel arriving via POST /api/chat/cancel/:streamId will
-        // transition a still-running run to cancelled; both lines then appear,
-        // truthfully, in causal order.
-        if (chatRuns.markDetached(streamId)) {
-          chatLog.warn("ai", "ai.run_detached", {
-            streamId,
-            threadId,
-            reason: "connection-closed",
+          controller.close();
+          // The producer outcome is authoritative. A response drain is only a
+          // transport observation; it must never turn an error/unknown stream
+          // into a successful run.
+          chatLog.info("chat", "chat_response_closed", {
+            closedBy: "drain",
             elapsedMs: Date.now() - chatStartedAt,
+            streamId,
+            runStatus: chatRuns.get(streamId)?.status ?? "unknown",
             chunkCount,
             responseBytesSent,
+            hadError: runHadError(),
+          });
+          return;
+        }
+        responseBytesSent += value.byteLength;
+        controller.enqueue(value);
+      } catch (err) {
+        sourceReader.releaseLock();
+        if (!monitorCancelled) {
+          // Observation died, not necessarily the run: mark detached so the
+          // run continues and remains resumable.
+          if (chatRuns.markDetached(streamId)) {
+            chatLog.warn("ai", "ai.run_detached", {
+              streamId,
+              threadId,
+              reason: "read-error",
+              elapsedMs: Date.now() - chatStartedAt,
+              chunkCount,
+              responseBytesSent,
+            });
+          }
+          chatLog.warn("chat", "chat_response_closed", {
+            closedBy: "error",
+            elapsedMs: Date.now() - chatStartedAt,
+            streamId,
+            runStatus: chatRuns.get(streamId)?.status ?? "unknown",
+            chunkCount,
+            responseBytesSent,
+            hadError: runHadError(),
+            errorType: err instanceof Error ? err.name : typeof err,
           });
         }
-        chatLog.warn("chat", "chat_response_closed", {
-          closedBy: "cancel",
-          elapsedMs: Date.now() - chatStartedAt,
+        controller.error(err);
+      }
+    },
+    cancel() {
+      monitorCancelled = true;
+      clientDisconnected = true;
+      sourceReader.cancel().catch(() => {});
+      sourceReader.releaseLock();
+      // The connection is gone but the run may be alive: detach (don't kill).
+      // An explicit cancel arriving via POST /api/chat/cancel/:streamId will
+      // transition a still-running run to cancelled; both lines then appear,
+      // truthfully, in causal order.
+      if (chatRuns.markDetached(streamId)) {
+        chatLog.warn("ai", "ai.run_detached", {
           streamId,
-          runStatus: chatRuns.get(streamId)?.status ?? "unknown",
+          threadId,
+          reason: "connection-closed",
+          elapsedMs: Date.now() - chatStartedAt,
           chunkCount,
           responseBytesSent,
-          hadError: runHadError(),
         });
-      },
-    });
+      }
+      chatLog.warn("chat", "chat_response_closed", {
+        closedBy: "cancel",
+        elapsedMs: Date.now() - chatStartedAt,
+        streamId,
+        runStatus: chatRuns.get(streamId)?.status ?? "unknown",
+        chunkCount,
+        responseBytesSent,
+        hadError: runHadError(),
+      });
+    },
+  });
 
-    return new Response(monitorStream, {
-      headers: {
-        ...UI_MESSAGE_STREAM_HEADERS,
-        [RESUMABLE_STREAM_ID_HEADER]: streamId,
-      },
-    });
+  return new Response(monitorStream, {
+    headers: {
+      ...UI_MESSAGE_STREAM_HEADERS,
+      [RESUMABLE_STREAM_ID_HEADER]: streamId,
+    },
+  });
 }

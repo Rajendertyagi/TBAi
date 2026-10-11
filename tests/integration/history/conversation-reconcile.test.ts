@@ -82,9 +82,7 @@ describe("reconcile — verdicts", () => {
   it("reports gone for an id with no row", async () => {
     const { status, json } = await post([`${PREFIX}never-existed`]);
     expect(status).toBe(200);
-    expect((await json()).results).toEqual([
-      { id: `${PREFIX}never-existed`, status: "gone" },
-    ]);
+    expect((await json()).results).toEqual([{ id: `${PREFIX}never-existed`, status: "gone" }]);
   });
 
   it("reports gone only for the missing ids in a mixed set", async () => {
@@ -117,11 +115,7 @@ describe("reconcile — completeness and ordering", () => {
     // Cardinality AND order both mirror the request, duplicates included.
     expect(results).toHaveLength(3);
     expect(results.map((r: { id: string }) => r.id)).toEqual(requested);
-    expect(results.map((r: { status: string }) => r.status)).toEqual([
-      "gone",
-      "exists",
-      "gone",
-    ]);
+    expect(results.map((r: { status: string }) => r.status)).toEqual(["gone", "exists", "gone"]);
   });
 
   it("exposes only id and status — no conversation data", async () => {
@@ -195,11 +189,7 @@ describe("conversationService.existsMany", () => {
   it("returns only the ids that exist", async () => {
     const a = seed(`${PREFIX}many-a`);
     const b = seed(`${PREFIX}many-b`);
-    const found = await conversationService.existsMany([
-      a,
-      `${PREFIX}many-absent`,
-      b,
-    ]);
+    const found = await conversationService.existsMany([a, `${PREFIX}many-absent`, b]);
     expect(found.has(a)).toBe(true);
     expect(found.has(b)).toBe(true);
     expect(found.has(`${PREFIX}many-absent`)).toBe(false);

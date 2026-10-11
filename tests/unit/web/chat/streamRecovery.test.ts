@@ -117,7 +117,9 @@ describe("stream recovery — published state", () => {
   });
 
   it("publishes a per-thread state and clears only that thread", async () => {
-    await resolveStreamRecovery("thread_a", "hello", { fetchImpl: async () => jsonResponse({ run: BASE }) });
+    await resolveStreamRecovery("thread_a", "hello", {
+      fetchImpl: async () => jsonResponse({ run: BASE }),
+    });
     await resolveStreamRecovery("thread_b", "hello", {
       fetchImpl: async () => jsonResponse({ run: { ...BASE, terminalKind: "completed" } }),
     });
@@ -139,15 +141,20 @@ describe("stream recovery — published state", () => {
 
   it("publishes nothing for a thread that has no run at all", async () => {
     // A fresh conversation must not be nagged with a recovery notice.
-    await resolveStreamRecovery("thread_empty", "", { fetchImpl: async () => jsonResponse({ run: null }) });
+    await resolveStreamRecovery("thread_empty", "", {
+      fetchImpl: async () => jsonResponse({ run: null }),
+    });
     expect(useStreamRecoveryStore.getState().byThread.thread_empty).toBeUndefined();
   });
 
   it("clears a stale notice when the conversation's run is now healthy", async () => {
-    await resolveStreamRecovery("thread_f", "hi", { fetchImpl: async () => jsonResponse({ run: BASE }) });
+    await resolveStreamRecovery("thread_f", "hi", {
+      fetchImpl: async () => jsonResponse({ run: BASE }),
+    });
     expect(useStreamRecoveryStore.getState().byThread.thread_f).toBeDefined();
     await resolveStreamRecovery("thread_f", "hi", {
-      fetchImpl: async () => jsonResponse({ run: { ...BASE, status: "streaming", terminalKind: null } }),
+      fetchImpl: async () =>
+        jsonResponse({ run: { ...BASE, status: "streaming", terminalKind: null } }),
     });
     expect(useStreamRecoveryStore.getState().byThread.thread_f).toBeUndefined();
   });
@@ -245,7 +252,8 @@ describe("stream recovery — published state", () => {
     expect(calls).toBe(before);
   }, 10000);
 
-  it("publishes nothing when the status is unreadable and no run is known", async () => {    // No evidence at all: a thread nobody asked a question on. Publishing here
+  it("publishes nothing when the status is unreadable and no run is known", async () => {
+    // No evidence at all: a thread nobody asked a question on. Publishing here
     // would nag on every fresh conversation.
     await resolveStreamRecovery("thread_h", "", {
       fetchImpl: async () => {
@@ -257,12 +265,14 @@ describe("stream recovery — published state", () => {
 
   it("returns the status so the caller can tell a dead run from a live one", async () => {
     const terminal = await resolveStreamRecovery("thread_d", "hi", {
-      fetchImpl: async () => jsonResponse({ run: { ...BASE, status: "error", terminalKind: "interrupted" } }),
+      fetchImpl: async () =>
+        jsonResponse({ run: { ...BASE, status: "error", terminalKind: "interrupted" } }),
     });
     expect(terminal.status?.status).toBe("error");
 
     const live = await resolveStreamRecovery("thread_e", "hi", {
-      fetchImpl: async () => jsonResponse({ run: { ...BASE, status: "streaming", terminalKind: null } }),
+      fetchImpl: async () =>
+        jsonResponse({ run: { ...BASE, status: "streaming", terminalKind: null } }),
     });
     // A live producer must keep its resume pointer — this is the distinction that
     // stops the client re-resuming a dead stream forever while never cutting off a

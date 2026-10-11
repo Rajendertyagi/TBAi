@@ -59,7 +59,10 @@ const OVERFLOW_BODY = {
 };
 
 function jsonError(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function sse(rows: unknown[]): Response {
@@ -136,14 +139,22 @@ const ADEQUATE_SUMMARY = Array.from(
 function longHistory(): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
   for (let i = 0; i < 12; i += 1) {
-    messages.push({ id: `u${i}`, role: "user", parts: [{ type: "text", text: `question ${i} ${"detail ".repeat(40)}` }] });
+    messages.push({
+      id: `u${i}`,
+      role: "user",
+      parts: [{ type: "text", text: `question ${i} ${"detail ".repeat(40)}` }],
+    });
     messages.push({
       id: `a${i}`,
       role: "assistant",
       parts: [{ type: "text", text: `answer ${i} ${"reply ".repeat(40)}`, state: "done" }],
     });
   }
-  messages.push({ id: "live", role: "user", parts: [{ type: "text", text: "the current question" }] });
+  messages.push({
+    id: "live",
+    role: "user",
+    parts: [{ type: "text", text: "the current question" }],
+  });
   return messages;
 }
 
@@ -167,14 +178,16 @@ function countChunks(sseText: string, type: string): number {
 }
 
 async function post(messages: Array<Record<string, unknown>>): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title: "compaction-invariant",
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title: "compaction-invariant",
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   try {
     const res = await app.request("/api/chat", {
       method: "POST",
@@ -250,7 +263,13 @@ describe("the positive case: an APPLIED compaction does authorise the retry", ()
               object: "chat.completion.chunk",
               created: 0,
               model: MODEL_ID,
-              choices: [{ index: 0, delta: { role: "assistant", content: "recovered" }, finish_reason: "stop" }],
+              choices: [
+                {
+                  index: 0,
+                  delta: { role: "assistant", content: "recovered" },
+                  finish_reason: "stop",
+                },
+              ],
               usage: { prompt_tokens: 900, completion_tokens: 10, total_tokens: 910 },
             },
           ]);

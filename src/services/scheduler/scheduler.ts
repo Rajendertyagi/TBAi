@@ -212,7 +212,10 @@ export async function fireJob(
     });
   }
 
-  let result;
+  // Typed from the callback passed below, not from `extendRequestContext`: that
+  // helper is generic over its return, so `ReturnType` of it collapses to
+  // `unknown` and every `result.ok` read would fail.
+  let result: Awaited<ReturnType<typeof executeJobRun>>;
   try {
     // Scheduler funnel context: everything nested in the run (tool calls,
     // storage ops, model calls) inherits job/provider/model identity — no
@@ -245,11 +248,7 @@ export async function fireJob(
   // Recurring jobs: refresh next_run_at bookkeeping after each fire.
   if (job.scheduleType === "cron" && job.cronExpression) {
     try {
-      const next = computeNextRun(
-        job.cronExpression,
-        job.timezone,
-        Date.now(),
-      );
+      const next = computeNextRun(job.cronExpression, job.timezone, Date.now());
       schedulerStore.update(job.id, { nextRunAt: next });
     } catch {
       /* keep the previous next_run_at; the cron timer still fires */
@@ -312,10 +311,7 @@ function scheduleOnce(job: SchedulerJob): void {
  * within the grace window → run once now; otherwise record missed/expired
  * and never execute late.
  */
-export async function handleOverdueOnce(
-  job: SchedulerJob,
-  database: Database = db,
-): Promise<void> {
+export async function handleOverdueOnce(job: SchedulerJob, database: Database = db): Promise<void> {
   const now = Date.now();
   const overdueSec = Math.floor((now - (job.execAt ?? now)) / 1000);
   const requestId = newRequestId();
@@ -386,10 +382,7 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
   if (!job) return { error: "Job not found" };
   const occurrenceId = manualOccurrenceId();
   const requestId = newRequestId();
-  if (
-    job.overlapPolicy === "skip_if_running" &&
-    schedulerStore.hasRunningRun(job.id)
-  ) {
+  if (job.overlapPolicy === "skip_if_running" && schedulerStore.hasRunningRun(job.id)) {
     schedulerStore.recordTerminalRun(
       job,
       `${occurrenceId}-skip`,
@@ -470,9 +463,7 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
       } else {
         if (job.execAt == null) continue;
         if (job.execAt <= Date.now()) {
-          const overdueSec = Math.floor(
-            (Date.now() - job.execAt) / 1000,
-          );
+          const overdueSec = Math.floor((Date.now() - job.execAt) / 1000);
           await handleOverdueOnce(job, database);
           if (overdueSec <= Math.max(0, job.missedGraceSeconds)) {
             report.ranFromGrace += 1;

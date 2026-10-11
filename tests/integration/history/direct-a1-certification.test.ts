@@ -59,11 +59,17 @@ const OVERFLOW_BODY = {
 };
 /** 4xx family, but a single oversized part — NOT a context problem. */
 const TOO_LARGE_BODY = {
-  error: { message: "Request payload is too large for this endpoint", type: "invalid_request_error" },
+  error: {
+    message: "Request payload is too large for this endpoint",
+    type: "invalid_request_error",
+  },
 };
 
 function jsonError(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 function jsonCompletion(content: string): Response {
   return new Response(
@@ -146,14 +152,22 @@ const ADEQUATE_SUMMARY = Array.from(
 function longHistory(turns = 12, liveId = "live"): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
   for (let i = 0; i < turns; i += 1) {
-    messages.push({ id: `u${i}`, role: "user", parts: [{ type: "text", text: `question ${i} ${"detail ".repeat(40)}` }] });
+    messages.push({
+      id: `u${i}`,
+      role: "user",
+      parts: [{ type: "text", text: `question ${i} ${"detail ".repeat(40)}` }],
+    });
     messages.push({
       id: `a${i}`,
       role: "assistant",
       parts: [{ type: "text", text: `answer ${i} ${"reply ".repeat(40)}`, state: "done" }],
     });
   }
-  messages.push({ id: liveId, role: "user", parts: [{ type: "text", text: "the current question" }] });
+  messages.push({
+    id: liveId,
+    role: "user",
+    parts: [{ type: "text", text: "the current question" }],
+  });
   return messages;
 }
 
@@ -191,22 +205,32 @@ function countChunks(sseText: string, type: string): number {
 }
 
 async function newConversation(title: string): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title,
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title,
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 
-async function post(conversationId: string, messages: Array<Record<string, unknown>>): Promise<string> {
+async function post(
+  conversationId: string,
+  messages: Array<Record<string, unknown>>,
+): Promise<string> {
   const res = await app.request("/api/chat", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ providerId: PROVIDER_ID, model: MODEL_ID, id: conversationId, messages }),
+    body: JSON.stringify({
+      providerId: PROVIDER_ID,
+      model: MODEL_ID,
+      id: conversationId,
+      messages,
+    }),
   });
   return await res.text();
 }
@@ -222,7 +246,14 @@ function persistedAssistantTexts(conversationId: string): string[] {
 }
 
 const report = (label: string): void => {
-  console.log(label, JSON.stringify({ attemptCalls, summariserCalls, totalUpstream: attemptCalls + summariserCalls }));
+  console.log(
+    label,
+    JSON.stringify({
+      attemptCalls,
+      summariserCalls,
+      totalUpstream: attemptCalls + summariserCalls,
+    }),
+  );
 };
 
 afterEach(() => {
@@ -305,7 +336,14 @@ describe("A5-7 — visible content before an overflow fails closed", () => {
     await seed(() =>
       sse([
         textChunk("partial answer", null),
-        { id: "chatcmpl-cert", object: "chat.completion.chunk", created: 0, model: MODEL_ID, choices: [], error: OVERFLOW_BODY.error },
+        {
+          id: "chatcmpl-cert",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: MODEL_ID,
+          choices: [],
+          error: OVERFLOW_BODY.error,
+        },
       ]),
     );
     const id = await newConversation("a5-7");
@@ -367,9 +405,9 @@ describe("RECOVERY VISIBILITY — a recovery compaction reaches the transcript",
       const record = compactionStore.get(id);
       expect(record?.generation).toBe(Number(data?.generation));
       // `spanLength` arrives from a JSON parse, so it is `unknown`; the test
-  // decides based on whether the divider spans anything at all.
-  const spanLength = typeof data?.spanLength === "number" ? data.spanLength : 0;
-  expect(record?.spanEndIndex).toBe(spanLength > 0 ? record?.spanEndIndex : undefined);
+      // decides based on whether the divider spans anything at all.
+      const spanLength = typeof data?.spanLength === "number" ? data.spanLength : 0;
+      expect(record?.spanEndIndex).toBe(spanLength > 0 ? record?.spanEndIndex : undefined);
 
       // One stored divider row, carrying the same envelope manual and automatic use.
       const rows = db
@@ -379,12 +417,10 @@ describe("RECOVERY VISIBILITY — a recovery compaction reaches the transcript",
         .all(id)
         .map(
           (r) =>
-            (
-              JSON.parse(r.content) as {
-                role: string;
-                parts: Array<{ type: string; data?: Record<string, unknown> }>;
-              }
-            ),
+            JSON.parse(r.content) as {
+              role: string;
+              parts: Array<{ type: string; data?: Record<string, unknown> }>;
+            },
         );
       expect(rows).toHaveLength(1);
       expect(rows[0]?.role).toBe("assistant");
@@ -481,7 +517,15 @@ describe("SCENARIO D — the conversation stays usable after a recovered turn", 
 
       // Follow-up turn on the same conversation, carrying the recovered turn forward.
       const before = attemptCalls;
-      const followUp = await post(id, [...longHistory(), { id: "a-recovered", role: "assistant", parts: [{ type: "text", text: "recovered answer", state: "done" }] }, { id: "live2", role: "user", parts: [{ type: "text", text: "a follow-up question" }] }]);
+      const followUp = await post(id, [
+        ...longHistory(),
+        {
+          id: "a-recovered",
+          role: "assistant",
+          parts: [{ type: "text", text: "recovered answer", state: "done" }],
+        },
+        { id: "live2", role: "user", parts: [{ type: "text", text: "a follow-up question" }] },
+      ]);
       report("SCENARIO_D_FOLLOWUP");
 
       // It succeeded, and cost exactly one further attempt — no recovery on the follow-up.

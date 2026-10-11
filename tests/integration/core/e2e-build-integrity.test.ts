@@ -25,7 +25,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   assessWebBuild,
   buildStampPath,
@@ -144,7 +143,10 @@ describe("web build provenance — the hash identifies the source, not the direc
   it("ignores build-irrelevant noise such as node_modules and test-results", () => {
     const root = makeFakeWebRoot();
     const before = hashWebSource(root);
-    fs.writeFileSync(path.join(root, "node_modules", "left-pad", "index.js"), "module.exports=2;\n");
+    fs.writeFileSync(
+      path.join(root, "node_modules", "left-pad", "index.js"),
+      "module.exports=2;\n",
+    );
     fs.writeFileSync(path.join(root, "test-results", "log.txt"), "more noise\n");
     fs.writeFileSync(path.join(root, "dist", "old-bundle.js"), "// rebuilt\n");
     expect(hashWebSource(root)).toBe(before);
@@ -257,7 +259,10 @@ describe("buildWebAndStamp — a failed build can never leave a trusted artifact
     // Drive the orchestration against the REAL dist/web, but with a build
     // function that does no work, so the assertion is about the stamping
     // protocol rather than about vite.
-    const ok = buildWebAndStamp(() => 0, () => undefined);
+    const ok = buildWebAndStamp(
+      () => 0,
+      () => undefined,
+    );
     expect(ok).toBe(true);
     expect(readBuildStamp(WEB_DIST)).not.toBeNull();
     expect(assessWebBuild(WEB_ROOT, WEB_DIST).status).toBe("current");
@@ -268,7 +273,10 @@ describe("buildWebAndStamp — a failed build can never leave a trusted artifact
     const stampBefore = readBuildStamp(WEB_DIST);
     expect(stampBefore).not.toBeNull(); // precondition: a trusted artifact exists
 
-    const ok = buildWebAndStamp(() => 1, () => undefined);
+    const ok = buildWebAndStamp(
+      () => 1,
+      () => undefined,
+    );
     expect(ok).toBe(false);
     // The old bundle is still physically present — that is exactly why existence
     // checking was never enough — but it is no longer trusted.
@@ -279,16 +287,22 @@ describe("buildWebAndStamp — a failed build can never leave a trusted artifact
 
   it("a build that THROWS is treated as failure, not as success", async () => {
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
-    const ok = buildWebAndStamp(() => {
-      throw new Error("tsc exited with diagnostics");
-    }, () => undefined);
+    const ok = buildWebAndStamp(
+      () => {
+        throw new Error("tsc exited with diagnostics");
+      },
+      () => undefined,
+    );
     expect(ok).toBe(false);
     expect(readBuildStamp(WEB_DIST)).toBeNull();
   });
 
   it("restores a truthful stamp so the real E2E suite remains runnable", async () => {
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
-    buildWebAndStamp(() => 0, () => undefined);
+    buildWebAndStamp(
+      () => 0,
+      () => undefined,
+    );
     expect(assessWebBuild(WEB_ROOT, WEB_DIST).status).toBe("current");
   });
 });

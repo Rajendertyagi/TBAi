@@ -93,7 +93,11 @@ function assistantText(totalChars: number): UIMessage[] {
 
 /** The live user turn. Always last, so the current turn is identifiable. */
 function question(): UIMessage {
-  return { id: "live", role: "user", parts: [{ type: "text", text: "THE CURRENT QUESTION" }] } as unknown as UIMessage;
+  return {
+    id: "live",
+    role: "user",
+    parts: [{ type: "text", text: "THE CURRENT QUESTION" }],
+  } as unknown as UIMessage;
 }
 
 /** One assistant turn with a single oversized tool result (a string output, as `reduce.ts` requires). */
@@ -115,7 +119,11 @@ function toolTurn(toolChars: number): UIMessage {
   } as unknown as UIMessage;
 }
 
-async function assemble(messages: UIMessage[], provider: ProviderConfig, compaction?: CompactionSeam) {
+async function assemble(
+  messages: UIMessage[],
+  provider: ProviderConfig,
+  compaction?: CompactionSeam,
+) {
   return assembleContext({
     conversationId: "fa-regression",
     submittedMessages: messages,
@@ -176,7 +184,10 @@ describe("F-A: the reduction-state matrix, through the real seam", () => {
   it("ACCEPTS once tool-result reduction has brought the request inside the budget", async () => {
     // The reduction genuinely runs: a 300 000-char result is truncated to the cap.
     const usable = usableBudget(LARGE_WINDOW);
-    const result = await assemble([...assistantText(2_000), toolTurn(300_000), question()], LARGE_WINDOW);
+    const result = await assemble(
+      [...assistantText(2_000), toolTurn(300_000), question()],
+      LARGE_WINDOW,
+    );
     const { estimate, decision, reduction } = result.context.provenance;
 
     expect(reduction?.reducedParts).toBeGreaterThan(0);
@@ -189,7 +200,10 @@ describe("F-A: the reduction-state matrix, through the real seam", () => {
     // Reduction succeeded and was not enough. Nothing safe is left to try, so the
     // request must not be sent hoping the provider's count lands lower.
     const usable = usableBudget(LARGE_WINDOW);
-    const result = await assemble([...assistantText(300_000), toolTurn(300_000), question()], LARGE_WINDOW);
+    const result = await assemble(
+      [...assistantText(300_000), toolTurn(300_000), question()],
+      LARGE_WINDOW,
+    );
     const { estimate, decision, reduction } = result.context.provenance;
 
     expect(reduction?.reducedParts).toBeGreaterThan(0);
@@ -206,7 +220,9 @@ describe("F-A: the reduction-state matrix, through the real seam", () => {
   it("REJECTS when every applicable mechanism is exhausted (Case C)", async () => {
     // Over at BOTH ends of the band: a certain over-limit, not a judgement call.
     const result = await assemble([...assistantText(120_000), question()], SMALL_WINDOW);
-    expect(result.context.provenance.estimate.range.low).toBeGreaterThan(usableBudget(SMALL_WINDOW));
+    expect(result.context.provenance.estimate.range.low).toBeGreaterThan(
+      usableBudget(SMALL_WINDOW),
+    );
 
     const decision = result.context.provenance.decision;
     expect(decision.action).toBe("reject");
@@ -270,7 +286,11 @@ describe("F-A: the compaction error is contained AND recorded", () => {
 
   it("logs compaction_error with an error type instead of discarding it", async () => {
     const since = logger.getRecentEntries().at(-1)?.seq ?? 0;
-    const result = await assemble([...assistantText(6_000), question()], SMALL_WINDOW, failingLatchSeam());
+    const result = await assemble(
+      [...assistantText(6_000), question()],
+      SMALL_WINDOW,
+      failingLatchSeam(),
+    );
     const entries = logger.getRecentEntries(since).filter((e) => e.event === "compaction_error");
 
     // Under a bare `catch {}` this entry could not exist at all.
@@ -311,7 +331,10 @@ describe("F-A: the compaction error is contained AND recorded", () => {
     const result = await assemble([...assistantText(80_000), question()], SMALL_WINDOW, seam);
     expect(result.context.provenance.compaction?.reason).toMatch(/^summarize_failed:/);
     // Failed after being offered is Case D: sent, and the withhold is visible.
-    expect(result.context.provenance.decision.reduction.compaction).toEqual({ kind: "withheld", reason: "failed" });
+    expect(result.context.provenance.decision.reduction.compaction).toEqual({
+      kind: "withheld",
+      reason: "failed",
+    });
     expect(result.diagnostics.reductionWithheld).toBe(true);
   });
 });
@@ -455,15 +478,35 @@ describe("no dead verdicts remain", () => {
 
     const verdicts = [
       // Branch 1: fits at the pessimistic end.
-      decideBudget({ estimate: banded(usable - 1, usable - 2, usable - 1), budget, reduction: exhausted, limitSource: "provider_reported" }),
+      decideBudget({
+        estimate: banded(usable - 1, usable - 2, usable - 1),
+        budget,
+        reduction: exhausted,
+        limitSource: "provider_reported",
+      }),
       // Branch 2: the band straddles and the point estimate FITS. This is the
       // branch the old `"reduce"` verdict came from, so it must be pinned here —
       // otherwise a reintroduced dead verdict hides behind branch 1.
-      decideBudget({ estimate: banded(usable - 10, usable - 100, usable + 5_000), budget, reduction: exhausted, limitSource: "provider_reported" }),
+      decideBudget({
+        estimate: banded(usable - 10, usable - 100, usable + 5_000),
+        budget,
+        reduction: exhausted,
+        limitSource: "provider_reported",
+      }),
       // Branch 3: the band straddles and the point estimate is OVER.
-      decideBudget({ estimate: banded(usable + 1, usable, usable + 9), budget, reduction: exhausted, limitSource: "provider_reported" }),
+      decideBudget({
+        estimate: banded(usable + 1, usable, usable + 9),
+        budget,
+        reduction: exhausted,
+        limitSource: "provider_reported",
+      }),
       // Branch 4: over at both ends.
-      decideBudget({ estimate: banded(usable + 50_000, usable + 40_000, usable + 60_000), budget, reduction: exhausted, limitSource: "provider_reported" }),
+      decideBudget({
+        estimate: banded(usable + 50_000, usable + 40_000, usable + 60_000),
+        budget,
+        reduction: exhausted,
+        limitSource: "provider_reported",
+      }),
     ];
 
     // Compile-time exhaustiveness is the strongest form of this assertion; this is

@@ -183,12 +183,7 @@ export interface LimitCandidateRecord {
    * `not_compared` when fewer than two candidates were valid, which is the
    * only state in which "agreed" and "conflicted" cannot be claims.
    */
-  readonly outcome:
-    | "not_compared"
-    | "agreed"
-    | "conflicted"
-    | "lost_precedence"
-    | "rejected";
+  readonly outcome: "not_compared" | "agreed" | "conflicted" | "lost_precedence" | "rejected";
 }
 
 export interface ContextLimit {
@@ -697,7 +692,7 @@ export interface CompactionPhaseInput {
   readonly conversationId: string | undefined;
   readonly messages: UIMessage[];
   readonly seam: CompactionSeam | undefined;
-/**
+  /**
    * Compact on request even when usage is under the trigger.
    *
    * Set only by an explicit user action (the Direct `/compact` command). It removes

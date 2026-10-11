@@ -193,9 +193,7 @@ export async function windowIsMaximized(): Promise<boolean> {
 }
 
 /** Subscribe to window-resize events; resolves to the unlisten function. */
-export async function onWindowResized(
-  handler: () => void,
-): Promise<() => void> {
+export async function onWindowResized(handler: () => void): Promise<() => void> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   return getCurrentWindow().onResized(handler);
 }

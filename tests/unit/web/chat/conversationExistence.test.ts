@@ -18,10 +18,7 @@ import {
   reconcileConversations,
   type ConversationRow,
 } from "@web/features/chat/state/conversationExistence.ts";
-import {
-  setClientTransportEnabled,
-  setLogLevel,
-} from "@web/lib/logger.ts";
+import { setClientTransportEnabled, setLogLevel } from "@web/lib/logger.ts";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 
 const realFetch = globalThis.fetch;
@@ -81,7 +78,7 @@ function throwsFetch(err: Error): void {
   }) as unknown as typeof fetch;
 }
 
-describe("classifyExistence — only 404 is ever \"gone\"", () => {
+describe('classifyExistence — only 404 is ever "gone"', () => {
   it("maps 2xx to exists", () => {
     for (const status of [200, 201, 202, 204]) {
       expect(classifyExistence(status)).toBe("exists");
@@ -147,7 +144,8 @@ describe("probeConversation — one request, verdict plus row data", () => {
   });
 
   it("returns gone on 404, with no data", async () => {
-    globalThis.fetch = (async () => res(404, { error: "Conversation not found" })) as unknown as typeof fetch;
+    globalThis.fetch = (async () =>
+      res(404, { error: "Conversation not found" })) as unknown as typeof fetch;
     const probe = await probeConversation("dead");
     expect(probe).toEqual({ status: "gone", data: null });
   });
@@ -210,7 +208,12 @@ describe("reconcileConversations — fail-safe batch", () => {
   }
 
   it("maps a complete response per id", async () => {
-    install(() => results([["a", "exists"], ["b", "gone"]]));
+    install(() =>
+      results([
+        ["a", "exists"],
+        ["b", "gone"],
+      ]),
+    );
     const verdicts = await reconcileConversations(["a", "b"]);
     expect(verdicts.get("a")).toBe("exists");
     expect(verdicts.get("b")).toBe("gone");
@@ -273,7 +276,12 @@ describe("reconcileConversations — fail-safe batch", () => {
   });
 
   it("ignores ids the client never asked about", async () => {
-    install(() => results([["a", "exists"], ["stranger", "gone"]]));
+    install(() =>
+      results([
+        ["a", "exists"],
+        ["stranger", "gone"],
+      ]),
+    );
     const verdicts = await reconcileConversations(["a"]);
     expect(verdicts.size).toBe(1);
     expect(verdicts.has("stranger")).toBe(false);
@@ -283,14 +291,22 @@ describe("reconcileConversations — fail-safe batch", () => {
 
   it("keeps the FIRST verdict for a duplicated response entry", async () => {
     install(() =>
-      results([["a", "exists"], ["a", "gone"]]),
+      results([
+        ["a", "exists"],
+        ["a", "gone"],
+      ]),
     );
     expect((await reconcileConversations(["a"])).get("a")).toBe("exists");
   });
 
   it("ignores an entry with an unrecognized status value", async () => {
     install(() =>
-      res(200, { results: [{ id: "a", status: "weird" }, { id: "b", status: "gone" }] }),
+      res(200, {
+        results: [
+          { id: "a", status: "weird" },
+          { id: "b", status: "gone" },
+        ],
+      }),
     );
     // "a" has no usable verdict, so the pass is incomplete -> everything unknown.
     const verdicts = await reconcileConversations(["a", "b"]);
@@ -409,9 +425,7 @@ describe("consumer adoption — no lossy conversation reads remain", () => {
 
 describe("wiring — the pass is registered and retried", () => {
   it("the shell registers the boot pass", async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/app/layout/AppShell.tsx"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/app/layout/AppShell.tsx")).text();
     expect(source).toContain("registerTabReconciliation");
   });
 

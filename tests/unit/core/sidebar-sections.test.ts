@@ -15,10 +15,7 @@
  * ever surface as a module-load SyntaxError at run time.
  */
 import { describe, it, expect } from "bun:test";
-import {
-  moveSectionInOrder,
-  normalizeSectionOrder,
-} from "@web/lib/sidebar-sections";
+import { moveSectionInOrder, normalizeSectionOrder } from "@web/lib/sidebar-sections";
 
 describe("normalizeSectionOrder", () => {
   it("passes a full permutation through", () => {
@@ -32,27 +29,17 @@ describe("normalizeSectionOrder", () => {
   });
 
   it("drops unknowns and repeats, appends missing in default order", () => {
-    expect(
-      normalizeSectionOrder(["recent", "nope", "recent", "chats"]),
-    ).toEqual(["recent", "chats", "folders"]);
+    expect(normalizeSectionOrder(["recent", "nope", "recent", "chats"])).toEqual([
+      "recent",
+      "chats",
+      "folders",
+    ]);
   });
 
   it("falls back to default for absent or corrupt values", () => {
-    expect(normalizeSectionOrder(undefined)).toEqual([
-      "folders",
-      "chats",
-      "recent",
-    ]);
-    expect(normalizeSectionOrder("chats-first")).toEqual([
-      "folders",
-      "chats",
-      "recent",
-    ]);
-    expect(normalizeSectionOrder(null)).toEqual([
-      "folders",
-      "chats",
-      "recent",
-    ]);
+    expect(normalizeSectionOrder(undefined)).toEqual(["folders", "chats", "recent"]);
+    expect(normalizeSectionOrder("chats-first")).toEqual(["folders", "chats", "recent"]);
+    expect(normalizeSectionOrder(null)).toEqual(["folders", "chats", "recent"]);
   });
 });
 
@@ -60,17 +47,9 @@ describe("moveSectionInOrder", () => {
   const order = ["folders", "chats", "recent"] as const;
 
   it("moves down and up", () => {
-    expect(moveSectionInOrder(order, "chats", 1)).toEqual([
-      "folders",
-      "recent",
-      "chats",
-    ]);
+    expect(moveSectionInOrder(order, "chats", 1)).toEqual(["folders", "recent", "chats"]);
     // `recent` (index 2) moved up two slots lands at index 0.
-    expect(moveSectionInOrder(order, "recent", -2)).toEqual([
-      "recent",
-      "folders",
-      "chats",
-    ]);
+    expect(moveSectionInOrder(order, "recent", -2)).toEqual(["recent", "folders", "chats"]);
   });
 
   it("returns the same reference for clamped or unknown moves", () => {
@@ -80,8 +59,6 @@ describe("moveSectionInOrder", () => {
     expect(moveSectionInOrder(order, "folders", -1)).toBe(order);
     expect(moveSectionInOrder(order, "recent", 1)).toBe(order);
     expect(moveSectionInOrder(order, "chats", 0)).toBe(order);
-    expect(
-      moveSectionInOrder(order, "unknown" as never, 1),
-    ).toBe(order);
+    expect(moveSectionInOrder(order, "unknown" as never, 1)).toBe(order);
   });
 });

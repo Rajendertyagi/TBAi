@@ -1,11 +1,5 @@
-import type {
-  AppendMessage,
-  ThreadMessageLike,
-} from "@assistant-ui/react";
-import type {
-  SessionMessageUser,
-  SessionPromptInput,
-} from "@opencode/client";
+import type { AppendMessage, ThreadMessageLike } from "@assistant-ui/react";
+import type { SessionMessageUser, SessionPromptInput } from "@opencode/client";
 import {
   deriveV2ToolCallId,
   projectV2Permission,
@@ -51,7 +45,13 @@ export interface V2PromptPayload {
   readonly skills: NonNullable<SessionPromptInput["skills"]>;
 }
 
-type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
 type JsonObject = Readonly<Record<string, JsonValue>>;
 
 function isJsonValue(value: unknown): value is JsonValue {
@@ -106,10 +106,12 @@ function filesFromAppendMessage(message: AppendMessage): V2PromptPayload["files"
   if (typeof message.content === "string") return [];
   return message.content.flatMap((part) => {
     if (part.type === "file") {
-      return [{
-        uri: fileUri(part.data, part.mimeType),
-        ...(part.filename ? { name: part.filename } : {}),
-      }];
+      return [
+        {
+          uri: fileUri(part.data, part.mimeType),
+          ...(part.filename ? { name: part.filename } : {}),
+        },
+      ];
     }
     if (part.type === "image") {
       if (!part.image.startsWith("data:") && !part.image.startsWith("file:")) {
@@ -159,23 +161,34 @@ function partToAssistantContent(
   message: V2MessageState,
   permissions: readonly V2PermissionView[],
 ): AssistantContent {
-  if (part.kind === "text") return { type: "text", text: part.value, status: { type: part.status === "streaming" ? "running" : "complete" } };
-  if (part.kind === "reasoning") return { type: "reasoning", text: part.value, status: { type: part.status === "streaming" ? "running" : "complete" } };
+  if (part.kind === "text")
+    return {
+      type: "text",
+      text: part.value,
+      status: { type: part.status === "streaming" ? "running" : "complete" },
+    };
+  if (part.kind === "reasoning")
+    return {
+      type: "reasoning",
+      text: part.value,
+      status: { type: part.status === "streaming" ? "running" : "complete" },
+    };
   if (part.kind === "step") return { type: "text", text: "", status: { type: "complete" } };
-  if (part.kind === "retry") return { type: "text", text: part.value, status: { type: "complete" } };
+  if (part.kind === "retry")
+    return { type: "text", text: part.value, status: { type: "complete" } };
   const sourceContent = message.source?.type === "assistant" ? message.source.content : [];
   const sourceTool = sourceContent.find(
     (content) => content.type === "tool" && `tool:${message.id}:${content.id}` === part.id,
   );
   const toolPartPrefix = `tool:${message.id}:`;
-  const officialToolId = sourceTool?.type === "tool"
-    ? sourceTool.id
-    : part.id.startsWith(toolPartPrefix)
-      ? part.id.slice(toolPartPrefix.length)
-      : undefined;
-  const toolCallId = officialToolId === undefined
-    ? part.id
-    : deriveV2ToolCallId(message.id, officialToolId);
+  const officialToolId =
+    sourceTool?.type === "tool"
+      ? sourceTool.id
+      : part.id.startsWith(toolPartPrefix)
+        ? part.id.slice(toolPartPrefix.length)
+        : undefined;
+  const toolCallId =
+    officialToolId === undefined ? part.id : deriveV2ToolCallId(message.id, officialToolId);
   const permission = permissions.find((candidate) => candidate.toolCallId === toolCallId);
   const timeline = timelineArtifactFor(part);
   return {
@@ -230,23 +243,22 @@ function openCodePartsForMessage(message: V2MessageState): readonly unknown[] {
     if (part.kind !== "tool") return [];
     const prefix = `tool:${message.id}:`;
     const id = part.id.startsWith(prefix) ? part.id.slice(prefix.length) : part.id;
-    const status = part.status === "complete"
-      ? "completed"
-      : part.status === "error"
-        ? "error"
-        : "running";
+    const status =
+      part.status === "complete" ? "completed" : part.status === "error" ? "error" : "running";
     const content = Array.isArray(part.output) ? part.output : [];
-    return [{
-      type: "tool",
-      id,
-      name: part.name,
-      state: {
-        status,
-        input: part.input,
-        ...(content.length > 0 ? { content } : {}),
-        ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+    return [
+      {
+        type: "tool",
+        id,
+        name: part.name,
+        state: {
+          status,
+          input: part.input,
+          ...(content.length > 0 ? { content } : {}),
+          ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+        },
       },
-    }];
+    ];
   });
 }
 
@@ -313,9 +325,7 @@ export function pendingPatchMap(
 }
 
 /** Projects the current state into branchable assistant-ui repository items. */
-export function projectV2RepositoryItems(
-  state: V2ThreadState,
-): readonly V2BranchableMessageItem[] {
+export function projectV2RepositoryItems(state: V2ThreadState): readonly V2BranchableMessageItem[] {
   const permissions: readonly V2PermissionView[] = state.permissions
     .map(projectV2Permission)
     .filter((permission): permission is V2PermissionView => permission !== null);
@@ -333,8 +343,6 @@ export function projectV2RepositoryItems(
 }
 
 /** Returns the explicit assistant-ui repository head id. */
-export function repositoryHeadId(
-  items: readonly V2BranchableMessageItem[],
-): string | null {
+export function repositoryHeadId(items: readonly V2BranchableMessageItem[]): string | null {
   return items.at(-1)?.message.id ?? null;
 }

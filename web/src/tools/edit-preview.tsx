@@ -82,13 +82,7 @@ export function previewFiles(preview: EditPreview | null): readonly CodeDiffFile
  * The Find/Replace pair. Kept as the fallback, and exported so the fallback is
  * testable on its own rather than only as the absence of a diff.
  */
-export function EditFindReplaceBody({
-  oldText,
-  newText,
-}: {
-  oldText: unknown;
-  newText: unknown;
-}) {
+export function EditFindReplaceBody({ oldText, newText }: { oldText: unknown; newText: unknown }) {
   const cap = toolsConfig.limits.toolArgEditPreviewMaxChars;
   return (
     <div className="space-y-1 text-xs">
@@ -152,13 +146,7 @@ function renderPreview(
  * arrives, so the card is never empty while the request is in flight. The swap is
  * a replacement rather than an addition, so the card does not grow twice.
  */
-export function EditPreviewBody({
-  args,
-  fallbackName,
-}: {
-  args: AnyArgs;
-  fallbackName: string;
-}) {
+export function EditPreviewBody({ args, fallbackName }: { args: AnyArgs; fallbackName: string }) {
   const [preview, setPreview] = useState<EditPreview | null>(null);
   const path = typeof args.path === "string" ? args.path : "";
   const oldText = typeof args.oldText === "string" ? args.oldText : "";

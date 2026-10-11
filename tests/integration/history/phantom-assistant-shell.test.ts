@@ -29,7 +29,13 @@ const FORMAT = "ai-sdk/v6";
 const SHELL_CONTENT = {
   metadata: { custom: { providerId: "p1", modelId: "m1" } },
   role: "assistant",
-  parts: [{ type: "data-tbai-progress", id: "progress", data: { kind: "tbai-progress", version: 1, stages: [] } }],
+  parts: [
+    {
+      type: "data-tbai-progress",
+      id: "progress",
+      data: { kind: "tbai-progress", version: 1, stages: [] },
+    },
+  ],
 };
 
 const TEXT_CONTENT = {
@@ -37,20 +43,26 @@ const TEXT_CONTENT = {
   role: "assistant",
   parts: [
     { type: "step-start" },
-    { type: "data-tbai-progress", id: "progress", data: { kind: "tbai-progress", version: 1, stages: [] } },
+    {
+      type: "data-tbai-progress",
+      id: "progress",
+      data: { kind: "tbai-progress", version: 1, stages: [] },
+    },
     { type: "text", text: "the real answer", state: "done" },
   ],
 };
 
 async function conversation(title: string): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title,
-    providerId: "p1",
-    modelId: "m1",
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title,
+      providerId: "p1",
+      modelId: "m1",
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 
@@ -174,7 +186,11 @@ describe("phantom shell — real replies are never touched", () => {
       const partial = {
         role: "assistant",
         parts: [
-          { type: "data-tbai-progress", id: "progress", data: { kind: "tbai-progress", version: 1, stages: [] } },
+          {
+            type: "data-tbai-progress",
+            id: "progress",
+            data: { kind: "tbai-progress", version: 1, stages: [] },
+          },
           { type: "text", text: "I started to explain that", state: "streaming" },
         ],
       };

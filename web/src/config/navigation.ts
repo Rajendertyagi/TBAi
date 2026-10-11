@@ -1,4 +1,20 @@
-import { Archive, Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
+import {
+  Archive,
+  Circle,
+  Search,
+  Plug,
+  ScrollText,
+  Clock,
+  MessageSquare,
+  MessageSquareText,
+  Palette,
+  FolderCog,
+  Server,
+  Monitor,
+  Settings,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -252,9 +268,7 @@ export const appConfig: AppConfig = {
 
 /** Nav items that should actually render, sorted by `order`. */
 export function getVisibleNav(): NavItem[] {
-  return appConfig.nav
-    .filter((item) => item.visible)
-    .sort((a, b) => a.order - b.order);
+  return appConfig.nav.filter((item) => item.visible).sort((a, b) => a.order - b.order);
 }
 
 /** Rail icons: visible items not opted out (settings areas live behind the single gear). */

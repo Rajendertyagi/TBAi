@@ -15,15 +15,7 @@ async function seedActiveProvider(model: string, thinking: string | null, active
     `INSERT OR REPLACE INTO provider_configs
        (id, name, type, encrypted_api_key, credential_version, endpoint, model, models, thinking, is_active, created_at, updated_at)
      VALUES (?, ?, 'ollama', NULL, NULL, NULL, ?, '[]', ?, ?, ?, ?)`,
-    [
-      id,
-      `seed-${id}`,
-      model,
-      thinking,
-      active ? 1 : 0,
-      Date.now(),
-      Date.now(),
-    ],
+    [id, `seed-${id}`, model, thinking, active ? 1 : 0, Date.now(), Date.now()],
   );
   await registry.loadFromDb(db);
   return id;
@@ -31,13 +23,15 @@ async function seedActiveProvider(model: string, thinking: string | null, active
 
 describe("conversation config persistence", () => {
   it("create persists explicit modelId + reasoningLevel and round-trips them", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "cfg-test",
-      providerId: "p1",
-      modelId: "model-x",
-      reasoningLevel: "high",
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "cfg-test",
+        providerId: "p1",
+        modelId: "model-x",
+        reasoningLevel: "high",
+        systemPrompt: null,
+      }),
+    );
     expect(created.modelId).toBe("model-x");
     expect(created.reasoningLevel).toBe("high");
 
@@ -49,13 +43,15 @@ describe("conversation config persistence", () => {
   });
 
   it("update patches modelId + reasoningLevel without clobbering other fields", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "cfg-update",
-      providerId: "p1",
-      modelId: "model-a",
-      reasoningLevel: "off",
-      systemPrompt: "sys",
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "cfg-update",
+        providerId: "p1",
+        modelId: "model-a",
+        reasoningLevel: "off",
+        systemPrompt: "sys",
+      }),
+    );
 
     const updated = await conversationService.update(created.id, {
       modelId: "model-b",
@@ -80,13 +76,15 @@ describe("conversation config persistence", () => {
     const active = registry.getActive();
     expect(active?.id).toBe(providerId);
 
-    const created = await conversationService.create(conversationInput({
-      title: "cfg-defaults",
-      providerId,
-      modelId: active?.model ?? null,
-      reasoningLevel: active?.thinking ?? "off",
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "cfg-defaults",
+        providerId,
+        modelId: active?.model ?? null,
+        reasoningLevel: active?.thinking ?? "off",
+        systemPrompt: null,
+      }),
+    );
     expect(created.modelId).toBe("default-model");
     expect(created.reasoningLevel).toBe("low");
     expect(created.providerId).toBe(providerId);
@@ -94,13 +92,15 @@ describe("conversation config persistence", () => {
     // And the omitted-field path: when the route leaves a field undefined the
     // service stores NULL — proving the service is a faithful store and that
     // defaulting is a caller (route) concern, not a hidden behavior here.
-    const omitted = await conversationService.create(conversationInput({
-      title: "cfg-omitted",
-      providerId,
-      modelId: undefined,
-      reasoningLevel: undefined,
-      systemPrompt: null,
-    }));
+    const omitted = await conversationService.create(
+      conversationInput({
+        title: "cfg-omitted",
+        providerId,
+        modelId: undefined,
+        reasoningLevel: undefined,
+        systemPrompt: null,
+      }),
+    );
     expect(omitted.modelId).toBeNull();
     expect(omitted.reasoningLevel).toBeNull();
 

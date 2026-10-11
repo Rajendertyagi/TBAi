@@ -35,10 +35,7 @@ import { describe, expect, it, beforeAll } from "bun:test";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  buildDividerPart,
-  type DirectCompactStatus,
-} from "@web/features/chat/compactCommand.ts";
+import { buildDividerPart, type DirectCompactStatus } from "@web/features/chat/compactCommand.ts";
 import { composerConfig } from "@web/config/composer.ts";
 
 const sources: Record<string, string> = {};
@@ -77,7 +74,8 @@ function composerCompactCommand(): string {
   return sources.composer.slice(start, end);
 }
 
-describe("the client's role in manual compaction persistence", () => {  it("appends the divider in memory and starts no run", () => {
+describe("the client's role in manual compaction persistence", () => {
+  it("appends the divider in memory and starts no run", () => {
     const body = composerCompactCommand();
     // `startRun: false` is what keeps a compaction from becoming a chat run: no
     // provider call, no assistant reply, no conversational artefact.
@@ -99,7 +97,7 @@ describe("the client's role in manual compaction persistence", () => {  it("appe
   it("clears the composer only after the status arrives", () => {
     const body = composerCompactCommand();
     const append = body.indexOf("aui.thread().append(");
-    const clear = body.indexOf("setText(\"\")");
+    const clear = body.indexOf('setText("")');
     // Ordering is the invariant: nothing is consumed, and nothing is shown, until the
     // server has actually said what it did. A transport failure must leave the text
     // in the box so a retry is possible.

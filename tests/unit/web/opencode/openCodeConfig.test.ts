@@ -141,9 +141,7 @@ describe("fetchOpenCodeConfig", () => {
           headers: { "Content-Type": "application/json" },
         })) as unknown as typeof fetch,
       async () => {
-        await expect(fetchOpenCodeConfig()).rejects.toThrow(
-          /no configuration document/,
-        );
+        await expect(fetchOpenCodeConfig()).rejects.toThrow(/no configuration document/);
       },
     );
   });
@@ -251,9 +249,7 @@ describe("addOpenCodePermissionRule", () => {
           { status: 422, headers: { "Content-Type": "application/json" } },
         )) as unknown as typeof fetch,
       async () => {
-        await expect(addOpenCodePermissionRule(QUESTION_RULE)).rejects.toThrow(
-          /already exists/,
-        );
+        await expect(addOpenCodePermissionRule(QUESTION_RULE)).rejects.toThrow(/already exists/);
       },
     );
   });

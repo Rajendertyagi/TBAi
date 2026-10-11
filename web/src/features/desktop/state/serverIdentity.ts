@@ -42,9 +42,7 @@ export function useServerIdentity(poll = true): {
     } catch (err: unknown) {
       setReachable(false);
       setCheckedAt(Date.now());
-      setLoadError(
-        err instanceof Error ? err.message : "Could not read server state.",
-      );
+      setLoadError(err instanceof Error ? err.message : "Could not read server state.");
     }
   }, []);
 

@@ -49,14 +49,11 @@ async function createStdioFixture(name: string): Promise<string> {
  */
 async function startPendingElicitation(
   id: string,
-  toolCallId: string
+  toolCallId: string,
 ): Promise<{ elicitationId: string; pending: Promise<unknown> }> {
   const tools = mcpManager.getAiTools();
-  const pending = tools[`mcp__${id}__ask_user`].execute(
-    {},
-    { toolCallId, messages: [] }
-  );
-  let info;
+  const pending = tools[`mcp__${id}__ask_user`].execute({}, { toolCallId, messages: [] });
+  let info: ReturnType<typeof mcpManager.getPendingElicitation>;
   for (let i = 0; i < 100; i++) {
     info = mcpManager.getPendingElicitation();
     if (info?.serverId === id) break;
@@ -85,9 +82,7 @@ describe("MCP elicitation settlement (Phase 4)", () => {
       const drained = pending.catch(() => {});
       await mcpManager.disconnect(id);
       expect(mcpManager.getPendingElicitation()).toBeUndefined();
-      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe(
-        "disconnected"
-      );
+      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe("disconnected");
       // The tool-level promise settled (not hung): awaited with a bounded
       // race so a regression (transport close without elicitation cancel)
       // surfaces as a failure instead of a hang.
@@ -121,9 +116,7 @@ describe("MCP elicitation settlement (Phase 4)", () => {
       // no double settlement (cancelPendingElicitation is a no-op here).
       await mcpManager.disconnect(id);
       expect(mcpManager.getPendingElicitation()).toBeUndefined();
-      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe(
-        "disconnected"
-      );
+      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe("disconnected");
     } finally {
       await mcpManager.disconnect(id);
     }
@@ -143,9 +136,7 @@ describe("MCP elicitation settlement (Phase 4)", () => {
       await mcpManager.disconnect(id);
       await mcpManager.disconnectAll();
       expect(mcpManager.getPendingElicitation()).toBeUndefined();
-      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe(
-        "disconnected"
-      );
+      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe("disconnected");
       // The cancellation path settled the tool promise: no hang.
       await drained;
       // The cancellation path settles with { action: "cancel" } semantics:

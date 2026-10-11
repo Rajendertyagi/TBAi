@@ -29,18 +29,16 @@ const PATCH = `--- a/src/hello.ts
 /** Renders a patch the way the app does: parse, then one `CodeDiff` per file. */
 const renderPatch = (patch: string) =>
   renderToStaticMarkup(
-    <>
-      {patchToCodeDiffs(patch).map((file, index) => (
-        <CodeDiff
-          key={`${index}-${file.filename}`}
-          filename={file.filename}
-          additions={file.additions}
-          deletions={file.deletions}
-          lines={file.lines}
-          cycle={0}
-        />
-      ))}
-    </>,
+    patchToCodeDiffs(patch).map((file) => (
+      <CodeDiff
+        key={file.filename}
+        filename={file.filename}
+        additions={file.additions}
+        deletions={file.deletions}
+        lines={file.lines}
+        cycle={0}
+      />
+    )),
   );
 
 describe("CodeDiff (official element, SSR)", () => {

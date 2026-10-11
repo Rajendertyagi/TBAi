@@ -35,7 +35,9 @@ export async function writeClipboardText(text: string): Promise<ClipboardWrite> 
   // The async Clipboard API is absent entirely in an insecure context and in
   // browsers that never shipped it; `writeText` rejects when permission is
   // denied. Both are checked, and neither is swallowed.
-  const clipboard = (globalThis as { navigator?: { clipboard?: { writeText?: (t: string) => Promise<void> } } }).navigator?.clipboard;
+  const clipboard = (
+    globalThis as { navigator?: { clipboard?: { writeText?: (t: string) => Promise<void> } } }
+  ).navigator?.clipboard;
   if (typeof clipboard?.writeText !== "function") return "unavailable";
   try {
     await clipboard.writeText(text);

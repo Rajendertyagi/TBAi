@@ -51,9 +51,7 @@ function StatItem({
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-1.5 text-muted-foreground [&>svg]:size-3.5">
         {icon}
-        <span className="text-xs font-medium uppercase tracking-wide">
-          {label}
-        </span>
+        <span className="text-xs font-medium uppercase tracking-wide">{label}</span>
       </div>
       <div className="min-w-0 truncate text-sm">{children}</div>
     </div>
@@ -119,17 +117,13 @@ export function JobDetail({
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       {/* Header: name + status + actions */}
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="min-w-0 flex-1 truncate text-base font-semibold">
-          {job.name}
-        </h2>
+        <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{job.name}</h2>
         <JobStatusChip status={job.status} />
         {!job.enabled && (
           <span className="text-xs text-muted-foreground">({copy.disabledSuffix})</span>
         )}
       </div>
-      {job.description && (
-        <p className="-mt-2 text-sm text-muted-foreground">{job.description}</p>
-      )}
+      {job.description && <p className="-mt-2 text-sm text-muted-foreground">{job.description}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={onRunNow} disabled={running}>
           <Play aria-hidden="true" className="size-3.5" />
@@ -210,7 +204,7 @@ export function JobDetail({
           </Button>
         </div>
         {loadingRuns && runs.length === 0 ? (
-          <div className="space-y-2" aria-label="Loading runs">
+          <div className="space-y-2" role="status" aria-label="Loading runs">
             {[0, 1].map((i) => (
               <div key={i} className="h-10 rounded-md bg-muted animate-pulse" />
             ))}
@@ -242,11 +236,7 @@ export function JobDetail({
                       )}
                       title={manual ? copy.runManual : copy.runScheduled}
                     >
-                      {manual ? (
-                        <Play className="size-3" />
-                      ) : (
-                        <Clock className="size-3" />
-                      )}
+                      {manual ? <Play className="size-3" /> : <Clock className="size-3" />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate tabular-nums">
@@ -303,11 +293,7 @@ export function JobDetail({
                           </button>
                         )}
                         {run.status === "running" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => onCancelRun(run.id)}
-                          >
+                          <Button size="sm" variant="ghost" onClick={() => onCancelRun(run.id)}>
                             {copy.cancelRun}
                           </Button>
                         )}
@@ -325,15 +311,11 @@ export function JobDetail({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.deleteDescription(job.name)}
-            </AlertDialogDescription>
+            <AlertDialogDescription>{copy.deleteDescription(job.name)}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>
-            <AlertDialogAction onClick={onDelete}>
-              {copy.delete}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={onDelete}>{copy.delete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

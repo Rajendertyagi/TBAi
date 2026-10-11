@@ -1,8 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import {
-  conversationIdFromPath,
-  threadUrl,
-} from "@web/features/chat/state/chatTabs.ts";
+import { conversationIdFromPath, threadUrl } from "@web/features/chat/state/chatTabs.ts";
 
 /**
  * Unit tests for the pure `conversationIdFromPath` helper: the single home for

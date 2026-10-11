@@ -68,15 +68,13 @@ describe("deriveWriteBack — corrected invariant 21", () => {
         },
       ],
     };
-    const window = deriveWriteBack([
-      row("m1", null, [persisted("m1")]),
-      row("m2", "m1", [m2, m3]),
-    ]);
+    const window = deriveWriteBack([row("m1", null, [persisted("m1")]), row("m2", "m1", [m2, m3])]);
 
     // The approval lives on a persisted message the write-back actually carries,
     // so responding to it persists against m3 and not against the row id.
-    const approvalOwner = window.messages.find((m) =>
-      (m.message.parts[0] as { approval?: { id?: string } } | undefined)?.approval?.id === "ap-1",
+    const approvalOwner = window.messages.find(
+      (m) =>
+        (m.message.parts[0] as { approval?: { id?: string } } | undefined)?.approval?.id === "ap-1",
     );
     expect(approvalOwner?.id).toBe("m3");
     expect(approvalOwner?.message).toBe(m3);
@@ -106,7 +104,10 @@ describe("deriveWriteBack — corrected invariant 21", () => {
   it("fails closed on a duplicated persisted id", () => {
     let error: WriteBackAmbiguityError | null = null;
     try {
-      deriveWriteBack([row("m1", null, [persisted("m1")]), row("m2", "m1", [persisted("m2"), persisted("m2")])]);
+      deriveWriteBack([
+        row("m1", null, [persisted("m1")]),
+        row("m2", "m1", [persisted("m2"), persisted("m2")]),
+      ]);
     } catch (e) {
       error = e as WriteBackAmbiguityError;
     }
@@ -126,7 +127,10 @@ describe("deriveWriteBack — corrected invariant 21", () => {
   });
 
   it("fails closed on a bound value that is not a persisted message", () => {
-    const message = { id: "m2", role: "assistant", content: [] } as unknown as Record<string, unknown>;
+    const message = { id: "m2", role: "assistant", content: [] } as unknown as Record<
+      string,
+      unknown
+    >;
     bindExternalStoreMessage(message as never, { nope: true } as never);
 
     let error: WriteBackAmbiguityError | null = null;

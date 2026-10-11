@@ -17,7 +17,9 @@ function freshDb(): Database {
 
 function seed(
   db: Database,
-  rows: Array<Partial<ProviderConfig> & { id: string; type: ProviderConfig["type"]; model: string }>,
+  rows: Array<
+    Partial<ProviderConfig> & { id: string; type: ProviderConfig["type"]; model: string }
+  >,
 ) {
   const now = Date.now();
   for (const r of rows) {
@@ -50,13 +52,23 @@ describe("ProviderRegistry — apiProtocol mapping", () => {
   });
 
   it("maps an explicit api_protocol value through to the config", async () => {
-    seed(db, [{ id: "p1", type: "custom", model: "m", endpoint: "https://x/v1", apiProtocol: "chat-completions" }]);
+    seed(db, [
+      {
+        id: "p1",
+        type: "custom",
+        model: "m",
+        endpoint: "https://x/v1",
+        apiProtocol: "chat-completions",
+      },
+    ]);
     await registry.loadFromDb(db);
     expect(registry.get("p1")?.apiProtocol).toBe("chat-completions");
   });
 
   it("treats a NULL api_protocol as undefined (default applied later at model build)", async () => {
-    seed(db, [{ id: "p2", type: "custom", model: "m", endpoint: "https://x/v1", apiProtocol: undefined }]);
+    seed(db, [
+      { id: "p2", type: "custom", model: "m", endpoint: "https://x/v1", apiProtocol: undefined },
+    ]);
     await registry.loadFromDb(db);
     expect(registry.get("p2")?.apiProtocol).toBeUndefined();
   });
@@ -68,7 +80,15 @@ describe("ProviderRegistry — apiProtocol mapping", () => {
   });
 
   it("list() exposes apiProtocol but never the api key", async () => {
-    seed(db, [{ id: "p4", type: "ollama", model: "llama3", endpoint: "http://localhost:11434/v1", apiProtocol: "chat-completions" }]);
+    seed(db, [
+      {
+        id: "p4",
+        type: "ollama",
+        model: "llama3",
+        endpoint: "http://localhost:11434/v1",
+        apiProtocol: "chat-completions",
+      },
+    ]);
     await registry.loadFromDb(db);
     const listed = registry.list().find((p) => p.id === "p4");
     expect(listed?.apiProtocol).toBe("chat-completions");

@@ -24,27 +24,30 @@ function provider400(message: string): Error {
 
 describe("context overflow is its own category", () => {
   it("classifies Anthropic's wording", () => {
-    expect(classifyError(provider400("prompt is too long: 250000 tokens > 200000 maximum")).category).toBe(
-      "context_overflow",
-    );
+    expect(
+      classifyError(provider400("prompt is too long: 250000 tokens > 200000 maximum")).category,
+    ).toBe("context_overflow");
   });
 
   it("classifies OpenAI's wording", () => {
-    expect(classifyError(provider400("This model's maximum context length is 8192 tokens")).category).toBe(
-      "context_overflow",
-    );
+    expect(
+      classifyError(provider400("This model's maximum context length is 8192 tokens")).category,
+    ).toBe("context_overflow");
   });
 
   it("classifies the reduce-the-length advice", () => {
     expect(
-      classifyError(provider400("Please reduce the length of the messages to fit the context window")).category,
+      classifyError(
+        provider400("Please reduce the length of the messages to fit the context window"),
+      ).category,
     ).toBe("context_overflow");
   });
 
   it("classifies Google's wording", () => {
-    expect(classifyError(provider400("input length exceeds the maximum number of input tokens")).category).toBe(
-      "context_overflow",
-    );
+    expect(
+      classifyError(provider400("input length exceeds the maximum number of input tokens"))
+        .category,
+    ).toBe("context_overflow");
   });
 
   it("classifies even when the message carries no status", () => {
@@ -66,7 +69,9 @@ describe("overflow does not swallow neighbouring conditions", () => {
 
   it("still classifies a bare 401 as auth, even if the text mentions tokens", () => {
     // The 401 status is the authority; an overflow pattern must not win over it.
-    const err = new Error("Unauthorized: token count exceeds allowance") as Error & { statusCode?: number };
+    const err = new Error("Unauthorized: token count exceeds allowance") as Error & {
+      statusCode?: number;
+    };
     err.statusCode = 401;
     expect(classifyError(err).category).toBe("auth");
   });
@@ -79,7 +84,9 @@ describe("overflow does not swallow neighbouring conditions", () => {
 
   it("still classifies a quota error as a rate limit, not a size problem", () => {
     // "exceeded your current quota" and a token-limit message can co-occur.
-    const err = new Error("429 You exceeded your current quota, please check your plan and token usage") as Error & {
+    const err = new Error(
+      "429 You exceeded your current quota, please check your plan and token usage",
+    ) as Error & {
       statusCode?: number;
     };
     err.statusCode = 429;

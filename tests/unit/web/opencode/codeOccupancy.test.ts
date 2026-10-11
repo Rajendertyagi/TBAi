@@ -21,10 +21,7 @@ const tokens = (input: number, output = 0, read = 0) => ({
 const assistant = (id: string, value: ReturnType<typeof tokens>): SessionMessageInfo =>
   ({ type: "assistant", id, time: { created: 1 }, tokens: value }) as unknown as SessionMessageInfo;
 
-const compaction = (
-  id: string,
-  status: "running" | "completed" | "failed",
-): SessionMessageInfo =>
+const compaction = (id: string, status: "running" | "completed" | "failed"): SessionMessageInfo =>
   ({
     type: "compaction",
     id,
@@ -66,10 +63,7 @@ describe("resolveCodeOccupancy: the ledger is never the answer", () => {
 
   it("skips a malformed payload rather than trusting it", () => {
     const broken = { type: "assistant", id: "m1", time: { created: 1 }, tokens: { input: 1 } };
-    const messages = [
-      broken as unknown as SessionMessageInfo,
-      assistant("m2", tokens(500)),
-    ];
+    const messages = [broken as unknown as SessionMessageInfo, assistant("m2", tokens(500))];
     expect(occupancyTokens(resolveCodeOccupancy(messages))?.input).toBe(500);
   });
 });

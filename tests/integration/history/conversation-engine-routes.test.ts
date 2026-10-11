@@ -99,13 +99,15 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
   });
 
   it("PATCH /api/conversations/:id updates engine + opencodeAgent + opencodeModel", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "patch target",
-      providerId: "prov-engine-route",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "patch target",
+        providerId: "prov-engine-route",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
 
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
@@ -130,13 +132,15 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
   });
 
   it("PATCH rejects an invalid engine enum value with 400 (edge case)", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "bad enum probe",
-      providerId: "prov-engine-route",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "bad enum probe",
+        providerId: "prov-engine-route",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
 
     const { status } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
@@ -151,16 +155,18 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
   });
 
   it("PATCH with null opencodeAgent/opencodeModel clears them while keeping engine", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "clear probe",
-      providerId: "prov-engine-route",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-      opencodeAgent: "coder",
-      opencodeModel: "openai/gpt-4o",
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "clear probe",
+        providerId: "prov-engine-route",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+        opencodeAgent: "coder",
+        opencodeModel: "openai/gpt-4o",
+      }),
+    );
 
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
@@ -177,16 +183,18 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
   });
 
   it("GET /api/conversations/:id returns the persisted fields", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "get probe",
-      providerId: "prov-engine-route",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-      opencodeAgent: "coder",
-      opencodeModel: "openai/gpt-4o",
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "get probe",
+        providerId: "prov-engine-route",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+        opencodeAgent: "coder",
+        opencodeModel: "openai/gpt-4o",
+      }),
+    );
 
     const { status, json } = await appFetch(`/api/conversations/${created.id}`);
     expect(status).toBe(200);
@@ -217,13 +225,15 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
   });
 
   it("PATCH /api/conversations/:id updates opencodeAutoApprove", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "auto patch target",
-      providerId: "prov-engine-route",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "auto patch target",
+        providerId: "prov-engine-route",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     expect(created.opencodeAutoApprove).toBe(false);
 
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
@@ -241,13 +251,15 @@ describe("conversation routes — engine / opencodeAgent / opencodeModel pass-th
   });
 
   it("PATCH rejects a non-boolean opencodeAutoApprove with 400", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "auto bad probe",
-      providerId: "prov-engine-route",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "auto bad probe",
+        providerId: "prov-engine-route",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
 
     const { status } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",

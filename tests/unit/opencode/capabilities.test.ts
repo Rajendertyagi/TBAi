@@ -43,16 +43,14 @@ mock.module("@/services/opencode/client", () => ({
 }));
 
 const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
-const {
-  getOpenCodeCapabilities,
-  resolveOpenCodeModelRef,
-  resolveOpenCodeVariant,
-} = await import("@/services/opencode/capabilities.ts");
+const { getOpenCodeCapabilities, resolveOpenCodeModelRef, resolveOpenCodeVariant } = await import(
+  "@/services/opencode/capabilities.ts"
+);
 const { toOpenCodeError, OpenCodeError } = await import("@/services/opencode/errors.ts");
 
 // No real server process: ensureBaseUrl answers with a stub base URL.
-(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> })
-  .ensureBaseUrl = () => Promise.resolve("http://127.0.0.1:0");
+(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl = () =>
+  Promise.resolve("http://127.0.0.1:0");
 
 function setServer(agents: unknown, models: unknown) {
   serverPayload = { agents, models };
@@ -106,22 +104,21 @@ describe("getOpenCodeCapabilities", () => {
   });
 
   it("omits an agent row missing its required native V2 name", async () => {
-    setServer([
-      { id: "missing-name", description: "Must not be displayed." },
-      { id: "valid", name: "Valid Agent", description: "Displayed." },
-    ], []);
+    setServer(
+      [
+        { id: "missing-name", description: "Must not be displayed." },
+        { id: "valid", name: "Valid Agent", description: "Displayed." },
+      ],
+      [],
+    );
     const caps = await getOpenCodeCapabilities();
-    expect(caps.agents).toEqual([
-      { id: "valid", name: "Valid Agent", description: "Displayed." },
-    ]);
+    expect(caps.agents).toEqual([{ id: "valid", name: "Valid Agent", description: "Displayed." }]);
   });
 
   it("prefers a real name when the server supplies one", async () => {
     setServer([{ id: "build", name: "Build Agent" }], []);
     const caps = await getOpenCodeCapabilities();
-    expect(caps.agents).toEqual([
-      { id: "build", name: "Build Agent", description: undefined },
-    ]);
+    expect(caps.agents).toEqual([{ id: "build", name: "Build Agent", description: undefined }]);
   });
 
   it("maps models and flattens variant objects to bare ids", async () => {
@@ -262,9 +259,7 @@ describe("toOpenCodeError", () => {
 
   it("maps an undeclared HTTP status to http and preserves the status code", () => {
     // Preserve the status code when the official client rejects an undeclared HTTP status.
-    const err = toOpenCodeError(
-      new ClientError("UnexpectedStatus", { cause: { status: 204 } }),
-    );
+    const err = toOpenCodeError(new ClientError("UnexpectedStatus", { cause: { status: 204 } }));
     expect(err.kind).toBe("http");
     expect(err.statusCode).toBe(204);
   });

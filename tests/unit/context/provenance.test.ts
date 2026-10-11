@@ -30,7 +30,12 @@ import {
 import type { UIMessage } from "ai";
 import { assembleContext } from "@/context/index.ts";
 import type { ContextLimit } from "@/context/types.ts";
-import { configuredLimit, providerReportedLimit, type ModelOption, type ProviderConfig } from "@/types";
+import {
+  configuredLimit,
+  providerReportedLimit,
+  type ModelOption,
+  type ProviderConfig,
+} from "@/types";
 import { contextWindowSourceSchema, modelOptionSchema } from "@/lib/validation.ts";
 import { discoverModels } from "@/services/modelDiscovery.ts";
 
@@ -38,7 +43,13 @@ const modelId = "m-1";
 
 /** A provider carrying exactly the stored model metadata under test. */
 function providerWith(models: ModelOption[]): ProviderConfig {
-  return { id: "p1", name: "Test", type: "custom", model: modelId, models } as unknown as ProviderConfig;
+  return {
+    id: "p1",
+    name: "Test",
+    type: "custom",
+    model: modelId,
+    models,
+  } as unknown as ProviderConfig;
 }
 
 function user(id: string, text: string): UIMessage {
@@ -183,8 +194,18 @@ describe("R1 · provenance travels with the number", () => {
 
   it("selects the requested model and nothing else, by id alone", () => {
     const models: ModelOption[] = [
-      { id: "other", provider: "custom", contextWindow: 1, contextWindowSource: "provider_reported" },
-      { id: modelId, provider: "custom", contextWindow: 2, contextWindowSource: "provider_reported" },
+      {
+        id: "other",
+        provider: "custom",
+        contextWindow: 1,
+        contextWindowSource: "provider_reported",
+      },
+      {
+        id: modelId,
+        provider: "custom",
+        contextWindow: 2,
+        contextWindowSource: "provider_reported",
+      },
     ];
     expect(selectModelOption(models, modelId)?.contextWindow).toBe(2);
     // No provider-name or model-name knowledge may leak into this lookup.
@@ -250,13 +271,17 @@ describe("R1 · conflicting provider and configured figures", () => {
 
 describe("R1 · only a provider-reported ceiling may size a Phase 3 experiment", () => {
   /** Build a limit the way a caller would, from a stored model. */
-  function limitFor(model?: Pick<ModelOption, "contextWindow" | "contextWindowSource">): ContextLimit {
+  function limitFor(
+    model?: Pick<ModelOption, "contextWindow" | "contextWindowSource">,
+  ): ContextLimit {
     return resolveContextLimit({ providerType: "custom", modelId, model });
   }
 
   it("authorises an experiment only for a provider-reported ceiling", () => {
     expect(
-      isPhase3ExperimentEligible(limitFor({ contextWindow: 524288, contextWindowSource: "provider_reported" })),
+      isPhase3ExperimentEligible(
+        limitFor({ contextWindow: 524288, contextWindowSource: "provider_reported" }),
+      ),
     ).toBe(true);
   });
 
@@ -268,9 +293,11 @@ describe("R1 · only a provider-reported ceiling may size a Phase 3 experiment",
   });
 
   it("refuses to size an experiment from an operator's configured belief", () => {
-    expect(isPhase3ExperimentEligible(limitFor({ contextWindow: 524288, contextWindowSource: "configured" }))).toBe(
-      false,
-    );
+    expect(
+      isPhase3ExperimentEligible(
+        limitFor({ contextWindow: 524288, contextWindowSource: "configured" }),
+      ),
+    ).toBe(false);
   });
 
   it("refuses to size an experiment from a pre-R1 bare value", () => {
@@ -324,7 +351,9 @@ describe("R1 · input reserve and generation cap are different quantities", () =
           model: { contextWindow: ceiling, contextWindowSource: "provider_reported" },
         });
         const budget = computeBudget({ limit, modelOutputTokens });
-        expect((budget.usableInputTokens ?? 0) + budget.generationCap.tokens).toBeLessThanOrEqual(ceiling);
+        expect((budget.usableInputTokens ?? 0) + budget.generationCap.tokens).toBeLessThanOrEqual(
+          ceiling,
+        );
       }
     }
   });
@@ -379,7 +408,9 @@ describe("R1 · input reserve and generation cap are different quantities", () =
   it("loosens the budget when a real, larger limit becomes known", () => {
     // The false-rejection correction R1 exists for: the stand-in refuses ~76% of
     // the usable window of a documented 512K model.
-    const standIn = computeBudget({ limit: resolveContextLimit({ providerType: "custom", modelId }) });
+    const standIn = computeBudget({
+      limit: resolveContextLimit({ providerType: "custom", modelId }),
+    });
     const real = computeBudget({ limit: statedLimit });
     expect(real.usableInputTokens!).toBeGreaterThan(standIn.usableInputTokens!);
   });
@@ -390,7 +421,12 @@ describe("R1 · model metadata actually reaches the resolver", () => {
     // Pre-R1 the seam passed only providerType+modelId, so `model_reported` was
     // dead code and every request resolved to the stand-in.
     const result = await assembleWith([
-      { id: modelId, provider: "custom", contextWindow: 524288, contextWindowSource: "provider_reported" },
+      {
+        id: modelId,
+        provider: "custom",
+        contextWindow: 524288,
+        contextWindowSource: "provider_reported",
+      },
     ]);
     expect(result.context.provenance.limit.source).toBe("provider_reported");
     expect(result.diagnostics.limitSource).toBe("provider_reported");
@@ -434,7 +470,14 @@ describe("R1 · model metadata actually reaches the resolver", () => {
   it("rejects an oversized request against the real limit, not the stand-in", async () => {
     const huge = [user("u1", "x".repeat(3_000_000))];
     const result = await assembleWith(
-      [{ id: modelId, provider: "custom", contextWindow: 524288, contextWindowSource: "provider_reported" }],
+      [
+        {
+          id: modelId,
+          provider: "custom",
+          contextWindow: 524288,
+          contextWindowSource: "provider_reported",
+        },
+      ],
       huge,
     );
     expect(result.decision.action).toBe("reject");
@@ -451,7 +494,14 @@ describe("R1 · model metadata actually reaches the resolver", () => {
     const big = [user("u1", "x".repeat(600_000))];
 
     const real = await assembleWith(
-      [{ id: modelId, provider: "custom", contextWindow: 524288, contextWindowSource: "provider_reported" }],
+      [
+        {
+          id: modelId,
+          provider: "custom",
+          contextWindow: 524288,
+          contextWindowSource: "provider_reported",
+        },
+      ],
       big,
     );
     expect(real.decision.action).not.toBe("reject");
@@ -470,7 +520,12 @@ describe("R1 · model metadata actually reaches the resolver", () => {
 
   it("reports divergence in diagnostics only when it happened", async () => {
     const agreed = await assembleWith([
-      { id: modelId, provider: "custom", contextWindow: 524288, contextWindowSource: "provider_reported" },
+      {
+        id: modelId,
+        provider: "custom",
+        contextWindow: 524288,
+        contextWindowSource: "provider_reported",
+      },
     ]);
     expect(agreed.diagnostics.limitDivergent).toBeUndefined();
   });
@@ -478,7 +533,14 @@ describe("R1 · model metadata actually reaches the resolver", () => {
   it("keeps the diagnostics free of prompt text while reporting provenance", async () => {
     const secret = "SECRET_PROBE_STRING_NOT_FOR_LOGS";
     const result = await assembleWith(
-      [{ id: modelId, provider: "custom", contextWindow: 524288, contextWindowSource: "configured" }],
+      [
+        {
+          id: modelId,
+          provider: "custom",
+          contextWindow: 524288,
+          contextWindowSource: "configured",
+        },
+      ],
       [user("u1", secret)],
     );
     expect(JSON.stringify(result.diagnostics)).not.toContain(secret);
@@ -519,21 +581,34 @@ describe("R1 · the two writers cannot be confused", () => {
 
   it("still validates a pre-R1 row that carries no stance", () => {
     // Backwards compatible: existing rows must keep loading, unchanged.
-    const legacy = modelOptionSchema.parse({ id: modelId, provider: "custom", contextWindow: 200000 });
+    const legacy = modelOptionSchema.parse({
+      id: modelId,
+      provider: "custom",
+      contextWindow: 200000,
+    });
     expect(legacy.contextWindow).toBe(200000);
     expect(legacy.contextWindowSource).toBeUndefined();
   });
 
   it("rejects a stanced model whose stance is not a real one", () => {
     expect(() =>
-      modelOptionSchema.parse({ id: modelId, provider: "custom", contextWindow: 1, contextWindowSource: "guessed" }),
+      modelOptionSchema.parse({
+        id: modelId,
+        provider: "custom",
+        contextWindow: 1,
+        contextWindowSource: "guessed",
+      }),
     ).toThrow();
   });
 
   it("resolves a stored-and-restored provider figure back to provider_reported", () => {
     // Full round-trip: written by the provider writer, persisted, reloaded, resolved.
     const written = { id: modelId, provider: "custom", ...providerReportedLimit(524288) };
-    const stored = { ...written, contextWindow: written.value, contextWindowSource: written.source };
+    const stored = {
+      ...written,
+      contextWindow: written.value,
+      contextWindowSource: written.source,
+    };
     const restored = modelOptionSchema.parse(stored);
     const limit = resolveContextLimit({
       providerType: "custom",
@@ -549,7 +624,9 @@ describe("R1 · discovery is the only producer of a provider_reported figure", (
   const origFetch = globalThis.fetch;
 
   function serveModels(payload: unknown): void {
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (input: RequestInfo | URL) => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (
+      input: RequestInfo | URL,
+    ) => {
       const url = typeof input === "string" ? input : String(input);
       if (url.includes("/models")) {
         return new Response(JSON.stringify(payload), {
@@ -566,8 +643,16 @@ describe("R1 · discovery is the only producer of a provider_reported figure", (
   });
 
   it("tags a figure read from the provider's own listing as provider_reported", async () => {
-    serveModels({ data: [{ id: "claude-x", display_name: "X", max_input_tokens: 200000, max_output_tokens: 8192 }] });
-    const [model] = await discoverModels({ type: "anthropic", endpoint: "http://mock", apiKey: "k" });
+    serveModels({
+      data: [
+        { id: "claude-x", display_name: "X", max_input_tokens: 200000, max_output_tokens: 8192 },
+      ],
+    });
+    const [model] = await discoverModels({
+      type: "anthropic",
+      endpoint: "http://mock",
+      apiKey: "k",
+    });
     expect(model?.contextWindow).toBe(200000);
     expect(model?.contextWindowSource).toBe("provider_reported");
     expect(model?.maxOutputTokens).toBe(8192);
@@ -578,7 +663,11 @@ describe("R1 · discovery is the only producer of a provider_reported figure", (
     // Absence of metadata is not evidence of a limit. Emitting a stand-in here
     // would persist a number the provider never stated.
     serveModels({ data: [{ id: "claude-x" }] });
-    const [model] = await discoverModels({ type: "anthropic", endpoint: "http://mock", apiKey: "k" });
+    const [model] = await discoverModels({
+      type: "anthropic",
+      endpoint: "http://mock",
+      apiKey: "k",
+    });
     expect(model?.contextWindow).toBeUndefined();
     expect(model?.contextWindowSource).toBeUndefined();
   });
@@ -593,7 +682,11 @@ describe("R1 · discovery is the only producer of a provider_reported figure", (
 
   it("never lets discovery produce a configured figure", async () => {
     serveModels({ data: [{ id: "claude-x", max_input_tokens: 200000 }] });
-    const [model] = await discoverModels({ type: "anthropic", endpoint: "http://mock", apiKey: "k" });
+    const [model] = await discoverModels({
+      type: "anthropic",
+      endpoint: "http://mock",
+      apiKey: "k",
+    });
     expect(model?.contextWindowSource).not.toBe("configured");
   });
 });

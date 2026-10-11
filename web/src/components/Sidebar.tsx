@@ -1,25 +1,14 @@
-import {
-  useCallback,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { FolderOpenDot, MessageSquarePlus, SquarePen } from "lucide-react";
-import {
-  sidebarConfig,
-  SIDEBAR_SECTION_IDS,
-  type SidebarSectionId,
-} from "../config/sidebar";
+import { sidebarConfig, SIDEBAR_SECTION_IDS, type SidebarSectionId } from "../config/sidebar";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useThreadListQuerySync } from "../features/sidebar/hooks/useThreadListQuerySync";
 import { useConversationsList } from "../features/sidebar/hooks/useConversationsList";
 import { SidebarHeader } from "../features/sidebar/components/SidebarHeader";
 import { SidebarNavButton } from "../features/sidebar/components/SidebarNavButton";
 import { SidebarSection } from "../features/sidebar/components/SidebarSection";
-import {
-  SidebarThreadRow,
-} from "../features/sidebar/components/SidebarThreadRow";
+import { SidebarThreadRow } from "../features/sidebar/components/SidebarThreadRow";
 import { FoldersSection } from "../features/sidebar/components/FoldersSection";
 import { SearchResults } from "../features/sidebar/components/SearchResults";
 import { NewProjectChatDialog } from "./NewProjectChatDialog";
@@ -62,9 +51,7 @@ export function Sidebar() {
   const order = useDesktopLayout((s) => s.sectionOrder);
   const sectionCollapsed = useDesktopLayout((s) => s.sectionCollapsed);
   const setSectionCollapsed = useDesktopLayout((s) => s.setSectionCollapsed);
-  const setAllSectionsCollapsed = useDesktopLayout(
-    (s) => s.setAllSectionsCollapsed,
-  );
+  const setAllSectionsCollapsed = useDesktopLayout((s) => s.setAllSectionsCollapsed);
   const showRecent = useDesktopLayout((s) => s.showRecent);
   const showCompleted = useDesktopLayout((s) => s.showCompleted);
   const searchQuery = useDesktopLayout((s) => s.searchQuery);
@@ -83,16 +70,13 @@ export function Sidebar() {
   // `archived` section, now a rail surface) so a stale entry can never
   // render an empty unknown section.
   const visibleSections = order
-    .filter((id): id is SidebarSectionId =>
-      (SIDEBAR_SECTION_IDS as readonly string[]).includes(id),
-    )
+    .filter((id): id is SidebarSectionId => (SIDEBAR_SECTION_IDS as readonly string[]).includes(id))
     .filter(isVisible);
   const allExpanded = visibleSections.every(isExpanded);
   // `searchQuery` is already debounced in the store, so the sections stay put
   // for the settle window instead of collapsing out from under the user
   // mid-keystroke. Searching swaps the whole section area for one global list.
-  const isSearching =
-    searchQuery.trim().length >= sidebarConfig.searchMinLength;
+  const isSearching = searchQuery.trim().length >= sidebarConfig.searchMinLength;
 
   return (
     <div className="relative flex w-[var(--sidebar-width,224px)] flex-col border-r border-sidebar-border glass-surface text-sidebar-foreground select-none">
@@ -105,10 +89,7 @@ export function Sidebar() {
       {/* Fixed actions above the scrollable list — never scroll away. */}
       <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
         <SidebarNavButton onClick={() => navigate("/chat/new")}>
-          <SquarePen
-            aria-hidden="true"
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
+          <SquarePen aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">{copy.newChat}</span>
         </SidebarNavButton>
       </div>
@@ -116,7 +97,10 @@ export function Sidebar() {
       <WorkspaceFolderDialog open={addFolderOpen} onOpenChange={setAddFolderOpen} />
       <NewProjectChatDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} />
 
-      <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2">
+      <div
+        ref={listRef}
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1.5 pt-1.5 pb-2"
+      >
         <div className="flex flex-col gap-2">
           {isSearching ? (
             <SearchResults
@@ -136,11 +120,7 @@ export function Sidebar() {
                   key={id}
                   id={id}
                   label={
-                    id === "folders"
-                      ? copy.folders
-                      : id === "chats"
-                        ? copy.chats
-                        : copy.recent
+                    id === "folders" ? copy.folders : id === "chats" ? copy.chats : copy.recent
                   }
                   expanded={expanded}
                   onExpandedChange={setExpanded}
@@ -171,10 +151,7 @@ export function Sidebar() {
                 >
                   {id === "folders" && <FoldersSection />}
                   {id === "chats" && (
-                    <ChatsItems
-                      showCompleted={showCompleted}
-                      onOpenThread={openThread}
-                    />
+                    <ChatsItems showCompleted={showCompleted} onOpenThread={openThread} />
                   )}
                   {id === "recent" && (
                     <RecentItems showCompleted={showCompleted} onOpenThread={openThread} />
@@ -265,7 +242,7 @@ function ChatsItems({
       )}
 
       {isLoading && items.length === 0 && (
-        <div className="space-y-2 px-1 py-2" aria-label="Loading conversations">
+        <div className="space-y-2 px-1 py-2" role="status" aria-label="Loading conversations">
           {[0, 1, 2].map((i) => (
             <div key={i} className="h-8 rounded-full bg-muted animate-pulse" />
           ))}
@@ -313,5 +290,3 @@ function RecentItems({
     </>
   );
 }
-
-

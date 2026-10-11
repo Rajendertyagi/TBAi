@@ -28,7 +28,9 @@ let body = "";
 let source = "";
 
 beforeAll(async () => {
-  source = await Bun.file(path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx")).text();
+  source = await Bun.file(
+    path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
+  ).text();
   body = functionBody(stripComments(source), "AgentRuntime");
 });
 

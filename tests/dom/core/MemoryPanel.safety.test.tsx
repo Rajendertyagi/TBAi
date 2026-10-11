@@ -44,7 +44,10 @@ describe("22. derived safety status wording", () => {
   });
 
   it("degrades gracefully for a reason token this build does not know", () => {
-    const line = memoryStatusLine({ safetyFlag: true, safetyReason: "a_class_from_a_future_build" });
+    const line = memoryStatusLine({
+      safetyFlag: true,
+      safetyReason: "a_class_from_a_future_build",
+    });
     expect(line).toContain("Not sent to the model");
     expect(line).toContain("did not pass a safety check");
   });

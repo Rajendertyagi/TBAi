@@ -76,16 +76,10 @@ export function SidebarViewMenu() {
               setSidebarSort(sort);
             }}
           >
-            <DropdownMenuRadioItem
-              value="updated"
-              onSelect={(event) => event.preventDefault()}
-            >
+            <DropdownMenuRadioItem value="updated" onSelect={(event) => event.preventDefault()}>
               {copy.sortByUpdated}
             </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem
-              value="created"
-              onSelect={(event) => event.preventDefault()}
-            >
+            <DropdownMenuRadioItem value="created" onSelect={(event) => event.preventDefault()}>
               {copy.sortByCreated}
             </DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>

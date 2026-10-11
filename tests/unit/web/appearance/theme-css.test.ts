@@ -3,7 +3,12 @@ import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
 
 import { contrastRatio, formatColor, parseColor } from "@web/features/appearance/theme-color.ts";
-import { DEFAULT_THEME_ID, getTheme, isThemeId, THEMES } from "@web/features/appearance/theme-data.ts";
+import {
+  DEFAULT_THEME_ID,
+  getTheme,
+  isThemeId,
+  THEMES,
+} from "@web/features/appearance/theme-data.ts";
 import { resolveThemeVars, themeCss, themeSwatch } from "@web/features/appearance/theme-css.ts";
 
 /**

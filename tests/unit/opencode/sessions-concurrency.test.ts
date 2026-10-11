@@ -86,8 +86,8 @@ mock.module("@/services/workspace", () => ({
 const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
 const { ensureOpenCodeSession } = await import("@/services/opencode/sessions.ts");
 
-(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> })
-  .ensureBaseUrl = async () => "http://127.0.0.1:0";
+(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
+  async () => "http://127.0.0.1:0";
 
 beforeEach(() => {
   createCalls = 0;

@@ -21,7 +21,10 @@ import { reduceV2Event, reduceV2ThreadState } from "@web/features/opencode/v2Eve
 import * as fs from "node:fs";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 
-const ringSource = fs.readFileSync(path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeContextRing.tsx"), "utf8");
+const ringSource = fs.readFileSync(
+  path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeContextRing.tsx"),
+  "utf8",
+);
 
 const usage = (over: Record<string, unknown> = {}) => ({
   input: 200_000,
@@ -49,9 +52,7 @@ describe("Code meter: the server's total wins", () => {
   });
 
   it("the fallback includes cache.write, as OpenChamber's does", () => {
-    const result = toCodeContextUsage(
-      usage({ cache: { read: 30_000, write: 5_000 } }),
-    );
+    const result = toCodeContextUsage(usage({ cache: { read: 30_000, write: 5_000 } }));
     // 200_000 + 32_000 + 500 + 30_000 + 5_000
     expect(result?.contextTokens).toBe(267_500);
   });
@@ -75,7 +76,14 @@ describe("Code meter: the server's total wins", () => {
 
   it("returns no context at all for an invalid payload", () => {
     expect(toCodeContextUsage(null)).toBeUndefined();
-    expect(toCodeContextUsage({ input: "200000", output: 1, reasoning: 0, cache: { read: 0, write: 0 } })).toBeUndefined();
+    expect(
+      toCodeContextUsage({
+        input: "200000",
+        output: 1,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -116,7 +124,12 @@ describe("Code meter: a multi-step turn is occupancy, not traffic", () => {
     // window that really held 232,872 tokens. Cache reads are a subdivision of
     // the same prompt the total already contains.
     const result = toCodeContextUsage(
-      usage({ input: 200_000, output: 32_000, total: 232_872, cache: { read: 3_291_956, write: 0 } }),
+      usage({
+        input: 200_000,
+        output: 32_000,
+        total: 232_872,
+        cache: { read: 3_291_956, write: 0 },
+      }),
     );
     expect(result?.contextTokens).toBe(232_872);
     expect(result?.cachedInputTokens).toBe(3_291_956);
@@ -198,10 +211,14 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     // owns the translation, so a raw event passing through `reduceV2Event`
     // changes nothing. These cases document that split rather than asserting a
     // single-hop reaction that was never the design.
-    const raw = reduceV2Event(base, {
-      type: "session.compaction.ended",
-      data: { sessionID: "ses_1" },
-    } as never, 3);
+    const raw = reduceV2Event(
+      base,
+      {
+        type: "session.compaction.ended",
+        data: { sessionID: "ses_1" },
+      } as never,
+      3,
+    );
     expect(raw.occupancyStale).toBe(false);
 
     // The action the controller dispatches for that same event does invalidate.
@@ -273,7 +290,11 @@ describe("Code meter: after a compaction the reading is unknown", () => {
 
   it("a measured reading still resolves normally", () => {
     expect(
-      resolveOccupancyNumerator({ contextTokens: 76_000, usageTotalTokens: 900_000, state: "measured" }),
+      resolveOccupancyNumerator({
+        contextTokens: 76_000,
+        usageTotalTokens: 900_000,
+        state: "measured",
+      }),
     ).toBe(76_000);
     expect(resolveOccupancyNumerator({ usageTotalTokens: 50_000, state: "measured" })).toBe(50_000);
     expect(resolveOccupancyNumerator({ state: "measured" })).toBeUndefined();
@@ -297,7 +318,9 @@ describe("Code meter: the limit comes from OpenCode", () => {
     );
     // The specific bug this forbids: a 1M model being measured against 128k,
     // which reads as 100% full on a conversation that is 12% full.
-    expect(resolveContextWindow({ limitContext: 1_000_000 })).not.toBe(DEFAULT_MODEL_CONTEXT_WINDOW);
+    expect(resolveContextWindow({ limitContext: 1_000_000 })).not.toBe(
+      DEFAULT_MODEL_CONTEXT_WINDOW,
+    );
   });
 
   it("rejects a malformed host limit and falls back rather than rendering NaN", async () => {

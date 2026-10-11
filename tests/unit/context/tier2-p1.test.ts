@@ -24,7 +24,13 @@ import { describe, expect, it } from "bun:test";
 import { computeBudget, decideBudget } from "@/context/budget.ts";
 import { TIER_2_MAX_TOKENS, evaluateTier2 } from "@/context/tier2.ts";
 import { UNKNOWN_LIMIT_CEILING, resolveContextLimit } from "@/context/limits.ts";
-import type { ContextBudget, ContextLimit, InputSizeEstimate, LimitSource, ReductionRecord } from "@/context/types.ts";
+import type {
+  ContextBudget,
+  ContextLimit,
+  InputSizeEstimate,
+  LimitSource,
+  ReductionRecord,
+} from "@/context/types.ts";
 
 const EXHAUSTED: ReductionRecord = {
   toolResults: { kind: "exhausted", reason: "no_reducible_content" },
@@ -216,18 +222,25 @@ describe("C. the advisory relaxation is bounded by Tier 2", () => {
     // not "nothing bounds this".
     const limit = unknownLimit();
     const budget = budgetFor(limit);
-    const usable = budget.usableInputTokens!;
+    const _usable = budget.usableInputTokens!;
     const decision = decideBudget({
-      estimate: estimate(TIER_2_MAX_TOKENS + 1_000_000, TIER_2_MAX_TOKENS + 500_000, TIER_2_MAX_TOKENS + 2_000_000),
+      estimate: estimate(
+        TIER_2_MAX_TOKENS + 1_000_000,
+        TIER_2_MAX_TOKENS + 500_000,
+        TIER_2_MAX_TOKENS + 2_000_000,
+      ),
       budget,
       reduction: EXHAUSTED,
       limitSource: limit.source,
     });
 
     expect(decision.action).toBe("advisory");
-    expect(evaluateTier2(estimate(TIER_2_MAX_TOKENS + 2_000_000, 0, TIER_2_MAX_TOKENS + 2_000_000), limit.source).outcome).toBe(
-      "assembly_limit_exceeded",
-    );
+    expect(
+      evaluateTier2(
+        estimate(TIER_2_MAX_TOKENS + 2_000_000, 0, TIER_2_MAX_TOKENS + 2_000_000),
+        limit.source,
+      ).outcome,
+    ).toBe("assembly_limit_exceeded");
   });
 
   it("a known model with a huge window is still bounded by Tier 2", () => {

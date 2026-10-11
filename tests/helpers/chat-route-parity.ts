@@ -38,8 +38,7 @@ const ROUTE_ENTRY = "src/routes/chat.ts";
 const PHASE_DIR = "src/routes/chat";
 
 /** `<logger>.warn("scope", "event", {` — level, scope and event are literals. */
-const LOG_CALL =
-  /\.(warn|error|info|debug)\(\s*"([a-z][a-z0-9_]*)"\s*,\s*"([a-z][a-z0-9_.]*)"/g;
+const LOG_CALL = /\.(warn|error|info|debug)\(\s*"([a-z][a-z0-9_]*)"\s*,\s*"([a-z][a-z0-9_.]*)"/g;
 
 /**
  * Any `c.json(...)` response construction.

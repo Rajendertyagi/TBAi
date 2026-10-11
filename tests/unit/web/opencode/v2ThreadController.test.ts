@@ -36,7 +36,10 @@ import {
   type V2ThreadController,
 } from "@web/features/opencode/v2ThreadController.ts";
 import { clearAllAutoPolicies, setAutoPolicy } from "@web/features/opencode/sessionAutoPolicy.ts";
-import { createInitialV2ThreadState, reduceV2ThreadState } from "@web/features/opencode/v2Events.ts";
+import {
+  createInitialV2ThreadState,
+  reduceV2ThreadState,
+} from "@web/features/opencode/v2Events.ts";
 import { QUESTION_PERMISSION_ACTION } from "@web/features/permissions/permissionPolicy";
 import { resetClientTransportForTests } from "@web/lib/log-transport";
 import { stripComments } from "@web/testing/source-scope";
@@ -55,13 +58,15 @@ const ASSISTANT_TOOL_MESSAGE: SessionMessageInfo = {
   type: "assistant",
   agent: "build",
   model: { id: "test-model", providerID: "test-provider" },
-  content: [{
-    type: "tool",
-    id: "tool-1",
-    name: "shell",
-    state: { status: "running", input: { command: "bun --version" }, metadata: {} },
-    time: { created: 20, ran: 21 },
-  }],
+  content: [
+    {
+      type: "tool",
+      id: "tool-1",
+      name: "shell",
+      state: { status: "running", input: { command: "bun --version" }, metadata: {} },
+      time: { created: 20, ran: 21 },
+    },
+  ],
 };
 const PERMISSION_ID = "permission_controller_test";
 const FORM_REPLY_ID = "form_reply_controller_test";
@@ -329,10 +334,7 @@ function createEvents() {
   return events;
 }
 
-function createGeneration(
-  generationId: number,
-  options: GenerationOptions = {},
-): FakeGeneration {
+function createGeneration(generationId: number, options: GenerationOptions = {}): FakeGeneration {
   const events = createEvents();
   const promptInputs: SessionPromptInput[] = [];
   const inboxCancelInputs: { readonly sessionID: string; readonly inboxID: string }[] = [];
@@ -341,7 +343,8 @@ function createGeneration(
   const formReplyInputs: SessionFormReplyInput[] = [];
   const formCancelInputs: SessionFormCancelInput[] = [];
   let lifecycleSignal = new AbortController().signal;
-  let promptHandler: PromptHandler = async (input) => userInbox(input.id ?? LOCAL_MESSAGE_ID, input.delivery ?? "steer");
+  let promptHandler: PromptHandler = async (input) =>
+    userInbox(input.id ?? LOCAL_MESSAGE_ID, input.delivery ?? "steer");
 
   const operations: OpenCodeV2GenerationOperations = {
     serverInfo: async () => SERVER_INFO,
@@ -476,9 +479,10 @@ describe("native V2 thread controller lifecycle", () => {
       generation.events.emit(assistantTextDelta());
       await waitForState(
         controller,
-        (state) => state.messages[LIVE_ASSISTANT_MESSAGE_ID]?.parts.some(
-          (part) => part.kind === "text" && part.value === "live response",
-        ) === true,
+        (state) =>
+          state.messages[LIVE_ASSISTANT_MESSAGE_ID]?.parts.some(
+            (part) => part.kind === "text" && part.value === "live response",
+          ) === true,
       );
 
       const message = controller.getState().messages[LIVE_ASSISTANT_MESSAGE_ID];
@@ -499,9 +503,15 @@ describe("native V2 thread controller lifecycle", () => {
 
   it("isolates auxiliary hydration failures without failing the primary load", async () => {
     const generation = createGeneration(1, {
-      inboxList: async () => { throw new TypeError("inbox unavailable"); },
-      permissionList: async () => { throw new TypeError("permissions unavailable"); },
-      formList: async () => { throw new TypeError("forms unavailable"); },
+      inboxList: async () => {
+        throw new TypeError("inbox unavailable");
+      },
+      permissionList: async () => {
+        throw new TypeError("permissions unavailable");
+      },
+      formList: async () => {
+        throw new TypeError("forms unavailable");
+      },
     });
     const client = createClient([generation]);
     const controller = createV2ThreadController(client);
@@ -612,13 +622,15 @@ describe("native V2 prompt admission", () => {
 
     try {
       let sendSettled = false;
-      const sending = controller.sendMessage(USER_MESSAGE, {
-        messageId: LOCAL_MESSAGE_ID,
-        delivery: "queue",
-      }).then((submission) => {
-        sendSettled = true;
-        return submission;
-      });
+      const sending = controller
+        .sendMessage(USER_MESSAGE, {
+          messageId: LOCAL_MESSAGE_ID,
+          delivery: "queue",
+        })
+        .then((submission) => {
+          sendSettled = true;
+          return submission;
+        });
       await promptCalled.promise;
       generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "queue"));
       await waitForState(controller, (state) => state.inboxById[EVENT_INBOX_ID] !== undefined);
@@ -711,11 +723,13 @@ describe("native V2 controller replies and disposal", () => {
       await controller.replyToPermission(PERMISSION_ID, "once");
       await controller.replyToPermission(PERMISSION_ID, "once");
 
-      expect(generation.permissionReplyInputs).toEqual([{
-        sessionID: SESSION_ID,
-        requestID: PERMISSION_ID,
-        decision: "once",
-      }]);
+      expect(generation.permissionReplyInputs).toEqual([
+        {
+          sessionID: SESSION_ID,
+          requestID: PERMISSION_ID,
+          decision: "once",
+        },
+      ]);
       expect(controller.getState().permissions).toEqual([]);
       expect(controller.getState().answeredPermissionIds).toEqual([PERMISSION_ID]);
     } finally {
@@ -737,15 +751,19 @@ describe("native V2 controller replies and disposal", () => {
       await controller.rejectForm(FORM_CANCEL_ID);
       await controller.rejectForm(FORM_CANCEL_ID);
 
-      expect(generation.formReplyInputs).toEqual([{
-        sessionID: SESSION_ID,
-        formID: FORM_REPLY_ID,
-        answer,
-      }]);
-      expect(generation.formCancelInputs).toEqual([{
-        sessionID: SESSION_ID,
-        formID: FORM_CANCEL_ID,
-      }]);
+      expect(generation.formReplyInputs).toEqual([
+        {
+          sessionID: SESSION_ID,
+          formID: FORM_REPLY_ID,
+          answer,
+        },
+      ]);
+      expect(generation.formCancelInputs).toEqual([
+        {
+          sessionID: SESSION_ID,
+          formID: FORM_CANCEL_ID,
+        },
+      ]);
       expect(controller.getState().forms).toEqual([]);
     } finally {
       controller.dispose();
@@ -769,7 +787,9 @@ describe("native V2 controller replies and disposal", () => {
     const sending = controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
     await promptCalled.promise;
     let notifications = 0;
-    controller.subscribe(() => { notifications += 1; });
+    controller.subscribe(() => {
+      notifications += 1;
+    });
 
     controller.dispose();
     controller.dispose();
@@ -870,9 +890,9 @@ function projectedToolCalls(controller: V2ThreadController) {
   return projectV2RepositoryItems(controller.getState()).flatMap((item) =>
     Array.isArray(item.message.content)
       ? item.message.content.filter(
-        (part): part is Extract<typeof part, { readonly type: "tool-call" }> =>
-          part.type === "tool-call",
-      )
+          (part): part is Extract<typeof part, { readonly type: "tool-call" }> =>
+            part.type === "tool-call",
+        )
       : [],
   );
 }
@@ -889,9 +909,8 @@ describe("native V2 approval seams", () => {
       generation.events.emit(shellToolStarted());
       generation.events.emit(shellToolCalled());
       generation.events.emit(permissionAsked());
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === LIVE_SHELL_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === LIVE_SHELL_PERMISSION_ID),
       );
 
       const shell = projectedToolCalls(controller).find((part) => part.toolName === "shell");
@@ -901,9 +920,7 @@ describe("native V2 approval seams", () => {
 
       // And the user-facing half, through the real renderer the toolkit maps
       // `shell` to — the same component `bash` uses.
-      const html = renderToStaticMarkup(
-        createElement(OpenCodeBashToolUI, shell),
-      );
+      const html = renderToStaticMarkup(createElement(OpenCodeBashToolUI, shell));
       expect(html).toContain("shell · bun --version");
       expect(html).toContain("Approve");
       expect(html).toContain("Deny");
@@ -1076,9 +1093,8 @@ describe("native V2 auto-approve arm path", () => {
       expect(repliedIds(generation)).toEqual([]);
 
       generation.events.emit(armPermissionAsked(ARM_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1111,9 +1127,8 @@ describe("native V2 auto-approve arm path", () => {
     try {
       await controller.awaitReady();
       generation.events.emit(armPermissionAsked(ARM_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1137,9 +1152,8 @@ describe("native V2 auto-approve arm path", () => {
     try {
       await controller.awaitReady();
       generation.events.emit(armPermissionAsked(ARM_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1166,9 +1180,8 @@ describe("native V2 auto-approve arm path", () => {
       await controller.awaitReady();
 
       generation.events.emit(armPermissionAsked(ARM_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
       );
       await settleAsyncWork();
       expect(repliedIds(generation)).toEqual([ARM_PERMISSION_ID]);
@@ -1177,17 +1190,14 @@ describe("native V2 auto-approve arm path", () => {
       // cannot be explained by the first request already having been claimed.
       setAutoPolicy(SESSION_ID, false);
       generation.events.emit(armPermissionAsked(ARM_SECOND_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_SECOND_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_SECOND_PERMISSION_ID),
       );
       await settleAsyncWork();
 
       expect(repliedIds(generation)).toEqual([ARM_PERMISSION_ID]);
       expect(
-        controller.getState().permissions.some(
-          (entry) => entry.id === ARM_SECOND_PERMISSION_ID,
-        ),
+        controller.getState().permissions.some((entry) => entry.id === ARM_SECOND_PERMISSION_ID),
       ).toBe(true);
     } finally {
       controller.dispose();
@@ -1207,9 +1217,8 @@ describe("native V2 auto-approve arm path", () => {
     try {
       await controller.awaitReady();
       generation.events.emit(armPermissionAsked(ARM_UNLINKED_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_UNLINKED_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_UNLINKED_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1250,11 +1259,8 @@ describe("native V2 auto-approve arm path", () => {
         },
       } as unknown as V2Event;
       generation.events.emit(unlinked);
-      await waitForState(
-        controller,
-        (state) => state.permissions.some(
-          (entry) => entry.id === ARM_CUSTOM_KIND_PERMISSION_ID,
-        ),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_CUSTOM_KIND_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1277,9 +1283,8 @@ describe("native V2 auto-approve arm path", () => {
       await controller.awaitReady();
       const event = armPermissionAsked(ARM_PERMISSION_ID);
       generation.events.emit(event);
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
       );
       await settleAsyncWork();
       // The same event object, delivered again — a genuinely distinct second
@@ -1328,9 +1333,8 @@ describe("native V2 auto-approve arm path", () => {
     try {
       await controller.awaitReady();
       generation.events.emit(armPermissionAsked(ARM_PERMISSION_ID));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1345,9 +1349,10 @@ describe("native V2 auto-approve arm path", () => {
       generation.events.emit(assistantTextDelta());
       await waitForState(
         controller,
-        (state) => state.messages[LIVE_ASSISTANT_MESSAGE_ID]?.parts.some(
-          (part) => part.kind === "text" && part.value === "live response",
-        ) === true,
+        (state) =>
+          state.messages[LIVE_ASSISTANT_MESSAGE_ID]?.parts.some(
+            (part) => part.kind === "text" && part.value === "live response",
+          ) === true,
       );
       // …and no reconnect was triggered by the failure.
       expect(controller.getState().connection.type).toBe("connected");
@@ -1416,11 +1421,14 @@ describe("native V2 auto-approve — a question needs no approval", () => {
 
     try {
       await controller.awaitReady();
-      generation.events.emit(armPermissionAsked(ARM_QUESTION_PERMISSION_ID, undefined, QUESTION_PERMISSION_ACTION));
-      generation.events.emit(armPermissionAsked(ARM_SHELL_PERMISSION_ID, undefined, SHELL_PERMISSION_ACTION));
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_SHELL_PERMISSION_ID),
+      generation.events.emit(
+        armPermissionAsked(ARM_QUESTION_PERMISSION_ID, undefined, QUESTION_PERMISSION_ACTION),
+      );
+      generation.events.emit(
+        armPermissionAsked(ARM_SHELL_PERMISSION_ID, undefined, SHELL_PERMISSION_ACTION),
+      );
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_SHELL_PERMISSION_ID),
       );
       await settleAsyncWork();
 
@@ -1457,8 +1465,12 @@ describe("native V2 auto-approve — a question needs no approval", () => {
 
     try {
       await controller.awaitReady();
-      generation.events.emit(armPermissionAsked(ARM_QUESTION_PERMISSION_ID, undefined, QUESTION_PERMISSION_ACTION));
-      generation.events.emit(armPermissionAsked(ARM_SHELL_PERMISSION_ID, undefined, SHELL_PERMISSION_ACTION));
+      generation.events.emit(
+        armPermissionAsked(ARM_QUESTION_PERMISSION_ID, undefined, QUESTION_PERMISSION_ACTION),
+      );
+      generation.events.emit(
+        armPermissionAsked(ARM_SHELL_PERMISSION_ID, undefined, SHELL_PERMISSION_ACTION),
+      );
       await waitForState(
         controller,
         (state) => !state.permissions.some((entry) => entry.id === ARM_SHELL_PERMISSION_ID),
@@ -1489,18 +1501,21 @@ describe("native V2 auto-approve — a question needs no approval", () => {
     try {
       await controller.awaitReady();
       generation.events.emit(
-        armPermissionAsked(ARM_UNKNOWN_ACTION_PERMISSION_ID, undefined, UNRECOGNISED_PERMISSION_ACTION),
+        armPermissionAsked(
+          ARM_UNKNOWN_ACTION_PERMISSION_ID,
+          undefined,
+          UNRECOGNISED_PERMISSION_ACTION,
+        ),
       );
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_UNKNOWN_ACTION_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_UNKNOWN_ACTION_PERMISSION_ID),
       );
       await settleAsyncWork();
 
       expect(generation.permissionReplyInputs).toEqual([]);
-      expect(
-        controller.getState().permissions.map((entry) => entry.id),
-      ).toEqual([ARM_UNKNOWN_ACTION_PERMISSION_ID]);
+      expect(controller.getState().permissions.map((entry) => entry.id)).toEqual([
+        ARM_UNKNOWN_ACTION_PERMISSION_ID,
+      ]);
     } finally {
       controller.dispose();
       clearAllAutoPolicies();
@@ -1522,16 +1537,15 @@ describe("native V2 auto-approve — a question needs no approval", () => {
       if (event.type !== "permission.asked") throw new Error("expected permission.asked");
       const { action: _absent, ...dataWithoutAction } = event.data;
       generation.events.emit({ ...event, data: dataWithoutAction } as unknown as V2Event);
-      await waitForState(
-        controller,
-        (state) => state.permissions.some((entry) => entry.id === ARM_UNKNOWN_ACTION_PERMISSION_ID),
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ARM_UNKNOWN_ACTION_PERMISSION_ID),
       );
       await settleAsyncWork();
 
       expect(generation.permissionReplyInputs).toEqual([]);
-      expect(
-        controller.getState().permissions.map((entry) => entry.id),
-      ).toEqual([ARM_UNKNOWN_ACTION_PERMISSION_ID]);
+      expect(controller.getState().permissions.map((entry) => entry.id)).toEqual([
+        ARM_UNKNOWN_ACTION_PERMISSION_ID,
+      ]);
     } finally {
       controller.dispose();
       clearAllAutoPolicies();
@@ -1585,9 +1599,12 @@ describe("native V2 auto-approve — the drain asks the same predicate", () => {
       await controller.awaitReady();
 
       expect(await controller.reconcileAutoApprove()).toBe(2);
-      expect(generation.permissionReplyInputs.map((input) => input.requestID).slice().sort()).toEqual(
-        [DRAIN_QUESTION_PERMISSION_ID, DRAIN_SHELL_PERMISSION_ID].sort(),
-      );
+      expect(
+        generation.permissionReplyInputs
+          .map((input) => input.requestID)
+          .slice()
+          .sort(),
+      ).toEqual([DRAIN_QUESTION_PERMISSION_ID, DRAIN_SHELL_PERMISSION_ID].sort());
       expect(new Set(generation.permissionReplyInputs.map((input) => input.decision))).toEqual(
         new Set([EXPECTED_AUTO_DECISION]),
       );

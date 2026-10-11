@@ -85,7 +85,7 @@ describeRuntime("real OpenCode: an isolated stub provider serves a real turn", (
     fs.rmSync(isolation?.root ?? "", { recursive: true, force: true });
   });
 
-  const api = <T,>(pathname: string): Promise<T> =>
+  const api = <T>(pathname: string): Promise<T> =>
     server.json<T>(pathname, { headers: { "x-opencode-directory": directory } });
 
   /**
@@ -152,11 +152,15 @@ describeRuntime("real OpenCode: an isolated stub provider serves a real turn", (
     sessionId = created?.data?.id;
     expect(typeof sessionId).toBe("string");
 
-    const headers = { "content-type": "application/json", "x-opencode-directory": isolation.homeDir };
-    await server.json<unknown>(
-      `/api/session/${sessionId}/model`,
-      { method: "POST", headers, body: JSON.stringify({ model: { id: STUB_MODEL_ID, providerID: STUB_PROVIDER_ID } }) },
-    );
+    const headers = {
+      "content-type": "application/json",
+      "x-opencode-directory": isolation.homeDir,
+    };
+    await server.json<unknown>(`/api/session/${sessionId}/model`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: { id: STUB_MODEL_ID, providerID: STUB_PROVIDER_ID } }),
+    });
     // Selection is proven by the session reporting the model back, not by the
     // 204: a switch that silently did nothing would look identical otherwise.
     const bound = await api<{ data: { model?: { id?: string; providerID?: string } } }>(
@@ -209,7 +213,9 @@ describeRuntime("real OpenCode: an isolated stub provider serves a real turn", (
     expect(names).toContain("read");
     // And the offering must sit on a request carrying the agent preamble, which
     // is what distinguishes an agent turn from the title call.
-    expect(offering.some((request) => request.messages.some((m) => m.role === "system"))).toBe(true);
+    expect(offering.some((request) => request.messages.some((m) => m.role === "system"))).toBe(
+      true,
+    );
   }, 120_000);
 
   it("gate 6+7: a tool call round trip completes, including the tool-result turn", async () => {
@@ -233,7 +239,11 @@ describeRuntime("real OpenCode: an isolated stub provider serves a real turn", (
       JSON.stringify(buildStubOpenCodeConfig(toolStub.baseURL), null, 2),
       "utf8",
     );
-    const toolServer = await startRuntimeOpenCodeServer(undefined, {}, { isolation: toolIsolation });
+    const toolServer = await startRuntimeOpenCodeServer(
+      undefined,
+      {},
+      { isolation: toolIsolation },
+    );
     const headers = {
       "content-type": "application/json",
       "x-opencode-directory": toolIsolation.homeDir,
@@ -265,7 +275,11 @@ describeRuntime("real OpenCode: an isolated stub provider serves a real turn", (
 
       // Two requests are the round trip: the tool call, then the turn carrying
       // its result. Polling for the second avoids a fixed sleep.
-      for (let attempt = 0; attempt < 120 && toolStub.toolResultRequests.length === 0; attempt += 1) {
+      for (
+        let attempt = 0;
+        attempt < 120 && toolStub.toolResultRequests.length === 0;
+        attempt += 1
+      ) {
         await Bun.sleep(500);
       }
       expect(toolStub.requests.length).toBeGreaterThanOrEqual(2);

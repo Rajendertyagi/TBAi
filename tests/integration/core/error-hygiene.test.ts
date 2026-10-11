@@ -185,9 +185,7 @@ function controlledResponse(pathname: string, requestNumber: number): Response {
         // the first request of the case answers with the call.
         if (behavior === "tool-call-then-complete" && requestNumber === 1) {
           controller.enqueue(
-            encoder.encode(
-              toolCallChunk("read_file", { path: TOOL_ERROR_MARKER }, "tool_calls"),
-            ),
+            encoder.encode(toolCallChunk("read_file", { path: TOOL_ERROR_MARKER }, "tool_calls")),
           );
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
@@ -329,14 +327,16 @@ function userMessage(text: string): Record<string, unknown> {
 }
 
 async function createDirectConversation(title: string): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title,
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title,
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 

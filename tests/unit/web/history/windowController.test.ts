@@ -23,7 +23,11 @@ const row = (n: number): PersistedRow => ({
   parentId: n === 1 ? null : `m${n - 1}`,
   format: "ai-sdk/v6",
   content: { id: `m${n}`, parts: [{ type: "text", text: `body m${n}` }] },
-  message: { id: `m${n}`, role: n % 2 === 1 ? "user" : "assistant", parts: [{ type: "text", text: `body m${n}` }] },
+  message: {
+    id: `m${n}`,
+    role: n % 2 === 1 ? "user" : "assistant",
+    parts: [{ type: "text", text: `body m${n}` }],
+  },
 });
 
 /** The persisted chain: a single branch m1..m500 (P1' authority). */
@@ -44,7 +48,8 @@ const sliceOf = (request: WindowRequest, limit: number): WindowSliceResponse => 
     };
   }
   const startId = request.anchorId === null ? TOTAL - 1 : ids.indexOf(request.anchorId);
-  if (startId < 0) return { messages: [], hasMoreBefore: false, hasMoreAfter: false, contiguous: true };
+  if (startId < 0)
+    return { messages: [], hasMoreBefore: false, hasMoreAfter: false, contiguous: true };
   const end = Math.min(TOTAL, startId + limit);
   return {
     messages: CHAIN.slice(startId, end),
@@ -249,8 +254,16 @@ describe("P2 controller — window lifecycle", () => {
 
     const broken = new WindowController({
       limit: 50,
-      anchors: () => ({ top: { messageId: "m498", offset: 0 }, bottom: { messageId: "m500", offset: 0 } }),
-      fetchWindow: async () => ({ messages: [], hasMoreBefore: false, hasMoreAfter: false, contiguous: false }),
+      anchors: () => ({
+        top: { messageId: "m498", offset: 0 },
+        bottom: { messageId: "m500", offset: 0 },
+      }),
+      fetchWindow: async () => ({
+        messages: [],
+        hasMoreBefore: false,
+        hasMoreAfter: false,
+        contiguous: false,
+      }),
     });
     let error: WindowControllerError | null = null;
     try {
@@ -264,7 +277,10 @@ describe("P2 controller — window lifecycle", () => {
     // keeps that window — the incomplete walk never replaces it.
     const failing = new WindowController({
       limit: 50,
-      anchors: () => ({ top: { messageId: "m498", offset: 0 }, bottom: { messageId: "m500", offset: 0 } }),
+      anchors: () => ({
+        top: { messageId: "m498", offset: 0 },
+        bottom: { messageId: "m500", offset: 0 },
+      }),
       fetchWindow: async (request) => {
         const slice = sliceOf(request, 50);
         return request.anchorId === null ? slice : { ...slice, contiguous: false };
@@ -367,11 +383,14 @@ describe("P2 controller — write-back boundary", () => {
     // public API so the module-local symbol is the shared one.
     const boundRow = (id: string, parentId: string | null) => {
       const message = { id, role: "assistant", content: [] } as unknown as Record<string, unknown>;
-      bindExternalStoreMessage(message as never, {
-        id,
-        role: "assistant",
-        parts: [{ type: "text", text: `body ${id}` }],
-      } as never);
+      bindExternalStoreMessage(
+        message as never,
+        {
+          id,
+          role: "assistant",
+          parts: [{ type: "text", text: `body ${id}` }],
+        } as never,
+      );
       return { message, parentId };
     };
 

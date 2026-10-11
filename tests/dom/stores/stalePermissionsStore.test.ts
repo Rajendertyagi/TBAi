@@ -11,24 +11,18 @@ import {
 
 describe("isPermissionGone", () => {
   it("recognises the OpenCode server's not-found reply", () => {
-    expect(
-      isPermissionGone(new Error("Permission request not found: per_0ab678")),
-    ).toBe(true);
+    expect(isPermissionGone(new Error("Permission request not found: per_0ab678"))).toBe(true);
   });
 
   it("is case-insensitive and reads non-Error throwables", () => {
     expect(isPermissionGone("permission request NOT FOUND")).toBe(true);
-    expect(isPermissionGone({ message: "Permission request not found" })).toBe(
-      true,
-    );
+    expect(isPermissionGone({ message: "Permission request not found" })).toBe(true);
   });
 
   it("does not treat an unrelated failure as gone", () => {
     // A transient failure must stay retryable: the card keeps its controls.
     expect(isPermissionGone(new Error("Failed to fetch"))).toBe(false);
-    expect(isPermissionGone(new Error("NetworkError when attempting"))).toBe(
-      false,
-    );
+    expect(isPermissionGone(new Error("NetworkError when attempting"))).toBe(false);
     expect(isPermissionGone(undefined)).toBe(false);
     expect(isPermissionGone(new Error("session not found"))).toBe(false);
   });
@@ -116,9 +110,7 @@ describe("reportPermissionGone — the write half", () => {
     // same id reads as stale from then on — which is what makes both approval
     // surfaces render nothing for it.
     const { markStale } = useStalePermissionsStore.getState();
-    expect(
-      isStaleApproval("per_gone", useStalePermissionsStore.getState().stale),
-    ).toBe(false);
+    expect(isStaleApproval("per_gone", useStalePermissionsStore.getState().stale)).toBe(false);
 
     reportPermissionGone(
       "per_gone",
@@ -126,9 +118,7 @@ describe("reportPermissionGone — the write half", () => {
       markStale,
     );
 
-    expect(
-      isStaleApproval("per_gone", useStalePermissionsStore.getState().stale),
-    ).toBe(true);
+    expect(isStaleApproval("per_gone", useStalePermissionsStore.getState().stale)).toBe(true);
   });
 
   it("retires only the request that failed, never its neighbours", () => {
@@ -146,20 +136,16 @@ describe("reportPermissionGone — the write half", () => {
   it("leaves an ordinary transient failure retryable", () => {
     // Conflating "gone" with "failed" would hide a card a retry could answer.
     const { markStale } = useStalePermissionsStore.getState();
-    expect(
-      reportPermissionGone("per_transient", new Error("Failed to fetch"), markStale),
-    ).toBe(false);
+    expect(reportPermissionGone("per_transient", new Error("Failed to fetch"), markStale)).toBe(
+      false,
+    );
     expect(useStalePermissionsStore.getState().stale.size).toBe(0);
   });
 
   it("reports nothing when there is no approval id to retire", () => {
     const { markStale } = useStalePermissionsStore.getState();
     expect(
-      reportPermissionGone(
-        undefined,
-        new Error("Permission request not found"),
-        markStale,
-      ),
+      reportPermissionGone(undefined, new Error("Permission request not found"), markStale),
     ).toBe(false);
     expect(useStalePermissionsStore.getState().stale.size).toBe(0);
   });
@@ -260,8 +246,7 @@ describe("approval parity — every surface shares the ONE guard", () => {
     const store = await Bun.file(
       path.join(REPO_ROOT, "web/src/stores/stalePermissionsStore.ts"),
     ).text();
-    const occurrences =
-      stripComments(store).match(/permission request not found/gi) ?? [];
+    const occurrences = stripComments(store).match(/permission request not found/gi) ?? [];
     expect(occurrences.length).toBe(1);
   });
 

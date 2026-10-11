@@ -20,18 +20,11 @@ async function waitDraft(page: Page): Promise<void> {
     .getByRole("heading", { name: /what do you want to build/i })
     .first()
     .waitFor({ timeout: 30000 });
-  await expect(
-    page.getByRole("group", { name: "Engine" }),
-  ).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("group", { name: "Engine" })).toBeVisible({ timeout: 10000 });
 }
 
-async function setDraftEngine(
-  page: Page,
-  engine: "Direct" | "OpenCode",
-): Promise<void> {
-  const pill = page
-    .getByRole("group", { name: "Engine" })
-    .getByRole("button", { name: engine });
+async function setDraftEngine(page: Page, engine: "Direct" | "OpenCode"): Promise<void> {
+  const pill = page.getByRole("group", { name: "Engine" }).getByRole("button", { name: engine });
   if ((await pill.getAttribute("aria-pressed")) !== "true") {
     await pill.click();
     await expect(pill).toHaveAttribute("aria-pressed", "true");
@@ -143,9 +136,7 @@ test("D1 Direct draft send routes to /chat/<id> (intercept proves /api/chat call
     // straight after the URL assertion raced and intermittently saw 0. The
     // cleared composer proves the send finished, and the poll covers the
     // remaining gap without sleeping for a fixed period.
-    await expect
-      .poll(() => chatCallCount, { timeout: 30000 })
-      .toBeGreaterThan(0);
+    await expect.poll(() => chatCallCount, { timeout: 30000 }).toBeGreaterThan(0);
     // Still exactly one: a duplicate would have arrived by now that the send has
     // completed, so this remains a real duplicate-send guard rather than a race.
     expect(chatCallCount).toBe(1);
@@ -159,9 +150,7 @@ test("D1 Direct draft send routes to /chat/<id> (intercept proves /api/chat call
   }
 });
 
-test("D2 OpenCode draft send routes to /code/<id> with zero /api/chat calls", async ({
-  page,
-}) => {
+test("D2 OpenCode draft send routes to /code/<id> with zero /api/chat calls", async ({ page }) => {
   const MARKER = "p4-opencode-e2e-2";
   let chatCallCount = 0;
 
@@ -190,9 +179,7 @@ test("D2 OpenCode draft send routes to /code/<id> with zero /api/chat calls", as
 
     // OpenCode draft: the send button is a custom circle-arrow, not the
     // library's standard submit button. Click it explicitly.
-    const sendBtn = page.locator(
-      'button[aria-label*="Send message"], button[size="7"]',
-    ).first();
+    const sendBtn = page.locator('button[aria-label*="Send message"], button[size="7"]').first();
     await expect(sendBtn).toBeVisible({ timeout: 10000 });
     await sendBtn.click();
 

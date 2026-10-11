@@ -90,14 +90,10 @@ describe("source guards — the timeline is gated at the call site", () => {
     // The gate lives at the ONE call site. If either surface started mounting
     // its own, the engine rule would exist in two places and could drift.
     const chatView = stripComments(
-      await Bun.file(
-        path.join(REPO_ROOT, "web/src/features/chat/components/ChatView.tsx"),
-      ).text(),
+      await Bun.file(path.join(REPO_ROOT, "web/src/features/chat/components/ChatView.tsx")).text(),
     );
     const openCodeView = stripComments(
-      await Bun.file(
-        path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx"),
-      ).text(),
+      await Bun.file(path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeView.tsx")).text(),
     );
     expect(chatView).not.toContain("SessionTimeline");
     expect(openCodeView).not.toContain("SessionTimeline");

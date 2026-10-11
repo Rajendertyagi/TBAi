@@ -43,9 +43,7 @@ describe("searchMatchKey — identity is where the match is", () => {
 
   it("does not shift when an item is inserted ahead of it", () => {
     const original = searchMatchKey(B);
-    const withInsertion = [A, { path: "src/new.ts", line: 1 }, B].map(
-      searchMatchKey,
-    );
+    const withInsertion = [A, { path: "src/new.ts", line: 1 }, B].map(searchMatchKey);
     expect(withInsertion[2]).toBe(original);
   });
 
@@ -101,9 +99,7 @@ describe("questionItemKey — identity is the question itself", () => {
 
   it("keeps two questions with the same text but different headers apart", () => {
     // Realistic: a form may ask the same question under two headings.
-    expect(questionItemKey("Before", "Continue?")).not.toBe(
-      questionItemKey("After", "Continue?"),
-    );
+    expect(questionItemKey("Before", "Continue?")).not.toBe(questionItemKey("After", "Continue?"));
   });
 
   it("follows a question through a reorder", () => {
@@ -118,11 +114,7 @@ describe("questionItemKey — identity is the question itself", () => {
 
   it("does not shift when a question is inserted before it", () => {
     const key = questionItemKey("H2", "B?");
-    const list = [
-      questionItemKey("H0", "Z?"),
-      questionItemKey("H1", "A?"),
-      key,
-    ];
+    const list = [questionItemKey("H0", "Z?"), questionItemKey("H1", "A?"), key];
     expect(list[2]).toBe(key);
   });
 });

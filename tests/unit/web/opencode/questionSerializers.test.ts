@@ -5,7 +5,11 @@ import type { FormInfo } from "@opencode/client";
 import { V2FormCard } from "@web/features/opencode/V2FormCard.tsx";
 import { projectV2Form, type V2FormView } from "@web/features/opencode/v2Forms.ts";
 import { questionAsJson, questionAsMarkdown } from "@web/features/opencode/questionSerializers.ts";
-import { capturedQuestionForm, CAPTURED_QUESTION_PART_ID, CAPTURED_QUESTION_SESSION_ID } from "@web/testing/question-payloads";
+import {
+  capturedQuestionForm,
+  CAPTURED_QUESTION_PART_ID,
+  CAPTURED_QUESTION_SESSION_ID,
+} from "@web/testing/question-payloads";
 import { toolsConfig } from "@web/config/tools";
 
 /**
@@ -68,7 +72,12 @@ function keysIn(value: unknown, found: string[] = []): string[] {
 }
 
 function viewOf(fields: FormInfo["fields"]): V2FormView {
-  return projectV2Form({ id: "frm_route_me_not", sessionID: "ses_route_me_not", title: "Preferences", fields });
+  return projectV2Form({
+    id: "frm_route_me_not",
+    sessionID: "ses_route_me_not",
+    title: "Preferences",
+    fields,
+  });
 }
 
 describe("a copied question carries the question and nothing that routes it", () => {
@@ -83,7 +92,9 @@ describe("a copied question carries the question and nothing that routes it", ()
     expect(markdown).toContain("- Postgres");
     // The detail under an option travels too, so the choice can be made by
     // reading rather than by recognising a word.
-    expect(markdown).toContain("file-based, zero-config, ideal for a small app with minimal ops overhead");
+    expect(markdown).toContain(
+      "file-based, zero-config, ideal for a small app with minimal ops overhead",
+    );
     // And the escape hatch is offered, because the capture's field has options
     // AND `custom: true` — the very combination this app got wrong before.
     expect(markdown).toContain(toolsConfig.copy.form.customEntryLabel);
@@ -129,7 +140,15 @@ describe("a copied question carries the question and nothing that routes it", ()
     const parsed: unknown = JSON.parse(questionAsJson(CAPTURED_VIEW));
     expect(Array.isArray(parsed)).toBe(true);
     const [field] = parsed as [
-      { key: string; title: string; description: string; required: boolean; type: string; freeText: boolean; options: { value: string; label: string }[] },
+      {
+        key: string;
+        title: string;
+        description: string;
+        required: boolean;
+        type: string;
+        freeText: boolean;
+        options: { value: string; label: string }[];
+      },
     ];
     expect(field.key).toBe("q0");
     expect(field.title).toBe("Database choice");
@@ -148,11 +167,21 @@ describe("a copied question carries the question and nothing that routes it", ()
     // script can index the questions without unwrapping anything.
     const parsed = JSON.parse(questionAsJson(CAPTURED_VIEW)) as Record<string, unknown>[];
     expect(parsed).toHaveLength(1);
-    expect(Object.keys(parsed[0])).toEqual(["key", "title", "description", "required", "type", "options", "freeText"]);
+    expect(Object.keys(parsed[0])).toEqual([
+      "key",
+      "title",
+      "description",
+      "required",
+      "type",
+      "options",
+      "freeText",
+    ]);
   });
 
   it("writes an option's own shape and nothing else, so no id can hide inside one", () => {
-    const parsed = JSON.parse(questionAsJson(CAPTURED_VIEW)) as { options: Record<string, unknown>[] }[];
+    const parsed = JSON.parse(questionAsJson(CAPTURED_VIEW)) as {
+      options: Record<string, unknown>[];
+    }[];
     expect(Object.keys(parsed[0].options[0])).toEqual(["value", "label", "description"]);
   });
 
@@ -171,7 +200,9 @@ describe("a copied question carries the question and nothing that routes it", ()
     for (const id of ROUTING_IDS) expect(json).not.toContain(id);
     // A boolean keeps `options: null` — its answer is a JSON boolean, not one
     // of two strings, so no two-string fiction rides along.
-    const [booleanField] = JSON.parse(questionAsJson(viewOf([{ key: "ok", type: "boolean" }]))) as { options: unknown }[];
+    const [booleanField] = JSON.parse(questionAsJson(viewOf([{ key: "ok", type: "boolean" }]))) as {
+      options: unknown;
+    }[];
     expect(booleanField.options).toBeNull();
   });
 
@@ -236,9 +267,18 @@ describe("the dock's header — the two copy actions", () => {
     // person follows the precedent instead of the rule.
     const form = toolsConfig.copy.form;
     for (const key of [
-      "copyMarkdown", "copyJson", "copiedMarkdown", "copiedJson", "copyRefused",
-      "copyUnavailable", "copyEmpty", "copyRequired", "copyAnswerText",
-      "copyAnswerNumber", "copyAnswerInteger", "copyAnswerList",
+      "copyMarkdown",
+      "copyJson",
+      "copiedMarkdown",
+      "copiedJson",
+      "copyRefused",
+      "copyUnavailable",
+      "copyEmpty",
+      "copyRequired",
+      "copyAnswerText",
+      "copyAnswerNumber",
+      "copyAnswerInteger",
+      "copyAnswerList",
     ] as const) {
       expect(typeof form[key]).toBe("string");
       expect(form[key].length).toBeGreaterThan(0);

@@ -157,7 +157,9 @@ export const buildStampPath = (webDistDir: string): string =>
  */
 export function readBuildStamp(webDistDir: string): BuildStamp | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(buildStampPath(webDistDir), "utf8")) as Partial<BuildStamp>;
+    const parsed = JSON.parse(
+      fs.readFileSync(buildStampPath(webDistDir), "utf8"),
+    ) as Partial<BuildStamp>;
     if (typeof parsed?.sourceHash !== "string" || parsed.sourceHash.length === 0) return null;
     return {
       sourceHash: parsed.sourceHash,

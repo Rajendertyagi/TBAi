@@ -58,16 +58,15 @@ import {
 let fakeQuery: string | undefined = "my query";
 let fakeRawParts: unknown = null;
 
-const useToolArgsStatusMock = mock(
-  () => ({ propStatus: fakeQuery === undefined ? undefined : { query: fakeQuery } }),
-);
-const useAuiStateMock = mock(
-  (selector: (state: unknown) => unknown) =>
-    selector({
-      message: {
-        metadata: { custom: { opencode: { parts: fakeRawParts } } },
-      },
-    }),
+const useToolArgsStatusMock = mock(() => ({
+  propStatus: fakeQuery === undefined ? undefined : { query: fakeQuery },
+}));
+const useAuiStateMock = mock((selector: (state: unknown) => unknown) =>
+  selector({
+    message: {
+      metadata: { custom: { opencode: { parts: fakeRawParts } } },
+    },
+  }),
 );
 
 function installRendererHookFakes() {
@@ -168,9 +167,7 @@ describe("websearch — the captured exa document that reproduced the defect", (
     expect(html).toContain(`Read ${headingCount(exaLiveDocument)} sources`);
     expect(html).toContain("Installation | Bun Docs");
     expect(html).not.toContain("endoflife.date");
-    expect(toolsConfig.limits.webSearchMaxResults).toBeLessThan(
-      headingCount(exaLiveDocument),
-    );
+    expect(toolsConfig.limits.webSearchMaxResults).toBeLessThan(headingCount(exaLiveDocument));
   });
 
   it("keeps the captured document visible beneath the rows", () => {
@@ -214,24 +211,21 @@ describe("websearch — the captured provider shapes", () => {
     // a LINK; keying on `##` alone would report a dozen sources.
     const hits = parseOpenCodeWebSearchHits(webSearchContent(tavilyDocument));
     expect(hits).toHaveLength(headingCount(tavilyDocument));
-    expect(hits?.map((hit) => hit.domain)).toEqual([
-      "npmjs.com",
-      "jsdelivr.com",
-    ]);
+    expect(hits?.map((hit) => hit.domain)).toEqual(["npmjs.com", "jsdelivr.com"]);
   });
 
   it("tolerates a hit with no snippet at all", () => {
     // Synthetic: no capture is this shape, but the document does not promise a
     // snippet, and a heading alone is still a real hit.
-    expect(
-      parseOpenCodeWebSearchHits("## [Only a heading](https://example.com/a)\n"),
-    ).toEqual([{ title: "Only a heading", domain: "example.com" }]);
+    expect(parseOpenCodeWebSearchHits("## [Only a heading](https://example.com/a)\n")).toEqual([
+      { title: "Only a heading", domain: "example.com" },
+    ]);
   });
 
   it("tolerates CRLF line endings and surrounding whitespace", () => {
-    expect(
-      parseOpenCodeWebSearchHits("  ## [Padded](https://example.com/p)  \r\n\r\n"),
-    ).toEqual([{ title: "Padded", domain: "example.com" }]);
+    expect(parseOpenCodeWebSearchHits("  ## [Padded](https://example.com/p)  \r\n\r\n")).toEqual([
+      { title: "Padded", domain: "example.com" },
+    ]);
   });
 
   it("drops a heading whose link is not a URL, and one with no title", () => {
@@ -378,7 +372,13 @@ describe("websearch — the provider caption", () => {
       ]);
       const html = render(
         OpenCodeWebSearchToolUI,
-        webSearchPart({ query: "q" }, webSearchContent(document), { type: "complete" }, null, "call_part"),
+        webSearchPart(
+          { query: "q" },
+          webSearchContent(document),
+          { type: "complete" },
+          null,
+          "call_part",
+        ),
       );
       expect(html, provider).toContain(toolsConfig.copy.webSearch.searchedVia(provider));
     }
@@ -445,7 +445,13 @@ describe("websearch — the provider caption", () => {
     withRawParts(undefined);
     const html = render(
       OpenCodeWebSearchToolUI,
-      webSearchPart({ query: "q" }, webSearchContent(tinyfishDocument), { type: "complete" }, null, "call_ws"),
+      webSearchPart(
+        { query: "q" },
+        webSearchContent(tinyfishDocument),
+        { type: "complete" },
+        null,
+        "call_ws",
+      ),
     );
     expect(html).not.toMatch(/Searched via/);
     expect(html).toContain("Read 2 sources");
@@ -472,7 +478,13 @@ describe("websearch — the provider caption", () => {
     ]);
     const html = render(
       OpenCodeWebSearchToolUI,
-      webSearchPart({ query: "q" }, webSearchContent(tinyfishDocument), { type: "complete" }, null, "call_second"),
+      webSearchPart(
+        { query: "q" },
+        webSearchContent(tinyfishDocument),
+        { type: "complete" },
+        null,
+        "call_second",
+      ),
     );
     expect(html).toContain(toolsConfig.copy.webSearch.searchedVia("tinyfish"));
     expect(html).not.toContain(toolsConfig.copy.webSearch.searchedVia("exa"));
@@ -491,7 +503,13 @@ describe("websearch — the provider caption", () => {
     ]);
     const html = render(
       OpenCodeWebSearchToolUI,
-      webSearchPart({ query: "q" }, webSearchContent(exaLiveDocument), { type: "complete" }, null, "call_c"),
+      webSearchPart(
+        { query: "q" },
+        webSearchContent(exaLiveDocument),
+        { type: "complete" },
+        null,
+        "call_c",
+      ),
     );
     const caption = html.slice(html.indexOf(toolsConfig.copy.webSearch.searchedVia("exa")) - 120);
     expect(caption).toContain("text-muted-foreground");
@@ -522,11 +540,7 @@ describe("websearch — searching state", () => {
     fakeQuery = "done";
     const html = render(
       OpenCodeWebSearchToolUI,
-      webSearchPart(
-        { query: "done" },
-        webSearchContent(parallelDocument),
-        { type: "complete" },
-      ),
+      webSearchPart({ query: "done" }, webSearchContent(parallelDocument), { type: "complete" }),
     );
     expect(html).toContain("Read 2 sources");
     expect(html).not.toContain("Searching");
@@ -541,10 +555,7 @@ describe("websearch — query rendering", () => {
     fakeQuery = "the exact query";
     const html = render(
       OpenCodeWebSearchToolUI,
-      webSearchPart(
-        { query: "the exact query" },
-        webSearchContent(parallelDocument),
-      ),
+      webSearchPart({ query: "the exact query" }, webSearchContent(parallelDocument)),
     );
     expect(html).toContain("the exact query");
   });
@@ -627,7 +638,11 @@ describe("websearch — unrelated OpenCode renderers unchanged", () => {
   it("read still resolves to its own renderer and shows the body", () => {
     const html = render(
       OpenCodeReadToolUI,
-      completed("read", { filePath: "D:\\ws\\n.txt" }, { content: webSearchContent("line1\nline2") }),
+      completed(
+        "read",
+        { filePath: "D:\\ws\\n.txt" },
+        { content: webSearchContent("line1\nline2") },
+      ),
     );
     expect(html).toContain("line1");
     expect(html).toContain("line2");
@@ -643,7 +658,11 @@ describe("websearch — unrelated OpenCode renderers unchanged", () => {
     expect(
       render(
         OpenCodeGrepToolUI,
-        completed("grep", { pattern: "needle", include: "*.ts" }, { content: webSearchContent("x.ts:1") }),
+        completed(
+          "grep",
+          { pattern: "needle", include: "*.ts" },
+          { content: webSearchContent("x.ts:1") },
+        ),
       ),
     ).toContain("grep · needle");
   });
@@ -664,7 +683,11 @@ describe("websearch — unrelated OpenCode renderers unchanged", () => {
     expect(
       render(
         OpenCodeWriteToolUI,
-        completed("write", { filePath: "D:\\ws\\w.txt", content: "data" }, { content: webSearchContent("Wrote file successfully.") }),
+        completed(
+          "write",
+          { filePath: "D:\\ws\\w.txt", content: "data" },
+          { content: webSearchContent("Wrote file successfully.") },
+        ),
       ),
     ).toContain("write · D:\\ws\\w.txt");
   });
@@ -672,10 +695,7 @@ describe("websearch — unrelated OpenCode renderers unchanged", () => {
   it("websearch is not normalized away (it has no arg aliases)", () => {
     // The websearch renderer reads args.query directly; the normalizer passes
     // it through untouched.
-    const args = normalizeOpenCodeArgs("websearch", { query: "q" }) as Record<
-      string,
-      unknown
-    >;
+    const args = normalizeOpenCodeArgs("websearch", { query: "q" }) as Record<string, unknown>;
     expect(args?.query).toBe("q");
   });
 });

@@ -319,10 +319,17 @@ export function createAudit(options: AuditOptions): AuditHarness {
         };
         const createMessage = toCreateMessage(m as never);
         if (!(m.startRun ?? m.role === "user")) {
-          setMessages((current) => [
-            ...(current as unknown as AiUiMessage[]),
-            { id: `local-${current.length + 1}`, role: m.role as "user", parts: createMessage.parts },
-          ] as never);
+          setMessages(
+            (current) =>
+              [
+                ...(current as unknown as AiUiMessage[]),
+                {
+                  id: `local-${current.length + 1}`,
+                  role: m.role as "user",
+                  parts: createMessage.parts,
+                },
+              ] as never,
+          );
           return;
         }
         await chat.sendMessage(createMessage as never, {
@@ -344,10 +351,7 @@ export function createAudit(options: AuditOptions): AuditHarness {
         if (!(m.startRun ?? m.role === "user")) {
           setMessages(
             (current) =>
-              [
-                ...sliceMessagesUntil(current as never, m.parentId),
-                createMessage,
-              ] as never,
+              [...sliceMessagesUntil(current as never, m.parentId), createMessage] as never,
           );
           return;
         }
@@ -359,7 +363,9 @@ export function createAudit(options: AuditOptions): AuditHarness {
       onReload: async (parentId: string | null, config?: unknown) => {
         const newMessages = sliceMessagesUntil(chat.messages as never, parentId);
         setMessages(newMessages as never);
-        await chat.regenerate({ metadata: (config as { runConfig?: unknown })?.runConfig as never });
+        await chat.regenerate({
+          metadata: (config as { runConfig?: unknown })?.runConfig as never,
+        });
       },
 
       // useAISDKRuntime.js:565
@@ -475,8 +481,9 @@ export function createAudit(options: AuditOptions): AuditHarness {
       await new Promise((r) => setTimeout(r, 40));
     },
     dispose() {
-      (core as unknown as { invalidateThreadRuntime?: (r: unknown) => void })
-        .invalidateThreadRuntime?.(runtime);
+      (
+        core as unknown as { invalidateThreadRuntime?: (r: unknown) => void }
+      ).invalidateThreadRuntime?.(runtime);
     },
   };
 }

@@ -39,17 +39,10 @@ export type ConversationCustom = {
 };
 
 export function ModelChip() {
-  const {
-    providers,
-    activeProviderId,
-    selectedProviderId,
-    selectedModelId,
-    selectChatTarget,
-  } = useSettingsStore();
+  const { providers, activeProviderId, selectedProviderId, selectedModelId, selectChatTarget } =
+    useSettingsStore();
   const aui = useAui();
-  const custom = useAuiState((s) => s.threadListItem.custom) as
-    | ConversationCustom
-    | undefined;
+  const custom = useAuiState((s) => s.threadListItem.custom) as ConversationCustom | undefined;
   const [open, setOpen] = useState(false);
 
   // Every provider's models, grouped under its name (single source in
@@ -58,8 +51,7 @@ export function ModelChip() {
 
   // Effective selection: one-shot picker override wins, else the conversation
   // default (custom), else the global active provider's model.
-  let currentProviderId =
-    selectedProviderId ?? custom?.providerId ?? activeProviderId;
+  let currentProviderId = selectedProviderId ?? custom?.providerId ?? activeProviderId;
   let currentModelId: string | undefined;
   if (selectedModelId) {
     const owner = resolveModelOwner(groups, selectedModelId);
@@ -72,9 +64,7 @@ export function ModelChip() {
   const currentProvider = providers.find((p) => p.id === currentProviderId);
   currentModelId ??= currentProvider?.model ?? "";
   const currentModel =
-    groups
-      .flatMap((g) => g.models)
-      .find((m) => m.id === currentModelId) ?? undefined;
+    groups.flatMap((g) => g.models).find((m) => m.id === currentModelId) ?? undefined;
   const label = currentModel?.label ?? currentModelId ?? composerConfig.copy.selectModel;
 
   const handleSelect = (providerId: string, modelId: string) => {
@@ -121,8 +111,7 @@ export function ModelChip() {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="min-w-55 p-0">
-        {groups.length === 0 ||
-        groups.every((g) => g.models.length === 0) ? (
+        {groups.length === 0 || groups.every((g) => g.models.length === 0) ? (
           <div className="px-3 py-6 text-center text-sm text-muted-foreground">
             {composerConfig.copy.noModels}
           </div>
@@ -157,9 +146,7 @@ export function ModelChip() {
 export function ThinkingChip() {
   const [open, setOpen] = useState(false);
   const aui = useAui();
-  const custom = useAuiState((s) => s.threadListItem.custom) as
-    | ConversationCustom
-    | undefined;
+  const custom = useAuiState((s) => s.threadListItem.custom) as ConversationCustom | undefined;
   // Display follows: one-shot override > conversation default > provider default.
   const stored = useSettingsStore((s) => s.selectedReasoningLevel);
   const providerDefault = useSettingsStore((s) => {
@@ -169,8 +156,7 @@ export function ThinkingChip() {
   // Show the level that will actually be used. The old code mapped "off" onto a
   // "Default" label, so a conversation with thinking disabled still read as if
   // something would happen.
-  const selected: ReasoningLevel =
-    stored ?? custom?.reasoningLevel ?? providerDefault;
+  const selected: ReasoningLevel = stored ?? custom?.reasoningLevel ?? providerDefault;
 
   const handleSelect = (level: ReasoningLevel) => {
     setOpen(false);
@@ -229,4 +215,3 @@ export function ThinkingChip() {
     </DropdownMenu>
   );
 }
-

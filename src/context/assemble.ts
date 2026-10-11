@@ -67,9 +67,19 @@ import {
 } from "./limits";
 import { readObservedContextWindow } from "./observed-limits";
 import { evaluateTier2, TIER_2_MAX_TOKENS, type Tier2Verdict } from "./tier2";
-import { combineEstimates, measureInstructions, measureMessages, measureToolDefinitions } from "./measure";
+import {
+  combineEstimates,
+  measureInstructions,
+  measureMessages,
+  measureToolDefinitions,
+} from "./measure";
 import { reduceToolResults, describeToolResultReduction } from "./reduce";
-import { applyExistingCompaction, isCompactionLatched, maybeCompact, summarizeSpan } from "./compaction";
+import {
+  applyExistingCompaction,
+  isCompactionLatched,
+  maybeCompact,
+  summarizeSpan,
+} from "./compaction";
 import { describeCompactionOutcome } from "./compaction/outcome";
 import { memoryDiagnostics, runMemoryPhase } from "./memory";
 import type { CompactionPhaseInput, CompactionReport, CompactionSeam } from "./types";
@@ -214,7 +224,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   // Splicing a partial prefix silently drops client messages from the request,
   // which is strictly worse than trusting the client.
   let effectiveMessages = submittedMessages;
-  let p1pApplied = false;
+  let _p1pApplied = false;
 
   if (conversationId && !input.disableP1p) {
     try {
@@ -232,7 +242,9 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
         const oldestSubmittedId = submittedMessages[0]?.id;
 
         if (oldestSubmittedId !== undefined) {
-          const boundaryChainIndex = headChain.messages.findIndex((m) => m.id === oldestSubmittedId);
+          const boundaryChainIndex = headChain.messages.findIndex(
+            (m) => m.id === oldestSubmittedId,
+          );
 
           // Absent from the authoritative chain ⇒ fail closed to client history.
           if (boundaryChainIndex >= 0) {
@@ -241,7 +253,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
               .map((m) => m.content as UIMessage);
             // The ENTIRE submission is retained, boundary included.
             effectiveMessages = [...serverPrefix, ...submittedMessages];
-            p1pApplied = true;
+            _p1pApplied = true;
           }
         }
       }
@@ -278,15 +290,18 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   const { messages: reduced, report: reduction } = reduceToolResults(repaired);
 
   // ── Layer C, step 3: identify the current turn ─────────────────────────────
-  // Identified on the ORIGINAL reduced list, BEFORE compaction. The current turn
-  // must be known first so the compaction planner can be structurally forbidden
-  // from touching it, and so `currentTurnIds` always describes the real user
-  // request rather than a summary block.
-  const { currentIds, retainedIds } = identifyCurrentTurn(reduced);
+  // Done inside the compaction layer, on the reduced list but BEFORE the
+  // planner runs, so the planner is structurally forbidden from touching the
+  // current turn and `currentTurnIds` describes the real user request rather
+  // than a summary block. See `planCompaction` below (the 565/651/708 call
+  // sites) - there is deliberately no second, earlier identification here.
 
   // ── Reconciliation against stored history ─────────────────────────────────
   // A comparison, never a merge. See divergence.ts for why it does not reject.
-  const divergence = await reconcileWithStoredHistory({ conversationId, submittedMessages: reduced });
+  const divergence = await reconcileWithStoredHistory({
+    conversationId,
+    submittedMessages: reduced,
+  });
 
   // ── Limit + budget ────────────────────────────────────────────────────────
   // Computed BEFORE compaction because the compaction trigger must use the actual
@@ -558,7 +573,11 @@ function resolveSummarizerInputTokens(
 async function runCompactionPhase(
   input: CompactionPhaseInput,
 ): Promise<{ layerC: MessagesLayer; report: CompactionReport }> {
-  const base: CompactionReport = { applied: false, reason: "not_attempted", ...emptyCompactionFields() };
+  const base: CompactionReport = {
+    applied: false,
+    reason: "not_attempted",
+    ...emptyCompactionFields(),
+  };
 
   const seam = input.seam;
   if (!seam || !input.conversationId) {
@@ -577,7 +596,10 @@ async function runCompactionPhase(
     // 1. Re-apply any EXISTING durable record. This is what keeps a compacted
     //    conversation stable across reload, resume and detached completion
     //    without re-summarising on every turn.
-    const reapply = applyExistingCompaction({ messages: input.messages, record: seam.existingRecord });
+    const reapply = applyExistingCompaction({
+      messages: input.messages,
+      record: seam.existingRecord,
+    });
 
     // 2. Measure the (possibly re-applied) history so the trigger uses real
     //    numbers rather than a message count. Layer A and Layer B are added on
@@ -653,7 +675,11 @@ async function runCompactionPhase(
     if (outcome.outcome.applied === false) {
       const noCompactionReason = outcome.outcome.reason;
       return {
-        layerC: { messages: final, currentTurnIds: identified.currentIds, retainedIds: identified.retainedIds },
+        layerC: {
+          messages: final,
+          currentTurnIds: identified.currentIds,
+          retainedIds: identified.retainedIds,
+        },
         report: {
           applied: false,
           reason: reapply.applied
@@ -725,8 +751,9 @@ async function runCompactionPhase(
  * approximation here would make the trigger disagree with the verdict.
  */
 function perMessageTokens(messages: readonly UIMessage[]): number[] {
-  return messages.map((message) =>
-    measureMessages({ messages: [message], currentTurnIds: [], retainedIds: [] }).estimatedTokens,
+  return messages.map(
+    (message) =>
+      measureMessages({ messages: [message], currentTurnIds: [], retainedIds: [] }).estimatedTokens,
   );
 }
 

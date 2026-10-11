@@ -38,11 +38,7 @@
  * The handler still supplies the arrow over its own `terminalBatcher`; the
  * deferral is unchanged, only now it is stated rather than inferred.
  */
-import {
-  assembleContext,
-  localMemoryProvider,
-  memoryEnabled,
-} from "../../context";
+import { assembleContext, localMemoryProvider, memoryEnabled } from "../../context";
 import {
   buildCacheProviderOptions,
   computePrefixIdentity,
@@ -68,11 +64,7 @@ import { chatRuns } from "../../services/chat-runs";
 import { compactionStore } from "../../services/compaction";
 import type { BashOutputEvent } from "../../services/tools";
 import { resolveConversationWorkspace, WorkspaceError } from "../../services/workspace";
-import {
-  buildToolsContext,
-  type NativeToolSet,
-  type NativeToolsContext,
-} from "../../tools";
+import { buildToolsContext, type NativeToolSet, type NativeToolsContext } from "../../tools";
 import type { ChatContextState } from "../chat-model";
 import type { ChatContext, DirectRunSetup, PhaseResult } from "./types";
 
@@ -187,9 +179,7 @@ export async function createRunAndAssemble(
  * neither source produced a usable number, so the meter keeps its previous
  * reading rather than inventing one.
  */
-export function contextStateForUi(
-  state: DirectRunAssembly,
-): ChatContextState | undefined {
+export function contextStateForUi(state: DirectRunAssembly): ChatContextState | undefined {
   const { assembled, lastStepOccupancy } = state;
   if (assembled === undefined) return undefined;
   const provenance = assembled.context.provenance;
@@ -210,7 +200,10 @@ export function contextStateForUi(
     windowSource: contextState.windowSource,
     usableInputTokens: contextState.usableInputTokens,
     occupancyKind: contextState.measurement?.kind ?? "unknown",
-    cachedInputTokens: contextState.measurement?.kind === "provider" ? contextState.measurement.cachedInputTokens : undefined,
+    cachedInputTokens:
+      contextState.measurement?.kind === "provider"
+        ? contextState.measurement.cachedInputTokens
+        : undefined,
     // The resolution identity travels WITH the number, so a reading whose window is
     // no longer the one this conversation would resolve can be recognised as stale
     // instead of being presented as current.
@@ -265,8 +258,7 @@ export async function assembleForRequest(
   terminalTap: (toolCallId: string, event: BashOutputEvent) => void,
   options: { forceCompaction?: boolean } = {},
 ): Promise<void> {
-  const { requestId, threadId, conversation, provider, modelConfig, languageModel, messages } =
-    setup;
+  const { threadId, conversation, provider, modelConfig, languageModel, messages } = setup;
   const { run, workspaceDir } = state;
   try {
     const assembled = await assembleContext({
@@ -327,9 +319,7 @@ export async function assembleForRequest(
       // Off unless `TBAI_MEMORY_ENABLED` is exactly "1"/"true" — supplying this
       // seam makes stored memory model-visible, which is a deliberate act. See
       // `src/context/memory/enablement.ts`.
-      memory: memoryEnabled()
-        ? { provider: localMemoryProvider, enabled: true }
-        : undefined,
+      memory: memoryEnabled() ? { provider: localMemoryProvider, enabled: true } : undefined,
     });
     state.assembled = assembled;
     state.tools = assembled.context.layerB.tools as NativeToolSet & Record<string, any>;

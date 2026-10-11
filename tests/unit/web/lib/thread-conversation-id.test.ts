@@ -8,9 +8,7 @@ type ThreadIdentityState = {
 
 type ResolveConversationId = (state: ThreadIdentityState) => string | null;
 
-async function resolveConversationId(
-  state: ThreadIdentityState,
-): Promise<string | null> {
+async function resolveConversationId(state: ThreadIdentityState): Promise<string | null> {
   const module = await import("@web/lib/thread-conversation-id.ts");
   const resolve = module.resolveThreadConversationId as ResolveConversationId;
   return resolve(state);

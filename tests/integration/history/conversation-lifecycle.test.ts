@@ -40,7 +40,11 @@ async function call(path: string, init: RequestInit = {}) {
 const post = (body: unknown) =>
   call("/api/conversations", { method: "POST", headers: jsonHeaders, body: JSON.stringify(body) });
 const patch = (id: string, body: unknown) =>
-  call(`/api/conversations/${id}`, { method: "PATCH", headers: jsonHeaders, body: JSON.stringify(body) });
+  call(`/api/conversations/${id}`, {
+    method: "PATCH",
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
 const del = (id: string) => call(`/api/conversations/${id}`, { method: "DELETE" });
 const get = (id: string) => call(`/api/conversations/${id}`);
 
@@ -99,7 +103,12 @@ describe("validation failures are truthful and structural", () => {
 describe("PATCH preserve / clear / set", () => {
   it("preserves omitted fields, clears explicit null, sets values", async () => {
     const created = (
-      await post({ title: "Lifecycle", providerId: "lc-provider", modelId: "m1", reasoningLevel: "low" })
+      await post({
+        title: "Lifecycle",
+        providerId: "lc-provider",
+        modelId: "m1",
+        reasoningLevel: "low",
+      })
     ).body;
 
     // Omitted ⇒ preserved.

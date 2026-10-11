@@ -56,12 +56,10 @@ describe("processSummary: the shape of a process listing", () => {
     // `memoryMB: null` is what `p.MemoryMB ?? null` produces, so this is the
     // shape a real listing contains — and an empty right-hand cell would be a
     // blank column the reader cannot read as "unknown".
-    const html = render(
-      [
-        { pid: 1, name: "System", cpuSeconds: null, memoryMB: null },
-        { pid: 2, name: "explorer", cpuSeconds: 4, memoryMB: 88 },
-      ],
-    );
+    const html = render([
+      { pid: 1, name: "System", cpuSeconds: null, memoryMB: null },
+      { pid: 2, name: "explorer", cpuSeconds: 4, memoryMB: 88 },
+    ]);
     expect(countOf(html, "<dd")).toBe(1);
     expect(html).toContain("88 MB");
     expect(html).toContain("System (1)");
@@ -83,11 +81,7 @@ describe("processSummary: the shape of a process listing", () => {
     // different claim from "the machine is idle". The last two are the
     // unreadable results the `r?.processes ?? []` guard exists for: a result
     // with no `processes` key, and no result at all.
-    for (const result of [
-      { count: 0, processes: [] as Proc[] },
-      { count: 0 },
-      undefined,
-    ]) {
+    for (const result of [{ count: 0, processes: [] as Proc[] }, { count: 0 }, undefined]) {
       const html = renderToStaticMarkup(processSummary(result));
       expect(html).toContain(toolsConfig.copy.status.noProcesses);
       expect(html).not.toContain("<dl");

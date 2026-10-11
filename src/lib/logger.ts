@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { generateId } from "./utils";
 import { LOG_PATH as DEFAULT_LOG_PATH } from "../config/data-dir";
@@ -74,7 +74,7 @@ export interface LoggerConfig {
   maxTotalBytes: number;
   retentionMs: number;
 
-/** Live-tail ring cap (entries). Bounded by design — overflow is counted. */
+  /** Live-tail ring cap (entries). Bounded by design — overflow is counted. */
   bufferSize: number;
   /** File-sink backlog cap (lines). Overflow is counted, never blocking. */
   fileQueueLimit: number;
@@ -321,19 +321,16 @@ export const REQUEST_ID_HEADER = "x-request-id";
  * A malformed or absent id is replaced (requestId) or dropped (operationId);
  * neither is ever trusted as-is.
  */
-export function resolveInboundCorrelation(headers: {
-  get(name: string): string | null;
-}): { requestId: string; operationId?: string } {
+export function resolveInboundCorrelation(headers: { get(name: string): string | null }): {
+  requestId: string;
+  operationId?: string;
+} {
   const incomingRequest = headers.get(REQUEST_ID_HEADER);
   const requestId =
-    incomingRequest && CORRELATION_ID_RE.test(incomingRequest)
-      ? incomingRequest
-      : newRequestId();
+    incomingRequest && CORRELATION_ID_RE.test(incomingRequest) ? incomingRequest : newRequestId();
   const incomingOperation = headers.get(OPERATION_ID_HEADER);
   const operationId =
-    incomingOperation && CORRELATION_ID_RE.test(incomingOperation)
-      ? incomingOperation
-      : undefined;
+    incomingOperation && CORRELATION_ID_RE.test(incomingOperation) ? incomingOperation : undefined;
   return { requestId, operationId };
 }
 
@@ -383,15 +380,12 @@ export function normalizeError(err: unknown, includeStack = !isProd()): Normaliz
     message: redactString(message).slice(0, 2000),
   };
   if (err instanceof Error && err.cause !== undefined) {
-    out.causeType =
-      err.cause instanceof Error ? err.cause.name || "Error" : typeof err.cause;
+    out.causeType = err.cause instanceof Error ? err.cause.name || "Error" : typeof err.cause;
   }
   const status = errorStatus(err);
   if (status !== undefined) out.status = status;
   const code =
-    err !== null && typeof err === "object"
-      ? (err as { code?: unknown }).code
-      : undefined;
+    err !== null && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
   if (typeof code === "string" || typeof code === "number") out.code = code;
   if (includeStack && err instanceof Error && err.stack) {
     out.stack = redactString(err.stack).slice(0, 4000);
@@ -471,7 +465,10 @@ export interface LogFileInfo {
 export function listLogFiles(dir: string): LogFileInfo[] {
   let names: string[];
   try {
-    names = fs.readdirSync(dir).filter((n) => LOG_FILE_RE.test(n)).sort();
+    names = fs
+      .readdirSync(dir)
+      .filter((n) => LOG_FILE_RE.test(n))
+      .sort();
   } catch {
     return [];
   }
@@ -834,9 +831,7 @@ class Logger {
       console.log(line);
     }
     if (this.config.fileEnabled && this.config.file) {
-      this.enqueueFileLine(
-        `${JSON.stringify({ ...safe, time: new Date().toISOString() })}\n`,
-      );
+      this.enqueueFileLine(`${JSON.stringify({ ...safe, time: new Date().toISOString() })}\n`);
     }
   }
 
@@ -947,14 +942,13 @@ class Logger {
 
   /** Scoped child carrying fixed bindings (e.g. a requestId) explicitly. */
   child(bindings: LogFields): Pick<Logger, "debug" | "info" | "warn" | "error" | "isEnabled"> {
-    const parent = this;
     const merge = (fields: LogFields): LogFields => ({ ...bindings, ...fields });
     return {
-      debug: (scope, event, fields = {}) => parent.debug(scope, event, merge(fields)),
-      info: (scope, event, fields = {}) => parent.info(scope, event, merge(fields)),
-      warn: (scope, event, fields = {}) => parent.warn(scope, event, merge(fields)),
-      error: (scope, event, fields = {}) => parent.error(scope, event, merge(fields)),
-      isEnabled: (level) => parent.isEnabled(level),
+      debug: (scope, event, fields = {}) => this.debug(scope, event, merge(fields)),
+      info: (scope, event, fields = {}) => this.info(scope, event, merge(fields)),
+      warn: (scope, event, fields = {}) => this.warn(scope, event, merge(fields)),
+      error: (scope, event, fields = {}) => this.error(scope, event, merge(fields)),
+      isEnabled: (level) => this.isEnabled(level),
     };
   }
 

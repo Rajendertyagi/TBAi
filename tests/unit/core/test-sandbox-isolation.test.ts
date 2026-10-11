@@ -13,9 +13,9 @@
  */
 import { describe, expect, it, afterAll, beforeAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   collectStaleSandboxes,
@@ -110,7 +110,9 @@ describe("per-file sandbox resolution", () => {
     const shared = path.join(os.tmpdir(), `tbai-test-${ARBITRARY_PID}`);
     expect(resolveTestDataDir(undefined, ARBITRARY_PID)).toBe(shared);
     expect(resolveTestDataDir("not-a-test-file.ts", ARBITRARY_PID)).toBe(shared);
-    expect(resolveTestDataDir(path.join(os.tmpdir(), "absent.test.ts"), ARBITRARY_PID)).toBe(shared);
+    expect(resolveTestDataDir(path.join(os.tmpdir(), "absent.test.ts"), ARBITRARY_PID)).toBe(
+      shared,
+    );
     expect(testFileSlug(undefined)).toBeNull();
   });
 
@@ -325,50 +327,38 @@ handle.close();
     collectStaleSandboxes();
   });
 
-  it(
-    "runs each file in its own sandbox with --isolate",
-    () => {
-      const { code, reports, stderr } = runHarness(true);
-      expect(code, `probe run failed:\n${stderr}`).toBe(0);
-      expect(reports.size).toBe(2);
-      const dataDirs = [...reports.values()].map((r) => r.dataDir);
-      expect(new Set(dataDirs).size).toBe(2);
-      for (const dir of dataDirs) expect(dir).toContain("tbai-test");
-    },
-    120000,
-  );
+  it("runs each file in its own sandbox with --isolate", () => {
+    const { code, reports, stderr } = runHarness(true);
+    expect(code, `probe run failed:\n${stderr}`).toBe(0);
+    expect(reports.size).toBe(2);
+    const dataDirs = [...reports.values()].map((r) => r.dataDir);
+    expect(new Set(dataDirs).size).toBe(2);
+    for (const dir of dataDirs) expect(dir).toContain("tbai-test");
+  }, 120000);
 
-  it(
-    "gives each file EXACTLY the sandbox its own path resolves to",
-    () => {
-      // Pins the identity contract itself, not just "the two differ". Each probe
-      // file's DATA_DIR must equal resolveTestDataDir(<that file's absolute
-      // path>, <that file's own pid>). If Bun ever stopped pointing argv[1] at
-      // the collected file, this fails with the exact mismatch instead of the
-      // suite quietly reverting to one shared database.
-      const { code, reports, stderr } = runHarness(true);
-      expect(code, `probe run failed:\n${stderr}`).toBe(0);
-      for (const [name, observed] of reports) {
-        expect(observed.argv1).toBe(probeFile(name));
-        expect(observed.dataDir).toBe(resolveTestDataDir(probeFile(name), observed.pid));
-        // Not the shared run root, which is what a refused identity returns.
-        expect(observed.dataDir).not.toBe(resolveTestRunRoot(observed.pid));
-      }
-    },
-    120000,
-  );
+  it("gives each file EXACTLY the sandbox its own path resolves to", () => {
+    // Pins the identity contract itself, not just "the two differ". Each probe
+    // file's DATA_DIR must equal resolveTestDataDir(<that file's absolute
+    // path>, <that file's own pid>). If Bun ever stopped pointing argv[1] at
+    // the collected file, this fails with the exact mismatch instead of the
+    // suite quietly reverting to one shared database.
+    const { code, reports, stderr } = runHarness(true);
+    expect(code, `probe run failed:\n${stderr}`).toBe(0);
+    for (const [name, observed] of reports) {
+      expect(observed.argv1).toBe(probeFile(name));
+      expect(observed.dataDir).toBe(resolveTestDataDir(probeFile(name), observed.pid));
+      // Not the shared run root, which is what a refused identity returns.
+      expect(observed.dataDir).not.toBe(resolveTestRunRoot(observed.pid));
+    }
+  }, 120000);
 
-  it(
-    "the probe files ARE sensitive to --isolate (negative control)",
-    () => {
-      // Without the flag both files land in ONE sandbox, so the peer-row
-      // assertion cannot hold. This is what makes the cases above meaningful:
-      // they prove the isolation, rather than passing by accident.
-      const { code, reports } = runHarness(false);
-      expect(code).not.toBe(0);
-      const dataDirs = [...reports.values()].map((r) => r.dataDir);
-      expect(new Set(dataDirs).size).toBe(1);
-    },
-    120000,
-  );
+  it("the probe files ARE sensitive to --isolate (negative control)", () => {
+    // Without the flag both files land in ONE sandbox, so the peer-row
+    // assertion cannot hold. This is what makes the cases above meaningful:
+    // they prove the isolation, rather than passing by accident.
+    const { code, reports } = runHarness(false);
+    expect(code).not.toBe(0);
+    const dataDirs = [...reports.values()].map((r) => r.dataDir);
+    expect(new Set(dataDirs).size).toBe(1);
+  }, 120000);
 });

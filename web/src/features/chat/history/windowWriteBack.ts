@@ -88,7 +88,9 @@ export class WriteBackAmbiguityError extends Error {
   readonly ids: readonly string[];
 
   constructor(ambiguity: WriteBackAmbiguity, ids: readonly string[]) {
-    super(`Write-back cannot recover persisted identity unambiguously (${ambiguity}): ${ids.join(",")}`);
+    super(
+      `Write-back cannot recover persisted identity unambiguously (${ambiguity}): ${ids.join(",")}`,
+    );
     this.name = "WriteBackAmbiguityError";
     this.ambiguity = ambiguity;
     this.ids = ids;
@@ -141,10 +143,9 @@ export function deriveWriteBack(rows: readonly BoundRow[]): WriteBackWindow {
   for (const row of rows) {
     const bound = getExternalStoreMessages(row.message as never) as readonly unknown[];
     if (bound.length === 0) {
-      throw new WriteBackAmbiguityError(
-        "missing-binding",
-        [readPersistedId(row.message) ?? "<unidentified-row>"],
-      );
+      throw new WriteBackAmbiguityError("missing-binding", [
+        readPersistedId(row.message) ?? "<unidentified-row>",
+      ]);
     }
 
     const rowId = readPersistedId(row.message);
@@ -152,7 +153,10 @@ export function deriveWriteBack(rows: readonly BoundRow[]): WriteBackWindow {
     if (row.parentId !== null) {
       const translated = lastPersistedIdByRowId.get(row.parentId);
       if (translated === undefined) {
-        throw new WriteBackAmbiguityError("unresolvable-parent", [row.parentId, rowId ?? "<unidentified-row>"]);
+        throw new WriteBackAmbiguityError("unresolvable-parent", [
+          row.parentId,
+          rowId ?? "<unidentified-row>",
+        ]);
       }
       parentId = translated;
     }
@@ -160,7 +164,9 @@ export function deriveWriteBack(rows: readonly BoundRow[]): WriteBackWindow {
     for (const persisted of bound) {
       const id = readPersistedId(persisted);
       if (id === null || !isPersistedMessage(persisted)) {
-        throw new WriteBackAmbiguityError("invalid-persisted-message", [rowId ?? "<unidentified-row>"]);
+        throw new WriteBackAmbiguityError("invalid-persisted-message", [
+          rowId ?? "<unidentified-row>",
+        ]);
       }
       if (seen.has(id)) {
         throw new WriteBackAmbiguityError("duplicate-persisted-id", [id]);

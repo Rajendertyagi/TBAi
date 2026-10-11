@@ -41,13 +41,13 @@
     "c.json( { error: \"Invalid request\", issues: parsed.error.issues, requestId}, 400)",
     "c.json( { error: \"This conversation is too large to send to any model. Its history has grown past the assembly limit. Start a new chat to continue.\", code: ASSEMBLY_LIMIT_CODE, requestId}, 400)",
     "c.json( { error: \"This conversation is too long for the selected model's context window. Start a new chat, or switch to a model with a larger context limit.\", code: \"CONTEXT_OVERFLOW\", requestId}, 400)",
-    "c.json( { error: \"Tool approval security is unavailable\", requestId }, 500)",
     "c.json( { error: `Conversation ${threadId} uses the OpenCode engine; open it on the Code surface instead of /api/chat.`, code: \"ENGINE_MISMATCH\", requestId}, 422)",
     "c.json( { error: `Workspace error: ${err.message}`, code: err.code, requestId }, 400)",
     "c.json({ error: \"Invalid messages\", requestId }, 400)",
     "c.json({ error: \"No API key configured for this provider.\", requestId }, 400)",
     "c.json({ error: \"No provider configured\", requestId }, 400)",
     "c.json({ error: \"System messages are server-owned\", requestId }, 400)",
+    "c.json({ error: \"Tool approval security is unavailable\", requestId }, 500)",
     "c.json({ error: \"invalid stream id\", requestId }, 400)",
     "c.json({ error: \"run not found\", requestId }, 404)",
     "c.json({ error: \"stream not found\", requestId }, 404)",
@@ -64,6 +64,12 @@
     "c.json({ run: null, requestId }, 200)"
   ],
   "files": [
-    "src/routes/chat.ts"
+    "src/routes/chat.ts",
+    "src/routes/chat/assemble-run.ts",
+    "src/routes/chat/execute-direct-stream.ts",
+    "src/routes/chat/gate.ts",
+    "src/routes/chat/settlement.ts",
+    "src/routes/chat/types.ts",
+    "src/routes/chat/validate-and-resolve.ts"
   ]
 }

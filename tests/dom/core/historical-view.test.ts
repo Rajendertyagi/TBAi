@@ -40,7 +40,8 @@ async function attempt(
   try {
     if (kind === "append") await h.appendAt(parentId ?? h.headId(), "user text");
     else if (kind === "edit") await h.appendAt(parentId ?? "m390", "edited");
-    else if (kind === "regenerate") await h.runtime.startRun({ parentId: parentId ?? "m390" } as never);
+    else if (kind === "regenerate")
+      await h.runtime.startRun({ parentId: parentId ?? "m390" } as never);
     else if (kind === "delete") await h.runtime.deleteMessage(parentId ?? "m390");
     else if (kind === "branch") h.runtime.switchToBranch(parentId ?? "m390");
   } catch (e) {
@@ -70,7 +71,9 @@ describe("Gap 1 — HISTORICAL_VIEW: can write-back and user mutation be separat
 
     console.log("\n=== baseline user mutations (active) ===");
     for (const r of results) {
-      console.log(`  ${r.kind.padEnd(11)} blocked=${String(r.blocked).padEnd(5)} submissions=${r.submissions} err=${r.error ?? "-"}`);
+      console.log(
+        `  ${r.kind.padEnd(11)} blocked=${String(r.blocked).padEnd(5)} submissions=${r.submissions} err=${r.error ?? "-"}`,
+      );
     }
 
     expect(caps.edit).toBe(true);
@@ -94,7 +97,9 @@ describe("Gap 1 — HISTORICAL_VIEW: can write-back and user mutation be separat
 
     console.log("\n=== HISTORICAL_VIEW user mutations ===");
     for (const r of results) {
-      console.log(`  ${r.kind.padEnd(11)} blocked=${String(r.blocked).padEnd(5)} submissions=${r.submissions} err=${r.error ?? "-"}`);
+      console.log(
+        `  ${r.kind.padEnd(11)} blocked=${String(r.blocked).padEnd(5)} submissions=${r.submissions} err=${r.error ?? "-"}`,
+      );
     }
 
     // A. append  — onNew is still wired (needed for the composer to exist at
@@ -145,7 +150,10 @@ describe("Gap 1 — HISTORICAL_VIEW: can write-back and user mutation be separat
     h.republishWindow(chainFromTo(340, 400));
     const afterRepublish = h.visibleIds();
 
-    console.log("  visible after republish:", `${afterRepublish[0]}..${afterRepublish.at(-1)} (${afterRepublish.length})`);
+    console.log(
+      "  visible after republish:",
+      `${afterRepublish[0]}..${afterRepublish.at(-1)} (${afterRepublish.length})`,
+    );
 
     expect(afterRepublish.length).toBe(61);
     expect(afterRepublish[0]).toBe("m340");
@@ -177,7 +185,8 @@ describe("Gap 1 — HISTORICAL_VIEW: can write-back and user mutation be separat
     h.setMutationMode("historicalView");
 
     const exported = h.repository.export();
-    const assistant = exported.messages.find((e) => e.message.id === "m391")?.message as unknown as {
+    const assistant = exported.messages.find((e) => e.message.id === "m391")
+      ?.message as unknown as {
       content: Array<{ type: string; toolCallId?: string }>;
       status?: { type: string };
     };
@@ -214,7 +223,8 @@ describe("Gap 1 — HISTORICAL_VIEW: can write-back and user mutation be separat
     h.setMutationMode("historicalView");
 
     const exported = h.repository.export();
-    const assistant = exported.messages.find((e) => e.message.id === "m391")?.message as unknown as {
+    const assistant = exported.messages.find((e) => e.message.id === "m391")
+      ?.message as unknown as {
       content: Array<{ type: string; approval?: { id?: string } }>;
       status?: { type: string; reason?: string };
     };

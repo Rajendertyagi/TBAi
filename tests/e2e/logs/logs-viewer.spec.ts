@@ -80,7 +80,7 @@ test("logs match codeg layout: capture, viewer, files", async ({ page, request }
     expect(download.suggestedFilename()).toBe("tbai-logs-export.log");
     const downloadPath = await download.path();
     expect(downloadPath).toBeTruthy();
-    const { readFile } = await import("fs/promises");
+    const { readFile } = await import("node:fs/promises");
     const exported = await readFile(downloadPath as string, "utf-8");
     expect(exported).toContain(marker);
     expect(exported.trim().split("\n").length).toBeGreaterThanOrEqual(1);

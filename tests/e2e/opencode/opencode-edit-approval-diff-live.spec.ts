@@ -9,7 +9,6 @@ import {
   TARGET_FILE,
 } from "../helpers/opencode-live-fixtures";
 
-
 /**
  * A pending edit approval shows the ACTUAL CHANGE, not the model's find/replace.
  *
@@ -93,10 +92,7 @@ async function setEditEffect(
 }
 
 test.describe("edit approval shows the resulting change (live)", () => {
-  test("the gate renders a diff, not the find/replace pair", async ({
-    page,
-    request,
-  }) => {
+  test("the gate renders a diff, not the find/replace pair", async ({ page, request }) => {
     test.setTimeout(300_000);
 
     const state = await readEditState(request);
@@ -107,10 +103,10 @@ test.describe("edit approval shows the resulting change (live)", () => {
     // asserted, so the union narrows instead of being cast past the compiler.
     if (state.kind !== "readable") {
       throw new Error(
-      `the OpenCode permissions API is not usable: ${
-        state.kind === "broken" ? state.reason : state.kind
-      }`,
-    );
+        `the OpenCode permissions API is not usable: ${
+          state.kind === "broken" ? state.reason : state.kind
+        }`,
+      );
     }
     const previous = state.effect;
 
@@ -135,9 +131,9 @@ test.describe("edit approval shows the resulting change (live)", () => {
       );
 
       // The real gate.
-      await expect(
-        page.getByRole("button", { name: /^(Allow|Approve)\b/ }),
-      ).toBeVisible({ timeout: LIVE_TIMEOUT_MS });
+      await expect(page.getByRole("button", { name: /^(Allow|Approve)\b/ })).toBeVisible({
+        timeout: LIVE_TIMEOUT_MS,
+      });
 
       // The change, as a diff. `data-slot="opencode-pending-diff"` is set by the
       // component that renders the pending patch, so its presence is the feature

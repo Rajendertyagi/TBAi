@@ -100,11 +100,7 @@ export function CodeDiff({
   return (
     <div
       data-slot="code-diff"
-      className={cn(
-        paper,
-        "w-full overflow-hidden rounded-2xl font-mono text-xs",
-        className,
-      )}
+      className={cn(paper, "w-full overflow-hidden rounded-2xl font-mono text-xs", className)}
       {...props}
     >
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -118,6 +114,7 @@ export function CodeDiff({
         <div className={codeSurface}>
           {lines.map((line, i) => (
             <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: a diff legitimately contains repeated identical lines, so a content-only key would collide. The index is part of the identity here, and the list is immutable for the life of the render.
               key={`${cycle}-${i}-${line.text}`}
               className={cn(
                 "fade-in animate-in fill-mode-both flex px-4 py-0.5 leading-relaxed whitespace-pre duration-300",
@@ -126,9 +123,7 @@ export function CodeDiff({
               )}
               style={{ animationDelay: `${i * 60}ms` }}
             >
-              <span
-                className={cn("w-4 shrink-0 select-none", GUTTER_TEXT[line.kind])}
-              >
+              <span className={cn("w-4 shrink-0 select-none", GUTTER_TEXT[line.kind])}>
                 {GUTTER[line.kind]}
               </span>
               <span className={cn(line.kind !== "context" && GUTTER_TEXT[line.kind])}>

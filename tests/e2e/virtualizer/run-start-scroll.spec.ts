@@ -60,10 +60,7 @@ interface FrameSample {
  * once per animation frame. `requestAnimationFrame` is the honest clock here:
  * it is what the browser paints on, so a one-frame flash is a real sample.
  */
-async function samplePerFrame(
-  page: Page,
-  durationMs: number,
-): Promise<{ samples: FrameSample[] }> {
+async function samplePerFrame(page: Page, durationMs: number): Promise<{ samples: FrameSample[] }> {
   return page.evaluate(
     async ({ scrollerSelector, prompt, duration }) => {
       const scroller = document.querySelector(scrollerSelector) as HTMLElement;
@@ -134,9 +131,10 @@ test.describe("run-start scrolling", () => {
    * A further attempt needs the compensation timing isolated first, which is a
    * separate investigation rather than a patch.
    */
-  test.fixme(
-    "a message sent from the live end stays in view for the whole run",
-    async ({ page, request }) => {
+  test.fixme("a message sent from the live end stays in view for the whole run", async ({
+    page,
+    request,
+  }) => {
     test.setTimeout(180_000);
 
     const conversationId = await seedTextConversation(request, "run start", 40);
@@ -152,9 +150,7 @@ test.describe("run-start scrolling", () => {
       const scroller = document.querySelector(scrollerSelector) as HTMLElement;
       return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     }, SCROLLER);
-    expect(atEnd, "the reader starts at the live end").toBeLessThanOrEqual(
-      SCROLL_END_THRESHOLD_PX,
-    );
+    expect(atEnd, "the reader starts at the live end").toBeLessThanOrEqual(SCROLL_END_THRESHOLD_PX);
 
     const transport = await stubChatTransport(page);
 
@@ -226,6 +222,5 @@ test.describe("run-start scrolling", () => {
     expect(finalDistance, "the run ends at the live end").toBeLessThanOrEqual(
       SCROLL_END_THRESHOLD_PX,
     );
-    },
-  );
+  });
 });

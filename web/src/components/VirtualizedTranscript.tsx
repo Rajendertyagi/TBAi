@@ -121,9 +121,7 @@ export type VirtualizedTranscriptProps = {
    * documents this requirement, and the timeline invokes it for every mounted
    * row, so a fresh function each render re-renders the whole list.
    */
-  readonly renderRow: NonNullable<
-    React.ComponentProps<typeof ThreadPrimitive.Row>["children"]
-  >;
+  readonly renderRow: NonNullable<React.ComponentProps<typeof ThreadPrimitive.Row>["children"]>;
   /**
    * Paging control. Rendered as a SIBLING above the scroll container, never
    * inside it — see the header note in the component body for why both facts
@@ -187,10 +185,7 @@ export function VirtualizedTranscript({
   // Memoized because TanStack documents it: the virtualizer invalidates its
   // measurement cache when measurement-affecting options change, and a new
   // function identity on every render is an unnecessary recalculation.
-  const getItemKey = useCallback(
-    (index: number) => rows[index]?.key ?? index,
-    [rows],
-  );
+  const getItemKey = useCallback((index: number) => rows[index]?.key ?? index, [rows]);
 
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
     count: rows.length,
@@ -317,36 +312,34 @@ export function VirtualizedTranscript({
           className={className}
           data-testid="virtual-transcript-scroller"
         >
-        {/*
+          {/*
           The total-size container IS the coordinate system: as tall as the whole
           logical list, with every row positioned inside it by its virtual offset.
         */}
-        <div
-          style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}
-        >
-          {items.map((item) => {
-            const row = rows[item.index];
-            // A row whose message has left the thread renders nothing, so a row
-            // the virtualizer keeps for a frame after a deletion is safe.
-            if (!row) return null;
-            return (
-              <div
-                key={item.key}
-                ref={virtualizer.measureElement}
-                data-index={item.index}
-                data-row-key={row.key}
-                style={{
-                  position: "absolute",
-                  transform: `translateY(${item.start}px)`,
-                  width: "100%",
-                }}
-              >
-                <ThreadPrimitive.Row row={row}>{renderRow}</ThreadPrimitive.Row>
-              </div>
-            );
-          })}
+          <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+            {items.map((item) => {
+              const row = rows[item.index];
+              // A row whose message has left the thread renders nothing, so a row
+              // the virtualizer keeps for a frame after a deletion is safe.
+              if (!row) return null;
+              return (
+                <div
+                  key={item.key}
+                  ref={virtualizer.measureElement}
+                  data-index={item.index}
+                  data-row-key={row.key}
+                  style={{
+                    position: "absolute",
+                    transform: `translateY(${item.start}px)`,
+                    width: "100%",
+                  }}
+                >
+                  <ThreadPrimitive.Row row={row}>{renderRow}</ThreadPrimitive.Row>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
       </TranscriptOwnsScrollCompensationContext.Provider>
     </TranscriptVirtualizerContext.Provider>
   );
@@ -397,9 +390,7 @@ export const scrollTranscriptToEnd = (virtualizer: TranscriptVirtualizer): void 
 export function useTranscriptVirtualizer(): TranscriptVirtualizer {
   const value = useContext(TranscriptVirtualizerContext);
   if (!value) {
-    throw new Error(
-      "useTranscriptVirtualizer must be used inside a <VirtualizedTranscript>.",
-    );
+    throw new Error("useTranscriptVirtualizer must be used inside a <VirtualizedTranscript>.");
   }
   return value;
 }

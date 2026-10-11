@@ -1,22 +1,23 @@
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { Client, StreamableHTTPClientTransport, SSEClientTransport } from "@modelcontextprotocol/client";
-import type { Root, ElicitRequest, CreateMessageRequest, ElicitResult, Transport } from "@modelcontextprotocol/client";
+import { Client } from "@modelcontextprotocol/client";
+import type {
+  Root,
+  ElicitRequest,
+  CreateMessageRequest,
+  ElicitResult,
+  Transport,
+} from "@modelcontextprotocol/client";
 import { tool, jsonSchema, generateText } from "ai";
 import { db } from "../../db";
-import type { SQLQueryBindings } from "bun:sqlite";
-import { generateId } from "../../lib/utils";
 import { logger, normalizeError } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 import { classifySseFailure, safeEndpointMeta } from "./classify";
 import type { SseProbeOutcome } from "./classify";
 import {
-  deleteConfigRow,
   getConfig as getStoredConfig,
   insertConfig as insertStoredConfig,
   loadConfigs as loadStoredConfigs,
   readRow as readStoredRow,
   rowToConfig as storedRowToConfig,
-  setEnabledRow,
   updateConfigRow as updateStoredConfigRow,
 } from "./store";
 import {
@@ -28,7 +29,6 @@ import {
   sseFailureMessage,
 } from "./transport";
 import { extractMessageText, mcpContentToText } from "./tool-content";
-import { encryptSecret, decryptSecret } from "../../services/credentials";
 import { credentialStore } from "../../services/credentials";
 import { getModel } from "../../services/ai";
 import { instrumentedExecute } from "../../lib/tool-funnel";
@@ -36,8 +36,6 @@ import { registry } from "../../config/providers";
 import type { McpServerCreate } from "../../lib/validation";
 import type {
   McpServerConfig,
-  McpTransport,
-  McpAuthType,
   McpConnectionStatus,
   McpFailureReason,
   McpToolInfo,
@@ -51,7 +49,6 @@ import type {
   McpResourceReadResult,
   McpPromptGetResult,
 } from "./types";
-
 
 interface McpConnection {
   config: McpServerConfig;
@@ -84,9 +81,7 @@ const MAX_EVENTS = 50;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
 /** Read-only SSE probe budget: 3s, diagnostics only, never the transport. */
-const SSE_PROBE_TIMEOUT_MS = 3000;
-
-
+const _SSE_PROBE_TIMEOUT_MS = 3000;
 
 /**
  * Generic MCP client manager.
@@ -136,11 +131,7 @@ export class McpManager {
     return getStoredConfig(id);
   }
 
-
-
   /** Read a row including the (decrypted) auth token. Internal use only. */
-
-
 
   createConfig(input: McpServerCreate): McpServerConfig {
     return insertStoredConfig(input);
@@ -185,7 +176,7 @@ export class McpManager {
    */
   async notifyRootsChanged(id: string): Promise<boolean> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") return false;
+    if (conn?.status !== "connected") return false;
     try {
       await conn.client.sendRootsListChanged();
       this.pushEvent(id, "log", "Roots list changed notification sent");
@@ -224,8 +215,6 @@ export class McpManager {
   }
 
   // ---- Transport construction ----
-
-
 
   // ---- Connection lifecycle ----
 
@@ -279,12 +268,15 @@ export class McpManager {
       // classifies unreachable / auth / non-SSE responses BEFORE the SDK opens
       // its EventSource. The probe is diagnostic, never the transport itself.
       if (config.transport === "sse" && config.url) {
-        const probe = await probeSseEndpoint(
-          config.url,
-          buildHeaders(config, authToken),
-        );
+        const probe = await probeSseEndpoint(config.url, buildHeaders(config, authToken));
         const reason = classifySseFailure(probe, undefined, authToken !== undefined);
-        if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
+        if (
+          probe.kind === "unreachable" ||
+          probe.kind === "timeout" ||
+          reason === "auth_required" ||
+          reason === "auth_failed" ||
+          reason === "incompatible_response"
+        ) {
           this.failConnect(id, conn, config, probe, reason);
           return;
         }
@@ -306,7 +298,11 @@ export class McpManager {
       } catch {
         conn.protocolEra = undefined;
       }
-      this.pushEvent(id, "connected", `Connected to ${config.name} (era: ${conn.protocolEra ?? "unknown"})`);
+      this.pushEvent(
+        id,
+        "connected",
+        `Connected to ${config.name} (era: ${conn.protocolEra ?? "unknown"})`,
+      );
 
       await this.discoverCapabilities(id);
       logger.info("mcp", "mcp.operation", {
@@ -418,7 +414,11 @@ export class McpManager {
       /* ignore */
     }
     this.pushEvent(id, "disconnected", `Disconnected from ${conn.config.name}`);
-    logger.info("mcp", "mcp.operation", { op: "disconnect", outcome: "ok", mcpServer: conn.config.name });
+    logger.info("mcp", "mcp.operation", {
+      op: "disconnect",
+      outcome: "ok",
+      mcpServer: conn.config.name,
+    });
   }
 
   /** Disconnect every connection; never throws (used at shutdown). */
@@ -442,7 +442,7 @@ export class McpManager {
 
   async refresh(id: string): Promise<void> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") {
+    if (conn?.status !== "connected") {
       await this.connect(id);
       return;
     }
@@ -458,7 +458,7 @@ export class McpManager {
     const attempt = conn.reconnectAttempts;
     conn.reconnectTimer = setTimeout(() => {
       const c = this.connections.get(id);
-      if (!c || !c.config.enabled || c.status === "connected") return;
+      if (!c?.config.enabled || c.status === "connected") return;
       logger.info("mcp", "mcp.operation", {
         op: "reconnect",
         outcome: "started",
@@ -522,33 +522,37 @@ export class McpManager {
     if (!conn) return;
     const { client } = conn;
 
-    client.setNotificationHandler('notifications/progress', (notification) => {
-      const p = notification.params as { progress?: number; total?: number; progressToken?: unknown };
+    client.setNotificationHandler("notifications/progress", (notification) => {
+      const p = notification.params as {
+        progress?: number;
+        total?: number;
+        progressToken?: unknown;
+      };
       const msg = `Progress ${p.progress ?? "?"}"${p.total ? `/${p.total}` : ""}`;
       this.pushEvent(id, "progress", msg, notification.params);
     });
 
-    client.setNotificationHandler('notifications/tools/list_changed', () => {
+    client.setNotificationHandler("notifications/tools/list_changed", () => {
       this.pushEvent(id, "tool_list_changed", "Tool list changed");
       void this.discoverCapabilities(id);
     });
 
-    client.setNotificationHandler('notifications/resources/list_changed', () => {
+    client.setNotificationHandler("notifications/resources/list_changed", () => {
       this.pushEvent(id, "resource_list_changed", "Resource list changed");
       void this.discoverCapabilities(id);
     });
 
-    client.setNotificationHandler('notifications/prompts/list_changed', () => {
+    client.setNotificationHandler("notifications/prompts/list_changed", () => {
       this.pushEvent(id, "prompt_list_changed", "Prompt list changed");
       void this.discoverCapabilities(id);
     });
 
-    client.setNotificationHandler('notifications/resources/updated', (notification) => {
+    client.setNotificationHandler("notifications/resources/updated", (notification) => {
       const uri = (notification.params as { uri?: string })?.uri ?? "";
       this.pushEvent(id, "resource_updated", `Resource updated: ${uri}`, notification.params);
     });
 
-    client.setNotificationHandler('notifications/message', (notification) => {
+    client.setNotificationHandler("notifications/message", (notification) => {
       const params = notification.params as { level?: string; logger?: string; data?: unknown };
       const text = typeof params.data === "string" ? params.data : JSON.stringify(params.data);
       this.pushEvent(id, "log", `[${params.level ?? "info"}] ${text}`, notification.params);
@@ -572,7 +576,7 @@ export class McpManager {
     const { client } = conn;
 
     // Roots: advertise which filesystem locations the server may access.
-    client.setRequestHandler('roots/list', () => {
+    client.setRequestHandler("roots/list", () => {
       const roots: Root[] = (conn.config.roots ?? []).map((uri) => ({ uri }));
       logger.debug("mcp", "mcp.operation", {
         op: "roots",
@@ -584,12 +588,12 @@ export class McpManager {
     });
 
     // Sampling: the server asks the model to generate text; route it to the active provider.
-    client.setRequestHandler('sampling/createMessage', (request: CreateMessageRequest) =>
+    client.setRequestHandler("sampling/createMessage", (request: CreateMessageRequest) =>
       this.handleSampling(id, request),
     );
 
     // Elicitation: the server asks the *user* a question mid-tool-call; surface it to the UI.
-    client.setRequestHandler('elicitation/create', (request: ElicitRequest) =>
+    client.setRequestHandler("elicitation/create", (request: ElicitRequest) =>
       this.handleElicitation(id, request),
     );
   }
@@ -643,7 +647,11 @@ export class McpManager {
       provider: provider.type,
       model: provider.model,
     });
-    return { role: "assistant", content: { type: "text", text: result.text }, model: provider.model };
+    return {
+      role: "assistant",
+      content: { type: "text", text: result.text },
+      model: provider.model,
+    };
   }
 
   private handleElicitation(id: string, request: ElicitRequest): Promise<ElicitResult> {
@@ -714,7 +722,10 @@ export class McpManager {
     if (conn.pendingElicitation.elicitationId !== elicitationId) return false;
     const result: ElicitResult =
       action === "accept"
-        ? { action: "accept", content: (content ?? {}) as Record<string, string | number | boolean | string[]> }
+        ? {
+            action: "accept",
+            content: (content ?? {}) as Record<string, string | number | boolean | string[]>,
+          }
         : { action };
     conn.pendingElicitation.resolve(result);
     conn.pendingElicitation = undefined;
@@ -731,16 +742,18 @@ export class McpManager {
 
   async readResource(id: string, uri: string): Promise<McpResourceReadResult> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") throw new Error("Server not connected");
+    if (conn?.status !== "connected") throw new Error("Server not connected");
     const started = Date.now();
     try {
       const res = await conn.client.readResource({ uri });
-      const contents = (res.contents ?? []).map((c: { uri: string; mimeType?: string; text?: string; blob?: string }) => ({
-        uri: c.uri,
-        mimeType: c.mimeType,
-        text: c.text,
-        blob: c.blob,
-      }));
+      const contents = (res.contents ?? []).map(
+        (c: { uri: string; mimeType?: string; text?: string; blob?: string }) => ({
+          uri: c.uri,
+          mimeType: c.mimeType,
+          text: c.text,
+          blob: c.blob,
+        }),
+      );
       logger.debug("mcp", "mcp.operation", {
         op: "resource_read",
         outcome: "ok",
@@ -765,16 +778,22 @@ export class McpManager {
     }
   }
 
-  async getPrompt(id: string, name: string, args?: Record<string, string>): Promise<McpPromptGetResult> {
+  async getPrompt(
+    id: string,
+    name: string,
+    args?: Record<string, string>,
+  ): Promise<McpPromptGetResult> {
     const conn = this.connections.get(id);
-    if (!conn || conn.status !== "connected") throw new Error("Server not connected");
+    if (conn?.status !== "connected") throw new Error("Server not connected");
     const started = Date.now();
     try {
       const res = await conn.client.getPrompt({ name, arguments: args });
-      const messages = (res.messages ?? []).map((m: { role: "user" | "assistant"; content?: unknown }) => ({
-        role: m.role,
-        content: { type: "text", text: extractMessageText(m.content) },
-      }));
+      const messages = (res.messages ?? []).map(
+        (m: { role: "user" | "assistant"; content?: unknown }) => ({
+          role: m.role,
+          content: { type: "text", text: extractMessageText(m.content) },
+        }),
+      );
       logger.debug("mcp", "mcp.operation", {
         op: "prompt",
         outcome: "ok",
@@ -805,9 +824,11 @@ export class McpManager {
     // the UI needs to render configured-vs-unconfigured auth.
     const presence = new Map<string, boolean>();
     try {
-      const rows = db.query<{ id: string; auth_token: string | null }, []>(
-        "SELECT id, auth_token FROM mcp_servers",
-      ).all();
+      const rows = db
+        .query<{ id: string; auth_token: string | null }, []>(
+          "SELECT id, auth_token FROM mcp_servers",
+        )
+        .all();
       for (const r of rows) presence.set(r.id, r.auth_token !== null);
     } catch {
       /* presence unknown — defaults to false below */
@@ -930,7 +951,13 @@ export class McpManager {
           undefined,
           (input.authToken ?? undefined) !== undefined,
         );
-        if (probe.kind === "unreachable" || probe.kind === "timeout" || reason === "auth_required" || reason === "auth_failed" || reason === "incompatible_response") {
+        if (
+          probe.kind === "unreachable" ||
+          probe.kind === "timeout" ||
+          reason === "auth_required" ||
+          reason === "auth_failed" ||
+          reason === "incompatible_response"
+        ) {
           const meta = safeEndpointMeta(config.url);
           const probeDetail =
             probe.kind === "ok"
@@ -980,7 +1007,12 @@ export class McpManager {
       if (caps.resources !== undefined) {
         const res = await client.listResources();
         for (const r of res.resources ?? []) {
-          resources.push({ uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType });
+          resources.push({
+            uri: r.uri,
+            name: r.name,
+            description: r.description,
+            mimeType: r.mimeType,
+          });
         }
       }
       if (caps.prompts !== undefined) {
@@ -1049,13 +1081,11 @@ export class McpManager {
  * Returns undefined when no credential is stored or auth is "none".
  */
 
-
 /**
  * Human-readable, non-secret detail for a classified SSE failure. Carries
  * host/port/path only — never query strings, headers, or credentials.
  */
 
 /** Best-effort text extraction from a v2 sampling/prompt message content block. */
-
 
 export const mcpManager = McpManager.getInstance();

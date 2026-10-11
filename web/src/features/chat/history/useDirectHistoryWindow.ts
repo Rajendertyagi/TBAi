@@ -70,10 +70,7 @@ import {
   type PersistedRow,
   type WindowSliceResponse,
 } from "./windowController";
-import {
-  IDLE_RUNTIME,
-  type RuntimeActivity,
-} from "./historyWindow";
+import { IDLE_RUNTIME, type RuntimeActivity } from "./historyWindow";
 
 /** Default bounded window size for Direct. The core may evict either side to keep it. */
 export const DEFAULT_WINDOW_LIMIT = 100;
@@ -403,7 +400,9 @@ export function clearHistoryLoadFailed(conversationId: string): void {
 
 /** Whether this conversation's most recent history load failed. */
 export function isHistoryLoadFailed(conversationId: string | null | undefined): boolean {
-  return conversationId !== null && conversationId !== undefined && loadFailures.has(conversationId);
+  return (
+    conversationId !== null && conversationId !== undefined && loadFailures.has(conversationId)
+  );
 }
 
 /**
@@ -603,10 +602,7 @@ export function windowControllerStanding(
  *
  * @returns Whether state was published.
  */
-export function publishWindowUiFor(
-  conversationId: string,
-  controller: WindowController,
-): boolean {
+export function publishWindowUiFor(conversationId: string, controller: WindowController): boolean {
   if (windowControllerStanding(conversationId, controller) === "superseded") return false;
   if (windowControllerStanding(conversationId, controller) === "orphaned") {
     controllers.set(conversationId, { controller });
@@ -625,10 +621,7 @@ const readUiSnapshot = (conversationId: string | null): DirectHistoryWindowUi =>
  * the viewport/control that report anchors and offer paging.
  */
 export function useDirectHistoryWindowUi(conversationId: string | null): DirectHistoryWindowUi {
-  const subscribe = useCallback(
-    (onChange: () => void) => subscribeUi(onChange),
-    [],
-  );
+  const subscribe = useCallback((onChange: () => void) => subscribeUi(onChange), []);
   const getSnapshot = useCallback(() => readUiSnapshot(conversationId), [conversationId]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
@@ -717,10 +710,10 @@ export function useDirectHistoryWindow(conversationId: string | null): DirectHis
   const ui = useDirectHistoryWindowUi(conversationId);
   const chat = useAISDKChat();
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the memo must rebuild when the controller identity changes, or when a commit replaces the rows it holds (`ui.revision` is that signal). Adding `windowControllerFor` would rebuild on every render and discard exactly the rows this memo exists to preserve.
   const controller = useMemo(
     () => windowControllerFor(conversationId),
     // `ui.revision` is the signal that a commit replaced the controller's rows.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [conversationId, ui.revision],
   );
 
@@ -729,7 +722,6 @@ export function useDirectHistoryWindow(conversationId: string | null): DirectHis
     const status = chat?.status;
     return status === "streaming" || status === "submitted";
   }, [chat]);
-
 
   /**
    * Load one older page and PREPEND it.
@@ -871,5 +863,3 @@ export function useDirectHistoryWindow(conversationId: string | null): DirectHis
     writeBack,
   };
 }
-
-

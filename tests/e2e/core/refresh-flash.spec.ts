@@ -1,8 +1,5 @@
 import { expect, test } from "@playwright/test";
-import {
-  removeConversation,
-  seedConversation,
-} from "../helpers/seedConversation";
+import { removeConversation, seedConversation } from "../helpers/seedConversation";
 
 /**
  * Refresh-flash regression: reloading a started (bound) thread must never
@@ -16,9 +13,9 @@ test("refresh of a started thread never flashes welcome", async ({ page }, testI
   // the mismatch was never observed. Budget must exceed the sampler's window.
   test.setTimeout(90_000);
   await page.goto("/#/chat/new");
-  await expect(
-    page.getByRole("heading", { name: /what do you want to build/i }),
-  ).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
+    timeout: 15000,
+  });
 
   // Seeded rather than borrowed. This used to read the conversation list and
   // skip when it was empty, which only ever worked because an earlier spec had
@@ -40,10 +37,10 @@ test("refresh of a started thread never flashes welcome", async ({ page }, testI
 
   try {
     await page.goto(`/#/chat/${threadId}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
-    await expect(
-      page.getByRole("heading", { name: /what do you want to build/i }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
+    await expect(page.getByRole("heading", { name: /what do you want to build/i })).toHaveCount(0);
 
     // Full reload, sampling the DOM from the earliest possible instant.
     await page.reload();
@@ -60,16 +57,11 @@ test("refresh of a started thread never flashes welcome", async ({ page }, testI
             ) {
               welcome = true;
             }
-            counts.push(
-              document.querySelectorAll('textarea:not([aria-hidden="true"])').length,
-            );
+            counts.push(document.querySelectorAll('textarea:not([aria-hidden="true"])').length);
             if (document.body.innerText.length > 500) {
               setTimeout(() => {
                 clearInterval(iv);
-                counts.push(
-                  document.querySelectorAll('textarea:not([aria-hidden="true"])')
-                    .length,
-                );
+                counts.push(document.querySelectorAll('textarea:not([aria-hidden="true"])').length);
                 resolve({ welcome, counts });
               }, 800);
             }

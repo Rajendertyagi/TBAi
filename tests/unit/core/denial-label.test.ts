@@ -2,13 +2,11 @@ import { describe, it, expect } from "bun:test";
 import { denialOf } from "@web/tools/filesystem/ui.tsx";
 
 const approval = (approved?: boolean) =>
-  (approved === undefined ? undefined : ({ approved }) as never);
+  approved === undefined ? undefined : ({ approved } as never);
 
 describe("denialOf", () => {
   it("treats approved:false as denial regardless of text", () => {
-    expect(
-      denialOf({ error: "Denied by user" }, approval(false)),
-    ).toBe("Denied by user");
+    expect(denialOf({ error: "Denied by user" }, approval(false))).toBe("Denied by user");
     expect(denialOf({ error: "nope" }, approval(false))).toBe("nope");
   });
 
@@ -19,19 +17,13 @@ describe("denialOf", () => {
         approval(true),
       ),
     ).toBeNull();
-    expect(
-      denialOf({ error: 'Path "/" is outside the workspace' }, approval(true)),
-    ).toBeNull();
+    expect(denialOf({ error: 'Path "/" is outside the workspace' }, approval(true))).toBeNull();
     expect(denialOf({ error: "boom" }, undefined)).toBeNull();
   });
 
   it("keeps genuine denies reloaded without a marker as denial", () => {
-    expect(denialOf({ error: "Denied by user" }, undefined)).toBe(
-      "Denied by user",
-    );
-    expect(denialOf({ error: "Tool approval denied" }, undefined)).toBe(
-      "Tool approval denied",
-    );
+    expect(denialOf({ error: "Denied by user" }, undefined)).toBe("Denied by user");
+    expect(denialOf({ error: "Tool approval denied" }, undefined)).toBe("Tool approval denied");
   });
 
   it("returns null for non-error results", () => {

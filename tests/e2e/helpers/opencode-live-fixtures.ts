@@ -1,6 +1,6 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Shared fixtures for the specs that run against the REAL managed OpenCode
@@ -53,10 +53,7 @@ export async function deleteCodeConversation(
 }
 
 /** Opens an existing Code-mode conversation and waits for the composer. */
-export async function openCodeConversation(
-  page: Page,
-  conversationId: string,
-): Promise<void> {
+export async function openCodeConversation(page: Page, conversationId: string): Promise<void> {
   await page.goto(`/#/code/${conversationId}`);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
     timeout: LIVE_TIMEOUT_MS,

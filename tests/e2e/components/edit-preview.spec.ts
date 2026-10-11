@@ -51,7 +51,11 @@ test.afterEach(async ({ request }) => {
 
 test("the endpoint returns a patch describing the change", async ({ request }) => {
   const response = await request.post("/api/tools/edit-preview", {
-    data: { path: "preview-target.ts", oldText: "const target = 3;", newText: "const target = 99;" },
+    data: {
+      path: "preview-target.ts",
+      oldText: "const target = 3;",
+      newText: "const target = 99;",
+    },
   });
   expect(response.ok()).toBe(true);
   const body = (await response.json()) as { patch: string; occurrences: number };
@@ -68,7 +72,11 @@ test("the endpoint returns a patch describing the change", async ({ request }) =
 
 test("the endpoint wrote nothing", async ({ request }) => {
   await request.post("/api/tools/edit-preview", {
-    data: { path: "preview-target.ts", oldText: "const target = 3;", newText: "const target = 99;" },
+    data: {
+      path: "preview-target.ts",
+      oldText: "const target = 3;",
+      newText: "const target = 99;",
+    },
   });
   const read = await request.post("/api/tools/read", {
     data: { path: "preview-target.ts" },
@@ -95,9 +103,7 @@ test("the endpoint refuses what the edit refuses", async ({ request }) => {
   expect(absent.status()).toBeGreaterThanOrEqual(400);
 });
 
-test("the endpoint validates its arguments like every other tool route", async ({
-  request,
-}) => {
+test("the endpoint validates its arguments like every other tool route", async ({ request }) => {
   const bad = await request.post("/api/tools/edit-preview", {
     data: { path: "", oldText: "a", newText: "b" },
   });

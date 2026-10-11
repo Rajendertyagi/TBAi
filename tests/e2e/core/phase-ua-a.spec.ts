@@ -37,10 +37,7 @@ async function createFolder(page: Page): Promise<{ id: string; name: string; dir
   return { id: folder.id, name: folder.name ?? name, dir };
 }
 
-async function deleteFolder(
-  page: Page,
-  folder: { id: string; dir: string },
-): Promise<void> {
+async function deleteFolder(page: Page, folder: { id: string; dir: string }): Promise<void> {
   await page.request.delete(`/api/folders/${folder.id}`).catch(() => {});
   // Removing the row is NOT enough: createFolder made this directory on disk, so
   // without this every run left a scratch dir behind forever. 25 had piled up
@@ -54,10 +51,7 @@ async function createConversation(
   body: Record<string, unknown>,
 ): Promise<{ id: string }> {
   const res = await page.request.post("/api/conversations", { data: body });
-  expect(
-    res.ok(),
-    `createConversation ${JSON.stringify(body)} → ${res.status()}`,
-  ).toBe(true);
+  expect(res.ok(), `createConversation ${JSON.stringify(body)} → ${res.status()}`).toBe(true);
   return res.json() as Promise<{ id: string }>;
 }
 
@@ -103,9 +97,7 @@ function convUrl(id: string, engine: "direct" | "opencode"): RegExp {
 // ---------------------------------------------------------------------------
 // (a) folder "+" lands on /chat/new with the folder preset in scope
 // ---------------------------------------------------------------------------
-test("(a) folder + button opens /chat/new with the folder preset in scope", async ({
-  page,
-}) => {
+test("(a) folder + button opens /chat/new with the folder preset in scope", async ({ page }) => {
   const folder = await createFolder(page);
   try {
     await page.goto(`${BASE}#/`);
@@ -113,9 +105,7 @@ test("(a) folder + button opens /chat/new with the folder preset in scope", asyn
 
     // The sidebar "Folders" section lists the folder we just created.
     // Find its header button by the folder's name/alias.
-    const folderHeader = page
-      .getByRole("button", { name: new RegExp(folder.name, "i") })
-      .first();
+    const folderHeader = page.getByRole("button", { name: new RegExp(folder.name, "i") }).first();
     await expect(folderHeader).toBeVisible({ timeout: 10000 });
 
     // The "+" (new-conversation) button is revealed on hover of the folder
@@ -141,9 +131,7 @@ test("(a) folder + button opens /chat/new with the folder preset in scope", asyn
     // `Working folder: <name>` when a project folder is the scope. The store
     // round-trips the pick, so a brief flash back to "Chat mode" can happen
     // while folders load — use a longer settle window.
-    const scopeChip = page.locator(
-      `button[title="Working folder: ${folder.name}"]`,
-    );
+    const scopeChip = page.locator(`button[title="Working folder: ${folder.name}"]`);
     await expect(scopeChip).toBeVisible({ timeout: 20000 });
   } finally {
     await deleteFolder(page, folder);
@@ -260,9 +248,7 @@ test("(c) a folder conversation opened via /code/<id> highlights in its folder",
     // only meaningful when the sidebar is visible. If the row is not found
     // within the window, the shell's focused-chrome contract is in effect and
     // we assert the URL instead (the engine-correct routing the task names).
-    const row = page
-      .getByRole("button", { name: /ua-a code conv/i })
-      .first();
+    const row = page.getByRole("button", { name: /ua-a code conv/i }).first();
     const rowVisible = await row
       .waitFor({ timeout: 15000 })
       .then(() => true)

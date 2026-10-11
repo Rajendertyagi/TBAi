@@ -153,11 +153,7 @@ describe("ApprovalGate — exactly one primary button", () => {
   it("puts the ink variant on allow-once even when the host lists it last", () => {
     // Read from the rendered markup, paired with the button's aria-label, so this
     // proves the PRIMARY IS allow-once and not merely that one primary exists.
-    const html = renderGate([
-      option(REJECT_ONCE),
-      option(ALLOW_ALWAYS),
-      option(ALLOW_ONCE),
-    ]);
+    const html = renderGate([option(REJECT_ONCE), option(ALLOW_ALWAYS), option(ALLOW_ONCE)]);
 
     /**
      * Pair each `<button>` with its own attributes, order-independently.
@@ -186,8 +182,9 @@ describe("ApprovalGate — exactly one primary button", () => {
     // this change — a request that never declared options has no primary OPTION
     // to promote.
     const html = renderGate([]);
-    expect(buttonVariants(html).filter((variant) => variant === "default").length)
-      .toBeLessThanOrEqual(1);
+    expect(
+      buttonVariants(html).filter((variant) => variant === "default").length,
+    ).toBeLessThanOrEqual(1);
     // The generic pair is still there, so the user can still decide.
     expect(html).toContain("Approve");
     expect(html).toContain("Deny");
@@ -259,13 +256,6 @@ describe("source guards — the button treatment", () => {
       (match) => match[1] ?? "",
     );
 
-    expect(declared).toEqual([
-      "default",
-      "outline",
-      "secondary",
-      "ghost",
-      "destructive",
-      "link",
-    ]);
+    expect(declared).toEqual(["default", "outline", "secondary", "ghost", "destructive", "link"]);
   });
 });

@@ -56,6 +56,10 @@ describe("formTextareaOverflows", () => {
   it("agrees with the height rule at the boundary", () => {
     // A box exactly at the cap must already be scrollable, or the last line is
     // unreachable: `formTextareaHeight` may return exactly the cap.
-    expect(formTextareaOverflows(formTextareaHeight(FORM_TEXTAREA_MAX_LINES * FORM_TEXTAREA_LINE_HEIGHT_PX))).toBe(true);
+    expect(
+      formTextareaOverflows(
+        formTextareaHeight(FORM_TEXTAREA_MAX_LINES * FORM_TEXTAREA_LINE_HEIGHT_PX),
+      ),
+    ).toBe(true);
   });
 });

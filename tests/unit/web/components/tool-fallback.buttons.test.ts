@@ -55,12 +55,10 @@ function option(kind: string, id = `opt_${kind}`): ToolApprovalOption {
  */
 function variantByLabel(html: string): Map<string, string> {
   return new Map(
-    [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].map(
-      ([, attrs, children]) => [
-        (children ?? "").replace(/<[^>]*>/g, "").trim(),
-        /data-variant="([^"]*)"/.exec(attrs ?? "")?.[1] ?? "",
-      ],
-    ),
+    [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].map(([, attrs, children]) => [
+      (children ?? "").replace(/<[^>]*>/g, "").trim(),
+      /data-variant="([^"]*)"/.exec(attrs ?? "")?.[1] ?? "",
+    ]),
   );
 }
 
@@ -81,7 +79,9 @@ function renderApproval(
   options: readonly ToolApprovalOption[],
   approval: Record<string, unknown> = {},
 ): string {
-  const Approval = ToolFallbackApproval as unknown as (props: Record<string, unknown>) => ReactElement;
+  const Approval = ToolFallbackApproval as unknown as (
+    props: Record<string, unknown>,
+  ) => ReactElement;
   return renderToStaticMarkup(
     createElement(Approval, {
       title: "mcp_tool · some_arg",
@@ -96,11 +96,7 @@ describe("tool-fallback — the option buttons match the shared approval treatme
   it("gives the primary option the ink variant and every other option a solid one", () => {
     // `Allow` is the primary, `Always allow` and `Deny` sit beside it as
     // `secondary`. `outline` is what the guard below forbids.
-    const html = renderApproval([
-      option(ALLOW_ONCE),
-      option(ALLOW_ALWAYS),
-      option(REJECT_ONCE),
-    ]);
+    const html = renderApproval([option(ALLOW_ONCE), option(ALLOW_ALWAYS), option(REJECT_ONCE)]);
     const byLabel = variantByLabel(html);
 
     expect(byLabel.size).toBeGreaterThanOrEqual(3);
@@ -131,11 +127,7 @@ describe("tool-fallback — the option buttons match the shared approval treatme
     // upstream's "first allow option": with the list reordered, a positional
     // rule returns `ALLOW_ALWAYS` here and leads a card with the persistent
     // grant instead of the reversible one.
-    const html = renderApproval([
-      option(REJECT_ONCE),
-      option(ALLOW_ALWAYS),
-      option(ALLOW_ONCE),
-    ]);
+    const html = renderApproval([option(REJECT_ONCE), option(ALLOW_ALWAYS), option(ALLOW_ONCE)]);
     const byLabel = variantByLabel(html);
 
     expect(byLabel.get(ALLOW_ONCE)).toBe("default");
@@ -176,7 +168,9 @@ describe("source guards — no new treatment, no leftover outline", () => {
 
   beforeAll(async () => {
     fallbackSource = stripComments(
-      await Bun.file(path.join(REPO_ROOT, "web/src/components/assistant-ui/elements/tool-fallback.tsx")).text(),
+      await Bun.file(
+        path.join(REPO_ROOT, "web/src/components/assistant-ui/elements/tool-fallback.tsx"),
+      ).text(),
     );
     buttonSource = stripComments(
       await Bun.file(path.join(REPO_ROOT, "web/src/components/ui/button.tsx")).text(),
@@ -214,14 +208,7 @@ describe("source guards — no new treatment, no leftover outline", () => {
     const declared = [...(variantsBlock[1] ?? "").matchAll(/^\s{8}([a-z-]+):/gm)].map(
       (m) => m[1] ?? "",
     );
-    expect(declared).toEqual([
-      "default",
-      "outline",
-      "secondary",
-      "ghost",
-      "destructive",
-      "link",
-    ]);
+    expect(declared).toEqual(["default", "outline", "secondary", "ghost", "destructive", "link"]);
   });
 
   it("adds no literal colour and no inline style to the card's buttons", () => {

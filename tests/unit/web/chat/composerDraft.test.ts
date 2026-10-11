@@ -78,15 +78,9 @@ describe("composerDraft helpers (Phase 3.7)", () => {
     };
     holder.localStorage.setItem("tbai:composer-draft:bad", "not-json{{{");
     expect(readComposerDraft("bad")).toBeNull();
-    holder.localStorage.setItem(
-      "tbai:composer-draft:wrong-type",
-      JSON.stringify({ text: 42 }),
-    );
+    holder.localStorage.setItem("tbai:composer-draft:wrong-type", JSON.stringify({ text: 42 }));
     expect(readComposerDraft("wrong-type")).toBeNull();
-    holder.localStorage.setItem(
-      "tbai:composer-draft:empty-text",
-      JSON.stringify({ text: "" }),
-    );
+    holder.localStorage.setItem("tbai:composer-draft:empty-text", JSON.stringify({ text: "" }));
     expect(readComposerDraft("empty-text")).toBeNull();
   });
 

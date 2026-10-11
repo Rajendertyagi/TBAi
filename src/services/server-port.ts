@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { db } from "../db";
 import { DATA_DIR } from "../config/data-dir";
 
@@ -27,9 +27,9 @@ function parsePortText(raw: string): number | null {
 /** Port persisted in app_settings, or null when never saved (or corrupt). */
 export function getPersistedPort(): number | null {
   try {
-    const row = db
-      .query("SELECT value FROM app_settings WHERE key = ?")
-      .get(PORT_SETTING_KEY) as { value: string } | undefined;
+    const row = db.query("SELECT value FROM app_settings WHERE key = ?").get(PORT_SETTING_KEY) as
+      | { value: string }
+      | undefined;
     if (!row) return null;
     const parsed: unknown = JSON.parse(row.value);
     if (typeof parsed === "number") return parsePortText(String(parsed));

@@ -39,11 +39,7 @@ interface CallState {
 }
 
 export interface TerminalPartWriter {
-  write: (part: {
-    type: string;
-    id: string;
-    data: TerminalDataPayload;
-  }) => void;
+  write: (part: { type: string; id: string; data: TerminalDataPayload }) => void;
 }
 
 export function createTerminalBatcher(

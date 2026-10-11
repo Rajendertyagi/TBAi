@@ -79,10 +79,7 @@ export const COMPACT_COMMAND = "/compact";
 export const COMPACT_COMMAND_ALIASES: readonly string[] = ["/compress"];
 
 /** Every accepted spelling, canonical first. The single source of truth for matching. */
-export const COMPACT_COMMANDS: readonly string[] = [
-  COMPACT_COMMAND,
-  ...COMPACT_COMMAND_ALIASES,
-];
+export const COMPACT_COMMANDS: readonly string[] = [COMPACT_COMMAND, ...COMPACT_COMMAND_ALIASES];
 
 /**
  * A parsed `/compact` invocation.
@@ -352,10 +349,7 @@ type AssemblerCompaction = NonNullable<AssembleContextInput["compaction"]>;
 type SummarizerModel = AssemblerCompaction["summarizerModel"];
 
 /** Neutral fields for a result that never reached the compaction seam. */
-function unattemptedResult(
-  operationId: string,
-  reason: string,
-): ManualCompactResult {
+function unattemptedResult(operationId: string, reason: string): ManualCompactResult {
   return {
     kind: "tbai-compact",
     version: 1,
@@ -469,9 +463,7 @@ export interface ManualCompactInput {
  * render for it. Assembly, summariser and persistence faults are all reported as
  * `failed` with the underlying reason preserved in the log.
  */
-export async function runManualCompaction(
-  input: ManualCompactInput,
-): Promise<ManualCompactResult> {
+export async function runManualCompaction(input: ManualCompactInput): Promise<ManualCompactResult> {
   const log = logger.child({
     requestId: input.requestId,
     conversationId: input.conversationId,

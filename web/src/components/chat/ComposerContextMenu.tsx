@@ -17,16 +17,8 @@ import {
   pastePlainTextInto,
   selectAllTextareaText,
 } from "@/lib/clipboard";
-import {
-  couldBeMisspelling,
-  ensureSpellchecker,
-  getSpellingSuggestions,
-} from "@/lib/spellcheck";
-import {
-  findWordAtCaret,
-  replaceWord,
-  type WordAtCaret,
-} from "@/lib/word-suggestions";
+import { couldBeMisspelling, ensureSpellchecker, getSpellingSuggestions } from "@/lib/spellcheck";
+import { findWordAtCaret, replaceWord, type WordAtCaret } from "@/lib/word-suggestions";
 import { logger } from "@/lib/logger";
 import {
   ContextMenu,
@@ -75,8 +67,7 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
     boxRef.current?.querySelector("textarea") ?? null;
 
   const clipboardReadSupported =
-    typeof navigator !== "undefined" &&
-    typeof navigator.clipboard?.readText === "function";
+    typeof navigator !== "undefined" && typeof navigator.clipboard?.readText === "function";
 
   // Live saved snippets (SQLite source of truth). Refreshed on menu open
   // only — no polling, no cache. Failures stay in logs; the menu never
@@ -104,9 +95,7 @@ export function ComposerContextMenu({ children }: { children: ReactNode }) {
    * focus. Right-click is the first moment a correction can be wanted, so it is
    * the first moment the cost is justified.
    */
-  const resolveSpellingOffer = async (
-    ta: HTMLTextAreaElement,
-  ): Promise<SpellingOffer | null> => {
+  const resolveSpellingOffer = async (ta: HTMLTextAreaElement): Promise<SpellingOffer | null> => {
     const target = findWordAtCaret(ta.value, {
       selectionStart: ta.selectionStart ?? 0,
       selectionEnd: ta.selectionEnd ?? 0,

@@ -1,5 +1,5 @@
 // SCRATCH: structural analysis of captured Gemini body (redacted).
-import fs from "fs";
+import fs from "node:fs";
 const file = process.argv[2] ?? "D:\\Temp\\gemini-capture-z6.json";
 const calls = JSON.parse(fs.readFileSync(file, "utf8"));
 for (const { url, body } of calls) {

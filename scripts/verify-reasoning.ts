@@ -171,14 +171,41 @@ function printOptionMatrix(): void {
     level: string;
     why: string;
   }> = [
-    { type: "google", model: "gemini-3.1-flash-lite", level: "low", why: "Gemini 3 → thinkingLevel" },
+    {
+      type: "google",
+      model: "gemini-3.1-flash-lite",
+      level: "low",
+      why: "Gemini 3 → thinkingLevel",
+    },
     { type: "google", model: "gemini-2.5-flash", level: "low", why: "Gemini 2.5 → thinkingBudget" },
-    { type: "google", model: "gemini-2.5-flash-lite", level: "low", why: "2.5 lite rejects a budget" },
-    { type: "google", model: "gemini-3.1-flash-lite", level: "off", why: "off → no options at all" },
+    {
+      type: "google",
+      model: "gemini-2.5-flash-lite",
+      level: "low",
+      why: "2.5 lite rejects a budget",
+    },
+    {
+      type: "google",
+      model: "gemini-3.1-flash-lite",
+      level: "off",
+      why: "off → no options at all",
+    },
     { type: "anthropic", model: "claude-sonnet-4-5", level: "low", why: "extended thinking" },
     { type: "openai", model: "gpt-5", level: "low", why: "Responses API namespace" },
-    { type: "custom", apiProtocol: "chat-completions", model: "agnes-2.0-flash", level: "low", why: "gateway namespace" },
-    { type: "ollama", apiProtocol: "chat-completions", model: "llama3", level: "low", why: "effort not applicable" },
+    {
+      type: "custom",
+      apiProtocol: "chat-completions",
+      model: "agnes-2.0-flash",
+      level: "low",
+      why: "gateway namespace",
+    },
+    {
+      type: "ollama",
+      apiProtocol: "chat-completions",
+      model: "llama3",
+      level: "low",
+      why: "effort not applicable",
+    },
   ];
   console.log("\n=== option matrix (offline, no provider or key needed) ===");
   for (const c of cases) {

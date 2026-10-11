@@ -24,20 +24,10 @@ export function OpenCodeModelChip() {
   const copy = welcomeConfig.copy;
   const { agentId } = useParams();
   const conversationId = agentId ?? "";
-  const {
-    models,
-    isLoading,
-    error,
-    open,
-    setOpen,
-    currentModel,
-    currentModelInfo,
-    persist,
-  } = useOpenCodeChipState(conversationId);
+  const { models, isLoading, error, open, setOpen, currentModel, currentModelInfo, persist } =
+    useOpenCodeChipState(conversationId);
 
-  const label =
-    currentModelInfo?.name ??
-    (currentModel || copy.selectModel);
+  const label = currentModelInfo?.name ?? (currentModel || copy.selectModel);
 
   const toggleModel = async (m: OpenCodeModelOption) => {
     setOpen(false);
@@ -53,11 +43,7 @@ export function OpenCodeModelChip() {
     const ordered: { provider: string; options: OpenCodeModelOption[] }[] = [];
     const byProvider = new Map<string, OpenCodeModelOption[]>();
     for (const m of models) {
-      if (
-        q &&
-        !m.name.toLowerCase().includes(q) &&
-        !m.id.toLowerCase().includes(q)
-      ) {
+      if (q && !m.name.toLowerCase().includes(q) && !m.id.toLowerCase().includes(q)) {
         continue;
       }
       const key = m.providerID || "";
@@ -100,7 +86,11 @@ export function OpenCodeModelChip() {
                 className="h-8"
               />
             </div>
-            <div role="list" className="max-h-48 overflow-y-auto p-1">
+            <div
+              role="listbox"
+              aria-label={copy.modelSearchPlaceholder}
+              className="max-h-48 overflow-y-auto p-1"
+            >
               {matchCount === 0 ? (
                 <div className="px-2 py-2 text-xs text-muted-foreground">
                   {query.trim() ? copy.noModelsMatch : copy.selectModel}
@@ -129,9 +119,7 @@ export function OpenCodeModelChip() {
                 ))
               )}
             </div>
-            <div className="mt-2 px-1 text-xs text-muted-foreground">
-              {copy.modelHint}
-            </div>
+            <div className="mt-2 px-1 text-xs text-muted-foreground">{copy.modelHint}</div>
           </div>
         </OpenCodeChipMenuContent>
       </OpenCodeChipMenu>

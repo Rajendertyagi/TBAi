@@ -86,9 +86,9 @@ describe("classifySseFailure (pure, no I/O)", () => {
     expect(classifySseFailure({ kind: "unreachable" })).toBe("unreachable");
   });
   it("maps non-SSE 200 response to incompatible_response", () => {
-    expect(
-      classifySseFailure({ kind: "ok", status: 200, contentType: "application/json" }),
-    ).toBe("incompatible_response");
+    expect(classifySseFailure({ kind: "ok", status: 200, contentType: "application/json" })).toBe(
+      "incompatible_response",
+    );
   });
   it("maps 401 without a stored credential to auth_required", () => {
     expect(
@@ -160,9 +160,10 @@ describe("SSE probe integration (local fixtures)", () => {
   it("non-SSE 200 response → error/incompatible_response", async () => {
     const srv = Bun.serve({
       port: 0,
-      fetch: () => new Response(JSON.stringify({ hello: 1 }), {
-        headers: { "content-type": "application/json" },
-      }),
+      fetch: () =>
+        new Response(JSON.stringify({ hello: 1 }), {
+          headers: { "content-type": "application/json" },
+        }),
     });
     servers.push(srv);
     const id = track(
@@ -235,9 +236,7 @@ describe("SSE probe integration (local fixtures)", () => {
     expect(st.status).toBe("auth_failed");
     expect(st.failureReason).toBe("auth_failed");
     // Truthfulness: a failed connection is never presented as healthy.
-    expect(
-      mcpManager.getStatuses().find((s) => s.id === id)?.status,
-    ).not.toBe("connected");
+    expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).not.toBe("connected");
     await mcpManager.disconnect(id);
   });
 
@@ -247,8 +246,7 @@ describe("SSE probe integration (local fixtures)", () => {
     // short-circuit a reachable endpoint.
     const srv = Bun.serve({
       port: 0,
-      fetch: () =>
-        new Response(": ping\n\n", { headers: { "content-type": "text/event-stream" } }),
+      fetch: () => new Response(": ping\n\n", { headers: { "content-type": "text/event-stream" } }),
     });
     servers.push(srv);
     const id = track(
@@ -333,7 +331,9 @@ describe("reconnect stays bounded (no loops)", () => {
     expect(statusOf(id)!.status).toBe("disconnected");
     const reconnects = logger
       .getRecentEntries(cutoff)
-      .filter((e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "t-bounded");
+      .filter(
+        (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === "t-bounded",
+      );
     expect(reconnects.length).toBe(0);
   }, 20000);
 });
@@ -494,7 +494,9 @@ describe("connect failure logs: diagnostics without secrets", () => {
     await waitForStatus(id, "error");
     const entries = logger
       .getRecentEntries(cutoff)
-      .filter((e) => e.event === "mcp.operation" && e.op === "connect" && e.mcpServer === "t-log-secrecy");
+      .filter(
+        (e) => e.event === "mcp.operation" && e.op === "connect" && e.mcpServer === "t-log-secrecy",
+      );
     expect(entries.length).toBeGreaterThan(0);
     const serialized = JSON.stringify(entries);
     expect(serialized).not.toContain(sentinel);

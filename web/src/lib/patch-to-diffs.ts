@@ -29,8 +29,7 @@ import { toolsConfig } from "@/config/tools";
  * missing.
  */
 
-const { diffPreviewMaxChars: MAX_CHARS, diffPreviewMaxLines: MAX_LINES } =
-  toolsConfig.limits;
+const { diffPreviewMaxChars: MAX_CHARS, diffPreviewMaxLines: MAX_LINES } = toolsConfig.limits;
 
 /** Per-side share of the budget the head and the tail each get. */
 const SIDE_LINES = Math.floor(MAX_LINES / 2);
@@ -150,11 +149,7 @@ function trimOversizeFile(file: CodeDiffFile): CodeDiffFile {
     headChars += line.text.length;
     splitAt = i + 1;
   }
-  for (
-    let i = file.lines.length - 1;
-    i >= splitAt && tail.length < SIDE_LINES;
-    i -= 1
-  ) {
+  for (let i = file.lines.length - 1; i >= splitAt && tail.length < SIDE_LINES; i -= 1) {
     const line = file.lines[i];
     if (tail.length > 0 && tailChars + line.text.length > SIDE_CHARS) break;
     tail.push(line);

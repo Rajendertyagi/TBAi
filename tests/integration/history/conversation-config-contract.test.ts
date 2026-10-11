@@ -24,10 +24,7 @@ import { registry } from "@/config/providers.ts";
 import { conversationService } from "@/services/storage";
 import conversationsApp from "@/routes/conversations.ts";
 import chatApp from "@/routes/chat.ts";
-import {
-  resolveChatModel,
-  UnknownProviderError,
-} from "@/routes/chat-model";
+import { resolveChatModel, UnknownProviderError } from "@/routes/chat-model";
 import { conversationUpdateSchema } from "@/lib/validation.ts";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 
@@ -51,12 +48,7 @@ const SHARED_A = "p2-shared-a";
 const SHARED_B = "p2-shared-b";
 const OWN_IDS = [ACTIVE_ID, SECOND_ID, SHARED_A, SHARED_B];
 
-function seedRow(
-  id: string,
-  model: string,
-  thinking: string | null,
-  active: boolean,
-) {
+function seedRow(id: string, model: string, thinking: string | null, active: boolean) {
   db.run(
     `INSERT OR REPLACE INTO provider_configs
        (id, name, type, encrypted_api_key, credential_version, endpoint, model, models, thinking, is_active, created_at, updated_at)
@@ -80,13 +72,15 @@ describe("phase 2 — PATCH persistence contract (real Hono app)", () => {
   });
 
   it("[P2-01] bound conversation: explicit provider/model PATCH persists both", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "p2-01",
-      providerId: null,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "p2-01",
+        providerId: null,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -105,13 +99,15 @@ describe("phase 2 — PATCH persistence contract (real Hono app)", () => {
   });
 
   it("[P2-02] explicit reasoningLevel PATCH persists", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "p2-02",
-      providerId: ACTIVE_ID,
-      modelId: "m",
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "p2-02",
+        providerId: ACTIVE_ID,
+        modelId: "m",
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -119,21 +115,21 @@ describe("phase 2 — PATCH persistence contract (real Hono app)", () => {
     });
     expect(status).toBe(200);
     expect((await json()).reasoningLevel).toBe("high");
-    expect((await conversationService.get(created.id))?.reasoningLevel).toBe(
-      "high",
-    );
+    expect((await conversationService.get(created.id))?.reasoningLevel).toBe("high");
 
     await conversationService.delete(created.id);
   });
 
   it("[P2-03] explicit null clears previously persisted provider/model/reasoning", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "p2-03",
-      providerId: ACTIVE_ID,
-      modelId: "keep-model",
-      reasoningLevel: "high",
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "p2-03",
+        providerId: ACTIVE_ID,
+        modelId: "keep-model",
+        reasoningLevel: "high",
+        systemPrompt: null,
+      }),
+    );
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -158,13 +154,15 @@ describe("phase 2 — PATCH persistence contract (real Hono app)", () => {
   });
 
   it("[P2-04] omitted PATCH fields preserve existing values", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "p2-04",
-      providerId: ACTIVE_ID,
-      modelId: "keep-model",
-      reasoningLevel: "medium",
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "p2-04",
+        providerId: ACTIVE_ID,
+        modelId: "keep-model",
+        reasoningLevel: "medium",
+        systemPrompt: null,
+      }),
+    );
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -278,20 +276,24 @@ describe("phase 2 — POST materialization contract (real Hono app)", () => {
   });
 
   it("[P2-09] switch-away-and-back preserves each conversation's config", async () => {
-    const a = await conversationService.create(conversationInput({
-      title: "conv-a",
-      providerId: ACTIVE_ID,
-      modelId: "model-a",
-      reasoningLevel: "low",
-      systemPrompt: null,
-    }));
-    const b = await conversationService.create(conversationInput({
-      title: "conv-b",
-      providerId: SECOND_ID,
-      modelId: "model-b",
-      reasoningLevel: "high",
-      systemPrompt: null,
-    }));
+    const a = await conversationService.create(
+      conversationInput({
+        title: "conv-a",
+        providerId: ACTIVE_ID,
+        modelId: "model-a",
+        reasoningLevel: "low",
+        systemPrompt: null,
+      }),
+    );
+    const b = await conversationService.create(
+      conversationInput({
+        title: "conv-b",
+        providerId: SECOND_ID,
+        modelId: "model-b",
+        reasoningLevel: "high",
+        systemPrompt: null,
+      }),
+    );
 
     // Edit A, then "switch away" to B and back to A — all via readback.
     const patched = await appFetch(`/api/conversations/${a.id}`, {
@@ -316,13 +318,15 @@ describe("phase 2 — POST materialization contract (real Hono app)", () => {
   });
 
   it("[P2-16] opencode_* fields round-trip through PATCH/GET unmodified", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "p2-16",
-      providerId: null,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "p2-16",
+        providerId: null,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     const { status } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -358,13 +362,15 @@ describe("phase 2 — resolveChatModel contract (seam)", () => {
   });
 
   it("[P2-10] honors the explicit row provider/model", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "p2-10",
-      providerId: SECOND_ID,
-      modelId: "row-model",
-      reasoningLevel: "high",
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p2-10",
+        providerId: SECOND_ID,
+        modelId: "row-model",
+        reasoningLevel: "high",
+        systemPrompt: null,
+      }),
+    );
     const resolved = await resolveChatModel({ threadId: conv.id });
     expect(resolved?.provider.id).toBe(SECOND_ID);
     expect(resolved?.model).toBe("row-model");
@@ -374,13 +380,15 @@ describe("phase 2 — resolveChatModel contract (seam)", () => {
   });
 
   it("[P2-11a] unknown row provider throws UnknownProviderError (no active substitution)", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "p2-11a",
-      providerId: "p2-ghost-provider",
-      modelId: "m",
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p2-11a",
+        providerId: "p2-ghost-provider",
+        modelId: "m",
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     let thrown: unknown;
     try {
       await resolveChatModel({ threadId: conv.id });
@@ -431,13 +439,15 @@ describe("phase 2 — resolveChatModel contract (seam)", () => {
     expect(bare?.reasoning).toBe("low");
 
     // NULL row (no explicit config) also falls back to active.
-    const conv = await conversationService.create(conversationInput({
-      title: "p2-12a",
-      providerId: null,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p2-12a",
+        providerId: null,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     const rowless = await resolveChatModel({ threadId: conv.id });
     expect(rowless?.provider.id).toBe(ACTIVE_ID);
 
@@ -469,26 +479,30 @@ describe("phase 2 — resolveChatModel contract (seam)", () => {
       const resolved = await resolveChatModel({ providerId: blank });
       expect(resolved?.provider.id).toBe(ACTIVE_ID);
     }
-    const conv = await conversationService.create(conversationInput({
-      title: "p2-12c",
-      providerId: "   ",
-      modelId: "m",
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p2-12c",
+        providerId: "   ",
+        modelId: "m",
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     const resolved = await resolveChatModel({ threadId: conv.id });
     expect(resolved?.provider.id).toBe(ACTIVE_ID);
     await conversationService.delete(conv.id);
   });
 
   it("[P2-13] one-shot request values resolve without altering the persisted row", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "p2-13",
-      providerId: ACTIVE_ID,
-      modelId: "persisted-model",
-      reasoningLevel: "low",
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p2-13",
+        providerId: ACTIVE_ID,
+        modelId: "persisted-model",
+        reasoningLevel: "low",
+        systemPrompt: null,
+      }),
+    );
     const resolved = await resolveChatModel({
       providerId: SECOND_ID,
       model: "oneshot-model",
@@ -510,13 +524,15 @@ describe("phase 2 — resolveChatModel contract (seam)", () => {
   });
 
   it("[P2-14] after one-shot use, bare resolution returns the persisted values", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "p2-14",
-      providerId: SECOND_ID,
-      modelId: "persisted-model",
-      reasoningLevel: "medium",
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p2-14",
+        providerId: SECOND_ID,
+        modelId: "persisted-model",
+        reasoningLevel: "medium",
+        systemPrompt: null,
+      }),
+    );
     // One-shot against a different provider (must not leak into the row).
     await resolveChatModel({
       providerId: ACTIVE_ID,
@@ -563,13 +579,15 @@ describe("phase 2 — full-chain integration", () => {
   });
 
   it("[P2-A] select → PATCH → reload → resolve yields the exact provider + model", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "p2-a",
-      providerId: null,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "p2-a",
+        providerId: null,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     // select: user picks provider + model in the composer → PATCH.
     const patched = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import {
-  buildModelGroups,
-  filterModelGroups,
-  resolveModelOwner,
-} from "@web/lib/model-groups.ts";
+import { buildModelGroups, filterModelGroups, resolveModelOwner } from "@web/lib/model-groups.ts";
 import type { ProviderConfig } from "@web/types";
 
 function provider(

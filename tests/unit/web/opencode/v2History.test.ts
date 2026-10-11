@@ -18,9 +18,7 @@ const message = (id: string, text: string, created: number): SessionMessageInfo 
   type: "user",
 });
 
-function repositoryState(
-  projection: ReturnType<typeof projectV2History>,
-): V2ThreadState {
+function repositoryState(projection: ReturnType<typeof projectV2History>): V2ThreadState {
   return {
     sessionId: "session-1",
     connection: { type: "connected", serverVersion: "2.0.16" },
@@ -69,10 +67,15 @@ function reader(pages: SessionMessagesResponse[]): V2HistoryReader {
 
 describe("native V2 history projection", () => {
   it("loads cursor pages, reverses them, and deduplicates ids", async () => {
-    const snapshot = await loadV2History(reader([
-      { data: [message("m3", "third", 3), message("m2", "second", 2)], cursor: { next: "older" } },
-      { data: [message("m2", "second", 2), message("m1", "first", 1)], cursor: {} },
-    ]));
+    const snapshot = await loadV2History(
+      reader([
+        {
+          data: [message("m3", "third", 3), message("m2", "second", 2)],
+          cursor: { next: "older" },
+        },
+        { data: [message("m2", "second", 2), message("m1", "first", 1)], cursor: {} },
+      ]),
+    );
     expect(snapshot.messages.map((item) => item.id)).toEqual(["m1", "m2", "m3"]);
     expect(snapshot.pages).toBe(2);
     const projection = projectV2History(snapshot, []);
@@ -118,17 +121,19 @@ describe("native V2 history projection", () => {
       agent: "build",
       model: { id: "test-model", providerID: "test-provider" },
       time: { created: 1 },
-      content: [{
-        type: "tool",
-        id: "tool-streaming",
-        name: "read",
-        time: { created: 1 },
-        state: { status: "streaming", input: "{\"filePath\":\"a.txt\"}" },
-      }],
+      content: [
+        {
+          type: "tool",
+          id: "tool-streaming",
+          name: "read",
+          time: { created: 1 },
+          state: { status: "streaming", input: '{"filePath":"a.txt"}' },
+        },
+      ],
     };
     const projection = projectV2History({ messages: [assistantMessage], pages: 1 }, []);
     expect(projection.messages[0]?.parts[0]).toMatchObject({
-      input: { text: "{\"filePath\":\"a.txt\"}" },
+      input: { text: '{"filePath":"a.txt"}' },
       output: undefined,
       status: "running",
     });
@@ -141,18 +146,20 @@ describe("native V2 history projection", () => {
       agent: "build",
       model: { id: "test-model", providerID: "test-provider" },
       time: { created: 1 },
-      content: [{
-        type: "tool",
-        id: "tool-error",
-        name: "read",
-        time: { created: 1, ran: 1 },
-        state: {
-          status: "error",
-          input: { filePath: "a.txt" },
-          error: { type: "tool.execution", message: "File not found" },
-          content: [{ type: "text", text: "partial output" }],
+      content: [
+        {
+          type: "tool",
+          id: "tool-error",
+          name: "read",
+          time: { created: 1, ran: 1 },
+          state: {
+            status: "error",
+            input: { filePath: "a.txt" },
+            error: { type: "tool.execution", message: "File not found" },
+            content: [{ type: "text", text: "partial output" }],
+          },
         },
-      }],
+      ],
     };
     const projection = projectV2History({ messages: [assistantMessage], pages: 1 }, []);
     expect(projection.messages[0]?.parts[0]).toMatchObject({
@@ -171,10 +178,7 @@ describe("native V2 history projection", () => {
       text: "System history text",
       time: { created: 1 },
     };
-    const projection = projectV2History(
-      { messages: [systemMessage], pages: 1 },
-      [],
-    );
+    const projection = projectV2History({ messages: [systemMessage], pages: 1 }, []);
     expect(projection.messages[0]).toMatchObject({
       role: "system",
       parts: [{ kind: "text", value: "System history text" }],
@@ -198,10 +202,7 @@ describe("native V2 history projection", () => {
       },
       time: { created: 2, completed: 3 },
     };
-    const projection = projectV2History(
-      { messages: [shellMessage], pages: 1 },
-      [],
-    );
+    const projection = projectV2History({ messages: [shellMessage], pages: 1 }, []);
     expect(projection.messages[0]).toMatchObject({
       role: "system",
       // Native text projection preserves the command and output in source order.
@@ -217,10 +218,7 @@ describe("native V2 history projection", () => {
       text: "System history text",
       time: { created: 1 },
     };
-    const projection = projectV2History(
-      { messages: [systemMessage], pages: 1 },
-      [],
-    );
+    const projection = projectV2History({ messages: [systemMessage], pages: 1 }, []);
     const repositoryItems = projectV2RepositoryItems(repositoryState(projection));
     const projectedMessage = repositoryItems[0]?.message;
     expect(projectedMessage).toMatchObject({
@@ -231,10 +229,14 @@ describe("native V2 history projection", () => {
   });
 
   it("rejects a repeated cursor instead of looping", async () => {
-    await expect(loadV2History(reader([
-      { data: [], cursor: { next: "same" } },
-      { data: [], cursor: { next: "same" } },
-    ]))).rejects.toThrow("repeated cursor");
+    await expect(
+      loadV2History(
+        reader([
+          { data: [], cursor: { next: "same" } },
+          { data: [], cursor: { next: "same" } },
+        ]),
+      ),
+    ).rejects.toThrow("repeated cursor");
   });
 });
 
@@ -296,10 +298,7 @@ describe("tool timing from refreshed history", () => {
   });
 
   it("records no timing when the server reported no time at all", () => {
-    const projection = projectV2History(
-      { messages: [assistantWithTool(undefined)], pages: 1 },
-      [],
-    );
+    const projection = projectV2History({ messages: [assistantWithTool(undefined)], pages: 1 }, []);
     expect(firstPart(projection)?.timing).toBeUndefined();
   });
 });

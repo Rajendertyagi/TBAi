@@ -1,7 +1,4 @@
-import type {
-  ToolCallMessagePartComponent,
-  ToolCallMessagePartProps,
-} from "@assistant-ui/react";
+import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
 import { BackendToolView } from "../filesystem/ui";
 import { FieldsOrJson } from "@/tools/result-fields";
 import { toolsConfig } from "@/config/tools";
@@ -24,8 +21,7 @@ type AnyProps = ToolCallMessagePartProps<SchedulerArgs, AnyResult>;
  */
 export const SchedulerToolUI: ToolCallMessagePartComponent = (p: AnyProps) => {
   const action = String(p.args?.action ?? "scheduler");
-  const label =
-    String(p.args?.name ?? p.args?.jobId ?? "").trim() || "scheduler";
+  const label = String(p.args?.name ?? p.args?.jobId ?? "").trim() || "scheduler";
   return (
     <BackendToolView
       title={`scheduler · ${action} · ${label}`}

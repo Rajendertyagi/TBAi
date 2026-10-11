@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import {
   runList,
   runSearch,
@@ -127,9 +127,7 @@ describe("canonical containment", () => {
   });
 
   it("requires an explicit root (no silent fallback)", () => {
-    expect(() =>
-      resolveSafe("proj", undefined as unknown as string),
-    ).toThrow(/No workspace root/);
+    expect(() => resolveSafe("proj", undefined as unknown as string)).toThrow(/No workspace root/);
   });
 });
 

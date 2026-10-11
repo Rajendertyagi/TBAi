@@ -42,9 +42,12 @@ beforeEach(() => {
   // one's operation (which would itself be a stale-id leak).
   resetOperationsForTests();
   resetSendOperationForTests();
-  logger.info = ((scope: string, event: string) => capture("info", scope, event)) as typeof logger.info;
-  logger.warn = ((scope: string, event: string) => capture("warn", scope, event)) as typeof logger.warn;
-  logger.error = ((scope: string, event: string) => capture("error", scope, event)) as typeof logger.error;
+  logger.info = ((scope: string, event: string) =>
+    capture("info", scope, event)) as typeof logger.info;
+  logger.warn = ((scope: string, event: string) =>
+    capture("warn", scope, event)) as typeof logger.warn;
+  logger.error = ((scope: string, event: string) =>
+    capture("error", scope, event)) as typeof logger.error;
 });
 
 afterEach(() => {
@@ -197,12 +200,9 @@ describe("observeBodySettled", () => {
 
   it("settles exactly once when a cancel follows a completed read", async () => {
     let settled = 0;
-    const wrapped = observeBodySettled(
-      streamOf(new TextEncoder().encode("x")),
-      () => {
-        settled += 1;
-      },
-    );
+    const wrapped = observeBodySettled(streamOf(new TextEncoder().encode("x")), () => {
+      settled += 1;
+    });
     await drain(wrapped);
     await wrapped.cancel().catch(() => {});
     expect(settled).toBe(1);

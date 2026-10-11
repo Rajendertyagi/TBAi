@@ -209,10 +209,9 @@ test.describe("Code model chip — native default binding", () => {
           providerID: NATIVE_MODEL.split("/")[0]!,
         },
       };
-      const switched = await request.post(
-        `/api/opencode/api/session/${bound.sessionId}/model`,
-        { data: switchBody },
-      );
+      const switched = await request.post(`/api/opencode/api/session/${bound.sessionId}/model`, {
+        data: switchBody,
+      });
       expect(switched.ok()).toBe(true);
 
       const after = await request.get(`/api/opencode/api/session/${bound.sessionId}`);
@@ -228,10 +227,9 @@ test.describe("Code model chip — native default binding", () => {
       // The stored choice must still be what is displayed.
       expect(await readStoredModel(request, conversationId)).toBe(STORED_MODEL);
       await openCodeConversation(page, conversationId);
-      await expect(modelChip(page)).toHaveText(
-        new RegExp(STORED_MODEL.split("/")[1]!, "i"),
-        { timeout: LIVE_TIMEOUT_MS },
-      );
+      await expect(modelChip(page)).toHaveText(new RegExp(STORED_MODEL.split("/")[1]!, "i"), {
+        timeout: LIVE_TIMEOUT_MS,
+      });
     } finally {
       await deleteCodeConversation(request, conversationId);
     }

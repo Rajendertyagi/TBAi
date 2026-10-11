@@ -59,7 +59,10 @@ function storeFor(fsx: Fs, ttlMs?: number): SqliteResumableStreamStore {
     ...(ttlMs !== undefined ? { ttlMs } : {}),
     generateLeaseToken: (() => {
       let n = 0;
-      return () => `lease_${(n += 1)}`;
+      return () => {
+        n += 1;
+        return `lease_${n}`;
+      };
     })(),
   });
 }
@@ -111,7 +114,9 @@ const rowExists = (fsx: Fs, id: string): boolean =>
 
 const chunkRows = (fsx: Fs, id: string): number =>
   fsx.db
-    .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM chat_stream_chunks WHERE stream_id = ?")
+    .query<{ c: number }, [string]>(
+      "SELECT COUNT(*) AS c FROM chat_stream_chunks WHERE stream_id = ?",
+    )
     .get(id)!.c;
 
 afterEach(() => {
@@ -291,9 +296,7 @@ describe("cleanup — deletion criteria", () => {
     expect(
       fsx.db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM conversations").get()!.c,
     ).toBe(1);
-    expect(
-      fsx.db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM messages").get()!.c,
-    ).toBe(1);
+    expect(fsx.db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM messages").get()!.c).toBe(1);
   });
 
   it("processes only a bounded batch per tick", async () => {

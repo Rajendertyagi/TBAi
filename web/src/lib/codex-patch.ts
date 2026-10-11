@@ -186,9 +186,7 @@ export function parseCodexPatch(
     const headerLine = raw.trimEnd();
     const header = SECTION_HEADERS.find((h) => headerLine.startsWith(h.prefix));
     // A header word with nothing after it: real header, missing path.
-    const bareWord = header
-      ? null
-      : SECTION_WORDS.find((w) => line === w.word);
+    const bareWord = header ? null : SECTION_WORDS.find((w) => line === w.word);
     if (bareWord) {
       return {
         problem: {
@@ -306,21 +304,14 @@ export function parseCodexPatch(
  * @param sections - Output of {@link parseCodexPatch}.
  * @returns A unified diff, or an empty string when there is nothing to show.
  */
-export function codexPatchToUnifiedDiff(
-  sections: readonly CodexPatchSection[],
-): string {
+export function codexPatchToUnifiedDiff(sections: readonly CodexPatchSection[]): string {
   const chunks: string[] = [];
   for (const section of sections) {
     const path = section.path;
     if (section.kind === "add") {
       const added = section.lines.map((l) => `+${l.slice(1)}`);
       chunks.push(
-        [
-          `--- /dev/null`,
-          `+++ ${path}`,
-          `@@ -0,0 +1,${added.length} @@`,
-          ...added,
-        ].join("\n"),
+        [`--- /dev/null`, `+++ ${path}`, `@@ -0,0 +1,${added.length} @@`, ...added].join("\n"),
       );
       continue;
     }
@@ -334,12 +325,9 @@ export function codexPatchToUnifiedDiff(
     const oldCount = section.lines.filter((l) => l[0] !== "+").length;
     const newCount = section.lines.filter((l) => l[0] !== "-").length;
     chunks.push(
-      [
-        `--- ${path}`,
-        `+++ ${path}`,
-        `@@ -1,${oldCount} +1,${newCount} @@`,
-        ...section.lines,
-      ].join("\n"),
+      [`--- ${path}`, `+++ ${path}`, `@@ -1,${oldCount} +1,${newCount} @@`, ...section.lines].join(
+        "\n",
+      ),
     );
   }
   return chunks.join("\n");

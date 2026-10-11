@@ -82,7 +82,7 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
   /** Settle to a terminal status; only the first transition out of running wins. */
   function settle(id: string, status: Exclude<ChatRunStatus, "running">): boolean {
     const rec = records.get(id);
-    if (!rec || rec.status !== "running") return false;
+    if (rec?.status !== "running") return false;
     clearTimer(rec);
     rec.status = status;
     rec.updatedAt = now();
@@ -183,7 +183,7 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
     /** Connection dropped while running: run continues, marked detached. */
     markDetached(id: string): boolean {
       const rec = records.get(id);
-      if (!rec || rec.status !== "running" || rec.detachedAt !== null) return false;
+      if (rec?.status !== "running" || rec.detachedAt !== null) return false;
       rec.detachedAt = now();
       rec.updatedAt = now();
       return true;

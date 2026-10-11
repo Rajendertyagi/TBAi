@@ -52,14 +52,9 @@ async function readConfig(request: import("@playwright/test").APIRequestContext)
 }
 
 /** The effect currently on disk for one (action, resource) pair. */
-function effectOf(
-  config: ConfigSnapshot,
-  action: string,
-  resource: string,
-): string | undefined {
-  return config.permissions?.find(
-    (rule) => rule.action === action && rule.resource === resource,
-  )?.effect;
+function effectOf(config: ConfigSnapshot, action: string, resource: string): string | undefined {
+  return config.permissions?.find((rule) => rule.action === action && rule.resource === resource)
+    ?.effect;
 }
 
 test.describe("OpenCode Configuration against the real managed server", () => {
@@ -84,17 +79,14 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     expect(response.ok()).toBe(true);
   });
 
-  test("the page shows the configuration the server actually reads", async ({
-    page,
-    request,
-  }) => {
+  test("the page shows the configuration the server actually reads", async ({ page, request }) => {
     const config = await readConfig(request);
     await page.goto(CONFIG_URL);
     const main = page.getByRole("main");
 
-    await expect(
-      main.getByRole("heading", { name: "OpenCode Configuration" }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expect(main.getByRole("heading", { name: "OpenCode Configuration" })).toBeVisible({
+      timeout: 30_000,
+    });
 
     // The resolved path must be the one the server reported — not the
     // TBAi-owned data/opencode-home file, which also exists and is not the
@@ -122,16 +114,14 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     // visible as Deny rather than silently dropped.
     for (const rule of config.permissions ?? []) {
       await expect(main.getByText(rule.action, { exact: true }).first()).toBeVisible();
-      await expect(
-        main.getByText(rule.resource, { exact: true }).first(),
-      ).toBeVisible();
+      await expect(main.getByText(rule.resource, { exact: true }).first()).toBeVisible();
     }
     for (const resource of PROTECTED_RULES) {
       const rule = config.permissions?.find((r) => r.resource === resource);
       if (!rule) continue;
-      await expect(
-        main.getByRole("combobox", { name: `edit ${resource} effect` }),
-      ).toHaveText(/Deny/);
+      await expect(main.getByRole("combobox", { name: `edit ${resource} effect` })).toHaveText(
+        /Deny/,
+      );
     }
   });
 
@@ -152,13 +142,13 @@ test.describe("OpenCode Configuration against the real managed server", () => {
       name: `question ${target!.resource} effect`,
     });
     await expect(trigger).toBeVisible({ timeout: 30_000 });
-    await expect(trigger).toHaveText(
-      new RegExp(`^${target!.effect === "ask" ? "Ask" : "Allow"}`),
-    );
+    await expect(trigger).toHaveText(new RegExp(`^${target!.effect === "ask" ? "Ask" : "Allow"}`));
 
     // A change that has not been saved must not have touched the file.
     await trigger.click();
-    await page.getByRole("option", { name: new RegExp(`^${next === "allow" ? "Allow" : "Ask"}`) }).click();
+    await page
+      .getByRole("option", { name: new RegExp(`^${next === "allow" ? "Allow" : "Ask"}`) })
+      .click();
 
     const midFlight = await readConfig(request);
     expect(effectOf(midFlight, "question", target!.resource)).toBe(target!.effect);
@@ -172,9 +162,7 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     // the save is an honest no-op and says so. Asserting the file instead (see
     // below) is what actually proves the change landed.
     await expect(
-      main.getByText(
-        /Saved to the OpenCode configuration\.|Already set to this effect\./,
-      ),
+      main.getByText(/Saved to the OpenCode configuration\.|Already set to this effect\./),
     ).toBeVisible({ timeout: 30_000 });
 
     // The write landed.
@@ -193,10 +181,7 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     });
   });
 
-  test("the protected deny rules and unknown fields survive a save", async ({
-    page,
-    request,
-  }) => {
+  test("the protected deny rules and unknown fields survive a save", async ({ page, request }) => {
     const before = await readConfig(request);
     const question = before.permissions?.find((r) => r.action === "question");
     test.skip(!question, "This configuration has no question rule to edit.");
@@ -221,9 +206,7 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     // when the rule already holds the target effect, so the file is the thing
     // asserted on, not which message the page chose to show.
     await expect(
-      main.getByText(
-        /Saved to the OpenCode configuration\.|Already set to this effect\./,
-      ),
+      main.getByText(/Saved to the OpenCode configuration\.|Already set to this effect\./),
     ).toBeVisible({ timeout: 30_000 });
 
     const afterParsed = JSON.parse((await readConfig(request)).raw) as Record<string, unknown>;
@@ -243,10 +226,7 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     }
   });
 
-  test("a malformed configuration is read-only and no write happens", async ({
-    page,
-    request,
-  }) => {
+  test("a malformed configuration is read-only and no write happens", async ({ page, request }) => {
     const config = await readConfig(request);
     // This spec cannot corrupt the maintainer's real file to prove the refusal;
     // that path is covered behaviourally in configDocument.test.ts and by the
@@ -260,8 +240,8 @@ test.describe("OpenCode Configuration against the real managed server", () => {
       );
     }
     await page.goto(CONFIG_URL);
-    await expect(
-      page.getByRole("main").getByText(/not valid JSON/i),
-    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("main").getByText(/not valid JSON/i)).toBeVisible({
+      timeout: 30_000,
+    });
   });
 });

@@ -56,7 +56,9 @@ interface EndDistanceReading {
   readonly isAtEnd: boolean;
 }
 
-async function measureEndDistance(page: import("@playwright/test").Page): Promise<EndDistanceReading> {
+async function measureEndDistance(
+  page: import("@playwright/test").Page,
+): Promise<EndDistanceReading> {
   return page.evaluate((scrollerSelector) => {
     const scroller = document.querySelector(scrollerSelector) as HTMLElement;
     const view = scroller.getBoundingClientRect();
@@ -93,7 +95,10 @@ async function scrollToOffset(
   await page.evaluate(
     ({ scrollerSelector, value }) => {
       const scroller = document.querySelector(scrollerSelector) as HTMLElement;
-      scroller.scrollTop = Math.max(0, Math.min(value, scroller.scrollHeight - scroller.clientHeight));
+      scroller.scrollTop = Math.max(
+        0,
+        Math.min(value, scroller.scrollHeight - scroller.clientHeight),
+      );
     },
     { scrollerSelector: SCROLLER, value: offset },
   );
@@ -101,19 +106,22 @@ async function scrollToOffset(
 }
 
 test.describe("virtual end-distance closes on the DOM end-distance", () => {
-  test("the scrollport and the virtualizer share one coordinate space", async ({ page, request }) => {
+  test("the scrollport and the virtualizer share one coordinate space", async ({
+    page,
+    request,
+  }) => {
     test.setTimeout(240_000);
-    const cid = await seedTurnConversation(
-      request,
-      `enddist-closed ${Date.now()}`,
-      {
-        totalMessages: 150,
-        turnIndex: 136,
-        turnParts: [{ type: "text", text: "seeded turn for end-distance reading" }],
-      },
-    );
+    const cid = await seedTurnConversation(request, `enddist-closed ${Date.now()}`, {
+      totalMessages: 150,
+      turnIndex: 136,
+      turnParts: [{ type: "text", text: "seeded turn for end-distance reading" }],
+    });
     await page.goto(`/#/chat/${cid}`);
-    await page.getByText("seeded-body-149").first().waitFor({ timeout: 30_000 }).catch(() => {});
+    await page
+      .getByText("seeded-body-149")
+      .first()
+      .waitFor({ timeout: 30_000 })
+      .catch(() => {});
     await waitForStableScrollHeight(page);
     await page.waitForTimeout(1500);
 

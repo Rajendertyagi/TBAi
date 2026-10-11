@@ -82,8 +82,12 @@ describe("resolveChipModelSource — the honest unbound state", () => {
   test("ignores a native model missing its provider or id", () => {
     // Half a reference cannot be matched against the catalogue, and inventing
     // the missing half would be a guess presented as fact.
-    expect(resolveChipModelSource(bound({ nativeModel: { providerID: "", modelID: "m" } }))).toBe("");
-    expect(resolveChipModelSource(bound({ nativeModel: { providerID: "p", modelID: "" } }))).toBe("");
+    expect(resolveChipModelSource(bound({ nativeModel: { providerID: "", modelID: "m" } }))).toBe(
+      "",
+    );
+    expect(resolveChipModelSource(bound({ nativeModel: { providerID: "p", modelID: "" } }))).toBe(
+      "",
+    );
   });
 });
 
@@ -128,9 +132,10 @@ describe("findChipModelInfo — resolution through the live catalogue", () => {
   });
 
   test("resolves a stored model through the catalogue", () => {
-    expect(findChipModelInfo(models, resolveChipModelSource(bound({ storedModel: "google/gemini-pro" })))?.name).toBe(
-      "Gemini Pro",
-    );
+    expect(
+      findChipModelInfo(models, resolveChipModelSource(bound({ storedModel: "google/gemini-pro" })))
+        ?.name,
+    ).toBe("Gemini Pro");
   });
 
   test("falls back to a bare model id when the qualified form does not match", () => {
@@ -140,7 +145,9 @@ describe("findChipModelInfo — resolution through the live catalogue", () => {
   test("returns null for an unknown id instead of inventing metadata", () => {
     // A session bound to a model this install no longer lists: no name, no
     // provider, no crash — the chip shows the raw id, which is truthful.
-    const shown = resolveChipModelSource(bound({ nativeModel: { providerID: "gone", modelID: "model" } }));
+    const shown = resolveChipModelSource(
+      bound({ nativeModel: { providerID: "gone", modelID: "model" } }),
+    );
     expect(findChipModelInfo(models, shown)).toBeNull();
     expect(shown).toBe("gone/model");
   });
@@ -152,15 +159,17 @@ describe("findChipModelInfo — resolution through the live catalogue", () => {
 
 describe("qualifyChipModel", () => {
   test("joins provider and id", () => {
-    expect(qualifyChipModel({ providerID: "openrouter", modelID: "perceptron/perceptron-mk1.5" })).toBe(
-      "openrouter/perceptron/perceptron-mk1.5",
-    );
+    expect(
+      qualifyChipModel({ providerID: "openrouter", modelID: "perceptron/perceptron-mk1.5" }),
+    ).toBe("openrouter/perceptron/perceptron-mk1.5");
   });
 
   test("preserves a model id that itself contains a slash", () => {
     // OpenCode namespaces some models (`provider/sub/model`), so the join must
     // not split or flatten the id.
-    expect(qualifyChipModel({ providerID: "openrouter", modelID: "a/b/c" })).toBe("openrouter/a/b/c");
+    expect(qualifyChipModel({ providerID: "openrouter", modelID: "a/b/c" })).toBe(
+      "openrouter/a/b/c",
+    );
   });
 
   test("returns empty for null, undefined, and partial references", () => {

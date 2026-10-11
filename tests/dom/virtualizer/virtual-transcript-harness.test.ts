@@ -71,11 +71,17 @@ function harness(count: number, overrides: Record<string, unknown> = {}) {
     paddingEnd: 0,
     gap: 0,
     enabled: true,
-    observeElementRect: (_instance: unknown, cb: (r: { width: number; height: number }) => void) => {
+    observeElementRect: (
+      _instance: unknown,
+      cb: (r: { width: number; height: number }) => void,
+    ) => {
       cb(rect);
       return () => undefined;
     },
-    observeElementOffset: (_instance: unknown, cb: (offset: number, isScrolling: boolean) => void) => {
+    observeElementOffset: (
+      _instance: unknown,
+      cb: (offset: number, isScrolling: boolean) => void,
+    ) => {
       cb(0, false);
       return () => undefined;
     },

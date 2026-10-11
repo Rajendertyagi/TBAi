@@ -280,9 +280,7 @@ function UserMessage() {
         <MessagePrimitive.Parts />
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
-        {timeStr && (
-          <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>
-        )}
+        {timeStr && <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>}
         <TurnCopyButton />
       </div>
     </MessagePrimitive.Root>
@@ -330,12 +328,12 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
     (s) =>
       (s.message.role === "assistant"
         ? (s.message.metadata?.custom as
-             | {
-              usage?: { totalTokens?: number };
-              modelId?: string;
-              providerId?: string;
-              reasoningLevel?: string;
-            }
+            | {
+                usage?: { totalTokens?: number };
+                modelId?: string;
+                providerId?: string;
+                reasoningLevel?: string;
+              }
             | undefined)
         : undefined) ?? undefined,
   );
@@ -345,13 +343,10 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   const total = custom?.usage?.totalTokens;
   const modelId = custom?.modelId;
   const providerName = custom?.providerId
-    ? (providers.find((p) => p.id === custom.providerId)?.name ??
-      custom.providerId)
+    ? (providers.find((p) => p.id === custom.providerId)?.name ?? custom.providerId)
     : undefined;
   const thinking =
-    custom?.reasoningLevel && custom.reasoningLevel !== "off"
-      ? custom.reasoningLevel
-      : undefined;
+    custom?.reasoningLevel && custom.reasoningLevel !== "off" ? custom.reasoningLevel : undefined;
   const isStreaming = timing?.totalStreamTime == null && threadIsRunning;
   // Routed through `formatDuration`, the one owner of how a span is written.
   //
@@ -360,9 +355,10 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   // rendered `299.0s` in this footer while the tool badge on the same card read
   // `4m 59s`. Two spellings of the same fact on one screen, one of them
   // unreadable. Caught by looking at a live subagent capture, not by a test.
-  const durationSec = !isStreaming && timing?.totalStreamTime != null
-    ? formatDuration(timing.totalStreamTime)
-    : undefined;
+  const durationSec =
+    !isStreaming && timing?.totalStreamTime != null
+      ? formatDuration(timing.totalStreamTime)
+      : undefined;
   const timeStr =
     createdAt instanceof Date
       ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -370,7 +366,10 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
 
   const [liveMs, setLiveMs] = useState(0);
   useEffect(() => {
-    if (!isStreaming) { setLiveMs(0); return; }
+    if (!isStreaming) {
+      setLiveMs(0);
+      return;
+    }
     const interval = setInterval(() => setLiveMs((m) => m + 1000), 1000);
     return () => clearInterval(interval);
   }, [isStreaming]);
@@ -468,6 +467,7 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
             </span>
             {metadataChips.map((chip, i) => (
               <span
+                // biome-ignore lint/suspicious/noArrayIndexKey: the chips are a fixed set of slots (total, provider, model, thinking) pushed in a constant order and never reordered or removed, so position IS the identity. A content key would collide whenever two slots hold the same string.
                 key={i}
                 className="text-[10px] tabular-nums text-muted-foreground/70"
                 title={chip}
@@ -504,7 +504,9 @@ function AssistantPart({
   part,
   children,
 }: {
-  part: Parameters<NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>>[0]["part"];
+  part: Parameters<
+    NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>
+  >[0]["part"];
   children?: ReactNode;
 }) {
   // Thread-level, so it is read here rather than threaded down from the message:
@@ -579,7 +581,9 @@ function AssistantPart({
 
 /** `GroupedParts` render-function form, for use as its child. */
 function AssistantPartSlot(
-  props: Parameters<NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>>[0],
+  props: Parameters<
+    NonNullable<React.ComponentProps<typeof MessagePrimitive.GroupedParts>["children"]>
+  >[0],
 ) {
   return <AssistantPart part={props.part}>{props.children}</AssistantPart>;
 }
@@ -652,9 +656,9 @@ function HighlightingSyntax(props: {
     // matching how the legacy viewer rendered one block per file.
     return (
       <div data-slot="code-diff-list" className="w-full space-y-2">
-        {files.map((file, index) => (
+        {files.map((file) => (
           <CodeDiff
-            key={`${index}-${file.filename}`}
+            key={file.filename}
             filename={file.filename}
             additions={file.additions}
             deletions={file.deletions}

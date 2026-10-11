@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { registry } from "../config/providers";
-import { ConversationNotFoundError, MessageOwnershipError, conversationService, messageService } from "../services/storage";
+import {
+  ConversationNotFoundError,
+  MessageOwnershipError,
+  conversationService,
+  messageService,
+} from "../services/storage";
 import type { Conversation } from "../types";
 import { terminateOpenCodeSession } from "../services/opencode/sessions";
 import { logger, normalizeError } from "../lib/logger";
@@ -101,8 +106,7 @@ app.post("/api/conversations", async (c) => {
     // value means "the user chose this" and must survive refresh/switching.
     // (Rows created before this contract carry baked defaults that are
     // indistinguishable from explicit choices; only new behavior is covered.)
-    const provider =
-      (parsed.providerId && registry.get(parsed.providerId)) || null;
+    const provider = (parsed.providerId && registry.get(parsed.providerId)) || null;
     const modelId = parsed.modelId ?? null;
     const reasoningLevel = parsed.reasoningLevel ?? null;
 
@@ -119,10 +123,7 @@ app.post("/api/conversations", async (c) => {
           reason: "folder_not_available",
           folderId: parsed.workspaceFolderId ?? null,
         });
-        return c.json(
-          { error: "Project folder is not available" },
-          400,
-        );
+        return c.json({ error: "Project folder is not available" }, 400);
       }
     }
 
@@ -427,19 +428,14 @@ app.patch("/api/conversations/:id", async (c) => {
         ? null
         : (parsed.workspaceFolderId ?? oldFolderId);
     if (effectiveMode === "project") {
-      const folder = effectiveFolderId
-        ? await folderService.get(effectiveFolderId)
-        : null;
+      const folder = effectiveFolderId ? await folderService.get(effectiveFolderId) : null;
       if (!folder || folder.kind === "chat") {
         logger.warn("workspace", "workspace.rejected", {
           reason: "folder_not_available",
           conversationId: id,
           folderId: effectiveFolderId,
         });
-        return c.json(
-          { error: "Project folder is not available" },
-          400,
-        );
+        return c.json({ error: "Project folder is not available" }, 400);
       }
     }
 
@@ -456,7 +452,7 @@ app.patch("/api/conversations/:id", async (c) => {
           ? null
           : parsed.workspaceFolderId === null
             ? null
-            : parsed.workspaceFolderId ?? undefined,
+            : (parsed.workspaceFolderId ?? undefined),
     });
 
     // Cleanup old hidden chat folder when switching away from simple mode,

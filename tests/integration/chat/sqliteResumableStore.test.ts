@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { ResumableStreamError } from "assistant-stream/resumable";
 import type { SQLQueryBindings } from "bun:sqlite";
-import { applyChatStreamsSchema, DEFAULT_CHAT_STREAM_TTL_MS } from "@/services/chat-streams/schema.ts";
+import {
+  applyChatStreamsSchema,
+  DEFAULT_CHAT_STREAM_TTL_MS,
+} from "@/services/chat-streams/schema.ts";
 import {
   createSqliteResumableStreamStore,
   type SqliteResumableStreamStore,
@@ -54,7 +57,10 @@ function openDb(file: string, bootId?: string): Harness {
       bootId: bootId ?? "boot_test_1",
       generateLeaseToken: (() => {
         let n = 0;
-        return () => `lease_${(n += 1)}`;
+        return () => {
+          n += 1;
+          return `lease_${n}`;
+        };
       })(),
     }),
     close: () => db.close(),
@@ -327,12 +333,8 @@ describe("sqlite resumable store — guarded settlement", () => {
     const lease = await producerOf(store, id);
     await store.append(id, enc.encode('{"type":"finish"}'), lease);
 
-    expect(await store.settleDurable(id, { status: "done", terminalKind: "completed" })).toBe(
-      true,
-    );
-    expect(await store.settleDurable(id, { status: "error", terminalKind: "failed" })).toBe(
-      false,
-    );
+    expect(await store.settleDurable(id, { status: "done", terminalKind: "completed" })).toBe(true);
+    expect(await store.settleDurable(id, { status: "error", terminalKind: "failed" })).toBe(false);
     // The reference's finalize() is a silent no-op once terminal, not a throw.
     await expect(store.finalize(id, "error")).resolves.toBeUndefined();
     expect(store.describe(id)!.terminalKind).toBe("completed");
@@ -387,9 +389,7 @@ describe("sqlite resumable store — missing + expired", () => {
     await expect(collect(store, "nope")).rejects.toThrow("Stream not found: nope");
     // finalize on an unknown id throws a plain Error, not a ResumableStreamError.
     await expect(store.finalize("nope", "done")).rejects.toThrow("Stream not found: nope");
-    await expect(store.finalize("nope", "done")).rejects.not.toBeInstanceOf(
-      ResumableStreamError,
-    );
+    await expect(store.finalize("nope", "done")).rejects.not.toBeInstanceOf(ResumableStreamError);
     // delete is a no-op when absent.
     await store.delete("nope");
   });
@@ -461,10 +461,11 @@ describe("sqlite resumable store — integrity", () => {
     await store.append(id, enc.encode('{"type":"finish"}'), lease);
     await store.finalize(id, "done");
 
-    db.run(
-      "INSERT INTO chat_stream_chunks (stream_id, seq, chunk) VALUES (?, ?, ?)",
-      [id, 99, new Uint8Array([1])],
-    );
+    db.run("INSERT INTO chat_stream_chunks (stream_id, seq, chunk) VALUES (?, ?, ?)", [
+      id,
+      99,
+      new Uint8Array([1]),
+    ]);
     expect(store.describe(id)!.integrity).toBe("sequence-gap");
     db.run("DELETE FROM chat_stream_chunks WHERE stream_id = ? AND seq = ?", [id, 99]);
     // Sequence is contiguous again, but the recorded counter has drifted.
@@ -788,10 +789,7 @@ describe("sqlite resumable store — final message capture", () => {
 
     expect(store.recordFinalMessage(id, { message, parentId: "msg_user" })).toBe(true);
     const row = db
-      .query<
-        { final_message_json: string; final_parent_id: string },
-        SQLQueryBindings[]
-      >(
+      .query<{ final_message_json: string; final_parent_id: string }, SQLQueryBindings[]>(
         "SELECT final_message_json, final_parent_id FROM chat_streams WHERE stream_id = ?",
       )
       .get(id)!;
@@ -799,9 +797,9 @@ describe("sqlite resumable store — final message capture", () => {
     expect(row.final_parent_id).toBe("msg_user");
 
     // Fill-only: a second capture can never replace the first.
-    expect(store.recordFinalMessage(id, { message: { ...message, id: "other" }, parentId: null })).toBe(
-      false,
-    );
+    expect(
+      store.recordFinalMessage(id, { message: { ...message, id: "other" }, parentId: null }),
+    ).toBe(false);
   });
 
   it("refuses to capture for a run that is not a pending completed run", async () => {
@@ -883,7 +881,8 @@ describe("sqlite resumable store — final message capture", () => {
 });
 
 describe("sqlite resumable store — history claim", () => {
-  it("allows exactly one claim and records the message id", async () => {    const { store } = harness();
+  it("allows exactly one claim and records the message id", async () => {
+    const { store } = harness();
     const id = "run_claim";
     await producerOf(store, id);
     store.recordRunVerdict(id, "completed");
@@ -960,9 +959,7 @@ describe("sqlite resumable store — schema + wiring safety", () => {
       store: undefined as unknown as SqliteResumableStreamStore,
       close: () => db.close(),
     });
-    expect(() => createSqliteResumableStreamStore({ db })).toThrow(
-      /chat_streams table is missing/,
-    );
+    expect(() => createSqliteResumableStreamStore({ db })).toThrow(/chat_streams table is missing/);
   });
 
   it("applies its schema idempotently", () => {

@@ -76,9 +76,7 @@ describe("native V2 guard — backend OpenCode sources", () => {
   });
 
   it("uses the official OpenCode client boundary", () => {
-    const clientSource = stripComments(
-      readFileSync(path.join(OPENCODE_DIR, "client.ts"), "utf8"),
-    );
+    const clientSource = stripComments(readFileSync(path.join(OPENCODE_DIR, "client.ts"), "utf8"));
     expect(clientSource).toContain(`from "${OFFICIAL_CLIENT_PACKAGE}"`);
     expect(clientSource).toContain("OpenCode.make");
   });

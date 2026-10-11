@@ -62,13 +62,15 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("create without engine fields defaults engine to 'direct' with null agent/model (happy path)", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "engine-defaults",
-      providerId: "p",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "engine-defaults",
+        providerId: "p",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     expect(created.engine).toBe("direct");
     expect(created.opencodeAgent).toBeNull();
     expect(created.opencodeModel).toBeNull();
@@ -76,7 +78,7 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("legacy row with NULL engine maps to 'direct', NULL agent/model map to null (edge case)", async () => {
-    const legacy = legacyConversation("legacy-engine-" + Date.now());
+    const legacy = legacyConversation(`legacy-engine-${Date.now()}`);
     const mapped = await conversationService.get(legacy.id);
     expect(mapped).not.toBeNull();
     // The documented mapping: SQL NULL → "direct" default.
@@ -87,13 +89,15 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("update patches engine / opencodeAgent / opencodeModel and persists (happy path)", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "engine-update",
-      providerId: "p",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "engine-update",
+        providerId: "p",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     expect(created.engine).toBe("direct");
 
     const updated = await conversationService.update(created.id, {
@@ -114,16 +118,18 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("update clears opencode fields to null without touching engine (edge case: partial patch)", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "engine-clear",
-      providerId: "p",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-      opencodeAgent: "coder",
-      opencodeModel: "openai/gpt-4o",
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "engine-clear",
+        providerId: "p",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+        opencodeAgent: "coder",
+        opencodeModel: "openai/gpt-4o",
+      }),
+    );
 
     const updated = await conversationService.update(created.id, {
       opencodeAgent: null,
@@ -137,14 +143,16 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("create persists opencodeAutoApprove and round-trips it", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "auto-happy",
-      providerId: "p",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      opencodeAutoApprove: true,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "auto-happy",
+        providerId: "p",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        opencodeAutoApprove: true,
+      }),
+    );
     expect(created.opencodeAutoApprove).toBe(true);
 
     const fetched = await conversationService.get(created.id);
@@ -153,25 +161,29 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("create without opencodeAutoApprove defaults to manual (false)", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "auto-default",
-      providerId: "p",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "auto-default",
+        providerId: "p",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     expect(created.opencodeAutoApprove).toBe(false);
     await cleaned(created.id);
   });
 
   it("update patches opencodeAutoApprove and persists it", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "auto-update",
-      providerId: "p",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "auto-update",
+        providerId: "p",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     expect(created.opencodeAutoApprove).toBe(false);
 
     const updated = await conversationService.update(created.id, {
@@ -185,7 +197,7 @@ describe("conversation storage — engine / opencodeAgent / opencodeModel mappin
   });
 
   it("legacy row with NULL opencode_auto_approve maps to manual (false)", async () => {
-    const legacy = legacyConversation("legacy-auto-" + Date.now());
+    const legacy = legacyConversation(`legacy-auto-${Date.now()}`);
     const mapped = await conversationService.get(legacy.id);
     expect(mapped).not.toBeNull();
     expect(mapped?.opencodeAutoApprove).toBe(false);

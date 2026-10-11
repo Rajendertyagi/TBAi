@@ -27,9 +27,7 @@ interface FakeStore extends HistoryFinalizerStore {
   terminalKind: "completed" | "failed" | "cancelled" | "interrupted";
 }
 
-function fakeStore(
-  overrides: Partial<FakeStore> = {},
-): FakeStore {
+function fakeStore(overrides: Partial<FakeStore> = {}): FakeStore {
   const store: FakeStore = {
     claims: [],
     skips: 0,
@@ -46,7 +44,7 @@ function fakeStore(
       historyMessageId: store.claims[0] ?? null,
       historyClaimedAt: null,
     }),
-    claimHistory: (streamId, messageId) => {
+    claimHistory: (_streamId, messageId) => {
       // The real guard: a claim needs a pending row AND a completed run, and only
       // one caller can win it.
       if (store.historyState !== "pending" || store.terminalKind !== "completed") return false;
@@ -164,7 +162,11 @@ describe("history finalizer — never fabricates", () => {
   }> = [
     { name: "no final message at all", responseMessage: null, isAborted: false },
     { name: "an aborted run", responseMessage: assistantMessage(), isAborted: true },
-    { name: "an empty parts array", responseMessage: assistantMessage({ parts: [] }), isAborted: false },
+    {
+      name: "an empty parts array",
+      responseMessage: assistantMessage({ parts: [] }),
+      isAborted: false,
+    },
     {
       name: "a message with no id",
       responseMessage: assistantMessage({ id: "" }),

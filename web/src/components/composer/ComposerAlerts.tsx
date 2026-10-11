@@ -44,9 +44,7 @@ export function ComposerAlerts({
       )}
       {recovery && (
         <div className="px-3 pb-3" role="alert">
-          <p className="text-xs text-destructive">
-            {streamRecoveryCopy(recovery.reason)}
-          </p>
+          <p className="text-xs text-destructive">{streamRecoveryCopy(recovery.reason)}</p>
           {recovery.canRetry && (
             <button
               type="button"
@@ -62,4 +60,3 @@ export function ComposerAlerts({
     </>
   );
 }
-

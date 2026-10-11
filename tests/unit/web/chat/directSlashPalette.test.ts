@@ -23,7 +23,7 @@
 
 import { describe, expect, it } from "bun:test";
 import path from "node:path";
-import fs from "fs";
+import fs from "node:fs";
 import { stripComments } from "@web/testing/source-scope";
 import { applyCommandSelection } from "@web/features/opencode/slashCommands.ts";
 import {
@@ -37,10 +37,7 @@ import { REPO_ROOT } from "../../../helpers/repo-root";
 /** The Composer, comments stripped. `import.meta.dir` is `web/src/features/chat`. */
 function composer(): string {
   return stripComments(
-    fs.readFileSync(
-      path.join(REPO_ROOT, "web/src/components/Composer.tsx"),
-      "utf8",
-    ),
+    fs.readFileSync(path.join(REPO_ROOT, "web/src/components/Composer.tsx"), "utf8"),
   );
 }
 
@@ -57,7 +54,10 @@ describe("Direct offers its own commands in the palette", () => {
     // accepts. The mapping lives in the builder now rather than inline in the composer,
     // which is what makes the token→name conversion executable by the tests below.
     const builder = stripComments(
-      fs.readFileSync(path.join(REPO_ROOT, "web/src/features/chat/directCompactEntries.ts"), "utf8"),
+      fs.readFileSync(
+        path.join(REPO_ROOT, "web/src/features/chat/directCompactEntries.ts"),
+        "utf8",
+      ),
     );
     expect(builder).toContain("DIRECT_COMPACT_COMMANDS.map(");
     // And the OpenCode feed stays behind its own gate, still excluded from Direct.

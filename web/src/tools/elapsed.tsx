@@ -105,7 +105,9 @@ class ElapsedBoundary extends Component<
  * `false` here is what lets the caller render the hook only where it can work.
  */
 function useHasPartScope(): boolean {
-  return useAuiState((state) => (state as { optional?: { part?: unknown } }).optional?.part != null);
+  return useAuiState(
+    (state) => (state as { optional?: { part?: unknown } }).optional?.part != null,
+  );
 }
 
 /**
@@ -186,12 +188,7 @@ function ElapsedValue({ className }: { className?: string }) {
   const elapsedMs = useToolCallElapsed();
   if (elapsedMs === undefined) return null;
   return (
-    <span
-      className={cn(
-        "shrink-0 text-xs tabular-nums text-muted-foreground",
-        className,
-      )}
-    >
+    <span className={cn("shrink-0 text-xs tabular-nums text-muted-foreground", className)}>
       {formatDuration(elapsedMs)}
     </span>
   );

@@ -12,16 +12,13 @@
  */
 import { describe, it, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import conversationsApp from "@/routes/conversations.ts";
 import foldersApp from "@/routes/folders.ts";
 import { folderService, FolderRegistrationError } from "@/services/folders.ts";
-import {
-  resolveConversationWorkspace,
-  WorkspaceError,
-} from "@/services/workspace";
+import { resolveConversationWorkspace, WorkspaceError } from "@/services/workspace";
 import { conversationService } from "@/services/storage";
 
 const app = new Hono();
@@ -98,15 +95,13 @@ describe("canonical registration identity", () => {
   it("duplicate concurrent registrations converge on one row", async () => {
     const dir = trackDir(makeDir());
     const results = await Promise.all(
-      Array.from({ length: 8 }, () =>
-        folderService.openFolder({ path: dir + path.sep }),
-      ),
+      Array.from({ length: 8 }, () => folderService.openFolder({ path: dir + path.sep })),
     );
     ownedFolderIds.push(results[0]!.id);
     expect(new Set(results.map((f) => f.id)).size).toBe(1);
-    expect(
-      (await folderService.listAll()).filter((f) => f.path === results[0]!.path),
-    ).toHaveLength(1);
+    expect((await folderService.listAll()).filter((f) => f.path === results[0]!.path)).toHaveLength(
+      1,
+    );
   });
 
   it("re-opening an already registered project returns the same identity", async () => {
@@ -123,9 +118,10 @@ describe("canonical registration identity", () => {
 describe("registration validation", () => {
   it("rejects a nonexistent path with path_missing", async () => {
     const ghost = path.join(os.tmpdir(), `tbai-p9-ghost-${Date.now()}`);
-    const err = await folderService
-      .openFolder({ path: ghost })
-      .then(() => null, (e: unknown) => e);
+    const err = await folderService.openFolder({ path: ghost }).then(
+      () => null,
+      (e: unknown) => e,
+    );
     expect(err).toBeInstanceOf(FolderRegistrationError);
     expect((err as FolderRegistrationError).code).toBe("path_missing");
   });
@@ -134,17 +130,19 @@ describe("registration validation", () => {
     const dir = trackDir(makeDir());
     const file = path.join(dir, "f.txt");
     fs.writeFileSync(file, "x");
-    const err = await folderService
-      .openFolder({ path: file })
-      .then(() => null, (e: unknown) => e);
+    const err = await folderService.openFolder({ path: file }).then(
+      () => null,
+      (e: unknown) => e,
+    );
     expect(err).toBeInstanceOf(FolderRegistrationError);
     expect((err as FolderRegistrationError).code).toBe("path_not_directory");
   });
 
   it("rejects a blank path without touching the server cwd", async () => {
-    const err = await folderService
-      .openFolder({ path: "   " })
-      .then(() => null, (e: unknown) => e);
+    const err = await folderService.openFolder({ path: "   " }).then(
+      () => null,
+      (e: unknown) => e,
+    );
     expect(err).toBeInstanceOf(FolderRegistrationError);
   });
 
@@ -343,8 +341,6 @@ describe("conversation workspace binding guards", () => {
       workspaceFolderId: folderB.id,
     });
     expect(res.status).toBe(400);
-    expect((await conversationService.get(conv.id))?.workspaceFolderId).toBe(
-      folderA.id,
-    );
+    expect((await conversationService.get(conv.id))?.workspaceFolderId).toBe(folderA.id);
   });
 });

@@ -43,10 +43,15 @@ function makeTransport() {
   return new AssistantChatTransport({
     api: "/api/chat",
     fetch: (async (_url: unknown, init?: RequestInit) => {
-      const body = init?.body ? (JSON.parse(String(init.body)) as { messages: Array<{ id: string }> }) : null;
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { messages: Array<{ id: string }> })
+        : null;
       sent.push({
         ids: (body?.messages ?? []).map((m) => m.id),
-        trigger: (init?.body ? (JSON.parse(String(init.body)) as { trigger?: string }).trigger : undefined) ?? "submit-message",
+        trigger:
+          (init?.body
+            ? (JSON.parse(String(init.body)) as { trigger?: string }).trigger
+            : undefined) ?? "submit-message",
       });
       return new Response(
         new ReadableStream<Uint8Array>({
@@ -194,10 +199,13 @@ function useCandidateRuntime(initial: unknown[]) {
       },
       onNew: async (message: { id: string }) => {
         // Mirror the wrapper: hand the new message back to the Chat.
-        chat.setMessages((current) => [
-          ...current,
-          { id: message.id, role: "user", parts: [{ type: "text", text: "from the probe" }] },
-        ] as never);
+        chat.setMessages(
+          (current) =>
+            [
+              ...current,
+              { id: message.id, role: "user", parts: [{ type: "text", text: "from the probe" }] },
+            ] as never,
+        );
       },
     }),
     [chat, chat.messages, chat.status],
@@ -320,10 +328,7 @@ describe("P2 spike — Phase 2: React composition", () => {
     const rendered = container.querySelectorAll("[data-message-id]");
     console.log("=== PROBE: rendered message rows ===");
     console.log("rows with data-message-id:", rendered.length);
-    console.log(
-      "ids:",
-      [...rendered].map((el) => el.getAttribute("data-message-id")).join(","),
-    );
+    console.log("ids:", [...rendered].map((el) => el.getAttribute("data-message-id")).join(","));
 
     // This is what a viewport tracker would key on.
     expect(rendered.length).toBe(5);
@@ -362,10 +367,7 @@ describe("P2 spike — Phase 2: React composition", () => {
     const rendered = container.querySelectorAll("[data-message-id]");
     console.log("=== PROBE: under useRemoteThreadListRuntime ===");
     console.log("rows:", rendered.length);
-    console.log(
-      "ids:",
-      [...rendered].map((el) => el.getAttribute("data-message-id")).join(","),
-    );
+    console.log("ids:", [...rendered].map((el) => el.getAttribute("data-message-id")).join(","));
 
     // The nested runtime mounted and the thread list resolved to spike-thread.
     expect(rendered.length).toBe(5);

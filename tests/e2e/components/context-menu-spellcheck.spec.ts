@@ -20,7 +20,12 @@ const COMPOSER = '[data-testid="composer-input"], textarea[name="input"]';
 
 /** Reads the composer draft, or `""` when there is none. */
 async function draft(page: Page): Promise<string> {
-  return (await page.locator(COMPOSER).inputValue().catch(() => "")) ?? "";
+  return (
+    (await page
+      .locator(COMPOSER)
+      .inputValue()
+      .catch(() => "")) ?? ""
+  );
 }
 
 /** Replaces the draft with `text` and leaves the caret at its end. */
@@ -46,9 +51,7 @@ test.describe("composer context menu — spelling suggestions", () => {
     // ...and a named suggestion is the proof it is not an empty shell. Typo.js
     // ranks `custom` inside the candidate set rather than first, so the
     // assertion is on presence, which is the promise a user relies on.
-    await expect(
-      page.getByRole("menuitem", { name: "custom", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "custom", exact: true })).toBeVisible();
     // The menu must still offer the text-editing actions alongside the
     // corrections, exactly as a browser's menu does.
     await expect(page.getByRole("menuitem", { name: "Cut" })).toBeVisible();
@@ -131,10 +134,7 @@ test.describe("composer context menu — spelling suggestions", () => {
     await expect(page.getByRole("menuitem", { name: "Cut" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Spelling suggestions" })).toHaveCount(0);
     await page.waitForTimeout(750);
-    expect(
-      requests,
-      "an identifier right-click must not load the dictionary",
-    ).toEqual([]);
+    expect(requests, "an identifier right-click must not load the dictionary").toEqual([]);
 
     // 3. A right-click on an ordinary word does need it, and fetches it once.
     await page.keyboard.press("Escape");

@@ -27,9 +27,7 @@ const rows = (page: Page) => page.locator("[data-row-key]");
 
 /** How far the transcript is from its live end. */
 async function distanceFromEnd(page: Page): Promise<number> {
-  return scroller(page).evaluate(
-    (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-  );
+  return scroller(page).evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
 }
 
 async function send(page: Page, text: string): Promise<void> {
@@ -50,19 +48,27 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     request,
   }) => {
     const netLog: string[] = [];
-    page.on("request", (r) => { if (r.url().includes("/api/chat")) netLog.push("REQ " + r.method() + " " + r.url().slice(-40)); });
-    page.on("response", (r) => { if (r.url().includes("/api/chat")) netLog.push("RES " + r.status()); });
-    page.on("requestfailed", (r) => { if (r.url().includes("/api/chat")) netLog.push("FAILED " + r.failure()?.errorText); });
-    page.on("console", (m) => { if (m.type() === "error") netLog.push("ERR " + m.text().slice(0, 160)); });
+    page.on("request", (r) => {
+      if (r.url().includes("/api/chat")) netLog.push(`REQ ${r.method()} ${r.url().slice(-40)}`);
+    });
+    page.on("response", (r) => {
+      if (r.url().includes("/api/chat")) netLog.push(`RES ${r.status()}`);
+    });
+    page.on("requestfailed", (r) => {
+      if (r.url().includes("/api/chat")) netLog.push(`FAILED ${r.failure()?.errorText}`);
+    });
+    page.on("console", (m) => {
+      if (m.type() === "error") netLog.push(`ERR ${m.text().slice(0, 160)}`);
+    });
     // A long, chunked reply so the streaming row grows substantially.
     // Slow enough on purpose: the stream must still be RUNNING when the viewport is
     // moved away, which is the whole point of the test.
     await setStubStreamShape(request, { text: LONG_REPLY, chunkChars: 60, chunkDelayMs: 90 });
 
     await page.goto("/#/chat/new");
-    await expect(
-      page.getByRole("heading", { name: /what do you want to build/i }),
-    ).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
+      timeout: 15000,
+    });
 
     // ── D: a run started at the live edge follows the output ──────────────
     await send(page, "follow me while streaming");
@@ -95,11 +101,9 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     const SCROLL_STABILITY_TOLERANCE_PX = 2;
 
     await expect
-      .poll(
-        async () =>
-          scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight),
-        { timeout: 30000 },
-      )
+      .poll(async () => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight), {
+        timeout: 30000,
+      })
       .toBeGreaterThan(AWAY_MIN_SCROLL_ROOM_PX);
     await expect.poll(() => distanceFromEnd(page), { timeout: 30000 }).toBeLessThanOrEqual(80);
 
@@ -173,12 +177,11 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
       // replaced once real content lands, so anchoring to one makes the check
       // fail on correct behaviour. `message:<id>` is the identity assistant-ui
       // documents as "stable across streaming and earlier pages".
-      const candidates = Array.from(
-        el.querySelectorAll<HTMLElement>('[data-row-key^="message:"]'),
-      );
-      const pool = candidates.length > 0
-        ? candidates
-        : Array.from(el.querySelectorAll<HTMLElement>("[data-row-key]"));
+      const candidates = Array.from(el.querySelectorAll<HTMLElement>('[data-row-key^="message:"]'));
+      const pool =
+        candidates.length > 0
+          ? candidates
+          : Array.from(el.querySelectorAll<HTMLElement>("[data-row-key]"));
       let nearest: HTMLElement | null = null;
       let nearestDelta = Infinity;
       for (const row of pool) {
@@ -199,18 +202,18 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     expect(anchor!.key, "the anchored row has a stable message key").toContain("message:");
 
     const baselineDistance = await distanceFromEnd(page);
-    expect(
-      baselineDistance,
-      "the reader starts genuinely away from the live edge",
-    ).toBeGreaterThan(AWAY_MIN_DISTANCE_PX);
+    expect(baselineDistance, "the reader starts genuinely away from the live edge").toBeGreaterThan(
+      AWAY_MIN_DISTANCE_PX,
+    );
 
     // The scroll baselines the streaming assertion is measured against. Taken
     // only after the settle loop above has confirmed the transcript is quiescent.
-    const { scrollTop: baselineScrollTop, scrollHeight: baselineScrollHeight } =
-      await scroller(page).evaluate((el) => ({
-        scrollTop: Math.round(el.scrollTop),
-        scrollHeight: Math.round(el.scrollHeight),
-      }));
+    const { scrollTop: baselineScrollTop, scrollHeight: baselineScrollHeight } = await scroller(
+      page,
+    ).evaluate((el) => ({
+      scrollTop: Math.round(el.scrollTop),
+      scrollHeight: Math.round(el.scrollHeight),
+    }));
 
     await send(page, "stream while I am reading history");
     await page.waitForTimeout(1500);
@@ -253,12 +256,12 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     // not in scope.
     const scrollAfter = await scroller(page).evaluate(
       // Playwright passes `(element, arg)` to a locator callback. This declared a
-    // SINGLE parameter destructuring `{ anchorKey, threshold }`, which silently
-    // unpacked those names off the ELEMENT instead — both `undefined`, so
-    // `distance <= threshold` was always false and `isAtEnd` always reported
-    // false. The reading looked plausible and no assertion could catch it.
-    (_el, { anchorKey, threshold }) => {
-      const el = document.querySelector('[data-testid="virtual-transcript-scroller"]')!;
+      // SINGLE parameter destructuring `{ anchorKey, threshold }`, which silently
+      // unpacked those names off the ELEMENT instead — both `undefined`, so
+      // `distance <= threshold` was always false and `isAtEnd` always reported
+      // false. The reading looked plausible and no assertion could catch it.
+      (_el, { anchorKey, threshold }) => {
+        const el = document.querySelector('[data-testid="virtual-transcript-scroller"]')!;
         const mountedKeys = Array.from(el.querySelectorAll("[data-row-key]"))
           .map((row) => row.getAttribute("data-row-key"))
           .filter((k): k is string => k !== null);
@@ -296,9 +299,7 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     await expect.poll(() => distanceFromEnd(page), { timeout: 8000 }).toBeLessThanOrEqual(80);
 
     await send(page, "and follow me again");
-    await expect
-      .poll(() => distanceFromEnd(page), { timeout: 30000 })
-      .toBeLessThanOrEqual(80);
+    await expect.poll(() => distanceFromEnd(page), { timeout: 30000 }).toBeLessThanOrEqual(80);
   });
 
   test("B/L: run-start is stable and duplicate-free; the tail message is persisted once", async ({
@@ -306,9 +307,9 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
     request,
   }) => {
     await page.goto("/#/chat/new");
-    await expect(
-      page.getByRole("heading", { name: /what do you want to build/i }),
-    ).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
+      timeout: 15000,
+    });
 
     await send(page, "exactly one run start");
     await expect(page.getByText("exactly one run start")).toBeVisible({ timeout: 20000 });
@@ -409,9 +410,7 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
         el.scrollTop = el.scrollHeight;
       });
 
-      await expect
-        .poll(() => distanceFromEnd(page), { timeout: 10000 })
-        .toBeLessThanOrEqual(80);
+      await expect.poll(() => distanceFromEnd(page), { timeout: 10000 }).toBeLessThanOrEqual(80);
 
       // Stronger than the original: not merely "the tip is present", but the tip
       // is the LAST row carrying content. A window rebased onto older content
@@ -487,10 +486,10 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
       // Polled rather than read once: the record is written when the aborted
       // request rejects, not when this line executes.
       await expect
-        .poll(
-          () => consoleLines.filter((line) => line.includes("history.load_failed")).length,
-          { timeout: 15_000, message: "the aborted history load was never recorded as failed" },
-        )
+        .poll(() => consoleLines.filter((line) => line.includes("history.load_failed")).length, {
+          timeout: 15_000,
+          message: "the aborted history load was never recorded as failed",
+        })
         .toBeGreaterThan(0);
 
       // --- Retry -------------------------------------------------------------
@@ -522,9 +521,8 @@ test.describe("P2 live runtime behaviour (virtualized path)", () => {
       await expect
         .poll(
           async () =>
-            (await rows(page).evaluateAll((els) =>
-              els.map((e) => e.getAttribute("data-row-key")),
-            )).length,
+            (await rows(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-row-key"))))
+              .length,
           { timeout: 30_000, message: "the recovered transcript never mounted any rows" },
         )
         .toBeGreaterThan(0);

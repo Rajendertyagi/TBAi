@@ -79,9 +79,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   return (
     <ContextMenu modal={false} onOpenChange={handleOpenChange}>
       <ContextMenuTrigger asChild>
-        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-          {children}
-        </div>
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[13rem]">
         <ContextMenuItem

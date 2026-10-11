@@ -68,9 +68,7 @@ export function WorkspacePage() {
       </SettingsSection>
       <SettingsSection title="This computer">
         {error && <p className="text-xs text-destructive">{error}</p>}
-        {!sysinfo && !error && (
-          <p className="text-xs text-muted-foreground">Loading…</p>
-        )}
+        {!sysinfo && !error && <p className="text-xs text-muted-foreground">Loading…</p>}
         {sysinfo && (
           <div className="grid grid-cols-2 gap-2 text-xs">
             {(

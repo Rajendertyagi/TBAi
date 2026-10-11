@@ -107,7 +107,9 @@ describe("the focus indicator", () => {
     // On the card, not the buttons: that is what makes it read as "this card is
     // current". Inset rather than a border, because a border would shove the
     // content sideways the moment focus moved.
-    expect(approvalCard).toMatch(/has-\[\[data-decision-owner\]\]:shadow-\[inset_2px_0_0_0_var\(--primary\)\]/);
+    expect(approvalCard).toMatch(
+      /has-\[\[data-decision-owner\]\]:shadow-\[inset_2px_0_0_0_var\(--primary\)\]/,
+    );
   });
 });
 
@@ -164,8 +166,24 @@ describe("the question dock", () => {
   it("re-runs on the field's KEY, never on the field object", () => {
     // `field` is rebuilt every render. Depending on it would re-run the focus
     // effect on every keystroke in the custom-answer box and reset the caret.
-    expect(formCard).toMatch(/\}, \[field\?\.key\]\);/);
-    expect(formCard).not.toMatch(/\}, \[field\]\);/);
+    //
+    // The assertion is on the DEPENDENCY LIST AS A SET, not on a literal
+    // `[field?.key]`: the invariant is which value the effect keys on, and
+    // pinning the exact array text would fail the moment the effect gains any
+    // other legitimate dependency (it gained `collapsed`, which the body reads
+    // and which the linter enforces) while proving nothing about `field`.
+    //
+    // Anchored on this effect's own opening guards so the capture cannot drift
+    // onto a neighbouring hook's dependency list.
+    const deps =
+      /if \(collapsed\) return;\s*\n\s*if \(!dockSeen\.current\) return;[\s\S]*?\}, \[([^\]]*)\]\);/.exec(
+        formCard,
+      )?.[1];
+    expect(deps, "focus effect dependency list was not found").toBeDefined();
+    const items = (deps ?? "").split(",").map((part) => part.trim());
+    expect(items).toContain("field?.key");
+    // The bare object, with no property read off it, is the defect.
+    expect(items).not.toContain("field");
   });
 
   it("registers with the same registry, so a card and a dock cannot both answer Enter", () => {
@@ -209,9 +227,7 @@ describe("both surfaces share one focus policy", () => {
       ["approval-card.tsx", approvalCard],
       ["V2FormCard.tsx", formCard],
     ] as const) {
-      expect(source, `${name} should use the shared focus helpers`).toContain(
-        'from "@/lib/focus"',
-      );
+      expect(source, `${name} should use the shared focus helpers`).toContain('from "@/lib/focus"');
     }
   });
 });
@@ -221,10 +237,7 @@ describe("the composer stands down while a card owns the keyboard", () => {
   // the composer re-takes focus on the next scroll-to-bottom or new run, and
   // Enter sends an empty message instead of approving. A mount effect cannot
   // catch that, because nothing tells it focus was lost.
-  const composer = readFileSync(
-    path.join(REPO_ROOT, "web/src/components/Composer.tsx"),
-    "utf8",
-  );
+  const composer = readFileSync(path.join(REPO_ROOT, "web/src/components/Composer.tsx"), "utf8");
 
   it("disables both library focus behaviours while a card holds the claim", () => {
     // Both default to TRUE in assistant-ui, and TBAi overrode neither, so

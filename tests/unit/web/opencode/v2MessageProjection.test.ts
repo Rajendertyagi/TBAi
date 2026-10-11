@@ -25,28 +25,32 @@ describe("native V2 live tool projection", () => {
           parentId: null,
           role: "assistant" as const,
           createdAt: 1,
-          parts: [{
-            kind: "tool" as const,
-            id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
-            order: 0,
-            name: "shell",
-            input: { command: "bun --version" },
-            output: null,
-            status: "running" as const,
-            permissionId: null,
-          }],
+          parts: [
+            {
+              kind: "tool" as const,
+              id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+              order: 0,
+              name: "shell",
+              input: { command: "bun --version" },
+              output: null,
+              status: "running" as const,
+              permissionId: null,
+            },
+          ],
           source: null,
         },
       },
       messageOrder: [MESSAGE_ID],
-      permissions: [{
-        id: PERMISSION_ID,
-        sessionID: SESSION_ID,
-        action: "shell",
-        resources: ["bun --version"],
-        save: [],
-        source: { type: "tool" as const, messageID: MESSAGE_ID, id: TOOL_ID },
-      }],
+      permissions: [
+        {
+          id: PERMISSION_ID,
+          sessionID: SESSION_ID,
+          action: "shell",
+          resources: ["bun --version"],
+          save: [],
+          source: { type: "tool" as const, messageID: MESSAGE_ID, id: TOOL_ID },
+        },
+      ],
     };
 
     const [item] = projectV2RepositoryItems(state);
@@ -64,18 +68,20 @@ describe("native V2 live tool projection", () => {
       agent: "build",
       model: { id: "test-model", providerID: "test-provider" },
       time: { created: 1 },
-      content: [{
-        type: "tool",
-        id: TOOL_ID,
-        name: "edit",
-        time: { created: 1, ran: 1 },
-        state: {
-          status: "completed",
-          input: { filePath: "a.ts" },
-          content: [{ type: "text", text: "done" }],
-          metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
+      content: [
+        {
+          type: "tool",
+          id: TOOL_ID,
+          name: "edit",
+          time: { created: 1, ran: 1 },
+          state: {
+            status: "completed",
+            input: { filePath: "a.ts" },
+            content: [{ type: "text", text: "done" }],
+            metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
+          },
         },
-      }],
+      ],
     };
     const initial = createInitialV2ThreadState(SESSION_ID);
     const state = {
@@ -86,16 +92,18 @@ describe("native V2 live tool projection", () => {
           parentId: null,
           role: "assistant" as const,
           createdAt: 1,
-          parts: [{
-            kind: "tool" as const,
-            id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
-            order: 0,
-            name: "edit",
-            input: { filePath: "a.ts" },
-            output: [{ type: "text", text: "done" }],
-            status: "complete" as const,
-            permissionId: null,
-          }],
+          parts: [
+            {
+              kind: "tool" as const,
+              id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+              order: 0,
+              name: "edit",
+              input: { filePath: "a.ts" },
+              output: [{ type: "text", text: "done" }],
+              status: "complete" as const,
+              permissionId: null,
+            },
+          ],
           source,
         },
       },
@@ -118,17 +126,19 @@ describe("native V2 live tool projection", () => {
           parentId: null,
           role: "assistant" as const,
           createdAt: 1,
-          parts: [{
-            kind: "tool" as const,
-            id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
-            order: 0,
-            name: "edit",
-            input: { filePath: "a.ts" },
-            output: [{ type: "text", text: "done" }],
-            metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
-            status: "complete" as const,
-            permissionId: null,
-          }],
+          parts: [
+            {
+              kind: "tool" as const,
+              id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+              order: 0,
+              name: "edit",
+              input: { filePath: "a.ts" },
+              output: [{ type: "text", text: "done" }],
+              metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
+              status: "complete" as const,
+              permissionId: null,
+            },
+          ],
           source: null,
         },
       },
@@ -138,17 +148,19 @@ describe("native V2 live tool projection", () => {
     const [item] = projectV2RepositoryItems(state);
     expect(item?.message.metadata?.custom).toEqual({
       opencode: {
-        parts: [{
-          type: "tool",
-          id: TOOL_ID,
-          name: "edit",
-          state: {
-            status: "completed",
-            input: { filePath: "a.ts" },
-            content: [{ type: "text", text: "done" }],
-            metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
+        parts: [
+          {
+            type: "tool",
+            id: TOOL_ID,
+            name: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "a.ts" },
+              content: [{ type: "text", text: "done" }],
+              metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
+            },
           },
-        }],
+        ],
       },
     });
   });
@@ -163,16 +175,18 @@ describe("native V2 live tool projection", () => {
           parentId: null,
           role: "assistant" as const,
           createdAt: 1,
-          parts: [{
-            kind: "tool" as const,
-            id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
-            order: 0,
-            name: "shell",
-            input: { command: "bun --version" },
-            output: null,
-            status: "running" as const,
-            permissionId: null,
-          }],
+          parts: [
+            {
+              kind: "tool" as const,
+              id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+              order: 0,
+              name: "shell",
+              input: { command: "bun --version" },
+              output: null,
+              status: "running" as const,
+              permissionId: null,
+            },
+          ],
           source: null,
         },
       },
@@ -226,18 +240,20 @@ describe("native V2 edit metadata through a reload", () => {
       agent: "build",
       model: { id: "test-model", providerID: "test-provider" },
       time: { created: 1 },
-      content: [{
-        type: "tool",
-        id: TOOL_ID,
-        name: "edit",
-        time: { created: 1, ran: 1 },
-        state: {
-          status: "completed",
-          input: { filePath: "src/a.ts" },
-          content: [{ type: "text", text: "Edit applied successfully." }],
-          metadata: { files: [{ file: "src/a.ts", patch: RELOAD_PATCH }] },
+      content: [
+        {
+          type: "tool",
+          id: TOOL_ID,
+          name: "edit",
+          time: { created: 1, ran: 1 },
+          state: {
+            status: "completed",
+            input: { filePath: "src/a.ts" },
+            content: [{ type: "text", text: "Edit applied successfully." }],
+            metadata: { files: [{ file: "src/a.ts", patch: RELOAD_PATCH }] },
+          },
         },
-      }],
+      ],
     };
 
     // Reload: snapshot -> normalized state -> assistant-ui repository item.
@@ -251,9 +267,7 @@ describe("native V2 edit metadata through a reload", () => {
 
     // The renderer reads the untouched parts off message metadata, exactly as
     // `useOpenCodeEditPatch` does.
-    const custom = item?.message.metadata?.custom as
-      | { opencode?: { parts?: unknown } }
-      | undefined;
+    const custom = item?.message.metadata?.custom as { opencode?: { parts?: unknown } } | undefined;
     const rawParts = custom?.opencode?.parts;
 
     const toolCall = item?.message.content[0];
@@ -367,16 +381,18 @@ describe("pending-change preview in the projected message metadata", () => {
         parentId: null,
         role: "assistant" as const,
         createdAt: 1,
-        parts: [{
-          kind: "tool" as const,
-          id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
-          order: 0,
-          name: "edit",
-          input: { filePath: "a.ts" },
-          output: undefined,
-          status: "running" as const,
-          permissionId: null,
-        }],
+        parts: [
+          {
+            kind: "tool" as const,
+            id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+            order: 0,
+            name: "edit",
+            input: { filePath: "a.ts" },
+            output: undefined,
+            status: "running" as const,
+            permissionId: null,
+          },
+        ],
         source: null,
       },
     },
@@ -396,9 +412,13 @@ describe("pending-change preview in the projected message metadata", () => {
 
   const pendingPatchesOf = (state: ReturnType<typeof stateWith>) => {
     const [item] = projectV2RepositoryItems(state as never);
-    return (item?.message.metadata?.custom as {
-      opencode?: { pendingPatches?: Record<string, string> };
-    } | undefined)?.opencode?.pendingPatches;
+    return (
+      item?.message.metadata?.custom as
+        | {
+            opencode?: { pendingPatches?: Record<string, string> };
+          }
+        | undefined
+    )?.opencode?.pendingPatches;
   };
 
   it("keys the patch by the tool call the permission belongs to", () => {
@@ -411,12 +431,20 @@ describe("pending-change preview in the projected message metadata", () => {
   it("omits the key entirely when no permission carries a patch", () => {
     const [item] = projectV2RepositoryItems(
       stateWith([
-        { id: PERMISSION_ID, sessionID: SESSION_ID, action: "bash", resources: ["x"], save: [], source: { type: "tool" as const, messageID: MESSAGE_ID, id: TOOL_ID } },
+        {
+          id: PERMISSION_ID,
+          sessionID: SESSION_ID,
+          action: "bash",
+          resources: ["x"],
+          save: [],
+          source: { type: "tool" as const, messageID: MESSAGE_ID, id: TOOL_ID },
+        },
       ]) as never,
     );
     expect(item?.message.metadata?.custom).toEqual({ opencode: { parts: expect.anything() } });
     expect(
-      (item?.message.metadata?.custom as { opencode?: { pendingPatches?: unknown } }).opencode?.pendingPatches,
+      (item?.message.metadata?.custom as { opencode?: { pendingPatches?: unknown } } | undefined)
+        ?.opencode?.pendingPatches,
     ).toBeUndefined();
   });
 
@@ -470,16 +498,18 @@ describe("the gate reads what the projection wrote", () => {
         parentId: null,
         role: "assistant" as const,
         createdAt: 1,
-        parts: [{
-          kind: "tool" as const,
-          id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
-          order: 0,
-          name: "edit",
-          input: { filePath: "a.ts" },
-          output: undefined,
-          status: "running" as const,
-          permissionId: null,
-        }],
+        parts: [
+          {
+            kind: "tool" as const,
+            id: `tool:${MESSAGE_ID}:${TOOL_ID}`,
+            order: 0,
+            name: "edit",
+            input: { filePath: "a.ts" },
+            output: undefined,
+            status: "running" as const,
+            permissionId: null,
+          },
+        ],
         source: null,
       },
     },

@@ -65,9 +65,7 @@ describe("useServerIdentity — reload refreshes reachable and checkedAt", () =>
   });
 
   it("fetches /api/server with no-store cache (live identity, not cached)", () => {
-    expect(source).toMatch(
-      /fetch\("\/api\/server",\s*\{\s*cache: "no-store"\s*\}\)/,
-    );
+    expect(source).toMatch(/fetch\("\/api\/server",\s*\{\s*cache: "no-store"\s*\}\)/);
   });
 });
 
@@ -90,8 +88,6 @@ describe("useServerIdentity — poll interval is a named constant", () => {
   it("exposes SERVER_STATUS_POLL_INTERVAL_MS as a single source of truth", () => {
     expect(source).toMatch(/export const SERVER_STATUS_POLL_INTERVAL_MS = \d+/);
     // The setInterval must reference the constant, not a literal.
-    expect(source).toMatch(
-      /setInterval\(\(\) => \{[\s\S]*?\},\s*SERVER_STATUS_POLL_INTERVAL_MS\)/,
-    );
+    expect(source).toMatch(/setInterval\(\(\) => \{[\s\S]*?\},\s*SERVER_STATUS_POLL_INTERVAL_MS\)/);
   });
 });

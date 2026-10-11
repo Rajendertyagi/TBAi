@@ -125,7 +125,13 @@ function firstErrorIndex(types: readonly string[]): number {
 
 /** Index of the first chunk that is model-visible to a user, or -1. */
 function firstVisibleIndex(types: readonly string[]): number {
-  const visible = new Set(["text-delta", "text", "reasoning-delta", "tool-input-delta", "tool-call"]);
+  const visible = new Set([
+    "text-delta",
+    "text",
+    "reasoning-delta",
+    "tool-input-delta",
+    "tool-call",
+  ]);
   return types.findIndex((t) => visible.has(t));
 }
 
@@ -150,14 +156,16 @@ afterAll(async () => {
 describe("SPIKE: the pre-overflow commitment boundary", () => {
   it("records the exact ordered chunk sequence a client receives before the error", async () => {
     await seedOverflowingProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "overflow-spike",
-      providerId: PROVIDER_ID,
-      modelId: MODEL_ID,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "overflow-spike",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const res = await app.request("/api/chat", {

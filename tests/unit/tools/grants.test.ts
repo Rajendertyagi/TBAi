@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { mintGrant, consumeGrant, grantCounts } from "@/services/grants.ts";
 import { resolveSafe, inspectTarget, OutsideWorkspaceError } from "@/services/tools.ts";
 
@@ -46,7 +46,7 @@ describe("grant store", () => {
 describe("resolveSafe with grants", () => {
   it("admits an outside path once with a matching grant, then fails closed", () => {
     const scope = { conversationId: "c9", tool: "read_file" };
-    const outside = path.join(root, "..", path.basename(root) + "-other");
+    const outside = path.join(root, "..", `${path.basename(root)}-other`);
     fs.mkdirSync(outside, { recursive: true });
     const target = path.relative(root, path.join(outside, "f.txt"));
     // No grant: structured refusal, same historic message.
@@ -77,8 +77,8 @@ describe("resolveSafe with grants", () => {
     const target = path.join(root, "..", "nope.txt");
     const { real } = inspectTarget(target, root);
     mintGrant({ conversationId: "other", tool: "read_file", resolvedTarget: real });
-    expect(() =>
-      resolveSafe(target, root, { conversationId: "c9", tool: "read_file" }),
-    ).toThrow(OutsideWorkspaceError);
+    expect(() => resolveSafe(target, root, { conversationId: "c9", tool: "read_file" })).toThrow(
+      OutsideWorkspaceError,
+    );
   });
 });

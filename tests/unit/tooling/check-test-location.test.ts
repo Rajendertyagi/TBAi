@@ -190,16 +190,13 @@ describe("findViolations", () => {
   });
 
   it("returns a stable, sorted list", () => {
-    withFixture(
-      { "z/last.test.ts": "", "a/first.test.ts": "", "m/middle.spec.ts": "" },
-      (root) => {
-        expect(findViolations(root).map((v) => v.path)).toEqual([
-          "a/first.test.ts",
-          "m/middle.spec.ts",
-          "z/last.test.ts",
-        ]);
-      },
-    );
+    withFixture({ "z/last.test.ts": "", "a/first.test.ts": "", "m/middle.spec.ts": "" }, (root) => {
+      expect(findViolations(root).map((v) => v.path)).toEqual([
+        "a/first.test.ts",
+        "m/middle.spec.ts",
+        "z/last.test.ts",
+      ]);
+    });
   });
 
   it("handles a repository path containing spaces", () => {

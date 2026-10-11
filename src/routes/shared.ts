@@ -15,10 +15,7 @@ import { sanitizeStreamError } from "../lib/redact";
  * runtimes), where the global timeout remains the backstop. Apply ONLY to
  * long-lived streaming endpoints — never to regular request/response routes.
  */
-export function disableIdleTimeout(c: {
-  req: { raw: Request };
-  env: unknown;
-}): void {
+export function disableIdleTimeout(c: { req: { raw: Request }; env: unknown }): void {
   const server = (c.env ?? {}) as {
     timeout?: (req: Request, seconds: number) => void;
   };
@@ -45,8 +42,5 @@ export function storageError(c: Context, e: unknown, status = 500) {
   if (e instanceof ZodError) {
     return c.json({ error: "Invalid request", issues: e.issues, requestId }, 400);
   }
-  return c.json(
-    { error: sanitizeStreamError(e), requestId },
-    status as 500,
-  );
+  return c.json({ error: sanitizeStreamError(e), requestId }, status as 500);
 }

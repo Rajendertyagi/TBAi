@@ -52,8 +52,18 @@ const ROW_CLASS =
 
 /** Predefined folder colors (codeg parity). */
 const FOLDER_COLORS = [
-  "#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#06b6d4",
-  "#3b82f6", "#6366f1", "#8b5cf6", "#a855f7", "#ec4899", "#f43f5e",
+  "#ef4444",
+  "#f97316",
+  "#eab308",
+  "#22c55e",
+  "#14b8a6",
+  "#06b6d4",
+  "#3b82f6",
+  "#6366f1",
+  "#8b5cf6",
+  "#a855f7",
+  "#ec4899",
+  "#f43f5e",
 ];
 
 /**
@@ -107,9 +117,7 @@ export function FolderHeader({
   // creation here — a second creation path is how folder chats got locked to
   // Direct.
   const handleNewConversation = useCallback(() => {
-    useWelcomeScopeStore
-      .getState()
-      .setScope({ mode: "project", folderId: folder.id });
+    useWelcomeScopeStore.getState().setScope({ mode: "project", folderId: folder.id });
     navigate("/chat/new");
   }, [folder.id, navigate]);
 
@@ -214,15 +222,12 @@ export function FolderHeader({
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="min-w-[12rem] p-2">
               <ContextMenuItem
-                onSelect={() =>
-                  void updateFolder(folder.id, { color: DEFAULT_FOLDER_COLOR })
-                }
+                onSelect={() => void updateFolder(folder.id, { color: DEFAULT_FOLDER_COLOR })}
                 className="gap-2"
               >
                 <span
                   aria-hidden
-                  className="size-4 shrink-0 rounded border border-border"
-                  style={{ backgroundColor: DEFAULT_FOLDER_COLOR }}
+                  className="size-4 shrink-0 rounded border border-border bg-[#6b7280]"
                 />
                 <span className="min-w-0 flex-1 truncate">Default</span>
                 {folder.color === DEFAULT_FOLDER_COLOR && (
@@ -237,9 +242,7 @@ export function FolderHeader({
                     type="button"
                     title={color}
                     aria-label={color}
-                    onClick={() =>
-                      void updateFolder(folder.id, { color })
-                    }
+                    onClick={() => void updateFolder(folder.id, { color })}
                     className="size-5 cursor-pointer rounded-sm outline-none ring-offset-1 ring-offset-popover transition-[box-shadow,transform] duration-100 hover:scale-110 data-[active]:ring-2 data-[active]:ring-foreground/60"
                     data-active={folder.color === color ? "" : undefined}
                     style={{ backgroundColor: color }}
@@ -249,10 +252,7 @@ export function FolderHeader({
             </ContextMenuSubContent>
           </ContextMenuSub>
           <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            onSelect={() => setRemoveOpen(true)}
-          >
+          <ContextMenuItem variant="destructive" onSelect={() => setRemoveOpen(true)}>
             <Trash2 className="size-4" />
             Remove from workspace
           </ContextMenuItem>
@@ -265,8 +265,7 @@ export function FolderHeader({
           <DialogHeader>
             <DialogTitle>Set alias</DialogTitle>
             <DialogDescription>
-              A display name shown in the sidebar. Leave blank to use the folder
-              name.
+              A display name shown in the sidebar. Leave blank to use the folder name.
             </DialogDescription>
           </DialogHeader>
           <Input
@@ -296,9 +295,8 @@ export function FolderHeader({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove folder?</AlertDialogTitle>
             <AlertDialogDescription>
-              &ldquo;{label}&rdquo; will be removed from your workspace.
-              Conversations attached to it will stay bound and can be accessed by
-              re-opening the folder.
+              &ldquo;{label}&rdquo; will be removed from your workspace. Conversations attached to
+              it will stay bound and can be accessed by re-opening the folder.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

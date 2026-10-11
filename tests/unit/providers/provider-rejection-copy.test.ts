@@ -53,14 +53,18 @@ describe("model-identity rejection", () => {
   it("never sets modelIdentity when a refinement already claimed the category", () => {
     // `validation` and `config` share prose ("invalid …"), so the flag is checked
     // against the REFINED category; a claimed refinement must win outright.
-    const c = classifyError(errWith("invalid request: invalid model payload rejected", { status: 400 }));
+    const c = classifyError(
+      errWith("invalid request: invalid model payload rejected", { status: 400 }),
+    );
     expect(c.modelIdentity).toBeUndefined();
   });
 });
 
 describe("residual provider 4xx", () => {
   it.each([400, 404, 409, 422])("states that a %i will not be fixed by retrying", (status) => {
-    const copy = sanitizeStreamError(errWith("Bad Request: messages[9].tool_calls[0] is invalid", { status }));
+    const copy = sanitizeStreamError(
+      errWith("Bad Request: messages[9].tool_calls[0] is invalid", { status }),
+    );
     expect(copy).toBe(
       "The provider rejected this request (HTTP 4xx) as invalid. Retrying the same message will not help — start a new chat or switch model.",
     );
@@ -97,6 +101,8 @@ describe("unrelated copy is unchanged", () => {
   });
 
   it("keeps the generic copy for a runtime fault", () => {
-    expect(sanitizeStreamError(errWith("TypeError: x is not a function"))).toContain("Generation failed");
+    expect(sanitizeStreamError(errWith("TypeError: x is not a function"))).toContain(
+      "Generation failed",
+    );
   });
 });

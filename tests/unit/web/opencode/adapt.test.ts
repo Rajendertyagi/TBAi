@@ -173,7 +173,10 @@ describe("normalizeOpenCodeResult — native V2 content", () => {
   });
 
   it("does not invent an exit code for `bash`", () => {
-    const shaped = normalizeOpenCodeResult("bash", [{ type: "text", text: "boom" }]) as Record<string, unknown>;
+    const shaped = normalizeOpenCodeResult("bash", [{ type: "text", text: "boom" }]) as Record<
+      string,
+      unknown
+    >;
     expect(shaped.exitCode).toBeUndefined();
     expect("exitCode" in shaped).toBe(false);
   });
@@ -194,12 +197,16 @@ describe("normalizeOpenCodeResult — native V2 content", () => {
   });
 
   it("keeps native V2 file content visible in a text result", () => {
-    expect(openCodeResultText([{
-      type: "file",
-      uri: "file:///workspace/report.txt",
-      mime: "text/plain",
-      name: "report.txt",
-    }])).toBe("report.txt");
+    expect(
+      openCodeResultText([
+        {
+          type: "file",
+          uri: "file:///workspace/report.txt",
+          mime: "text/plain",
+          name: "report.txt",
+        },
+      ]),
+    ).toBe("report.txt");
   });
 
   it("reads a captured websearch document carried in a native V2 content array", () => {
@@ -238,7 +245,7 @@ const REAL_GREP_CONTENT = [
       "D:\\Temp\\ai-chat-app\\web\\src\\features\\opencode\\V2FormCard.tsx:\n" +
       "  Line 39:  * - Actions: Dismiss, Back, Next, Submit. (No approval/permission metaphors).\n" +
       "\n" +
-      "  Line 156:       logger.info(\"approval\", \"question.submitted\", {\n",
+      '  Line 156:       logger.info("approval", "question.submitted", {\n',
   },
 ];
 
@@ -249,8 +256,8 @@ const REAL_READ_CONTENT = [
     text:
       "Read file D:\\Temp\\ai-chat-app\\package.json, lines 1-47\n" +
       "1: {\n" +
-      "2:   \"name\": \"tbai\",\n" +
-      "3:   \"version\": \"0.1.0\",\n",
+      '2:   "name": "tbai",\n' +
+      '3:   "version": "0.1.0",\n',
   },
 ];
 
@@ -340,12 +347,16 @@ describe("openCodeResultText — the real V2 result, before and after normalizat
     // still hand it over, so it must keep working.
     const wrapped = { content: REAL_GREP_CONTENT };
     expect(openCodeResultText(wrapped)).toBe(REAL_GREP_CONTENT[0].text);
-    expect(openCodeResultText([{
-      type: "file",
-      uri: "file:///workspace/report.txt",
-      mime: "text/plain",
-      name: "report.txt",
-    }])).toBe("report.txt");
+    expect(
+      openCodeResultText([
+        {
+          type: "file",
+          uri: "file:///workspace/report.txt",
+          mime: "text/plain",
+          name: "report.txt",
+        },
+      ]),
+    ).toBe("report.txt");
   });
 
   it("reports no text for empty, error and unexpected results", () => {
@@ -426,9 +437,7 @@ describe("openCodePatchFromParts — the patch lives in metadata, not the result
   });
 
   it("finds its own part among many", () => {
-    expect(
-      openCodePatchFromParts([writePart, editPart], "call_edit_1"),
-    ).toBe(PATCH);
+    expect(openCodePatchFromParts([writePart, editPart], "call_edit_1")).toBe(PATCH);
   });
 
   it("returns null for `write`, which records no patch at all", () => {
@@ -452,14 +461,9 @@ describe("openCodePatchFromParts — the patch lives in metadata, not the result
     expect(openCodePatchFromParts([editPart], "not_the_id")).toBeNull();
     // A part with no metadata (e.g. still running) must not throw.
     expect(
-      openCodePatchFromParts(
-        [{ id: "call_x", state: { status: "running" } }],
-        "call_x",
-      ),
+      openCodePatchFromParts([{ id: "call_x", state: { status: "running" } }], "call_x"),
     ).toBeNull();
-    expect(
-      openCodePatchFromParts([{ id: "call_y", state: null }], "call_y"),
-    ).toBeNull();
+    expect(openCodePatchFromParts([{ id: "call_y", state: null }], "call_y")).toBeNull();
   });
 
   it("treats a whitespace-only `files[].patch` as absent", () => {
@@ -471,9 +475,7 @@ describe("openCodePatchFromParts — the patch lives in metadata, not the result
   });
 
   it("ignores non-object entries instead of throwing", () => {
-    expect(
-      openCodePatchFromParts([null, "junk", 42, editPart], "call_edit_1"),
-    ).toBe(PATCH);
+    expect(openCodePatchFromParts([null, "junk", 42, editPart], "call_edit_1")).toBe(PATCH);
   });
 });
 
@@ -566,19 +568,13 @@ describe("openCodeWebSearchProviderFromParts — the provider is read, never ass
 
   it("returns null for a part with no metadata at all (e.g. still running)", () => {
     expect(
-      openCodeWebSearchProviderFromParts(
-        [{ id: "c_run", state: { status: "running" } }],
-        "c_run",
-      ),
+      openCodeWebSearchProviderFromParts([{ id: "c_run", state: { status: "running" } }], "c_run"),
     ).toBeNull();
     expect(
       openCodeWebSearchProviderFromParts([{ id: "c_null", state: null }], "c_null"),
     ).toBeNull();
     expect(
-      openCodeWebSearchProviderFromParts(
-        [{ id: "c_str", state: { metadata: "exa" } }],
-        "c_str",
-      ),
+      openCodeWebSearchProviderFromParts([{ id: "c_str", state: { metadata: "exa" } }], "c_str"),
     ).toBeNull();
   });
 
@@ -598,7 +594,12 @@ describe("openCodeWebSearchProviderFromParts — the provider is read, never ass
   });
 
   it("ignores non-object entries instead of throwing", () => {
-    const parts = [null, "junk", 42, webSearchPartOf(WS_ID, exaLiveDocument, webSearchMetadata.exa)];
+    const parts = [
+      null,
+      "junk",
+      42,
+      webSearchPartOf(WS_ID, exaLiveDocument, webSearchMetadata.exa),
+    ];
     expect(openCodeWebSearchProviderFromParts(parts, WS_ID)).toBe("exa");
   });
 

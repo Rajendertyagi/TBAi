@@ -51,9 +51,7 @@ const project = projectArg ? projectArg.split("=")[1] : "chromium-headless";
 const explicit = args.filter((a) => !a.startsWith("--"));
 
 /** Flags the runner does not own, passed through to Playwright untouched. */
-const forwarded = args.filter(
-  (a) => a.startsWith("--") && !a.startsWith("--project="),
-);
+const forwarded = args.filter((a) => a.startsWith("--") && !a.startsWith("--project="));
 // A caller-chosen reporter must win outright rather than race the default, so
 // the default is only added when the caller did not ask for one.
 const reporterDefault = forwarded.some((a) => a.startsWith("--reporter"))
@@ -89,15 +87,17 @@ function specFiles(): string[] {
   if (explicit.length > 0) {
     return explicit.map((f) => (f.endsWith(".spec.ts") ? f : `${f}.spec.ts`));
   }
-  return collectSpecFiles(E2E_DIR)
-    .filter((f) => runLive || !f.endsWith("-live.spec.ts"))
-    // Playwright treats positional arguments as REGEXES matched against each
-    // test file's path. An absolute Windows path is full of backslashes, which
-    // are regex escapes, so every pattern fails to match and the run reports
-    // "No tests found" for every file. Relative POSIX paths from the E2E root
-    // match literally.
-    .map((f) => path.relative(E2E_DIR, f).split(path.sep).join("/"))
-    .sort();
+  return (
+    collectSpecFiles(E2E_DIR)
+      .filter((f) => runLive || !f.endsWith("-live.spec.ts"))
+      // Playwright treats positional arguments as REGEXES matched against each
+      // test file's path. An absolute Windows path is full of backslashes, which
+      // are regex escapes, so every pattern fails to match and the run reports
+      // "No tests found" for every file. Relative POSIX paths from the E2E root
+      // match literally.
+      .map((f) => path.relative(E2E_DIR, f).split(path.sep).join("/"))
+      .sort()
+  );
 }
 
 async function waitForServer(timeoutMs: number): Promise<boolean> {

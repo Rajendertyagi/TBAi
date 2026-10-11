@@ -56,7 +56,9 @@ function install() {
         agent: { list: agentList },
         model: {
           list: modelList,
-          default: async () => ({ data: (responses[responses.length - 1].models[0] as typeof REAL_MODEL) ?? null }),
+          default: async () => ({
+            data: (responses[responses.length - 1].models[0] as typeof REAL_MODEL) ?? null,
+          }),
         },
       };
     },

@@ -43,19 +43,13 @@ import {
  *      — so a failure is a failure even with no readable `error` string.
  */
 
-function render(
-  UI: ToolCallMessagePartComponent,
-  props: Record<string, unknown>,
-): string {
+function render(UI: ToolCallMessagePartComponent, props: Record<string, unknown>): string {
   const Any = UI as unknown as (p: Record<string, unknown>) => ReactElement;
   return renderToStaticMarkup(createElement(Any, props));
 }
 
 /** A settled part in the native V2 shape, with the runtime's `isError` set. */
-const part = (
-  result: unknown,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> => ({
+const part = (result: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   type: "tool-call",
   toolCallId: "call_1",
   toolName: "read",
@@ -83,9 +77,7 @@ describe("classifyOpenCodeResultBody — empty is not the same as unreadable", (
     // say something true about it, and did before this change.
     const body = classifyOpenCodeResultBody(capturedBinaryReadContent);
     expect(body.kind).toBe("text");
-    expect(body.kind === "text" && body.text).toContain(
-      "causeC-2-answer-on-card.jpg",
-    );
+    expect(body.kind === "text" && body.text).toContain("causeC-2-answer-on-card.jpg");
   });
 
   it("calls a genuinely empty result empty", () => {
@@ -102,20 +94,14 @@ describe("classifyOpenCodeResultBody — empty is not the same as unreadable", (
   it("calls a FAILED result unreadable, not empty — this is the reported defect", () => {
     // REAL: `{ error, type }` is exactly what `v2History`/`v2Events` build for
     // the 40 error parts, none of which carried a `content` key.
-    expect(classifyOpenCodeResultBody(capturedErrorEnvelopeOutput).kind).toBe(
-      "unreadable",
-    );
-    expect(classifyOpenCodeResultBody(capturedWebFetchErrorOutput).kind).toBe(
-      "unreadable",
-    );
+    expect(classifyOpenCodeResultBody(capturedErrorEnvelopeOutput).kind).toBe("unreadable");
+    expect(classifyOpenCodeResultBody(capturedWebFetchErrorOutput).kind).toBe("unreadable");
   });
 
   it("calls a content array of unknown parts unreadable", () => {
     // Present, non-empty, and not decodable — a different case from the empty
     // array above, which is why the two cannot share one branch.
-    expect(classifyOpenCodeResultBody([{ type: "image", blob: "…" }]).kind).toBe(
-      "unreadable",
-    );
+    expect(classifyOpenCodeResultBody([{ type: "image", blob: "…" }]).kind).toBe("unreadable");
     expect(classifyOpenCodeResultBody({ content: 42 }).kind).toBe("unreadable");
   });
 });
@@ -132,10 +118,7 @@ describe("a failed read shows a failure marker, never 'No output.'", () => {
   it("renders the failure badge for the captured read error", () => {
     // REAL state: `capturedReadErrorPart` — `status:"error"`, no `content`,
     // `error.type: "tool.execution"`.
-    const html = render(
-      OpenCodeReadToolUI,
-      part(capturedErrorEnvelopeOutput, { isError: true }),
-    );
+    const html = render(OpenCodeReadToolUI, part(capturedErrorEnvelopeOutput, { isError: true }));
     expect(html).toContain("Failed");
     // The defect's exact symptom.
     expect(html).not.toContain(toolsConfig.copy.status.noOutput);
@@ -151,10 +134,7 @@ describe("a failed read shows a failure marker, never 'No output.'", () => {
   it("does the same for the captured webfetch failure, whose error.type differs", () => {
     // REAL: `error.type: "unknown"`. Pinned so nothing can start branching on
     // the type field, which carries no usable distinction.
-    const html = render(
-      OpenCodeReadToolUI,
-      part(capturedWebFetchErrorOutput, { isError: true }),
-    );
+    const html = render(OpenCodeReadToolUI, part(capturedWebFetchErrorOutput, { isError: true }));
     expect(html).toContain("Failed");
     expect(html).not.toContain(toolsConfig.copy.status.noOutput);
 
@@ -168,10 +148,7 @@ describe("a failed read shows a failure marker, never 'No output.'", () => {
     // part it called failed is a failure — with or without a readable `error`.
     // Before this, `failureOf` was the only signal, and such a part fell
     // through to the success body.
-    const html = render(
-      OpenCodeReadToolUI,
-      part({ nothing: "useful" }, { isError: true }),
-    );
+    const html = render(OpenCodeReadToolUI, part({ nothing: "useful" }, { isError: true }));
     expect(html).toContain("Failed");
     expect(html).not.toContain(toolsConfig.copy.status.noOutput);
 
@@ -199,10 +176,7 @@ describe("a failed read shows a failure marker, never 'No output.'", () => {
     // result keeps its `error` string, the approval marker is gone, and
     // `denialOf` has already declined to call it a denial. It is still a
     // failure, so `isError` must not have become the ONLY signal.
-    const failed = failureCopyOf(
-      { error: "Execution failed before the tool ran." },
-      false,
-    );
+    const failed = failureCopyOf({ error: "Execution failed before the tool ran." }, false);
     expect(failed?.reason).toBe("Execution failed before the tool ran.");
   });
 });

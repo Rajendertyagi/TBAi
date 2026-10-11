@@ -97,7 +97,10 @@ export function isTestFileName(fileName: string): boolean {
 
 /** True when any path segment is a directory whose contents are tests. */
 export function hasTestDirectorySegment(relativePath: string): boolean {
-  return relativePath.split("/").slice(0, -1).some((segment) => TEST_DIRECTORY_NAMES.has(segment));
+  return relativePath
+    .split("/")
+    .slice(0, -1)
+    .some((segment) => TEST_DIRECTORY_NAMES.has(segment));
 }
 
 /** One violation, with enough context for a human to act without re-deriving it. */
@@ -190,7 +193,10 @@ export function extractImportSpecifiers(source: string): string[] {
   // Strip comments first, while preserving offsets so string scanning stays aligned.
   const code = source
     .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
-    .replace(/(^|[^:])\/\/.*$/gm, (_m, lead: string) => lead + " ".repeat(Math.max(0, _m.length - lead.length)));
+    .replace(
+      /(^|[^:])\/\/.*$/gm,
+      (_m, lead: string) => lead + " ".repeat(Math.max(0, _m.length - lead.length)),
+    );
 
   let i = 0;
   while (i < code.length) {

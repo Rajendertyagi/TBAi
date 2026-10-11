@@ -167,10 +167,7 @@ function restRequests(fixture: Fixture): readonly CapturedRequest[] {
   return fixture.requests.filter((request) => !new URL(request.url).pathname.endsWith("/event"));
 }
 
-function requestForPath(
-  fixture: Fixture,
-  pathSuffix: string,
-): CapturedRequest | undefined {
+function requestForPath(fixture: Fixture, pathSuffix: string): CapturedRequest | undefined {
   return fixture.requests.find((request) => new URL(request.url).pathname.endsWith(pathSuffix));
 }
 
@@ -303,9 +300,7 @@ describe("createOpenCodeV2Client", () => {
     const requestCount = fixture.requests.length;
 
     await expect(generation.operations.serverInfo()).rejects.toThrow();
-    await expect(
-      generation.operations.sessionGet({ sessionID: SESSION_ID }),
-    ).rejects.toThrow();
+    await expect(generation.operations.sessionGet({ sessionID: SESSION_ID })).rejects.toThrow();
     await expect(generation.history.list({ sessionID: SESSION_ID })).rejects.toThrow();
     await expect(generation.events.next()).rejects.toThrow();
     expect(fixture.requests).toHaveLength(requestCount);

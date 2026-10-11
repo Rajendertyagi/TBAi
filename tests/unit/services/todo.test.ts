@@ -39,7 +39,6 @@ function seededThread(id: string): string {
   return threadId;
 }
 
-
 describe("todo service", () => {
   it("rejects when no thread context is supplied", () => {
     expect(() => runTodo({ action: "list" })).toThrow();
@@ -63,14 +62,21 @@ describe("todo service", () => {
   it("toggles the done state", () => {
     const added = runTodo({ action: "add", text: "task" }, { threadId: seededThread("t3") });
     const id = added.items[0].id;
-    expect(runTodo({ action: "toggle", id }, { threadId: seededThread("t3") }).items[0].done).toBe(true);
-    expect(runTodo({ action: "toggle", id }, { threadId: seededThread("t3") }).items[0].done).toBe(false);
+    expect(runTodo({ action: "toggle", id }, { threadId: seededThread("t3") }).items[0].done).toBe(
+      true,
+    );
+    expect(runTodo({ action: "toggle", id }, { threadId: seededThread("t3") }).items[0].done).toBe(
+      false,
+    );
   });
 
   it("updates text and done", () => {
     const added = runTodo({ action: "add", text: "old" }, { threadId: seededThread("t4") });
     const id = added.items[0].id;
-    const updated = runTodo({ action: "update", id, text: "new", done: true }, { threadId: seededThread("t4") });
+    const updated = runTodo(
+      { action: "update", id, text: "new", done: true },
+      { threadId: seededThread("t4") },
+    );
     expect(updated.items[0].text).toBe("new");
     expect(updated.items[0].done).toBe(true);
   });
@@ -83,7 +89,9 @@ describe("todo service", () => {
   it("removes an item", () => {
     const added = runTodo({ action: "add", text: "temp" }, { threadId: seededThread("t7") });
     const id = added.items[0].id;
-    expect(runTodo({ action: "remove", id }, { threadId: seededThread("t7") }).items).toHaveLength(0);
+    expect(runTodo({ action: "remove", id }, { threadId: seededThread("t7") }).items).toHaveLength(
+      0,
+    );
   });
 
   it("clears all items", () => {
@@ -98,10 +106,14 @@ describe("todo service", () => {
     runTodo({ action: "toggle", id }, { threadId: seededThread("t9") });
     runTodo({ action: "add", text: "two" }, { threadId: seededThread("t9") });
     expect(
-      runTodo({ action: "list", filter: "done" }, { threadId: seededThread("t9") }).items.map((i) => i.text),
+      runTodo({ action: "list", filter: "done" }, { threadId: seededThread("t9") }).items.map(
+        (i) => i.text,
+      ),
     ).toEqual(["one"]);
     expect(
-      runTodo({ action: "list", filter: "active" }, { threadId: seededThread("t9") }).items.map((i) => i.text),
+      runTodo({ action: "list", filter: "active" }, { threadId: seededThread("t9") }).items.map(
+        (i) => i.text,
+      ),
     ).toEqual(["two"]);
   });
 });

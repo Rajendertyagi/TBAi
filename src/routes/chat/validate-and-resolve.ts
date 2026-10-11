@@ -82,10 +82,7 @@ export async function validateAndResolve(
     };
   }
 
-  const {
-    reasoningLevel: reasoningOverride,
-    messages: rawMessages,
-  } = parsed.data;
+  const { reasoningLevel: reasoningOverride, messages: rawMessages } = parsed.data;
   const providerId = parsed.data.providerId?.trim() || undefined;
   const model = parsed.data.model?.trim() || undefined;
   const threadId = parsed.data.id?.trim() || undefined;
@@ -108,8 +105,8 @@ export async function validateAndResolve(
     };
   }
 
-  const directiveField = (["system", "tools", "callSettings", "config"] as const).find(
-    (field) => hasNonEmptyDirective(parsed.data[field]),
+  const directiveField = (["system", "tools", "callSettings", "config"] as const).find((field) =>
+    hasNonEmptyDirective(parsed.data[field]),
   );
   if (directiveField) {
     logger.warn("chat", "chat_request_rejected", {
@@ -208,10 +205,7 @@ export async function validateAndResolve(
     });
     return {
       ok: false,
-      response: c.json(
-        { error: "Tool approval security is unavailable", requestId },
-        500,
-      ),
+      response: c.json({ error: "Tool approval security is unavailable", requestId }, 500),
     };
   }
 

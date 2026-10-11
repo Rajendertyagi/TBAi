@@ -34,15 +34,35 @@ describe("native V2 permission projection", () => {
       V2_PERMISSION_OPTION_IDS.always,
       V2_PERMISSION_OPTION_IDS.reject,
     ]);
-    expect(toV2PermissionReply(view, { approvalId: view.id, approved: true, optionId: V2_PERMISSION_OPTION_IDS.once })).toBe("once");
-    expect(toV2PermissionReply(view, { approvalId: view.id, approved: true, optionId: V2_PERMISSION_OPTION_IDS.always })).toBe("always");
-    expect(toV2PermissionReply(view, { approvalId: view.id, approved: false, optionId: V2_PERMISSION_OPTION_IDS.reject })).toBe("reject");
+    expect(
+      toV2PermissionReply(view, {
+        approvalId: view.id,
+        approved: true,
+        optionId: V2_PERMISSION_OPTION_IDS.once,
+      }),
+    ).toBe("once");
+    expect(
+      toV2PermissionReply(view, {
+        approvalId: view.id,
+        approved: true,
+        optionId: V2_PERMISSION_OPTION_IDS.always,
+      }),
+    ).toBe("always");
+    expect(
+      toV2PermissionReply(view, {
+        approvalId: view.id,
+        approved: false,
+        optionId: V2_PERMISSION_OPTION_IDS.reject,
+      }),
+    ).toBe("reject");
   });
 
   it("rejects an unknown or mismatched option instead of defaulting to once", () => {
     const view = projectV2Permission(request);
     if (!view) throw new Error("expected permission");
-    expect(() => toV2PermissionReply(view, { approvalId: view.id, approved: true, optionId: "unknown" })).toThrow();
+    expect(() =>
+      toV2PermissionReply(view, { approvalId: view.id, approved: true, optionId: "unknown" }),
+    ).toThrow();
   });
 });
 
@@ -119,11 +139,7 @@ describe("V2 approval prompt — only a real message qualifies", () => {
     // Same request, same decisions: `prompt` is the ONLY key a message adds.
     expect(withMessage.id).toBe(withoutMessage.id);
     expect(withMessage.options).toEqual(withoutMessage.options);
-    expect(Object.keys(withMessage).sort()).toEqual([
-      "id",
-      "options",
-      "prompt",
-    ]);
+    expect(Object.keys(withMessage).sort()).toEqual(["id", "options", "prompt"]);
   });
 
   it("a blank message is kept verbatim — normalising it is the card's job", () => {
@@ -187,7 +203,9 @@ describe("native V2 permission file diffs", () => {
 
   it("reads the patch the server precomputed, with its file", () => {
     const view = projectV2Permission(
-      edit({ files: [{ file: "src/a.ts", patch: PATCH, status: "modified", additions: 1, deletions: 1 }] }),
+      edit({
+        files: [{ file: "src/a.ts", patch: PATCH, status: "modified", additions: 1, deletions: 1 }],
+      }),
     );
     expect(view?.fileDiffs).toEqual([{ file: "src/a.ts", patch: PATCH }]);
   });
@@ -205,7 +223,15 @@ describe("native V2 permission file diffs", () => {
     // so nothing about the shape is guaranteed.
     const view = projectV2Permission(
       edit({
-        files: [null, "junk", 42, {}, { file: "src/a.ts" }, { patch: PATCH }, { file: "src/a.ts", patch: "   " }],
+        files: [
+          null,
+          "junk",
+          42,
+          {},
+          { file: "src/a.ts" },
+          { patch: PATCH },
+          { file: "src/a.ts", patch: "   " },
+        ],
       }),
     );
     expect(view?.fileDiffs).toEqual([]);

@@ -5,11 +5,7 @@ import {
   reduceV2Event,
   reduceV2ThreadState,
 } from "@web/features/opencode/v2Events.ts";
-import type {
-  V2InboxRecord,
-  V2MessageState,
-  V2SafeError,
-} from "@web/features/opencode/v2Types.ts";
+import type { V2InboxRecord, V2MessageState, V2SafeError } from "@web/features/opencode/v2Types.ts";
 
 const SESSION_ID = "ses_v2_events_test";
 const ASSISTANT_MESSAGE_ID = "msg_assistant_v2_events_test";
@@ -174,35 +170,62 @@ describe("V2 tool lifecycle events", () => {
         type: "session.tool.input.delta",
         aggregateID: SESSION_ID,
         seq: 2,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, id: toolId, delta: "{\"command\":" },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          id: toolId,
+          delta: '{"command":',
+        },
       }),
       durableEvent({
         id: "evt_tool_ended",
         type: "session.tool.input.ended",
         aggregateID: SESSION_ID,
         seq: 3,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, id: toolId, text: "{\"command\":\"bun --version\"}" },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          id: toolId,
+          text: '{"command":"bun --version"}',
+        },
       }),
       durableEvent({
         id: "evt_tool_called",
         type: "session.tool.called",
         aggregateID: SESSION_ID,
         seq: 4,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, id: toolId, input: { command: "bun --version" }, executed: true },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          id: toolId,
+          input: { command: "bun --version" },
+          executed: true,
+        },
       }),
       durableEvent({
         id: "evt_tool_progress",
         type: "session.tool.progress",
         aggregateID: SESSION_ID,
         seq: 5,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, id: toolId, metadata: { progress: "running" } },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          id: toolId,
+          metadata: { progress: "running" },
+        },
       }),
       durableEvent({
         id: "evt_tool_success",
         type: "session.tool.success",
         aggregateID: SESSION_ID,
         seq: 6,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, id: toolId, content: [{ type: "text", text: "1.4.2" }], executed: true },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          id: toolId,
+          content: [{ type: "text", text: "1.4.2" }],
+          executed: true,
+        },
       }),
     ];
     for (const [index, event] of events.entries()) {
@@ -268,7 +291,12 @@ describe("V2 tool lifecycle events", () => {
         type: "session.text.ended",
         aggregateID: SESSION_ID,
         seq: 2,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, ordinal: 0, text: "final text" },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          ordinal: 0,
+          text: "final text",
+        },
       }),
       durableEvent({
         id: "evt_reasoning_started",
@@ -282,32 +310,55 @@ describe("V2 tool lifecycle events", () => {
         type: "session.reasoning.ended",
         aggregateID: SESSION_ID,
         seq: 4,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, ordinal: 0, text: "final reasoning" },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          ordinal: 0,
+          text: "final reasoning",
+        },
       }),
       durableEvent({
         id: "evt_step_started",
         type: "session.step.started",
         aggregateID: SESSION_ID,
         seq: 5,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, agent: "build", model: { id: "test-model", providerID: "test-provider" }, started: 1 },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          agent: "build",
+          model: { id: "test-model", providerID: "test-provider" },
+          started: 1,
+        },
       }),
       durableEvent({
         id: "evt_step_ended",
         type: "session.step.ended",
         aggregateID: SESSION_ID,
         seq: 6,
-        data: { sessionID: SESSION_ID, assistantMessageID: messageId, finish: "stop", cost: 0.25, tokens: TOKEN_USAGE },
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: messageId,
+          finish: "stop",
+          cost: 0.25,
+          tokens: TOKEN_USAGE,
+        },
       }),
     ];
     for (const [index, event] of events.entries()) {
       state = reduceV2Event(state, event, index + 1, "observe-and-apply");
     }
 
-    expect(state.messages[messageId]?.parts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "text", value: "final text", status: "complete" }),
-      expect.objectContaining({ kind: "reasoning", value: "final reasoning", status: "complete" }),
-      expect.objectContaining({ kind: "step", status: "finished" }),
-    ]));
+    expect(state.messages[messageId]?.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "text", value: "final text", status: "complete" }),
+        expect.objectContaining({
+          kind: "reasoning",
+          value: "final reasoning",
+          status: "complete",
+        }),
+        expect.objectContaining({ kind: "step", status: "finished" }),
+      ]),
+    );
     expect(state.usage).toEqual({ cost: 0.25, tokens: TOKEN_USAGE });
   });
 
@@ -319,14 +370,24 @@ describe("V2 tool lifecycle events", () => {
       type: "session.step.started",
       aggregateID: SESSION_ID,
       seq: 1,
-      data: { sessionID: SESSION_ID, assistantMessageID: messageId, agent: "build", model: { id: "test-model", providerID: "test-provider" }, started: 1 },
+      data: {
+        sessionID: SESSION_ID,
+        assistantMessageID: messageId,
+        agent: "build",
+        model: { id: "test-model", providerID: "test-provider" },
+        started: 1,
+      },
     });
     const failed = durableEvent({
       id: "evt_step_failure",
       type: "session.step.failed",
       aggregateID: SESSION_ID,
       seq: 2,
-      data: { sessionID: SESSION_ID, assistantMessageID: messageId, error: { type: "provider.error", message: "Step failed" } },
+      data: {
+        sessionID: SESSION_ID,
+        assistantMessageID: messageId,
+        error: { type: "provider.error", message: "Step failed" },
+      },
     });
     state = reduceV2Event(state, started, 1, "observe-and-apply");
     state = reduceV2Event(state, failed, 2, "observe-and-apply");
@@ -560,12 +621,7 @@ describe("V2 prompt admission and idempotence", () => {
       data: { sessionID: SESSION_ID },
     });
 
-    const enqueued = reduceV2Event(
-      submitting,
-      enqueuedEvent,
-      1,
-      "observe-and-apply",
-    );
+    const enqueued = reduceV2Event(submitting, enqueuedEvent, 1, "observe-and-apply");
     const terminal = reduceV2Event(enqueued, terminalEvent, 2, "observe-and-apply");
     const httpResponse = reduceV2ThreadState(terminal, {
       type: "prompt_admitted",
@@ -780,26 +836,32 @@ describe("V2 tool timing", () => {
       "observe-and-apply",
     );
     for (const [seq, event] of [
-      [2, durableEvent({
-        id: "evt_timing_d",
-        type: "session.tool.input.delta",
-        aggregateID: SESSION_ID,
-        seq: 2,
-        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, delta: "{" },
-      })],
-      [3, durableEvent({
-        id: "evt_timing_c",
-        type: "session.tool.called",
-        aggregateID: SESSION_ID,
-        seq: 3,
-        data: {
-          sessionID: SESSION_ID,
-          assistantMessageID: MESSAGE,
-          id: TOOL,
-          input: { command: "bun" },
-          executed: false,
-        },
-      })],
+      [
+        2,
+        durableEvent({
+          id: "evt_timing_d",
+          type: "session.tool.input.delta",
+          aggregateID: SESSION_ID,
+          seq: 2,
+          data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, delta: "{" },
+        }),
+      ],
+      [
+        3,
+        durableEvent({
+          id: "evt_timing_c",
+          type: "session.tool.called",
+          aggregateID: SESSION_ID,
+          seq: 3,
+          data: {
+            sessionID: SESSION_ID,
+            assistantMessageID: MESSAGE,
+            id: TOOL,
+            input: { command: "bun" },
+            executed: false,
+          },
+        }),
+      ],
     ] as const) {
       state = reduceV2Event(state, event, seq, "observe-and-apply");
       expect(toolPart(state)?.timing).toEqual({ startedAt: 101 });

@@ -19,7 +19,12 @@ const WINDOW_LIMIT = 100;
 const SEEDED_MESSAGES = 150;
 
 /** One persisted row exactly as `POST /api/conversations/:id/messages` stores it. */
-function storedMessage(id: string, parentId: string | null, text: string, role: "user" | "assistant") {
+function storedMessage(
+  id: string,
+  parentId: string | null,
+  text: string,
+  role: "user" | "assistant",
+) {
   return {
     id,
     parent_id: parentId,
@@ -157,9 +162,7 @@ test.describe("P2 bounded Direct history in the mounted app", () => {
       await expect(page.getByRole("button", { name: /back to latest/i })).toBeVisible({
         timeout: 15000,
       });
-      await expect(
-        page.getByRole("button", { name: /load earlier/i }),
-      ).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /load earlier/i })).toHaveCount(0);
       // The buffer is APPEND-ONLY, so the root of the conversation is now
       // reachable. Scrolling up is a real user gesture: it disarms the
       // auto-follow, so the viewport stays where the user put it.

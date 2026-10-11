@@ -49,12 +49,7 @@ describe("buildOpenCodeServeArgs", () => {
   });
 
   it("handles edge ports (0 and max)", () => {
-    expect(buildOpenCodeServeArgs(0)).toEqual([
-      OPENCODE_CONFIG.binaryName,
-      "serve",
-      "--port",
-      "0",
-    ]);
+    expect(buildOpenCodeServeArgs(0)).toEqual([OPENCODE_CONFIG.binaryName, "serve", "--port", "0"]);
     expect(buildOpenCodeServeArgs(65535)[3]).toBe("65535");
   });
 });
@@ -162,9 +157,7 @@ describe("probeOpenCodeInfo", () => {
   });
 
   it("accepts a 2.0.16 server info response within the approved range", async () => {
-    const fixture = startInfoFixture(() =>
-      Response.json({ version: CURRENT_SUPPORTED_VERSION }),
-    );
+    const fixture = startInfoFixture(() => Response.json({ version: CURRENT_SUPPORTED_VERSION }));
 
     try {
       const outcome = await probeOpenCodeInfo(
@@ -189,9 +182,7 @@ describe("probeOpenCodeInfo", () => {
   });
 
   it("reports not ready on HTTP 401", async () => {
-    const fixture = startInfoFixture(
-      () => new Response("unauthorized", { status: 401 }),
-    );
+    const fixture = startInfoFixture(() => new Response("unauthorized", { status: 401 }));
 
     try {
       const outcome = await probeOpenCodeInfo(
@@ -251,9 +242,7 @@ describe("probeOpenCodeInfo", () => {
   });
 
   it("reports not ready for an unsupported version", async () => {
-    const fixture = startInfoFixture(
-      () => Response.json({ version: UNSUPPORTED_VERSION }),
-    );
+    const fixture = startInfoFixture(() => Response.json({ version: UNSUPPORTED_VERSION }));
 
     try {
       const outcome = await probeOpenCodeInfo(
@@ -270,9 +259,7 @@ describe("probeOpenCodeInfo", () => {
   });
 
   it("reports not ready at the 2.1.0 upper bound", async () => {
-    const fixture = startInfoFixture(
-      () => Response.json({ version: UPPER_BOUND_VERSION }),
-    );
+    const fixture = startInfoFixture(() => Response.json({ version: UPPER_BOUND_VERSION }));
 
     try {
       const outcome = await probeOpenCodeInfo(
@@ -541,10 +528,7 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
     return FAKE_MANAGED_BINARY;
   }
 
-  protected createChild(
-    port: number,
-    binaryPath: string = FAKE_MANAGED_BINARY,
-  ): Subprocess {
+  protected createChild(port: number, binaryPath: string = FAKE_MANAGED_BINARY): Subprocess {
     this.createChildCalls += 1;
     this.lastBinaryPath = binaryPath;
     const child = new FakeChild(
@@ -559,9 +543,7 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
     return child as unknown as Subprocess;
   }
 
-  protected diagnosticsFor(
-    child: Subprocess,
-  ): { stdout: string; stderr: string } | undefined {
+  protected diagnosticsFor(child: Subprocess): { stdout: string; stderr: string } | undefined {
     const d = super.diagnosticsFor(child);
     this.lastDiagnostics = d;
     return d;
@@ -642,10 +624,9 @@ describe("OpenCodeServerManager.ensureBaseUrl", () => {
     try {
       const baseUrl = await mgr.ensureBaseUrl();
       expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-      const response = await fetch(
-        `${baseUrl}${OPENCODE_CONFIG.readinessProbePath}`,
-        { headers: getOpenCodeAuthHeaders() },
-      );
+      const response = await fetch(`${baseUrl}${OPENCODE_CONFIG.readinessProbePath}`, {
+        headers: getOpenCodeAuthHeaders(),
+      });
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ version: SUPPORTED_VERSION });
     } finally {
@@ -676,9 +657,7 @@ describe("OpenCodeServerManager lifecycle", () => {
       readyPollMs: 5,
     });
     mgr.serveMode = "never";
-    await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(
-      OpenCodeReadinessTimeoutError,
-    );
+    await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeReadinessTimeoutError);
     expect(mgr.lastChild.killCalls).toContain("SIGKILL");
     expect(mgr.createChildCalls).toBe(1);
     mgr.stopFake();

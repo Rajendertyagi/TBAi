@@ -18,7 +18,11 @@ describe("D1 divider ownership", () => {
   });
 
   it("server durable divider exists, browser cannot duplicate", async () => {
-    const conv = await conversationService.create({ title: "test", providerId: "test", workspaceMode: "simple" });
+    const conv = await conversationService.create({
+      title: "test",
+      providerId: "test",
+      workspaceMode: "simple",
+    });
 
     // Server writes the durable divider
     const dividerId = "data-tbai-compact-test-op-1";
@@ -73,7 +77,11 @@ describe("D1 divider ownership", () => {
   });
 
   it("repeated reload does not duplicate divider", async () => {
-    const conv = await conversationService.create({ title: "test", providerId: "test", workspaceMode: "simple" });
+    const conv = await conversationService.create({
+      title: "test",
+      providerId: "test",
+      workspaceMode: "simple",
+    });
 
     // Server writes the durable divider
     const dividerId = "data-tbai-compact-test-op-2";

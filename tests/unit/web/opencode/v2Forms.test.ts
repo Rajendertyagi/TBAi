@@ -25,7 +25,10 @@ function formOf(fields: FormInfo["fields"]): ReturnType<typeof projectV2Form> {
 }
 
 /** The field-error map of a rejected answer, or `null` when it was accepted. */
-function fieldErrors(view: ReturnType<typeof projectV2Form>, answer: V2FormAnswer): Record<string, string> | null {
+function fieldErrors(
+  view: ReturnType<typeof projectV2Form>,
+  answer: V2FormAnswer,
+): Record<string, string> | null {
   const result = validateV2FormAnswer(view, answer);
   return result.ok === true ? null : result.fieldErrors;
 }
@@ -65,17 +68,29 @@ describe("native V2 form contract", () => {
 
 describe("V2 string options — the option list constrains, custom adds to it", () => {
   const choice = formOf([
-    { key: "db", type: "string", options: [{ value: "SQLite", label: "SQLite" }, { value: "Postgres", label: "Postgres" }] },
+    {
+      key: "db",
+      type: "string",
+      options: [
+        { value: "SQLite", label: "SQLite" },
+        { value: "Postgres", label: "Postgres" },
+      ],
+    },
   ]);
 
   it("accepts a listed option value", () => {
-    expect(validateV2FormAnswer(choice, { db: "Postgres" })).toEqual({ ok: true, answer: { db: "Postgres" } });
+    expect(validateV2FormAnswer(choice, { db: "Postgres" })).toEqual({
+      ok: true,
+      answer: { db: "Postgres" },
+    });
   });
 
   it("rejects an unlisted value when the field does not allow custom input", () => {
     // The hole this fixes: `options && !custom` was read as "custom REPLACES
     // the options", so this case validated nothing at all.
-    expect(fieldErrors(choice, { db: "mysql" })).toEqual({ db: "Choose one of the available options" });
+    expect(fieldErrors(choice, { db: "mysql" })).toEqual({
+      db: "Choose one of the available options",
+    });
   });
 
   it("accepts an unlisted value when the field allows custom input", () => {
@@ -84,17 +99,26 @@ describe("V2 string options — the option list constrains, custom adds to it", 
         key: "db",
         type: "string",
         custom: true,
-        options: [{ value: "SQLite", label: "SQLite" }, { value: "Postgres", label: "Postgres" }],
+        options: [
+          { value: "SQLite", label: "SQLite" },
+          { value: "Postgres", label: "Postgres" },
+        ],
       },
     ]);
-    expect(validateV2FormAnswer(withCustom, { db: "mysql" })).toEqual({ ok: true, answer: { db: "mysql" } });
+    expect(validateV2FormAnswer(withCustom, { db: "mysql" })).toEqual({
+      ok: true,
+      answer: { db: "mysql" },
+    });
   });
 
   it("still accepts a listed option when custom input is also allowed", () => {
     const withCustom = formOf([
       { key: "db", type: "string", custom: true, options: [{ value: "SQLite", label: "SQLite" }] },
     ]);
-    expect(validateV2FormAnswer(withCustom, { db: "SQLite" })).toEqual({ ok: true, answer: { db: "SQLite" } });
+    expect(validateV2FormAnswer(withCustom, { db: "SQLite" })).toEqual({
+      ok: true,
+      answer: { db: "SQLite" },
+    });
   });
 
   it("keeps the string constraints that are not about options", () => {
@@ -107,14 +131,30 @@ describe("V2 string options — the option list constrains, custom adds to it", 
       { key: "uri", type: "string", format: "uri" },
       { key: "shaped", type: "string", pattern: "^[A-Z]+$" },
     ]);
-    expect(fieldErrors(view, { short: "ab", long: "a@b.co", mail: "nope", uri: "nope", shaped: "lower" })).toEqual({
+    expect(
+      fieldErrors(view, {
+        short: "ab",
+        long: "a@b.co",
+        mail: "nope",
+        uri: "nope",
+        shaped: "lower",
+      }),
+    ).toEqual({
       short: "Use at least 4 characters",
       long: "Use at most 5 characters",
       mail: "Enter a valid email",
       uri: "Enter a valid URI",
       shaped: "Value does not match the required format",
     });
-    expect(validateV2FormAnswer(view, { short: "abcd", long: "abcde", mail: "a@b.co", uri: "https://x.dev", shaped: "AB" })).toEqual({
+    expect(
+      validateV2FormAnswer(view, {
+        short: "abcd",
+        long: "abcde",
+        mail: "a@b.co",
+        uri: "https://x.dev",
+        shaped: "AB",
+      }),
+    ).toEqual({
       ok: true,
       answer: { short: "abcd", long: "abcde", mail: "a@b.co", uri: "https://x.dev", shaped: "AB" },
     });
@@ -129,17 +169,26 @@ describe("V2 string options — an empty list is not a list", () => {
     // there is nothing to choose from and nothing to enforce.
     const view = formOf([{ key: "note", type: "string", options: [] }]);
     expect(v2FormFieldOptions(view.fields[0])).toBeNull();
-    expect(validateV2FormAnswer(view, { note: "anything" })).toEqual({ ok: true, answer: { note: "anything" } });
+    expect(validateV2FormAnswer(view, { note: "anything" })).toEqual({
+      ok: true,
+      answer: { note: "anything" },
+    });
   });
 
   it("reports no options for an omitted `options`", () => {
     const view = formOf([{ key: "note", type: "string" }]);
     expect(v2FormFieldOptions(view.fields[0])).toBeNull();
-    expect(validateV2FormAnswer(view, { note: "anything" })).toEqual({ ok: true, answer: { note: "anything" } });
+    expect(validateV2FormAnswer(view, { note: "anything" })).toEqual({
+      ok: true,
+      answer: { note: "anything" },
+    });
   });
 
   it("reports no options for a field type that has none", () => {
-    const view = formOf([{ key: "n", type: "number" }, { key: "b", type: "boolean" }]);
+    const view = formOf([
+      { key: "n", type: "number" },
+      { key: "b", type: "boolean" },
+    ]);
     for (const field of view.fields) {
       expect(v2FormFieldOptions(field)).toBeNull();
       expect(v2FormFieldAllowsCustom(field)).toBe(false);
@@ -148,10 +197,22 @@ describe("V2 string options — an empty list is not a list", () => {
 });
 
 describe("V2 multiselect — the answer is always a string array", () => {
-  const tags = formOf([{ key: "tags", type: "multiselect", options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] }]);
+  const tags = formOf([
+    {
+      key: "tags",
+      type: "multiselect",
+      options: [
+        { value: "a", label: "A" },
+        { value: "b", label: "B" },
+      ],
+    },
+  ]);
 
   it("accepts an array of listed options", () => {
-    expect(validateV2FormAnswer(tags, { tags: ["a", "b"] })).toEqual({ ok: true, answer: { tags: ["a", "b"] } });
+    expect(validateV2FormAnswer(tags, { tags: ["a", "b"] })).toEqual({
+      ok: true,
+      answer: { tags: ["a", "b"] },
+    });
   });
 
   it("rejects a bare string, which `Form.Value` allows but a multiselect does not", () => {
@@ -167,33 +228,61 @@ describe("V2 multiselect — the answer is always a string array", () => {
     // plausible payload that the contents check — not the union — has to catch.
     const loose = { tags: ["a", 1] } as unknown as V2FormAnswer;
     expect(fieldErrors(tags, loose)).toEqual({ tags: "Choose valid options" });
-    expect(fieldErrors(tags, { tags: [true] } as unknown as V2FormAnswer)).toEqual({ tags: "Choose valid options" });
+    expect(fieldErrors(tags, { tags: [true] } as unknown as V2FormAnswer)).toEqual({
+      tags: "Choose valid options",
+    });
   });
 
   it("rejects an unlisted entry when the field does not allow custom input", () => {
-    expect(fieldErrors(tags, { tags: ["a", "z"] })).toEqual({ tags: "Choose only available options" });
+    expect(fieldErrors(tags, { tags: ["a", "z"] })).toEqual({
+      tags: "Choose only available options",
+    });
   });
 
   it("accepts a mixed listed-and-custom array when the field allows custom input", () => {
-    const withCustom = formOf([{ key: "tags", type: "multiselect", custom: true, options: [{ value: "a", label: "A" }] }]);
-    expect(validateV2FormAnswer(withCustom, { tags: ["a", "free1"] })).toEqual({ ok: true, answer: { tags: ["a", "free1"] } });
+    const withCustom = formOf([
+      { key: "tags", type: "multiselect", custom: true, options: [{ value: "a", label: "A" }] },
+    ]);
+    expect(validateV2FormAnswer(withCustom, { tags: ["a", "free1"] })).toEqual({
+      ok: true,
+      answer: { tags: ["a", "free1"] },
+    });
   });
 
   it("keeps the min/max item bounds", () => {
-    const bounded = formOf([{ key: "tags", type: "multiselect", minItems: 2, maxItems: 3, options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] }]);
+    const bounded = formOf([
+      {
+        key: "tags",
+        type: "multiselect",
+        minItems: 2,
+        maxItems: 3,
+        options: [
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ],
+      },
+    ]);
     expect(fieldErrors(bounded, { tags: ["a"] })).toEqual({ tags: "Choose at least 2 options" });
-    expect(fieldErrors(bounded, { tags: ["a", "b", "a", "b"] })).toEqual({ tags: "Choose at most 3 options" });
+    expect(fieldErrors(bounded, { tags: ["a", "b", "a", "b"] })).toEqual({
+      tags: "Choose at most 3 options",
+    });
   });
 });
 
 describe("V2 required and `when` visibility", () => {
-  it("requires a value for a required field, treating [] and \"\" as missing", () => {
+  it('requires a value for a required field, treating [] and "" as missing', () => {
     const view = formOf([
       { key: "name", type: "string", required: true },
       { key: "tags", type: "multiselect", required: true, options: [{ value: "a", label: "A" }] },
     ]);
-    expect(fieldErrors(view, {})).toEqual({ name: "This field is required", tags: "This field is required" });
-    expect(fieldErrors(view, { name: "", tags: [] })).toEqual({ name: "This field is required", tags: "This field is required" });
+    expect(fieldErrors(view, {})).toEqual({
+      name: "This field is required",
+      tags: "This field is required",
+    });
+    expect(fieldErrors(view, { name: "", tags: [] })).toEqual({
+      name: "This field is required",
+      tags: "This field is required",
+    });
   });
 
   it("hides a `when`-gated field and stops validating it", () => {
@@ -210,10 +299,12 @@ describe("V2 required and `when` visibility", () => {
     expect(isV2FormFieldVisible(note, { kind: "other" })).toBe(true);
     expect(isV2FormFieldVisible(note, { kind: "sql" })).toBe(false);
     // The hidden field's value is dropped from the submitted answer.
-    expect(validateV2FormAnswer(view, { kind: "sql", host: "localhost", note: "ignored" })).toEqual({
-      ok: true,
-      answer: { kind: "sql", host: "localhost" },
-    });
+    expect(validateV2FormAnswer(view, { kind: "sql", host: "localhost", note: "ignored" })).toEqual(
+      {
+        ok: true,
+        answer: { kind: "sql", host: "localhost" },
+      },
+    );
   });
 
   it("hides a `hidden` field unconditionally", () => {

@@ -9,16 +9,11 @@ type Conversation = {
   engine?: string | null;
 };
 
-async function deleteConversation(
-  request: APIRequestContext,
-  id: string,
-): Promise<void> {
+async function deleteConversation(request: APIRequestContext, id: string): Promise<void> {
   await request.delete(`/api/conversations/${id}`).catch(() => undefined);
 }
 
-async function listConversationIds(
-  request: APIRequestContext,
-): Promise<Set<string>> {
+async function listConversationIds(request: APIRequestContext): Promise<Set<string>> {
   const response = await request.get("/api/conversations?status=all&limit=200");
   if (!response.ok()) return new Set<string>();
   const body = (await response.json().catch(() => null)) as {
@@ -39,14 +34,10 @@ async function openCodeDraft(page: Page): Promise<void> {
   await expect(openCode).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Model" })).toBeVisible();
-  await expect(
-    page.getByRole("textbox", { name: /Send a message/ }),
-  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /Send a message/ })).toBeVisible();
 }
 
-test("Code route admits a first prompt and restores its session history", async ({
-  page,
-}) => {
+test("Code route admits a first prompt and restores its session history", async ({ page }) => {
   test.setTimeout(180_000);
 
   const before = await listConversationIds(page.request);
@@ -74,9 +65,7 @@ test("Code route admits a first prompt and restores its session history", async 
           const url = new URL(response.url());
           return (
             response.request().method() === "POST" &&
-            /^\/api\/opencode\/(?:api\/)?session\/[^/]+\/prompt$/.test(
-              url.pathname,
-            )
+            /^\/api\/opencode\/(?:api\/)?session\/[^/]+\/prompt$/.test(url.pathname)
           );
         },
         { timeout: SERVER_TIMEOUT_MS },
@@ -92,10 +81,9 @@ test("Code route admits a first prompt and restores its session history", async 
     conversationId = created.id;
     expect(created.engine).toBe("opencode");
 
-    await expect(page).toHaveURL(
-      new RegExp(`#\\/code\\/${created.id}$`),
-      { timeout: SERVER_TIMEOUT_MS },
-    );
+    await expect(page).toHaveURL(new RegExp(`#\\/code\\/${created.id}$`), {
+      timeout: SERVER_TIMEOUT_MS,
+    });
     await expect(composer).toBeVisible({ timeout: SERVER_TIMEOUT_MS });
     await expect(composer).toHaveValue("", { timeout: ROUTE_TIMEOUT_MS });
     await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
@@ -103,7 +91,7 @@ test("Code route admits a first prompt and restores its session history", async 
 
     const promptOutcome = await Promise.race([
       promptResponsePromise.then((response) =>
-        response ? ({ kind: "response" as const, response }) : null,
+        response ? { kind: "response" as const, response } : null,
       ),
       page
         .getByRole("button", { name: "OpenCode status: Error" })
@@ -141,10 +129,9 @@ test("Code route admits a first prompt and restores its session history", async 
     }
 
     await page.reload();
-    await expect(page).toHaveURL(
-      new RegExp(`#\\/code\\/${created.id}$`),
-      { timeout: SERVER_TIMEOUT_MS },
-    );
+    await expect(page).toHaveURL(new RegExp(`#\\/code\\/${created.id}$`), {
+      timeout: SERVER_TIMEOUT_MS,
+    });
     await expect(composer).toBeVisible({ timeout: SERVER_TIMEOUT_MS });
     await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
     if (admitted) {

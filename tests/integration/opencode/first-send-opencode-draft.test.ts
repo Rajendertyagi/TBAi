@@ -355,22 +355,26 @@ describe("Phase 4 — materialization idempotency (case 6 + replay + no-key)", (
 
 describe("Phase 4 — first message ownership + hydration (cases 7 + 9)", () => {
   it("first message upsert targets the bound id; a sibling conversation stays empty", async () => {
-    const a = await conversationService.create(conversationInput({
-      title: "p4 bound",
-      providerId: PROVIDER_ID,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
-    const b = await conversationService.create(conversationInput({
-      title: "p4 sibling",
-      providerId: PROVIDER_ID,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const a = await conversationService.create(
+      conversationInput({
+        title: "p4 bound",
+        providerId: PROVIDER_ID,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
+    const b = await conversationService.create(
+      conversationInput({
+        title: "p4 sibling",
+        providerId: PROVIDER_ID,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
     try {
       const put = await app.request(`/api/conversations/${a.id}/messages`, {
         method: "POST",
@@ -397,14 +401,16 @@ describe("Phase 4 — first message ownership + hydration (cases 7 + 9)", () => 
   }, 30000);
 
   it("history refresh after send keeps the first message (exactly one copy)", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "p4 hydration",
-      providerId: PROVIDER_ID,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p4 hydration",
+        providerId: PROVIDER_ID,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
     try {
       await messageService.upsertStored(conv.id, {
         id: "msg-hydra-p4",

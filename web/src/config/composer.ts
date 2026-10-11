@@ -11,8 +11,7 @@ export const composerConfig = {
     selectModel: "Select model",
     noModels: "No models configured",
     defaultSuffix: "default",
-    nextMessage: (provider: string, model: string) =>
-      `Next message: ${provider} · ${model}`,
+    nextMessage: (provider: string, model: string) => `Next message: ${provider} · ${model}`,
     thinking: "Thinking",
     /**
      * `Off` is a real, selectable level — not a "default" placeholder. The
@@ -43,7 +42,8 @@ export const composerConfig = {
     // Palette row for the Direct compaction command. Names the argument form, because
     // `/compact <words>` is a supported capability with no other way to discover it —
     // the command has no help text and is intercepted before it becomes a message.
-    compactCommandDescription: "Summarise earlier turns to free up context — add words to narrow what is kept",
+    compactCommandDescription:
+      "Summarise earlier turns to free up context — add words to narrow what is kept",
     modelSearchPlaceholder: "Search models...",
     modelSearchAria: "Search models",
     modelListAria: "Models",

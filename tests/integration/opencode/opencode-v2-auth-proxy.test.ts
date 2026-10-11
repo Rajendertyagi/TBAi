@@ -42,17 +42,15 @@ const fixtureServer = Bun.serve({
 
 const fixtureBaseUrl = `http://127.0.0.1:${fixtureServer.port}`;
 const originalEnsureBaseUrl = openCodeServerManager.ensureBaseUrl;
-(
-  openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }
-).ensureBaseUrl = async () => fixtureBaseUrl;
+(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
+  async () => fixtureBaseUrl;
 
 const { default: openCodeApp } = await import("@/routes/opencode.ts");
 
 afterAll(() => {
   fixtureServer.stop(true);
-  (
-    openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }
-  ).ensureBaseUrl = originalEnsureBaseUrl;
+  (openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
+    originalEnsureBaseUrl;
 });
 
 describe("OpenCode proxy authentication", () => {
@@ -75,10 +73,9 @@ describe("OpenCode proxy authentication", () => {
   it("proxies the V2 server info endpoint with backend auth", async () => {
     capturedRequests.length = 0;
 
-    const response = await openCodeApp.request(
-      "http://localhost/api/opencode/info",
-      { headers: { Authorization: browserAuthorization } },
-    );
+    const response = await openCodeApp.request("http://localhost/api/opencode/info", {
+      headers: { Authorization: browserAuthorization },
+    });
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ fixture: "opencode-proxy" });

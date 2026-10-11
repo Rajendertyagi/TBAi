@@ -49,9 +49,7 @@
  * (`server-port-routes.test.ts`) probing a fixed port could be poisoned by it.
  */
 import { describe, it, expect, afterEach, beforeEach, mock } from "bun:test";
-import { db } from "@/db";
 import * as serverPortModule from "@/services/server-port.ts";
-import { restartListener, getActivePort } from "@/services/server-listener.ts";
 
 // ── Fake server objects standing in for Bun.serve results ───────────────────
 
@@ -240,9 +238,7 @@ async function bootOnFreePort(): Promise<number> {
     server.stop(true);
     liveServers.pop();
   }
-  throw new Error(
-    `could not boot on an OS-chosen port after ${MAX_BOOT_ATTEMPTS} attempts`,
-  );
+  throw new Error(`could not boot on an OS-chosen port after ${MAX_BOOT_ATTEMPTS} attempts`);
 }
 
 describe("restartListener — rollback order", () => {
@@ -276,15 +272,14 @@ describe("restartListener — rollback order", () => {
     const targetPort = bootPort + 2;
     persistFail = true;
     let err: unknown;
-    await withFakeServe(
-      () =>
-        withFakePersist(async () => {
-          try {
-            await realRestartListener(targetPort);
-          } catch (e) {
-            err = e;
-          }
-        }),
+    await withFakeServe(() =>
+      withFakePersist(async () => {
+        try {
+          await realRestartListener(targetPort);
+        } catch (e) {
+          err = e;
+        }
+      }),
     );
 
     // A `port_persist_failed` error propagates.
@@ -305,11 +300,10 @@ describe("restartListener — rollback order", () => {
 
     const targetPort = bootPort + 3;
     let result: { port: number; restarted: boolean };
-    await withFakeServe(
-      () =>
-        withFakePersist(async () => {
-          result = await realRestartListener(targetPort);
-        }),
+    await withFakeServe(() =>
+      withFakePersist(async () => {
+        result = await realRestartListener(targetPort);
+      }),
     );
 
     expect(result).toEqual({ port: targetPort, restarted: true });
@@ -323,11 +317,10 @@ describe("restartListener — rollback order", () => {
     const bootPort = await bootOnFreePort();
 
     let result: { port: number; restarted: boolean };
-    await withFakeServe(
-      () =>
-        withFakePersist(async () => {
-          result = await realRestartListener(bootPort);
-        }),
+    await withFakeServe(() =>
+      withFakePersist(async () => {
+        result = await realRestartListener(bootPort);
+      }),
     );
 
     expect(result).toEqual({ port: bootPort, restarted: false });

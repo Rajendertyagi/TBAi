@@ -53,7 +53,8 @@ const SUMMARY_TIMEOUT_MS = 5_000;
  */
 const ADEQUATE_SUMMARY = Array.from(
   { length: 36 },
-  (_, i) => `line ${i} detail about topic ${i} and task ${i} that the assistant left open for later.`,
+  (_, i) =>
+    `line ${i} detail about topic ${i} and task ${i} that the assistant left open for later.`,
 ).join(" ");
 
 /** Context window for the crossing scenarios; see `crossingWindowIsUsable` below. */
@@ -152,7 +153,10 @@ function fileUser(id: string, text: string, filename: string, dataUrl: string): 
   return {
     id,
     role: "user",
-    parts: [{ type: "text", text }, { type: "file", mediaType: "text/plain", filename, url: dataUrl }],
+    parts: [
+      { type: "text", text },
+      { type: "file", mediaType: "text/plain", filename, url: dataUrl },
+    ],
   } as unknown as UIMessage;
 }
 
@@ -243,7 +247,10 @@ function summaryOnlyModel(): MockLanguageModelV3 {
  * a failed write, and `maybeCompact` discards the compaction with
  * `persist_failed` — so the run would silently compare two uncompacted histories.
  */
-function seam(existingRecord: CompactionRecord | undefined, sink: CompactionStoreSink): CompactionSeam {
+function seam(
+  existingRecord: CompactionRecord | undefined,
+  sink: CompactionStoreSink,
+): CompactionSeam {
   return {
     policy: DEFAULT_COMPACTION_POLICY,
     existingRecord,
@@ -297,7 +304,12 @@ async function runOnce(args: {
   });
   const report = result.context.provenance.compaction;
   if (!report) throw new Error("expected a compaction report: the seam was wired");
-  return { layerC: result.context.layerC.messages, report, persisted: sink.record, decision: result.decision };
+  return {
+    layerC: result.context.layerC.messages,
+    report,
+    persisted: sink.record,
+    decision: result.decision,
+  };
 }
 
 /** A record handed to two runs must not be shared by reference. */
@@ -306,7 +318,11 @@ function seed(record: CompactionRecord | undefined): CompactionRecord | undefine
 }
 
 async function createTestConversation(messages: UIMessage[]) {
-  const conv = await conversationService.create({ title: "test", providerId: "test", workspaceMode: "simple" });
+  const conv = await conversationService.create({
+    title: "test",
+    providerId: "test",
+    workspaceMode: "simple",
+  });
   let prevId: string | null = null;
   for (const msg of messages) {
     await messageService.upsertStored(conv.id, {
@@ -326,7 +342,8 @@ async function appendToConversation(
   messages: readonly UIMessage[],
   fromIndex: number,
 ): Promise<void> {
-  let prevId: string | null = fromIndex === 0 ? null : ((messages[fromIndex - 1] as { id?: string }).id ?? null);
+  let prevId: string | null =
+    fromIndex === 0 ? null : ((messages[fromIndex - 1] as { id?: string }).id ?? null);
   for (let i = fromIndex; i < messages.length; i += 1) {
     const msg = messages[i] as { id?: string };
     await messageService.upsertStored(conversationId, {
@@ -396,7 +413,10 @@ function canonicalizeModuloSpan(messages: readonly UIMessage[]): string {
       return value.replace(/^tbai-preserved:span:[^:]+:\d+:/, "tbai-preserved:");
     }
     if (typeof value === "string") {
-      return value.replace(/\d+ earlier message\(s\) summarized/g, "<span> earlier message(s) summarized");
+      return value.replace(
+        /\d+ earlier message\(s\) summarized/g,
+        "<span> earlier message(s) summarized",
+      );
     }
     if (value && typeof value === "object" && !Array.isArray(value)) {
       return Object.keys(value)
@@ -515,8 +535,16 @@ describe("P1′ real compaction differential", () => {
     // conversation does.
     const base = settledHistory(20, 45);
     const phase1 = [...base, user("live", "THE LIVE REQUEST")];
-    const phase2 = [...phase1, user("g1", `follow up one ${filler(CHAIN_GROWTH_REPEAT)}`), toolTurn("ag1", "tcg1")];
-    const phase3 = [...phase2, user("g2", `follow up two ${filler(CHAIN_GROWTH_REPEAT)}`), toolTurn("ag2", "tcg2")];
+    const phase2 = [
+      ...phase1,
+      user("g1", `follow up one ${filler(CHAIN_GROWTH_REPEAT)}`),
+      toolTurn("ag1", "tcg1"),
+    ];
+    const phase3 = [
+      ...phase2,
+      user("g2", `follow up two ${filler(CHAIN_GROWTH_REPEAT)}`),
+      toolTurn("ag2", "tcg2"),
+    ];
 
     const conv = await createTestConversation(phase1);
 
@@ -592,7 +620,9 @@ describe("P1′ real compaction differential", () => {
     // The replayed message must carry the ORIGINAL payload byte-for-byte, under a
     // fresh id that cannot collide with the persisted original.
     for (const message of preserved) {
-      const parts = (message as { parts?: Array<{ type?: string; filename?: string; url?: string }> }).parts ?? [];
+      const parts =
+        (message as { parts?: Array<{ type?: string; filename?: string; url?: string }> }).parts ??
+        [];
       const file = parts.find((part) => part.type === "file");
       expect(file).toBeDefined();
       expect(file?.filename).toMatch(/^file-\d\.txt$/);
@@ -664,7 +694,9 @@ describe("P1′ real compaction differential", () => {
     expect(window[window.length - 1]!.id).toBe(messages[messages.length - 1]!.id);
     expect(window[0]!.id).toBe(messages[WINDOW_DROP]!.id);
     for (const message of messages.slice(0, WINDOW_DROP)) {
-      expect(window.map((m) => (m as { id?: string }).id)).not.toContain((message as { id?: string }).id);
+      expect(window.map((m) => (m as { id?: string }).id)).not.toContain(
+        (message as { id?: string }).id,
+      );
     }
 
     // ── 3. OLD and P1′ over the same persisted state and the same record ───
@@ -713,15 +745,25 @@ describe("P1′ real compaction differential", () => {
       // The divider is a single user-role text block carrying the header and the
       // model summary. (`data-tbai-compact` is the browser-side representation the
       // adapter strips on persist; it is deliberately absent from Layer C.)
-      const divider = layerC[0] as { role?: string; parts?: Array<{ type?: string; text?: string }> };
+      const divider = layerC[0] as {
+        role?: string;
+        parts?: Array<{ type?: string; text?: string }>;
+      };
       expect(divider.role).toBe("user");
       expect(divider.parts).toHaveLength(1);
       expect(divider.parts?.[0]?.type).toBe("text");
-      expect(divider.parts?.[0]?.text).toContain("[TBAi compacted history — model_generated_summary");
+      expect(divider.parts?.[0]?.text).toContain(
+        "[TBAi compacted history — model_generated_summary",
+      );
       expect(divider.parts?.[0]?.text).toContain(ADEQUATE_SUMMARY);
       // Every replayed attachment restores its ORIGINAL payload, byte for byte.
       for (const message of preservedOf(layerC)) {
-        const parts = (message as { parts?: Array<{ type?: string; filename?: string; url?: string; mediaType?: string }> }).parts ?? [];
+        const parts =
+          (
+            message as {
+              parts?: Array<{ type?: string; filename?: string; url?: string; mediaType?: string }>;
+            }
+          ).parts ?? [];
         const file = parts.find((part) => part.type === "file");
         expect(file?.filename).toMatch(/^file-\d\.txt$/);
         expect(file?.mediaType).toBe("text/plain");

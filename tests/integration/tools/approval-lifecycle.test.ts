@@ -122,10 +122,7 @@ type ApprovalRequest = {
   signature?: string;
 };
 
-function decidedFollowUp(
-  approvalRequest: ApprovalRequest,
-  approved: boolean,
-): UIMessage[] {
+function decidedFollowUp(approvalRequest: ApprovalRequest, approved: boolean): UIMessage[] {
   // Static tool UI parts carry the tool name in `type` (tool-<name>); the
   // runtime emits them this way and convertToModelMessages reads them back.
   return [
@@ -178,7 +175,9 @@ describe("server approval gate lifecycle", () => {
     expect(approvalRequest.approvalId).toBeTruthy();
     expect(approvalRequest.signature).toBeTruthy();
 
-    const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("deleted") } as any });
+    const secondModel = new MockLanguageModelV4({
+      doStream: { stream: textStream("deleted") } as any,
+    });
     const second = await runChat(
       secondModel,
       decidedFollowUp(approvalRequest, true),
@@ -197,7 +196,9 @@ describe("server approval gate lifecycle", () => {
     const { approvals } = await collect(first);
     const approvalRequest = approvals[0] as ApprovalRequest;
 
-    const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("unsafe") } as any });
+    const secondModel = new MockLanguageModelV4({
+      doStream: { stream: textStream("unsafe") } as any,
+    });
     const second = await runChat(
       secondModel,
       decidedFollowUp({ approvalId: approvalRequest.approvalId }, true),
@@ -205,9 +206,7 @@ describe("server approval gate lifecycle", () => {
     );
 
     const { errors } = await collect(second);
-    expect(
-      errors.some((error) => error instanceof InvalidToolApprovalSignatureError),
-    ).toBe(true);
+    expect(errors.some((error) => error instanceof InvalidToolApprovalSignatureError)).toBe(true);
     expect(executions.count).toBe(0);
   });
 
@@ -219,7 +218,9 @@ describe("server approval gate lifecycle", () => {
     const approvalRequest = approvals[0] as ApprovalRequest;
     expect(approvalRequest.signature).toBeTruthy();
 
-    const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("unsafe") } as any });
+    const secondModel = new MockLanguageModelV4({
+      doStream: { stream: textStream("unsafe") } as any,
+    });
     const second = await runChat(
       secondModel,
       decidedFollowUp(
@@ -233,9 +234,7 @@ describe("server approval gate lifecycle", () => {
     );
 
     const { errors } = await collect(second);
-    expect(
-      errors.some((error) => error instanceof InvalidToolApprovalSignatureError),
-    ).toBe(true);
+    expect(errors.some((error) => error instanceof InvalidToolApprovalSignatureError)).toBe(true);
     expect(executions.count).toBe(0);
   });
 
@@ -247,7 +246,9 @@ describe("server approval gate lifecycle", () => {
     const approvalRequest = approvals[0] as ApprovalRequest;
     expect(approvalRequest.signature).toBeTruthy();
 
-    const secondModel = new MockLanguageModelV4({ doStream: { stream: textStream("ok, skipped") } as any });
+    const secondModel = new MockLanguageModelV4({
+      doStream: { stream: textStream("ok, skipped") } as any,
+    });
     const second = await runChat(
       secondModel,
       decidedFollowUp(approvalRequest, false),

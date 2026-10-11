@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 export const paper = "bg-background border border-border/60 dark:bg-popover";
@@ -34,8 +34,7 @@ export const labelSwap =
 
 export const labelSwapIn = "opacity-100 blur-none";
 
-export const labelSwapOut =
-  "pointer-events-none select-none opacity-0 blur-[2px]";
+export const labelSwapOut = "pointer-events-none select-none opacity-0 blur-[2px]";
 
 export const collapsePanel =
   "h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:h-0 data-[starting-style]:h-0 motion-reduce:transition-none";
@@ -50,10 +49,7 @@ export function ShimmerLabel({
   ...props
 }: ComponentProps<"span"> & { active?: boolean }) {
   return (
-    <span
-      className={cn(active && "shimmer motion-reduce:animate-none", className)}
-      {...props}
-    />
+    <span className={cn(active && "shimmer motion-reduce:animate-none", className)} {...props} />
   );
 }
 
@@ -80,19 +76,25 @@ export function SwapLabel({
   children: [React.ReactNode, React.ReactNode];
   className?: string;
 }) {
-  const layers = [useRef<HTMLSpanElement>(null), useRef<HTMLSpanElement>(null)];
+  // The two layer refs are held individually and collected into a STABLE array,
+  // because the measurement effect below depends on `layers`. Building the array
+  // inline would give it a new identity every render, so it could never be a
+  // dependency: the effect would either loop (measure -> setWidth -> render ->
+  // new array) or have to suppress the lint and risk going stale.
+  const firstLayer = useRef<HTMLSpanElement>(null);
+  const secondLayer = useRef<HTMLSpanElement>(null);
+  const layers = useMemo(() => [firstLayer, secondLayer], []);
   const [width, setWidth] = useState<number | null>(null);
 
   useLayoutEffect(() => {
     const target = layers[active]?.current;
     if (!target) return undefined;
-    const measure = () =>
-      setWidth(Math.ceil(target.getBoundingClientRect().width));
+    const measure = () => setWidth(Math.ceil(target.getBoundingClientRect().width));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(target);
     return () => observer.disconnect();
-  }, [active]);
+  }, [active, layers]);
 
   return (
     <span
@@ -104,13 +106,11 @@ export function SwapLabel({
     >
       {children.map((layer, index) => (
         <span
+          // biome-ignore lint/suspicious/noArrayIndexKey: the ref below is stored by position (`layers[index]`), so the key and the ref must agree on the same index. These layers never reorder.
           key={index}
           ref={layers[index]}
           aria-hidden={active !== index}
-          className={cn(
-            labelSwap,
-            active === index ? labelSwapIn : labelSwapOut,
-          )}
+          className={cn(labelSwap, active === index ? labelSwapIn : labelSwapOut)}
         >
           {layer}
         </span>

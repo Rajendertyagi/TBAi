@@ -74,11 +74,16 @@ const respond = (url: string): Response => {
         id: r.id,
         parent_id: r.parent_id,
         format: "ai-sdk/v6",
-        content: { id: r.id, role: r.id.startsWith("u") ? "user" : "assistant", parts: [{ type: "text", text: r.text }] },
+        content: {
+          id: r.id,
+          role: r.id.startsWith("u") ? "user" : "assistant",
+          parts: [{ type: "text", text: r.text }],
+        },
       })),
       hasMoreBefore,
       hasMoreAfter,
-      contiguous: true, complete: true,
+      contiguous: true,
+      complete: true,
     }),
   } as Response;
 };
@@ -274,7 +279,10 @@ describe("P2 live paging through the public AI SDK chat helper", () => {
     }) as unknown as typeof fetch;
 
     await act(async () => {
-      await ui.get().loadEarlier().catch(() => undefined);
+      await ui
+        .get()
+        .loadEarlier()
+        .catch(() => undefined);
     });
 
     expect(controller.windowIds().join(",")).toBe(before);

@@ -36,15 +36,12 @@ export function resolveOpenCodeModel(
       : { providerID: defaultModel.providerID, modelID: defaultModel.modelID };
   }
   const match =
-    models.find((m) => `${m.providerID}/${m.id}` === stored) ??
-    models.find((m) => m.id === stored);
+    models.find((m) => `${m.providerID}/${m.id}` === stored) ?? models.find((m) => m.id === stored);
   if (!match) {
     // Unknown to the live list but explicitly configured: trust the stored
     // provider-qualified form when present so a valid pick still resolves.
     const [providerID, modelID] = stored.split("/");
-    return providerID
-      ? { providerID, modelID: modelID ?? providerID }
-      : undefined;
+    return providerID ? { providerID, modelID: modelID ?? providerID } : undefined;
   }
   return { providerID: match.providerID, modelID: match.id };
 }
@@ -55,5 +52,8 @@ export function useResolvedOpenCodeModel(
   models: OpenCodeModelOption[],
   defaultModel?: OpenCodeDefaultModel,
 ) {
-  return useMemo(() => resolveOpenCodeModel(stored, models, defaultModel), [stored, models, defaultModel]);
+  return useMemo(
+    () => resolveOpenCodeModel(stored, models, defaultModel),
+    [stored, models, defaultModel],
+  );
 }

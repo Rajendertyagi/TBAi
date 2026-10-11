@@ -68,6 +68,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
 
   const [rootName, setRootName] = useState(copy.workspaceFallback);
   const [rootHref, setRootHref] = useState("/workspace");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `copy.temporaryWorkspace` IS read below (`setRootName(copy.temporaryWorkspace)`), and `copy.workspaceFallback` is listed beside it so a copy/locale change re-resolves the whole crumb consistently rather than half of it. Biome's walk reports both as unused.
   useEffect(() => {
     let cancelled = false;
     // Draft (pre-creation) chat: nothing is persisted yet — show the default.
@@ -99,7 +100,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
           const res = await apiFetch(`/api/folders/${conv.workspaceFolderId}`);
           const f = res.ok ? await res.json().catch(() => null) : null;
           if (cancelled) return;
-          setRootName(f ? (f.alias || f.name) : "Project (folder removed)");
+          setRootName(f ? f.alias || f.name : "Project (folder removed)");
         } catch {
           /* keep the current crumb — a folder read failure is not a 404 story */
         }
@@ -117,16 +118,12 @@ export function ChatHeader({ threadId }: { threadId: string }) {
   // change, never on streaming tokens or other threads' updates.
   const title = useAuiState((s) => {
     if (isDraft) return copy.newChatTitle;
-    const item = s.threads.threadItems.find(
-      (t) => t.remoteId === threadId || t.id === threadId,
-    );
+    const item = s.threads.threadItems.find((t) => t.remoteId === threadId || t.id === threadId);
     return (item?.title as string | undefined) ?? copy.untitled;
   });
   const status = useAuiState((s) => {
     if (isDraft) return "draft";
-    const item = s.threads.threadItems.find(
-      (t) => t.remoteId === threadId || t.id === threadId,
-    );
+    const item = s.threads.threadItems.find((t) => t.remoteId === threadId || t.id === threadId);
     return item?.status ?? "regular";
   });
 
@@ -148,8 +145,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
   const resolveStoreId = (): string | null => {
     const items = aui.threads.getState().threadItems;
     const match =
-      items.find((t) => t.remoteId === threadId) ??
-      items.find((t) => t.id === threadId);
+      items.find((t) => t.remoteId === threadId) ?? items.find((t) => t.id === threadId);
     return match?.id ?? match?.remoteId ?? null;
   };
 
@@ -187,8 +183,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     const item = aui.threads.item({ id });
     // Fire-and-forget against the throwing adapter: log centrally instead of
     // surfacing unhandled rejections; the row stays truthful via rollback.
-    const done =
-      status === "archived" ? item.unarchive() : item.archive();
+    const done = status === "archived" ? item.unarchive() : item.archive();
     void Promise.resolve(done).catch((err: unknown) => {
       logger.debug("chat", "archive_toggle_failed", {
         threadId,
@@ -257,16 +252,10 @@ export function ChatHeader({ threadId }: { threadId: string }) {
         >
           {rootName}
         </button>
-        <ChevronRight
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-muted-foreground/50"
-        />
+        <ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/50" />
         {/* Title absorbs remaining width and takes the ellipsis; the root
             crumb stays fully visible. */}
-        <span
-          className="min-w-0 flex-1 truncate text-sm text-foreground/90"
-          title={title}
-        >
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground/90" title={title}>
           {title}
         </span>
       </div>
@@ -364,9 +353,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
             <Button variant="outline" onClick={() => setRenameTarget(null)}>
               {copy.cancel}
             </Button>
-            <Button onClick={() => void handleRenameConfirm()}>
-              {copy.save}
-            </Button>
+            <Button onClick={() => void handleRenameConfirm()}>{copy.save}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

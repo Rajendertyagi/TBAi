@@ -6,13 +6,10 @@
  * DB isolation is handled by tests/setup.ts (redirects DATA_DIR to tmp).
  */
 import { describe, it, expect, beforeEach } from "bun:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
-import {
-  resolveConversationWorkspace,
-  WorkspaceError,
-} from "@/services/workspace.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { resolveConversationWorkspace, WorkspaceError } from "@/services/workspace.ts";
 import {
   folderService,
   folderLinkService,

@@ -122,10 +122,8 @@ describe("ToolFallbackResult — capped and scrollable", () => {
     // The JSON wrapper is part of the capped payload, so the serialised length
     // — not the raw value length — decides how much is dropped.
     expect(text).toMatch(MORE_CHARS_SHAPE);
-    expect(text.length).toBeLessThan(
-      JSON.stringify({ blob: "x".repeat(5000) }, null, 2).length,
-    );
-    expect(text.startsWith('{\n  &quot;blob&quot;: &quot;x')).toBe(true);
+    expect(text.length).toBeLessThan(JSON.stringify({ blob: "x".repeat(5000) }, null, 2).length);
+    expect(text.startsWith("{\n  &quot;blob&quot;: &quot;x")).toBe(true);
   });
 
   it("renders nothing at all without a result", () => {
@@ -136,9 +134,7 @@ describe("ToolFallbackResult — capped and scrollable", () => {
 describe("ToolFallbackError — deliberately NOT capped", () => {
   const renderError = (error: string) =>
     renderToStaticMarkup(
-      <ToolFallbackError
-        status={{ type: "incomplete", reason: "tool-calls", error }}
-      />,
+      <ToolFallbackError status={{ type: "incomplete", reason: "tool-calls", error }} />,
     );
 
   it("paints the one-line reason in a plain, unscrollable paragraph", () => {
@@ -185,9 +181,7 @@ describe("the cap has exactly one implementation", () => {
     // would have closed a module cycle between the two. The single-source rule
     // is unchanged; only the path is, and the guard follows it so a second
     // implementation still cannot creep in unnoticed.
-    expect(source).toMatch(
-      /import\s*\{\s*textPreview\s*\}\s*from\s*"@\/tools\/text-preview"/,
-    );
+    expect(source).toMatch(/import\s*\{\s*textPreview\s*\}\s*from\s*"@\/tools\/text-preview"/);
   });
 
   it("keeps the helper reachable from the tool UIs that use it", async () => {
@@ -200,9 +194,7 @@ describe("the cap has exactly one implementation", () => {
     ]) {
       const text = stripComments(await Bun.file(path.join(REPO_ROOT, importer)).text());
       expect(text, importer).toMatch(/textPreview/);
-      expect(text, importer).not.toMatch(
-        /(?:function|const|let|var)\s+textPreview\b/,
-      );
+      expect(text, importer).not.toMatch(/(?:function|const|let|var)\s+textPreview\b/);
     }
   });
 
@@ -214,8 +206,6 @@ describe("the cap has exactly one implementation", () => {
   it("does not redefine the helper locally", () => {
     // A copied-in cap would be a second implementation to tune. The effective
     // cap itself is pinned by the render assertions above.
-    expect(source).not.toMatch(
-      /(?:function|const|let|var)\s+textPreview\b/,
-    );
+    expect(source).not.toMatch(/(?:function|const|let|var)\s+textPreview\b/);
   });
 });

@@ -160,7 +160,9 @@ describe("correlatable request decision", () => {
     expect(resolveRequestUrl("/api/chat", ORIGIN)?.pathname).toBe("/api/chat");
     expect(resolveRequestUrl(`${ORIGIN}/api/chat`, ORIGIN)?.pathname).toBe("/api/chat");
     expect(resolveRequestUrl(new URL(`${ORIGIN}/api/chat`), ORIGIN)?.pathname).toBe("/api/chat");
-    expect(resolveRequestUrl(new Request(`${ORIGIN}/api/chat`), ORIGIN)?.pathname).toBe("/api/chat");
+    expect(resolveRequestUrl(new Request(`${ORIGIN}/api/chat`), ORIGIN)?.pathname).toBe(
+      "/api/chat",
+    );
   });
 
   it("only correlates same-origin /api paths", () => {
@@ -179,8 +181,7 @@ describe("operation header injection", () => {
   });
 
   it("changes nothing when there is no operation", () => {
-    expect(operationInitFor("/api/chat", { method: "POST" }, undefined, ORIGIN))
-      .toBeUndefined();
+    expect(operationInitFor("/api/chat", { method: "POST" }, undefined, ORIGIN)).toBeUndefined();
   });
 
   it("changes nothing for non-API or cross-origin requests", () => {

@@ -69,9 +69,9 @@ const partsOf = (message: UIMessage | undefined): unknown[] =>
   ((message as { parts?: unknown[] } | undefined)?.parts ?? []) as unknown[];
 
 const toolPartsOf = (message: UIMessage | undefined): Array<Record<string, unknown>> =>
-  partsOf(message).filter((p) => String((p as { type?: string }).type).startsWith("tool-")) as Array<
-    Record<string, unknown>
-  >;
+  partsOf(message).filter((p) =>
+    String((p as { type?: string }).type).startsWith("tool-"),
+  ) as Array<Record<string, unknown>>;
 
 // ── The exact production shape ────────────────────────────────────────────────
 describe("unreplayable: the exact production poisoned part", () => {
@@ -105,7 +105,10 @@ describe("unreplayable: the exact production poisoned part", () => {
     expect(stats.removedToolParts).toEqual(["call_only"]);
     expect(stats.removedEmptyTurns).toBe(1);
     expect(messages.length).toBe(1);
-    expect((messages[0].parts as { text: string }[]).map((p) => p.text)).toEqual(["write it", "next"]);
+    expect((messages[0].parts as { text: string }[]).map((p) => p.text)).toEqual([
+      "write it",
+      "next",
+    ]);
   });
 
   it("converts to model messages with NO tool call and NO orphan tool result", async () => {

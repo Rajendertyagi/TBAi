@@ -74,9 +74,7 @@ export function CollapsibleSection({
         />
       </button>
       {description && (
-        <p className="-mt-2 px-4 text-xs leading-5 text-muted-foreground">
-          {description}
-        </p>
+        <p className="-mt-2 px-4 text-xs leading-5 text-muted-foreground">{description}</p>
       )}
       {open && <div className="space-y-3 p-4 pt-3">{children}</div>}
     </div>

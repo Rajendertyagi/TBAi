@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import type {
-  ExportedMessageRepositoryItem,
-  MessageFormatAdapter,
-} from "@assistant-ui/react";
+import type { ExportedMessageRepositoryItem, MessageFormatAdapter } from "@assistant-ui/react";
 import {
   createThreadHistoryAdapter,
   invalidateHistoryCache,
@@ -89,7 +86,8 @@ function okWindow(entries: StoredRow[]): Response {
       messages: entries,
       hasMoreBefore: false,
       hasMoreAfter: false,
-      contiguous: true, complete: true,
+      contiguous: true,
+      complete: true,
     }),
   } as Response;
 }
@@ -119,8 +117,7 @@ afterEach(() => {
 describe("history last-good retention (Phase 3.5)", () => {
   it("[P3-07] load() failure (!ok or throw) retains the previous messages", async () => {
     const adapter = makeAdapter("c1");
-    globalThis.fetch = (async () =>
-      okMessages([storedEntry("m1")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okMessages([storedEntry("m1")])) as unknown as typeof fetch;
     const seeded = await adapter.load();
     expect(seeded.messages).toHaveLength(1);
 
@@ -135,8 +132,7 @@ describe("history last-good retention (Phase 3.5)", () => {
 
   it("[P3-07b] retention is per remoteId — unknown threads stay empty", async () => {
     const c1 = makeAdapter("c1");
-    globalThis.fetch = (async () =>
-      okMessages([storedEntry("m1")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okMessages([storedEntry("m1")])) as unknown as typeof fetch;
     await c1.load();
 
     globalThis.fetch = networkDown();
@@ -146,16 +142,14 @@ describe("history last-good retention (Phase 3.5)", () => {
 
   it("[P3-07c] invalidateHistoryCache() drops retained projections", async () => {
     const adapter = makeAdapter("c1");
-    globalThis.fetch = (async () =>
-      okMessages([storedEntry("m1")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okMessages([storedEntry("m1")])) as unknown as typeof fetch;
     await adapter.load();
 
     invalidateHistoryCache("c1");
     globalThis.fetch = networkDown();
     expect((await adapter.load()).messages).toEqual([]);
 
-    globalThis.fetch = (async () =>
-      okMessages([storedEntry("m1")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okMessages([storedEntry("m1")])) as unknown as typeof fetch;
     await adapter.load();
     invalidateHistoryCache();
     globalThis.fetch = networkDown();
@@ -164,8 +158,7 @@ describe("history last-good retention (Phase 3.5)", () => {
 
   it("[P3-07d] withFormat load() follows the same retain-on-failure rule", async () => {
     const adapter = makeAdapter("c1").withFormat!(fakeFormat);
-    globalThis.fetch = (async () =>
-      okWindow([storedRow("m1")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okWindow([storedRow("m1")])) as unknown as typeof fetch;
     expect((await adapter.load()).messages).toHaveLength(1);
 
     globalThis.fetch = networkDown();
@@ -248,14 +241,15 @@ describe("P2 bounded window-backed history (Direct)", () => {
         messages: [storedRow("m2"), storedRow("m3")],
         hasMoreBefore: true,
         hasMoreAfter: false,
-        contiguous: false, complete: false,
+        contiguous: false,
+        complete: false,
       }),
     })) as unknown as typeof fetch;
 
     expect((await adapter.load()).messages).toHaveLength(1);
     // The window still holds m1 — not the m2/m3 the incomplete slice offered.
     const [kept] = (await adapter.load()).messages;
-    expect((kept?.message as { id: string }).id).toBe("m1");
+    expect((kept?.message as { id: string } | undefined)?.id).toBe("m1");
   });
 });
 
@@ -286,7 +280,14 @@ describe("update rewrites a settled message in place", () => {
     id: "a1",
     role: "assistant",
     parts: [
-      { type: "tool-call", toolCallId: "call_1", toolName: "read_file", state: "output-available", input: { path: "a.ts" }, output: { type: "json", value: { lines: 42 } } },
+      {
+        type: "tool-call",
+        toolCallId: "call_1",
+        toolName: "read_file",
+        state: "output-available",
+        input: { path: "a.ts" },
+        output: { type: "json", value: { lines: 42 } },
+      },
     ],
   });
 
@@ -300,7 +301,12 @@ describe("update rewrites a settled message in place", () => {
     await adapter.update!(item, "a1");
 
     expect(bodies).toHaveLength(1);
-    const sent = bodies[0].message as { id: string; parent_id: string; format: string; content: unknown };
+    const sent = bodies[0].message as {
+      id: string;
+      parent_id: string;
+      format: string;
+      content: unknown;
+    };
     expect(sent.id).toBe("a1");
     expect(sent.parent_id).toBe("u1");
     expect(sent.format).toBe(fakeFormat.format);
@@ -316,7 +322,10 @@ describe("update rewrites a settled message in place", () => {
     const item = { message: toolMessage(), parentId: "u1" } as never;
     await adapter.update!(item, "a1");
     await adapter.update!(item, "a1");
-    await adapter.update!({ message: { ...toolMessage(), id: "a1" }, parentId: "u1" } as never, "a1");
+    await adapter.update!(
+      { message: { ...toolMessage(), id: "a1" }, parentId: "u1" } as never,
+      "a1",
+    );
 
     // Three calls, three requests — the ADAPTER must not dedupe silently, because
     // the server-side upsert is what makes repetition safe, and hiding the calls
@@ -328,35 +337,31 @@ describe("update rewrites a settled message in place", () => {
   it("update failures are surfaced, never swallowed", async () => {
     const adapter = makeAdapter("upd-3").withFormat!(fakeFormat);
     globalThis.fetch = (async () => errStatus(500)) as unknown as typeof fetch;
-    await expect(adapter.update!({ message: toolMessage(), parentId: null } as never, "a1")).rejects.toThrow(
-      "Failed to persist message",
-    );
+    await expect(
+      adapter.update!({ message: toolMessage(), parentId: null } as never, "a1"),
+    ).rejects.toThrow("Failed to persist message");
   });
 });
 
-describe("history mutation failure contract (Phase 3.11)", () => {  it("[P3-16a] append throws on !ok — the failed persist stays unsuccessful", async () => {
+describe("history mutation failure contract (Phase 3.11)", () => {
+  it("[P3-16a] append throws on !ok — the failed persist stays unsuccessful", async () => {
     const adapter = makeAdapter("c1");
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       if (init?.method === "POST") return errStatus(503);
       return okMessages([]);
     }) as unknown as typeof fetch;
-    await expect(adapter.append(repoItem("m1"))).rejects.toThrow(
-      "Failed to persist message (503)",
-    );
+    await expect(adapter.append(repoItem("m1"))).rejects.toThrow("Failed to persist message (503)");
   });
 
   it("[P3-16b] update delegates to append and throws on !ok", async () => {
     const adapter = makeAdapter("c1");
     globalThis.fetch = (async () => errStatus(500)) as unknown as typeof fetch;
-    await expect(adapter.update!(repoItem("m1"))).rejects.toThrow(
-      "Failed to persist message",
-    );
+    await expect(adapter.update!(repoItem("m1"))).rejects.toThrow("Failed to persist message");
   });
 
   it("[P3-16c] delete throws on !ok; success invalidates the retained projection", async () => {
     const adapter = makeAdapter("c1");
-    globalThis.fetch = (async () =>
-      okMessages([storedEntry("m1")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okMessages([storedEntry("m1")])) as unknown as typeof fetch;
     await adapter.load();
 
     globalThis.fetch = (async () => errStatus(500)) as unknown as typeof fetch;
@@ -364,8 +369,7 @@ describe("history mutation failure contract (Phase 3.11)", () => {  it("[P3-16a]
       "Failed to delete message (500)",
     );
 
-    globalThis.fetch = (async () =>
-      okMessages([])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okMessages([])) as unknown as typeof fetch;
     await adapter.delete!([repoItem("m1")]);
 
     // Deletion cleared the retained projection: a later failed load is [].
@@ -534,13 +538,20 @@ describe("Phase 4 — opencode history skip (case C)", () => {
     invalidateHistoryCache();
   });
 
-  async function seedOpencodeAdapter(): Promise<{ adapter: ReturnType<typeof makeAdapter>; remoteId: string }> {
+  async function seedOpencodeAdapter(): Promise<{
+    adapter: ReturnType<typeof makeAdapter>;
+    remoteId: string;
+  }> {
     // Materialize an opencode draft to seed the owner record.
     // Stub fetch first so the POST /api/conversations inside materializeDraft
     // resolves instead of hitting the real network.
     const stubFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "c-oc-seeded" }) } as unknown as Response)) as unknown as typeof fetch;
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "c-oc-seeded" }),
+      }) as unknown as Response) as unknown as typeof fetch;
     try {
       const snapshot = captureDraftSnapshot();
       const created = await materializeDraft(snapshot);
@@ -615,7 +626,11 @@ describe("Phase 4 — opencode history skip (case C)", () => {
 
     const stubFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
-      ({ ok: true, status: 200, json: async () => ({ id: "c-direct-seeded" }) } as unknown as Response)) as unknown as typeof fetch;
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "c-direct-seeded" }),
+      }) as unknown as Response) as unknown as typeof fetch;
     let createdId = "";
     try {
       const snapshot = captureDraftSnapshot();

@@ -11,10 +11,7 @@ import {
   withCpuProfile,
 } from "../helpers/cpuProfile.ts";
 import { removeConversation, seedConversation } from "../helpers/seedConversation.ts";
-import {
-  resetStubStreamShape,
-  setStubStreamShape,
-} from "../helpers/stubProvider.ts";
+import { resetStubStreamShape, setStubStreamShape } from "../helpers/stubProvider.ts";
 
 /**
  * Where the served chunks live, for naming frames from source.
@@ -93,7 +90,9 @@ function codeHeavyReply(paragraphs: number): string {
     parts.push(
       `Paragraph ${i}. This sentence exists to give the markdown parser prose to chew on between the expensive blocks.`,
       "",
-      [FENCE + "ts", `const value${i} = compute(${i});`, "export default value" + i + ";", FENCE].join("\n"),
+      [`${FENCE}ts`, `const value${i} = compute(${i});`, `export default value${i};`, FENCE].join(
+        "\n",
+      ),
       "",
     );
   }
@@ -373,15 +372,13 @@ test.describe("renderer CPU attribution", () => {
     try {
       const started = Date.now();
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
       const timeToInteractive = Date.now() - started;
 
       const scripts = await page.evaluate(() => {
-        const entries = performance.getEntriesByType(
-          "resource",
-        ) as PerformanceResourceTiming[];
+        const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
         return entries
           .filter((e) => e.name.endsWith(".js") || e.name.endsWith(".mjs"))
           .map((e) => ({
@@ -427,9 +424,9 @@ test.describe("renderer CPU attribution", () => {
     try {
       await seedExchange(request, conversationId, codeHeavyReply(8), 0, null);
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
       await expect(page.locator(".aui-md").first()).toBeVisible({ timeout: 30000 });
 
       const { cpu } = await withCpuProfile(page, async () => {
@@ -467,9 +464,9 @@ test.describe("renderer CPU attribution", () => {
       }
 
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
       // The transcript is fully painted before any scrolling is measured.
       await expect(page.locator(".aui-md").first()).toBeVisible({ timeout: 60000 });
 
@@ -514,9 +511,9 @@ test.describe("renderer CPU attribution", () => {
       });
 
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
 
       const { cpu } = await withCpuProfile(page, () =>
         sendAndProfile(page, "stream a long code-heavy reply"),
@@ -536,10 +533,7 @@ test.describe("renderer CPU attribution", () => {
     }
   });
 
-  test("is highlighting repeated per delta, or done once per fence", async ({
-    page,
-    request,
-  }) => {
+  test("is highlighting repeated per delta, or done once per fence", async ({ page, request }) => {
     test.setTimeout(600_000);
     test.slow();
 
@@ -587,9 +581,9 @@ test.describe("renderer CPU attribution", () => {
 
     try {
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
       await installFenceHighlightCounter(page);
 
       // Warm-up run, measured by nobody.
@@ -656,9 +650,9 @@ test.describe("renderer CPU attribution", () => {
 
     try {
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
 
       // Prose first. Same paragraph count, no fences, so the difference
       // between the two runs is the code path rather than the parse path.
@@ -667,9 +661,7 @@ test.describe("renderer CPU attribution", () => {
         chunkChars: CHUNK_CHARS,
         chunkDelayMs: CHUNK_DELAY_MS,
       });
-      const prose = await withCpuProfile(page, () =>
-        sendAndProfile(page, "first, prose only"),
-      );
+      const prose = await withCpuProfile(page, () => sendAndProfile(page, "first, prose only"));
 
       await setStubStreamShape(request, {
         text: codeHeavyReply(40),
@@ -706,10 +698,7 @@ test.describe("renderer CPU attribution", () => {
     }
   });
 
-  test("double the reply length: does cost grow linearly or worse", async ({
-    page,
-    request,
-  }) => {
+  test("double the reply length: does cost grow linearly or worse", async ({ page, request }) => {
     test.setTimeout(300_000);
 
     const label = `cpu profile scaling ${Date.now()}`;
@@ -721,9 +710,9 @@ test.describe("renderer CPU attribution", () => {
 
     try {
       await page.goto(`/#/chat/${conversationId}`);
-      await expect(
-        page.getByRole("textbox", { name: /Send a message/i }).first(),
-      ).toBeVisible({ timeout: 30000 });
+      await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+        timeout: 30000,
+      });
 
       // The O(n^2) claim is testable rather than arguable: if re-parsing the
       // whole growing message per token is the dominant cost, doubling the
@@ -739,9 +728,7 @@ test.describe("renderer CPU attribution", () => {
         chunkChars: CHUNK_CHARS,
         chunkDelayMs: CHUNK_DELAY_MS,
       });
-      const small = await withCpuProfile(page, () =>
-        sendAndProfile(page, "short reply"),
-      );
+      const small = await withCpuProfile(page, () => sendAndProfile(page, "short reply"));
 
       await setStubStreamShape(request, {
         text: codeHeavyReply(40),
@@ -757,9 +744,7 @@ test.describe("renderer CPU attribution", () => {
           ? large.cpu.totals.scriptMs / small.cpu.totals.scriptMs
           : Number.NaN;
 
-      console.log(
-        `\n[cpu] 20 paragraphs  ${formatTotals(small.cpu.totals)}`,
-      );
+      console.log(`\n[cpu] 20 paragraphs  ${formatTotals(small.cpu.totals)}`);
       console.log(
         `[cpu] 40 paragraphs  ${formatTotals(large.cpu.totals)}\n${formatHotFunctions(large.cpu.hot)}`,
       );

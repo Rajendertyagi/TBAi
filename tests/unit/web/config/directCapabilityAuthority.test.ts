@@ -52,7 +52,8 @@ const WEB_SRC = path.join(REPO_ROOT, "web/src");
 /** Read a frontend source file as text. Fails loudly rather than skipping a guard. */
 function readSource(relative: string): string {
   const file = path.join(WEB_SRC, relative);
-  if (!fs.existsSync(file)) throw new Error(`guard cannot read ${relative} - the rule it enforces moved`);
+  if (!fs.existsSync(file))
+    throw new Error(`guard cannot read ${relative} - the rule it enforces moved`);
   return fs.readFileSync(file, "utf8");
 }
 
@@ -163,7 +164,9 @@ describe("the server's resolved window reaches the UI unchanged", () => {
     expect(provider?.windowTokens).toBe(1_000_000);
     expect(provider?.windowSource).toBe("provider_reported");
 
-    const fallback = parseCurrentContext({ context: transport(SERVER_FALLBACK_WINDOW, "conservative_default") });
+    const fallback = parseCurrentContext({
+      context: transport(SERVER_FALLBACK_WINDOW, "conservative_default"),
+    });
     expect(fallback?.windowTokens).toBe(SERVER_FALLBACK_WINDOW);
     expect(fallback?.windowSource).toBe("conservative_default");
   });
@@ -192,7 +195,9 @@ describe("the server's resolved window reaches the UI unchanged", () => {
 
   it("Test 5 - a malformed window is refused rather than rounded into place", () => {
     for (const bad of [0, -1, Number.NaN, "128000", null]) {
-      expect(parseCurrentContext({ context: { usedTokens: 1, windowTokens: bad } })).toBeUndefined();
+      expect(
+        parseCurrentContext({ context: { usedTokens: 1, windowTokens: bad } }),
+      ).toBeUndefined();
     }
   });
 });

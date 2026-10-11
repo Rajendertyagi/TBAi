@@ -12,14 +12,15 @@ afterEach(() => {
 
 function ring(tool: string) {
   const since = 0;
-  return logger
-    .getRecentEntries(since)
-    .filter((e) => (e as { tool?: string }).tool === tool);
+  return logger.getRecentEntries(since).filter((e) => (e as { tool?: string }).tool === tool);
 }
 
 describe("tool funnel", () => {
   it("emits start/finish and passes the return value through", async () => {
-    const run = instrumentedExecute("funnel-probe-ok", async (args: { x: number }, _opts?: unknown) => args.x * 2);
+    const run = instrumentedExecute(
+      "funnel-probe-ok",
+      async (args: { x: number }, _opts?: unknown) => args.x * 2,
+    );
     await expect(run({ x: 21 }, { toolCallId: "call-1" })).resolves.toBe(42);
     const events = ring("funnel-probe-ok").map((e) => e.event);
     expect(events).toEqual(["tool.start", "tool.finish"]);
@@ -30,9 +31,12 @@ describe("tool funnel", () => {
 
   it("emits a classified error and rethrows the original", async () => {
     const boom = new Error("fetch failed catastrophically");
-    const run = instrumentedExecute("funnel-probe-err", async (_args?: unknown, _opts?: unknown) => {
-      throw boom;
-    });
+    const run = instrumentedExecute(
+      "funnel-probe-err",
+      async (_args?: unknown, _opts?: unknown) => {
+        throw boom;
+      },
+    );
     await expect(run({}, {})).rejects.toBe(boom);
     const errors = ring("funnel-probe-err").filter((e) => e.event === "tool.error");
     expect(errors).toHaveLength(1);
@@ -40,14 +44,15 @@ describe("tool funnel", () => {
   });
 
   it("binds toolCallId into context so nested logs correlate", async () => {
-    const run = instrumentedExecute("funnel-probe-ctx", async (_args?: unknown, _opts?: unknown) => {
-      logger.info("tool", "nested_probe", {});
-      return "ok";
-    });
+    const run = instrumentedExecute(
+      "funnel-probe-ctx",
+      async (_args?: unknown, _opts?: unknown) => {
+        logger.info("tool", "nested_probe", {});
+        return "ok";
+      },
+    );
     await run({}, { toolCallId: "call-9" });
-    const nested = logger
-      .getRecentEntries(0)
-      .filter((e) => e.event === "nested_probe");
+    const nested = logger.getRecentEntries(0).filter((e) => e.event === "nested_probe");
     expect(nested).toHaveLength(1);
     expect((nested[0] as { toolCallId?: string }).toolCallId).toBe("call-9");
   });

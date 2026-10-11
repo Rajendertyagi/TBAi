@@ -4,7 +4,10 @@ import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { toolsConfig } from "@web/config/tools";
 import { stripComments } from "@web/testing/source-scope";
-import { boundCodeFence, BoundedSyntaxHighlighter } from "@web/components/assistant-ui/elements/code-budget.tsx";
+import {
+  boundCodeFence,
+  BoundedSyntaxHighlighter,
+} from "@web/components/assistant-ui/elements/code-budget.tsx";
 
 /**
  * The code-fence budget, and the ordering claim that makes it a safety fix.
@@ -191,9 +194,7 @@ describe("code-fence budget: a trailing newline is not a row", () => {
     // A budget whose boundary depends on invisible characters is a budget
     // nobody can reason about.
     const body = lines(codeBlockMaxLines);
-    expect(boundCodeFence(body).truncated).toBe(
-      boundCodeFence(`${body}\n`).truncated,
-    );
+    expect(boundCodeFence(body).truncated).toBe(boundCodeFence(`${body}\n`).truncated);
   });
 
   it("still counts real rows past the limit, newline or not", () => {
@@ -262,12 +263,12 @@ describe("code-fence budget: the bound is wired BEFORE the highlighter", () => {
 
   beforeAll(async () => {
     source = stripComments(
-      await Bun.file(path.join(REPO_ROOT, "web/src/components/assistant-ui/elements/code-budget.tsx")).text(),
+      await Bun.file(
+        path.join(REPO_ROOT, "web/src/components/assistant-ui/elements/code-budget.tsx"),
+      ).text(),
     );
     chatSource = stripComments(
-      await Bun.file(
-        path.join(REPO_ROOT, "web/src/components/ChatWindow.tsx"),
-      ).text(),
+      await Bun.file(path.join(REPO_ROOT, "web/src/components/ChatWindow.tsx")).text(),
     );
   });
 

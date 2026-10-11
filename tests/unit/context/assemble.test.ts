@@ -7,7 +7,7 @@
  * lifecycle.
  */
 
-import { describe, expect, it, beforeEach } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { assembleContext, buildToolLayer, classifyDivergence } from "@/context/index.ts";
 import type { UIMessage } from "ai";
 import type { ProviderConfig } from "@/types";
@@ -26,7 +26,11 @@ function user(id: string, text: string): UIMessage {
 }
 
 function assistant(id: string, text: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", state: "done", text }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", state: "done", text }],
+  } as unknown as UIMessage;
 }
 
 function approvalPaused(id: string, toolCallId: string, approvalId: string): UIMessage {
@@ -45,7 +49,10 @@ function approvalPaused(id: string, toolCallId: string, approvalId: string): UIM
   } as unknown as UIMessage;
 }
 
-async function assemble(messages: UIMessage[], overrides: Partial<Parameters<typeof assembleContext>[0]> = {}) {
+async function assemble(
+  messages: UIMessage[],
+  overrides: Partial<Parameters<typeof assembleContext>[0]> = {},
+) {
   return assembleContext({
     // No conversationId by default: reconciliation is exercised separately, and
     // omitting it keeps these tests free of a database.
@@ -128,7 +135,10 @@ describe("lifecycle repair stays separate from size management (G17)", () => {
     // The one thing a budget must never do. A paused approval is carried whole
     // through assembly: pruning keeps it (it is the CURRENT turn), and the
     // budget reduces tool RESULTS, never the call or its gate.
-    const result = await assemble([user("u1", "delete it"), approvalPaused("a1", "call_1", "appr_1")]);
+    const result = await assemble([
+      user("u1", "delete it"),
+      approvalPaused("a1", "call_1", "appr_1"),
+    ]);
     const serialized = JSON.stringify(result.context.layerC.messages);
     expect(serialized).toContain("appr_1");
     expect(serialized).toContain("call_1");
@@ -153,7 +163,13 @@ describe("tool-call/result pairing survives assembly (guarantee 5)", () => {
       role: "assistant",
       parts: [
         { type: "text", state: "done", text: "reading" },
-        { type: "tool-read", toolCallId: "call_x", state: "output-available", input: { path: "p" }, output: big },
+        {
+          type: "tool-read",
+          toolCallId: "call_x",
+          state: "output-available",
+          input: { path: "p" },
+          output: big,
+        },
       ],
     } as unknown as UIMessage;
     const result = await assemble([user("u1", "read p"), turn]);
@@ -167,7 +183,11 @@ describe("tool-call/result pairing survives assembly (guarantee 5)", () => {
 
 describe("the current user turn is identifiable (G11)", () => {
   it("names the trailing user turn by id", async () => {
-    const result = await assemble([user("u1", "first"), assistant("a1", "r"), user("u2", "second")]);
+    const result = await assemble([
+      user("u1", "first"),
+      assistant("a1", "r"),
+      user("u2", "second"),
+    ]);
     expect(result.context.layerC.currentTurnIds).toEqual(["u2"]);
     expect(result.context.layerC.retainedIds).toContain("u1");
   });
@@ -185,7 +205,12 @@ describe("overflow is a decision, not an accident", () => {
     const known = {
       ...provider,
       models: [
-        { id: "claude-test", provider: "anthropic", contextWindow: 128_000, contextWindowSource: "provider_reported" },
+        {
+          id: "claude-test",
+          provider: "anthropic",
+          contextWindow: 128_000,
+          contextWindowSource: "provider_reported",
+        },
       ],
     } as unknown as typeof provider;
 

@@ -79,9 +79,7 @@ export function SidebarThreadRow({
   const title = item.title ?? "Untitled";
   const removeConversation = useDeleteConversation();
 
-  const isActive =
-    activeKey === `chat:${item.remoteId}` ||
-    activeKey === `agent:${item.remoteId}`;
+  const isActive = activeKey === `chat:${item.remoteId}` || activeKey === `agent:${item.remoteId}`;
 
   const handleDelete = (remoteId: string) => {
     void removeConversation(remoteId)
@@ -89,9 +87,7 @@ export function SidebarThreadRow({
         onMutate?.();
       })
       .catch((err: unknown) => {
-        toast.error(
-          err instanceof Error ? err.message : "Could not delete conversation.",
-        );
+        toast.error(err instanceof Error ? err.message : "Could not delete conversation.");
       });
   };
 
@@ -101,9 +97,7 @@ export function SidebarThreadRow({
         onMutate?.();
       })
       .catch((err: unknown) => {
-        toast.error(
-          err instanceof Error ? err.message : "Could not archive conversation.",
-        );
+        toast.error(err instanceof Error ? err.message : "Could not archive conversation.");
       });
   };
 
@@ -197,9 +191,7 @@ export function SidebarThreadRow({
         <ContextMenuContent>
           <ContextMenuItem
             onSelect={() =>
-              item.engine === "opencode"
-                ? openAgent(item.remoteId)
-                : openChat(item.remoteId)
+              item.engine === "opencode" ? openAgent(item.remoteId) : openChat(item.remoteId)
             }
           >
             <ExternalLink className="size-4" /> {copy.openInNewTab}
@@ -215,16 +207,11 @@ export function SidebarThreadRow({
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem
-            onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}
-          >
+          <ContextMenuItem onSelect={() => void navigator.clipboard?.writeText(item.remoteId)}>
             <Copy className="size-4" /> {copy.copyId}
           </ContextMenuItem>
           {historyConfig.deleteEnabled && (
-            <ContextMenuItem
-              variant="destructive"
-              onSelect={() => handleDelete(item.remoteId)}
-            >
+            <ContextMenuItem variant="destructive" onSelect={() => handleDelete(item.remoteId)}>
               <Trash2 className="size-4" /> Delete
             </ContextMenuItem>
           )}
@@ -259,9 +246,7 @@ export function SidebarThreadRow({
             <Button variant="outline" onClick={() => setRenameOpen(false)}>
               {copy.cancel}
             </Button>
-            <Button onClick={() => void handleConfirmRename()}>
-              {copy.save}
-            </Button>
+            <Button onClick={() => void handleConfirmRename()}>{copy.save}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -292,9 +277,7 @@ export function SidebarArchivedRow({
         onMutate?.();
       })
       .catch((err: unknown) => {
-        toast.error(
-          err instanceof Error ? err.message : "Could not delete conversation.",
-        );
+        toast.error(err instanceof Error ? err.message : "Could not delete conversation.");
       });
   };
 
@@ -304,9 +287,7 @@ export function SidebarArchivedRow({
         onMutate?.();
       })
       .catch((err: unknown) => {
-        toast.error(
-          err instanceof Error ? err.message : "Could not unarchive conversation.",
-        );
+        toast.error(err instanceof Error ? err.message : "Could not unarchive conversation.");
       });
   };
 
@@ -338,10 +319,7 @@ export function SidebarArchivedRow({
                 </DropdownMenuItem>
               )}
               {historyConfig.deleteEnabled && (
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() => handleDelete(remoteId)}
-                >
+                <DropdownMenuItem variant="destructive" onSelect={() => handleDelete(remoteId)}>
                   <Trash2 className="size-3.5" /> {copy.delete}
                 </DropdownMenuItem>
               )}
@@ -356,16 +334,11 @@ export function SidebarArchivedRow({
             <ArchiveRestore className="size-4" /> {copy.unarchive}
           </ContextMenuItem>
         )}
-        <ContextMenuItem
-          onSelect={() => void navigator.clipboard?.writeText(remoteId)}
-        >
+        <ContextMenuItem onSelect={() => void navigator.clipboard?.writeText(remoteId)}>
           <Copy className="size-4" /> {copy.copyId}
         </ContextMenuItem>
         {historyConfig.deleteEnabled && (
-          <ContextMenuItem
-            variant="destructive"
-            onSelect={() => handleDelete(remoteId)}
-          >
+          <ContextMenuItem variant="destructive" onSelect={() => handleDelete(remoteId)}>
             <Trash2 className="size-4" /> Delete
           </ContextMenuItem>
         )}

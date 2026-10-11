@@ -237,9 +237,10 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
  * outstanding by a previous process is settled at boot rather than an interval
  * later. Idempotent: a second call while running changes nothing.
  */
-export function startHistoryReconciliation(
-  options: StartHistoryReconciliationOptions,
-): { started: boolean; alreadyRunning: boolean } {
+export function startHistoryReconciliation(options: StartHistoryReconciliationOptions): {
+  started: boolean;
+  alreadyRunning: boolean;
+} {
   if (timer !== null) return { started: false, alreadyRunning: true };
 
   deps = options.deps;

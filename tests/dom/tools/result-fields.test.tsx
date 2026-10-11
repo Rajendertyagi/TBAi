@@ -20,8 +20,7 @@ import { flatResultFields, FieldsOrJson } from "@web/tools/result-fields.tsx";
  * sides.
  */
 
-const render = (value: unknown) =>
-  renderToStaticMarkup(createElement(FieldsOrJson, { value }));
+const render = (value: unknown) => renderToStaticMarkup(createElement(FieldsOrJson, { value }));
 
 describe("flatResultFields: what counts as a flat result", () => {
   it("accepts the real shapes these six tools return", () => {

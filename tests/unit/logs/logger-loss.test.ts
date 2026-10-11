@@ -7,9 +7,9 @@
  * thing this suite exists to prevent.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import fs from "fs";
-import path from "path";
-import os from "os";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { logger } from "@/lib/logger.ts";
 import { logLossMetricsText } from "@/services/http-metrics.ts";
 
@@ -185,10 +185,7 @@ describe("live log ring", () => {
       base + 9,
       base + 10,
     ]);
-    expect(logger.getRecentEntries(base + 8).map((e) => e.seq)).toEqual([
-      base + 9,
-      base + 10,
-    ]);
+    expect(logger.getRecentEntries(base + 8).map((e) => e.seq)).toEqual([base + 9, base + 10]);
   });
 
   it("reports lastSeq correctly before full, after wrap, and after overwrite", () => {
@@ -220,10 +217,7 @@ describe("live log ring", () => {
     logger.configure({ bufferSize: 2 });
     // Shrinking retains the newest survivors, oldest-first — matching what the
     // previous front-splice left alive.
-    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([
-      base + 4,
-      base + 5,
-    ]);
+    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([base + 4, base + 5]);
   });
 
   it("keeps writing and ordering correctly immediately after a shrink", () => {
@@ -236,10 +230,7 @@ describe("live log ring", () => {
     logger.debug("test.ring.reshrink", "after-1");
     // Capacity is 2, so the write overwrites the oldest survivor instead of
     // growing the ring, and the advanced head is still read correctly.
-    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([
-      base + 5,
-      base + 6,
-    ]);
+    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([base + 5, base + 6]);
     expect(logger.getWriteStats().loss.ringSpliced).toBe(1);
     expect(logger.lastSeq).toBe(base + 6);
   });
@@ -250,20 +241,12 @@ describe("live log ring", () => {
     logger.configure({ bufferSize: 6 });
     for (let i = 0; i < 5; i += 1) logger.debug("test.ring.reshrink2", `g-${i}`);
     logger.configure({ bufferSize: 3 });
-    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([
-      base + 3,
-      base + 4,
-      base + 5,
-    ]);
+    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([base + 3, base + 4, base + 5]);
     logger.resetLossCounters();
     for (let i = 0; i < 4; i += 1) logger.debug("test.ring.reshrink2", `h-${i}`);
     // Four writes past a full post-shrink ring: each evicts exactly one, and the
     // survivors must still read oldest-first rather than in raw slot order.
-    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([
-      base + 7,
-      base + 8,
-      base + 9,
-    ]);
+    expect(logger.getRecentEntries(0).map((e) => e.seq)).toEqual([base + 7, base + 8, base + 9]);
     expect(logger.getWriteStats().loss.ringSpliced).toBe(4);
     expect(logger.lastSeq).toBe(base + 9);
   });

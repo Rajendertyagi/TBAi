@@ -94,7 +94,10 @@ describe("reasoning reduction: it lowers the model-visible context", () => {
     // Tool result and text are preserved, untouched.
     const kept = next.find((m) => (m as { id?: string }).id === "m1");
     expect(kept).toBeDefined();
-    expect(((kept as { parts: Array<Record<string, unknown>> }).parts[0] as Record<string, unknown>).toolCallId).toBe("c1");
+    expect(
+      ((kept as { parts: Array<Record<string, unknown>> }).parts[0] as Record<string, unknown>)
+        .toolCallId,
+    ).toBe("c1");
     const current = next.find((m) => (m as { id?: string }).id === "cur");
     const currentParts = (current as { parts: Array<Record<string, unknown>> }).parts;
     expect(currentParts.find((p) => p.type === "text")?.text).toBe("done");
@@ -105,7 +108,10 @@ describe("reasoning reduction: it lowers the model-visible context", () => {
     const huge = "R".repeat(REQUEST_REASONING_MAX_CHARS * 3);
     const { messages, report } = reduceToolResults([reasoningMsg("a", huge)]);
     expect(report.reducedReasoningParts).toBe(1);
-    const part = (messages[0] as { parts: Array<Record<string, unknown>> }).parts[0] as Record<string, unknown>;
+    const part = (messages[0] as { parts: Array<Record<string, unknown>> }).parts[0] as Record<
+      string,
+      unknown
+    >;
     expect(String(part.text).length).toBeLessThanOrEqual(REQUEST_REASONING_MAX_CHARS + 200); // notice slack
     expect(String(part.text)).toContain("truncated");
   });
@@ -118,9 +124,17 @@ describe("reasoning reduction: it lowers the model-visible context", () => {
       userMsg("u", "hi"),
       reasoningPlusText("cur", "small", "answer"),
     ];
-    const before = measureMessages({ messages, currentTurnIds: [], retainedIds: [] }).estimatedTokens;
+    const before = measureMessages({
+      messages,
+      currentTurnIds: [],
+      retainedIds: [],
+    }).estimatedTokens;
     const { messages: next } = reduceToolResults(messages);
-    const after = measureMessages({ messages: next, currentTurnIds: [], retainedIds: [] }).estimatedTokens;
+    const after = measureMessages({
+      messages: next,
+      currentTurnIds: [],
+      retainedIds: [],
+    }).estimatedTokens;
     expect(after).toBeLessThan(before);
     // The visible reply and the user turn survive the reduction.
     const ids = next.map((m) => (m as { id?: string }).id);

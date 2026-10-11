@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo } from "react";
-import {
-  useChatRuntime,
-  AssistantChatTransport,
-} from "@assistant-ui/ai-sdk";
+import { useChatRuntime, AssistantChatTransport } from "@assistant-ui/ai-sdk";
 import {
   lastAssistantMessageIsCompleteWithToolCalls,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from "ai";
-import { useAui, useRemoteThreadListRuntime, type RemoteThreadListAdapter } from "@assistant-ui/react";
+import {
+  useAui,
+  useRemoteThreadListRuntime,
+  type RemoteThreadListAdapter,
+} from "@assistant-ui/react";
 import { useSettingsStore } from "./stores";
 import { logger } from "./lib/logger";
 import { classifyChatError } from "./lib/transport-errors";
@@ -26,7 +27,11 @@ import {
   lastRememberedStreamId,
   rememberStreamId,
 } from "./features/chat/state/resumable-stream";
-import { resolveStreamRecovery, useStreamRecoveryStore, type StreamRecoveryState } from "./features/chat/state/streamRecovery";
+import {
+  resolveStreamRecovery,
+  useStreamRecoveryStore,
+  type StreamRecoveryState,
+} from "./features/chat/state/streamRecovery";
 import { lastUserText } from "./lib/ui-messages";
 import { useAvailabilityStore } from "./features/availability/availabilityStore";
 import { resolveApiUrl } from "./lib/platform";
@@ -139,17 +144,10 @@ function diagnosticFetch(
   getThreadListItem: () => { remoteId?: string; id?: string } | undefined,
 ): typeof globalThis.fetch {
   const baseFetch = globalThis.fetch.bind(globalThis);
-  const wrapped = async (
-    input: URL | RequestInfo,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  const wrapped = async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
     const startedAt = Date.now();
     const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url;
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const threadId = getThreadListItem()?.remoteId ?? getThreadListItem()?.id ?? "unknown";
     // Path only — never the query string, which can carry user data. This is
     // the browser half of the request pair the backend logs as
@@ -176,9 +174,7 @@ function diagnosticFetch(
       });
       if (!res.body) return res;
       return new Response(
-        observeBodySettled(res.body, () =>
-          endSendOperation("stream-settled", operationId),
-        ),
+        observeBodySettled(res.body, () => endSendOperation("stream-settled", operationId)),
         { status: res.status, statusText: res.statusText, headers: res.headers },
       );
     } catch (err) {
@@ -377,7 +373,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             modelId?: string | null;
             reasoningLevel?: string | null;
           };
-          const lastUser = [...(messages as Array<{ role?: string; id?: string }>) ]
+          const lastUser = [...(messages as Array<{ role?: string; id?: string }>)]
             .reverse()
             .find((m) => m.role === "user");
           const sendKey = `${threadKey}:${lastUser?.id ?? "noid"}`;
@@ -396,7 +392,11 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
             // back to the conversation default. Continuations reuse the
             // snapshot via sendKey (history is immutable).
             const providerId =
-              s.selectedProviderId ?? custom.providerId ?? s.activeProviderId ?? s.providers[0]?.id ?? "";
+              s.selectedProviderId ??
+              custom.providerId ??
+              s.activeProviderId ??
+              s.providers[0]?.id ??
+              "";
             const provider = s.providers.find((p) => p.id === providerId) ?? s.providers[0];
             const resolvedProviderId = provider?.id ?? "";
             const resolvedModel = s.selectedModelId ?? custom.modelId ?? provider?.model ?? "";
@@ -413,7 +413,9 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
               providerId: resolvedProviderId,
               model: resolvedModel,
               reasoningLevel:
-                s.selectedReasoningLevel ?? (custom.reasoningLevel as string | undefined) ?? undefined,
+                s.selectedReasoningLevel ??
+                (custom.reasoningLevel as string | undefined) ??
+                undefined,
               operationId,
             };
             sendConfigs.set(sendKey, sel);
@@ -555,7 +557,7 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
 export function useAppChatRuntime(
   adapter: RemoteThreadListAdapter,
   threadId: string | undefined,
-  onThreadIdChange: (id: string | undefined) => void
+  onThreadIdChange: (id: string | undefined) => void,
 ) {
   return useRemoteThreadListRuntime({
     runtimeHook: ResumableThreadRuntime,

@@ -43,7 +43,12 @@ export function mcpContentToText(res: unknown): string {
   if (Array.isArray(content)) {
     return content
       .map((c: unknown) => {
-        const item = c as { type?: string; text?: string; resource?: unknown; [k: string]: unknown };
+        const item = c as {
+          type?: string;
+          text?: string;
+          resource?: unknown;
+          [k: string]: unknown;
+        };
         if (item.type === "text") return item.text ?? "";
         if (item.type === "resource") return JSON.stringify(item.resource ?? item);
         return JSON.stringify(item);

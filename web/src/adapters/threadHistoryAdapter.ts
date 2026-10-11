@@ -112,9 +112,10 @@ export function invalidateHistoryCache(remoteId?: string): void {
  * re-importing the same window is idempotent, whereas returning the caller's own
  * rows would overwrite newer data and returning `[]` would blank the transcript.
  */
-function reportCurrentWindow<TMessage>(
-  remoteId: string,
-): { headId: string | null; messages: Array<{ parentId: string | null; message: TMessage }> } {
+function reportCurrentWindow<TMessage>(remoteId: string): {
+  headId: string | null;
+  messages: Array<{ parentId: string | null; message: TMessage }>;
+} {
   const current = windowControllerFor(remoteId);
   const rows = current ? current.rows() : [];
   return {
@@ -141,7 +142,12 @@ function reportCurrentWindow<TMessage>(
  * result, so all real persistence flows through it.
  */
 export function createThreadHistoryAdapter(
-  getAui: () => { threadListItem: { getState: () => { remoteId?: string }; initialize: () => Promise<{ remoteId: string }> } }
+  getAui: () => {
+    threadListItem: {
+      getState: () => { remoteId?: string };
+      initialize: () => Promise<{ remoteId: string }>;
+    };
+  },
 ): ThreadHistoryAdapter {
   const getRemoteId = (): string | null => {
     try {
@@ -192,8 +198,11 @@ export function createThreadHistoryAdapter(
         // Non-ok carries no authoritative history: retain the previous
         // projection. A confirmed ok (even []) replaces the cache — "could
         // not be reached" never becomes "no messages".
-        if (!res.ok) return { headId: null, messages: retainedHistory<BaseHistoryMessage>(remoteId) };
-        const data = (await res.json()) as { messages: Array<{ content: unknown; parent_id: string | null }> };
+        if (!res.ok)
+          return { headId: null, messages: retainedHistory<BaseHistoryMessage>(remoteId) };
+        const data = (await res.json()) as {
+          messages: Array<{ content: unknown; parent_id: string | null }>;
+        };
         const messages: BaseHistoryMessage[] = (data.messages ?? []).map((m) => ({
           message: m.content as any,
           parentId: m.parent_id ?? null,
@@ -248,15 +257,16 @@ export function createThreadHistoryAdapter(
         // parts from the content before encoding.
         const message = item.message;
         if (message && Array.isArray(message.parts)) {
-          const filteredParts = message.parts.filter(
-            (p: any) => p?.type !== "data-tbai-compact",
-          );
+          const filteredParts = message.parts.filter((p: any) => p?.type !== "data-tbai-compact");
           if (filteredParts.length !== message.parts.length) {
             return {
               id: formatAdapter.getId(message),
               parent_id: item.parentId ?? null,
               format: formatAdapter.format,
-              content: formatAdapter.encode({ ...item, message: { ...message, parts: filteredParts } }),
+              content: formatAdapter.encode({
+                ...item,
+                message: { ...message, parts: filteredParts },
+              }),
             };
           }
         }
@@ -285,9 +295,12 @@ export function createThreadHistoryAdapter(
           if (peekMaterializedEngine(remoteId) === "opencode") return;
           for (const it of items) {
             // Phase 3.11: deletion must be server-confirmed like appends.
-            const res = await apiFetch(`/api/conversations/${remoteId}/messages/${formatAdapter.getId(it.message)}`, {
-              method: "DELETE",
-            });
+            const res = await apiFetch(
+              `/api/conversations/${remoteId}/messages/${formatAdapter.getId(it.message)}`,
+              {
+                method: "DELETE",
+              },
+            );
             if (!res.ok) {
               throw new Error(`Failed to delete message (${res.status})`);
             }
@@ -367,7 +380,8 @@ export function createThreadHistoryAdapter(
             // different, healthy controller, and this log is what an operator reads
             // to decide whether history is broken.
             const superseded =
-              controller !== null && windowControllerStanding(remoteId, controller) === "superseded";
+              controller !== null &&
+              windowControllerStanding(remoteId, controller) === "superseded";
             if (superseded) {
               logger.warn("chat", "history.load_superseded", { conversationId: remoteId });
             } else if (error instanceof HistoryWindowTimeoutError) {

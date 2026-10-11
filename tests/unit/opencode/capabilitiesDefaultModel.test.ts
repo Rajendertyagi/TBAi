@@ -38,8 +38,8 @@ mock.module("@/services/opencode/client", () => ({
 const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
 const { getOpenCodeCapabilities } = await import("@/services/opencode/capabilities.ts");
 
-(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> })
-  .ensureBaseUrl = () => Promise.resolve("http://127.0.0.1:0");
+(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl = () =>
+  Promise.resolve("http://127.0.0.1:0");
 
 function reset() {
   listModels = [];
@@ -106,7 +106,13 @@ describe("the server's advertised default model", () => {
 
   it("is omitted for a response that is not a usable model", async () => {
     reset();
-    for (const bad of [{ providerID: "openrouter" }, { modelID: "x" }, { providerID: "", modelID: "x" }, "nope", 42]) {
+    for (const bad of [
+      { providerID: "openrouter" },
+      { modelID: "x" },
+      { providerID: "", modelID: "x" },
+      "nope",
+      42,
+    ]) {
       defaultModel = bad;
       expect((await getOpenCodeCapabilities()).defaultModel).toBeUndefined();
     }

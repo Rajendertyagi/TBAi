@@ -27,13 +27,17 @@ const STORED = { providerID: "agnes", modelID: "agnes-3.0-flash" };
 
 describe("case 1 — a new session with no stored choice gets the server default", () => {
   it("resolves to the default", () => {
-    expect(pickSessionModel({ storedModel: null, serverDefault: DEFAULT_MODEL }))
-      .toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
+    expect(pickSessionModel({ storedModel: null, serverDefault: DEFAULT_MODEL })).toEqual({
+      id: "perceptron/perceptron-mk1.5",
+      providerID: "openrouter",
+    });
   });
 
   it("treats an undefined stored value as no choice", () => {
-    expect(pickSessionModel({ serverDefault: DEFAULT_MODEL }))
-      .toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
+    expect(pickSessionModel({ serverDefault: DEFAULT_MODEL })).toEqual({
+      id: "perceptron/perceptron-mk1.5",
+      providerID: "openrouter",
+    });
   });
 });
 
@@ -41,39 +45,46 @@ describe("case 2 — an adopted session with an empty model gets the server defa
   it("resolves to the default when the session reports no model", () => {
     // The live defect: a session bound before the default was consulted reports
     // `model=''`, which the fetch surfaces as null.
-    expect(pickSessionModel({ boundModel: null, storedModel: null, serverDefault: DEFAULT_MODEL }))
-      .toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
+    expect(
+      pickSessionModel({ boundModel: null, storedModel: null, serverDefault: DEFAULT_MODEL }),
+    ).toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
   });
 
   it("also treats an empty string as no model", () => {
     // OpenCode reports an unset model as `''` as well as absent, and the fetch
     // normalises both — this pins the normalisation rather than trusting it.
-    expect(pickSessionModel({ boundModel: "", storedModel: null, serverDefault: DEFAULT_MODEL }))
-      .toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
+    expect(
+      pickSessionModel({ boundModel: "", storedModel: null, serverDefault: DEFAULT_MODEL }),
+    ).toEqual({ id: "perceptron/perceptron-mk1.5", providerID: "openrouter" });
   });
 
   it("does NOT touch a session that already has a model", () => {
     // The guard that makes it safe to run on every adopt. A model already set —
     // by the reader, or by OpenCode itself — is left exactly as it is.
-    expect(pickSessionModel({
-      boundModel: "agnes/agnes-3.0-flash",
-      storedModel: STORED,
-      serverDefault: DEFAULT_MODEL,
-    })).toBeNull();
+    expect(
+      pickSessionModel({
+        boundModel: "agnes/agnes-3.0-flash",
+        storedModel: STORED,
+        serverDefault: DEFAULT_MODEL,
+      }),
+    ).toBeNull();
   });
 });
 
 describe("case 3 — a stored model always wins", () => {
   it("beats the server default", () => {
-    expect(pickSessionModel({ storedModel: STORED, serverDefault: DEFAULT_MODEL }))
-      .toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
+    expect(pickSessionModel({ storedModel: STORED, serverDefault: DEFAULT_MODEL })).toEqual({
+      id: "agnes-3.0-flash",
+      providerID: "agnes",
+    });
   });
 
   it("beats the default even when the session is empty", () => {
     // Both entry points feed the same three facts, which is what stops an
     // adopt from quietly replacing the reader's pick with the default.
-    expect(pickSessionModel({ boundModel: null, storedModel: STORED, serverDefault: DEFAULT_MODEL }))
-      .toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
+    expect(
+      pickSessionModel({ boundModel: null, storedModel: STORED, serverDefault: DEFAULT_MODEL }),
+    ).toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
   });
 });
 
@@ -85,8 +96,10 @@ describe("case 4 — no server default leaves the session honestly unbound", () 
   });
 
   it("still honours a stored choice when there is no default", () => {
-    expect(pickSessionModel({ storedModel: STORED, serverDefault: null }))
-      .toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
+    expect(pickSessionModel({ storedModel: STORED, serverDefault: null })).toEqual({
+      id: "agnes-3.0-flash",
+      providerID: "agnes",
+    });
   });
 });
 
@@ -99,7 +112,10 @@ describe("case 5 — an unbound historical session is never resurrected", () => 
     // future "fix all empty sessions" sweep fails here instead of quietly
     // resurrecting history.
     const { readFile } = await import("node:fs/promises");
-    const source = await readFile(path.join(REPO_ROOT, "src/services/opencode/sessions.ts"), "utf8");
+    const source = await readFile(
+      path.join(REPO_ROOT, "src/services/opencode/sessions.ts"),
+      "utf8",
+    );
     // No listing of all sessions, and no call that could enumerate them.
     expect(source).not.toMatch(/\.session\.list\(/);
     expect(source).not.toMatch(/listSessions|allSessions|everySession/);

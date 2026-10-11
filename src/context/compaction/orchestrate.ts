@@ -40,7 +40,7 @@ import {
   type CompactionRecord,
   type SupersededTurn,
 } from "./contract";
-import { summarizeSpan, type SummarizeResult } from "./summarize";
+import type { SummarizeResult } from "./summarize";
 
 /**
  * How much hysteresis headroom is required before a second compaction.
@@ -179,7 +179,8 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
     reason: "pressure",
   });
 
-  if (plan.kind === "none") return { messages: [...input.messages], outcome: { applied: false, reason: plan.reason } };
+  if (plan.kind === "none")
+    return { messages: [...input.messages], outcome: { applied: false, reason: plan.reason } };
 
   // The RAW messages to summarise, sliced from the already-repaired CLIENT list, so
   // the summariser cannot see a stale tool part even if one existed upstream — and
@@ -217,7 +218,10 @@ export async function maybeCompact(input: MaybeCompactInput): Promise<{
 
   if (summary.ok === false) {
     // Contained failure: the caller falls back to today's behaviour.
-    return { messages: [...input.messages], outcome: { applied: false, reason: `summarize_failed:${summary.failure}` } };
+    return {
+      messages: [...input.messages],
+      outcome: { applied: false, reason: `summarize_failed:${summary.failure}` },
+    };
   }
 
   const generation = (input.existing?.generation ?? 0) + 1;

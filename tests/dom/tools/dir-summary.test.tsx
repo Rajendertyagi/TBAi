@@ -33,8 +33,13 @@ import { dirSummary } from "@web/tools/filesystem/ui.tsx";
  * Emoji, JS-side. PowerShell's `-match` cannot express `\u{1F4C1}`, so the check
  * has to live in the test rather than in a shell grep — which is also the only
  * way it is a real assertion instead of a convention.
+ *
+ * U+FE0F (VARIATION SELECTOR-16) sits OUTSIDE the class, as a trailing optional.
+ * Inside a character class it would match a bare base character with no
+ * selector, which is a different glyph from the one this test means to detect —
+ * and it would let `dirSummary` emit a non-emoji character and still pass.
  */
-const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B00}-\u{2BFF}]/u;
+const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}](?:\u{FE0F})?/u;
 
 /** `runList`'s entry, typed so a test fixture cannot drift from the tool. */
 type DirEntry = { name: string; type: string; size: number | null };
@@ -52,12 +57,10 @@ describe("dirSummary: the shape of a directory listing", () => {
   it("renders no emoji anywhere, so the icon follows the theme", () => {
     // The defect: 📁 / 📄. Asserted as a range rather than as two literals so a
     // different emoji cannot slip through the same hole.
-    const html = render(
-      [
-        { name: "src", type: "dir", size: null },
-        { name: "a.ts", type: "file", size: 12 },
-      ],
-    );
+    const html = render([
+      { name: "src", type: "dir", size: null },
+      { name: "a.ts", type: "file", size: 12 },
+    ]);
     expect(EMOJI_RE.test(html)).toBe(false);
   });
 
@@ -86,12 +89,10 @@ describe("dirSummary: the shape of a directory listing", () => {
   it("renders a file's size and no dd at all for a directory", () => {
     // `size` is `null` for a directory, so an empty right-hand cell would be a
     // blank column on most rows of a typical listing.
-    const html = render(
-      [
-        { name: "src", type: "dir", size: null },
-        { name: "a.ts", type: "file", size: 12 },
-      ],
-    );
+    const html = render([
+      { name: "src", type: "dir", size: null },
+      { name: "a.ts", type: "file", size: 12 },
+    ]);
     expect(countOf(html, "<dd")).toBe(1);
     expect(html).toContain("12 B");
 
@@ -103,12 +104,10 @@ describe("dirSummary: the shape of a directory listing", () => {
     // Row identity is the entry name — that is what `readdirSync` returns and
     // what distinguishes one row from another. Two entries with different names
     // must be two rows, each named once, or the listing merges them.
-    const html = render(
-      [
-        { name: "src", type: "dir", size: null },
-        { name: "docs", type: "dir", size: null },
-      ],
-    );
+    const html = render([
+      { name: "src", type: "dir", size: null },
+      { name: "docs", type: "dir", size: null },
+    ]);
     expect(countOf(html, "<dt")).toBe(2);
     expect(countOf(html, ">src</span>")).toBe(1);
     expect(countOf(html, ">docs</span>")).toBe(1);
@@ -128,12 +127,10 @@ describe("dirSummary: the shape of a directory listing", () => {
   });
 
   it("says nothing about omitted rows when the listing fits", () => {
-    const html = render(
-      [
-        { name: "a.ts", type: "file", size: 1 },
-        { name: "b.ts", type: "file", size: 2 },
-      ],
-    );
+    const html = render([
+      { name: "a.ts", type: "file", size: 1 },
+      { name: "b.ts", type: "file", size: 2 },
+    ]);
     expect(html).not.toContain(toolsConfig.copy.status.andMoreCount(0));
     // Every omission note this component can render starts with an ellipsis, and
     // nothing else in a listing does — so its absence is "no note at all",

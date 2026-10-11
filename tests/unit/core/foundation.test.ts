@@ -37,10 +37,7 @@ describe("unified tab store", () => {
     api.openChat("abc");
     api.openChat("def");
     useChatTabsStore.getState().openChat("abc");
-    expect(useChatTabsStore.getState().tabs.map((t) => t.key)).toEqual([
-      "chat:abc",
-      "chat:def",
-    ]);
+    expect(useChatTabsStore.getState().tabs.map((t) => t.key)).toEqual(["chat:abc", "chat:def"]);
     expect(useChatTabsStore.getState().activeKey).toBe("chat:abc");
   });
 
@@ -69,9 +66,7 @@ describe("unified tab store", () => {
     useChatTabsStore.getState().openChat("only");
     useChatTabsStore.getState().close("chat:only");
     const s = useChatTabsStore.getState();
-    expect(s.tabs).toEqual([
-      { key: "chat:new", kind: "chat", ref: NEW_DRAFT_TAB_ID },
-    ]);
+    expect(s.tabs).toEqual([{ key: "chat:new", kind: "chat", ref: NEW_DRAFT_TAB_ID }]);
     expect(s.activeKey).toBe("chat:new");
   });
 
@@ -99,12 +94,8 @@ describe("unified tab store", () => {
 describe("tab keys and urls", () => {
   it("maps tabs to routes", () => {
     expect(chatKey("abc")).toBe("chat:abc");
-    expect(
-      urlForTab({ key: "chat:abc", kind: "chat", ref: "abc" }),
-    ).toBe("/chat/abc");
-    expect(
-      urlForTab({ key: "chat:new", kind: "chat", ref: "new" }),
-    ).toBe("/chat/new");
+    expect(urlForTab({ key: "chat:abc", kind: "chat", ref: "abc" })).toBe("/chat/abc");
+    expect(urlForTab({ key: "chat:new", kind: "chat", ref: "new" })).toBe("/chat/new");
   });
 
   it("nextActiveAfterClose prefers the right neighbor", () => {
@@ -116,10 +107,7 @@ describe("tab keys and urls", () => {
     expect(nextActiveAfterClose(tabs, "chat:b")).toBe("chat:c");
     expect(nextActiveAfterClose(tabs, "chat:c")).toBe("chat:b");
     expect(
-      nextActiveAfterClose(
-        [{ key: "chat:a", kind: "chat", ref: "a" }],
-        "chat:a",
-      ),
+      nextActiveAfterClose([{ key: "chat:a", kind: "chat", ref: "a" }], "chat:a"),
     ).toBeUndefined();
   });
 });

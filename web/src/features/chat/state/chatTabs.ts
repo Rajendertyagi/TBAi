@@ -95,10 +95,7 @@ function loadPersisted(): PersistedTabs {
   // Tabs are conversations + agent (Code mode) only; drop any page tabs
   // persisted by the interim unified-tab build. Chat and agent tabs carry over.
   const tabs = loaded.tabs.filter((t) => t.kind !== "page");
-  const activeKey =
-    tabs.some((t) => t.key === loaded.activeKey)
-      ? loaded.activeKey
-      : tabs[0]?.key;
+  const activeKey = tabs.some((t) => t.key === loaded.activeKey) ? loaded.activeKey : tabs[0]?.key;
   return { tabs, activeKey };
 }
 
@@ -116,18 +113,15 @@ function loadRaw(): PersistedTabs {
       const openIds = (parsed as { openIds: unknown[] }).openIds.filter(
         (id): id is string => typeof id === "string",
       );
-      const tabs = openIds.map(
-        (id): Tab => ({ key: `chat:${id}`, kind: "chat", ref: id }),
-      );
+      const tabs = openIds.map((id): Tab => ({ key: `chat:${id}`, kind: "chat", ref: id }));
       const legacy = parsed as { activeId?: unknown };
       const activeKey =
-        typeof legacy.activeId === "string"
-          ? `chat:${legacy.activeId}`
-          : tabs[0]?.key;
+        typeof legacy.activeId === "string" ? `chat:${legacy.activeId}` : tabs[0]?.key;
       return {
-        tabs: activeKey && !tabs.some((t) => t.key === activeKey)
-          ? [...tabs, { key: activeKey, kind: "chat", ref: activeKey.slice(5) }]
-          : tabs,
+        tabs:
+          activeKey && !tabs.some((t) => t.key === activeKey)
+            ? [...tabs, { key: activeKey, kind: "chat", ref: activeKey.slice(5) }]
+            : tabs,
         activeKey,
       };
     }
@@ -136,13 +130,10 @@ function loadRaw(): PersistedTabs {
         ? (parsed as { tabs?: unknown }).tabs
         : undefined;
     if (Array.isArray(unifiedShape)) {
-      const tabs = unifiedShape
-        .map(healTab)
-        .filter((t): t is Tab => t !== null);
+      const tabs = unifiedShape.map(healTab).filter((t): t is Tab => t !== null);
       const legacy = parsed as { activeKey?: unknown };
       const activeKey =
-        typeof legacy.activeKey === "string" &&
-        tabs.some((t) => t.key === legacy.activeKey)
+        typeof legacy.activeKey === "string" && tabs.some((t) => t.key === legacy.activeKey)
           ? legacy.activeKey
           : tabs[0]?.key;
       return { tabs, activeKey };
@@ -167,9 +158,7 @@ function persist(tabs: Tab[], activeKey: string | undefined): void {
 const initial = loadPersisted();
 
 function withActive(tabs: Tab[], activeKey: string): { tabs: Tab[]; activeKey: string } {
-  const next = tabs.some((t) => t.key === activeKey)
-    ? tabs
-    : [...tabs, tabForKey(activeKey)];
+  const next = tabs.some((t) => t.key === activeKey) ? tabs : [...tabs, tabForKey(activeKey)];
   persist(next, activeKey);
   return { tabs: next, activeKey };
 }
@@ -271,8 +260,7 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
     logger.info("chat", "tab.open", { kind: "agent", conversationId });
     set((state) => withActive(state.tabs, agentKey(conversationId)));
   },
-  openPage: (route) =>
-    set((state) => withActive(state.tabs, pageKey(route))),
+  openPage: (route) => set((state) => withActive(state.tabs, pageKey(route))),
   close: (key) =>
     set((state) => {
       const remaining = state.tabs.filter((t) => t.key !== key);
@@ -309,9 +297,9 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
           ? nextActiveAfterClose(state.tabs, state.activeKey)
           : undefined;
       const activeKey = activeGone
-        ? (candidate && tabs.some((t) => t.key === candidate)
-            ? candidate
-            : tabs[tabs.length - 1]?.key)
+        ? candidate && tabs.some((t) => t.key === candidate)
+          ? candidate
+          : tabs[tabs.length - 1]?.key
         : state.activeKey;
       logger.info("chat", "tab.close", {
         conversationId: ref,
@@ -353,12 +341,8 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
         const nextKey = agentKey(realId);
         const tabs = state.tabs
           .filter((t) => t.key !== draftKey)
-          .filter(
-            (t, index, arr) => arr.findIndex((x) => x.key === t.key) === index,
-          );
-        const next = tabs.some((t) => t.key === nextKey)
-          ? tabs
-          : [...tabs, tabForKey(nextKey)];
+          .filter((t, index, arr) => arr.findIndex((x) => x.key === t.key) === index);
+        const next = tabs.some((t) => t.key === nextKey) ? tabs : [...tabs, tabForKey(nextKey)];
         logger.info("chat", "conversation.draft_resolved", {
           conversationId: realId,
           engine: "opencode",
@@ -368,14 +352,9 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
       }
       const newKey = chatKey(realId);
       const tabs = state.tabs
-        .map((t) =>
-          t.key === draftKey ? { ...t, key: newKey, ref: realId } : t,
-        )
-        .filter(
-          (t, index, arr) => arr.findIndex((x) => x.key === t.key) === index,
-        );
-      const nextActiveKey =
-        state.activeKey === draftKey ? newKey : state.activeKey;
+        .map((t) => (t.key === draftKey ? { ...t, key: newKey, ref: realId } : t))
+        .filter((t, index, arr) => arr.findIndex((x) => x.key === t.key) === index);
+      const nextActiveKey = state.activeKey === draftKey ? newKey : state.activeKey;
       logger.info("chat", "conversation.draft_resolved", {
         conversationId: realId,
         engine: "direct",
@@ -410,10 +389,7 @@ if (typeof window !== "undefined") {
 }
 
 /** Key to activate after closing `closedKey` (right neighbor preferred). */
-export function nextActiveAfterClose(
-  tabs: Tab[],
-  closedKey: string,
-): string | undefined {
+export function nextActiveAfterClose(tabs: Tab[], closedKey: string): string | undefined {
   const remaining = tabs.filter((t) => t.key !== closedKey);
   if (remaining.length === 0) return undefined;
   const closedIndex = tabs.findIndex((t) => t.key === closedKey);

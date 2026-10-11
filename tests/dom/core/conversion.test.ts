@@ -181,7 +181,10 @@ describe("Q5 — the minimal conversion contract", () => {
     // A plain object shaped like a ThreadMessage is NOT bound.
     const handBuilt = { id: "m1", role: "assistant", content: [{ type: "text", text: "x" }] };
     const handRecovered = getExternalStoreMessages(handBuilt as never);
-    console.log("  hand-built is bound    :", Array.isArray(handRecovered) && handRecovered.length > 0);
+    console.log(
+      "  hand-built is bound    :",
+      Array.isArray(handRecovered) && handRecovered.length > 0,
+    );
     expect(handRecovered.length).toBe(0);
   });
 

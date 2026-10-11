@@ -115,7 +115,9 @@ describe("permission policy — the always-eligible set", () => {
     // from it. The policy module is the single source of truth; everything that
     // needs the action imports it (the native controller included).
     const source = stripComments(
-      await Bun.file(path.join(REPO_ROOT, "web/src/features/permissions/permissionPolicy.ts")).text(),
+      await Bun.file(
+        path.join(REPO_ROOT, "web/src/features/permissions/permissionPolicy.ts"),
+      ).text(),
     );
     const occurrences = source.split(`"${QUESTION_PERMISSION_ACTION}"`).length - 1;
     // Exactly one: the constant's own value. (Comments are stripped above, so
@@ -160,7 +162,9 @@ describe("permission policy — the shield's invariants are unchanged", () => {
 describe("permission policy — the module stays pure", () => {
   it("imports nothing and touches no host API", async () => {
     const source = stripComments(
-      await Bun.file(path.join(REPO_ROOT, "web/src/features/permissions/permissionPolicy.ts")).text(),
+      await Bun.file(
+        path.join(REPO_ROOT, "web/src/features/permissions/permissionPolicy.ts"),
+      ).text(),
     );
 
     expect(source).not.toContain("import ");

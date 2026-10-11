@@ -22,10 +22,7 @@ import { conversationService } from "@/services/storage";
 ).ensureBaseUrl = () => Promise.reject(new Error("readiness failed"));
 
 /** Drive the real Hono route in-process (no server, no network). */
-async function requestRoute(
-  path: string,
-  init?: RequestInit,
-): Promise<Response> {
+async function requestRoute(path: string, init?: RequestInit): Promise<Response> {
   const { default: app } = await import("@/routes/opencode.ts");
   return app.request(`http://localhost${path}`, init);
 }

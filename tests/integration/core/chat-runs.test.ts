@@ -83,11 +83,7 @@ async function deleteBlackholeProviders(): Promise<void> {
 }
 
 /** Poll a condition the server reaches on its own; fails loudly on timeout. */
-async function waitFor(
-  predicate: () => boolean,
-  what: string,
-  timeoutMs = 5000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
@@ -126,19 +122,18 @@ describe("chat run cancel endpoint", () => {
     // Start a run but never consume the body: the handler returns response
     // headers (with the stream id) while the model leg hangs.
     const controller = new AbortController();
-    const pending = app.request(
-      "/api/chat",
-      {
-        method: "POST",
-        headers: json,
-        body: JSON.stringify({
-          providerId,
-          model: "void",
-          messages: [{ id: "msg-run-cancel", role: "user", parts: [{ type: "text", text: "hang forever" }] }],
-        }),
-        signal: controller.signal,
-      },
-    );
+    const pending = app.request("/api/chat", {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({
+        providerId,
+        model: "void",
+        messages: [
+          { id: "msg-run-cancel", role: "user", parts: [{ type: "text", text: "hang forever" }] },
+        ],
+      }),
+      signal: controller.signal,
+    });
     const res = await pending;
     expect(res.status).toBe(200);
     const streamId = res.headers.get("x-resumable-stream-id");

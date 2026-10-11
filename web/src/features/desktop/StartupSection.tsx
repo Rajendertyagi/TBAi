@@ -3,11 +3,7 @@ import { Power } from "lucide-react";
 import { toast } from "sonner";
 import { SettingsSection, SettingRow } from "../../components/shared/settings";
 import { Switch } from "../../components/ui/switch";
-import {
-  isTauri,
-  isAutostartEnabled,
-  setAutostartEnabled,
-} from "../../lib/platform";
+import { isTauri, isAutostartEnabled, setAutostartEnabled } from "../../lib/platform";
 
 /**
  * OS autostart switch ("Start TBAi with Windows").
@@ -37,9 +33,7 @@ export function StartupSection() {
       })
       .catch((err: unknown) => {
         if (!mounted.current) return;
-        setLoadError(
-          err instanceof Error ? err.message : "Could not read startup state.",
-        );
+        setLoadError(err instanceof Error ? err.message : "Could not read startup state.");
       })
       .finally(() => {
         if (mounted.current) setLoading(false);
@@ -100,10 +94,7 @@ export function StartupSection() {
       <SettingRow
         label="Start TBAi with Windows"
         icon={Power}
-        description={
-          loadError ??
-          "Register TBAi to start automatically with Windows sign-in."
-        }
+        description={loadError ?? "Register TBAi to start automatically with Windows sign-in."}
         control={
           <Switch
             checked={enabled}

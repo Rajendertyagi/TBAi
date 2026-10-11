@@ -105,7 +105,9 @@ describe("/compact is intercepted locally and never reaches the model", () => {
     // The last link: the lifecycle event invalidates occupancy, and the ring
     // renders a placeholder rather than the pre-compaction figure. Without this
     // hop, `/compact` would run and the meter would keep showing the old number.
-    expect(display).toContain('if (unknown) return <span className="font-mono tabular-nums">--</span>;');
+    expect(display).toContain(
+      'if (unknown) return <span className="font-mono tabular-nums">--</span>;',
+    );
     // And no fabricated estimate keeps the ring populated.
     expect(display).not.toContain("unknown ? Math.round(percent)");
   });
@@ -113,13 +115,20 @@ describe("/compact is intercepted locally and never reaches the model", () => {
 
 describe("/compact uses OpenCode's own compaction", () => {
   it("calls the OpenCode compact operation, not a local summarizer", () => {
-    expect(controller).toContain("generation.operations.compact({ sessionID: client.sessionId, id, delivery: \"steer\" })");
+    // Layout-independent: the argument list is spread over several lines, and a
+    // single-line `toContain` of the whole call pinned the assertion to a
+    // wrapping style rather than to the fields the call is made with.
+    expect(controller).toMatch(
+      /generation\.operations\.compact\(\{[\s\S]*?sessionID: client\.sessionId,[\s\S]*?id,[\s\S]*?delivery: "steer",?[\s\S]*?\}\)/,
+    );
   });
 
   it("admits the resulting inbox record as a compaction", () => {
-    // The server's admission, not a locally invented one.
+    // The server's admission, not a locally invented one. The inbox fields are
+    // on separate lines, so the pairing is asserted across them rather than by
+    // a contiguous substring.
     expect(controller).toContain('type: "compaction_admitted"');
-    expect(controller).toContain('type: "compaction", delivery: result.delivery');
+    expect(controller).toMatch(/type: "compaction",[\s\S]*?delivery: result\.delivery,/);
   });
 
   it("reconstructs the run from logs alone", async () => {

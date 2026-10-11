@@ -134,14 +134,9 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       // `DirectViewportBridge` performs the recovery in an effect after the
       // adapter records the failure, and latches on `recoveryAttempted`, so a
       // persistently broken route must not turn this into a retry loop.
-      await expect
-        .poll(() => requests.length, { timeout: 30_000 })
-        .toBe(2);
+      await expect.poll(() => requests.length, { timeout: 30_000 }).toBe(2);
       await page.waitForTimeout(SETTLE_MS);
-      expect(
-        requests.length,
-        "recovery must stay bounded while the route stays broken",
-      ).toBe(2);
+      expect(requests.length, "recovery must stay bounded while the route stays broken").toBe(2);
 
       await page.unroute(WINDOW_ROUTE);
 
@@ -206,10 +201,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       // The proof of recovery: the seeded tip row renders.
       await expectTipLoaded(page, `rec-${tag}-a-11`);
       await expect.poll(() => requests.length, { timeout: 30_000 }).toBe(2);
-      expect(
-        requests.length,
-        "recovery must stop once the retry has succeeded",
-      ).toBe(2);
+      expect(requests.length, "recovery must stop once the retry has succeeded").toBe(2);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);
       await request.delete(`/api/conversations/${target}`).catch(() => undefined);
@@ -263,9 +255,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       await page.goto(`/#/chat/${empty}`);
       await expectShell(page);
       await expect.poll(() => requests.length, { timeout: 30_000 }).toBe(1);
-      await expect
-        .poll(() => page.locator("[data-row-key]").count(), { timeout: 30_000 })
-        .toBe(0);
+      await expect.poll(() => page.locator("[data-row-key]").count(), { timeout: 30_000 }).toBe(0);
 
       // The visible failure state must agree: a conversation that genuinely holds
       // nothing must NOT be told its history could not be loaded. Counting
@@ -328,10 +318,7 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       // --- 1. bounded while the route stays broken ---------------------------
       await expect.poll(() => requests.length, { timeout: 30_000 }).toBe(2);
       await page.waitForTimeout(SETTLE_MS);
-      expect(
-        requests.length,
-        "a route that stays broken must not become a retry loop",
-      ).toBe(2);
+      expect(requests.length, "a route that stays broken must not become a retry loop").toBe(2);
 
       await page.unroute(WINDOW_ROUTE);
 
@@ -342,10 +329,9 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       await page.goto(`/#/chat/${target}`);
       await expectTipLoaded(page, `rec-${tag}-a-11`);
       await page.waitForTimeout(SETTLE_MS);
-      expect(
-        requests.length,
-        "a new visit must re-arm the budget, and stop once it succeeds",
-      ).toBe(1);
+      expect(requests.length, "a new visit must re-arm the budget, and stop once it succeeds").toBe(
+        1,
+      );
 
       // --- 3. once healthy, further visits must be silent --------------------
       for (const revisit of [1, 2]) {

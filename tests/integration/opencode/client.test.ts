@@ -52,10 +52,7 @@ function startClientFixture(): {
 }
 
 /** Calls the real client in a fresh Bun process so unrelated module mocks cannot replace it. */
-async function runIsolatedClient(
-  baseUrl: string,
-  directory?: string | null,
-): Promise<void> {
+async function runIsolatedClient(baseUrl: string, directory?: string | null): Promise<void> {
   const options = directory === undefined ? "{}" : `{ directory: ${JSON.stringify(directory)} }`;
   const script = `
     const { createOpenCodeClient } = await import(${JSON.stringify(clientModuleUrl)});
@@ -71,10 +68,7 @@ async function runIsolatedClient(
     stdout: "ignore",
     stderr: "pipe",
   });
-  const [exitCode, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stderr).text(),
-  ]);
+  const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
   if (exitCode !== 0) {
     throw new Error(`OpenCode client fixture process failed: ${stderr}`);
   }

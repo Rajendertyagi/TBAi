@@ -7,9 +7,9 @@
  */
 import { describe, it, expect } from "bun:test";
 import { Hono } from "hono";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import conversationsApp from "@/routes/conversations.ts";
 import toolsApp from "@/routes/tools.ts";
 
@@ -67,7 +67,11 @@ describe("outside-workspace check/grant", () => {
       body: JSON.stringify({ conversationId, tool: "read_file", path: outsideFile }),
     });
     expect(grant.status).toBe(200);
-    const granted = (await grant.json()) as { ok: boolean; grantId: string; resolvedTarget: string };
+    const granted = (await grant.json()) as {
+      ok: boolean;
+      grantId: string;
+      resolvedTarget: string;
+    };
     expect(granted.ok).toBe(true);
     expect(granted.grantId).toBeTruthy();
     expect(granted.resolvedTarget).toBe(checked.resolvedTarget);
@@ -88,7 +92,11 @@ describe("outside-workspace check/grant", () => {
       const res = await app.request(route, {
         method: "POST",
         headers: json,
-        body: JSON.stringify({ conversationId: "does-not-exist", tool: "read_file", path: "x.txt" }),
+        body: JSON.stringify({
+          conversationId: "does-not-exist",
+          tool: "read_file",
+          path: "x.txt",
+        }),
       });
       expect(res.status).toBe(400);
     }
@@ -124,7 +132,11 @@ describe("one-shot granted execution", () => {
       }),
     });
     expect(run.status).toBe(200);
-    const body = (await run.json()) as { ok: boolean; grantId: string; output: { entries: Array<{ name: string }> } };
+    const body = (await run.json()) as {
+      ok: boolean;
+      grantId: string;
+      output: { entries: Array<{ name: string }> };
+    };
     expect(body.ok).toBe(true);
     expect(body.grantId).toBeTruthy();
     expect(body.output.entries.map((e) => e.name)).toContain("secret.txt");
@@ -157,7 +169,11 @@ describe("one-shot granted execution", () => {
     const unknown = await app.request("/api/tools/run-granted", {
       method: "POST",
       headers: json,
-      body: JSON.stringify({ conversationId: "does-not-exist", tool: "list_dir", args: { path: "/tmp" } }),
+      body: JSON.stringify({
+        conversationId: "does-not-exist",
+        tool: "list_dir",
+        args: { path: "/tmp" },
+      }),
     });
     expect(unknown.status).toBe(400);
   });

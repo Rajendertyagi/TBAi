@@ -102,9 +102,7 @@ function controlledResponse(): Response {
       if (stage === 0) {
         stage = 1;
         controller.enqueue(
-          encoder.encode(
-            chatCompletionChunk({ role: "assistant", content: ANSWER_TEXT_MARKER }),
-          ),
+          encoder.encode(chatCompletionChunk({ role: "assistant", content: ANSWER_TEXT_MARKER })),
         );
         return;
       }
@@ -185,14 +183,16 @@ function userMessage(text: string): Record<string, unknown> {
 }
 
 async function createDirectConversation(title: string): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title,
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title,
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 
@@ -463,7 +463,11 @@ describe("History reconciliation — outstanding completed run", () => {
    * with no grace window so a just-settled row is immediately eligible.
    */
   async function reconcileNow(): Promise<HistoryReconcileReport | null> {
-    startHistoryReconciliation({ deps: chatHistoryReconcilerDeps, graceMs: 0, runImmediately: false });
+    startHistoryReconciliation({
+      deps: chatHistoryReconcilerDeps,
+      graceMs: 0,
+      runImmediately: false,
+    });
     try {
       return await runHistoryReconciliationOnce();
     } finally {
@@ -516,7 +520,9 @@ describe("History reconciliation — outstanding completed run", () => {
       expect(assistantRows[0].parent_id).toBe(USER_MESSAGE_ID);
       expect(historyStateOf(streamId)).toBe("done");
 
-      const reconciled = logEntriesSince(since).filter((e) => e.event === "chat_history_reconciled");
+      const reconciled = logEntriesSince(since).filter(
+        (e) => e.event === "chat_history_reconciled",
+      );
       expect(reconciled.length).toBe(1);
     } finally {
       await conversationService.delete(conversationId);
@@ -804,8 +810,9 @@ describe("Stream status endpoint — the client's durable question", () => {
 
       // An empty conversation is not "missing a reply" in any useful sense, but it
       // is certainly not a reply, and the client treats absent as unknown.
-      expect(await messageService.endsWithReply(await createDirectConversation("status-empty")))
-        .toBe(false);
+      expect(
+        await messageService.endsWithReply(await createDirectConversation("status-empty")),
+      ).toBe(false);
     } finally {
       await conversationService.delete(conversationId);
       await conversationService.delete(empty);
@@ -829,7 +836,8 @@ describe("Stream status endpoint — the client's durable question", () => {
     }
   }, 30000);
 
-  it("still answers by stream id for a caller that holds one", async () => {    await seedControlledProvider();
+  it("still answers by stream id for a caller that holds one", async () => {
+    await seedControlledProvider();
     const conversationId = await createDirectConversation("status-by-stream");
     try {
       const { streamId } = await runAttached(conversationId);
@@ -874,10 +882,7 @@ describe("History finalization — browser/server convergence", () => {
    * A durable row in the state a completed run leaves behind: verdict recorded,
    * conversation bound, history still pending. `streamId` is server-minted.
    */
-  async function completedStreamRow(
-    conversationId: string,
-    messageId: string,
-  ): Promise<string> {
+  async function completedStreamRow(conversationId: string, messageId: string): Promise<string> {
     const streamId = `stream_conv_${messageId}`;
     await chatStreamStore.acquireLease(streamId);
     await chatStreamStore.append(streamId, new TextEncoder().encode('{"type":"finish"}'));
@@ -886,18 +891,17 @@ describe("History finalization — browser/server convergence", () => {
     return streamId;
   }
 
-  const browserWrite = async (
-    conversationId: string,
-    messageId: string,
-    parentId: string,
-  ) => {
+  const browserWrite = async (conversationId: string, messageId: string, parentId: string) => {
     // Exactly what the assistant-ui adapter posts: the id in the entry, the
     // message body without it.
     await messageService.upsertStored(conversationId, {
       id: messageId,
       parent_id: parentId,
       format: "ai-sdk/v6",
-      content: { role: "assistant", parts: [{ type: "text", text: ANSWER_TEXT_MARKER, state: "done" }] },
+      content: {
+        role: "assistant",
+        parts: [{ type: "text", text: ANSWER_TEXT_MARKER, state: "done" }],
+      },
     });
   };
 
@@ -998,7 +1002,7 @@ describe("History finalization — browser/server convergence", () => {
       const row = (await storedRows(conversationId)).find((r) => r.id === messageId);
       expect(row).toBeDefined();
       expect(row?.parent_id).toBe(USER_MESSAGE_ID);
-      expect((row?.content as { id?: unknown }).id).toBeUndefined();
+      expect((row?.content as { id?: unknown } | undefined)?.id).toBeUndefined();
       expect(row?.format).toBe("ai-sdk/v6");
     } finally {
       await conversationService.delete(conversationId);
@@ -1021,9 +1025,9 @@ describe("Detached history finalization — non-completed runs", () => {
       // verdict must agree: no finalization, no message row.
       expect(await assistantRow(conversationId)).toBeNull();
       expect(historyStateOf(streamId)).toBe("pending");
-      expect(logEntriesSince(since).filter((e) => e.event === "chat_history_finalized").length).toBe(
-        0,
-      );
+      expect(
+        logEntriesSince(since).filter((e) => e.event === "chat_history_finalized").length,
+      ).toBe(0);
     } finally {
       await conversationService.delete(conversationId);
     }

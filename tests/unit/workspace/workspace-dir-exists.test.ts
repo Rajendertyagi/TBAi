@@ -25,8 +25,8 @@
  * data.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { conversationService } from "@/services/storage";
 import { getWorkspaceDir } from "@/services/tools.ts";
 import { chatWorkspaceDir, resolveConversationWorkspace } from "@/services/workspace.ts";
@@ -36,7 +36,7 @@ const CHATS_ROOT = path.join(getWorkspaceDir(), "chats");
 
 /** Refuse to run against a non-temporary workspace root. */
 function assertIsolatedRoot(label: string): void {
-  const tmp = path.resolve(require("os").tmpdir());
+  const tmp = path.resolve(require("node:os").tmpdir());
   const resolved = path.resolve(CHATS_ROOT);
   // Must live under the OS temp root, and must NOT live under the repo. The
   // second check is the one that matters: the test deletes directories.

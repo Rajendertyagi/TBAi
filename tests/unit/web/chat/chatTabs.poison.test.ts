@@ -113,9 +113,11 @@ describe("threadUrl — engine-aware thread opening", () => {
 
 describe("healTab — persisted poison repair", () => {
   it("repairs a poisoned agent entry (chat kind + colon ref) by key", () => {
-    expect(
-      healTab({ key: "agent:abc", kind: "chat", ref: ":abc" }),
-    ).toEqual({ key: "agent:abc", kind: "agent", ref: "abc" });
+    expect(healTab({ key: "agent:abc", kind: "chat", ref: ":abc" })).toEqual({
+      key: "agent:abc",
+      kind: "agent",
+      ref: "abc",
+    });
   });
 
   it("keeps well-formed chat/agent/page tabs byte-identical", () => {

@@ -67,7 +67,10 @@ function idsOf(messages: readonly unknown[]): Set<string> {
  *                          necessarily an error (a rebased thread can look like
  *                          this legitimately).
  */
-export function classifyDivergence(submittedIds: ReadonlySet<string>, storedIds: ReadonlySet<string>): DivergenceReport {
+export function classifyDivergence(
+  submittedIds: ReadonlySet<string>,
+  storedIds: ReadonlySet<string>,
+): DivergenceReport {
   let onlyInStored = 0;
   let onlyInSubmitted = 0;
   for (const id of storedIds) if (!submittedIds.has(id)) onlyInStored += 1;
@@ -145,7 +148,10 @@ export async function reconcileWithStoredHistory(input: {
  * is the last element), there is no current user turn; the returned set is
  * empty and every message is retained history. The budget must tolerate that.
  */
-export function identifyCurrentTurn(messages: readonly UIMessage[]): { currentIds: string[]; retainedIds: string[] } {
+export function identifyCurrentTurn(messages: readonly UIMessage[]): {
+  currentIds: string[];
+  retainedIds: string[];
+} {
   const currentIds: string[] = [];
   const retainedIds: string[] = [];
 
@@ -155,7 +161,9 @@ export function identifyCurrentTurn(messages: readonly UIMessage[]): { currentId
     if (role !== "user") continue;
     // A user message that is followed by another user message is still part of
     // the current turn only if nothing assistant-shaped follows it.
-    const followedByAssistant = messages.slice(i + 1).some((later) => messageRole(later) === "assistant");
+    const followedByAssistant = messages
+      .slice(i + 1)
+      .some((later) => messageRole(later) === "assistant");
     if (!followedByAssistant) {
       const id = (message as { id?: unknown }).id;
       if (typeof id === "string") currentIds.push(id);
@@ -180,7 +188,10 @@ export function identifyCurrentTurn(messages: readonly UIMessage[]): { currentId
  * over-count, but they are not model-visible and the contract says so here
  * rather than leaving a reader to infer it.
  */
-export function countModelVisibleParts(message: unknown): { visible: number; droppedDataParts: number } {
+export function countModelVisibleParts(message: unknown): {
+  visible: number;
+  droppedDataParts: number;
+} {
   const parts = (message as { parts?: unknown } | null)?.parts;
   if (!Array.isArray(parts)) return { visible: 0, droppedDataParts: 0 };
   let visible = 0;

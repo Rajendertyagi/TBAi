@@ -18,8 +18,15 @@
  */
 import { expect, test } from "@playwright/test";
 import {
-  REASONING_TRIGGER, mountRow, parkRowInView, readGeometry, reasoningParts,
-  rowByKey, seedTurnConversation, toggleDisclosureInPlace, waitForStableScrollHeight,
+  REASONING_TRIGGER,
+  mountRow,
+  parkRowInView,
+  readGeometry,
+  reasoningParts,
+  rowByKey,
+  seedTurnConversation,
+  toggleDisclosureInPlace,
+  waitForStableScrollHeight,
 } from "./transcriptAnchoring";
 
 const COLLAPSED_PX = 64;
@@ -27,7 +34,10 @@ const EXPECTED_GROWTH_PX = 256;
 const TOLERANCE_PX = 24;
 
 test.describe("real pointer interaction", () => {
-  test("a real click on a reachable trigger records the anchor outcome", async ({ page, request }) => {
+  test("a real click on a reachable trigger records the anchor outcome", async ({
+    page,
+    request,
+  }) => {
     test.setTimeout(300_000);
     const cid = await seedTurnConversation(request, `r1mouse ${Date.now()}`, {
       totalMessages: 150,
@@ -35,7 +45,11 @@ test.describe("real pointer interaction", () => {
       turnParts: reasoningParts(14),
     });
     await page.goto(`/#/chat/${cid}`);
-    await page.getByText("seeded-body-149").first().waitFor({ timeout: 30_000 }).catch(() => {});
+    await page
+      .getByText("seeded-body-149")
+      .first()
+      .waitFor({ timeout: 30_000 })
+      .catch(() => {});
     await waitForStableScrollHeight(page);
     await page.waitForTimeout(1500);
 
@@ -53,7 +67,9 @@ test.describe("real pointer interaction", () => {
       await toggleDisclosureInPlace(page, { rowKey, triggerSelector: REASONING_TRIGGER });
       await page.waitForTimeout(900);
     }
-    expect(collapsed, "the panel must start collapsed for the growth under test to be +256px").toBe(true);
+    expect(collapsed, "the panel must start collapsed for the growth under test to be +256px").toBe(
+      true,
+    );
 
     // Throws unless the row is fully inside the scrollport and its trigger is
     // hit-testable - which is what makes any result below interpretable.
@@ -73,7 +89,10 @@ test.describe("real pointer interaction", () => {
     const anchorKeyBefore = before.rows.find(
       (row) => row.key !== park.targetKey && row.height > 0 && row.top >= park.rowBox.bottom,
     )?.key;
-    expect(anchorKeyBefore, "a row below the growing one must be mounted to observe the anchor").toBeDefined();
+    expect(
+      anchorKeyBefore,
+      "a row below the growing one must be mounted to observe the anchor",
+    ).toBeDefined();
 
     const anchorTopBefore = rowByKey(before, anchorKeyBefore!)?.top ?? -1;
     const scrollTopBefore = before.scrollTop;
@@ -87,7 +106,9 @@ test.describe("real pointer interaction", () => {
 
     const afterClick = await page.evaluate(() => {
       const active = document.activeElement as HTMLElement | null;
-      const el = document.querySelector('[data-testid="virtual-transcript-scroller"]') as HTMLElement;
+      const el = document.querySelector(
+        '[data-testid="virtual-transcript-scroller"]',
+      ) as HTMLElement;
       return {
         scrollTop: el.scrollTop,
         active:

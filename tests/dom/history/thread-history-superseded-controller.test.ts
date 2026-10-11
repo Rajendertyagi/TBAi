@@ -69,7 +69,9 @@ const adapterFor = (remoteId: string) =>
       initialize: async () => ({ remoteId }),
     },
   })) as unknown as {
-    withFormat: (a: unknown) => { load: () => Promise<{ headId: string | null; messages: unknown[] }> };
+    withFormat: (a: unknown) => {
+      load: () => Promise<{ headId: string | null; messages: unknown[] }>;
+    };
   };
 
 describe("Defect S - a superseded controller touches nothing", () => {

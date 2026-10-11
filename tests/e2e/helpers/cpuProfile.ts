@@ -239,7 +239,11 @@ const MAX_CALL_PATH_DEPTH = 8;
  * walk is visit-bounded because profile trees are DAGs in practice (a node can
  * be referenced from more than one parent) and must not spin.
  */
-function callPathOf(parents: Map<number, number>, byId: Map<number, ProfileNode>, startId: number): readonly string[] {
+function callPathOf(
+  parents: Map<number, number>,
+  byId: Map<number, ProfileNode>,
+  startId: number,
+): readonly string[] {
   const path: string[] = [];
   const seen = new Set<number>([startId]);
   let currentId: number | undefined = parents.get(startId);
@@ -299,7 +303,17 @@ function aggregateSelfTime(profile: ProfileResult): {
     selfUsByNode.set(id, (selfUsByNode.get(id) ?? 0) + (deltas[i] ?? 0));
   }
 
-  const byFunction = new Map<string, { us: number; name: string; url: string; line: number; column: number; callPath: readonly string[] }>();
+  const byFunction = new Map<
+    string,
+    {
+      us: number;
+      name: string;
+      url: string;
+      line: number;
+      column: number;
+      callPath: readonly string[];
+    }
+  >();
   const byBucket = new Map<BucketName, number>();
   let totalUs = 0;
   for (const [id, us] of selfUsByNode) {
@@ -322,7 +336,8 @@ function aggregateSelfTime(profile: ProfileResult): {
     const key = `${name} @ ${url}:${line}:${column}`;
     const existing = byFunction.get(key);
     if (existing) existing.us += us;
-    else byFunction.set(key, { us, name, url, line, column, callPath: callPathOf(parents, byId, id) });
+    else
+      byFunction.set(key, { us, name, url, line, column, callPath: callPathOf(parents, byId, id) });
   }
 
   const pct = (us: number): number => (totalUs === 0 ? 0 : (us / totalUs) * 100);
@@ -464,10 +479,7 @@ export function formatTotals(totals: RendererCpuDelta): string {
  * @param assetsDir Directory holding the served chunks, normally `web/dist-profile/assets`.
  * @returns A new array; the input is not mutated.
  */
-export function annotateFromSources(
-  hot: readonly HotFunction[],
-  assetsDir: string,
-): HotFunction[] {
+export function annotateFromSources(hot: readonly HotFunction[], assetsDir: string): HotFunction[] {
   const cache = new Map<string, string[] | null>();
   return hot.map((frame) => {
     if (frame.url === "(native)" || frame.line < 0) return frame;
@@ -565,8 +577,6 @@ export function formatUnattributable(cpu: {
   unattributablePct: number;
 }): string {
   if (cpu.unattributable.length === 0) return "  frameless: none";
-  const rows = cpu.unattributable
-    .map((b) => `${b.name} ${b.sharePct.toFixed(1)}%`)
-    .join(", ");
+  const rows = cpu.unattributable.map((b) => `${b.name} ${b.sharePct.toFixed(1)}%`).join(", ");
   return `  frameless (not symbolicable): ${cpu.unattributablePct.toFixed(1)}%  [${rows}]`;
 }

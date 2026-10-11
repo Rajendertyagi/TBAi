@@ -79,9 +79,7 @@ describe("OpenCode renderers — one approval path, not two", () => {
       ["edit", "OpenCodeEditToolUI"],
       ["write", "OpenCodeWriteToolUI"],
     ] as const) {
-      expect(typeof (ui as Record<string, unknown>)[exported], exported).toBe(
-        "function",
-      );
+      expect(typeof (ui as Record<string, unknown>)[exported], exported).toBe("function");
       expect(code, tool).toContain(`"${tool}"`);
     }
   });

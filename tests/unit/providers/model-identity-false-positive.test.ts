@@ -34,7 +34,8 @@ import { sanitizeStreamError } from "@/lib/redact.ts";
 
 const errWith = (message: string, status: number) => Object.assign(new Error(message), { status });
 
-const MODEL_COPY = "The provider rejected this model. Pick another model or fix the provider's model id.";
+const MODEL_COPY =
+  "The provider rejected this model. Pick another model or fix the provider's model id.";
 const REQUEST_COPY_FRAGMENT = "Retrying the same message will not help";
 
 describe("Generation-400: MODEL_IDENTITY_RE false positives", () => {
@@ -95,7 +96,9 @@ describe("Generation-400: MODEL_IDENTITY_RE true positives are preserved", () =>
 
   it("never overrides a category a refinement already claimed", () => {
     // `validation` and `config` share "invalid …" prose; the refinement wins.
-    const classified = classifyError(errWith("invalid request: invalid model payload rejected", 400));
+    const classified = classifyError(
+      errWith("invalid request: invalid model payload rejected", 400),
+    );
     expect(classified.category).toBe("validation");
     expect(classified.modelIdentity).toBeUndefined();
   });

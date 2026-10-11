@@ -27,13 +27,7 @@ import { Switch } from "./ui/switch";
 import { maxSeq, mergeLogEntries, serializeLogEntries } from "../lib/log-entries";
 import { apiFetch, resolveApiUrl } from "../lib/platform";
 import { SCROLL_END_THRESHOLD_PX } from "../config/virtualization";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 /**
  * Runtime log settings + live viewer (local-only).
@@ -262,7 +256,9 @@ const LogRow = memo(function LogRow({
             aria-expanded={expanded}
             aria-label="Toggle details"
           >
-            <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`} />
+            <ChevronRight
+              className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+            />
           </button>
         ) : (
           <span className="w-3 shrink-0" />
@@ -270,14 +266,12 @@ const LogRow = memo(function LogRow({
         <span className="shrink-0 tabular-nums text-muted-foreground">
           {formatTime(record.time)}
         </span>
-        <span className={`w-12 shrink-0 font-semibold uppercase ${levelBadgeClasses(record.level)}`}>
+        <span
+          className={`w-12 shrink-0 font-semibold uppercase ${levelBadgeClasses(record.level)}`}
+        >
           {record.level}
         </span>
-        <span
-          className="shrink-0 truncate text-muted-foreground/80"
-          style={{ maxWidth: "12rem" }}
-          title={record.scope}
-        >
+        <span className="shrink-0 max-w-48 truncate text-muted-foreground/80" title={record.scope}>
           {record.scope}
         </span>
         <span className="min-w-0 flex-1 whitespace-pre-wrap break-all text-foreground/90">
@@ -569,6 +563,7 @@ export function LogsPanel() {
   // element) before this one, so by the time this runs the scroll element
   // exists and `scrollToEnd` has something to scroll. In a passive effect the
   // element is attached too, but the jump would land after paint.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `virtualizer` is never read in the body - it is an ORDERING dependency, and the only correct fix for an ordering dependency is to name it. `useVirtualizer` attaches the scroll element in its own layout effect, which runs first only because this effect is keyed on the instance it created.
   useLayoutEffect(() => {
     if (didInitialScrollRef.current || !listMounted) return;
     didInitialScrollRef.current = true;
@@ -719,8 +714,8 @@ export function LogsPanel() {
         <section className="space-y-1">
           <h1 className="text-sm font-semibold">Logs</h1>
           <p className="text-xs text-muted-foreground">
-            View and configure runtime logs. Entries are redacted server-side —
-            this view never receives secrets.
+            View and configure runtime logs. Entries are redacted server-side — this view never
+            receives secrets.
           </p>
         </section>
 
@@ -761,8 +756,8 @@ export function LogsPanel() {
           )}
           {throttled.length > 0 && (
             <p className="text-2xs text-amber-500">
-              Throttling {throttled.map((t) => `${t.scope} (${t.dropped} shed)`).join(", ")} —
-              over the 1/sec info budget. Quiet the source or raise its capture level.
+              Throttling {throttled.map((t) => `${t.scope} (${t.dropped} shed)`).join(", ")} — over
+              the 1/sec info budget. Quiet the source or raise its capture level.
             </p>
           )}
 
@@ -792,8 +787,8 @@ export function LogsPanel() {
               <div className="space-y-0.5">
                 <h3 className="text-xs font-semibold">Per-scope overrides</h3>
                 <p className="text-2xs leading-4 text-muted-foreground">
-                  Raise or silence individual scopes. An override matches its scope and
-                  everything below it.
+                  Raise or silence individual scopes. An override matches its scope and everything
+                  below it.
                 </p>
               </div>
               <Button size="sm" variant="outline" onClick={handleAddTarget} disabled={envLocked}>
@@ -807,7 +802,11 @@ export function LogsPanel() {
                   const trimmed = row.scope.trim();
                   const invalid = trimmed !== "" && !SCOPE_RE.test(trimmed);
                   return (
-                    <div key={i} className="flex items-center gap-2">
+                    <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: these are editable rows - the index is the identity of the row the user is typing into, and re-keying them on every keystroke of their own value would destroy focus and caret position mid-edit.
+                      key={i}
+                      className="flex items-center gap-2"
+                    >
                       <Input
                         value={row.scope}
                         onChange={(e) =>
@@ -885,7 +884,11 @@ export function LogsPanel() {
               {liveTail && streamState === "reconnecting" && (
                 <span className="text-xs text-amber-500">Reconnecting…</span>
               )}
-              <Button size="sm" variant={liveTail ? "default" : "outline"} onClick={() => setLiveTail((v) => !v)}>
+              <Button
+                size="sm"
+                variant={liveTail ? "default" : "outline"}
+                onClick={() => setLiveTail((v) => !v)}
+              >
                 {liveTail ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 {liveTail ? "Pause" : "Live"}
               </Button>
@@ -978,23 +981,14 @@ export function LogsPanel() {
                   `measureElement`, which needs BOTH the `data-index` attribute
                   (it reads the index off the element) and the ref.
                 */}
-                <div
-                  style={{
-                    height: virtualizer.getTotalSize(),
-                    position: "relative",
-                    width: "100%",
-                  }}
-                >
+                <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
                   {virtualizer.getVirtualItems().map((item) => (
                     <div
                       key={item.key}
                       ref={virtualizer.measureElement}
                       data-index={item.index}
-                      style={{
-                        position: "absolute",
-                        transform: `translateY(${item.start}px)`,
-                        width: "100%",
-                      }}
+                      className="absolute w-full"
+                      style={{ transform: `translateY(${item.start}px)` }}
                     >
                       <LogRow
                         record={visible[item.index]}
@@ -1014,8 +1008,8 @@ export function LogsPanel() {
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">Log files</h2>
             <p className="text-xs leading-5 text-muted-foreground">
-              On-disk history beyond the memory buffer. Empty while file logging is off
-              (the development default).
+              On-disk history beyond the memory buffer. Empty while file logging is off (the
+              development default).
             </p>
             {retention && (
               <p className="text-2xs text-muted-foreground">

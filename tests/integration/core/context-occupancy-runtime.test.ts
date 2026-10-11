@@ -73,9 +73,12 @@ function chunk(delta: unknown, finish: string | null, usage?: unknown): unknown 
 }
 
 function sse(rows: unknown[]): Response {
-  return new Response([...rows.map((r) => `data: ${JSON.stringify(r)}\n\n`), "data: [DONE]\n\n"].join(""), {
-    headers: { "Content-Type": "text/event-stream" },
-  });
+  return new Response(
+    [...rows.map((r) => `data: ${JSON.stringify(r)}\n\n`), "data: [DONE]\n\n"].join(""),
+    {
+      headers: { "Content-Type": "text/event-stream" },
+    },
+  );
 }
 
 /**
@@ -96,17 +99,30 @@ async function seedControlledProvider(): Promise<void> {
             {
               role: "assistant",
               tool_calls: [
-                { index: 0, id: "call_1", type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "." }) } },
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "list_dir", arguments: JSON.stringify({ path: "." }) },
+                },
               ],
             },
             null,
           ),
-          chunk({}, "tool_calls", { prompt_tokens: FIRST_PROMPT_TOKENS, completion_tokens: 20, total_tokens: FIRST_PROMPT_TOKENS + 20 }),
+          chunk({}, "tool_calls", {
+            prompt_tokens: FIRST_PROMPT_TOKENS,
+            completion_tokens: 20,
+            total_tokens: FIRST_PROMPT_TOKENS + 20,
+          }),
         ]);
       }
       return sse([
         chunk({ role: "assistant", content: "done" }, null),
-        chunk({}, "stop", { prompt_tokens: SECOND_PROMPT_TOKENS, completion_tokens: 20, total_tokens: SECOND_PROMPT_TOKENS + 20 }),
+        chunk({}, "stop", {
+          prompt_tokens: SECOND_PROMPT_TOKENS,
+          completion_tokens: 20,
+          total_tokens: SECOND_PROMPT_TOKENS + 20,
+        }),
       ]);
     },
   });
@@ -165,7 +181,11 @@ function findPublishedContext(sseText: string): PublishedContext | undefined {
     const carriers = [
       parsed.context,
       (parsed.metadata as Record<string, unknown> | undefined)?.context,
-      ((parsed.metadata as Record<string, unknown> | undefined)?.custom as Record<string, unknown> | undefined)?.context,
+      (
+        (parsed.metadata as Record<string, unknown> | undefined)?.custom as
+          | Record<string, unknown>
+          | undefined
+      )?.context,
       meta?.context,
       custom?.context,
     ];
@@ -200,14 +220,16 @@ function findPublishedUsageInputTokens(sseText: string): number | undefined {
 describe("runtime: the meter reads occupancy, not traffic", () => {
   it("publishes the final round trip's prompt size, not the step sum", async () => {
     await seedControlledProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "occupancy-runtime",
-      providerId: PROVIDER_ID,
-      modelId: MODEL_ID,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "occupancy-runtime",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const res = await app.request("/api/chat", {
@@ -217,7 +239,9 @@ describe("runtime: the meter reads occupancy, not traffic", () => {
           providerId: PROVIDER_ID,
           model: MODEL_ID,
           id: conv.id,
-          messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "list the directory" }] }],
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "list the directory" }] },
+          ],
         }),
       });
       const body = await res.text();
@@ -258,14 +282,16 @@ describe("runtime: the meter reads occupancy, not traffic", () => {
 
   it("occupancy stays under the window even when traffic exceeds it", async () => {
     await seedControlledProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "occupancy-window",
-      providerId: PROVIDER_ID,
-      modelId: MODEL_ID,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "occupancy-window",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const res = await app.request("/api/chat", {
@@ -275,7 +301,9 @@ describe("runtime: the meter reads occupancy, not traffic", () => {
           providerId: PROVIDER_ID,
           model: MODEL_ID,
           id: conv.id,
-          messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "list the directory" }] }],
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "list the directory" }] },
+          ],
         }),
       });
       const context = findPublishedContext(await res.text());

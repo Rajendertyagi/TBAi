@@ -36,14 +36,11 @@
  */
 
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
-import path from "node:path";
-import * as fs from "node:fs";
 import { Hono } from "hono";
 import { db } from "@/db";
 import { registry } from "@/config/providers.ts";
 import { conversationService } from "@/services/storage";
 import chatApp from "@/routes/chat.ts";
-import { REPO_ROOT } from "../../helpers/repo-root";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 import { readDirectRouteSource } from "../../helpers/direct-route-source";
 
@@ -123,14 +120,16 @@ afterAll(async () => {
 describe("OWNERSHIP: an ordinary provider error is published exactly once", () => {
   it("surfaces exactly one error chunk, from one provider call, with no retry", async () => {
     await seed();
-    const conv = await conversationService.create(conversationInput({
-      title: "error-ownership",
-      providerId: PROVIDER_ID,
-      modelId: MODEL_ID,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "error-ownership",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const res = await app.request("/api/chat", {
@@ -164,8 +163,7 @@ describe("OWNERSHIP: the structural precondition the redesign depends on", () =>
   // and `settleRun` / `publishFinalProviderError` with it. The ownership contract
   // below is about the Direct route as a whole, so it reads the route whole rather
   // than one file. See `tests/helpers/direct-route-source.ts`.
-  const routeSource = (): string =>
-    readDirectRouteSource(["execute-direct-stream.ts"]);
+  const routeSource = (): string => readDirectRouteSource(["execute-direct-stream.ts"]);
 
   it("attempt-level onError now CAPTURES only, and the gate publishes", () => {
     // The ownership model this suite was written to protect is now IMPLEMENTED.
@@ -196,7 +194,7 @@ describe("OWNERSHIP: the structural precondition the redesign depends on", () =>
     // by accident, and the recovery design can be simplified.
     const src = routeSource();
     const composed = src.slice(src.indexOf("The composed stream reports error chunks"));
-    expect(composed).toContain("settleRun(\"failed\")");
+    expect(composed).toContain('settleRun("failed")');
     expect(composed).toContain("logAiError(");
   });
 

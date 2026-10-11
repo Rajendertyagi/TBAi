@@ -59,21 +59,15 @@ describe("isSessionThreadBound — settled-boundary predicate", () => {
 
   it("wrong thread identity is not bound", () => {
     expect(isSessionThreadBound({ remoteId: "draft-1" }, "ses_1")).toBe(false);
-    expect(
-      isSessionThreadBound({ remoteId: "ses_2", externalId: "ses_2" }, "ses_1"),
-    ).toBe(false);
+    expect(isSessionThreadBound({ remoteId: "ses_2", externalId: "ses_2" }, "ses_1")).toBe(false);
   });
 
   it("missing session id never binds", () => {
-    expect(
-      isSessionThreadBound({ remoteId: "ses_1", externalId: "ses_1" }, undefined),
-    ).toBe(false);
+    expect(isSessionThreadBound({ remoteId: "ses_1", externalId: "ses_1" }, undefined)).toBe(false);
   });
 
   it("externalId wins, remoteId is the fallback", () => {
-    expect(
-      isSessionThreadBound({ remoteId: "ses_1", externalId: "ses_1" }, "ses_1"),
-    ).toBe(true);
+    expect(isSessionThreadBound({ remoteId: "ses_1", externalId: "ses_1" }, "ses_1")).toBe(true);
     expect(isSessionThreadBound({ remoteId: "ses_1" }, "ses_1")).toBe(true);
   });
 });

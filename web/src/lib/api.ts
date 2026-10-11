@@ -91,11 +91,7 @@ export function errorText(value: unknown, fallback: string): string {
  * when `scope` is supplied. Pass `scope` for stores whose failures the operator
  * must be able to find in the backend log.
  */
-export async function apiJson<T>(
-  path: string,
-  init?: RequestInit,
-  scope?: string,
-): Promise<T> {
+export async function apiJson<T>(path: string, init?: RequestInit, scope?: string): Promise<T> {
   const response = await apiFetch(path, {
     headers: { "Content-Type": "application/json" },
     ...init,
@@ -125,10 +121,7 @@ export async function apiJson<T>(
  * failed toggle never unmounts the list. The failed payload is still returned
  * as `data`, because a 4xx there can carry a usable entity.
  */
-export async function apiResult<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<ApiResult<T>> {
+export async function apiResult<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const response = await apiFetch(path, {
     headers: { "Content-Type": "application/json" },
     ...init,

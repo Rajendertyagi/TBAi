@@ -53,16 +53,19 @@ import {
   ExternalStoreThreadRuntimeCore,
   getExternalStoreMessages,
 } from "../../helpers/dom/resolve.ts";
-import { WindowController, type PersistedRow } from "@web/features/chat/history/windowController.ts";
+import {
+  WindowController,
+  type PersistedRow,
+} from "@web/features/chat/history/windowController.ts";
 
 const enc = new TextEncoder();
 const sse = (o: unknown) => enc.encode(`data: ${JSON.stringify(o)}\n\n`);
 
-let submissions = 0;
+let _submissions = 0;
 const transport = new AssistantChatTransport({
   api: "/api/chat",
   fetch: (async () => {
-    submissions += 1;
+    _submissions += 1;
     return new Response(
       new ReadableStream({
         start(c) {
@@ -101,15 +104,22 @@ const controllerFor = () =>
   new WindowController({
     limit: 50,
     overscan: 2,
-    anchors: () => ({ top: { messageId: "m4", offset: 0 }, bottom: { messageId: "m5", offset: 0 } }),
+    anchors: () => ({
+      top: { messageId: "m4", offset: 0 },
+      bottom: { messageId: "m5", offset: 0 },
+    }),
     fetchWindow: async ({ direction, anchorId }) => {
       const ids = ROWS.map((r) => r.id);
-      const start = anchorId === null ? 0 : Math.max(0, ids.indexOf(anchorId) + (direction === "older" ? -4 : 1));
+      const start =
+        anchorId === null
+          ? 0
+          : Math.max(0, ids.indexOf(anchorId) + (direction === "older" ? -4 : 1));
       return {
         messages: ROWS.slice(start, start + 5),
         hasMoreBefore: start > 0,
         hasMoreAfter: start + 5 < ROWS.length,
-        contiguous: true, complete: true,
+        contiguous: true,
+        complete: true,
       };
     },
   });
@@ -123,7 +133,13 @@ function Probe() {
 function App({ controller }: { controller: WindowController }) {
   const seed = controller.repositorySeed();
   const runtime = useRemoteThreadListRuntime({
-    runtimeHook: useMemo(() => function Thread() { return useDirectThread(seed); }, [seed]),
+    runtimeHook: useMemo(
+      () =>
+        function Thread() {
+          return useDirectThread(seed);
+        },
+      [seed],
+    ),
     adapter: {
       list: async () => ({ threads: [{ remoteId: "p2", title: "t", status: "regular" }] }),
       fetch: async (id: string) => ({ remoteId: id, title: "t", status: "regular" }),
@@ -203,13 +219,19 @@ describe("P2 — real runtime rendering (non-production seed path; see file head
         getModelContext: () => ({ tools: {}, callSettings: {}, system: undefined, config: {} }),
         registerModelContextProvider: () => () => {},
       } as never,
-      { messages: AISDKMessageConverter.toThreadMessages(ROWS.map((r) => r.message) as never, false, {} as never) as never, isRunning: false } as never,
+      {
+        messages: AISDKMessageConverter.toThreadMessages(
+          ROWS.map((r) => r.message) as never,
+          false,
+          {} as never,
+        ) as never,
+        isRunning: false,
+      } as never,
     );
     const merged = (core.messages as Array<{ id: string }>).find((m) => m.id === "m2")!;
-    expect((getExternalStoreMessages(merged as never) as Array<{ id: string }>).map((m) => m.id)).toEqual([
-      "m2",
-      "m3",
-    ]);
+    expect(
+      (getExternalStoreMessages(merged as never) as Array<{ id: string }>).map((m) => m.id),
+    ).toEqual(["m2", "m3"]);
 
     await act(async () => root.unmount());
   });
@@ -232,7 +254,10 @@ describe("P2 — real runtime rendering (non-production seed path; see file head
       } as never,
       {
         messageRepository: {
-          messages: converted.map((m, i) => ({ message: m, parentId: i === 0 ? null : converted[i - 1]!.id })),
+          messages: converted.map((m, i) => ({
+            message: m,
+            parentId: i === 0 ? null : converted[i - 1]!.id,
+          })),
           headId: converted.at(-1)!.id,
         } as never,
         isRunning: false,
@@ -243,12 +268,17 @@ describe("P2 — real runtime rendering (non-production seed path; see file head
     // L. merged row: the write-back carries BOTH m2 and m3, and m4's parent is
     // the persisted m3 rather than the row m2.
     const writeBack = controller.writeBack(
-      rows.map((m, i) => ({ message: m, parentId: i === 0 ? null : (rows[i - 1] as { id: string }).id })),
+      rows.map((m, i) => ({
+        message: m,
+        parentId: i === 0 ? null : (rows[i - 1] as { id: string }).id,
+      })),
     );
     console.log("\n=== real runtime: write-back ===");
     console.log(`  rendered rows : ${rows.map((m) => m.id).join(",")}`);
     console.log(`  write-back    : ${writeBack.messages.map((m) => m.id).join(",")}`);
-    console.log(`  parents       : ${JSON.stringify(writeBack.messages.map((m) => [m.id, m.parentId]))}`);
+    console.log(
+      `  parents       : ${JSON.stringify(writeBack.messages.map((m) => [m.id, m.parentId]))}`,
+    );
 
     expect(writeBack.messages.map((m) => m.id)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
     expect(Object.fromEntries(writeBack.messages.map((m) => [m.id, m.parentId]))).toEqual({
@@ -262,15 +292,20 @@ describe("P2 — real runtime rendering (non-production seed path; see file head
 
     // K. a repository rebuilt without the binding cannot become an empty write.
     const stripped = ExportedMessageRepository.fromBranchableArray(
-      converted.map((m, i) => ({ message: m, parentId: i === 0 ? null : converted[i - 1]!.id })) as never,
+      converted.map((m, i) => ({
+        message: m,
+        parentId: i === 0 ? null : converted[i - 1]!.id,
+      })) as never,
       { headId: converted.at(-1)!.id },
     );
-    const strippedRows = (stripped as never as { messages: Array<{ message: unknown; parentId: string | null }> }).messages;
+    const strippedRows = (
+      stripped as never as { messages: Array<{ message: unknown; parentId: string | null }> }
+    ).messages;
     expect(() => controller.writeBack(strippedRows)).toThrow();
   });
 
   it("D/E. historical state blocks the send; restoring re-enables it", async () => {
-    submissions = 0;
+    _submissions = 0;
     const controller = controllerFor();
     const root = await mount(controller);
 
@@ -279,7 +314,9 @@ describe("P2 — real runtime rendering (non-production seed path; see file head
     });
 
     console.log("\n=== real runtime: historical gate ===");
-    console.log(`  historical=${controller.historical} active=${controller.isActive} tip=${controller.authoritativeTip}`);
+    console.log(
+      `  historical=${controller.historical} active=${controller.isActive} tip=${controller.authoritativeTip}`,
+    );
     expect(controller.historical).toBe(true);
     expect(controller.isActive).toBe(false);
     // The authoritative tip is preserved while viewing history.

@@ -88,7 +88,11 @@ function user(id: string, text: string): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
 }
 function assistant(id: string, text: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", text, state: "done" }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text, state: "done" }],
+  } as unknown as UIMessage;
 }
 
 /**
@@ -118,7 +122,9 @@ function regressedConversation(): { messages: UIMessage[]; measuredTokens: numbe
 
 /** Ids of the contiguous covered prefix, as a durable record would hold them. */
 function coveredIds(messages: readonly UIMessage[]): string[] {
-  return messages.slice(COVERED_START, COVERED_START + COVERED_COUNT).map((m) => String((m as { id: string }).id));
+  return messages
+    .slice(COVERED_START, COVERED_START + COVERED_COUNT)
+    .map((m) => String((m as { id: string }).id));
 }
 
 /** Total measured tokens across the removable range. */
@@ -238,7 +244,8 @@ describe("a repeated compaction extends FORWARD over new growth", () => {
     const result = plan();
     if (result.kind !== "compact") throw new Error("expected a compaction plan");
     const summarizerRead =
-      PRIOR_SUMMARY_TOKENS + sumRange(measuredTokens, result.summarizerStartIndex, result.spanEndIndex);
+      PRIOR_SUMMARY_TOKENS +
+      sumRange(measuredTokens, result.summarizerStartIndex, result.spanEndIndex);
     expect(summarizerRead).toBeLessThanOrEqual(SUMMARISER_CAPACITY);
   });
 });
@@ -252,7 +259,9 @@ describe("forward progress stops only when there is genuinely nothing new", () =
     // loop, because it describes THIS span rather than the conversation's growth.
     const { messages, measuredTokens } = regressedConversation();
     const result = plan({
-      measuredTokens: measuredTokens.map((t, i) => (i >= GROWTH_START ? SUMMARISER_CAPACITY * 2 : t)),
+      measuredTokens: measuredTokens.map((t, i) =>
+        i >= GROWTH_START ? SUMMARISER_CAPACITY * 2 : t,
+      ),
     });
     expect(result).toEqual({ kind: "none", reason: "span_exceeds_summarizer_capacity" });
     expect(messages).toHaveLength(MESSAGE_COUNT);
@@ -286,7 +295,8 @@ describe("forward progress stops only when there is genuinely nothing new", () =
         i >= GROWTH_START ? Math.ceil(SUMMARISER_CAPACITY / 3) : t,
       ),
     });
-    if (result.kind !== "compact") throw new Error(`expected a compaction plan, got ${result.reason}`);
+    if (result.kind !== "compact")
+      throw new Error(`expected a compaction plan, got ${result.reason}`);
     expect(result.summarizerStartIndex).toBe(GROWTH_START);
     expect(result.spanEndIndex).toBeLessThan(CUT_INDEX);
     expect(result.spanEndIndex).toBeGreaterThanOrEqual(GROWTH_START);
@@ -306,7 +316,8 @@ describe("an unprovable covered prefix falls back instead of splicing", () => {
       measuredTokens,
       coveredMessageIds: ["not-in-this-conversation", "also-absent"],
     });
-    if (result.kind !== "compact") throw new Error(`expected a compaction plan, got ${result.reason}`);
+    if (result.kind !== "compact")
+      throw new Error(`expected a compaction plan, got ${result.reason}`);
     expect(result.summarizerStartIndex).toBe(result.spanStartIndex);
   });
 
@@ -317,7 +328,8 @@ describe("an unprovable covered prefix falls back instead of splicing", () => {
     const ids = coveredIds(messages);
     const gapped = [...ids.slice(0, -1), "u11"]; // drop one id, append a later one
     const result = plan({ messages, measuredTokens, coveredMessageIds: gapped });
-    if (result.kind !== "compact") throw new Error(`expected a compaction plan, got ${result.reason}`);
+    if (result.kind !== "compact")
+      throw new Error(`expected a compaction plan, got ${result.reason}`);
     expect(result.summarizerStartIndex).toBe(result.spanStartIndex);
   });
 });
@@ -331,7 +343,8 @@ describe("a first compaction is unchanged by any of this", () => {
       compactionLatched: false,
       coveredMessageIds: undefined,
     });
-    if (result.kind !== "compact") throw new Error(`expected a compaction plan, got ${result.reason}`);
+    if (result.kind !== "compact")
+      throw new Error(`expected a compaction plan, got ${result.reason}`);
     expect(result.summarizerStartIndex).toBe(result.spanStartIndex);
   });
 });
@@ -460,7 +473,12 @@ describe("forward progress survives many generations", () => {
         assistant(`y${round}`, `follow-up reply ${round}`),
         user(`live${round}`, `the current question ${round}`),
       ];
-      const newTokens = [...tokens, SETTLED_MESSAGE_TOKENS, SETTLED_MESSAGE_TOKENS, SMALL_MESSAGE_TOKENS];
+      const newTokens = [
+        ...tokens,
+        SETTLED_MESSAGE_TOKENS,
+        SETTLED_MESSAGE_TOKENS,
+        SMALL_MESSAGE_TOKENS,
+      ];
 
       const outcome = await maybeCompact({
         conversationId: "conv-regressed",

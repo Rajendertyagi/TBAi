@@ -141,7 +141,9 @@ describe("pendingFirstMessage — consume lifecycle (cases 17 + 18 storage half)
 
 describe("pendingFirstMessage — no timing sleeps (case 16)", () => {
   it("the module contains no timer-based waits", async () => {
-    const source = await Bun.file(path.join(REPO_ROOT, "web/src/features/chat/state/pendingFirstMessage.ts")).text();
+    const source = await Bun.file(
+      path.join(REPO_ROOT, "web/src/features/chat/state/pendingFirstMessage.ts"),
+    ).text();
     expect(source).not.toContain("setTimeout");
     expect(source).not.toContain("setInterval");
     expect(source).not.toContain("Bun.sleep");

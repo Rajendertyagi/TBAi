@@ -65,7 +65,9 @@ export function ModelOptionList({
   // row resolves its cursor position during render without a counter.
   const optionIndexByRow = useMemo(() => {
     const map = new Map<number, number>();
-    optionRowIndices.forEach((rowIndex, optionIndex) => map.set(rowIndex, optionIndex));
+    optionRowIndices.forEach((rowIndex, optionIndex) => {
+      map.set(rowIndex, optionIndex);
+    });
     return map;
   }, [optionRowIndices]);
   const optionCount = optionRowIndices.length;
@@ -132,15 +134,14 @@ export function ModelOptionList({
         <input
           type="text"
           value={query}
+          // biome-ignore lint/a11y/noAutofocus: the rule targets autofocus stealing focus on page load. This input exists only inside a picker the user just opened in order to type a filter, so focusing it is the requested behaviour, not a hijack. The list is a combobox with `aria-activedescendant`, and its own open/close is user-initiated.
           autoFocus
           spellCheck={false}
           autoComplete="off"
           role="combobox"
           aria-expanded
           aria-controls={listId}
-          aria-activedescendant={
-            optionCount > 0 ? `${baseId}-opt-${activeClamped}` : undefined
-          }
+          aria-activedescendant={optionCount > 0 ? `${baseId}-opt-${activeClamped}` : undefined}
           aria-label={searchAriaLabel}
           placeholder={searchPlaceholder}
           onChange={(event) => {
@@ -152,9 +153,7 @@ export function ModelOptionList({
         />
       </div>
       {optionCount === 0 ? (
-        <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-          {emptyLabel}
-        </div>
+        <div className="px-3 py-6 text-center text-sm text-muted-foreground">{emptyLabel}</div>
       ) : (
         <div className="max-h-64 overflow-y-auto p-1">
           <div role="listbox" id={listId} aria-label={listAriaLabel}>
@@ -172,8 +171,7 @@ export function ModelOptionList({
               }
               const optionIndex = optionIndexByRow.get(flatIndex) ?? 0;
               const selected =
-                row.modelId === currentModelId &&
-                row.providerId === currentProviderId;
+                row.modelId === currentModelId && row.providerId === currentProviderId;
               const active = optionIndex === activeClamped;
               return (
                 <button

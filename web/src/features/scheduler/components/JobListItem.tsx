@@ -141,9 +141,7 @@ export function JobListItem({
               // Border always in the box (transparent when unselected) so
               // selecting never shifts row height.
               "group flex h-8 w-full items-center rounded-full border pr-1 transition-colors",
-              selected
-                ? "border-border bg-accent"
-                : "border-transparent hover:bg-accent/60",
+              selected ? "border-border bg-accent" : "border-transparent hover:bg-accent/60",
             )}
           >
             <button
@@ -162,9 +160,7 @@ export function JobListItem({
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-sm",
-                  job.enabled
-                    ? "font-medium"
-                    : "font-normal text-muted-foreground",
+                  job.enabled ? "font-medium" : "font-normal text-muted-foreground",
                 )}
               >
                 {job.name}
@@ -219,15 +215,11 @@ export function JobListItem({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.deleteDescription(job.name)}
-            </AlertDialogDescription>
+            <AlertDialogDescription>{copy.deleteDescription(job.name)}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>
-            <AlertDialogAction onClick={onDelete}>
-              {copy.delete}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={onDelete}>{copy.delete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

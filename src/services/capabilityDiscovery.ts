@@ -60,7 +60,9 @@ export const OUTPUT_LIMIT_FIELDS: readonly string[] = [
  * degrade a model to "unknown", never hand the budget a figure that inverts it.
  */
 export function validTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /** How one listing entry nests its capability payload. */
@@ -179,9 +181,7 @@ export function limitRuleFor(providerType: string): LimitExtractionRule {
  * PARAMETER, and no value is attached to any particular model anywhere in this
  * module.
  */
-export function extractOllamaModelInfoLimits(
-  modelInfo: unknown,
-): ExtractedCapabilities {
+export function extractOllamaModelInfoLimits(modelInfo: unknown): ExtractedCapabilities {
   if (typeof modelInfo !== "object" || modelInfo === null) return {};
   const source = modelInfo as Record<string, unknown>;
 

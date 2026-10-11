@@ -32,14 +32,9 @@ mock.module("@/services/scheduler/schedulerTools", () => ({
   },
 }));
 
-const { nativeTools, withTerminalOutput, buildToolsContext } = await import(
-  "@/tools/index"
-);
+const { nativeTools, withTerminalOutput, buildToolsContext } = await import("@/tools/index");
 const { getWorkspaceDir } = await import("@/services/tools.ts");
-const {
-  createTerminalBatcher,
-  TERMINAL_DATA_TYPE,
-} = await import("@/lib/terminal-stream.ts");
+const { createTerminalBatcher, TERMINAL_DATA_TYPE } = await import("@/lib/terminal-stream.ts");
 
 type ExecuteWith = (
   args: unknown,

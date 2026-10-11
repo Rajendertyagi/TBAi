@@ -29,7 +29,10 @@ interface CreatedMcp {
 
 const createdMcp: CreatedMcp[] = [];
 
-async function createBadServer(name: string, overrides: { enabled?: boolean } = {}): Promise<string> {
+async function createBadServer(
+  name: string,
+  overrides: { enabled?: boolean } = {},
+): Promise<string> {
   const created = mcpManager.createConfig({
     name,
     transport: "stdio",
@@ -75,7 +78,7 @@ function countReconnectsSince(cutoff: number, serverName: string): number {
   return logger
     .getRecentEntries(cutoff)
     .filter(
-      (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === serverName
+      (e) => e.event === "mcp.operation" && e.op === "reconnect" && e.mcpServer === serverName,
     ).length;
 }
 
@@ -184,7 +187,7 @@ describe("MCP reconnect bookkeeping (unit, no real server)", () => {
       if (statusOf(id) === "connected") break;
     }
     expect(countReconnectsSince(cutoff, "p4-bounded-manual")).toBeLessThanOrEqual(
-      MAX_RECONNECT_ATTEMPTS
+      MAX_RECONNECT_ATTEMPTS,
     );
     await mcpManager.disconnect(id);
   }, 45000);

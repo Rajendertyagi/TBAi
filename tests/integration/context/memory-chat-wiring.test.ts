@@ -73,7 +73,7 @@ let failNext = false;
 let db: import("bun:sqlite").Database;
 let registry: typeof import("@/config/providers.ts")["registry"];
 let credentialStore: typeof import("@/services/credentials.ts")["credentialStore"];
-let app: (typeof import("@/routes/chat.ts"))["default"];
+let app: typeof import("@/routes/chat.ts")["default"];
 
 const T0 = 1_700_000_000_000;
 
@@ -93,10 +93,7 @@ const STREAM_BODY = [
 beforeAll(async () => {
   // 0. Snapshot the enablement variable BEFORE any test can touch it, so the
   //    suite can hand the process back exactly what it found.
-  envMemoryEnabledWasPresent = Object.prototype.hasOwnProperty.call(
-    process.env,
-    "TBAI_MEMORY_ENABLED",
-  );
+  envMemoryEnabledWasPresent = Object.hasOwn(process.env, "TBAI_MEMORY_ENABLED");
   envMemoryEnabledBefore = process.env.TBAI_MEMORY_ENABLED;
 
   // 1. A local server that impersonates the provider and records what it is sent.
@@ -126,7 +123,9 @@ beforeAll(async () => {
   db = (await import("@/db")).db;
   const openedPath = String((db as unknown as { filename?: string }).filename ?? "");
   if (!openedPath.toLowerCase().includes(tmpdir().toLowerCase())) {
-    throw new Error(`refusing to write: the database in use is not a test database (${openedPath})`);
+    throw new Error(
+      `refusing to write: the database in use is not a test database (${openedPath})`,
+    );
   }
 
   // 3. A real provider row aimed at the stub. `custom` + `chat-completions` is the
@@ -266,9 +265,7 @@ async function postAndCapturePrompt(
     status: response.status,
     raw: last.body,
     prompt: messages.map((message) =>
-      typeof message.content === "string"
-        ? message.content
-        : JSON.stringify(message.content ?? ""),
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? ""),
     ),
   };
 }
@@ -386,7 +383,9 @@ describe("Part 5 causal wiring: the real chat route supplies the real seam", () 
     setEnabled("1");
 
     seed([]);
-    expect(JSON.stringify((await postAndCapturePrompt()).prompt)).not.toContain("CREATED_MEMORY_TEXT");
+    expect(JSON.stringify((await postAndCapturePrompt()).prompt)).not.toContain(
+      "CREATED_MEMORY_TEXT",
+    );
 
     seed([{ id: "m1", content: "CREATED_MEMORY_TEXT", at: T0 + 1 }]);
     expect(JSON.stringify((await postAndCapturePrompt()).prompt)).toContain("CREATED_MEMORY_TEXT");
@@ -397,7 +396,9 @@ describe("Part 5 causal wiring: the real chat route supplies the real seam", () 
     expect(updated).not.toContain("CREATED_MEMORY_TEXT");
 
     seed([]);
-    expect(JSON.stringify((await postAndCapturePrompt()).prompt)).not.toContain("UPDATED_MEMORY_TEXT");
+    expect(JSON.stringify((await postAndCapturePrompt()).prompt)).not.toContain(
+      "UPDATED_MEMORY_TEXT",
+    );
   });
 
   it("never persists the injected block as conversation history", async () => {
@@ -472,9 +473,7 @@ describe("Part 5 causal wiring: the real chat route supplies the real seam", () 
       if (wasPresentBefore) {
         expect(process.env.TBAI_MEMORY_ENABLED).toBe(snapshot);
       } else {
-        expect(
-          Object.prototype.hasOwnProperty.call(process.env, "TBAI_MEMORY_ENABLED"),
-        ).toBe(false);
+        expect(Object.hasOwn(process.env, "TBAI_MEMORY_ENABLED")).toBe(false);
       }
     } finally {
       // Leave the suite exactly as this test found it, so it cannot itself

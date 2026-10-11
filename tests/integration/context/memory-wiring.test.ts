@@ -48,7 +48,7 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 
 // ── scratch database ─────────────────────────────────────────────────────────
 
-const openScratch = (): Database => {
+const _openScratch = (): Database => {
   const dir = mkdtempSync(join(tmpdir(), "tbai-memory-p5-"));
   const database = new Database(join(dir, "chat.db"));
   database.run(
@@ -92,12 +92,7 @@ afterEach(() => {
   for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const insert = (
-  database: Database,
-  id: string,
-  content: string,
-  createdAt: number,
-): void => {
+const insert = (database: Database, id: string, content: string, createdAt: number): void => {
   database
     .query("INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)")
     .run(id, content, createdAt, createdAt);
@@ -111,14 +106,23 @@ const provider: ProviderConfig = {
   type: "anthropic",
   model: "claude-test",
   models: [
-    { id: "claude-test", contextWindow: 128_000, contextWindowSource: "provider_reported", maxOutputTokens: 1024 },
+    {
+      id: "claude-test",
+      contextWindow: 128_000,
+      contextWindowSource: "provider_reported",
+      maxOutputTokens: 1024,
+    },
   ],
 } as unknown as ProviderConfig;
 
 const userMsg = (id: string, text: string): UIMessage =>
   ({ id, role: "user", parts: [{ type: "text", text }] }) as unknown as UIMessage;
 const asstMsg = (id: string, text = "ok"): UIMessage =>
-  ({ id, role: "assistant", parts: [{ type: "text", state: "done", text }] }) as unknown as UIMessage;
+  ({
+    id,
+    role: "assistant",
+    parts: [{ type: "text", state: "done", text }],
+  }) as unknown as UIMessage;
 
 /** Three completed turns, so a compactable span genuinely exists. */
 const history = (): UIMessage[] => [
@@ -150,7 +154,7 @@ const assemble = (seam: MemorySeam | undefined) =>
   });
 
 const textOf = (m: UIMessage): string =>
-  (m.parts ?? []).map((p) => ((p as { text?: string }).text ?? "")).join("");
+  (m.parts ?? []).map((p) => (p as { text?: string }).text ?? "").join("");
 
 /**
  * Flattened model-visible text.
@@ -169,15 +173,13 @@ const modelText = (r: Awaited<ReturnType<typeof assemble>>): string =>
             typeof part === "string"
               ? part
               : typeof (part as { text?: unknown })?.text === "string"
-                ? ((part as { text: string }).text)
+                ? (part as { text: string }).text
                 : "",
           )
           .join("");
       }
       if (Array.isArray(m.parts)) {
-        return m.parts
-          .map((p) => ((p as { text?: string })?.text ?? ""))
-          .join("");
+        return m.parts.map((p) => (p as { text?: string })?.text ?? "").join("");
       }
       return JSON.stringify(m.content ?? "");
     })
@@ -293,7 +295,8 @@ describe("Part 5.5: multiple memories follow deterministic ordering", () => {
     // opposite of the required order. A statement missing its ORDER BY would limit
     // to the 50 OLDEST and the two newest memories could never be selected.
     const database = makeDb();
-    for (let i = 0; i < 60; i += 1) insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
+    for (let i = 0; i < 60; i += 1)
+      insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
     const newestTwo = ["body number 58", "body number 59"];
 
     const r = await assemble(seamOver(database));
@@ -323,14 +326,16 @@ describe("Part 5.5: multiple memories follow deterministic ordering", () => {
 describe("Part 5.6-8: budget and both ceilings still apply", () => {
   it("selects at most 8 however many are stored", async () => {
     const database = makeDb();
-    for (let i = 0; i < 40; i += 1) insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
+    for (let i = 0; i < 40; i += 1)
+      insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
     const r = await assemble(seamOver(database));
     expect(r.diagnostics.memorySelectedCount).toBe(MEMORY_MAX_SELECTED);
   });
 
   it("considers at most 50 candidates however many the table holds", async () => {
     const database = makeDb();
-    for (let i = 0; i < 500; i += 1) insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
+    for (let i = 0; i < 500; i += 1)
+      insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
     const r = await assemble(seamOver(database));
     // The provider is asked for at most the ceiling...
     expect(r.diagnostics.memoryCandidateCount).toBeLessThanOrEqual(MEMORY_MAX_CANDIDATES);
@@ -345,7 +350,9 @@ describe("Part 5.6-8: budget and both ceilings still apply", () => {
     const r = await assemble(seamOver(database));
 
     // Never over budget, whatever the selection.
-    expect(r.diagnostics.memoryEstimatedSize).toBeLessThanOrEqual(r.diagnostics.memoryBudget as number);
+    expect(r.diagnostics.memoryEstimatedSize).toBeLessThanOrEqual(
+      r.diagnostics.memoryBudget as number,
+    );
 
     // The budget is the certified formula applied to Phase 2's USABLE input, not
     // to the raw model window: Phase 2's output reserve and safety margin have
@@ -403,7 +410,7 @@ describe("Part 5.13-14: memory failure never breaks the request", () => {
   const baseline = async () => assemble(undefined);
 
   it("survives a provider that throws, with a byte-identical request", async () => {
-    const base = await baseline();
+    const _base = await baseline();
     const r = await assemble({
       enabled: true,
       provider: {
@@ -471,11 +478,9 @@ describe("Part 5.15-16: SQLite is authoritative on every turn", () => {
     const before = await assemble(seamOver(database));
     expect(modelText(before)).toContain("original remembered preference");
 
-    database.query("UPDATE memories SET content = ?, updated_at = ? WHERE id = ?").run(
-      "edited remembered preference",
-      T0 + 5,
-      "m1",
-    );
+    database
+      .query("UPDATE memories SET content = ?, updated_at = ? WHERE id = ?")
+      .run("edited remembered preference", T0 + 5, "m1");
 
     const after = await assemble(seamOver(database));
     expect(modelText(after)).toContain("edited remembered preference");
@@ -514,10 +519,13 @@ describe("Part 5.17-18: the browser cannot supply memory, and memory is not hist
   const assembleSource = readFileSync(path.join(REPO_ROOT, "src/context/assemble.ts"), "utf8");
 
   it("reads no memory field from the submitted request", () => {
-    for (const [name, source] of [["chat route", chatRoute], ["assemble.ts", assembleSource]] as const) {
+    for (const [name, source] of [
+      ["chat route", chatRoute],
+      ["assemble.ts", assembleSource],
+    ] as const) {
       // Nothing may read a caller-supplied memory selection, ranking or safety state.
       expect(source, `${name} must not read request memory fields`).not.toMatch(
-        /(?:body|submittedMessages|request|metadata|messages)\s*[\.\[]\s*\w*memories?\w*/i,
+        /(?:body|submittedMessages|request|metadata|messages)\s*[.[]\s*\w*memories?\w*/i,
       );
       expect(source, `${name} must not accept selected memory ids`).not.toMatch(
         /selectedMemory|memoryIds|providedMemories/i,
@@ -541,11 +549,17 @@ describe("Part 5.17-18: the browser cannot supply memory, and memory is not hist
     expect(messages.some((m) => m.id.startsWith(MEMORY_MESSAGE_ID_PREFIX))).toBe(true);
     // ...and in neither the submitted history nor the id sets that get persisted.
     expect(submitted.some((m) => m.id.startsWith(MEMORY_MESSAGE_ID_PREFIX))).toBe(false);
-    expect(r.context.layerC.retainedIds.some((id) => id.startsWith(MEMORY_MESSAGE_ID_PREFIX))).toBe(false);
-    expect(r.context.layerC.currentTurnIds.some((id) => id.startsWith(MEMORY_MESSAGE_ID_PREFIX))).toBe(false);
+    expect(r.context.layerC.retainedIds.some((id) => id.startsWith(MEMORY_MESSAGE_ID_PREFIX))).toBe(
+      false,
+    );
+    expect(
+      r.context.layerC.currentTurnIds.some((id) => id.startsWith(MEMORY_MESSAGE_ID_PREFIX)),
+    ).toBe(false);
     // The block is re-derived per request, so it cannot accumulate across turns.
     const second = await assemble(seamOver(database));
-    const blocks = second.context.layerC.messages.filter((m) => m.id.startsWith(MEMORY_MESSAGE_ID_PREFIX));
+    const blocks = second.context.layerC.messages.filter((m) =>
+      m.id.startsWith(MEMORY_MESSAGE_ID_PREFIX),
+    );
     expect(blocks).toHaveLength(1);
   });
 });
@@ -575,7 +589,9 @@ describe("Part 5.19-21: continuation paths cannot duplicate or leak memory", () 
     const first = await assemble(seamOver(database));
     const second = await assemble(seamOver(database));
     for (const r of [first, second]) {
-      const blocks = r.context.layerC.messages.filter((m) => m.id.startsWith(MEMORY_MESSAGE_ID_PREFIX));
+      const blocks = r.context.layerC.messages.filter((m) =>
+        m.id.startsWith(MEMORY_MESSAGE_ID_PREFIX),
+      );
       expect(blocks).toHaveLength(1);
     }
   });
@@ -589,7 +605,7 @@ describe("Part 5.19-21: continuation paths cannot duplicate or leak memory", () 
     // because a resumed stream never runs assembly.
     const routeEntry = readFileSync(path.join(REPO_ROOT, "src/routes/chat.ts"), "utf8");
     const resume = routeEntry.slice(routeEntry.indexOf('app.get("/api/chat/resume/'));
-    const resumeHandler = resume.slice(0, resume.indexOf('\napp.'));
+    const resumeHandler = resume.slice(0, resume.indexOf("\napp."));
     expect(resumeHandler).not.toContain("assembleContext");
     expect(resumeHandler).not.toContain("memory");
   });

@@ -116,7 +116,20 @@ export async function fireFirstPromptHandoff(args: {
   setPendingFirstMessageIdentity(conversationId, messageId);
   try {
     if (sendWithId) {
-      await sendWithId(attachV2PromptMessageId({ role: "user", content: [{ type: "text", text }], parentId: null, sourceId: null, runConfig: undefined, createdAt: new Date(), metadata: { custom: {} } }, messageId));
+      await sendWithId(
+        attachV2PromptMessageId(
+          {
+            role: "user",
+            content: [{ type: "text", text }],
+            parentId: null,
+            sourceId: null,
+            runConfig: undefined,
+            createdAt: new Date(),
+            metadata: { custom: {} },
+          },
+          messageId,
+        ),
+      );
     } else {
       await append(text);
     }
@@ -173,6 +186,7 @@ export function FirstPromptHandoff({
 
   // Bound the handoff operation to the view that owns it, so a run it started
   // stops inheriting the operation once the session surface is gone.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `sessionId` is not read because the effect body is ONLY a cleanup. Naming it is the point: the handoff must be ended when the view unmounts AND when it is pointed at a different session, and an empty dependency list would only cover the former.
   useEffect(() => () => endHandoffOperation("view-unmounted"), [sessionId]);
 
   return null;

@@ -70,7 +70,9 @@ describe("text budget: an oversized body is bounded", () => {
     const original = text.split("\n");
     boundText(text, BUDGET)
       .text.split("\n")
-      .forEach((row, i) => expect(row).toBe(original[i]));
+      .forEach((row, i) => {
+        expect(row).toBe(original[i]);
+      });
   });
 
   it("reports how many whole rows went missing", () => {

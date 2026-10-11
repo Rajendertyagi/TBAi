@@ -132,7 +132,8 @@ export function providerOccupancyFromStepUsage(usage: unknown): OccupancyMeasure
   if (usage === null || typeof usage !== "object") return undefined;
   const input = (usage as { inputTokens?: unknown }).inputTokens;
   if (!isPositiveInt(input)) return undefined;
-  const details = (usage as { inputTokenDetails?: { cacheReadTokens?: unknown } }).inputTokenDetails;
+  const details = (usage as { inputTokenDetails?: { cacheReadTokens?: unknown } })
+    .inputTokenDetails;
   const cacheRead = details?.cacheReadTokens;
   return {
     kind: "provider",
@@ -157,7 +158,11 @@ export function resolveOccupancy(input: {
     return input.provider;
   }
   if (isPositiveInt(input.estimatedTokens)) {
-    return { kind: "estimate", inputTokens: Math.floor(input.estimatedTokens), field: "chars_per_token" };
+    return {
+      kind: "estimate",
+      inputTokens: Math.floor(input.estimatedTokens),
+      field: "chars_per_token",
+    };
   }
   return undefined;
 }
@@ -181,7 +186,9 @@ export function buildContextState(input: {
     usedTokens: Math.floor(usedTokens),
     windowTokens: Math.floor(windowTokens),
     windowSource: toLimitProvenance(input.windowSource),
-    usableInputTokens: isPositiveInt(input.usableInputTokens) ? Math.floor(input.usableInputTokens) : Math.floor(windowTokens),
+    usableInputTokens: isPositiveInt(input.usableInputTokens)
+      ? Math.floor(input.usableInputTokens)
+      : Math.floor(windowTokens),
     ...(input.occupancy ? { measurement: input.occupancy } : {}),
   };
 }

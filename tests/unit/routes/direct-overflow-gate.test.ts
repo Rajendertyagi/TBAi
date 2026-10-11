@@ -199,7 +199,11 @@ describe("gate: failing closed", () => {
     // visible part and therefore refuses to recover.
     const h = harness({
       attempts: [
-        [{ type: "start" }, { type: "text-delta", text: "partial" }, { type: "error", error: overflow() }],
+        [
+          { type: "start" },
+          { type: "text-delta", text: "partial" },
+          { type: "error", error: overflow() },
+        ],
         [{ type: "text-delta", text: "second answer" }],
       ],
     });
@@ -214,10 +218,7 @@ describe("gate: failing closed", () => {
 
   it("reports observability events for a successful recovery", async () => {
     const h = harness({
-      attempts: [
-        [{ type: "start" }, { type: "error", error: overflow() }],
-        [{ type: "finish" }],
-      ],
+      attempts: [[{ type: "start" }, { type: "error", error: overflow() }], [{ type: "finish" }]],
     });
     await drain(h.stream);
     expect(h.events).toEqual([

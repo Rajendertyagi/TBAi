@@ -74,13 +74,15 @@ describe("per-conversation config — real Hono app", () => {
   });
 
   it("PATCH /api/conversations/:id persists providerId + modelId + reasoningLevel", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "patch target",
-      providerId: "x",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "patch target",
+        providerId: "x",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
 
     const { status, json } = await appFetch(`/api/conversations/${created.id}`, {
       method: "PATCH",
@@ -107,13 +109,15 @@ describe("per-conversation config — real Hono app", () => {
   });
 
   it("PATCH explicit null modelId/reasoningLevel clears to NULL", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "null patch",
-      providerId: "p",
-      modelId: "keep-me",
-      reasoningLevel: "keep-reasoning",
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "null patch",
+        providerId: "p",
+        modelId: "keep-me",
+        reasoningLevel: "keep-reasoning",
+        systemPrompt: null,
+      }),
+    );
 
     // Phase 2 contract (mirror P2-03): explicit null clears the field to
     // NULL. Only omitted (undefined) fields preserve existing values.
@@ -154,13 +158,15 @@ describe("per-conversation config — chat route fallback (resolveChatModel seam
       ["prov-int-second", "int-second", "second-model", "low", Date.now(), Date.now()],
     );
     await registry.loadFromDb(db);
-    const conv = await conversationService.create(conversationInput({
-      title: "fallback chat",
-      providerId: "prov-int-conv-model",
-      modelId: "persisted-conv-model",
-      reasoningLevel: "high",
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "fallback chat",
+        providerId: "prov-int-conv-model",
+        modelId: "persisted-conv-model",
+        reasoningLevel: "high",
+        systemPrompt: null,
+      }),
+    );
 
     // Request names a different provider and omits model/reasoning: resolves
     // against the request provider's own defaults, not the row's model.
@@ -187,13 +193,15 @@ describe("per-conversation config — chat route fallback (resolveChatModel seam
 
   it("an explicit request model/reasoningLevel wins over the conversation default", async () => {
     await seedActiveProvider("conv-model", "medium");
-    const conv = await conversationService.create(conversationInput({
-      title: "override chat",
-      providerId: "prov-int-conv-model",
-      modelId: "persisted-conv-model",
-      reasoningLevel: "high",
-      systemPrompt: null,
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "override chat",
+        providerId: "prov-int-conv-model",
+        modelId: "persisted-conv-model",
+        reasoningLevel: "high",
+        systemPrompt: null,
+      }),
+    );
 
     // One-shot overrides (from the client's picker) take precedence.
     const resolved = await resolveChatModel({
@@ -235,13 +243,15 @@ describe("conversation status lifecycle (regular/archived)", () => {
   });
 
   it("archive/unarchive round-trips through PATCH and persists", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "archive probe",
-      providerId: "x",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "archive probe",
+        providerId: "x",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     expect((await conversationService.get(created.id))?.status).toBe("regular");
 
     const archived = await appFetch(`/api/conversations/${created.id}`, {
@@ -265,13 +275,15 @@ describe("conversation status lifecycle (regular/archived)", () => {
   });
 
   it("rejects the obsolete 4-state statuses", async () => {
-    const created = await conversationService.create(conversationInput({
-      title: "reject probe",
-      providerId: "x",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-    }));
+    const created = await conversationService.create(
+      conversationInput({
+        title: "reject probe",
+        providerId: "x",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+      }),
+    );
     for (const status of ["in_progress", "pending_review", "completed", "cancelled"]) {
       const res = await appFetch(`/api/conversations/${created.id}`, {
         method: "PATCH",

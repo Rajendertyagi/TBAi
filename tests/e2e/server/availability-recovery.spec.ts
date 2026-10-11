@@ -36,25 +36,23 @@ test("outage retains stale state and gates send, recovery refreshes authoritativ
   // guaranteed its own second-run failure.
   try {
     await page.goto("/#/chat/new");
-    await expect(
-      page.getByRole("heading", { name: /what do you want to build/i }),
-    ).toBeVisible({ timeout: 20000 });
+    await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
+      timeout: 20000,
+    });
     // Healthy: availability chrome reads Local; seeded conversation listed.
     await expect(page.getByTitle("Backend available")).toBeVisible({
       timeout: 15000,
     });
-    await expect(
-      page.getByText("Known Conversation").first(),
-    ).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Known Conversation").first()).toBeVisible({ timeout: 15000 });
 
     // Simulate a backend outage: readiness + all API traffic fails.
     await page.route("**/readyz", (route) => route.abort());
     await page.route("**/api/**", (route) => route.abort());
 
     // Poller escalates to offline; chrome says stale, never authoritative.
-    await expect(
-      page.getByTitle("Backend unavailable — showing last known state"),
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTitle("Backend unavailable — showing last known state")).toBeVisible({
+      timeout: 60000,
+    });
     // The known conversation stays visible (retained, not wiped to empty).
     await expect(page.getByText("Known Conversation").first()).toBeVisible();
     // Composer send is gated: an inert disabled button replaces Send.
@@ -74,9 +72,7 @@ test("outage retains stale state and gates send, recovery refreshes authoritativ
     // Draft kept verbatim; still on the draft route — nothing auto-sent.
     await expect(box).toHaveValue("unsent draft — keep me");
     expect(page.url()).toContain("/chat/new");
-    const list = await page.request.get(
-      "/api/conversations?status=all&limit=50",
-    );
+    const list = await page.request.get("/api/conversations?status=all&limit=50");
     expect(list.ok()).toBe(true);
     const data = (await list.json()) as { threads: Array<{ id: string }> };
     // THIS conversation survived the outage, asserted by identity. The old
@@ -86,8 +82,6 @@ test("outage retains stale state and gates send, recovery refreshes authoritativ
     // about. Retention is already proven above by the visible row.
     expect(data.threads.map((t) => t.id)).toContain(conversationId);
   } finally {
-    await page.request
-      .delete(`/api/conversations/${conversationId}`)
-      .catch(() => {});
+    await page.request.delete(`/api/conversations/${conversationId}`).catch(() => {});
   }
 });

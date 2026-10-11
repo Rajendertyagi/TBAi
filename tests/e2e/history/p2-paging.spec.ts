@@ -44,11 +44,7 @@ const EXPECTED_PAGES = 3;
  */
 const OVERLAP_SEEDED_MESSAGES = 360;
 
-async function seedChain(
-  request: APIRequestContext,
-  count: number,
-  tag: string,
-): Promise<string> {
+async function seedChain(request: APIRequestContext, count: number, tag: string): Promise<string> {
   const created = await request.post("/api/conversations", {
     data: { title: `p2 paging ${Date.now()}`, workspaceMode: "simple", engine: "direct" },
   });
@@ -62,7 +58,9 @@ async function seedChain(
           format: "ai-sdk/v6",
           content: {
             role: i % 2 === 0 ? "user" : "assistant",
-            parts: [{ type: "text", text: `body ${i} ${"filler for real row height. ".repeat(10)}` }],
+            parts: [
+              { type: "text", text: `body ${i} ${"filler for real row height. ".repeat(10)}` },
+            ],
           },
         },
       },
@@ -216,11 +214,13 @@ test.describe("P2 paging: multi-page progress and chain integrity", () => {
       await page.evaluate(() => {
         const w = window as unknown as { __disabledSeen: boolean };
         w.__disabledSeen = false;
-        const target = document.querySelector<HTMLButtonElement>(
-          '[data-testid="load-earlier"], button[aria-label*="Load earlier" i]',
-        ) ?? Array.from(document.querySelectorAll("button")).find((b) =>
-          (b.textContent ?? "").includes("Load earlier"),
-        );
+        const target =
+          document.querySelector<HTMLButtonElement>(
+            '[data-testid="load-earlier"], button[aria-label*="Load earlier" i]',
+          ) ??
+          Array.from(document.querySelectorAll("button")).find((b) =>
+            (b.textContent ?? "").includes("Load earlier"),
+          );
         if (!target) throw new Error("load-earlier control not found");
         if (target.disabled) w.__disabledSeen = true;
         new MutationObserver(() => {
@@ -263,19 +263,27 @@ test.describe("P2 paging: multi-page progress and chain integrity", () => {
         // Wait for the OUTCOME, not for the control's disabled flag: the flag is
         // a transient implementation detail that races React's re-render, while
         // "this activation added history" is the property under test.
-        await expect
-          .poll(() => logicalRowCount(page), { timeout: 25000 })
-          .toBeGreaterThan(before);
+        await expect.poll(() => logicalRowCount(page), { timeout: 25000 }).toBeGreaterThan(before);
         counts.push(await logicalRowCount(page));
       }
       for (let i = 1; i < counts.length; i += 1) {
-        expect(counts[i]!, `post-overlap activation ${i} added history (${counts.join(" -> ")})`)
-          .toBeGreaterThan(counts[i - 1]!);
+        expect(
+          counts[i]!,
+          `post-overlap activation ${i} added history (${counts.join(" -> ")})`,
+        ).toBeGreaterThan(counts[i - 1]!);
       }
-      expect(counts.length, "post-overlap paging made progress past the first page").toBeGreaterThan(1);
+      expect(
+        counts.length,
+        "post-overlap paging made progress past the first page",
+      ).toBeGreaterThan(1);
       await expect(loadEarlier(page), "history is exhausted at the root").toHaveCount(0);
 
-      const after = await storedChainHealth(request, conversationId, OVERLAP_SEEDED_MESSAGES, "ovl");
+      const after = await storedChainHealth(
+        request,
+        conversationId,
+        OVERLAP_SEEDED_MESSAGES,
+        "ovl",
+      );
       expect(after.roots, "overlap did not fork the chain").toHaveLength(1);
       expect(after.broken, "overlap did not re-root any link").toEqual([]);
     } finally {

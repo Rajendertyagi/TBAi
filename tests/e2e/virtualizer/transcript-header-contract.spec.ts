@@ -30,11 +30,7 @@
  * catch. Both must hold together.
  */
 import { expect, test, type Page } from "@playwright/test";
-import {
-  SCROLLER,
-  seedTextConversation,
-  waitForStableScrollHeight,
-} from "./transcriptAnchoring";
+import { SCROLLER, seedTextConversation, waitForStableScrollHeight } from "./transcriptAnchoring";
 
 const HEADER = '[data-testid="virtual-transcript-header"]';
 

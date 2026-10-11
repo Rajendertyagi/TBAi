@@ -43,7 +43,11 @@ describe("opening one conversation never duplicates a tab", () => {
     store().openAgent("c1");
     // Both surfaces may be open for one conversation; they are distinct tabs
     // and the wrong-kind one is closed by the surface reconciliation, not here.
-    expect(store().tabs.map((t) => t.key).sort()).toEqual([agentKey("c1"), chatKey("c1")].sort());
+    expect(
+      store()
+        .tabs.map((t) => t.key)
+        .sort(),
+    ).toEqual([agentKey("c1"), chatKey("c1")].sort());
   });
 
   it("does not duplicate when a draft resolves onto an id that is already open", () => {

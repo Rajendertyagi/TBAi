@@ -24,7 +24,7 @@ import {
 function relative(c: { r: number; g: number; b: number }): number {
   const ch = (v: number) => {
     const x = v / 255;
-    return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
   };
   return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
 }
@@ -141,10 +141,28 @@ describe("OKLab conversion", () => {
     // palette colours taken from OpenChamber and the neutral greys the stylesheet
     // itself is built from are represented.
     const samples = [
-      "#000000", "#ffffff", "#808080", "#fdfcfa", "#120f0e", "#b35017",
-      "#da7c47", "#393a34", "#5c5c54", "#f7f6f4", "#e5e1de", "#a9998f",
-      "#A277FF", "#15141B", "#2D2640", "#807b8b", "#D94F4F", "#40BF7A",
-      "#076678", "#FBF1C7", "#7a8a5a", "#0a0a0a",
+      "#000000",
+      "#ffffff",
+      "#808080",
+      "#fdfcfa",
+      "#120f0e",
+      "#b35017",
+      "#da7c47",
+      "#393a34",
+      "#5c5c54",
+      "#f7f6f4",
+      "#e5e1de",
+      "#a9998f",
+      "#A277FF",
+      "#15141B",
+      "#2D2640",
+      "#807b8b",
+      "#D94F4F",
+      "#40BF7A",
+      "#076678",
+      "#FBF1C7",
+      "#7a8a5a",
+      "#0a0a0a",
     ];
     for (const hex of samples) {
       const original = parseColor(hex)!;

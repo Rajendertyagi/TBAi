@@ -1,4 +1,4 @@
-import fs from "fs";
+import fs from "node:fs";
 import { db } from "../db";
 import { generateId } from "../lib/utils";
 import { canonicalizeRoot } from "../services/tools";
@@ -107,14 +107,18 @@ function mapGroup(row: FolderGroupRow): FolderGroup {
 
 function nextSortOrder(): number {
   const row = db
-    .query<{ max: number | null }, SQLQueryBindings[]>("SELECT MAX(sort_order) AS max FROM folders WHERE deleted_at IS NULL")
+    .query<{ max: number | null }, SQLQueryBindings[]>(
+      "SELECT MAX(sort_order) AS max FROM folders WHERE deleted_at IS NULL",
+    )
     .get() as { max: number | null } | undefined;
   return (row?.max ?? -1) + 1;
 }
 
 function nextGroupSortOrder(): number {
   const row = db
-    .query<{ max: number | null }, SQLQueryBindings[]>("SELECT MAX(sort_order) AS max FROM folder_groups")
+    .query<{ max: number | null }, SQLQueryBindings[]>(
+      "SELECT MAX(sort_order) AS max FROM folder_groups",
+    )
     .get() as { max: number | null } | undefined;
   return (row?.max ?? -1) + 1;
 }
@@ -198,16 +202,10 @@ export const folderService = {
       stat = null;
     }
     if (!stat) {
-      throw new FolderRegistrationError(
-        "path_missing",
-        `Directory not found: ${canonical}`,
-      );
+      throw new FolderRegistrationError("path_missing", `Directory not found: ${canonical}`);
     }
     if (!stat.isDirectory()) {
-      throw new FolderRegistrationError(
-        "path_not_directory",
-        `Not a directory: ${canonical}`,
-      );
+      throw new FolderRegistrationError("path_not_directory", `Not a directory: ${canonical}`);
     }
 
     const id = generateId();
@@ -311,7 +309,10 @@ export const folderService = {
 
   /** Re-open a closed folder (without touching deleted_at). */
   async open(id: string): Promise<void> {
-    db.run("UPDATE folders SET is_open = 1, last_opened_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [Date.now(), Date.now(), id]);
+    db.run(
+      "UPDATE folders SET is_open = 1, last_opened_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+      [Date.now(), Date.now(), id],
+    );
   },
 
   /** Soft-delete: keeps the row so conversations referencing it fail with a
@@ -403,7 +404,9 @@ export const folderLinkService = {
   async preview(
     folderId: string,
     targets: { name: string; targetPath: string }[],
-  ): Promise<Array<{ name: string; targetPath: string; status: "ok" | "skipped"; reason?: string }>> {
+  ): Promise<
+    Array<{ name: string; targetPath: string; status: "ok" | "skipped"; reason?: string }>
+  > {
     const existing = await this.listByFolder(folderId);
     const taken = new Set(existing.map((l) => l.name));
     const seen = new Set<string>();
@@ -424,7 +427,9 @@ export const folderLinkService = {
 export const folderGroupService = {
   async list(): Promise<FolderGroup[]> {
     const rows = db
-      .query<FolderGroupRow, SQLQueryBindings[]>("SELECT * FROM folder_groups ORDER BY sort_order ASC")
+      .query<FolderGroupRow, SQLQueryBindings[]>(
+        "SELECT * FROM folder_groups ORDER BY sort_order ASC",
+      )
       .all() as FolderGroupRow[];
     return rows.map(mapGroup);
   },

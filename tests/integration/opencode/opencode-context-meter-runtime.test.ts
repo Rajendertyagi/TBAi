@@ -136,20 +136,21 @@ interface SessionSnapshot {
 }
 
 /** Reads the session ledger - the value TBAi used to render as occupancy. */
-async function readLedger(server: RuntimeOpenCodeServer, sessionId: string): Promise<SessionSnapshot> {
-  const body = await server.json<{ data: SessionSnapshot }>(
-    `/api/session/${sessionId}`,
-    { headers: { "x-opencode-directory": DIRECTORY } },
-  );
+async function readLedger(
+  server: RuntimeOpenCodeServer,
+  sessionId: string,
+): Promise<SessionSnapshot> {
+  const body = await server.json<{ data: SessionSnapshot }>(`/api/session/${sessionId}`, {
+    headers: { "x-opencode-directory": DIRECTORY },
+  });
   return body.data;
 }
 
 /** Reads the persisted message list - the source occupancy is derived from. */
 async function readMessages(server: RuntimeOpenCodeServer, sessionId: string): Promise<unknown[]> {
-  const body = await server.json<{ data: unknown[] }>(
-    `/api/session/${sessionId}/message`,
-    { headers: { "x-opencode-directory": DIRECTORY } },
-  );
+  const body = await server.json<{ data: unknown[] }>(`/api/session/${sessionId}/message`, {
+    headers: { "x-opencode-directory": DIRECTORY },
+  });
   return body.data;
 }
 
@@ -312,9 +313,7 @@ describeRuntime("real OpenCode: compaction shapes the persisted message list", (
   it("admits a manual compaction and records it as a compaction message", async () => {
     // A compaction over real content, so it produces a summary and a settled
     // record rather than the nothing-to-do no-op an empty session returns.
-    expect(
-      await promptUntilAnswered(server, sessionId, "Reply with exactly: PONG"),
-    ).toBe(true);
+    expect(await promptUntilAnswered(server, sessionId, "Reply with exactly: PONG")).toBe(true);
 
     // The wire call TBAi's `controller.compact()` makes.
     const admitted = await server.json<{ data: { id: string; type: string } }>(
@@ -348,9 +347,9 @@ describeRuntime("real OpenCode: compaction shapes the persisted message list", (
     }
 
     // The conversation is still usable, and the next response repopulates.
-    expect(
-      await promptUntilAnswered(server, sessionId, "Reply with exactly: PONGAGAIN"),
-    ).toBe(true);
+    expect(await promptUntilAnswered(server, sessionId, "Reply with exactly: PONGAGAIN")).toBe(
+      true,
+    );
     const afterResponse = resolveCodeOccupancy(
       (await readMessages(server, sessionId)) as Parameters<typeof resolveCodeOccupancy>[0],
     );

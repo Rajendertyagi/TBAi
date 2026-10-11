@@ -23,11 +23,15 @@ describe("todo schema", () => {
 describe("browser read schema", () => {
   it("requires a url for open", () => {
     expect(browserReadSchema.safeParse({ action: "open" }).success).toBe(false);
-    expect(browserReadSchema.safeParse({ action: "open", url: "https://example.com" }).success).toBe(true);
+    expect(
+      browserReadSchema.safeParse({ action: "open", url: "https://example.com" }).success,
+    ).toBe(true);
   });
   it("requires a prompt for extract", () => {
     expect(browserReadSchema.safeParse({ action: "extract" }).success).toBe(false);
-    expect(browserReadSchema.safeParse({ action: "extract", prompt: "summary" }).success).toBe(true);
+    expect(browserReadSchema.safeParse({ action: "extract", prompt: "summary" }).success).toBe(
+      true,
+    );
   });
   it("allows snapshot/get/screenshot with no extra args", () => {
     expect(browserReadSchema.safeParse({ action: "snapshot" }).success).toBe(true);
@@ -51,7 +55,9 @@ describe("browser action schema", () => {
     expect(browserActionSchemaFull.safeParse({ action: "press", key: "Enter" }).success).toBe(true);
   });
   it("requires a prompt for act", () => {
-    expect(browserActionSchemaFull.safeParse({ action: "act", prompt: "do it" }).success).toBe(true);
+    expect(browserActionSchemaFull.safeParse({ action: "act", prompt: "do it" }).success).toBe(
+      true,
+    );
   });
 });
 

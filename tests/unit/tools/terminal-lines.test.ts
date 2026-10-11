@@ -115,11 +115,11 @@ describe("TerminalBuffer", () => {
 });
 
 describe("mergeTerminalParts (live terminal adapter logic)", () => {
-  const part = (
-    toolCallId: string,
-    chunks: string[],
-    extra: Record<string, unknown> = {},
-  ) => ({ type: "data", name: "tbai-terminal", data: { toolCallId, chunks, ...extra } });
+  const part = (toolCallId: string, chunks: string[], extra: Record<string, unknown> = {}) => ({
+    type: "data",
+    name: "tbai-terminal",
+    data: { toolCallId, chunks, ...extra },
+  });
 
   it("merges matching parts and ignores other tool calls", () => {
     const parts = [
@@ -172,9 +172,7 @@ describe("resultToLines (completed-result adapter logic)", () => {
     Array.from({ length: count }, (_, i) => `${prefix}-${i}`).join("\n");
 
   it("returns stdout lines then stderr lines", () => {
-    expect(
-      resultToLines({ stdout: "a\nb\n", stderr: "e1\ne2\n" }),
-    ).toEqual(["a", "b", "e1", "e2"]);
+    expect(resultToLines({ stdout: "a\nb\n", stderr: "e1\ne2\n" })).toEqual(["a", "b", "e1", "e2"]);
   });
 
   it("returns [] when output is absent", () => {
@@ -216,11 +214,7 @@ describe("resultToLines (completed-result adapter logic)", () => {
 
   it("honours an explicit maxLines", () => {
     const stdout = range(10, "line");
-    expect(resultToLines({ stdout }, 3)).toEqual([
-      "line-7",
-      "line-8",
-      "line-9",
-    ]);
+    expect(resultToLines({ stdout }, 3)).toEqual(["line-7", "line-8", "line-9"]);
   });
 
   it("floors a zero or fractional cap to exactly one row", () => {

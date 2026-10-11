@@ -121,15 +121,16 @@ describe("P2 contract — write-back derives from the binding-carrying conversio
 
     // The merged row is m2; the approval belongs to persisted m3. A write-back
     // derived from the row id would persist the decision against m2.
-    const approvalOwner = window.messages.find((m) =>
-      (m.message.parts[0] as { approval?: { id?: string } } | undefined)?.approval?.id === "ap-1",
+    const approvalOwner = window.messages.find(
+      (m) =>
+        (m.message.parts[0] as { approval?: { id?: string } } | undefined)?.approval?.id === "ap-1",
     );
     expect(approvalOwner?.id).toBe("m3");
 
     // The tool RESULT on m2 stays with m2, so a delete of m2's row removes both
     // persisted messages (no orphaned result).
-    const toolResultOwner = window.messages.find((m) =>
-      (m.message.parts[0] as { toolCallId?: string } | undefined)?.toolCallId === "call-a",
+    const toolResultOwner = window.messages.find(
+      (m) => (m.message.parts[0] as { toolCallId?: string } | undefined)?.toolCallId === "call-a",
     );
     expect(toolResultOwner?.id).toBe("m2");
   });
@@ -139,8 +140,11 @@ describe("P2 contract — write-back derives from the binding-carrying conversio
     const repository = repositoryFrom(rows);
 
     // Same rows, same parent links — the repository only loses the binding.
-    const repoRows = (repository as never as { messages: Array<{ message: { id: string }; parentId: string | null }> })
-      .messages;
+    const repoRows = (
+      repository as never as {
+        messages: Array<{ message: { id: string }; parentId: string | null }>;
+      }
+    ).messages;
     expect(repoRows.map((r) => r.message.id)).toEqual(["m1", "m2", "m4"]);
     expect(Object.fromEntries(repoRows.map((r) => [r.message.id, r.parentId]))).toEqual({
       m1: null,
@@ -172,7 +176,10 @@ describe("P2 contract — write-back derives from the binding-carrying conversio
     } as never);
 
     const pairWithParents = (messages: readonly unknown[]): BoundRow[] =>
-      messages.map((m, i) => ({ message: m, parentId: i === 0 ? null : (messages[i - 1] as { id: string }).id }));
+      messages.map((m, i) => ({
+        message: m,
+        parentId: i === 0 ? null : (messages[i - 1] as { id: string }).id,
+      }));
 
     // Identical rendered output from both shapes…
     expect((viaMessages.messages as Array<{ id: string }>).map((m) => m.id)).toEqual(
@@ -180,22 +187,23 @@ describe("P2 contract — write-back derives from the binding-carrying conversio
     );
 
     // …but only the messages-path rows can be written back.
-    expect(deriveWriteBack(pairWithParents(viaMessages.messages)).messages.map((m) => m.id)).toEqual([
-      "m1",
-      "m2",
-      "m3",
-      "m4",
-    ]);
-    expect(() => deriveWriteBack(pairWithParents(viaRepository.messages))).toThrow(WriteBackAmbiguityError);
+    expect(
+      deriveWriteBack(pairWithParents(viaMessages.messages)).messages.map((m) => m.id),
+    ).toEqual(["m1", "m2", "m3", "m4"]);
+    expect(() => deriveWriteBack(pairWithParents(viaRepository.messages))).toThrow(
+      WriteBackAmbiguityError,
+    );
   });
 
   it("F1: a window commit cannot silently persist an empty write-back", () => {
     // The failure mode F1 protects against: repository write-back returns nothing,
     // so an edit/delete/tool-output/approval would persist zero messages and the
     // persisted chain would lose the branch. The module refuses instead.
-    const repositoryRows = (repositoryFrom(boundRowsFromConversion(ADJACENT)) as never as {
-      messages: BoundRow[];
-    }).messages;
+    const repositoryRows = (
+      repositoryFrom(boundRowsFromConversion(ADJACENT)) as never as {
+        messages: BoundRow[];
+      }
+    ).messages;
     const written = (() => {
       try {
         return deriveWriteBack(repositoryRows).messages;
@@ -241,7 +249,9 @@ describe("P2 contract — corrected invariant 21 fails closed only on real ambig
   });
 
   it("fails closed when parentage cannot be resolved unambiguously", () => {
-    const orphan: BoundRow[] = [{ message: rows()[2]!.message, parentId: "not-a-row-in-this-window" }];
+    const orphan: BoundRow[] = [
+      { message: rows()[2]!.message, parentId: "not-a-row-in-this-window" },
+    ];
     let error: WriteBackAmbiguityError | null = null;
     try {
       deriveWriteBack(orphan);

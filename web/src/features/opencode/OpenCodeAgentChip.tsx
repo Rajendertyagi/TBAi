@@ -22,15 +22,8 @@ export function OpenCodeAgentChip() {
   const copy = welcomeConfig.copy;
   const { agentId } = useParams();
   const conversationId = agentId ?? "";
-  const {
-    agents,
-    isLoading,
-    error,
-    open,
-    setOpen,
-    currentAgent,
-    persist,
-  } = useOpenCodeChipState(conversationId);
+  const { agents, isLoading, error, open, setOpen, currentAgent, persist } =
+    useOpenCodeChipState(conversationId);
 
   const agentName = agents.find((a) => a.id === currentAgent)?.name;
   const label = agentName ?? copy.selectAgent;
@@ -52,11 +45,9 @@ export function OpenCodeAgentChip() {
       <OpenCodeChipMenu open={open} onClose={() => setOpen(false)}>
         <OpenCodeChipMenuContent isLoading={isLoading} error={error}>
           <div className="p-2">
-            <div role="list" className="max-h-40 overflow-y-auto">
+            <div role="listbox" aria-label={copy.agentLabel} className="max-h-40 overflow-y-auto">
               {agents.length === 0 ? (
-                <div className="px-2 py-2 text-xs text-muted-foreground">
-                  {copy.selectAgent}
-                </div>
+                <div className="px-2 py-2 text-xs text-muted-foreground">{copy.selectAgent}</div>
               ) : (
                 agents.map((a) => (
                   <OpenCodeChipOption
@@ -69,9 +60,7 @@ export function OpenCodeAgentChip() {
                 ))
               )}
             </div>
-            <div className="mt-2 px-1 text-xs text-muted-foreground">
-              {copy.agentHint}
-            </div>
+            <div className="mt-2 px-1 text-xs text-muted-foreground">{copy.agentHint}</div>
           </div>
         </OpenCodeChipMenuContent>
       </OpenCodeChipMenu>

@@ -9,10 +9,7 @@ import { SyntaxHighlighter as SyntaxHighlighterBase } from "./shiki-highlighter"
 /**
  * Props for the SyntaxHighlighter component
  */
-export type HighlighterProps = Omit<
-  ShikiHighlighterProps,
-  "children" | "theme"
-> & {
+export type HighlighterProps = Omit<ShikiHighlighterProps, "children" | "theme"> & {
   theme?: ShikiHighlighterProps["theme"];
 } & Pick<AUIProps, "language" | "code"> &
   Partial<Pick<AUIProps, "node" | "components">>;
@@ -37,12 +34,9 @@ export const SyntaxHighlighter: FC<HighlighterProps> = ({
   components: _components,
   ...props
 }) => {
-  const isStreaming = useAuiState(
-    (s) => s.optional.part?.status.type === "running",
-  );
+  const isStreaming = useAuiState((s) => s.optional.part?.status.type === "running");
 
   return <SyntaxHighlighterBase {...props} streaming={isStreaming} />;
 };
 
 SyntaxHighlighter.displayName = "SyntaxHighlighter";
-

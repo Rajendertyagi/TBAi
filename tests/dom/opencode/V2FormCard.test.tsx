@@ -44,12 +44,20 @@ function renderCard(fields: FormInfo["fields"], queuedBehind = 0): string {
   );
 }
 
-function renderControl(field: FormInfo["fields"][number], value?: string | readonly string[] | number | boolean) {
+function renderControl(
+  field: FormInfo["fields"][number],
+  value?: string | readonly string[] | number | boolean,
+) {
   // Through `projectV2Form`, because that is the only path production takes —
   // and it is what turns the wire's `undefined`/`[]` into the `null` the
   // option predicate documents. Rendering a raw wire field would test a shape
   // the app never hands the control.
-  const form: FormInfo = { id: "frm_test", sessionID: "ses_test", title: "Questions", fields: [field] };
+  const form: FormInfo = {
+    id: "frm_test",
+    sessionID: "ses_test",
+    title: "Questions",
+    fields: [field],
+  };
   const projected = projectV2Form(form);
   return renderToStaticMarkup(
     createElement(V2OptionControl, {
@@ -61,7 +69,11 @@ function renderControl(field: FormInfo["fields"][number], value?: string | reado
 }
 
 const SQLITE = { value: "SQLite", label: "SQLite", description: "file-based, zero-config" };
-const POSTGRES = { value: "Postgres", label: "Postgres", description: "a full relational database server" };
+const POSTGRES = {
+  value: "Postgres",
+  label: "Postgres",
+  description: "a full relational database server",
+};
 
 describe("V2OptionControl — options and the escape hatch are independent", () => {
   it("draws the options as full-width rows when the field has them and no custom input", () => {
@@ -119,8 +131,11 @@ describe("V2OptionControl — options and the escape hatch are independent", () 
   });
 
   it("marks the chosen option with aria-checked and leaves the rest unchecked", () => {
-    const html = renderControl({ key: "db", type: "string", options: [SQLITE, POSTGRES] }, "Postgres");
-    expect(html).toMatch(/aria-checked="true"[^]*?Postgres/);
+    const html = renderControl(
+      { key: "db", type: "string", options: [SQLITE, POSTGRES] },
+      "Postgres",
+    );
+    expect(html).toMatch(/aria-checked="true".*?Postgres/s);
     // Non-vacuity: the other option must NOT also read as chosen.
     expect(html.match(/aria-checked="true"/g)).toHaveLength(1);
   });
@@ -128,7 +143,10 @@ describe("V2OptionControl — options and the escape hatch are independent", () 
   it("shows no option as chosen while the reader is typing their own answer", () => {
     // Single-select custom text is a MODE: an option and a typed answer cannot
     // both be the value, so the rows must all read unchecked.
-    const html = renderControl(capturedQuestionForm.fields[0] as FormInfo["fields"][number], "DuckDB");
+    const html = renderControl(
+      capturedQuestionForm.fields[0] as FormInfo["fields"][number],
+      "DuckDB",
+    );
     expect(html).toContain("DuckDB");
     expect(html).not.toContain('aria-checked="true"');
   });
@@ -170,7 +188,9 @@ describe("V2OptionControl — the field types with no options", () => {
   });
 
   it("marks a chosen boolean, and nothing when it is unanswered", () => {
-    expect(renderControl({ key: "ok", type: "boolean" }, true)).toMatch(/aria-checked="true"[^]*?True/);
+    expect(renderControl({ key: "ok", type: "boolean" }, true)).toMatch(
+      /aria-checked="true".*?True/s,
+    );
     // Unanswered must read as neither, so "not answered" is expressible at all.
     expect(renderControl({ key: "ok", type: "boolean" })).not.toContain('aria-checked="true"');
   });
@@ -188,7 +208,12 @@ describe("V2OptionControl — the field types with no options", () => {
     // The schema types bounds as `number | string | null` because the server may
     // send 'Infinity' | '-Infinity' | 'NaN'. Passing those to the DOM would put
     // a literal string in `min`.
-    const html = renderControl({ key: "n", type: "number", minimum: "Infinity" as never, maximum: "NaN" as never });
+    const html = renderControl({
+      key: "n",
+      type: "number",
+      minimum: "Infinity" as never,
+      maximum: "NaN" as never,
+    });
     expect(html).not.toContain("Infinity");
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("min=");
@@ -360,10 +385,10 @@ describe("the options/Other gate — the guard that matters", () => {
     // back, because the next person to write `options && !custom` fails here
     // rather than shipping the dead end for a third time.
     for (const file of [
-    "web/src/features/opencode/V2OptionControl.tsx",
-    "web/src/features/opencode/V2FormCard.tsx",
-    "web/src/features/opencode/v2Forms.ts",
-  ]) {
+      "web/src/features/opencode/V2OptionControl.tsx",
+      "web/src/features/opencode/V2FormCard.tsx",
+      "web/src/features/opencode/v2Forms.ts",
+    ]) {
       const source = await sourceOf(file);
       for (const pattern of FORBIDDEN) {
         expect(source).not.toMatch(pattern);
@@ -381,4 +406,3 @@ describe("the options/Other gate — the guard that matters", () => {
     expect(source).not.toMatch(/field\.custom\b/);
   });
 });
-

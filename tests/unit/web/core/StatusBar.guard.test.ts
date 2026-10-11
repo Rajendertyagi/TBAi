@@ -17,9 +17,7 @@ import path from "node:path";
 let source = "";
 
 beforeAll(async () => {
-  source = await Bun.file(
-    path.join(REPO_ROOT, "web/src/components/StatusBar.tsx"),
-  ).text();
+  source = await Bun.file(path.join(REPO_ROOT, "web/src/components/StatusBar.tsx")).text();
 });
 
 describe("StatusBar — Code route shows agent·model from conversation config", () => {
@@ -30,8 +28,13 @@ describe("StatusBar — Code route shows agent·model from conversation config",
   it("reads the OpenCode conversation config only on Code routes", () => {
     // The hook must receive `agentId` only when `isCode`, so non-Code
     // routes never mount a Code config reader.
+    //
+    // The trailing comma is optional: this guard is about the ARGUMENT, not the
+    // layout. Requiring it pinned the assertion to a wrapped call site, so a
+    // formatter that collapsed the call onto one line failed a check whose
+    // subject - the conditional agent id - had not changed at all.
     expect(source).toMatch(
-      /useOpenCodeConversationConfig\(\s*isCode \? agentId : undefined,\s*\)/,
+      /useOpenCodeConversationConfig\(\s*isCode \? agentId : undefined,?\s*\)/,
     );
   });
 
@@ -56,7 +59,9 @@ describe("StatusBar — Code route shows agent·model from conversation config",
 
 describe("StatusBar — non-Code routes keep the Direct label, never fall back to Code", () => {
   it("computes a Direct label from the selected/active provider + model", () => {
-    expect(source).toMatch(/directLabel\s*=\s*provider[\s\S]*?provider\.name[\s\S]*?copy\.noProvider/);
+    expect(source).toMatch(
+      /directLabel\s*=\s*provider[\s\S]*?provider\.name[\s\S]*?copy\.noProvider/,
+    );
   });
 
   it("uses the Code label only under isCode (no leak on non-Code routes)", () => {
@@ -65,7 +70,10 @@ describe("StatusBar — non-Code routes keep the Direct label, never fall back t
     expect(source).toMatch(/rightLabel\s*=\s*isCode \? codeLabel : directLabel/);
     // And the Code config hook is only fed `agentId` when `isCode`
     // (otherwise `undefined`), so non-Code routes never mount a Code reader.
-    expect(source).toMatch(/useOpenCodeConversationConfig\(\s*isCode \? agentId : undefined,\s*\)/);
+    // Layout-independent, for the same reason as the assertion above.
+    expect(source).toMatch(
+      /useOpenCodeConversationConfig\(\s*isCode \? agentId : undefined,?\s*\)/,
+    );
   });
 });
 
@@ -77,9 +85,7 @@ describe("StatusBar — server button reflects identity activePort", () => {
 
   it("renders `:activePort` (not configuredPort) in the button", () => {
     // The port span must show the active port, with a placeholder when absent.
-    expect(source).toMatch(
-      /serverPort != null \? `:\$\{serverPort\}` : "…"/,
-    );
+    expect(source).toMatch(/serverPort != null \? `:\$\{serverPort\}` : "…"/);
     // And the server title must also reference the active port.
     expect(source).toMatch(/\(port \$\{serverPort\}\)/);
   });

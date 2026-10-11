@@ -64,9 +64,7 @@ export async function readGeometry(page: Page): Promise<Geometry> {
       const scroller = document.querySelector(scrollerSelector);
       if (!scroller) throw new Error("the virtualized transcript scroller is not mounted");
       const view = scroller.getBoundingClientRect();
-      const rowElements = Array.from(
-        document.querySelectorAll<HTMLElement>(rowSelector),
-      );
+      const rowElements = Array.from(document.querySelectorAll<HTMLElement>(rowSelector));
       const rows = rowElements.map((row) => {
         const rect = row.getBoundingClientRect();
         return {
@@ -117,8 +115,7 @@ export async function waitForStableScrollHeight(
   let stable = 0;
   for (;;) {
     const current = await page.evaluate(
-      (scrollerSelector) =>
-        (document.querySelector(scrollerSelector) as HTMLElement).scrollHeight,
+      (scrollerSelector) => (document.querySelector(scrollerSelector) as HTMLElement).scrollHeight,
       SCROLLER,
     );
     stable = current === previous ? stable + 1 : 0;
@@ -131,8 +128,9 @@ export async function waitForStableScrollHeight(
 
 export function firstFullyVisibleRow(geometry: Geometry): RowBox | null {
   return (
-    geometry.rows.find((row) => row.top >= geometry.viewTop - 1 && row.bottom <= geometry.viewBottom) ??
-    null
+    geometry.rows.find(
+      (row) => row.top >= geometry.viewTop - 1 && row.bottom <= geometry.viewBottom,
+    ) ?? null
   );
 }
 

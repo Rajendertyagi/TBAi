@@ -60,9 +60,9 @@ describe("invalid_stream — recognised from the SDK error name", () => {
   it("outranks the transport prose that would otherwise claim a provider stream failure", () => {
     // `TRANSPORT_RE` matches "premature close"; `StreamProviderError` is more
     // specific and is the authoritative signal.
-    expect(classifyError(sdkError("AI_StreamProviderError", "premature close of stream")).category).toBe(
-      "invalid_stream",
-    );
+    expect(
+      classifyError(sdkError("AI_StreamProviderError", "premature close of stream")).category,
+    ).toBe("invalid_stream");
   });
 });
 
@@ -110,9 +110,9 @@ describe("invalid_stream — AI_APICallError must not swallow auth or rate limit
   });
 
   it("treats a 2xx call with an unusable body as a conformance fault", () => {
-    expect(classifyError(sdkError("AI_APICallError", "bad body", { statusCode: 200 })).category).toBe(
-      "invalid_stream",
-    );
+    expect(
+      classifyError(sdkError("AI_APICallError", "bad body", { statusCode: 200 })).category,
+    ).toBe("invalid_stream");
   });
 
   it("does NOT infer a conformance fault from a missing status", () => {

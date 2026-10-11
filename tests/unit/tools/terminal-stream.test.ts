@@ -4,10 +4,7 @@
  * Executed with `bun test`.
  */
 import { describe, it, expect } from "bun:test";
-import {
-  createTerminalBatcher,
-  type TerminalDataPayload,
-} from "@/lib/terminal-stream.ts";
+import { createTerminalBatcher, type TerminalDataPayload } from "@/lib/terminal-stream.ts";
 
 interface Written {
   type: string;
@@ -17,10 +14,7 @@ interface Written {
 
 function collect(opts?: { flushMs?: number; maxPartsPerCall?: number }) {
   const written: Written[] = [];
-  const batcher = createTerminalBatcher(
-    (part) => written.push(part as Written),
-    opts,
-  );
+  const batcher = createTerminalBatcher((part) => written.push(part as Written), opts);
   return { written, batcher };
 }
 

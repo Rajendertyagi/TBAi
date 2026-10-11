@@ -40,10 +40,7 @@ import {
  *   - a completed tool result carries a native V2 content array
  */
 
-function render(
-  UI: ToolCallMessagePartComponent,
-  props: Record<string, unknown>,
-): string {
+function render(UI: ToolCallMessagePartComponent, props: Record<string, unknown>): string {
   const Any = UI as unknown as (p: Record<string, unknown>) => ReactElement;
   return renderToStaticMarkup(createElement(Any, props));
 }
@@ -86,13 +83,10 @@ describe("OpenCode read — title, path and body all populate", () => {
   });
 
   it("renders an incomplete native V2 tool state as failed", () => {
-    const html = render(
-      OpenCodeReadToolUI,
-      {
-        ...completedRead({ filePath: PATH }, undefined),
-        status: { type: "incomplete", reason: "File not found" },
-      },
-    );
+    const html = render(OpenCodeReadToolUI, {
+      ...completedRead({ filePath: PATH }, undefined),
+      status: { type: "incomplete", reason: "File not found" },
+    });
     expect(html).toContain("Failed");
     expect(html).not.toContain("No output");
   });
@@ -141,7 +135,10 @@ describe("OpenCode glob / grep — title comes from `pattern`", () => {
   it("titles grep with the pattern and renders the matches", () => {
     const html = render(
       OpenCodeGrepToolUI,
-      completedRead({ pattern: "useStaleApprovalGuard", include: "*.tsx" }, nativeContent("a.tsx:12")),
+      completedRead(
+        { pattern: "useStaleApprovalGuard", include: "*.tsx" },
+        nativeContent("a.tsx:12"),
+      ),
     );
     expect(html).toContain("grep · useStaleApprovalGuard");
     expect(html).toContain("a.tsx:12");
@@ -221,30 +218,27 @@ describe("OpenCode edit / write — title, path and body", () => {
     // `pendingPatch` is what OpenCode computed BEFORE running the edit and sent
     // with the permission request. The payload below is the real shape, captured
     // from the live server.
-    const html = render(
-      OpenCodeEditView,
-      {
-        ...toolPart(
-          "edit",
-          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
-          undefined,
-          {
-            status: { type: "requires-action", reason: "interrupt" },
-            approval: { id: "per_edit_1", options: [] },
-          },
-        ),
-        pendingPatch:
-          "Index: src/a.ts\n" +
-          "===================================================================\n" +
-          "--- src/a.ts\n" +
-          "+++ src/a.ts\n" +
-          "@@ -1,3 +1,3 @@\n" +
-          " const before = 1;\n" +
-          "-const target = BEFORE_TOKEN;\n" +
-          "+const target = AFTER_TOKEN;\n" +
-          " export { before };\n",
-      },
-    );
+    const html = render(OpenCodeEditView, {
+      ...toolPart(
+        "edit",
+        { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+        undefined,
+        {
+          status: { type: "requires-action", reason: "interrupt" },
+          approval: { id: "per_edit_1", options: [] },
+        },
+      ),
+      pendingPatch:
+        "Index: src/a.ts\n" +
+        "===================================================================\n" +
+        "--- src/a.ts\n" +
+        "+++ src/a.ts\n" +
+        "@@ -1,3 +1,3 @@\n" +
+        " const before = 1;\n" +
+        "-const target = BEFORE_TOKEN;\n" +
+        "+const target = AFTER_TOKEN;\n" +
+        " export { before };\n",
+    });
     // The resulting change, as a diff: the file, and both sides of it.
     expect(html).toContain("src/a.ts");
     expect(html).toContain("BEFORE_TOKEN");
@@ -260,21 +254,18 @@ describe("OpenCode edit / write — title, path and body", () => {
     // on the wire, and a gate with no preview at all would be worse than one
     // showing what the model proposed. Also the path a `write` takes, which has
     // no patch by data.
-    const html = render(
-      OpenCodeEditView,
-      {
-        ...toolPart(
-          "edit",
-          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
-          undefined,
-          {
-            status: { type: "requires-action", reason: "interrupt" },
-            approval: { id: "per_edit_1", options: [] },
-          },
-        ),
-        pendingPatch: null,
-      },
-    );
+    const html = render(OpenCodeEditView, {
+      ...toolPart(
+        "edit",
+        { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+        undefined,
+        {
+          status: { type: "requires-action", reason: "interrupt" },
+          approval: { id: "per_edit_1", options: [] },
+        },
+      ),
+      pendingPatch: null,
+    });
     expect(html).toContain("edit · src/a.ts");
     expect(html).toContain("BEFORE_TOKEN");
     expect(html).toContain("AFTER_TOKEN");
@@ -285,21 +276,18 @@ describe("OpenCode edit / write — title, path and body", () => {
     // A patch the diff parser cannot read must not leave the gate empty. This is
     // the same guard the completed card has: unparseable means "show what we
     // have", never "show nothing".
-    const html = render(
-      OpenCodeEditView,
-      {
-        ...toolPart(
-          "edit",
-          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
-          undefined,
-          {
-            status: { type: "requires-action", reason: "interrupt" },
-            approval: { id: "per_edit_1", options: [] },
-          },
-        ),
-        pendingPatch: "not a diff at all",
-      },
-    );
+    const html = render(OpenCodeEditView, {
+      ...toolPart(
+        "edit",
+        { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+        undefined,
+        {
+          status: { type: "requires-action", reason: "interrupt" },
+          approval: { id: "per_edit_1", options: [] },
+        },
+      ),
+      pendingPatch: "not a diff at all",
+    });
     expect(html).toContain("BEFORE_TOKEN");
     expect(html).toContain("Replace with:");
   });
@@ -308,21 +296,16 @@ describe("OpenCode edit / write — title, path and body", () => {
     // Two patches, two jobs. The one the server recorded after the edit ran
     // belongs to the completed card; the gate's own patch must not leak into it
     // as a second, competing preview.
-    const html = render(
-      OpenCodeEditView,
-      {
-        ...toolPart(
-          "edit",
-          { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
-          "Edit applied successfully.",
-          { status: { type: "complete" } },
-        ),
-        diffPatch:
-          "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-BEFORE_TOKEN\n+AFTER_TOKEN\n",
-        pendingPatch:
-          "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-OLD_PREVIEW\n+NEW_PREVIEW\n",
-      },
-    );
+    const html = render(OpenCodeEditView, {
+      ...toolPart(
+        "edit",
+        { filePath: "src/a.ts", oldString: "BEFORE_TOKEN", newString: "AFTER_TOKEN" },
+        "Edit applied successfully.",
+        { status: { type: "complete" } },
+      ),
+      diffPatch: "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-BEFORE_TOKEN\n+AFTER_TOKEN\n",
+      pendingPatch: "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-OLD_PREVIEW\n+NEW_PREVIEW\n",
+    });
     expect(html).toContain("BEFORE_TOKEN");
     expect(html).not.toContain("OLD_PREVIEW");
   });
@@ -336,27 +319,24 @@ describe("OpenCode edit / write — title, path and body", () => {
     // The gate used to show the raw `content` argument instead: a reviewer
     // scrolled a whole file to answer "is this the change I want?", with nothing
     // marking which lines are new - because all of them are.
-    const html = render(
-      OpenCodeWriteView,
-      {
-        ...toolPart(
-          "write",
-          { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
-          undefined,
-          {
-            status: { type: "requires-action", reason: "interrupt" },
-            approval: { id: "per_write_1", options: [] },
-          },
-        ),
-        pendingPatch:
-          "Index: src/b.ts\n" +
-          "===================================================================\n" +
-          "--- src/b.ts\n" +
-          "+++ src/b.ts\n" +
-          "@@ -0,0 +1,1 @@\n" +
-          "+export const WRITTEN_MARKER = 1;\n",
-      },
-    );
+    const html = render(OpenCodeWriteView, {
+      ...toolPart(
+        "write",
+        { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
+        undefined,
+        {
+          status: { type: "requires-action", reason: "interrupt" },
+          approval: { id: "per_write_1", options: [] },
+        },
+      ),
+      pendingPatch:
+        "Index: src/b.ts\n" +
+        "===================================================================\n" +
+        "--- src/b.ts\n" +
+        "+++ src/b.ts\n" +
+        "@@ -0,0 +1,1 @@\n" +
+        "+export const WRITTEN_MARKER = 1;\n",
+    });
     expect(html).toContain("src/b.ts");
     expect(html).toContain("WRITTEN_MARKER");
     // A real diff header, so the reader sees a change rather than a file dump.
@@ -366,21 +346,18 @@ describe("OpenCode edit / write — title, path and body", () => {
   it("falls back to the file content when a write carries no patch", () => {
     // The fallback stays load-bearing: `metadata.files` is optional, and a gate
     // with no preview would be worse than one showing what the model proposed.
-    const html = render(
-      OpenCodeWriteView,
-      {
-        ...toolPart(
-          "write",
-          { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
-          undefined,
-          {
-            status: { type: "requires-action", reason: "interrupt" },
-            approval: { id: "per_write_1", options: [] },
-          },
-        ),
-        pendingPatch: null,
-      },
-    );
+    const html = render(OpenCodeWriteView, {
+      ...toolPart(
+        "write",
+        { filePath: "src/b.ts", content: "export const WRITTEN_MARKER = 1;" },
+        undefined,
+        {
+          status: { type: "requires-action", reason: "interrupt" },
+          approval: { id: "per_write_1", options: [] },
+        },
+      ),
+      pendingPatch: null,
+    });
     expect(html).toContain("WRITTEN_MARKER");
   });
 
@@ -426,10 +403,7 @@ describe("OpenCode bash — terminal output and the gate", () => {
   });
 
   it("shows no output when the command produced none", () => {
-    const html = render(
-      OpenCodeBashToolUI,
-      toolPart("bash", { command: "true" }, []),
-    );
+    const html = render(OpenCodeBashToolUI, toolPart("bash", { command: "true" }, []));
     expect(html).toContain("bash · true");
     expect(html).toContain(toolsConfig.copy.status.noOutput);
   });
@@ -441,9 +415,14 @@ describe("OpenCode bash — terminal output and the gate", () => {
     // rather than relying on the captured envelope having no `stdout`.
     const html = render(
       OpenCodeBashToolUI,
-      toolPart("bash", { command: "bun --version" }, { stdout: "PARTIAL_OUTPUT" }, {
-        isError: true,
-      }),
+      toolPart(
+        "bash",
+        { command: "bun --version" },
+        { stdout: "PARTIAL_OUTPUT" },
+        {
+          isError: true,
+        },
+      ),
     );
     expect(html).toContain("Failed");
     expect(html).not.toContain(toolsConfig.copy.status.noOutput);
@@ -567,12 +546,7 @@ describe("OpenCode question — read-only history rendering", () => {
 
 /** A completed part shaped from the captured one, with the given answers. */
 const answeredQuestion = (answers: readonly (readonly string[])[] | null) =>
-  toolPart(
-    "question",
-    capturedQuestionPart.state.input,
-    capturedQuestionContent,
-    { answers },
-  );
+  toolPart("question", capturedQuestionPart.state.input, capturedQuestionContent, { answers });
 
 /**
  * A question still waiting on an answer.
@@ -589,7 +563,10 @@ const openQuestion = {
 
 describe("OpenCode question — the answer is on the card once it is given", () => {
   it("shows the answer the reader gave, from the completed part's own metadata", () => {
-    const html = render(QuestionReadonlyView, answeredQuestion(capturedQuestionPart.state.metadata.answers));
+    const html = render(
+      QuestionReadonlyView,
+      answeredQuestion(capturedQuestionPart.state.metadata.answers),
+    );
     expect(html).toContain(toolsConfig.copy.status.yourAnswer);
     expect(html).toContain("Postgres");
   });
@@ -599,7 +576,10 @@ describe("OpenCode question — the answer is on the card once it is given", () 
     // did I pick and why" — so the chosen option's description follows the
     // answer. Re-listing all three options with one highlighted turned the
     // receipt back into a menu, which is what the open card must never be.
-    const html = render(QuestionReadonlyView, answeredQuestion(capturedQuestionPart.state.metadata.answers));
+    const html = render(
+      QuestionReadonlyView,
+      answeredQuestion(capturedQuestionPart.state.metadata.answers),
+    );
     expect(html).toContain("Which database should you use?");
     expect(html).toContain("Database choice");
     expect(html).toContain("Postgres");
@@ -699,14 +679,20 @@ describe("OpenCode question — the answer is on the card once it is given", () 
   });
 
   it("drops the open-question caption once there is an answer", () => {
-    const html = render(QuestionReadonlyView, answeredQuestion(capturedQuestionPart.state.metadata.answers));
+    const html = render(
+      QuestionReadonlyView,
+      answeredQuestion(capturedQuestionPart.state.metadata.answers),
+    );
     expect(html).not.toContain(toolsConfig.copy.status.answerInQuestionDock);
   });
 
   it("renders the answer from a RELOADED history, where no event ever fires", () => {
     // Non-vacuity: the payload is read out of the raw part array the history
     // projection attaches, which is the only thing a reloaded conversation has.
-    const answers = openCodeQuestionAnswersFromParts(capturedQuestionRawParts, `tbai-v2-tool:msg_1:${encodeURIComponent(CAPTURED_QUESTION_PART_ID)}`);
+    const answers = openCodeQuestionAnswersFromParts(
+      capturedQuestionRawParts,
+      `tbai-v2-tool:msg_1:${encodeURIComponent(CAPTURED_QUESTION_PART_ID)}`,
+    );
     expect(answers).toEqual([["Postgres"]]);
     const html = render(QuestionReadonlyView, answeredQuestion(answers));
     expect(html).toContain("Postgres");
@@ -716,7 +702,9 @@ describe("OpenCode question — the answer is on the card once it is given", () 
   it("reports no answers for a still-running part and for no part at all", () => {
     const callId = `tbai-v2-tool:msg_1:${encodeURIComponent(CAPTURED_QUESTION_PART_ID)}`;
     expect(openCodeQuestionAnswersFromParts([capturedPendingQuestionPart], callId)).toBeNull();
-    expect(openCodeQuestionAnswersFromParts(capturedQuestionRawParts, "tbai-v2-tool:msg_1:other")).toBeNull();
+    expect(
+      openCodeQuestionAnswersFromParts(capturedQuestionRawParts, "tbai-v2-tool:msg_1:other"),
+    ).toBeNull();
     expect(openCodeQuestionAnswersFromParts(undefined, callId)).toBeNull();
   });
 
@@ -725,7 +713,12 @@ describe("OpenCode question — the answer is on the card once it is given", () 
     // from another producer — and it must not render as `undefined`.
     const callId = `tbai-v2-tool:msg_1:${encodeURIComponent(CAPTURED_QUESTION_PART_ID)}`;
     for (const answers of [["Postgres"], [{ q0: "Postgres" }], [null], "Postgres"]) {
-      const parts = [{ ...capturedQuestionPart, state: { ...capturedQuestionPart.state, metadata: { answers } } }];
+      const parts = [
+        {
+          ...capturedQuestionPart,
+          state: { ...capturedQuestionPart.state, metadata: { answers } },
+        },
+      ];
       expect(openCodeQuestionAnswersFromParts(parts, callId), JSON.stringify(answers)).toBeNull();
     }
   });
@@ -801,7 +794,7 @@ const REAL_GREP_TEXT =
 const REAL_READ_TEXT =
   "Read file D:\\Temp\\ai-chat-app\\package.json, lines 1-47\n" +
   "1: {\n" +
-  "2:   \"name\": \"tbai\",\n";
+  '2:   "name": "tbai",\n';
 
 /** Every renderer that renders its body through the shared helper. */
 const BODY_RENDERERS = [
@@ -830,7 +823,11 @@ describe("OpenCode bodies — a real V2 result is rendered, not replaced by 'No 
   it("grep shows the matched file and line, as OpenCode reported them", () => {
     const html = render(
       OpenCodeGrepToolUI,
-      toolPart("grep", { pattern: "approval", path: "D:\\Temp\\ai-chat-app\\web\\src" }, nativeContent(REAL_GREP_TEXT)),
+      toolPart(
+        "grep",
+        { pattern: "approval", path: "D:\\Temp\\ai-chat-app\\web\\src" },
+        nativeContent(REAL_GREP_TEXT),
+      ),
     );
     expect(html).toContain("grep · approval");
     expect(html).toContain("V2FormCard.tsx");
@@ -840,7 +837,10 @@ describe("OpenCode bodies — a real V2 result is rendered, not replaced by 'No 
   it("read shows the file text through its `{ content }` shape", () => {
     const html = render(
       OpenCodeReadToolUI,
-      completedRead({ filePath: "D:\\Temp\\ai-chat-app\\package.json" }, nativeContent(REAL_READ_TEXT)),
+      completedRead(
+        { filePath: "D:\\Temp\\ai-chat-app\\package.json" },
+        nativeContent(REAL_READ_TEXT),
+      ),
     );
     expect(html).toContain("Read file D:\\Temp\\ai-chat-app\\package.json, lines 1-47");
     expect(html).toContain("&quot;name&quot;: &quot;tbai&quot;");
@@ -861,10 +861,7 @@ describe("OpenCode bodies — a real V2 result is rendered, not replaced by 'No 
   it("still says 'No output.' when the tool really returned nothing", () => {
     // The empty state must survive the fix: an empty result is not a result.
     for (const value of [[], "", null, { content: [] }]) {
-      const html = render(
-        OpenCodeGrepToolUI,
-        toolPart("grep", { pattern: "approval" }, value),
-      );
+      const html = render(OpenCodeGrepToolUI, toolPart("grep", { pattern: "approval" }, value));
       expect(html, JSON.stringify(value)).toContain("No output.");
     }
   });

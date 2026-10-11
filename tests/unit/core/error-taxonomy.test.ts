@@ -50,12 +50,10 @@ describe("refined categories", () => {
   });
 
   it("recognises stream/transport faults", () => {
-    expect(
-      classifyError(errWith("ERR_INCOMPLETE_CHUNKED_ENCODING")).category,
-    ).toBe("transport");
-    expect(
-      classifyError(errWith("Invalid state: Controller is already closed")).category,
-    ).toBe("transport");
+    expect(classifyError(errWith("ERR_INCOMPLETE_CHUNKED_ENCODING")).category).toBe("transport");
+    expect(classifyError(errWith("Invalid state: Controller is already closed")).category).toBe(
+      "transport",
+    );
   });
 
   it("leaves genuinely unknown errors unknown", () => {

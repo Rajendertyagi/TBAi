@@ -100,8 +100,7 @@ function mountUi(conversationId: string): UiProbe {
   };
 }
 
-const freshId = (): string =>
-  `k-i6-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const freshId = (): string => `k-i6-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 describe("K-I6 — loadFailed is part of the snapshot contract", () => {
   const probes: UiProbe[] = [];

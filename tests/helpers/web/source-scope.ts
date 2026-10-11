@@ -39,9 +39,7 @@ import { REPO_ROOT } from "../repo-root";
 
 /** Remove comments, so prose about a rule cannot be mistaken for the rule. */
 export function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
 /**

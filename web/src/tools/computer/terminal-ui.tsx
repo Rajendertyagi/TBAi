@@ -36,8 +36,7 @@ function useLiveTerminalLines(ownId: string | undefined): string[] {
     return Array.isArray(all) ? all : EMPTY_PARTS;
   });
   return useMemo(
-    () =>
-      ownId ? mergeTerminalParts(allParts as unknown[], ownId) : EMPTY_LINES,
+    () => (ownId ? mergeTerminalParts(allParts as unknown[], ownId) : EMPTY_LINES),
     [allParts, ownId],
   );
 }
@@ -61,27 +60,19 @@ type RunResult = {
  * never forked — non-zero exits surface in the footer below it and the header
  * switches to a red "failed" badge via the `status` prop.
  */
-export const RunCommandTerminalUI: ToolCallMessagePartComponent = (
-  p: AnyProps,
-) => {
+export const RunCommandTerminalUI: ToolCallMessagePartComponent = (p: AnyProps) => {
   const { approval } = p;
   // Stable invocation id (typed on the part) for live data-part matching.
   const ownId = p.toolCallId;
-  const liveLines = useLiveTerminalLines(
-    typeof ownId === "string" ? ownId : undefined,
-  );
+  const liveLines = useLiveTerminalLines(typeof ownId === "string" ? ownId : undefined);
 
   const running = p.status?.type === "running";
-  const result =
-    p.result !== undefined && p.result !== null
-      ? (p.result as RunResult)
-      : undefined;
+  const result = p.result !== undefined && p.result !== null ? (p.result as RunResult) : undefined;
 
   // Non-terminal states keep the shared dispatcher byte-identically. Any
   // result error (denial or execution failure) routes there too — the
   // shared denialOf classifier inside BackendToolView tells them apart.
-  const hasError =
-    result && typeof result === "object" && typeof result.error === "string";
+  const hasError = result && typeof result === "object" && typeof result.error === "string";
   const denied = denialOf(p.result, p.approval);
   if (
     (approval && approval.approved === undefined) ||
@@ -108,14 +99,11 @@ export const RunCommandTerminalUI: ToolCallMessagePartComponent = (
     );
   }
 
-  const command = String(
-    (p.args as { command?: unknown } | undefined)?.command ?? "",
-  );
+  const command = String((p.args as { command?: unknown } | undefined)?.command ?? "");
   const lines = result !== undefined ? resultToLines(result) : liveLines;
   const done = !running;
 
-  const exitCode =
-    typeof result?.exitCode === "number" ? result.exitCode : undefined;
+  const exitCode = typeof result?.exitCode === "number" ? result.exitCode : undefined;
   const timedOut = result?.timedOut === true;
   const failed = exitCode !== undefined && exitCode !== 0;
   const errored = timedOut || failed;
@@ -131,17 +119,12 @@ export const RunCommandTerminalUI: ToolCallMessagePartComponent = (
         status={errored ? "error" : "success"}
       />
       {timedOut && (
-        <div
-          role="alert"
-          className="mt-1 font-mono text-xs text-destructive"
-        >
+        <div role="alert" className="mt-1 font-mono text-xs text-destructive">
           timed out — process killed
         </div>
       )}
       {!timedOut && failed && (
-        <div className="mt-1 font-mono text-xs text-destructive">
-          exit {exitCode}
-        </div>
+        <div className="mt-1 font-mono text-xs text-destructive">exit {exitCode}</div>
       )}
     </div>
   );

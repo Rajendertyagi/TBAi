@@ -245,8 +245,9 @@ describe("lazy initialisation", () => {
     // Imports are cached per module graph, so this re-imports through a fresh
     // query string to get a second, uninitialised instance and proves the
     // dictionary is not built at module scope.
-    const fresh = (await import(`@web/lib/spellcheck?lazy-probe=${Date.now()}`)) as
-      typeof import("@web/lib/spellcheck.ts");
+    const fresh = (await import(
+      `@web/lib/spellcheck?lazy-probe=${Date.now()}`
+    )) as typeof import("@web/lib/spellcheck.ts");
     let threw = false;
     try {
       fresh.isWordCorrect("custom");
@@ -260,5 +261,3 @@ describe("lazy initialisation", () => {
     expect(fresh.isWordCorrect("custom")).toBe(true);
   });
 });
-
-

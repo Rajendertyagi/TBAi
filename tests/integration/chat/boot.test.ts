@@ -63,7 +63,10 @@ function storeFor(fs: Fs, bootId: string): SqliteResumableStreamStore {
     pollIntervalMs: 10,
     generateLeaseToken: (() => {
       let n = 0;
-      return () => `lease_${(n += 1)}`;
+      return () => {
+        n += 1;
+        return `lease_${n}`;
+      };
     })(),
   });
 }
@@ -179,7 +182,13 @@ describe("boot recovery — orphaned streaming rows", () => {
     // New process: new connection, new boot identity, recovery runs.
     const after = openFs(dir, file);
     const report = recover(after, "boot_two");
-    expect(report).toEqual({ scanned: 1, interrupted: 1, streamIds: ["run_a"], preservedVerdicts: 0, preservedStreamIds: [] });
+    expect(report).toEqual({
+      scanned: 1,
+      interrupted: 1,
+      streamIds: ["run_a"],
+      preservedVerdicts: 0,
+      preservedStreamIds: [],
+    });
 
     const description = storeFor(after, "boot_two").describe("run_a")!;
     expect(description.storedStatus).toBe("error");
@@ -275,7 +284,13 @@ describe("boot recovery — orphaned streaming rows", () => {
     const cancelBefore = store.describe("run_cancel")!;
 
     const report = recover(fs, "boot_two");
-    expect(report).toEqual({ scanned: 0, interrupted: 0, streamIds: [], preservedVerdicts: 0, preservedStreamIds: [] });
+    expect(report).toEqual({
+      scanned: 0,
+      interrupted: 0,
+      streamIds: [],
+      preservedVerdicts: 0,
+      preservedStreamIds: [],
+    });
 
     const after = storeFor(fs, "boot_two");
     const doneAfter = after.describe("run_done")!;
@@ -298,7 +313,13 @@ describe("boot recovery — orphaned streaming rows", () => {
 
     const report = recover(fs, "boot_current");
 
-    expect(report).toEqual({ scanned: 0, interrupted: 0, streamIds: [], preservedVerdicts: 0, preservedStreamIds: [] });
+    expect(report).toEqual({
+      scanned: 0,
+      interrupted: 0,
+      streamIds: [],
+      preservedVerdicts: 0,
+      preservedStreamIds: [],
+    });
     const description = store.describe("run_mine")!;
     expect(description.status).toBe("streaming");
     expect(description.terminalKind).toBeNull();
@@ -325,7 +346,13 @@ describe("boot recovery — orphaned streaming rows", () => {
 
     const report = recover(fs, "boot_two");
 
-    expect(report).toEqual({ scanned: 1, interrupted: 1, streamIds: ["run_old"], preservedVerdicts: 0, preservedStreamIds: [] });
+    expect(report).toEqual({
+      scanned: 1,
+      interrupted: 1,
+      streamIds: ["run_old"],
+      preservedVerdicts: 0,
+      preservedStreamIds: [],
+    });
     expect(current.describe("run_old")!.terminalKind).toBe("interrupted");
     expect(current.describe("run_new")!.terminalKind).toBeNull();
   });
@@ -342,7 +369,13 @@ describe("boot recovery — orphaned streaming rows", () => {
 
     fs.clock.now += 60_000;
     const second = recover(fs, "boot_two");
-    expect(second).toEqual({ scanned: 0, interrupted: 0, streamIds: [], preservedVerdicts: 0, preservedStreamIds: [] });
+    expect(second).toEqual({
+      scanned: 0,
+      interrupted: 0,
+      streamIds: [],
+      preservedVerdicts: 0,
+      preservedStreamIds: [],
+    });
 
     const afterSecond = storeFor(fs, "boot_two").describe("run_twice")!;
     // Nothing rewritten: same transition timestamp, same expiry, same bytes.
@@ -391,7 +424,13 @@ describe("boot recovery — replay + restart semantics", () => {
     // A third boot finds the row already terminal and leaves it alone.
     const three = openFs(dir, file);
     const secondSweep = recover(three, "boot_3");
-    expect(secondSweep).toEqual({ scanned: 0, interrupted: 0, streamIds: [], preservedVerdicts: 0, preservedStreamIds: [] });
+    expect(secondSweep).toEqual({
+      scanned: 0,
+      interrupted: 0,
+      streamIds: [],
+      preservedVerdicts: 0,
+      preservedStreamIds: [],
+    });
     const after = storeFor(three, "boot_3").describe("run_multi")!;
     expect(after.terminalKind).toBe("interrupted");
     expect(after.finalizedAt).toBe(settled.finalizedAt);

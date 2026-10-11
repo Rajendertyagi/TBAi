@@ -51,9 +51,9 @@ test("sidebar shows a running dot only while generating", async ({ page, request
   try {
     // Full load, so the sidebar list is fetched with this conversation in it.
     await page.goto(`/#/chat/${conversation.id}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     // The row must exist before an indicator inside it can mean anything.
     const row = page.locator("div.group").filter({ hasText: title });
@@ -85,9 +85,9 @@ test("sidebar shows a running dot only while generating", async ({ page, request
     provider.complete();
 
     // Once the run ends the indicator goes away.
-    await expect(
-      row.getByRole("status", { name: "Generating response" }),
-    ).toHaveCount(0, { timeout: 15000 });
+    await expect(row.getByRole("status", { name: "Generating response" })).toHaveCount(0, {
+      timeout: 15000,
+    });
   } finally {
     provider.complete();
     provider.stop();

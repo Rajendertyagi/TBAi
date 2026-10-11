@@ -23,14 +23,17 @@ interface McpState {
   refresh: (id: string) => Promise<void>;
   test: (data: McpServerDraft) => Promise<McpTestResult>;
   readResource: (id: string, uri: string) => Promise<McpResourceReadResult>;
-  getPrompt: (id: string, name: string, args?: Record<string, string>) => Promise<McpPromptGetResult>;
+  getPrompt: (
+    id: string,
+    name: string,
+    args?: Record<string, string>,
+  ) => Promise<McpPromptGetResult>;
   setPendingInsert: (text: string) => void;
   clearPendingInsert: () => void;
 }
 
 /** Every MCP call logs its failures under the `mcp.ui` scope. */
-const api = <T>(path: string, init?: RequestInit): Promise<T> =>
-  apiJson<T>(path, init, "mcp.ui");
+const api = <T>(path: string, init?: RequestInit): Promise<T> => apiJson<T>(path, init, "mcp.ui");
 
 export const useMcpStore = create<McpState>((set) => ({
   servers: [],

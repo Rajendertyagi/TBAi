@@ -143,13 +143,22 @@ async function seedControlledProvider(): Promise<void> {
       if (problem) {
         return new Response(
           JSON.stringify({
-            error: { message: `Bad Request: ${problem}`, type: "invalid_request_error", param: "tool", code: "invalid_tool_arguments" },
+            error: {
+              message: `Bad Request: ${problem}`,
+              type: "invalid_request_error",
+              param: "tool",
+              code: "invalid_tool_arguments",
+            },
           }),
           { status: 400, headers: { "Content-Type": "application/json" } },
         );
       }
       return new Response(
-        [chatCompletionChunk({ role: "assistant", content: "ok" }), chatCompletionChunk({}, "stop"), "data: [DONE]\n\n"].join(""),
+        [
+          chatCompletionChunk({ role: "assistant", content: "ok" }),
+          chatCompletionChunk({}, "stop"),
+          "data: [DONE]\n\n",
+        ].join(""),
         { headers: { "Content-Type": "text/event-stream" } },
       );
     },
@@ -185,7 +194,11 @@ afterAll(async () => {
   await registry.loadFromDb(db);
 });
 
-const userMessage = (text: string, id: string) => ({ id, role: "user", parts: [{ type: "text", text }] });
+const userMessage = (text: string, id: string) => ({
+  id,
+  role: "user",
+  parts: [{ type: "text", text }],
+});
 
 /** The production assistant turn, with a caller-chosen `input` shape. */
 function assistantTurn(toolCallId: string, inputField: Record<string, unknown>) {
@@ -211,14 +224,16 @@ async function sendOne(messages: Array<Record<string, unknown>>): Promise<{
   outbound: Record<string, unknown>;
   problem: string | null;
 }> {
-  const conv = await conversationService.create(conversationInput({
-    title: "null-input-boundary",
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title: "null-input-boundary",
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   try {
     const res = await app.request("/api/chat", {
       method: "POST",
@@ -236,11 +251,16 @@ async function sendOne(messages: Array<Record<string, unknown>>): Promise<{
 // ── 13: the endpoint's own authority to fail a case ───────────────────────────
 describe("null-input boundary: the controlled endpoint is a real validator", () => {
   const call = (args: unknown) => ({
-    messages: [{ role: "assistant", tool_calls: [{ id: "c1", function: { name: "write_file", arguments: args } }] }],
+    messages: [
+      {
+        role: "assistant",
+        tool_calls: [{ id: "c1", function: { name: "write_file", arguments: args } }],
+      },
+    ],
   });
 
   it.each([
-    ['a JSON string (the production defect)', '"{\\"path\\": \\"a.txt\\"}"', true],
+    ["a JSON string (the production defect)", '"{\\"path\\": \\"a.txt\\"}"', true],
     ["a JSON array", '"[1,2]"', true],
     ["JSON null", '"null"', true],
     ["malformed JSON", '"{\\"path\\":"', true],
@@ -266,21 +286,25 @@ describe("null-input boundary: non-object input never reaches the provider", () 
     ["a string", "not-an-object"],
     ["a number", 42],
     ["a boolean", true],
-  ])("input = %s is repaired away before conversion", async (_label, badInput) => {
-    await seedControlledProvider();
-    const id = `call_bad_${_label}`;
-    const { outbound, problem } = await sendOne([
-      userMessage("write it", "msg-u1"),
-      assistantTurn(id, { input: badInput }),
-      userMessage("continue please", "msg-u2"),
-    ]);
+  ])(
+    "input = %s is repaired away before conversion",
+    async (_label, badInput) => {
+      await seedControlledProvider();
+      const id = `call_bad_${_label}`;
+      const { outbound, problem } = await sendOne([
+        userMessage("write it", "msg-u1"),
+        assistantTurn(id, { input: badInput }),
+        userMessage("continue please", "msg-u2"),
+      ]);
 
-    // Had the malformed argument reached the endpoint it would have answered 400.
-    expect(problem).toBeNull();
-    expect(toolCallIdsOnWire(outbound)).not.toContain(id);
-    // And no orphan tool result survives for the removed call.
-    expect(toolResultIdsOnWire(outbound)).not.toContain(id);
-  }, 30000);
+      // Had the malformed argument reached the endpoint it would have answered 400.
+      expect(problem).toBeNull();
+      expect(toolCallIdsOnWire(outbound)).not.toContain(id);
+      // And no orphan tool result survives for the removed call.
+      expect(toolResultIdsOnWire(outbound)).not.toContain(id);
+    },
+    30000,
+  );
 });
 
 // ── 1: the exact `input: null` production case ────────────────────────────────
@@ -303,9 +327,9 @@ describe("null-input boundary: the exact poisoned production case", () => {
     const { outbound, problem } = await sendOne([
       userMessage("write it", "msg-u1"),
       // `inputField` is spread into the tool part, so passing `{}` leaves the part with
-// no `input` key at all - which is precisely what this case exercises (the
-// assistant claims a tool result for a key the wire never carried).
-assistantTurn("call_absent_key", {}),
+      // no `input` key at all - which is precisely what this case exercises (the
+      // assistant claims a tool result for a key the wire never carried).
+      assistantTurn("call_absent_key", {}),
       userMessage("continue please", "msg-u2"),
     ]);
     expect(problem).toBeNull();
@@ -323,7 +347,13 @@ assistantTurn("call_absent_key", {}),
         parts: [
           { type: "step-start" },
           { type: "text", text: "Wrote it." },
-          { type: "tool-write_file", toolCallId: "call_valid", state: "output-available", input: validInput, output: { ok: true } },
+          {
+            type: "tool-write_file",
+            toolCallId: "call_valid",
+            state: "output-available",
+            input: validInput,
+            output: { ok: true },
+          },
         ],
       },
       userMessage("continue please", "msg-u2"),
@@ -333,7 +363,9 @@ assistantTurn("call_absent_key", {}),
     expect(toolCallIdsOnWire(outbound)).toContain("call_valid");
     const messages = outbound.messages as Array<Record<string, unknown>>;
     const withCall = messages.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.length > 0);
-    const first = (withCall?.tool_calls as Array<{ function: { arguments: string } }>)[0];
+    const first = (
+      withCall?.tool_calls as Array<{ function: { arguments: string } }> | undefined
+    )?.[0];
     expect(JSON.parse(first.function.arguments)).toEqual(validInput);
   }, 30000);
 
@@ -366,7 +398,9 @@ assistantTurn("call_absent_key", {}),
     expect(toolCallIdsOnWire(outbound)).toContain("call_recover");
     const messages = outbound.messages as Array<Record<string, unknown>>;
     const withCall = messages.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.length > 0);
-    const first = (withCall?.tool_calls as Array<{ function: { arguments: string } }>)[0];
+    const first = (
+      withCall?.tool_calls as Array<{ function: { arguments: string } }> | undefined
+    )?.[0];
     expect(JSON.parse(first.function.arguments)).toEqual(recovered);
   }, 30000);
 

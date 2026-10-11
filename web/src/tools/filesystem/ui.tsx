@@ -1,8 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type {
-  ToolCallMessagePartComponent,
-  ToolCallMessagePartProps,
-} from "@assistant-ui/react";
+import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAui } from "@assistant-ui/react";
 import { CheckCircle2, File, Folder, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -66,11 +63,7 @@ export function ToolCard({
  * whichever caller remembered to add one. See `body-budget.tsx`.
  */
 export function Json({ value }: { value: unknown }) {
-  return (
-    <BoundedBody
-      text={typeof value === "string" ? value : JSON.stringify(value, null, 2)}
-    />
-  );
+  return <BoundedBody text={typeof value === "string" ? value : JSON.stringify(value, null, 2)} />;
 }
 
 function Spinner({ label }: { label: string }) {
@@ -134,14 +127,13 @@ export function ApprovalGate({
   // requested path resolves outside this conversation's workspace. Failure
   // here never blocks the gate — worst case the warning is absent.
   const [outside, setOutside] = useState<{ resolvedTarget: string; root: string } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: both `approval` and `aui` are re-created on every render (the approval object is rebuilt with the tool payload, and `aui` is a live context handle). Depending on them would refire this display-only workspace check on every render. `tool` and `targetPath` are the inputs that actually change the answer.
   useEffect(() => {
     if (!tool || !targetPath || approval.isAutomatic) return;
     let cancelled = false;
     (async () => {
       try {
-        const conversationId = resolveThreadConversationId(
-          aui.threadListItem.getState(),
-        );
+        const conversationId = resolveThreadConversationId(aui.threadListItem.getState());
         if (!conversationId) return;
         const res = await apiFetch("/api/tools/check", {
           method: "POST",
@@ -187,7 +179,12 @@ export function ApprovalGate({
     );
   }
 
-  const answer = (response: { approved: boolean; reason?: string; optionId?: string; text?: string }) => {
+  const answer = (response: {
+    approved: boolean;
+    reason?: string;
+    optionId?: string;
+    text?: string;
+  }) => {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -242,9 +239,7 @@ export function ApprovalGate({
     setError(null);
     runWithExit(async () => {
       try {
-        const conversationId = resolveThreadConversationId(
-          aui.threadListItem.getState(),
-        );
+        const conversationId = resolveThreadConversationId(aui.threadListItem.getState());
         if (!conversationId || !tool || !targetPath) {
           throw new Error("No conversation for this approval");
         }
@@ -296,14 +291,11 @@ export function ApprovalGate({
     confirmingOption !== undefined && typeof confirmingOption.confirm === "object"
       ? confirmingOption.confirm
       : undefined;
-  const confirmDescription =
-    confirmMeta?.description ?? confirmingOption?.description;
+  const confirmDescription = confirmMeta?.description ?? confirmingOption?.description;
 
   return (
     <ToolCard title={title} leaving={leaving}>
-      {prompt !== undefined && (
-        <p className="mb-1 font-medium text-foreground">{prompt}</p>
-      )}
+      {prompt !== undefined && <p className="mb-1 font-medium text-foreground">{prompt}</p>}
       {details}
       {confirmingOption !== undefined ? (
         <div className="mt-2 rounded-xl border border-border bg-muted/40 px-3 py-2">
@@ -313,24 +305,17 @@ export function ApprovalGate({
           {confirmDescription !== undefined && (
             <p className="mt-1 text-muted-foreground">{confirmDescription}</p>
           )}
-          {confirmingOption.grants !== undefined &&
-            confirmingOption.grants.length > 0 && (
-              <ul className="mt-2 flex flex-col gap-1">
-                {confirmingOption.grants.map((grant) => (
-                  <li key={grant}>
-                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                      {grant}
-                    </code>
-                  </li>
-                ))}
-              </ul>
-            )}
+          {confirmingOption.grants !== undefined && confirmingOption.grants.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1">
+              {confirmingOption.grants.map((grant) => (
+                <li key={grant}>
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{grant}</code>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="mt-3 flex items-center gap-2">
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() => void chooseOption(confirmingOption)}
-            >
+            <Button size="sm" disabled={busy} onClick={() => void chooseOption(confirmingOption)}>
               Confirm
             </Button>
             <Button
@@ -397,8 +382,7 @@ export function ApprovalGate({
             Resolves to {outside.resolvedTarget}
           </div>
           <div className="text-muted-foreground">
-            Approving grants one-time access to this exact path. Future calls
-            will ask again.
+            Approving grants one-time access to this exact path. Future calls will ask again.
           </div>
         </div>
       )}
@@ -477,9 +461,7 @@ export function failureCopyOf(
   if (reason !== null) {
     return { reason, copy: toolsConfig.copy.status.failedWithReason(reason) };
   }
-  return isError
-    ? { reason: null, copy: toolsConfig.copy.status.failedWithoutReason }
-    : null;
+  return isError ? { reason: null, copy: toolsConfig.copy.status.failedWithoutReason } : null;
 }
 
 /** Active thread's conversation id (same pattern as the Composer Stop handler). */
@@ -521,16 +503,10 @@ function FailedOutsideRetry({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const addResult = (aui as unknown as { part?: { addToolResult?: (r: unknown) => void } })
-    ?.part?.addToolResult;
+  const addResult = (aui as unknown as { part?: { addToolResult?: (r: unknown) => void } })?.part
+    ?.addToolResult;
 
-  if (
-    dismissed ||
-    !addResult ||
-    !tool ||
-    !READ_RETRY_TOOLS.has(tool) ||
-    !OUTSIDE_RE.test(failed)
-  ) {
+  if (dismissed || !addResult || !tool || !READ_RETRY_TOOLS.has(tool) || !OUTSIDE_RE.test(failed)) {
     return null;
   }
 
@@ -585,9 +561,7 @@ function FailedOutsideRetry({
 /** Closed-gate notice (exported for the terminal adapter). */
 export function ClosedGateMessage({ resolution }: { resolution: string }) {
   return (
-    <span className="text-muted-foreground">
-      {toolsConfig.copy.status.closedGate(resolution)}
-    </span>
+    <span className="text-muted-foreground">{toolsConfig.copy.status.closedGate(resolution)}</span>
   );
 }
 
@@ -672,15 +646,12 @@ export function BackendToolView({
         icon={<CheckCircle2 className="size-3.5 shrink-0 text-success" />}
         badge={<DecisionBadge tone="approved">Approved</DecisionBadge>}
       >
-        <span className="text-muted-foreground">
-          {toolsConfig.copy.status.approvedWillExecute}
-        </span>
+        <span className="text-muted-foreground">{toolsConfig.copy.status.approvedWillExecute}</span>
       </CollapsedDecisionRow>
     );
   }
   if (status?.type === "incomplete") {
-    const reason =
-      (status as { reason?: unknown }).reason ?? approval?.reason ?? "unknown";
+    const reason = (status as { reason?: unknown }).reason ?? approval?.reason ?? "unknown";
     const cancelled = String(reason) === "cancelled" || reason === "cancelled";
     return (
       <CollapsedDecisionRow
@@ -763,9 +734,7 @@ export function BackendToolView({
   // that is actually blocked on a person. `argPreview` is the existing hook for
   // "what this call is about", so no new prop or card machinery is added.
   if (status?.type === "requires-action" && !approval) {
-    return (
-      <ToolCard title={title}>{argPreview ?? <Json value={args} />}</ToolCard>
-    );
+    return <ToolCard title={title}>{argPreview ?? <Json value={args} />}</ToolCard>;
   }
   return (
     <ToolCard title={title}>
@@ -781,7 +750,8 @@ export function BackendToolView({
 export function dirSummary(result: AnyResult) {
   const r = result as any;
   const entries = (r?.entries ?? []) as { name: string; type: string; size: number | null }[];
-  if (entries.length === 0) return <span className="text-muted-foreground">{toolsConfig.copy.status.emptyFolder}</span>;
+  if (entries.length === 0)
+    return <span className="text-muted-foreground">{toolsConfig.copy.status.emptyFolder}</span>;
   const maxRows = toolsConfig.limits.dirEntryMaxRows;
   const shown = entries.slice(0, maxRows);
   return (
@@ -830,16 +800,24 @@ export function searchSummary(result: AnyResult) {
   const r = result as any;
   const matches = (r?.matches ?? []) as { path: string; line: number; snippet: string }[];
   if (matches.length === 0)
-    return <span className="text-muted-foreground">{toolsConfig.copy.status.noMatchesInFiles(r?.filesScanned ?? 0)}</span>;
+    return (
+      <span className="text-muted-foreground">
+        {toolsConfig.copy.status.noMatchesInFiles(r?.filesScanned ?? 0)}
+      </span>
+    );
   return (
     <div className="space-y-1">
       {matches.map((m) => (
         <div key={searchMatchKey(m)} className="truncate">
-          <span className="font-medium text-foreground">{m.path}:{m.line}</span>{" "}
+          <span className="font-medium text-foreground">
+            {m.path}:{m.line}
+          </span>{" "}
           <span className="text-muted-foreground">{m.snippet}</span>
         </div>
       ))}
-      {r?.truncated && <div className="text-muted-foreground">{toolsConfig.copy.status.moreMatchesOmitted}</div>}
+      {r?.truncated && (
+        <div className="text-muted-foreground">{toolsConfig.copy.status.moreMatchesOmitted}</div>
+      )}
     </div>
   );
 }
@@ -940,9 +918,7 @@ export const EditFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
     // it cannot show whether the replacement lands where the author meant — which
     // is what the reader is being asked to judge. The pair is kept as the
     // fallback for when the server cannot produce a patch; see `edit-preview`.
-    argPreview={
-      <EditPreviewBody args={p.args} fallbackName={String(p.args.path ?? "")} />
-    }
+    argPreview={<EditPreviewBody args={p.args} fallbackName={String(p.args.path ?? "")} />}
     result={p.result}
     status={p.status}
     isError={p.isError}
@@ -970,4 +946,3 @@ export const DeleteFileToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (
 );
 
 /** Moved to `./text-preview` so modules that use it do not depend on this file. */
-

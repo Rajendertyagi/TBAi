@@ -69,7 +69,10 @@ afterEach(() => {
   resetDraftStores();
 });
 
-function stubPost(handler: (body: Record<string, unknown>, call: number) => Response | Promise<Response>, onCall?: (url: string) => void): { bodies: Record<string, unknown>[]; urls: string[] } {
+function stubPost(
+  handler: (body: Record<string, unknown>, call: number) => Response | Promise<Response>,
+  onCall?: (url: string) => void,
+): { bodies: Record<string, unknown>[]; urls: string[] } {
   const bodies: Record<string, unknown>[] = [];
   const urls: string[] = [];
   let calls = 0;
@@ -238,7 +241,13 @@ describe("materializeDraft — exactly-once key discipline (cases 5 + 11)", () =
 
 describe("materializeDraft — take-once engine record (case 15 owner half)", () => {
   it("records the materialized engine once; second take returns null", async () => {
-    useWelcomeEngineStore.setState({ engine: "opencode", agent: "coder", model: "m", variant: "", autoApprove: false });
+    useWelcomeEngineStore.setState({
+      engine: "opencode",
+      agent: "coder",
+      model: "m",
+      variant: "",
+      autoApprove: false,
+    });
     stubPost(() => okConversation("c-engine-record"));
     const created = await materializeDraft(captureDraftSnapshot());
     expect(takeMaterializedEngine(created.id)).toBe("opencode");
@@ -252,7 +261,13 @@ describe("materializeDraft — take-once engine record (case 15 owner half)", ()
 
 describe("materializeDraft — peek is non-destructive (case B)", () => {
   it("double peek returns the same value; take-after-peek still takes", async () => {
-    useWelcomeEngineStore.setState({ engine: "opencode", agent: "coder", model: "m", variant: "", autoApprove: false });
+    useWelcomeEngineStore.setState({
+      engine: "opencode",
+      agent: "coder",
+      model: "m",
+      variant: "",
+      autoApprove: false,
+    });
     stubPost(() => okConversation("c-peek"));
     const created = await materializeDraft(captureDraftSnapshot());
 
@@ -271,7 +286,9 @@ describe("materializeDraft — peek is non-destructive (case B)", () => {
 
 describe("materializeDraft — no timing sleeps (case 16)", () => {
   it("the module contains no timer-based waits", async () => {
-    const source = await Bun.file(path.join(REPO_ROOT, "web/src/features/chat/state/materializeDraft.ts")).text();
+    const source = await Bun.file(
+      path.join(REPO_ROOT, "web/src/features/chat/state/materializeDraft.ts"),
+    ).text();
     expect(source).not.toContain("setTimeout");
     expect(source).not.toContain("setInterval");
     expect(source).not.toContain("Bun.sleep");

@@ -53,8 +53,7 @@ export const schedulerViewConfig = {
     editorSave: "Save job",
     editorSaving: "Saving…",
     markSeen: "Mark seen",
-    unseenFailures: (n: number) =>
-      `${n} unseen failure${n === 1 ? "" : "s"}`,
+    unseenFailures: (n: number) => `${n} unseen failure${n === 1 ? "" : "s"}`,
     dismissError: "Dismiss error",
     runStarted: (name: string) => `Run started: ${name}`,
     repeatMinutes: "Every few minutes",
@@ -113,8 +112,7 @@ export const schedulerViewConfig = {
       thinkingMedium: "Medium",
       thinkingHigh: "High",
       workspace: "Workspace",
-      workspacePlaceholder:
-        "Absolute folder path inside the TBAi workspace root",
+      workspacePlaceholder: "Absolute folder path inside the TBAi workspace root",
       prompt: "Prompt",
       promptPlaceholder: "What should the scheduled run do?",
       conversation: "Conversation",

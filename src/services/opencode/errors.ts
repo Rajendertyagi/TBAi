@@ -49,9 +49,7 @@ function readString(source: object, key: string): string | undefined {
 
 /** Reads the human message off any object-shaped error body. */
 function messageOf(value: unknown): string | undefined {
-  return value !== null && typeof value === "object"
-    ? readString(value, "message")
-    : undefined;
+  return value !== null && typeof value === "object" ? readString(value, "message") : undefined;
 }
 
 /** Best-effort human detail from a declared-status error body (a plain object). */
@@ -103,12 +101,9 @@ export function toOpenCodeError(err: unknown): OpenCodeError {
     );
   }
   if (isUnauthorizedError(err) || isForbiddenError(err)) {
-    return new OpenCodeError(
-      "auth",
-      `OpenCode authentication failed: ${bodyDetail(err)}`,
-      401,
-      { cause: err },
-    );
+    return new OpenCodeError("auth", `OpenCode authentication failed: ${bodyDetail(err)}`, 401, {
+      cause: err,
+    });
   }
   if (isInvalidRequestError(err)) {
     return new OpenCodeError(

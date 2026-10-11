@@ -154,7 +154,7 @@ function packageRoot(req: NodeRequire, pkgName: string): string {
 
 /** Import a file inside a package by absolute URL, bypassing `exports`. */
 async function importDist(root: string, rel: string): Promise<Record<string, unknown>> {
-  const url = "file:///" + path.join(root, rel).replace(/\\/g, "/");
+  const url = `file:///${path.join(root, rel).replace(/\\/g, "/")}`;
   return (await import(url)) as Record<string, unknown>;
 }
 

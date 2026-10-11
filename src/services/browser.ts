@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import { ToolError } from "./tools";
 import { DATA_DIR } from "../config/data-dir";
 import type { BrowserReadArgs, BrowserActionArgs } from "../lib/validation";
@@ -270,18 +270,12 @@ async function runAgentBrowser(
     let stdout = "";
     let stderr = "";
     await Promise.all([
-      pump(
-        proc.stdout && typeof proc.stdout !== "number" ? proc.stdout : null,
-        (t) => {
-          stdout += t;
-        },
-      ),
-      pump(
-        proc.stderr && typeof proc.stderr !== "number" ? proc.stderr : null,
-        (t) => {
-          stderr += t;
-        },
-      ),
+      pump(proc.stdout && typeof proc.stdout !== "number" ? proc.stdout : null, (t) => {
+        stdout += t;
+      }),
+      pump(proc.stderr && typeof proc.stderr !== "number" ? proc.stderr : null, (t) => {
+        stderr += t;
+      }),
     ]);
 
     // Grace-bounded exit wait: after a kill the pipes may never close (the

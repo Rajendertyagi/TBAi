@@ -87,4 +87,9 @@ if (project) playwrightArgs.push(`--project=${project}`);
 // root and tries to reinstall the package as a git dependency, and handing
 // the CLI to `node` fails the same way when the runtime is bun.
 const playwrightCli = path.join(REPO_ROOT, "node_modules", "playwright", "cli.js");
-await run(process.execPath, [playwrightCli, ...playwrightArgs], { WEB_DIST_DIR: PROFILE_DIST }, WEB_DIR);
+await run(
+  process.execPath,
+  [playwrightCli, ...playwrightArgs],
+  { WEB_DIST_DIR: PROFILE_DIST },
+  WEB_DIR,
+);

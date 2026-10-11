@@ -2,11 +2,7 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  commentedBodyOf,
-  commentedConstBodyOf,
-  stripComments,
-} from "@web/testing/source-scope";
+import { commentedBodyOf, commentedConstBodyOf, stripComments } from "@web/testing/source-scope";
 import {
   nextPinState,
   pinnedOpenProp,
@@ -39,21 +35,34 @@ let openCodeRing = "";
 
 beforeAll(async () => {
   const base = pathToFileURL(REPO_ROOT + path.sep).href;
-  root = await commentedBodyOf("ContextDisplayRoot", "web/src/components/assistant-ui/elements/context-display.tsx");
-  trigger = await commentedBodyOf("ContextDisplayTrigger", "web/src/components/assistant-ui/elements/context-display.tsx");
-  percent = await commentedConstBodyOf("getUsagePercent", "web/src/components/assistant-ui/elements/context-display.tsx");
-  severity = await commentedConstBodyOf("getUsageSeverity", "web/src/components/assistant-ui/elements/context-display.tsx");
-  segments = await commentedConstBodyOf("getContextSegments", "web/src/components/assistant-ui/elements/context-display.tsx");
+  root = await commentedBodyOf(
+    "ContextDisplayRoot",
+    "web/src/components/assistant-ui/elements/context-display.tsx",
+  );
+  trigger = await commentedBodyOf(
+    "ContextDisplayTrigger",
+    "web/src/components/assistant-ui/elements/context-display.tsx",
+  );
+  percent = await commentedConstBodyOf(
+    "getUsagePercent",
+    "web/src/components/assistant-ui/elements/context-display.tsx",
+  );
+  severity = await commentedConstBodyOf(
+    "getUsageSeverity",
+    "web/src/components/assistant-ui/elements/context-display.tsx",
+  );
+  segments = await commentedConstBodyOf(
+    "getContextSegments",
+    "web/src/components/assistant-ui/elements/context-display.tsx",
+  );
   aui = stripComments(
-    await Bun.file(new URL("web/src/components/assistant-ui/elements/context-display.aui.tsx", base)).text(),
-  );
-  composer = stripComments(
-    await Bun.file(new URL("web/src/components/Composer.tsx", base)).text(),
-  );
-  openCodeRing = stripComments(
     await Bun.file(
-      new URL("web/src/features/opencode/OpenCodeContextRing.tsx", base),
+      new URL("web/src/components/assistant-ui/elements/context-display.aui.tsx", base),
     ).text(),
+  );
+  composer = stripComments(await Bun.file(new URL("web/src/components/Composer.tsx", base)).text());
+  openCodeRing = stripComments(
+    await Bun.file(new URL("web/src/features/opencode/OpenCodeContextRing.tsx", base)).text(),
   );
 });
 

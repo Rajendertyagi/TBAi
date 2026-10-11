@@ -14,9 +14,9 @@
  * No sleeps, no timers — pure store/DB transitions.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 
 // Test isolation: tests/setup.ts (bunfig preload) already redirects DATA_DIR to
@@ -37,7 +37,7 @@ let created: string[] = [];
 
 beforeAll(async () => {
   // The module import runs the migrations. Verify the column landed.
-  const cols = (db.query("PRAGMA table_info(conversations)").all() as Array<{ name: string }>);
+  const cols = db.query("PRAGMA table_info(conversations)").all() as Array<{ name: string }>;
   expect(
     cols.some((c) => c.name === "client_request_id"),
     "client_request_id column missing after migration",
@@ -74,11 +74,13 @@ describe("client_request_id — durable idempotency", () => {
   it("same key in one process returns one row (fast path)", async () => {
     const key = `cri-test-${Date.now()}`;
 
-    const first = await conversationService.create(conversationInput({
-      title: "cri-first",
-      workspaceMode: "simple",
-      clientRequestId: key,
-    }));
+    const first = await conversationService.create(
+      conversationInput({
+        title: "cri-first",
+        workspaceMode: "simple",
+        clientRequestId: key,
+      }),
+    );
     created.push(first.id);
     const byKey = await conversationService.findByClientRequestId(key);
     expect(byKey?.id).toBe(first.id);
@@ -90,7 +92,9 @@ describe("client_request_id — durable idempotency", () => {
     expect(stillThere?.id).toBe(first.id);
     // Only one row carries this key.
     const count = (
-      db.query("SELECT COUNT(*) AS c FROM conversations WHERE client_request_id = ?").get(key) as { c: number }
+      db.query("SELECT COUNT(*) AS c FROM conversations WHERE client_request_id = ?").get(key) as {
+        c: number;
+      }
     ).c;
     expect(count).toBe(1);
   });
@@ -98,11 +102,13 @@ describe("client_request_id — durable idempotency", () => {
   it("replayed key after simulated restart resolves to the existing row", async () => {
     const key = `cri-restart-${Date.now()}`;
 
-    const row = await conversationService.create(conversationInput({
-      title: "cri-restart",
-      workspaceMode: "simple",
-      clientRequestId: key,
-    }));
+    const row = await conversationService.create(
+      conversationInput({
+        title: "cri-restart",
+        workspaceMode: "simple",
+        clientRequestId: key,
+      }),
+    );
     created.push(row.id);
 
     // Simulate the restart: the in-memory `createCompleted` / `createInFlight`
@@ -114,7 +120,9 @@ describe("client_request_id — durable idempotency", () => {
 
     // Exactly one row carries the key (the unique index enforces this).
     const count = (
-      db.query("SELECT COUNT(*) AS c FROM conversations WHERE client_request_id = ?").get(key) as { c: number }
+      db.query("SELECT COUNT(*) AS c FROM conversations WHERE client_request_id = ?").get(key) as {
+        c: number;
+      }
     ).c;
     expect(count).toBe(1);
   });
@@ -123,17 +131,21 @@ describe("client_request_id — durable idempotency", () => {
     const keyA = `cri-a-${Date.now()}`;
     const keyB = `cri-b-${Date.now()}`;
 
-    const a = await conversationService.create(conversationInput({
-      title: "cri-a",
-      workspaceMode: "simple",
-      clientRequestId: keyA,
-    }));
+    const a = await conversationService.create(
+      conversationInput({
+        title: "cri-a",
+        workspaceMode: "simple",
+        clientRequestId: keyA,
+      }),
+    );
     created.push(a.id);
-    const b = await conversationService.create(conversationInput({
-      title: "cri-b",
-      workspaceMode: "simple",
-      clientRequestId: keyB,
-    }));
+    const b = await conversationService.create(
+      conversationInput({
+        title: "cri-b",
+        workspaceMode: "simple",
+        clientRequestId: keyB,
+      }),
+    );
     created.push(b.id);
 
     expect(a.id).not.toBe(b.id);
@@ -143,17 +155,21 @@ describe("client_request_id — durable idempotency", () => {
 
   it("a create without a key does not collide with any keyed row", async () => {
     const key = `cri-null-${Date.now()}`;
-    const keyed = await conversationService.create(conversationInput({
-      title: "cri-keyed",
-      workspaceMode: "simple",
-      clientRequestId: key,
-    }));
+    const keyed = await conversationService.create(
+      conversationInput({
+        title: "cri-keyed",
+        workspaceMode: "simple",
+        clientRequestId: key,
+      }),
+    );
     created.push(keyed.id);
 
-    const unkeyed = await conversationService.create(conversationInput({
-      title: "cri-unkeyed",
-      workspaceMode: "simple",
-    }));
+    const unkeyed = await conversationService.create(
+      conversationInput({
+        title: "cri-unkeyed",
+        workspaceMode: "simple",
+      }),
+    );
     created.push(unkeyed.id);
 
     // The unkeyed row has a NULL client_request_id (multiple NULLs allowed
@@ -164,10 +180,12 @@ describe("client_request_id — durable idempotency", () => {
 
   it("legacy rows (NULL key) are unaffected by the index", async () => {
     // Simulate a legacy row created before the column existed: no key.
-    const legacy = await conversationService.create(conversationInput({
-      title: "cri-legacy",
-      workspaceMode: "simple",
-    }));
+    const legacy = await conversationService.create(
+      conversationInput({
+        title: "cri-legacy",
+        workspaceMode: "simple",
+      }),
+    );
     created.push(legacy.id);
     const nullKey = await conversationService.findByClientRequestId("definitely-not-a-real-key");
     expect(nullKey).toBeNull();

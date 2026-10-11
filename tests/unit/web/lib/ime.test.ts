@@ -22,7 +22,9 @@ import {
  */
 
 function reactEvent(init: { isComposing?: boolean; keyCode?: number }): React.KeyboardEvent {
-  return { nativeEvent: { isComposing: init.isComposing ?? false, keyCode: init.keyCode ?? 0 } } as never;
+  return {
+    nativeEvent: { isComposing: init.isComposing ?? false, keyCode: init.keyCode ?? 0 },
+  } as never;
 }
 
 function nativeEvent(init: { isComposing?: boolean; keyCode?: number }): KeyboardEvent {

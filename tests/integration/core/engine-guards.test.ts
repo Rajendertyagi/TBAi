@@ -31,10 +31,7 @@ import { db } from "@/db";
 import { registry } from "@/config/providers.ts";
 import { conversationService } from "@/services/storage";
 import { chatRuns } from "@/services/chat-runs.ts";
-import {
-  ensureOpenCodeSession,
-  EngineMismatchError,
-} from "@/services/opencode/sessions.ts";
+import { ensureOpenCodeSession, EngineMismatchError } from "@/services/opencode/sessions.ts";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 
 // ── App assembly ─────────────────────────────────────────────────────────────
@@ -111,14 +108,16 @@ describe("POST /api/chat — engine guard", () => {
   it("rejects an opencode row with 422 ENGINE_MISMATCH and creates no run", async () => {
     await seedGuardProvider();
 
-    const conv = await conversationService.create(conversationInput({
-      title: "engine-guard-opencode",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-opencode",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
 
     try {
       const countsBefore = chatRuns.counts();
@@ -165,14 +164,16 @@ describe("POST /api/chat — engine guard precedence over provider resolution", 
     title: string,
     providerId: string | null,
   ): Promise<string> {
-    const conv = await conversationService.create(conversationInput({
-      title,
-      providerId,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title,
+        providerId,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
     return conv.id;
   }
 
@@ -193,7 +194,9 @@ describe("POST /api/chat — engine guard precedence over provider resolution", 
           providerId: UNKNOWN_PROVIDER,
           model: "void-model",
           id: convId,
-          messages: [{ id: "msg-engine-unknown", role: "user", parts: [{ type: "text", text: "x" }] }],
+          messages: [
+            { id: "msg-engine-unknown", role: "user", parts: [{ type: "text", text: "x" }] },
+          ],
         }),
       });
 
@@ -228,7 +231,9 @@ describe("POST /api/chat — engine guard precedence over provider resolution", 
           // silently fall back to the active provider and run.
           model: "void-model",
           id: convId,
-          messages: [{ id: "msg-engine-no-provider", role: "user", parts: [{ type: "text", text: "x" }] }],
+          messages: [
+            { id: "msg-engine-no-provider", role: "user", parts: [{ type: "text", text: "x" }] },
+          ],
         }),
       });
 
@@ -251,14 +256,16 @@ describe("POST /api/chat — engine guard precedence over provider resolution", 
   it("still refuses an unknown provider on a DIRECT row (the guard is not a bypass)", async () => {
     await seedGuardProvider();
     const UNKNOWN_PROVIDER = "prov-engine-guard-does-not-exist";
-    const direct = await conversationService.create(conversationInput({
-      title: "engine-guard-direct-unknown-provider",
-      providerId: UNKNOWN_PROVIDER,
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const direct = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-direct-unknown-provider",
+        providerId: UNKNOWN_PROVIDER,
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const countsBefore = chatRuns.counts();
@@ -269,7 +276,9 @@ describe("POST /api/chat — engine guard precedence over provider resolution", 
           providerId: UNKNOWN_PROVIDER,
           model: "void-model",
           id: direct.id,
-          messages: [{ id: "msg-engine-direct-unknown", role: "user", parts: [{ type: "text", text: "x" }] }],
+          messages: [
+            { id: "msg-engine-direct-unknown", role: "user", parts: [{ type: "text", text: "x" }] },
+          ],
         }),
       });
 
@@ -294,14 +303,16 @@ describe("ensureOpenCodeSession — engine guard (service seam)", () => {
   // Driving the service directly keeps the test hermetic: no OpenCode server
   // is spawned for a refused row and no session pointer is written.
   it("rejects a direct row: throws EngineMismatchError, no pointer written", async () => {
-    const direct = await conversationService.create(conversationInput({
-      title: "engine-guard-direct",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const direct = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-direct",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       let caught: unknown;
@@ -325,14 +336,16 @@ describe("ensureOpenCodeSession — engine guard (service seam)", () => {
   }, 30000);
 
   it("rejects a legacy (no engine field) row: same guard, no pointer", async () => {
-    const legacy = await conversationService.create(conversationInput({
-      title: "engine-guard-legacy",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      // No engine field → defaults to "direct" (legacy row).
-    }));
+    const legacy = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-legacy",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        // No engine field → defaults to "direct" (legacy row).
+      }),
+    );
 
     try {
       let caught: unknown;
@@ -359,14 +372,16 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
   it("POST /api/chat admits a direct row (no ENGINE_MISMATCH, run minted)", async () => {
     await seedGuardProvider();
 
-    const conv = await conversationService.create(conversationInput({
-      title: "engine-guard-positive-chat",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-positive-chat",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
 
     try {
       const countsBefore = chatRuns.counts();
@@ -378,7 +393,9 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
           providerId: "prov-engine-guard",
           model: "void-model",
           id: conv.id,
-          messages: [{ id: "msg-engine-direct", role: "user", parts: [{ type: "text", text: "ok" }] }],
+          messages: [
+            { id: "msg-engine-direct", role: "user", parts: [{ type: "text", text: "ok" }] },
+          ],
         }),
       });
 
@@ -403,14 +420,16 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
   it("POST /api/chat admits a legacy row (no engine field, no ENGINE_MISMATCH)", async () => {
     await seedGuardProvider();
 
-    const conv = await conversationService.create(conversationInput({
-      title: "engine-guard-legacy-chat",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      // No engine field → defaults to "direct" (legacy row).
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-legacy-chat",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        // No engine field → defaults to "direct" (legacy row).
+      }),
+    );
 
     try {
       const res = await app.request("/api/chat", {
@@ -420,7 +439,9 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
           providerId: "prov-engine-guard",
           model: "void-model",
           id: conv.id,
-          messages: [{ id: "msg-engine-legacy", role: "user", parts: [{ type: "text", text: "legacy" }] }],
+          messages: [
+            { id: "msg-engine-legacy", role: "user", parts: [{ type: "text", text: "legacy" }] },
+          ],
         }),
       });
 
@@ -442,13 +463,10 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
     // opencode-binary-missing.test.ts). The guard must be silent for the
     // correct engine; the fake proves the request was admitted and the
     // session pointer was persisted.
-    const { openCodeServerManager } = await import(
-      "@/services/opencode/serverManager.ts"
-    );
+    const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
     type EnsureBaseUrl = () => Promise<string>;
-    const realEnsureBaseUrl = (
-      openCodeServerManager as unknown as { ensureBaseUrl: EnsureBaseUrl }
-    ).ensureBaseUrl;
+    const realEnsureBaseUrl = (openCodeServerManager as unknown as { ensureBaseUrl: EnsureBaseUrl })
+      .ensureBaseUrl;
 
     // The V2 `create` returns the session object directly under `data.data`
     // (a bare object, not the nested `data.data.id` the guard reads). The
@@ -474,19 +492,19 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
       },
     });
     fake.unref();
-    (
-      openCodeServerManager as unknown as { ensureBaseUrl: EnsureBaseUrl }
-    ).ensureBaseUrl = () =>
+    (openCodeServerManager as unknown as { ensureBaseUrl: EnsureBaseUrl }).ensureBaseUrl = () =>
       Promise.resolve(`http://127.0.0.1:${fake.port}`);
 
-    const conv = await conversationService.create(conversationInput({
-      title: "engine-guard-positive-session",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "engine-guard-positive-session",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
 
     try {
       let caught: unknown;
@@ -512,9 +530,8 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
       const reloaded = await conversationService.get(conv.id);
       expect(reloaded?.opencodeSessionId).toBe(binding?.sessionId);
     } finally {
-      (
-        openCodeServerManager as unknown as { ensureBaseUrl: EnsureBaseUrl }
-      ).ensureBaseUrl = realEnsureBaseUrl;
+      (openCodeServerManager as unknown as { ensureBaseUrl: EnsureBaseUrl }).ensureBaseUrl =
+        realEnsureBaseUrl;
       fake.stop(true);
       await conversationService.delete(conv.id);
     }
@@ -542,9 +559,7 @@ type ServerManagerLike = {
 async function withFakeOpencodeServer(
   handler: (fake: { port: number; calls: string[] }) => Promise<void>,
 ): Promise<void> {
-  const { openCodeServerManager } = await import(
-    "@/services/opencode/serverManager.ts"
-  );
+  const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
   const calls: string[] = [];
   const fake = Bun.serve({
     port: 0,
@@ -579,14 +594,16 @@ async function withFakeOpencodeServer(
 describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 6)", () => {
   it("direct conversation: no terminate attempted, conversation deleted", async () => {
     await seedGuardProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "p6-direct-delete",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "direct",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p6-direct-delete",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "direct",
+      }),
+    );
     await withFakeOpencodeServer(async ({ calls }) => {
       const res = await app.request(`/api/conversations/${conv.id}`, {
         method: "DELETE",
@@ -603,14 +620,16 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
 
   it("opencode conversation with bound session: termination attempted + deleted", async () => {
     await seedGuardProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "p6-opencode-bound",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p6-opencode-bound",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
     await withFakeOpencodeServer(async ({ calls }) => {
       // Bind a session id on the row so terminateOpenCodeSession has a pointer.
       await conversationService.update(conv.id, {
@@ -632,14 +651,16 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
 
   it("opencode conversation with NO session: no crash, deleted", async () => {
     await seedGuardProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "p6-opencode-nosession",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p6-opencode-nosession",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
     // opencodeSessionId is null (never bound).
     await withFakeOpencodeServer(async ({ calls }) => {
       const res = await app.request(`/api/conversations/${conv.id}`, {
@@ -658,14 +679,16 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
 
   it("terminate reports not-found (session already gone): DELETE still completes", async () => {
     await seedGuardProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "p6-opencode-gone",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p6-opencode-gone",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
     await withFakeOpencodeServer(async () => {
       await conversationService.update(conv.id, {
         opencodeSessionId: "sess-p6-gone",
@@ -692,14 +715,16 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
 
   it("terminate transport failure: DELETE completes, warn path observed", async () => {
     await seedGuardProvider();
-    const conv = await conversationService.create(conversationInput({
-      title: "p6-opencode-fail",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "p6-opencode-fail",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
+    );
     await conversationService.update(conv.id, {
       opencodeSessionId: "sess-p6-fail",
     });
@@ -751,25 +776,23 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     // delete). The warn entry may be filtered by the logger's level gate, so
     // we verify the contract at the service seam: terminateOpenCodeSession
     // against a dead transport returns { terminated: false } without throwing.
-    const { terminateOpenCodeSession } = await import(
-      "@/services/opencode/sessions.ts"
+    const { terminateOpenCodeSession } = await import("@/services/opencode/sessions.ts");
+    const conv2 = await conversationService.create(
+      conversationInput({
+        title: "p6-opencode-fail-seam",
+        providerId: "prov-engine-guard",
+        modelId: null,
+        reasoningLevel: null,
+        systemPrompt: null,
+        engine: "opencode",
+      }),
     );
-    const conv2 = await conversationService.create(conversationInput({
-      title: "p6-opencode-fail-seam",
-      providerId: "prov-engine-guard",
-      modelId: null,
-      reasoningLevel: null,
-      systemPrompt: null,
-      engine: "opencode",
-    }));
     await conversationService.update(conv2.id, { opencodeSessionId: "sess-seam" });
     // For the service-seam half: make the transport calls themselves fail
     // (a server that refuses the interrupt/remove) so terminateOpenCodeSession
     // returns terminated:true after the best-effort skip path, proving the
     // per-call catch swallows transport failures without blocking.
-    const { openCodeServerManager: smMod2 } = await import(
-      "@/services/opencode/serverManager.ts"
-    );
+    const { openCodeServerManager: smMod2 } = await import("@/services/opencode/serverManager.ts");
     const managerLike = smMod2 as unknown as ServerManagerLike;
     const real2 = managerLike.ensureBaseUrl;
     const refuse = Bun.serve({

@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import { DEFAULT_THEME_ID, getTheme, THEMES, type ThemeDefinition } from "../features/appearance/theme-data";
+import {
+  DEFAULT_THEME_ID,
+  getTheme,
+  THEMES,
+  type ThemeDefinition,
+} from "../features/appearance/theme-data";
 import { applyThemeToDom, THEME_ATTRIBUTE } from "../features/appearance/theme-dom";
 import {
   DEFAULT_MODE,

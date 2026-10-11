@@ -73,11 +73,7 @@ mock.module("@/services/opencode/client", () => ({
         calls.push(`remove:${args.sessionID}`);
         return removeImpl();
       },
-      create: (args: {
-        location: { directory: string };
-        agent?: string;
-        model?: unknown;
-      }) => {
+      create: (args: { location: { directory: string }; agent?: string; model?: unknown }) => {
         calls.push(`create:${args.location.directory}`);
         return createImpl(args);
       },
@@ -95,11 +91,12 @@ mock.module("@/services/opencode/client", () => ({
 const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
 const { createOpenCodeClient } = await import("@/services/opencode/client.ts");
 const { OpenCodeError } = await import("@/services/opencode/errors.ts");
-const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } =
-  await import("@/services/opencode/sessions.ts");
+const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } = await import(
+  "@/services/opencode/sessions.ts"
+);
 
-(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> })
-  .ensureBaseUrl = async () => "http://127.0.0.1:0";
+(openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
+  async () => "http://127.0.0.1:0";
 
 /** Client from the mocked factory; its `session.*` behaviour is the *Impl vars. */
 const stubClient = createOpenCodeClient("http://127.0.0.1:0");
@@ -128,9 +125,7 @@ describe("terminateOpenCodeSession — V2 call mapping", () => {
 
   it("D. preserves lifecycle order: interrupt strictly before remove", async () => {
     await terminateOpenCodeSession("conv-1");
-    expect(calls.indexOf(`interrupt:${LIVE_ID}`)).toBeLessThan(
-      calls.indexOf(`remove:${LIVE_ID}`),
-    );
+    expect(calls.indexOf(`interrupt:${LIVE_ID}`)).toBeLessThan(calls.indexOf(`remove:${LIVE_ID}`));
   });
 
   it("clears the persisted pointer after a successful termination", async () => {
@@ -303,9 +298,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
       directory: "D:\\ws\\server-recorded",
     });
     expect(calls).toEqual([`get:${LIVE_ID}`, `create:${SUBMITTED_DIRECTORY}`]);
-    expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } },
-    ]);
+    expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } }]);
   });
 
   it("falls back to the submitted directory when a create response omits location", async () => {
@@ -319,8 +312,6 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
       directory: SUBMITTED_DIRECTORY,
     });
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
-    expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } },
-    ]);
+    expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } }]);
   });
 });

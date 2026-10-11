@@ -71,7 +71,7 @@ async function runSoak(
   seconds: number,
   rate: number,
   concurrency: number,
-  onProgress: (done: number, total: number) => void
+  onProgress: (done: number, total: number) => void,
 ): Promise<Sample[]> {
   const samples: Sample[] = [];
   const total = Math.floor(rate * seconds);
@@ -139,9 +139,27 @@ async function main() {
   const checks: Array<{ name: string; pass: boolean; detail: string }> = [];
 
   const upAtStart = await healthCheck(base);
-  checks.push({ name: "up_at_start", pass: upAtStart, detail: upAtStart ? "server responding" : "server not reachable" });
+  checks.push({
+    name: "up_at_start",
+    pass: upAtStart,
+    detail: upAtStart ? "server responding" : "server not reachable",
+  });
   if (!upAtStart) {
-    report({ base, seconds, rate, concurrency, checks, total: 0, drops: 0, malformed: 0, latency: { p50: 0, p95: 0, p99: 0 } }, outPath, useJson);
+    report(
+      {
+        base,
+        seconds,
+        rate,
+        concurrency,
+        checks,
+        total: 0,
+        drops: 0,
+        malformed: 0,
+        latency: { p50: 0, p95: 0, p99: 0 },
+      },
+      outPath,
+      useJson,
+    );
     process.exitCode = 1;
     return;
   }
@@ -167,8 +185,16 @@ async function main() {
   const ratioFail = p50 > DRIFT_APPLY_ABOVE_MS && p99 > DRIFT_MULTIPLIER * p50;
   const driftFail = absFail || ratioFail;
 
-  checks.push({ name: "zero_connection_drops", pass: drops === 0, detail: `${drops} of ${samples.length} errored` });
-  checks.push({ name: "no_desync", pass: malformed === 0, detail: `${malformed} of ${samples.length} malformed/truncated` });
+  checks.push({
+    name: "zero_connection_drops",
+    pass: drops === 0,
+    detail: `${drops} of ${samples.length} errored`,
+  });
+  checks.push({
+    name: "no_desync",
+    pass: malformed === 0,
+    detail: `${malformed} of ${samples.length} malformed/truncated`,
+  });
   checks.push({
     name: "no_buffer_issues",
     pass: !driftFail,
@@ -176,20 +202,42 @@ async function main() {
   });
 
   const upAtEnd = await healthCheck(base);
-  checks.push({ name: "still_up_at_end", pass: upAtEnd, detail: upAtEnd ? "server responding after soak" : "server gone after soak" });
+  checks.push({
+    name: "still_up_at_end",
+    pass: upAtEnd,
+    detail: upAtEnd ? "server responding after soak" : "server gone after soak",
+  });
 
-  const result = { base, seconds, rate, concurrency, at: new Date().toISOString(), total: samples.length, drops, malformed, latency: { p50, p95, p99 }, checks };
+  const result = {
+    base,
+    seconds,
+    rate,
+    concurrency,
+    at: new Date().toISOString(),
+    total: samples.length,
+    drops,
+    malformed,
+    latency: { p50, p95, p99 },
+    checks,
+  };
   report(result, outPath, useJson);
   process.exitCode = checks.every((c) => c.pass) ? 0 : 1;
 }
 
 function report(
   r: {
-    base: string; seconds: number; rate: number; concurrency: number; checks: Array<{ name: string; pass: boolean; detail: string }>;
-    total?: number; drops?: number; malformed?: number; latency?: { p50: number; p95: number; p99: number };
+    base: string;
+    seconds: number;
+    rate: number;
+    concurrency: number;
+    checks: Array<{ name: string; pass: boolean; detail: string }>;
+    total?: number;
+    drops?: number;
+    malformed?: number;
+    latency?: { p50: number; p95: number; p99: number };
   },
   outPath: string | null,
-  useJson: boolean
+  useJson: boolean,
 ): void {
   let text: string;
   if (useJson) {
@@ -200,7 +248,10 @@ function report(
     lines.push(`soak ${r.seconds}s @ ${r.rate} req/s, concurrency ${r.concurrency}`);
     if (r.total !== undefined) {
       lines.push(`requests: ${r.total} (drops ${r.drops}, malformed ${r.malformed})`);
-      if (r.latency) lines.push(`latency: p50=${r.latency.p50.toFixed(1)}ms p95=${r.latency.p95.toFixed(1)}ms p99=${r.latency.p99.toFixed(1)}ms`);
+      if (r.latency)
+        lines.push(
+          `latency: p50=${r.latency.p50.toFixed(1)}ms p95=${r.latency.p95.toFixed(1)}ms p99=${r.latency.p99.toFixed(1)}ms`,
+        );
     }
     lines.push("");
     for (const c of r.checks) lines.push(`  [${c.pass ? "PASS" : "FAIL"}] ${c.name} — ${c.detail}`);

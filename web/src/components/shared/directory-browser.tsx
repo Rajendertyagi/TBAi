@@ -50,9 +50,9 @@ export function DirectoryBrowser({
       .finally(() => setLoading(false));
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-once by design. This effect loads the CURRENT path, and `path` is itself state the user changes by navigating - depending on it would re-browse (and reset the entries list) on every navigation. Navigation calls `browse` directly.
   useEffect(() => {
     browse(path || "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const segments = path.split(/[\\/]/).filter(Boolean);
@@ -60,20 +60,25 @@ export function DirectoryBrowser({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
-        {segments.map((seg, i) => (
-          <span key={i} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight aria-hidden="true" className="size-3" />}
-            <button
-              type="button"
-              className="rounded px-1 hover:bg-muted hover:text-foreground"
-              onClick={() =>
-                browse(segments.slice(0, i + 1).join("/"))
-              }
-            >
-              {seg}
-            </button>
-          </span>
-        ))}
+        {segments.map((seg, i) => {
+          // The key is the path this crumb navigates to, not its position: the
+          // breadcrumb grows as the user descends, so an index key would hand
+          // React the wrong node and every crumb would remount on each step.
+          // The same value drives `browse`, so it is computed once.
+          const crumbPath = segments.slice(0, i + 1).join("/");
+          return (
+            <span key={crumbPath} className="flex items-center gap-1">
+              {i > 0 && <ChevronRight aria-hidden="true" className="size-3" />}
+              <button
+                type="button"
+                className="rounded px-1 hover:bg-muted hover:text-foreground"
+                onClick={() => browse(crumbPath)}
+              >
+                {seg}
+              </button>
+            </span>
+          );
+        })}
       </div>
 
       <div className="flex gap-1">

@@ -299,8 +299,10 @@ describe("the durable divider row", () => {
   it("stores a summary for an automatic compaction too, not only a manual one", () => {
     // The engine removes history the user did not ask it to remove. If the user
     // cannot read that, they cannot consent to it.
-    const data = (stored({ ...compacted, origin: "automatic" }).parts[0]?.data ??
-      {}) as Record<string, unknown>;
+    const data = (stored({ ...compacted, origin: "automatic" }).parts[0]?.data ?? {}) as Record<
+      string,
+      unknown
+    >;
     expect(data.origin).toBe("automatic");
     expect(data.summary).toBe(compacted.summary);
   });

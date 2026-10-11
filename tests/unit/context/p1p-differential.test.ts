@@ -15,8 +15,14 @@ import { db } from "@/db";
 import type { UIMessage } from "ai";
 
 // Helper: create a test conversation with messages
-async function createTestConversation(messages: Array<{ id: string; parent_id: string | null; content: any }>) {
-  const conv = await conversationService.create({ title: "test", providerId: "test", workspaceMode: "simple" });
+async function createTestConversation(
+  messages: Array<{ id: string; parent_id: string | null; content: any }>,
+) {
+  const conv = await conversationService.create({
+    title: "test",
+    providerId: "test",
+    workspaceMode: "simple",
+  });
   for (const msg of messages) {
     await messageService.upsertStored(conv.id, {
       id: msg.id,
@@ -30,12 +36,14 @@ async function createTestConversation(messages: Array<{ id: string; parent_id: s
 
 // Helper: canonicalize messages for comparison
 function canonicalize(messages: readonly UIMessage[]): string {
-  return JSON.stringify(messages, (key, value) => {
+  return JSON.stringify(messages, (_key, value) => {
     if (value && typeof value === "object" && !Array.isArray(value)) {
-      return Object.keys(value).sort().reduce((sorted, k) => {
-        sorted[k] = value[k];
-        return sorted;
-      }, {} as any);
+      return Object.keys(value)
+        .sort()
+        .reduce((sorted, k) => {
+          sorted[k] = value[k];
+          return sorted;
+        }, {} as any);
     }
     return value;
   });
@@ -50,9 +58,21 @@ describe("P1′ differential verification", () => {
 
   it("normal conversation: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] } },
-      { id: "m3", parent_id: "m2", content: { id: "m3", role: "user", parts: [{ type: "text", text: "how are you" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+      },
+      {
+        id: "m3",
+        parent_id: "m2",
+        content: { id: "m3", role: "user", parts: [{ type: "text", text: "how are you" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -79,16 +99,38 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("branch selection: OLD == P1′", async () => {
     const messages = [
-      { id: "a", parent_id: null, content: { id: "a", role: "user", parts: [{ type: "text", text: "a" }] } },
-      { id: "b", parent_id: "a", content: { id: "b", role: "assistant", parts: [{ type: "text", text: "b" }] } },
-      { id: "c", parent_id: "b", content: { id: "c", role: "user", parts: [{ type: "text", text: "c" }] } },
-      { id: "d", parent_id: "a", content: { id: "d", role: "assistant", parts: [{ type: "text", text: "d" }] } },
-      { id: "e", parent_id: "d", content: { id: "e", role: "user", parts: [{ type: "text", text: "e" }] } },
+      {
+        id: "a",
+        parent_id: null,
+        content: { id: "a", role: "user", parts: [{ type: "text", text: "a" }] },
+      },
+      {
+        id: "b",
+        parent_id: "a",
+        content: { id: "b", role: "assistant", parts: [{ type: "text", text: "b" }] },
+      },
+      {
+        id: "c",
+        parent_id: "b",
+        content: { id: "c", role: "user", parts: [{ type: "text", text: "c" }] },
+      },
+      {
+        id: "d",
+        parent_id: "a",
+        content: { id: "d", role: "assistant", parts: [{ type: "text", text: "d" }] },
+      },
+      {
+        id: "e",
+        parent_id: "d",
+        content: { id: "e", role: "user", parts: [{ type: "text", text: "e" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -120,12 +162,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("missing boundary: fail closed to client-authoritative", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -150,7 +198,11 @@ describe("P1′ differential verification", () => {
   });
 
   it("empty conversation: OLD == P1′", async () => {
-    const conv = await conversationService.create({ title: "test", providerId: "test", workspaceMode: "simple" });
+    const conv = await conversationService.create({
+      title: "test",
+      providerId: "test",
+      workspaceMode: "simple",
+    });
 
     const submittedMessages: UIMessage[] = [];
 
@@ -175,13 +227,23 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("repeated reconstruction: same result", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -209,11 +271,29 @@ describe("P1′ differential verification", () => {
 
   it("tool call/result: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "read file" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [
-        { type: "text", text: "reading", state: "done" },
-        { type: "tool-read_file", toolCallId: "tc1", state: "output-available", input: { path: "a.txt" }, output: { content: "hello" } },
-      ] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "read file" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: {
+          id: "m2",
+          role: "assistant",
+          parts: [
+            { type: "text", text: "reading", state: "done" },
+            {
+              type: "tool-read_file",
+              toolCallId: "tc1",
+              state: "output-available",
+              input: { path: "a.txt" },
+              output: { content: "hello" },
+            },
+          ],
+        },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -240,15 +320,30 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("file-bearing message: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [
-        { type: "text", text: "here is a file" },
-        { type: "file", mediaType: "text/plain", filename: "a.txt", url: "data:text/plain;base64,aGVsbG8=" },
-      ] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: {
+          id: "m1",
+          role: "user",
+          parts: [
+            { type: "text", text: "here is a file" },
+            {
+              type: "file",
+              mediaType: "text/plain",
+              filename: "a.txt",
+              url: "data:text/plain;base64,aGVsbG8=",
+            },
+          ],
+        },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -275,15 +370,25 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("data-part message: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "assistant", parts: [
-        { type: "data-tbai-progress", data: { step: 1 } },
-        { type: "text", text: "working" },
-      ] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: {
+          id: "m1",
+          role: "assistant",
+          parts: [
+            { type: "data-tbai-progress", data: { step: 1 } },
+            { type: "text", text: "working" },
+          ],
+        },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -310,15 +415,35 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("approval/pending interaction: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "delete file" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [
-        { type: "tool-delete_file", toolCallId: "tc1", state: "approval-requested", input: { path: "a.txt" }, approval: { id: "ap1" } },
-      ] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "delete file" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: {
+          id: "m2",
+          role: "assistant",
+          parts: [
+            {
+              type: "tool-delete_file",
+              toolCallId: "tc1",
+              state: "approval-requested",
+              input: { path: "a.txt" },
+              approval: { id: "ap1" },
+            },
+          ],
+        },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -345,15 +470,37 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("scheduler success: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] } },
-      { id: "sched1", parent_id: "m2", content: { id: "sched1", role: "user", parts: [{ type: "text", text: "Scheduled run of job" }] } },
-      { id: "sched2", parent_id: "sched1", content: { id: "sched2", role: "assistant", parts: [{ type: "text", text: "result" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+      },
+      {
+        id: "sched1",
+        parent_id: "m2",
+        content: {
+          id: "sched1",
+          role: "user",
+          parts: [{ type: "text", text: "Scheduled run of job" }],
+        },
+      },
+      {
+        id: "sched2",
+        parent_id: "sched1",
+        content: { id: "sched2", role: "assistant", parts: [{ type: "text", text: "result" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -380,15 +527,41 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("scheduler failure: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] } },
-      { id: "sched1", parent_id: "m2", content: { id: "sched1", role: "user", parts: [{ type: "text", text: "Scheduled run of job" }] } },
-      { id: "sched2", parent_id: "sched1", content: { id: "sched2", role: "assistant", parts: [{ type: "text", text: "Error: timeout" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+      },
+      {
+        id: "sched1",
+        parent_id: "m2",
+        content: {
+          id: "sched1",
+          role: "user",
+          parts: [{ type: "text", text: "Scheduled run of job" }],
+        },
+      },
+      {
+        id: "sched2",
+        parent_id: "sched1",
+        content: {
+          id: "sched2",
+          role: "assistant",
+          parts: [{ type: "text", text: "Error: timeout" }],
+        },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -415,22 +588,33 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("detached completion: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] } },
-      { id: "detached", parent_id: null, content: { id: "detached", role: "assistant", parts: [{ type: "text", text: "detached" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+      },
+      {
+        id: "detached",
+        parent_id: null,
+        content: { id: "detached", role: "assistant", parts: [{ type: "text", text: "detached" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
     // Only submit the main chain, not the detached message
-    const submittedMessages = [
-      messages[0].content,
-      messages[1].content,
-    ] as UIMessage[];
+    const submittedMessages = [messages[0].content, messages[1].content] as UIMessage[];
 
     const oldResult = await assembleContext({
       conversationId: conv.id,
@@ -453,15 +637,33 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("regenerate: OLD == P1′", async () => {
     const messages = [
-      { id: "a", parent_id: null, content: { id: "a", role: "user", parts: [{ type: "text", text: "a" }] } },
-      { id: "b", parent_id: "a", content: { id: "b", role: "assistant", parts: [{ type: "text", text: "b" }] } },
-      { id: "c", parent_id: "b", content: { id: "c", role: "user", parts: [{ type: "text", text: "c" }] } },
-      { id: "d", parent_id: "b", content: { id: "d", role: "assistant", parts: [{ type: "text", text: "d" }] } },
+      {
+        id: "a",
+        parent_id: null,
+        content: { id: "a", role: "user", parts: [{ type: "text", text: "a" }] },
+      },
+      {
+        id: "b",
+        parent_id: "a",
+        content: { id: "b", role: "assistant", parts: [{ type: "text", text: "b" }] },
+      },
+      {
+        id: "c",
+        parent_id: "b",
+        content: { id: "c", role: "user", parts: [{ type: "text", text: "c" }] },
+      },
+      {
+        id: "d",
+        parent_id: "b",
+        content: { id: "d", role: "assistant", parts: [{ type: "text", text: "d" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -493,13 +695,23 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("manual compaction: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -526,12 +738,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("automatic compaction: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -558,12 +776,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("recovery compaction: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -590,12 +814,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("multiple compaction generations: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -622,12 +852,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("stale-boundary repair: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -654,12 +890,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("preserved synthetic messages: OLD == P1′", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -686,12 +928,18 @@ describe("P1′ differential verification", () => {
       toolSignal: new AbortController().signal,
     });
 
-    expect(canonicalize(newResult.context.layerC.messages)).toBe(canonicalize(oldResult.context.layerC.messages));
+    expect(canonicalize(newResult.context.layerC.messages)).toBe(
+      canonicalize(oldResult.context.layerC.messages),
+    );
   });
 
   it("missing compaction span: fail closed", async () => {
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -726,10 +974,26 @@ describe("P1′ differential verification", () => {
     //
     // Without a control like this, "OLD == P1′" is evidence of nothing.
     const messages = [
-      { id: "m1", parent_id: null, content: { id: "m1", role: "user", parts: [{ type: "text", text: "first" }] } },
-      { id: "m2", parent_id: "m1", content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "second" }] } },
-      { id: "m3", parent_id: "m2", content: { id: "m3", role: "user", parts: [{ type: "text", text: "third" }] } },
-      { id: "m4", parent_id: "m3", content: { id: "m4", role: "assistant", parts: [{ type: "text", text: "fourth" }] } },
+      {
+        id: "m1",
+        parent_id: null,
+        content: { id: "m1", role: "user", parts: [{ type: "text", text: "first" }] },
+      },
+      {
+        id: "m2",
+        parent_id: "m1",
+        content: { id: "m2", role: "assistant", parts: [{ type: "text", text: "second" }] },
+      },
+      {
+        id: "m3",
+        parent_id: "m2",
+        content: { id: "m3", role: "user", parts: [{ type: "text", text: "third" }] },
+      },
+      {
+        id: "m4",
+        parent_id: "m3",
+        content: { id: "m4", role: "assistant", parts: [{ type: "text", text: "fourth" }] },
+      },
     ];
     const conv = await createTestConversation(messages);
 
@@ -770,7 +1034,11 @@ describe("P1′ differential verification", () => {
     return { id, parent_id: null, content: { id, role: "user", parts: [{ type: "text", text }] } };
   }
   function assistantMsg(id: string, text: string) {
-    return { id, parent_id: null, content: { id, role: "assistant", parts: [{ type: "text", text }] } };
+    return {
+      id,
+      parent_id: null,
+      content: { id, role: "assistant", parts: [{ type: "text", text }] },
+    };
   }
   function idsOf(result: { context: { layerC: { messages: readonly UIMessage[] } } }): string[] {
     return result.context.layerC.messages.map((m) => String((m as { id?: string }).id));
@@ -800,7 +1068,11 @@ describe("P1′ differential verification", () => {
       { ...m3, parent_id: "m2" },
     ]);
 
-    const x0 = { id: "x0", role: "user", parts: [{ type: "text", text: "client-only leading message" }] };
+    const x0 = {
+      id: "x0",
+      role: "user",
+      parts: [{ type: "text", text: "client-only leading message" }],
+    };
     const submitted = [x0, m1.content, m2.content, m3.content] as unknown as UIMessage[];
 
     const result = await assemble(conv.id, submitted);

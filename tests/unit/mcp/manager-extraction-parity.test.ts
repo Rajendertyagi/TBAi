@@ -29,12 +29,7 @@ import path from "node:path";
 import { REPO_ROOT } from "../../helpers/repo-root";
 
 /** The four modules that together make up the MCP manager. */
-const MODULE_FILES = [
-  "manager.ts",
-  "store.ts",
-  "transport.ts",
-  "tool-content.ts",
-] as const;
+const MODULE_FILES = ["manager.ts", "store.ts", "transport.ts", "tool-content.ts"] as const;
 
 const MCP_DIR = path.join(REPO_ROOT, "src/services/mcp");
 
@@ -88,7 +83,12 @@ function snapshot(source: string): ParitySnapshot {
 
 // Captured from the 1,297-line single-file manager.ts, before any move.
 const BASELINE: ParitySnapshot = {
-  loggerEvents: ["debug|mcp|mcp.operation", "error|mcp|mcp.operation", "info|mcp|mcp.operation", "warn|mcp|mcp.operation"],
+  loggerEvents: [
+    "debug|mcp|mcp.operation",
+    "error|mcp|mcp.operation",
+    "info|mcp|mcp.operation",
+    "warn|mcp|mcp.operation",
+  ],
   loggerEventCallCount: 16,
   operationLabels: [
     "connect",
@@ -160,10 +160,7 @@ describe("MCP parity harness is non-vacuous", () => {
   });
 
   it("detects a renamed log event", () => {
-    const mutated = combinedSource().replace(
-      '"mcp", "mcp.operation"',
-      '"mcp", "mcp.op"',
-    );
+    const mutated = combinedSource().replace('"mcp", "mcp.operation"', '"mcp", "mcp.op"');
     expect(snapshot(mutated).loggerEvents).not.toEqual(BASELINE.loggerEvents);
   });
 

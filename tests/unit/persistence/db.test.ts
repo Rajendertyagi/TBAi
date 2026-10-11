@@ -18,9 +18,8 @@
  *   fails after the bound (no hang).
  */
 import { describe, it, expect } from "bun:test";
-import path from "path";
-import os from "os";
-import fs from "fs";
+import path from "node:path";
+import fs from "node:fs";
 import { Database } from "bun:sqlite";
 import { db } from "@/db";
 
@@ -33,7 +32,7 @@ describe("db open + busy_timeout + WAL (Phase 5)", () => {
     db.run(
       `INSERT INTO app_settings (key, value, updated_at)
        VALUES ('db-test-phase5', 'ok', ${Date.now()})
-       ON CONFLICT(key) DO UPDATE SET value = 'ok', updated_at = ${Date.now()}`
+       ON CONFLICT(key) DO UPDATE SET value = 'ok', updated_at = ${Date.now()}`,
     );
     const row = db
       .query<{ value: string }, [string]>("SELECT value FROM app_settings WHERE key = ?")
@@ -70,7 +69,7 @@ describe("db open + busy_timeout + WAL (Phase 5)", () => {
     try {
       db.run(
         `INSERT INTO app_settings (key, value, updated_at)
-         VALUES ('db-test-phase5-held', 'x', ${Date.now()})`
+         VALUES ('db-test-phase5-held', 'x', ${Date.now()})`,
       );
     } catch {
       threw = true;
@@ -98,9 +97,7 @@ describe("db open + busy_timeout + WAL (Phase 5)", () => {
     writer.run("BEGIN IMMEDIATE"); // hold the write lock
 
     // A read on a separate connection to the same file is unaffected.
-    const row = reader
-      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM app_settings")
-      .get();
+    const row = reader.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM app_settings").get();
     expect(typeof row.n).toBe("number");
 
     writer.run("COMMIT");

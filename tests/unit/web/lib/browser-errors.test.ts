@@ -92,7 +92,8 @@ installGlobalLogHooks({
   },
 });
 
-let calls: Array<{ level: string; scope: string; event: string; fields: Record<string, unknown> }> = [];
+let calls: Array<{ level: string; scope: string; event: string; fields: Record<string, unknown> }> =
+  [];
 const realInfo = logger.info;
 const realWarn = logger.warn;
 const realError = logger.error;
@@ -118,14 +119,18 @@ afterEach(() => {
 
 describe("global hook wiring", () => {
   it("records the ResizeObserver notice as a layout diagnostic, not an error", () => {
-    handlers["error"]({
+    handlers.error({
       message: "ResizeObserver loop completed with undelivered notifications.",
       filename: "http://localhost/assets/index.js",
       lineno: 42,
       colno: 7,
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ level: "warn", scope: "app", event: "browser_layout_diagnostic" });
+    expect(calls[0]).toMatchObject({
+      level: "warn",
+      scope: "app",
+      event: "browser_layout_diagnostic",
+    });
     // Metadata is preserved so an unexpected layout problem stays diagnosable.
     expect(calls[0].fields.line).toBe(42);
     expect(calls[0].fields.column).toBe(7);
@@ -133,21 +138,23 @@ describe("global hook wiring", () => {
   });
 
   it("keeps a genuine window error a real error", () => {
-    handlers["error"]({ message: "TypeError: nope", filename: "a.js", lineno: 1, colno: 2 });
+    handlers.error({ message: "TypeError: nope", filename: "a.js", lineno: 1, colno: 2 });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ level: "error", scope: "app", event: "window_error" });
   });
 
   it("keeps unhandled rejections as real errors", () => {
-    handlers["unhandledrejection"]({ reason: new Error("kaboom") });
+    handlers.unhandledrejection({ reason: new Error("kaboom") });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ level: "error", scope: "app", event: "unhandled_rejection" });
     expect(calls[0].fields.message).toBe("kaboom");
   });
 
   it("does not downgrade a rejection that merely mentions ResizeObserver", () => {
-    handlers["unhandledrejection"]({
-      reason: new Error("Uncaught Error: ResizeObserver loop completed with undelivered notifications."),
+    handlers.unhandledrejection({
+      reason: new Error(
+        "Uncaught Error: ResizeObserver loop completed with undelivered notifications.",
+      ),
     });
     expect(calls[0]).toMatchObject({ level: "error", event: "unhandled_rejection" });
   });

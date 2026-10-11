@@ -16,7 +16,12 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 const SEEDED_MESSAGES = 150;
 const CONVERSATION = "p2 measurements";
 
-function storedMessage(id: string, parentId: string | null, text: string, role: "user" | "assistant") {
+function storedMessage(
+  id: string,
+  parentId: string | null,
+  text: string,
+  role: "user" | "assistant",
+) {
   return {
     id,
     parent_id: parentId,
@@ -180,13 +185,17 @@ test("P2 measurements: virtualized DOM, page latency, prepend stability", async 
         ),
       );
       const headerH = await page.evaluate(() => {
-        const content = document.querySelector(`[data-testid="virtual-transcript-scroller"]`)?.firstElementChild;
+        const content = document.querySelector(
+          `[data-testid="virtual-transcript-scroller"]`,
+        )?.firstElementChild;
         const firstRow = document.querySelector("[data-row-key]");
         if (!content || !firstRow) return null;
         return {
           contentChildren: content.children.length,
           firstRowTop: Math.round(firstRow.getBoundingClientRect().top),
-          firstChildH: Math.round((content.firstElementChild as HTMLElement)?.getBoundingClientRect().height ?? 0),
+          firstChildH: Math.round(
+            (content.firstElementChild as HTMLElement)?.getBoundingClientRect().height ?? 0,
+          ),
         };
       });
       report.prependLayout = JSON.stringify(headerH);

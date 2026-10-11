@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { logger, normalizeError } from "../lib/logger";
 import { isPortEnvLocked, persistConfiguredPort } from "./server-port";
 
@@ -59,8 +59,7 @@ export function getActivePort(): number {
 // launcher passes TBAI_INSTANCE_ID (a fresh UUID per boot); a direct
 // `bun run dev` boot mints its own. Process memory only — never persisted,
 // never machine-derived — so a match proves THIS launch's server answered.
-const INSTANCE_ID =
-  process.env.TBAI_INSTANCE_ID?.trim() || crypto.randomUUID();
+const INSTANCE_ID = process.env.TBAI_INSTANCE_ID?.trim() || crypto.randomUUID();
 
 /** This boot's instance ID, served at GET /api/server/instance. */
 export function getInstanceId(): string {
@@ -76,7 +75,12 @@ function bindListener(port: number): BunServer {
   // Bun.serve binds synchronously and throws (EADDRINUSE) when the port is
   // occupied — the caller keeps the old listener untouched in that case.
   // Explicitly binds to 127.0.0.1 so the socket is strictly loopback (never LAN-exposed).
-  return Bun.serve({ hostname: "127.0.0.1", fetch: requireFetch(), port, idleTimeout: LISTENER_IDLE_TIMEOUT_S });
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    fetch: requireFetch(),
+    port,
+    idleTimeout: LISTENER_IDLE_TIMEOUT_S,
+  });
 }
 
 function setActive(server: BunServer, port: number): void {

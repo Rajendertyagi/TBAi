@@ -47,7 +47,11 @@ function user(id: string, text = `q:${id}`): UIMessage {
 }
 
 function assistant(id: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", text: `a:${id}`, state: "done" }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text: `a:${id}`, state: "done" }],
+  } as unknown as UIMessage;
 }
 
 /**
@@ -80,10 +84,14 @@ function settledHistory(turns = 12): UIMessage[] {
   return out;
 }
 
-const ids = (messages: readonly UIMessage[]): string[] => messages.map((m) => String((m as { id: string }).id));
+const ids = (messages: readonly UIMessage[]): string[] =>
+  messages.map((m) => String((m as { id: string }).id));
 
 /** Compact exactly the way the production planner is called. */
-function plan(messages: readonly UIMessage[], coveredMessageIds?: readonly string[]): CompactionPlan {
+function plan(
+  messages: readonly UIMessage[],
+  coveredMessageIds?: readonly string[],
+): CompactionPlan {
   const measuredTokens = messages.map(() => TOKENS_PER_MESSAGE);
   const measuredTotalTokens = measuredTokens.reduce((a, b) => a + b, 0);
   return planCompaction({
@@ -96,13 +104,17 @@ function plan(messages: readonly UIMessage[], coveredMessageIds?: readonly strin
     hasExistingCompaction: coveredMessageIds !== undefined && coveredMessageIds.length > 0,
     compactionLatched: true,
     coveredMessageIds,
-    priorSummaryTokens: coveredMessageIds !== undefined && coveredMessageIds.length > 0 ? 100 : undefined,
+    priorSummaryTokens:
+      coveredMessageIds !== undefined && coveredMessageIds.length > 0 ? 100 : undefined,
     summarizerInputTokens: 1_000_000,
     reason: "pressure",
   });
 }
 
-function recordFor(p: Extract<CompactionPlan, { kind: "compact" }>, generation: number): CompactionRecord {
+function recordFor(
+  p: Extract<CompactionPlan, { kind: "compact" }>,
+  generation: number,
+): CompactionRecord {
   return {
     compactionId: `cmp_${generation}`,
     conversationId: "conv-stale-boundary",
@@ -128,7 +140,7 @@ async function modelVisibleFilenames(messages: readonly UIMessage[]): Promise<st
 }
 
 /** Ids the model would actually receive, in order. */
-async function modelVisibleIds(messages: readonly UIMessage[]): Promise<string[]> {
+async function _modelVisibleIds(messages: readonly UIMessage[]): Promise<string[]> {
   const converted = await convertToModelMessages(messages as UIMessage[]);
   return converted.map((m) => (m as { id?: string }).id ?? "");
 }
@@ -138,19 +150,45 @@ async function modelVisibleIds(messages: readonly UIMessage[]): Promise<string[]
 describe("which non-text parts actually reach the model", () => {
   it("treats `file` as model-visible and UI-only types as not", async () => {
     expect(isModelVisibleNonTextPart("file")).toBe(true);
-    for (const uiOnly of ["data-weather", "custom", "source-url", "source-document", "step-start", "reasoning-file"]) {
+    for (const uiOnly of [
+      "data-weather",
+      "custom",
+      "source-url",
+      "source-document",
+      "step-start",
+      "reasoning-file",
+    ]) {
       expect(isModelVisibleNonTextPart(uiOnly)).toBe(false);
     }
   });
 
   it("agrees with the installed SDK: only `file` survives conversion of a user part", async () => {
     const withFile = await convertToModelMessages([
-      { id: "m", role: "user", parts: [{ type: "text", text: "x" }, { type: "file", mediaType: "text/plain", filename: "f.txt", url: "data:text/plain;base64,QQ==" }] } as unknown as UIMessage,
+      {
+        id: "m",
+        role: "user",
+        parts: [
+          { type: "text", text: "x" },
+          {
+            type: "file",
+            mediaType: "text/plain",
+            filename: "f.txt",
+            url: "data:text/plain;base64,QQ==",
+          },
+        ],
+      } as unknown as UIMessage,
     ]);
     expect(JSON.stringify(withFile)).toContain('"filename":"f.txt"');
 
     const dataOnly = await convertToModelMessages([
-      { id: "m", role: "user", parts: [{ type: "text", text: "x" }, { type: "data-weather", data: { t: 1 } }] } as unknown as UIMessage,
+      {
+        id: "m",
+        role: "user",
+        parts: [
+          { type: "text", text: "x" },
+          { type: "data-weather", data: { t: 1 } },
+        ],
+      } as unknown as UIMessage,
     ]);
     expect(JSON.stringify(dataOnly)).not.toContain("weather");
   });
@@ -185,7 +223,12 @@ describe("the Pass-5 premise: text-only tails are normalised before planning", (
   /** Length of the trailing run of consecutive user messages. */
   const trailingUserRun = (messages: readonly UIMessage[]): number => {
     let n = 0;
-    for (let i = messages.length - 1; i >= 0 && (messages[i] as { role: string }).role === "user"; i -= 1) n += 1;
+    for (
+      let i = messages.length - 1;
+      i >= 0 && (messages[i] as { role: string }).role === "user";
+      i -= 1
+    )
+      n += 1;
     return n;
   };
 
@@ -216,11 +259,7 @@ describe("the Pass-5 premise: text-only tails are normalised before planning", (
   }
 
   it("the file-bearing equivalent DOES survive pruning, which is what makes it the reachable case", () => {
-    const submitted = [
-      ...settledHistory(),
-      fileUser("t1", "one.txt"),
-      fileUser("t2", "two.txt"),
-    ];
+    const submitted = [...settledHistory(), fileUser("t1", "one.txt"), fileUser("t2", "two.txt")];
     const pruned = pruneStaleMessages(submitted).messages;
 
     // A `file` part blocks the merge, so the run of two reaches the planner intact.
@@ -235,7 +274,12 @@ describe("the Pass-5 premise: text-only tails are normalised before planning", (
     // Direct planner-level proof, independent of the pruner test above: whatever the
     // input, a trailing run whose members are ALL text-only must yield no superseded
     // turn, so `planCrossingSuperseded` cannot engage on text alone.
-    const textOnlyTail = pruneStaleMessages([...settledHistory(), user("x1"), user("x2"), user("x3")]).messages;
+    const textOnlyTail = pruneStaleMessages([
+      ...settledHistory(),
+      user("x1"),
+      user("x2"),
+      user("x3"),
+    ]).messages;
     expect(trailingUserRun(textOnlyTail)).toBe(1);
 
     const withFiles = pruneStaleMessages([
@@ -284,7 +328,18 @@ describe("turn settlement in the trailing unanswered run", () => {
     const messages = pruneStaleMessages([
       ...settledHistory(),
       fileUser("f1", "one.txt"),
-      { id: "f2", role: "user", parts: [{ type: "file", mediaType: "text/plain", filename: "two.txt", url: "data:text/plain;base64,QQ==" }] } as unknown as UIMessage,
+      {
+        id: "f2",
+        role: "user",
+        parts: [
+          {
+            type: "file",
+            mediaType: "text/plain",
+            filename: "two.txt",
+            url: "data:text/plain;base64,QQ==",
+          },
+        ],
+      } as unknown as UIMessage,
     ]).messages;
     // f1 holds text + file -> needs preservation. No text-only superseded turn here.
     expect(findSupersededTurns(messages).every((t) => t.requiresPreservation)).toBe(true);
@@ -482,7 +537,10 @@ describe("V12 preserved-id safety", () => {
     for (let cycle = 1; cycle <= 4; cycle += 1) {
       const p = plan(messages, covered);
       if (p.kind !== "compact") break;
-      if (p.crossedSupersededTurns.length > 0) { crossing = p; break; }
+      if (p.crossedSupersededTurns.length > 0) {
+        crossing = p;
+        break;
+      }
       covered = p.spanMessageIds;
     }
     expect(crossing).toBeDefined();
@@ -497,7 +555,9 @@ describe("V12 preserved-id safety", () => {
       preservedTurns: crossing.crossedSupersededTurns,
     });
 
-    const preserved = applied.filter((m) => String((m as { id: string }).id).startsWith("tbai-preserved:"));
+    const preserved = applied.filter((m) =>
+      String((m as { id: string }).id).startsWith("tbai-preserved:"),
+    );
     expect(preserved.length).toBeGreaterThan(0);
 
     for (const message of preserved) {
@@ -518,7 +578,11 @@ describe("V12 preserved-id safety", () => {
 
   it("never mutates or deletes the original persisted message", () => {
     const original = fileUser("f1", "one.txt");
-    const messages = pruneStaleMessages([...settledHistory(), original, fileUser("f2", "two.txt")]).messages;
+    const messages = pruneStaleMessages([
+      ...settledHistory(),
+      original,
+      fileUser("f2", "two.txt"),
+    ]).messages;
     const p = plan(messages, undefined);
     expect(p.kind).toBe("compact");
     if (p.kind !== "compact") return;
@@ -550,7 +614,9 @@ describe("V13 file fidelity through reconstruction", () => {
       fileUser("f2", "two.txt", "PAYLOAD-TWO"),
     ]).messages;
     const source = messages.find((m) => String((m as { id: string }).id) === "f1");
-    const sourceFile = (source as { parts: Array<Record<string, unknown>> }).parts.find((p) => p.type === "file")!;
+    const sourceFile = (source as { parts: Array<Record<string, unknown>> }).parts.find(
+      (p) => p.type === "file",
+    )!;
 
     const reconstructed = renderPreservedMessages({
       messages,
@@ -558,7 +624,9 @@ describe("V13 file fidelity through reconstruction", () => {
       spanFingerprint: "fp-test",
     });
     expect(reconstructed).toHaveLength(1);
-    const outFile = (reconstructed[0] as { parts: Array<Record<string, unknown>> }).parts.find((p) => p.type === "file")!;
+    const outFile = (reconstructed[0] as { parts: Array<Record<string, unknown>> }).parts.find(
+      (p) => p.type === "file",
+    )!;
 
     expect(outFile.mediaType).toBe(sourceFile.mediaType);
     expect(outFile.filename).toBe(sourceFile.filename);
@@ -633,7 +701,10 @@ describe("model-visible ordering", () => {
     for (let cycle = 1; cycle <= 4; cycle += 1) {
       const p = plan(messages, covered);
       if (p.kind !== "compact") break;
-      if (p.crossedSupersededTurns.length > 0) { crossing = p; break; }
+      if (p.crossedSupersededTurns.length > 0) {
+        crossing = p;
+        break;
+      }
       covered = p.spanMessageIds;
     }
     expect(crossing).toBeDefined();
@@ -675,10 +746,19 @@ describe("model-visible ordering", () => {
     const p = plan(messages);
     expect(p.kind).toBe("compact");
     if (p.kind !== "compact") return;
-    const applied = applyCompaction({ messages, plan: p, record: recordFor(p, 1), preservedTurns: p.crossedSupersededTurns });
+    const applied = applyCompaction({
+      messages,
+      plan: p,
+      record: recordFor(p, 1),
+      preservedTurns: p.crossedSupersededTurns,
+    });
     // Exactly one synthetic summary, nothing preserved.
-    expect(applied.filter((m) => String((m as { id: string }).id).startsWith("tbai-compaction:"))).toHaveLength(1);
-    expect(applied.some((m) => String((m as { id: string }).id).startsWith("tbai-preserved:"))).toBe(false);
+    expect(
+      applied.filter((m) => String((m as { id: string }).id).startsWith("tbai-compaction:")),
+    ).toHaveLength(1);
+    expect(
+      applied.some((m) => String((m as { id: string }).id).startsWith("tbai-preserved:")),
+    ).toBe(false);
   });
 });
 
@@ -776,7 +856,11 @@ describe("crossing re-applies every earlier guard", () => {
       reason: "pressure",
     });
     if (tight.kind === "none") {
-      expect(["would_still_exceed_budget", "summary_would_not_reclaim_enough", "already_compacted_span"]).toContain(tight.reason);
+      expect([
+        "would_still_exceed_budget",
+        "summary_would_not_reclaim_enough",
+        "already_compacted_span",
+      ]).toContain(tight.reason);
     } else {
       // If it did compact, the residual check must genuinely hold.
       expect(tight.spanEndIndex).toBeGreaterThan(first.spanEndIndex);
@@ -795,7 +879,9 @@ describe("crossing re-applies every earlier guard", () => {
     // history) while the crossing growth is far larger than the summariser's
     // capacity — otherwise the first plan would refuse on the budget and the
     // capacity rule would never be exercised.
-    const measuredTokens = messages.map((m) => (String((m as { id: string }).id) === "f1" ? 150_000 : 1_000));
+    const measuredTokens = messages.map((m) =>
+      String((m as { id: string }).id) === "f1" ? 150_000 : 1_000,
+    );
     const measuredTotalTokens = measuredTokens.reduce((a, b) => a + b, 0);
     const usableInputTokens = 200_000;
 
@@ -1038,7 +1124,15 @@ describe("existing lifecycle safety is not weakened", () => {
       {
         id: "a",
         role: "assistant",
-        parts: [{ type: "tool-x", toolCallId: "tc", state: "approval-requested", input: { a: 1 }, approval: { id: "ap" } }],
+        parts: [
+          {
+            type: "tool-x",
+            toolCallId: "tc",
+            state: "approval-requested",
+            input: { a: 1 },
+            approval: { id: "ap" },
+          },
+        ],
       } as unknown as UIMessage,
     ]).messages;
     // The approval survives, so it must never be inside a compacted span.
@@ -1075,7 +1169,14 @@ describe("existing lifecycle safety is not weakened", () => {
         id: `a${i}`,
         role: "assistant",
         parts: [
-          { type: "tool-read", toolName: "read", toolCallId: `tc${i}`, state: "output-available", input: { p: "a" }, output: "body" },
+          {
+            type: "tool-read",
+            toolName: "read",
+            toolCallId: `tc${i}`,
+            state: "output-available",
+            input: { p: "a" },
+            output: "body",
+          },
         ],
       } as unknown as UIMessage);
     }

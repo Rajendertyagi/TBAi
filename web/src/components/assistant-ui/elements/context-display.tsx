@@ -32,12 +32,7 @@
  */
 "use client";
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   createContext,
@@ -58,17 +53,12 @@ export type TokenUsage = {
 };
 
 const formatTokenCount = (tokens: number): string => {
-  if (tokens >= 1_000_000)
-    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (tokens >= 1_000)
-    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   return `${tokens}`;
 };
 
-const getUsagePercent = (
-  totalTokens: number | undefined,
-  modelContextWindow: number,
-): number => {
+const getUsagePercent = (totalTokens: number | undefined, modelContextWindow: number): number => {
   if (!totalTokens) return 0;
   return Math.min((totalTokens / modelContextWindow) * 100, 100);
 };
@@ -114,9 +104,7 @@ type ContextDisplayContextValue = {
   togglePin: () => void;
 };
 
-const ContextDisplayContext = createContext<ContextDisplayContextValue | null>(
-  null,
-);
+const ContextDisplayContext = createContext<ContextDisplayContextValue | null>(null);
 
 function useContextDisplay(): ContextDisplayContextValue {
   const ctx = useContext(ContextDisplayContext);
@@ -166,7 +154,7 @@ export type PresetProps = {
   side?: "top" | "bottom" | "left" | "right";
   usage?: TokenUsage | undefined;
   resetKey?: string | undefined;
-/** TBAi: current model-visible context, server-measured. See Root. */
+  /** TBAi: current model-visible context, server-measured. See Root. */
   contextTokens?: number | undefined;
   /** TBAi: provenance of the effective window, shown to the user. */
   windowSource?: string | undefined;
@@ -194,7 +182,7 @@ export type PresetProps = {
 export type ContextDisplayRootProps = {
   modelContextWindow: number;
   children: ReactNode;
-/**
+  /**
    * TBAi: CURRENT model-visible context, server-measured.
    *
    * The ring's occupancy is this, NOT `usage.totalTokens`. `usage` is token
@@ -287,9 +275,7 @@ function ContextDisplayRoot({
   }
 
   const current =
-    tokenState.resetKey === resetKey
-      ? tokenState
-      : { totalTokens: rawTokens, usage, isUnknown };
+    tokenState.resetKey === resetKey ? tokenState : { totalTokens: rawTokens, usage, isUnknown };
   const totalTokens = current.totalTokens;
   const unknown = current.isUnknown;
   const percent = getUsagePercent(totalTokens, modelContextWindow);
@@ -303,10 +289,7 @@ function ContextDisplayRoot({
   // back through `onOpenChange` and release the pin. Clicking therefore pins
   // (or unpins) without ever force-closing native state — no fighting.
   const [pinned, setPinned] = useState(false);
-  const togglePin = useCallback(
-    () => setPinned((p) => nextPinState(p, "toggle")),
-    [],
-  );
+  const togglePin = useCallback(() => setPinned((p) => nextPinState(p, "toggle")), []);
 
   const contextValue = useMemo(
     () => ({
@@ -338,21 +321,14 @@ function ContextDisplayRoot({
     </ContextDisplayContext.Provider>
   );
 }
-function ContextDisplayTrigger({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<"button">) {
+function ContextDisplayTrigger({ className, children, ...props }: React.ComponentProps<"button">) {
   const { togglePin } = useContextDisplay();
   return (
     <TooltipTrigger asChild>
       <button
         type="button"
         data-slot="context-display-trigger"
-        className={cn(
-          "inline-flex items-center rounded-md transition-colors",
-          className,
-        )}
+        className={cn("inline-flex items-center rounded-md transition-colors", className)}
         {...props}
         onClick={(e) => {
           props.onClick?.(e);
@@ -377,9 +353,7 @@ type ContextSegment = {
 // so these are reported as the counts they are and none of them is given a
 // share of the bar, which stays the one reading that always holds: the
 // provider's own total against the window.
-const getContextSegments = (
-  usage: TokenUsage | undefined,
-): ContextSegment[] => {
+const getContextSegments = (usage: TokenUsage | undefined): ContextSegment[] => {
   if (!usage) return [];
   return [
     { label: "Input", tokens: usage.inputTokens ?? 0 },
@@ -443,10 +417,8 @@ function ContextDisplayContent({
             {unknown ? "context unknown" : `${Math.round(percent)}% full`}
           </span>
           <span className="font-mono tabular-nums">
-            {unknown
-              ? "--"
-              : formatTokenCount(Math.min(totalTokens, modelContextWindow))}{" "}
-            / {formatTokenCount(modelContextWindow)}
+            {unknown ? "--" : formatTokenCount(Math.min(totalTokens, modelContextWindow))} /{" "}
+            {formatTokenCount(modelContextWindow)}
           </span>
         </div>
         <div className="bg-muted mt-2.5 h-1 overflow-hidden rounded-full">
@@ -473,14 +445,9 @@ function ContextDisplayContent({
         {segments.length > 0 && (
           <div className="mt-3 grid gap-1.5">
             {segments.map((segment) => (
-              <div
-                key={segment.label}
-                className="flex items-baseline justify-between gap-6"
-              >
+              <div key={segment.label} className="flex items-baseline justify-between gap-6">
                 <span className="text-muted-foreground">{segment.label}</span>
-                <span className="font-mono tabular-nums">
-                  {formatTokenCount(segment.tokens)}
-                </span>
+                <span className="font-mono tabular-nums">{formatTokenCount(segment.tokens)}</span>
               </div>
             ))}
           </div>
@@ -523,9 +490,7 @@ function RingVisual() {
         strokeWidth={RING_STROKE}
         strokeLinecap="round"
         strokeDasharray={RING_CIRCUMFERENCE}
-        strokeDashoffset={
-          RING_CIRCUMFERENCE - (percent / 100) * RING_CIRCUMFERENCE
-        }
+        strokeDashoffset={RING_CIRCUMFERENCE - (percent / 100) * RING_CIRCUMFERENCE}
         className={cn(
           "transition-[stroke-dashoffset,stroke] duration-300",
           getStrokeColor(percent),
@@ -582,10 +547,7 @@ function BarVisual() {
     <div className="flex items-center gap-2">
       <div className="bg-muted h-1.5 w-16 overflow-hidden rounded-full">
         <div
-          className={cn(
-            "h-full rounded-full transition-all duration-300",
-            getBarColor(percent),
-          )}
+          className={cn("h-full rounded-full transition-all duration-300", getBarColor(percent))}
           style={{ width: `${percent}%` }}
         />
       </div>
@@ -603,15 +565,8 @@ const ContextDisplayBar: FC<PresetProps> = ({
   usage,
   resetKey,
 }) => (
-  <ContextDisplayRoot
-    modelContextWindow={modelContextWindow}
-    usage={usage}
-    resetKey={resetKey}
-  >
-    <ContextDisplayTrigger
-      className={cn("px-2 py-1", className)}
-      aria-label="Context usage"
-    >
+  <ContextDisplayRoot modelContextWindow={modelContextWindow} usage={usage} resetKey={resetKey}>
+    <ContextDisplayTrigger className={cn("px-2 py-1", className)} aria-label="Context usage">
       <BarVisual />
     </ContextDisplayTrigger>
     <ContextDisplayContent side={side} />
@@ -635,11 +590,7 @@ const ContextDisplayText: FC<PresetProps> = ({
   usage,
   resetKey,
 }) => (
-  <ContextDisplayRoot
-    modelContextWindow={modelContextWindow}
-    usage={usage}
-    resetKey={resetKey}
-  >
+  <ContextDisplayRoot modelContextWindow={modelContextWindow} usage={usage} resetKey={resetKey}>
     <ContextDisplayTrigger
       aria-label="Context usage"
       className={cn(

@@ -76,7 +76,10 @@ function harness(): Harness {
     bootId: "boot_reconcile_test",
     generateLeaseToken: (() => {
       let n = 0;
-      return () => `lease_${(n += 1)}`;
+      return () => {
+        n += 1;
+        return `lease_${n}`;
+      };
     })(),
   });
 
@@ -501,7 +504,7 @@ describe("history reconciliation — pass bounds and lifecycle", () => {
   });
 
   it("returns null and writes nothing when reconciliation was never started", async () => {
-    const h = harness();
+    const _h = harness();
     stopHistoryReconciliation();
     expect(await runHistoryReconciliationOnce()).toBeNull();
   });

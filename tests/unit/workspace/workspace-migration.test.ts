@@ -6,9 +6,9 @@
  * DB + DATA_DIR/WORKSPACE_DIR isolation via tests/setup.ts (tmp per pid).
  */
 import { describe, it, expect } from "bun:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   resolveConversationWorkspace,
   chatWorkspaceDir,

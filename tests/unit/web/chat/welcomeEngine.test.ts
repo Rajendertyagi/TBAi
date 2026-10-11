@@ -256,20 +256,20 @@ describe("welcome engine store — localStorage persistence + fallback", () => {
     useWelcomeEngineStore.getState().setModel("openai/gpt-4o");
     // Switch engine: the stored record must reflect the cleared pick.
     useWelcomeEngineStore.getState().setEngine("direct");
-      const stored = JSON.parse(readStorage() as string) as {
-        engine: string;
-        agent: string;
-        model: string;
-        variant: string;
-        autoApprove: boolean;
-      };
-      expect(stored).toEqual({
-        engine: "direct",
-        agent: "",
-        model: "",
-        variant: "",
-        autoApprove: false,
-      });
+    const stored = JSON.parse(readStorage() as string) as {
+      engine: string;
+      agent: string;
+      model: string;
+      variant: string;
+      autoApprove: boolean;
+    };
+    expect(stored).toEqual({
+      engine: "direct",
+      agent: "",
+      model: "",
+      variant: "",
+      autoApprove: false,
+    });
   });
 
   // ---- load() fallback branch ----
@@ -309,9 +309,7 @@ describe("welcome engine store — localStorage persistence + fallback", () => {
     // reading the storage and verifying it round-trips through the
     // same normalization load() applies: engine must be "opencode" to
     // survive; agent/model must be strings.
-    writeStorage(
-      JSON.stringify({ engine: "opencode", agent: "coder", model: "m1" }),
-    );
+    writeStorage(JSON.stringify({ engine: "opencode", agent: "coder", model: "m1" }));
     const raw = readStorage();
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw as string) as {
@@ -347,8 +345,8 @@ describe("welcome engine store — localStorage persistence + fallback", () => {
   it("persist() swallows setItem failures — state stays in-memory", () => {
     // Patch the storage shim to throw on setItem (quota-exceeded / blocked),
     // then verify the store still updates its in-memory state.
-    const original = (globalThis as { window: { localStorage: MemoryStorage } })
-      .window.localStorage;
+    const original = (globalThis as { window: { localStorage: MemoryStorage } }).window
+      .localStorage;
     const failing = new MemoryStorage();
     const origSetItem = failing.setItem.bind(failing);
     failing.setItem = () => {

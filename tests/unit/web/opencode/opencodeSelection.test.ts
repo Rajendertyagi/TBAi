@@ -12,10 +12,7 @@ type SelectionPatch = {
   readonly opencodeVariant?: string | null;
 };
 
-type MergeSelection = (
-  current: SelectionState,
-  patch: SelectionPatch,
-) => SelectionState;
+type MergeSelection = (current: SelectionState, patch: SelectionPatch) => SelectionState;
 
 async function mergeSelection(
   current: SelectionState,

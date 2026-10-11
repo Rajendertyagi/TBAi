@@ -100,9 +100,7 @@ export function AppShell({ children }: AppShellProps = {}) {
 
           {/* Page-level context menu is its own chrome component; the shell only
               composes it around the routed content. */}
-          <PageContextMenu>
-            {children ?? <Outlet />}
-          </PageContextMenu>
+          <PageContextMenu>{children ?? <Outlet />}</PageContextMenu>
         </main>
       </div>
 

@@ -51,7 +51,9 @@ describe("occupancy: the provider's count of the last prompt", () => {
     const measurement = providerOccupancyFromStepUsage(stepUsage(90_000, 80_000));
     expect(measurement?.kind).toBe("provider");
     expect(measurement?.inputTokens).toBe(90_000);
-    expect(measurement?.kind === "provider" ? measurement.cachedInputTokens : undefined).toBe(80_000);
+    expect(measurement?.kind === "provider" ? measurement.cachedInputTokens : undefined).toBe(
+      80_000,
+    );
     // 90k + 80k would be the 330%-readout bug.
     expect(measurement?.inputTokens).not.toBe(170_000);
   });
@@ -132,10 +134,20 @@ describe("occupancy: the published state", () => {
   it("refuses to publish without a denominator", () => {
     // A meter with no window cannot honestly report a percentage.
     expect(
-      buildContextState({ occupancy, windowTokens: undefined, windowSource: "configured", usableInputTokens: 1 }),
+      buildContextState({
+        occupancy,
+        windowTokens: undefined,
+        windowSource: "configured",
+        usableInputTokens: 1,
+      }),
     ).toBeUndefined();
     expect(
-      buildContextState({ occupancy, windowTokens: 0, windowSource: "conservative_default", usableInputTokens: 0 }),
+      buildContextState({
+        occupancy,
+        windowTokens: 0,
+        windowSource: "conservative_default",
+        usableInputTokens: 0,
+      }),
     ).toBeUndefined();
   });
 

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { resolveOpenCodeModel } from "@web/features/opencode/resolveOpenCodeModel.ts";
-import type { OpenCodeDefaultModel, OpenCodeModelOption } from "@web/features/opencode/useOpenCodeCapabilities.ts";
+import type {
+  OpenCodeDefaultModel,
+  OpenCodeModelOption,
+} from "@web/features/opencode/useOpenCodeCapabilities.ts";
 
 /**
  * Which model a Code turn runs on.
@@ -49,8 +52,15 @@ describe("resolveOpenCodeModel — nothing stored", () => {
   it("still uses a default the catalogue does not carry", () => {
     // A default the live list has not caught up with is still server-authoritative
     // and better than nothing. Rejecting it would reintroduce the blank state.
-    const stale: OpenCodeDefaultModel = { providerID: "agnes", modelID: "agnes-9-future", name: "Future" };
-    expect(resolveOpenCodeModel(null, [], stale)).toEqual({ providerID: "agnes", modelID: "agnes-9-future" });
+    const stale: OpenCodeDefaultModel = {
+      providerID: "agnes",
+      modelID: "agnes-9-future",
+      name: "Future",
+    };
+    expect(resolveOpenCodeModel(null, [], stale)).toEqual({
+      providerID: "agnes",
+      modelID: "agnes-9-future",
+    });
   });
 
   it("resolves to nothing when the server advertises no default either", () => {
@@ -70,8 +80,10 @@ describe("resolveOpenCodeModel — a stored choice always wins", () => {
   });
 
   it("keeps a bare stored id, resolved through the live catalogue", () => {
-    expect(resolveOpenCodeModel("agnes-3.0-flash", MODELS, SERVER_DEFAULT))
-      .toEqual({ providerID: "agnes", modelID: "agnes-3.0-flash" });
+    expect(resolveOpenCodeModel("agnes-3.0-flash", MODELS, SERVER_DEFAULT)).toEqual({
+      providerID: "agnes",
+      modelID: "agnes-3.0-flash",
+    });
   });
 
   it("keeps a stored choice the catalogue has not caught up with", () => {

@@ -6,9 +6,7 @@ describe("CodeShell architecture guard", () => {
   let source = "";
 
   beforeAll(async () => {
-    source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/features/opencode/CodeShell.tsx"),
-    ).text();
+    source = await Bun.file(path.join(REPO_ROOT, "web/src/features/opencode/CodeShell.tsx")).text();
   });
 
   it("renders via unified AppShell", () => {

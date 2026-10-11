@@ -47,7 +47,8 @@ function deferredFetch() {
     return new Promise<Response>((resolve, reject) => {
       if (signal) {
         if (signal.aborted) reject(new DOMException("Aborted", "AbortError"));
-        else signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        else
+          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
       }
       (globalThis as unknown as { __resolveFetch?: (r: Response) => void }).__resolveFetch =
         resolve;

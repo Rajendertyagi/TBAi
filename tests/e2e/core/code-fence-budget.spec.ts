@@ -116,9 +116,9 @@ test("a fence at the budget renders complete, and one over is cut with a visible
     );
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     // Rendering 2500 lines did not wedge the page. Without a real pre-render
     // bound this is where the tab stops responding, so reaching this line is
@@ -183,10 +183,7 @@ test("a fence at the budget renders complete, and one over is cut with a visible
   }
 });
 
-test("ordinary small code is untouched - no marker, no truncation", async ({
-  page,
-  request,
-}) => {
+test("ordinary small code is untouched - no marker, no truncation", async ({ page, request }) => {
   test.setTimeout(120_000);
 
   const label = `code fence untouched ${Date.now()}`;
@@ -204,9 +201,9 @@ test("ordinary small code is untouched - no marker, no truncation", async ({
     );
 
     await page.goto(`/#/chat/${conversationId}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/i }).first(),
-    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/i }).first()).toBeVisible({
+      timeout: 30000,
+    });
 
     // The budget costs nothing when it is not needed: no marker at all.
     await expect(page.locator(".aui-code-truncated")).toHaveCount(0);
@@ -216,9 +213,7 @@ test("ordinary small code is untouched - no marker, no truncation", async ({
 
     // Still highlighted, and the language label is unchanged. Polled for the
     // same WASM reason as the other spec.
-    await expect
-      .poll(() => page.locator(".aui-shiki-base .line").count())
-      .toBe(2);
+    await expect.poll(() => page.locator(".aui-shiki-base .line").count()).toBe(2);
     await expect(page.locator(".aui-code-header-language")).toHaveText("ts");
   } finally {
     await removeConversation(request, conversationId);

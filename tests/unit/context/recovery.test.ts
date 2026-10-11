@@ -107,7 +107,9 @@ describe("recovery: the classification it keys on", () => {
     const classified = classifyError(Object.assign(new Error(message), { status: 400 }));
     expect(classified.category).toBe(expected);
     expect(isRecoverableOverflow(classified.category)).toBe(true);
-    expect(decideOverflowRecovery({ ...base, category: classified.category }).shouldRecover).toBe(true);
+    expect(decideOverflowRecovery({ ...base, category: classified.category }).shouldRecover).toBe(
+      true,
+    );
   });
 
   it("does NOT treat a payload-too-large as a context overflow", () => {

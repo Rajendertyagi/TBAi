@@ -44,10 +44,7 @@ const RUNTIME_ENV_FLAG = "TBAI_OPENCODE_RUNTIME_TESTS";
 const RUNTIME_PASSWORD = "tbai-opencode-runtime-fixture";
 
 /** Why the runtime tests are unavailable, or `undefined` when they can run. */
-export type RuntimeUnavailableReason =
-  | "not_opted_in"
-  | "binary_missing"
-  | "unsupported_version";
+export type RuntimeUnavailableReason = "not_opted_in" | "binary_missing" | "unsupported_version";
 
 export interface RuntimeOpenCodeServer {
   readonly baseUrl: string;
@@ -172,7 +169,13 @@ export function createRuntimeIsolation(suffix = "runtime"): RuntimeIsolation {
   for (const dir of [configDir, homeDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  return { root, xdgConfigHome, configDir, configFile: path.join(configDir, "opencode.json"), homeDir };
+  return {
+    root,
+    xdgConfigHome,
+    configDir,
+    configFile: path.join(configDir, "opencode.json"),
+    homeDir,
+  };
 }
 
 /**

@@ -23,8 +23,8 @@ import {
   resolveDataDir,
 } from "@/services/server-port.ts";
 import { db } from "@/db";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
 const PORT_SETTING_KEY = "server.port";
 
@@ -110,34 +110,38 @@ describe("isPortEnvLocked", () => {
 describe("port validation boundaries", () => {
   it("rejects 0 (below the valid range)", () => {
     // getPersistedPort parses a stored 0 as null (invalid).
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "0", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "0",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBeNull();
   });
 
   it("accepts 1 (lowest valid port)", () => {
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "1", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "1",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBe(1);
   });
 
   it("accepts 65535 (highest valid port)", () => {
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "65535", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "65535",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBe(65535);
   });
 
   it("rejects 65536 (above the valid range)", () => {
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "65536", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "65536",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBeNull();
   });
 
@@ -145,18 +149,20 @@ describe("port validation boundaries", () => {
     // `getPersistedPort` parses via `Number.parseInt(..., 10)`, so a value
     // like 12.5 resolves to 12 (in range), not to null. This documents the
     // truncation, not a rejection.
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "12.5", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "12.5",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBe(12);
   });
 
   it("a stored out-of-range value is null even after truncation", () => {
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "70000.9", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "70000.9",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBeNull();
   });
 });
@@ -184,10 +190,11 @@ describe("persist-then-read roundtrip", () => {
   });
 
   it("returns null for a corrupt stored value", () => {
-    db.run(
-      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-      [PORT_SETTING_KEY, "{not json", Date.now()],
-    );
+    db.run(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)`, [
+      PORT_SETTING_KEY,
+      "{not json",
+      Date.now(),
+    ]);
     expect(getPersistedPort()).toBeNull();
   });
 });

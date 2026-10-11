@@ -117,7 +117,9 @@ async function storedMessages(
  * exact `type` string keeps this honest if the type prefix ever changes, while
  * still rejecting the non-tool parts that share the row.
  */
-function toolParts(messages: StoredMessage[]): Array<{ name: string; state: unknown; text: string }> {
+function toolParts(
+  messages: StoredMessage[],
+): Array<{ name: string; state: unknown; text: string }> {
   const found: Array<{ name: string; state: unknown; text: string }> = [];
   for (const message of messages) {
     for (const part of message.content?.parts ?? []) {
@@ -197,10 +199,9 @@ test.describe("F5 — a settled tool result is persisted, not just rendered", ()
       // rendering-only assertion would miss — the transcript shows the result
       // while the repository never received it.
       const schedulerOutput = (await persistedSchedulerTool())!;
-      expect(
-        schedulerOutput.text,
-        "the persisted tool part carries no result payload",
-      ).not.toBe("null");
+      expect(schedulerOutput.text, "the persisted tool part carries no result payload").not.toBe(
+        "null",
+      );
       expect(schedulerOutput.text.length).toBeGreaterThan(2);
       // The read-only scheduler list reports its jobs as a collection; an empty
       // array is a real answer, but a MISSING one is not.
@@ -217,14 +218,10 @@ test.describe("F5 — a settled tool result is persisted, not just rendered", ()
       await expect(page.getByText(FINAL_ANSWER)).toBeVisible({ timeout: 60_000 });
 
       const afterReload = await persistedSchedulerTool();
-      expect(
-        afterReload,
-        "the persisted tool result did not survive the reload",
-      ).not.toBeNull();
-      expect(
-        afterReload!.text,
-        "the persisted tool result changed across a reload",
-      ).toBe(schedulerOutput.text);
+      expect(afterReload, "the persisted tool result did not survive the reload").not.toBeNull();
+      expect(afterReload!.text, "the persisted tool result changed across a reload").toBe(
+        schedulerOutput.text,
+      );
     } finally {
       await disarmToolCall(request);
       await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);
@@ -279,7 +276,8 @@ test.describe("F5 — a settled tool result is persisted, not just rendered", ()
       const finalWindow = await request.get(
         `/api/conversations/${conversationId}/messages/window?direction=older&limit=50`,
       );
-      const finalRows = ((await finalWindow.json()) as { messages?: StoredMessage[] }).messages ?? [];
+      const finalRows =
+        ((await finalWindow.json()) as { messages?: StoredMessage[] }).messages ?? [];
       expect(finalRows.length).toBeGreaterThan(0);
       expect(finalRows.some((m) => m.content?.role === "assistant")).toBe(true);
     } finally {

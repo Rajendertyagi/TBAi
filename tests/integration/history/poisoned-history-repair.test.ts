@@ -338,18 +338,23 @@ function legacyRecoverableAssistantTurn(): Record<string, unknown> {
 }
 
 async function createConversation(title: string): Promise<string> {
-  const conv = await conversationService.create(conversationInput({
-    title,
-    providerId: PROVIDER_ID,
-    modelId: MODEL_ID,
-    reasoningLevel: null,
-    systemPrompt: null,
-    engine: "direct",
-  }));
+  const conv = await conversationService.create(
+    conversationInput({
+      title,
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: null,
+      systemPrompt: null,
+      engine: "direct",
+    }),
+  );
   return conv.id;
 }
 
-async function postChat(conversationId: string, messages: Array<Record<string, unknown>>): Promise<Response> {
+async function postChat(
+  conversationId: string,
+  messages: Array<Record<string, unknown>>,
+): Promise<Response> {
   return app.request("/api/chat", {
     method: "POST",
     headers: JSON_HEADERS,
@@ -366,7 +371,12 @@ async function postChat(conversationId: string, messages: Array<Record<string, u
 async function sendAndCapture(
   conversationId: string,
   messages: Array<Record<string, unknown>>,
-): Promise<{ status: number; body: string; outbound: Record<string, unknown>; verdict: ArgumentVerdict }> {
+): Promise<{
+  status: number;
+  body: string;
+  outbound: Record<string, unknown>;
+  verdict: ArgumentVerdict;
+}> {
   const res = await postChat(conversationId, messages);
   const body = await res.text();
   expect(captured.length).toBe(1);
@@ -421,7 +431,9 @@ describe("poisoned history — the provider boundary", () => {
       const assistantWithCall = messages.find(
         (m) => Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
       );
-      const call = (assistantWithCall?.tool_calls as Array<{ function: { arguments: string } }>)[0];
+      const call = (
+        assistantWithCall?.tool_calls as Array<{ function: { arguments: string } }> | undefined
+      )?.[0];
       expect(JSON.parse(call.function.arguments)).toEqual(VALID_INPUT);
     } finally {
       await conversationService.delete(conversationId);
@@ -429,78 +441,78 @@ describe("poisoned history — the provider boundary", () => {
   }, 30000);
 
   it("emits allowlisted provider error codes on a real 400 and never the body", async () => {
-  await seedControlledProvider();
-  const conversationId = await createConversation("provider-error-code");
+    await seedControlledProvider();
+    const conversationId = await createConversation("provider-error-code");
 
-  try {
-    // Drive a genuine provider rejection through the route so the diagnostic
-    // path actually executes — this is not a simulated log line.
-    rejectWith = { status: 400 };
-    const since = logger.lastSeq;
-    const res = await postChat(conversationId, [userMessage("hello", "msg-u1")]);
-    const body = await res.text();
-    rejectWith = null;
+    try {
+      // Drive a genuine provider rejection through the route so the diagnostic
+      // path actually executes — this is not a simulated log line.
+      rejectWith = { status: 400 };
+      const since = logger.lastSeq;
+      const res = await postChat(conversationId, [userMessage("hello", "msg-u1")]);
+      const body = await res.text();
+      rejectWith = null;
 
-    expect(captured.length).toBe(1);
-    expect(res.status).toBe(200); // the run settles failed INSIDE the stream
-    expect(body).toContain("error");
+      expect(captured.length).toBe(1);
+      expect(res.status).toBe(200); // the run settles failed INSIDE the stream
+      expect(body).toContain("error");
 
-    const entries = logger.getRecentEntries(since);
-    const rendered = entries.map((e) => JSON.stringify(e));
+      const entries = logger.getRecentEntries(since);
+      const rendered = entries.map((e) => JSON.stringify(e));
 
-    const diagnostic = entries.filter((e) => e.event === "ai.provider_error_code");
-    expect(diagnostic).toHaveLength(1);
-    const fields = diagnostic[0] as unknown as Record<string, unknown>;
-    // Exactly the allowlist — nothing more.
-    expect(fields.errorType).toBe("invalid_request_error");
-    expect(fields.errorCode).toBe("invalid_tool_arguments");
-    expect(fields.errorParam).toBe(PROVIDER_ERROR_PARAM);
-    expect(fields.statusCode).toBe(400);
-    expect(fields.provider).toBe("ollama");
-    expect(fields.model).toBe(MODEL_ID);
-    expect(fields.requestId).toBeDefined();
-    expect(fields.conversationId).toBe(conversationId);
+      const diagnostic = entries.filter((e) => e.event === "ai.provider_error_code");
+      expect(diagnostic).toHaveLength(1);
+      const fields = diagnostic[0] as unknown as Record<string, unknown>;
+      // Exactly the allowlist — nothing more.
+      expect(fields.errorType).toBe("invalid_request_error");
+      expect(fields.errorCode).toBe("invalid_tool_arguments");
+      expect(fields.errorParam).toBe(PROVIDER_ERROR_PARAM);
+      expect(fields.statusCode).toBe(400);
+      expect(fields.provider).toBe("ollama");
+      expect(fields.model).toBe(MODEL_ID);
+      expect(fields.requestId).toBeDefined();
+      expect(fields.conversationId).toBe(conversationId);
 
-    // The provider's PROSE and any body-shaped field must not appear anywhere.
-    for (const line of rendered) {
-      expect(line).not.toContain(PROVIDER_ERROR_PROSE);
-      expect(line).not.toContain("responseBody");
-      expect(line).not.toContain("requestBodyValues");
-      expect(line).not.toContain(POISONED_RAW_INPUT);
+      // The provider's PROSE and any body-shaped field must not appear anywhere.
+      for (const line of rendered) {
+        expect(line).not.toContain(PROVIDER_ERROR_PROSE);
+        expect(line).not.toContain("responseBody");
+        expect(line).not.toContain("requestBodyValues");
+        expect(line).not.toContain(POISONED_RAW_INPUT);
+      }
+
+      // `ai.error` keeps its deliberate omission of the provider message.
+      const aiError = entries.find((e) => e.event === "ai.error");
+      expect(aiError).toBeDefined();
+      expect(JSON.stringify(aiError)).not.toContain(PROVIDER_ERROR_PROSE);
+
+      // The fixture must actually reach the `config` bucket, or this case proves
+      // nothing about the 4xx copy. (An `Invalid request: …` fixture would be
+      // claimed by VALIDATION_RE as an application-side rejection.)
+      expect(aiError?.category).toBe("config");
+    } finally {
+      rejectWith = null;
+      await conversationService.delete(conversationId);
     }
+  }, 30000);
 
-    // `ai.error` keeps its deliberate omission of the provider message.
-    const aiError = entries.find((e) => e.event === "ai.error");
-    expect(aiError).toBeDefined();
-    expect(JSON.stringify(aiError)).not.toContain(PROVIDER_ERROR_PROSE);
+  it("answers a provider 400 with the new non-retry copy, never the generic one", async () => {
+    await seedControlledProvider();
+    const conversationId = await createConversation("provider-4xx-copy");
 
-    // The fixture must actually reach the `config` bucket, or this case proves
-    // nothing about the 4xx copy. (An `Invalid request: …` fixture would be
-    // claimed by VALIDATION_RE as an application-side rejection.)
-    expect(aiError?.category).toBe("config");
-  } finally {
-    rejectWith = null;
-    await conversationService.delete(conversationId);
-  }
-}, 30000);
+    try {
+      rejectWith = { status: 400 };
+      const res = await postChat(conversationId, [userMessage("hello", "msg-u1")]);
+      const body = await res.text();
+      rejectWith = null;
 
-it("answers a provider 400 with the new non-retry copy, never the generic one", async () => {
-  await seedControlledProvider();
-  const conversationId = await createConversation("provider-4xx-copy");
-
-  try {
-    rejectWith = { status: 400 };
-    const res = await postChat(conversationId, [userMessage("hello", "msg-u1")]);
-    const body = await res.text();
-    rejectWith = null;
-
-    expect(body).toContain("Retrying the same message will not help");
-    expect(body).not.toContain("Generation failed. Retry or pick another provider/model.");
-  } finally {
-    rejectWith = null;
-    await conversationService.delete(conversationId);
-  }
-}, 30000);
+      expect(body).toContain("Retrying the same message will not help");
+      expect(body).not.toContain("Generation failed. Retry or pick another provider/model.");
+    } finally {
+      rejectWith = null;
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
 
   it("replays the lenient legacy shape with recovered object arguments", async () => {
     await seedControlledProvider();
@@ -522,7 +534,9 @@ it("answers a provider 400 with the new non-retry copy, never the generic one", 
       const assistantWithCall = messages.find(
         (m) => Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
       );
-      const call = (assistantWithCall?.tool_calls as Array<{ function: { arguments: string } }>)[0];
+      const call = (
+        assistantWithCall?.tool_calls as Array<{ function: { arguments: string } }> | undefined
+      )?.[0];
       expect(JSON.parse(call.function.arguments)).toEqual(VALID_INPUT);
     } finally {
       await conversationService.delete(conversationId);

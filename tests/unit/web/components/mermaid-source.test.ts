@@ -11,9 +11,7 @@ describe("mermaid source normalisation", () => {
   it("drops the semicolon from a graph header alone on its line", () => {
     expect(normaliseMermaidSource("graph TD;\n  A --> B")).toBe("graph TD\n  A --> B");
     expect(normaliseMermaidSource("graph LR;\n  A --> B")).toBe("graph LR\n  A --> B");
-    expect(normaliseMermaidSource("flowchart TD;\n  A --> B")).toBe(
-      "flowchart TD\n  A --> B",
-    );
+    expect(normaliseMermaidSource("flowchart TD;\n  A --> B")).toBe("flowchart TD\n  A --> B");
   });
 
   it("handles whitespace around the semicolon", () => {
@@ -40,9 +38,7 @@ describe("mermaid source normalisation", () => {
   });
 
   it("copes with a leading blank line before the header", () => {
-    expect(normaliseMermaidSource("\ngraph TD;\n  A --> B")).toBe(
-      "\ngraph TD\n  A --> B",
-    );
+    expect(normaliseMermaidSource("\ngraph TD;\n  A --> B")).toBe("\ngraph TD\n  A --> B");
   });
 
   it("does not invent support the renderer does not have", () => {

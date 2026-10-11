@@ -46,18 +46,11 @@ interface FoldersState {
   removeFolder: (id: string) => Promise<void>;
   closeFolder: (id: string) => Promise<void>;
   createGroup: (name: string, color?: string) => Promise<void>;
-  updateGroup: (
-    id: string,
-    data: { name?: string; color?: string },
-  ) => Promise<void>;
+  updateGroup: (id: string, data: { name?: string; color?: string }) => Promise<void>;
   deleteGroup: (id: string) => Promise<void>;
   setFolderGroup: (folderId: string, groupId: string | null) => Promise<void>;
   listLinks: (folderId: string) => Promise<FolderLink[]>;
-  registerLink: (
-    folderId: string,
-    name: string,
-    targetPath: string,
-  ) => Promise<void>;
+  registerLink: (folderId: string, name: string, targetPath: string) => Promise<void>;
   renameLink: (folderId: string, linkId: string, name: string) => Promise<void>;
   deleteLink: (folderId: string, linkId: string) => Promise<void>;
   setSelectedFolder: (id: string | null) => void;
@@ -91,10 +84,7 @@ function saveFolderExpanded(state: Record<string, boolean>): void {
  * folder (removed/never-existed after reload). Pure so the rule is
  * unit-testable; the store applies it to every loaded list.
  */
-export function pruneSelectedFolderId(
-  folders: Folder[],
-  selectedId: string | null,
-): string | null {
+export function pruneSelectedFolderId(folders: Folder[], selectedId: string | null): string | null {
   if (!selectedId) return null;
   return folders.some((f) => f.id === selectedId) ? selectedId : null;
 }
@@ -107,14 +97,13 @@ let foldersLoadEpoch = 0;
 export const useFoldersStore = create<FoldersState>((set, get) => ({
   folders: [],
   folderGroups: [],
-  selectedFolderId:
-    (() => {
-      try {
-        return window.localStorage.getItem(SELECTED_KEY) || null;
-      } catch {
-        return null;
-      }
-    })(),
+  selectedFolderId: (() => {
+    try {
+      return window.localStorage.getItem(SELECTED_KEY) || null;
+    } catch {
+      return null;
+    }
+  })(),
   folderExpanded: loadFolderExpanded(),
   loading: false,
   foldersLoaded: false,
@@ -127,10 +116,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
       // A newer load issued while this one was in flight owns the state;
       // this response is stale and must not overwrite it.
       if (epoch !== foldersLoadEpoch) return;
-      const selectedFolderId = pruneSelectedFolderId(
-        folders,
-        get().selectedFolderId,
-      );
+      const selectedFolderId = pruneSelectedFolderId(folders, get().selectedFolderId);
       if (selectedFolderId !== get().selectedFolderId) {
         try {
           if (selectedFolderId) window.localStorage.setItem(SELECTED_KEY, selectedFolderId);
@@ -213,8 +199,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     await get().loadFolders();
   },
 
-  listLinks: async (folderId) =>
-    apiJson<FolderLink[]>(`/api/folders/${folderId}/links`),
+  listLinks: async (folderId) => apiJson<FolderLink[]>(`/api/folders/${folderId}/links`),
 
   registerLink: async (folderId, name, targetPath) => {
     await apiJson(`/api/folders/${folderId}/links`, {

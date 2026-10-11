@@ -13,8 +13,8 @@
  * for the live E2E checklist (another agent runs tests + live runs).
  */
 import { describe, it, expect, beforeEach, afterAll } from "bun:test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import {
   parseCron,
   isValidCron,
@@ -43,7 +43,19 @@ import {
   buildSchedulerTools,
   ensureJobConversation,
 } from "@/services/scheduler/schedulerExecution.ts";
-import { handleOverdueOnce, fireJob, scheduleJob, runJobNow, cancelRun, clearAllTimers, activeTimerCount, abortAllRuns, beginSchedulerShutdown, resetSchedulerShutdown, setSetupDelayHook } from "@/services/scheduler/scheduler.ts";
+import {
+  handleOverdueOnce,
+  fireJob,
+  scheduleJob,
+  runJobNow,
+  cancelRun,
+  clearAllTimers,
+  activeTimerCount,
+  abortAllRuns,
+  beginSchedulerShutdown,
+  resetSchedulerShutdown,
+  setSetupDelayHook,
+} from "@/services/scheduler/scheduler.ts";
 import schedulerApp from "@/routes/scheduler.ts";
 import providersApp from "@/routes/providers.ts";
 import { getWorkspaceDir } from "@/services/tools.ts";
@@ -128,9 +140,7 @@ function makeJob(overrides: Partial<JobCreate> = {}, patch?: Partial<SchedulerJo
  * branch rather than just failing on a property access.
  */
 function assertRunStarted(result: unknown): asserts result is { runId: string } {
-  expect(result).toEqual(
-    expect.objectContaining({ runId: expect.any(String) }),
-  );
+  expect(result).toEqual(expect.objectContaining({ runId: expect.any(String) }));
 }
 
 describe("cron validation", () => {
@@ -206,9 +216,7 @@ describe("timezone + next-run", () => {
 
   it("computes every-N-minutes slots", () => {
     const from = Date.UTC(2026, 0, 1, 0, 7, 0);
-    expect(computeNextRun("*/15 * * * *", "UTC", from)).toBe(
-      Date.UTC(2026, 0, 1, 0, 15, 0),
-    );
+    expect(computeNextRun("*/15 * * * *", "UTC", from)).toBe(Date.UTC(2026, 0, 1, 0, 15, 0));
   });
 
   it("honors the job timezone (Asia/Kolkata 09:00 = 03:30Z)", () => {
@@ -218,12 +226,7 @@ describe("timezone + next-run", () => {
   });
 
   it("computes ordered run lists", () => {
-    const runs = computeNextRuns(
-      "0 9 * * *",
-      "UTC",
-      Date.UTC(2026, 0, 1, 0, 0, 0),
-      3,
-    );
+    const runs = computeNextRuns("0 9 * * *", "UTC", Date.UTC(2026, 0, 1, 0, 0, 0), 3);
     expect(runs).toEqual([
       Date.UTC(2026, 0, 1, 9, 0, 0),
       Date.UTC(2026, 0, 2, 9, 0, 0),
@@ -344,9 +347,7 @@ describe("retry classification", () => {
   it("retries transient failures", () => {
     expect(isRetryableError(new Error("fetch failed: socket hang up"))).toBe(true);
     expect(isRetryableError(new Error("429 rate limit exceeded"))).toBe(true);
-    expect(
-      isRetryableError(Object.assign(new Error("x"), { status: 503 })),
-    ).toBe(true);
+    expect(isRetryableError(Object.assign(new Error("x"), { status: 503 }))).toBe(true);
   });
 
   it("never retries config/auth/safety failures", () => {
@@ -354,12 +355,8 @@ describe("retry classification", () => {
     expect(isRetryableError(new Error("No API key configured"))).toBe(false);
     expect(isRetryableError(new Error("Provider x is missing"))).toBe(false);
     expect(isRetryableError(new Error("Workspace not found"))).toBe(false);
-    expect(
-      isRetryableError(new Error("user approval required for run_command")),
-    ).toBe(false);
-    expect(
-      isRetryableError(Object.assign(new Error("bad"), { status: 400 })),
-    ).toBe(false);
+    expect(isRetryableError(new Error("user approval required for run_command"))).toBe(false);
+    expect(isRetryableError(Object.assign(new Error("bad"), { status: 400 }))).toBe(false);
   });
 });
 
@@ -373,12 +370,12 @@ describe("unattended tool safety", () => {
       "run_command",
       "process_kill",
     ] as const) {
-      const err = await (tools[name] as { execute: (a: unknown) => Promise<unknown> }).execute(
-        {},
-      ).then(
-        () => null,
-        (e: unknown) => e,
-      );
+      const err = await (tools[name] as { execute: (a: unknown) => Promise<unknown> })
+        .execute({})
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
       expect(err).not.toBeNull();
       expect(String((err as Error)?.message ?? err)).toMatch(/approval/i);
     }
@@ -400,9 +397,9 @@ describe("workspace verification", () => {
   it("accepts the workspace root, rejects outside + missing paths", () => {
     expect(verifyJobWorkspace(getWorkspaceDir())).toBe(getWorkspaceDir());
     expect(() => verifyJobWorkspace("/etc")).toThrow(/outside/);
-    expect(() =>
-      verifyJobWorkspace(path.join(getWorkspaceDir(), "no-such-dir-xyz")),
-    ).toThrow(/not found/);
+    expect(() => verifyJobWorkspace(path.join(getWorkspaceDir(), "no-such-dir-xyz"))).toThrow(
+      /not found/,
+    );
   });
 });
 
@@ -454,10 +451,12 @@ describe("ensureJobConversation", () => {
   });
 
   it("returns the existing conversation id without creating a new one (existing_thread)", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "Test conv",
-      providerId: "p1",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "Test conv",
+        providerId: "p1",
+      }),
+    );
     const job = schedulerStore.create({
       name: "test-existing-ok",
       scheduleType: "once",
@@ -496,10 +495,12 @@ describe("ensureJobConversation", () => {
   });
 
   it("dedicated_thread reuses an existing conversationId", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "Test conv",
-      providerId: "p1",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "Test conv",
+        providerId: "p1",
+      }),
+    );
     const job = schedulerStore.create({
       name: "test-dedicated-reuse",
       scheduleType: "once",
@@ -534,8 +535,12 @@ describe("SchedulerRun.conversationId persistence", () => {
   });
 
   it("run captures conversationId at claim time, not from later job state", async () => {
-    const convA = await conversationService.create(conversationInput({ title: "Chat A", providerId: "p1" }));
-    const convB = await conversationService.create(conversationInput({ title: "Chat B", providerId: "p1" }));
+    const convA = await conversationService.create(
+      conversationInput({ title: "Chat A", providerId: "p1" }),
+    );
+    const convB = await conversationService.create(
+      conversationInput({ title: "Chat B", providerId: "p1" }),
+    );
 
     const job = schedulerStore.create({
       name: "test-conv-persist",
@@ -700,10 +705,7 @@ describe("enable endpoint regression", () => {
   });
 
   it("route refuses a spent one-time date with a helpful message", async () => {
-    const job = makeJob(
-      { execAt: Date.now() - 3600_000 },
-      { status: "completed", enabled: false },
-    );
+    const job = makeJob({ execAt: Date.now() - 3600_000 }, { status: "completed", enabled: false });
     const res = await schedulerApp.request(`/jobs/${job.id}/enable`, {
       method: "POST",
     });
@@ -811,7 +813,9 @@ describe("overlap guard: cron vs manual", () => {
     expect(schedulerStore.hasRunningRun(job.id)).toBe(true);
     // Second runJobNow call should be blocked.
     const result = runJobNow(job.id);
-    expect(result).resolves.toEqual({ error: "Previous execution still running; manual run skipped" });
+    expect(result).resolves.toEqual({
+      error: "Previous execution still running; manual run skipped",
+    });
   });
 });
 describe("@-macro shorthands", () => {
@@ -833,9 +837,7 @@ describe("@-macro shorthands", () => {
     expect(describeCron("@weekly")).toBe("Weekly on Sunday at 00:00");
     // Next-run works through the macro.
     const from = Date.UTC(2026, 0, 1, 0, 0, 0);
-    expect(computeNextRun("@daily", "UTC", from)).toBe(
-      Date.UTC(2026, 0, 2, 0, 0, 0),
-    );
+    expect(computeNextRun("@daily", "UTC", from)).toBe(Date.UTC(2026, 0, 2, 0, 0, 0));
   });
 
   it("counts upcoming runs for the gallery", () => {
@@ -879,9 +881,7 @@ describe("run retention prune", () => {
     });
     const problems = schedulerStore.listProblemRuns(Date.now() - 3600_000);
     expect(problems.some((p) => p.id === failed.id)).toBe(true);
-    expect(problems.find((p) => p.id === failed.id)?.jobName).toBe(
-      "test job",
-    );
+    expect(problems.find((p) => p.id === failed.id)?.jobName).toBe("test job");
   });
 });
 
@@ -941,10 +941,12 @@ describe("manual runs need no live schedule", () => {
 describe("thread chaining for scheduler messages", () => {
   it("getThreadTip returns the latest message id", async () => {
     const { messageService } = await import("@/services/storage");
-    const conv = await conversationService.create(conversationInput({
-      title: "tip-test",
-      providerId: "",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "tip-test",
+        providerId: "",
+      }),
+    );
     expect(await messageService.getThreadTip(conv.id)).toBeNull();
     await messageService.upsertStored(conv.id, {
       id: "tip-1",
@@ -965,10 +967,12 @@ describe("thread chaining for scheduler messages", () => {
   it("repair chains orphan scheduler rows without touching content", async () => {
     const { messageService } = await import("@/services/storage");
     const { repairSchedulerThreadChains } = await import("@/db/index.ts");
-    const conv = await conversationService.create(conversationInput({
-      title: "repair-test",
-      providerId: "",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "repair-test",
+        providerId: "",
+      }),
+    );
     const job = makeJob();
     schedulerStore.update(job.id, { conversationId: conv.id });
     // Simulate the old bug: three disconnected roots.
@@ -991,19 +995,19 @@ describe("thread chaining for scheduler messages", () => {
     // Idempotent: second run changes nothing.
     repairSchedulerThreadChains();
     const again = await messageService.listThreadMessages(conv.id);
-    expect(again.map((r) => [r.id, r.parent_id])).toEqual(
-      rows.map((r) => [r.id, r.parent_id]),
-    );
+    expect(again.map((r) => [r.id, r.parent_id])).toEqual(rows.map((r) => [r.id, r.parent_id]));
     await conversationService.delete(conv.id);
   });
 });
 
 describe("thread retarget persistence", () => {
   it("PATCH saves conversationId instead of silently stripping it", async () => {
-    const conv = await conversationService.create(conversationInput({
-      title: "retarget-target",
-      providerId: "",
-    }));
+    const conv = await conversationService.create(
+      conversationInput({
+        title: "retarget-target",
+        providerId: "",
+      }),
+    );
     const job = makeJob({ conversationPolicy: "existing_thread" });
     const res = await schedulerApp.request(`/jobs/${job.id}`, {
       method: "PATCH",

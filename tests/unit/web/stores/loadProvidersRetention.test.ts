@@ -48,9 +48,7 @@ describe("loadProviders failure retention (Phase 3.5)", () => {
       throw new TypeError("fetch failed");
     }) as unknown as typeof fetch;
 
-    await expect(
-      useSettingsStore.getState().loadProviders(),
-    ).resolves.toBeUndefined();
+    await expect(useSettingsStore.getState().loadProviders()).resolves.toBeUndefined();
     expect(providerIds()).toEqual(["p1"]);
     expect(useSettingsStore.getState().activeProviderId).toBe("p1");
   });

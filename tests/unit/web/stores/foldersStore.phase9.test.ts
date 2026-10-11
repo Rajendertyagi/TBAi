@@ -6,10 +6,7 @@
  * controlled promise barriers for the overlapping-load race — no sleeps.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import {
-  pruneSelectedFolderId,
-  useFoldersStore,
-} from "@web/stores/foldersStore";
+import { pruneSelectedFolderId, useFoldersStore } from "@web/stores/foldersStore";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 import type { Folder } from "@web/types";
 
@@ -67,9 +64,7 @@ beforeEach(() => {
 
 describe("pruneSelectedFolderId — persisted selection converges on reload", () => {
   it("keeps a selection that still names a registered folder", () => {
-    expect(
-      pruneSelectedFolderId([folder("a"), folder("b")], "b"),
-    ).toBe("b");
+    expect(pruneSelectedFolderId([folder("a"), folder("b")], "b")).toBe("b");
   });
 
   it("drops a selection whose folder is gone (removed or never existed)", () => {
@@ -126,22 +121,17 @@ describe("loadFolders — stale responses never overwrite newer state", () => {
   });
 
   it("a stale selection is pruned when the fresh list arrives", async () => {
-    globalThis.fetch = (async () =>
-      okFolders([folder("kept")])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okFolders([folder("kept")])) as unknown as typeof fetch;
     useFoldersStore.setState({ selectedFolderId: "removed" });
     await useFoldersStore.getState().loadFolders();
     expect(useFoldersStore.getState().selectedFolderId).toBeNull();
-    expect(useFoldersStore.getState().folders.map((f) => f.id)).toEqual([
-      "kept",
-    ]);
+    expect(useFoldersStore.getState().folders.map((f) => f.id)).toEqual(["kept"]);
   });
 });
 
 describe("welcome scope — project binding is explicit UI state", () => {
   it("simple has no workspace dependency", () => {
-    useWelcomeScopeStore
-      .getState()
-      .setScope({ mode: "simple", folderId: null });
+    useWelcomeScopeStore.getState().setScope({ mode: "simple", folderId: null });
     expect(useWelcomeScopeStore.getState().scope).toEqual({
       mode: "simple",
       folderId: null,
@@ -158,9 +148,7 @@ describe("welcome scope — project binding is explicit UI state", () => {
   });
 
   it("project without an id collapses to simple (never a half-bound scope)", () => {
-    useWelcomeScopeStore
-      .getState()
-      .setScope({ mode: "project", folderId: null });
+    useWelcomeScopeStore.getState().setScope({ mode: "project", folderId: null });
     expect(useWelcomeScopeStore.getState().scope).toEqual({
       mode: "simple",
       folderId: null,

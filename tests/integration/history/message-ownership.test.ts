@@ -28,15 +28,24 @@ let B = "";
 async function newConversation(title: string): Promise<string> {
   await conversationService.create(conversationInput({ title }));
   return db
-    .query<{ id: string }, [string]>("SELECT id FROM conversations WHERE title = ? ORDER BY rowid DESC LIMIT 1")
+    .query<{ id: string }, [string]>(
+      "SELECT id FROM conversations WHERE title = ? ORDER BY rowid DESC LIMIT 1",
+    )
     .get(title)!.id;
 }
 
 const row = (id: string) =>
   db
-    .query<{ id: string; conversation_id: string; parent_id: string | null; content: string; format: string }, [string]>(
-      "SELECT id, conversation_id, parent_id, content, format FROM messages WHERE id = ?",
-    )
+    .query<
+      {
+        id: string;
+        conversation_id: string;
+        parent_id: string | null;
+        content: string;
+        format: string;
+      },
+      [string]
+    >("SELECT id, conversation_id, parent_id, content, format FROM messages WHERE id = ?")
     .get(id);
 
 const payload = (text: string) => ({ parts: [{ type: "text", text }] });
@@ -52,7 +61,12 @@ afterEach(() => {
 
 describe("message ownership — same conversation", () => {
   it("a legitimate upsert writes the row into the addressed conversation", async () => {
-    await messageService.upsertStored(A, { id: "m1", parent_id: null, format: "raw", content: payload("a1") });
+    await messageService.upsertStored(A, {
+      id: "m1",
+      parent_id: null,
+      format: "raw",
+      content: payload("a1"),
+    });
 
     const stored = row("m1");
     expect(stored).toBeDefined();
@@ -61,15 +75,33 @@ describe("message ownership — same conversation", () => {
   });
 
   it("a repeated upsert of the same id is idempotent (one row, same order_seq)", async () => {
-    const first = await messageService
-      .getWindowSlice(A, { direction: "older", anchorId: null, limit: 10 });
-    await messageService.upsertStored(A, { id: "m1", parent_id: null, format: "raw", content: payload("a1") });
+    const first = await messageService.getWindowSlice(A, {
+      direction: "older",
+      anchorId: null,
+      limit: 10,
+    });
+    await messageService.upsertStored(A, {
+      id: "m1",
+      parent_id: null,
+      format: "raw",
+      content: payload("a1"),
+    });
     const seqAfterFirst = db
       .query<{ order_seq: number }, [string]>("SELECT order_seq FROM messages WHERE id = ?")
       .get("m1")!.order_seq;
 
-    await messageService.upsertStored(A, { id: "m1", parent_id: null, format: "raw", content: payload("a1-again") });
-    await messageService.upsertStored(A, { id: "m1", parent_id: null, format: "raw", content: payload("a1-again") });
+    await messageService.upsertStored(A, {
+      id: "m1",
+      parent_id: null,
+      format: "raw",
+      content: payload("a1-again"),
+    });
+    await messageService.upsertStored(A, {
+      id: "m1",
+      parent_id: null,
+      format: "raw",
+      content: payload("a1-again"),
+    });
 
     const count = db
       .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM messages WHERE id = ?")
@@ -85,13 +117,28 @@ describe("message ownership — same conversation", () => {
   });
 
   it("a re-upsert that omits parent_id preserves the stored parent (no silent re-fork)", async () => {
-    await messageService.upsertStored(A, { id: "m1", parent_id: null, format: "raw", content: payload("a1") });
-    await messageService.upsertStored(A, { id: "m2", parent_id: "m1", format: "raw", content: payload("a2") });
+    await messageService.upsertStored(A, {
+      id: "m1",
+      parent_id: null,
+      format: "raw",
+      content: payload("a1"),
+    });
+    await messageService.upsertStored(A, {
+      id: "m2",
+      parent_id: "m1",
+      format: "raw",
+      content: payload("a2"),
+    });
 
     // This is the write `withFormat` performs after a bounded-window load, where
     // the window root's parent is clipped to null because its real parent lies
     // outside the window. It must not rewrite the stored link.
-    await messageService.upsertStored(A, { id: "m2", parent_id: null, format: "raw", content: payload("a2") });
+    await messageService.upsertStored(A, {
+      id: "m2",
+      parent_id: null,
+      format: "raw",
+      content: payload("a2"),
+    });
 
     expect(row("m2")!.parent_id).toBe("m1");
   });
@@ -110,7 +157,12 @@ describe("the ownership invariant holds inside SQL, not only in the pre-read", (
    * to A, and the writer believes it is inserting into B.
    */
   it("the conflict clause refuses to overwrite another conversation's row", async () => {
-    await messageService.upsertStored(A, { id: "race", parent_id: null, format: "raw", content: payload("owned-by-A") });
+    await messageService.upsertStored(A, {
+      id: "race",
+      parent_id: null,
+      format: "raw",
+      content: payload("owned-by-A"),
+    });
     const before = row("race")!;
 
     // Same statement `upsertStored` issues, with B's conversation id, and with
@@ -124,7 +176,18 @@ describe("the ownership invariant holds inside SQL, not only in the pre-read", (
          format = excluded.format,
          updated_at = excluded.updated_at
        WHERE messages.conversation_id = excluded.conversation_id`,
-      ["race", B, null, JSON.stringify(payload("from-B")), "some-other-parent", 999, null, "other-format", 1, Date.now()],
+      [
+        "race",
+        B,
+        null,
+        JSON.stringify(payload("from-B")),
+        "some-other-parent",
+        999,
+        null,
+        "other-format",
+        1,
+        Date.now(),
+      ],
     );
 
     const after = row("race")!;
@@ -135,7 +198,12 @@ describe("the ownership invariant holds inside SQL, not only in the pre-read", (
   });
 
   it("the same clause still permits a legitimate same-conversation update", async () => {
-    await messageService.upsertStored(A, { id: "race2", parent_id: null, format: "raw", content: payload("v1") });
+    await messageService.upsertStored(A, {
+      id: "race2",
+      parent_id: null,
+      format: "raw",
+      content: payload("v1"),
+    });
 
     db.run(
       `INSERT INTO messages (id, conversation_id, role, content, parent_id, order_seq, status, format, created_at, updated_at)
@@ -156,8 +224,18 @@ describe("the ownership invariant holds inside SQL, not only in the pre-read", (
 
   it("concurrent writes of one id to two conversations leave exactly one owner and no corruption", async () => {
     await Promise.allSettled([
-      messageService.upsertStored(A, { id: "race3", parent_id: null, format: "raw", content: payload("from-A") }),
-      messageService.upsertStored(B, { id: "race3", parent_id: null, format: "raw", content: payload("from-B") }),
+      messageService.upsertStored(A, {
+        id: "race3",
+        parent_id: null,
+        format: "raw",
+        content: payload("from-A"),
+      }),
+      messageService.upsertStored(B, {
+        id: "race3",
+        parent_id: null,
+        format: "raw",
+        content: payload("from-B"),
+      }),
     ]);
 
     // Whoever won, there is exactly ONE row, it belongs to one conversation, and
@@ -177,12 +255,22 @@ describe("the ownership invariant holds inside SQL, not only in the pre-read", (
 
 describe("message ownership — cross-conversation", () => {
   it("REFUSES a write whose id is owned by another conversation, and mutates nothing", async () => {
-    await messageService.upsertStored(A, { id: "shared", parent_id: null, format: "raw", content: payload("owned-by-A") });
+    await messageService.upsertStored(A, {
+      id: "shared",
+      parent_id: null,
+      format: "raw",
+      content: payload("owned-by-A"),
+    });
     const before = row("shared")!;
 
     let refused: unknown = null;
     try {
-      await messageService.upsertStored(B, { id: "shared", parent_id: null, format: "raw", content: payload("from-B") });
+      await messageService.upsertStored(B, {
+        id: "shared",
+        parent_id: null,
+        format: "raw",
+        content: payload("from-B"),
+      });
     } catch (error) {
       refused = error;
     }
@@ -199,17 +287,34 @@ describe("message ownership — cross-conversation", () => {
 
     // B never gained the row.
     const inB = db
-      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?")
+      .query<{ n: number }, [string]>(
+        "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?",
+      )
       .get(B)!.n;
     expect(inB).toBe(0);
   });
 
   it("REFUSES a cross-conversation write even when it would otherwise preserve the parent", async () => {
-    await messageService.upsertStored(A, { id: "m1", parent_id: null, format: "raw", content: payload("a1") });
-    await messageService.upsertStored(A, { id: "m2", parent_id: "m1", format: "raw", content: payload("a2") });
+    await messageService.upsertStored(A, {
+      id: "m1",
+      parent_id: null,
+      format: "raw",
+      content: payload("a1"),
+    });
+    await messageService.upsertStored(A, {
+      id: "m2",
+      parent_id: "m1",
+      format: "raw",
+      content: payload("a2"),
+    });
 
     expect(
-      messageService.upsertStored(B, { id: "m2", parent_id: null, format: "raw", content: payload("from-B") }),
+      messageService.upsertStored(B, {
+        id: "m2",
+        parent_id: null,
+        format: "raw",
+        content: payload("from-B"),
+      }),
     ).rejects.toThrow();
 
     expect(JSON.parse(row("m2")!.content).parts[0].text).toBe("a2");
@@ -217,14 +322,24 @@ describe("message ownership — cross-conversation", () => {
   });
 
   it("a rejected cross-conversation write leaves the addressed conversation writable", async () => {
-    await messageService.upsertStored(A, { id: "shared", parent_id: null, format: "raw", content: payload("owned-by-A") });
-    await messageService.upsertStored(B, { id: "shared", parent_id: null, format: "raw", content: payload("from-B") }).catch(
-      () => undefined,
-    );
+    await messageService.upsertStored(A, {
+      id: "shared",
+      parent_id: null,
+      format: "raw",
+      content: payload("owned-by-A"),
+    });
+    await messageService
+      .upsertStored(B, { id: "shared", parent_id: null, format: "raw", content: payload("from-B") })
+      .catch(() => undefined);
 
     // B's own distinct ids still write normally — the refusal is scoped to the
     // colliding id, not a poisoned conversation.
-    await messageService.upsertStored(B, { id: "b1", parent_id: null, format: "raw", content: payload("b1") });
+    await messageService.upsertStored(B, {
+      id: "b1",
+      parent_id: null,
+      format: "raw",
+      content: payload("b1"),
+    });
     expect(row("b1")!.conversation_id).toBe(B);
     expect(row("shared")!.conversation_id).toBe(A);
   });

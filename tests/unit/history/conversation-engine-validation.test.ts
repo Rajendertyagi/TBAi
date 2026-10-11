@@ -1,8 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import {
-  conversationCreateSchema,
-  conversationUpdateSchema,
-} from "@/lib/validation.ts";
+import { conversationCreateSchema, conversationUpdateSchema } from "@/lib/validation.ts";
 
 /**
  * Zod schemas for the dual-chat (P0b–P4) conversation fields: `engine`,

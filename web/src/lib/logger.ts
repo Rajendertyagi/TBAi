@@ -88,7 +88,7 @@ function emitLog(logLevel: LogLevel, scope: string, event: string, fields: LogFi
     console.warn(`[tbai] unregistered log scope "${scope}" (see lib/log-scopes.ts)`);
   }
   const safe = redactValue({ ...fields, event }) as Record<string, unknown>;
-  const line = `[tbai:${scope}] ${event}` + (safe.message ? ` ${safe.message}` : "");
+  const line = `[tbai:${scope}] ${event}${safe.message ? ` ${safe.message}` : ""}`;
 
   if (ORDER[logLevel] >= ORDER[level]) {
     // eslint-disable-next-line no-console
@@ -117,10 +117,14 @@ function emitLog(logLevel: LogLevel, scope: string, event: string, fields: LogFi
 }
 
 export const logger = {
-  debug: (scope: string, event: string, fields: LogFields = {}) => emitLog("debug", scope, event, fields),
-  info: (scope: string, event: string, fields: LogFields = {}) => emitLog("info", scope, event, fields),
-  warn: (scope: string, event: string, fields: LogFields = {}) => emitLog("warn", scope, event, fields),
-  error: (scope: string, event: string, fields: LogFields = {}) => emitLog("error", scope, event, fields),
+  debug: (scope: string, event: string, fields: LogFields = {}) =>
+    emitLog("debug", scope, event, fields),
+  info: (scope: string, event: string, fields: LogFields = {}) =>
+    emitLog("info", scope, event, fields),
+  warn: (scope: string, event: string, fields: LogFields = {}) =>
+    emitLog("warn", scope, event, fields),
+  error: (scope: string, event: string, fields: LogFields = {}) =>
+    emitLog("error", scope, event, fields),
 };
 
 let hooksInstalled = false;
@@ -183,8 +187,7 @@ export interface LogHookTarget {
  */
 export function installGlobalLogHooks(target?: LogHookTarget): void {
   const host =
-    target ??
-    (typeof window === "undefined" ? undefined : (window as unknown as LogHookTarget));
+    target ?? (typeof window === "undefined" ? undefined : (window as unknown as LogHookTarget));
   if (hooksInstalled || !host) return;
   hooksInstalled = true;
   host.addEventListener("unhandledrejection", (e) => {

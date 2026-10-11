@@ -1,72 +1,19 @@
 import { Hono } from "hono";
 import { logger, newRequestId } from "../lib/logger";
-import { generateId } from "../lib/utils";
-import { sanitizeStreamError } from "../lib/redact";
-import {
-  classifyError,
-  errorLogFields,
-  providerErrorCodeFields,
-} from "../lib/errors";
+import { errorLogFields } from "../lib/errors";
 import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../lib/ai-diagnostics";
-import { observedContextLength } from "../lib/context-window-observation";
 import { streamStatusQuerySchema } from "../lib/validation";
-import {
-  stepCountIs,
-  streamText,
-  UI_MESSAGE_STREAM_HEADERS,
-  createUIMessageStream,
-  createUIMessageStreamResponse,
-  toUIMessageStream,
-} from "ai";
-import { mcpManager } from "../services/mcp/manager";
-import { nativeTools, type NativeToolSet } from "../tools";
-import {
-  ASSEMBLY_LIMIT_CODE,
-  logAssembly,
-  logContextOverflow,
-} from "../context";
-import {
-  describeCacheDecision,
-  describeCacheObservation,
-  describePrefixIdentity,
-  observeSdkCacheUsage,
-} from "../context/cache";
-import { createTerminalBatcher } from "../lib/terminal-stream";
+import { UI_MESSAGE_STREAM_HEADERS } from "ai";
 import { resumableContext, chatStreamStore } from "../lib/resumable";
-import {
-  chatHistoryFinalizerDeps,
-  finalizeDetachedRunHistory,
-  validateFinalMessage,
-} from "../services/chat-streams/historyFinalizer";
-import type { ChatStreamTerminalKind } from "../services/chat-streams/schema";
-import { createProgressTracker } from "../lib/progress-tracker";
-import type { ProgressData } from "../lib/progress-stages";
 import { RESUMABLE_STREAM_ID_HEADER, ResumableStreamError } from "assistant-stream/resumable";
-import { buildChatMessageMetadata, type ChatContextState } from "./chat-model";
-import { providerOccupancyFromStepUsage } from "../context/occupancy";
-import { decideOverflowRecovery } from "../context/recovery";
-import { observeContextWindow } from "../context/observed-limits";
-import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "./direct-overflow-gate";
 import { disableIdleTimeout } from "./shared";
 import { validateAndResolve } from "./chat/validate-and-resolve";
 import { gateAssembledContext } from "./chat/gate";
 import type { StreamWriterHolder } from "./chat/types";
-import {
-  createTerminalOutput,
-  executeDirectStream,
-} from "./chat/execute-direct-stream";
-import { mirrorRunToDurableStream, type DirectRunSettlement } from "./chat/settlement";
-import {
-  assembleForRequest,
-  contextStateForUi,
-  createRunAndAssemble,
-} from "./chat/assemble-run";
-import {
-  persistCompactionDivider,
-} from "./direct-compact-command";
-import { compactionEnabled } from "../context/compaction";
+import { createTerminalOutput, executeDirectStream } from "./chat/execute-direct-stream";
+import { mirrorRunToDurableStream } from "./chat/settlement";
+import { assembleForRequest, createRunAndAssemble } from "./chat/assemble-run";
 import { chatRuns } from "../services/chat-runs";
-import type { BashOutputEvent } from "../services/tools";
 import { messageService } from "../services/storage";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
@@ -82,17 +29,7 @@ app.post("/api/chat", async (c) => {
   // live inside the phase, which returns the finished Response.
   const validation = await validateAndResolve(c, requestId);
   if (!validation.ok) return validation.response;
-  const {
-    threadId,
-    conversation,
-    provider,
-    modelConfig,
-    reasoning,
-    approvalSecret,
-    languageModel,
-    providerOptions,
-    messages,
-  } = validation.value;
+  const { threadId, provider, modelConfig, reasoning, messages } = validation.value;
 
   // ── P2: create the run and assemble context ──────────────────────────────
   // Run creation and workspace resolution are one step because a workspace
@@ -103,7 +40,6 @@ app.post("/api/chat", async (c) => {
   const assembly = await createRunAndAssemble(c, validation.value);
   if (!assembly.ok) return assembly.response;
   const state = assembly.value;
-  const { run, streamId, workspaceDir, attemptErrors } = state;
 
   // Assembly is a FUNCTION because provider overflow recovery rebuilds context
   // through this same seam after compacting — there is no second context path.
@@ -136,8 +72,7 @@ app.post("/api/chat", async (c) => {
   // overflow recovery re-enters. See `gate.ts`.
   const gateResult = await gateAssembledContext(c, validation.value, state);
   if (!gateResult.ok) return gateResult.response;
-  const { chatLog, chatStartedAt, publishCompactionDivider, compactionPart, automaticPart } =
-    gateResult.value;
+  const { chatLog, chatStartedAt } = gateResult.value;
 
   // ── Diagnostic: chat_request_received ─────────────────────────────────────
   chatLog.info("chat", "chat_request_received", {
@@ -171,14 +106,7 @@ app.post("/api/chat", async (c) => {
   // assembly ran, and reads `terminalBatcher` created inside the phase below -
   // a deferred read that is well-defined because the tap only fires when
   // `run_command` executes during streaming. See `execute-direct-stream.ts`.
-  return executeDirectStream(
-    c,
-    validation.value,
-    state,
-    gateResult.value,
-    terminal,
-    streamWriter,
-  );
+  return executeDirectStream(c, validation.value, state, gateResult.value, terminal, streamWriter);
 });
 
 // Resume endpoint: replays persisted bytes for reconnecting clients.
@@ -405,9 +333,7 @@ app.post("/api/chat/cancel/:streamId", (c) => {
   // wins the synchronous transition race after that marker, preserve the
   // timeout outcome instead of reporting a user cancellation.
   const timedOut = rec.timedOut;
-  const settled = timedOut
-    ? chatRuns.markFailed(streamId)
-    : chatRuns.markCancelled(streamId);
+  const settled = timedOut ? chatRuns.markFailed(streamId) : chatRuns.markCancelled(streamId);
   if (!settled) {
     const cur = chatRuns.get(streamId);
     return c.json({ ok: true, cancelled: false, status: cur?.status ?? rec.status });

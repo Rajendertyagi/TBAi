@@ -26,7 +26,9 @@ const INSERT_MESSAGE = `INSERT INTO messages
 /** Seed a chain through the real service, so FK constraints stay satisfied. */
 async function seedChain(ids: readonly string[]): Promise<void> {
   await conversationService.create(conversationInput({ title: "window" }));
-  CONVERSATION = db.query<{ id: string }, [string]>("SELECT id FROM conversations ORDER BY rowid DESC LIMIT 1").get("x")!.id;
+  CONVERSATION = db
+    .query<{ id: string }, [string]>("SELECT id FROM conversations ORDER BY rowid DESC LIMIT 1")
+    .get("x")!.id;
   for (let index = 0; index < ids.length; index += 1) {
     await messageService.upsertStored(CONVERSATION, {
       id: ids[index],
@@ -161,7 +163,11 @@ describe("P2 window slice â€” older direction", () => {
       .get()!.id;
     try {
       for (const direction of ["older", "newer"] as const) {
-        const slice = await messageService.getWindowSlice(emptyId, { direction, anchorId: null, limit: 5 });
+        const slice = await messageService.getWindowSlice(emptyId, {
+          direction,
+          anchorId: null,
+          limit: 5,
+        });
         expect(slice.messages).toEqual([]);
         expect(slice.contiguous).toBe(true);
       }

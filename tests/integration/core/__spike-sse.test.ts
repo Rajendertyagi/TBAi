@@ -34,7 +34,9 @@ let stub: ReturnType<typeof Bun.serve> | null = null;
 afterAll(async () => {
   try {
     stub?.stop(true);
-  } catch { /* closed */ }
+  } catch {
+    /* closed */
+  }
   stub = null;
   db.run("DELETE FROM provider_configs WHERE id = 'prov-spike-sse'");
   await registry.loadFromDb(db);
@@ -105,7 +107,8 @@ describe("SPIKE — fake Ollama SSE stub drives /api/chat to visible text", () =
       }
       expect(raw).toContain(MARKER);
     } finally {
-      for (const [, rec] of (chatRuns as unknown as { records?: Map<string, { status: string }> }).records ?? []) {
+      for (const [, rec] of (chatRuns as unknown as { records?: Map<string, { status: string }> })
+        .records ?? []) {
         void rec;
       }
       await conversationService.delete(conv.id);

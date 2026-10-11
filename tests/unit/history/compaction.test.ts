@@ -34,7 +34,11 @@ function user(id: string, text: string): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
 }
 function assistant(id: string, text: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", text, state: "done" }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text, state: "done" }],
+  } as unknown as UIMessage;
 }
 /** An assistant turn carrying a COMPLETED tool call + result pair. */
 function toolTurn(id: string, toolCallId: string, result: string): UIMessage {
@@ -111,7 +115,11 @@ function record(overrides: Partial<CompactionRecord> = {}): CompactionRecord {
 const TOKENS_PER_MESSAGE = 100;
 
 /** Plan over a conversation, with a measured size that forces a given outcome. */
-function planOver(messages: UIMessage[], measuredTotal: number, usable: number | undefined = 1000): CompactionPlan {
+function planOver(
+  messages: UIMessage[],
+  measuredTotal: number,
+  usable: number | undefined = 1000,
+): CompactionPlan {
   return planCompaction({
     messages,
     measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
@@ -148,7 +156,7 @@ describe("trigger uses the measured budget, not a message count", () => {
       measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
       usableInputTokens: 1000,
       measuredTotalTokens: 850,
-    fixedOverheadTokens: 0,
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: false,
       reason: "pressure",
@@ -158,7 +166,7 @@ describe("trigger uses the measured budget, not a message count", () => {
       measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
       usableInputTokens: 100_000,
       measuredTotalTokens: 850,
-    fixedOverheadTokens: 0,
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: false,
       reason: "pressure",
@@ -177,7 +185,7 @@ describe("trigger uses the measured budget, not a message count", () => {
       measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
       usableInputTokens: undefined,
       measuredTotalTokens: 9999,
-    fixedOverheadTokens: 0,
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: false,
       compactionLatched: false,
@@ -194,7 +202,7 @@ describe("trigger uses the measured budget, not a message count", () => {
       measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
       usableInputTokens: 0,
       measuredTotalTokens: 9999,
-    fixedOverheadTokens: 0,
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: false,
       compactionLatched: false,
@@ -211,7 +219,7 @@ describe("trigger uses the measured budget, not a message count", () => {
       measuredTokens: messages.map(() => 1), // tiny span
       usableInputTokens: 1000,
       measuredTotalTokens: 900,
-    fixedOverheadTokens: 0,
+      fixedOverheadTokens: 0,
       policy: POLICY,
       hasExistingCompaction: false,
       reason: "pressure",
@@ -224,7 +232,7 @@ describe("trigger uses the measured budget, not a message count", () => {
 // ─── Part 3: hysteresis ────────────────────────────────────────────────────
 
 describe("hysteresis prevents compaction on every turn", () => {
-it("does not re-summarise a span the durable record already covers", () => {
+  it("does not re-summarise a span the durable record already covers", () => {
     // HYSTERESIS, correctly scoped. The thing that must never happen twice is
     // paying a summarisation call for the SAME history. So the guard is the
     // covered-id set, not a conversation-wide latch.
@@ -292,7 +300,7 @@ it("does not re-summarise a span the durable record already covers", () => {
         measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
         usableInputTokens: 1000,
         measuredTotalTokens: 500,
-    fixedOverheadTokens: 0,
+        fixedOverheadTokens: 0,
         policy: POLICY,
         hasExistingCompaction: compactionLatched,
         compactionLatched,
@@ -313,7 +321,7 @@ it("does not re-summarise a span the durable record already covers", () => {
         measuredTokens: messages.map(() => TOKENS_PER_MESSAGE),
         usableInputTokens: 1000,
         measuredTotalTokens: usage,
-      fixedOverheadTokens: 0,
+        fixedOverheadTokens: 0,
         policy: POLICY,
         hasExistingCompaction: compactions > 0,
         compactionLatched: compactions > 0,
@@ -387,7 +395,9 @@ describe("the removable span never reaches into the current turn", () => {
     const cutMessage = messages[cut];
     expect(cutMessage).toBeDefined();
     // Whatever the cut lands on, every tool call at or before it has a result.
-    const parts = ((cutMessage as { parts?: Array<Record<string, unknown>> }).parts ?? []) as Array<Record<string, unknown>>;
+    const parts = ((cutMessage as { parts?: Array<Record<string, unknown>> }).parts ?? []) as Array<
+      Record<string, unknown>
+    >;
     for (const part of parts) {
       if (typeof part.type === "string" && part.type.startsWith("tool-")) {
         expect(part.output, `tool call at the cut must have its result`).toBeDefined();
@@ -486,7 +496,10 @@ describe("the summariser transcript is bounded and never sees the whole conversa
   });
 
   it("transcribes text parts faithfully", () => {
-    const transcript = renderSpanTranscript([user("u0", "hello world"), assistant("a0", "hi there")]);
+    const transcript = renderSpanTranscript([
+      user("u0", "hello world"),
+      assistant("a0", "hi there"),
+    ]);
     expect(transcript).toContain("USER: hello world");
     expect(transcript).toContain("ASSISTANT: hi there");
   });
@@ -555,7 +568,13 @@ describe("branch topology is not flattened", () => {
       spanStartIndex: 2,
       spanEndIndex: 3,
     });
-    const shifted = [user("u0", "q0"), assistant("a0", "a0"), user("u1", "q1"), assistant("a1", "a1"), user("live", "q")];
+    const shifted = [
+      user("u0", "q0"),
+      assistant("a0", "a0"),
+      user("u1", "q1"),
+      assistant("a1", "a1"),
+      user("live", "q"),
+    ];
     const result = applyExistingCompaction({ messages: shifted, record: stored });
     expect(result.applied).toBe(true);
     // u0/a0 survived because they are BEFORE the covered ids.
@@ -594,9 +613,9 @@ describe("compaction does not leak provider specifics", () => {
   it("the compaction module names no provider and no cache syntax", async () => {
     const { readFileSync } = await import("node:fs");
     // `new URL(file, dir)` below needs a URL base, not a directory path. The
-// trailing separator matters: without it a relative file resolves as a sibling
-// of the last path segment rather than inside the directory.
-const dir = pathToFileURL(path.join(REPO_ROOT, "src/context/compaction") + path.sep).href;
+    // trailing separator matters: without it a relative file resolves as a sibling
+    // of the last path segment rather than inside the directory.
+    const dir = pathToFileURL(path.join(REPO_ROOT, "src/context/compaction") + path.sep).href;
     for (const file of ["contract.ts", "summarize.ts", "orchestrate.ts"]) {
       const source = readFileSync(new URL(file, dir), "utf8")
         .split("\n")

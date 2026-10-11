@@ -40,9 +40,9 @@ import {
  * was installed before the stub, so the probe keeps working and is never handed
  * a fabricated response.
  */
-function stubBootstrapFetch(
-  respond: (attempt: number, init?: RequestInit) => unknown,
-): { attempts: () => number } {
+function stubBootstrapFetch(respond: (attempt: number, init?: RequestInit) => unknown): {
+  attempts: () => number;
+} {
   const previous = globalThis.fetch;
   let attempts = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

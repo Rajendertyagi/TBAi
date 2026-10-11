@@ -93,9 +93,7 @@ export function loadConfigs(): McpServerConfig[] {
 
 /** One server's config by id, or undefined when it does not exist. */
 export function getConfig(id: string): McpServerConfig | undefined {
-  const row = db
-    .query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?")
-    .get(id);
+  const row = db.query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?").get(id);
   return row ? rowToConfig(row) : undefined;
 }
 
@@ -107,9 +105,7 @@ export function getConfig(id: string): McpServerConfig | undefined {
  * already treats an absent token as "no auth".
  */
 export function readRow(id: string): { row: McpServerRow; authToken?: string } | undefined {
-  const row = db
-    .query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?")
-    .get(id);
+  const row = db.query<McpServerRow, [string]>("SELECT * FROM mcp_servers WHERE id = ?").get(id);
   if (!row) return undefined;
   let authToken: string | undefined;
   if (row.auth_token) {
@@ -183,7 +179,8 @@ export function updateConfigRow(
   if (input.args !== undefined) set("args", input.args ? JSON.stringify(input.args) : null);
   if (input.url !== undefined) set("url", input.url ?? null);
   if (input.env !== undefined) set("env", input.env ? JSON.stringify(input.env) : null);
-  if (input.headers !== undefined) set("headers", input.headers ? JSON.stringify(input.headers) : null);
+  if (input.headers !== undefined)
+    set("headers", input.headers ? JSON.stringify(input.headers) : null);
   if (input.authType !== undefined) set("auth_type", input.authType);
   // Auth token trichotomy: omitted (undefined/null) preserves the stored
   // credential; a non-empty string replaces it; an explicit empty string

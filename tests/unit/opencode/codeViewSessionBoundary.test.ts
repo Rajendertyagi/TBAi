@@ -130,15 +130,17 @@ beforeEach(() => {
     getOpenCodeCapabilities: async () => ({
       agents: [{ id: "build", name: "Build", description: "" }],
       models: [
-        { id: SERVER_DEFAULT.modelID, name: SERVER_DEFAULT.name, providerID: SERVER_DEFAULT.providerID },
+        {
+          id: SERVER_DEFAULT.modelID,
+          name: SERVER_DEFAULT.name,
+          providerID: SERVER_DEFAULT.providerID,
+        },
         { id: STORED_MODEL_ID, name: "Claude Sonnet 4.5", providerID: "openrouter" },
       ],
       defaultModel: serverDefault ?? undefined,
     }),
     resolveOpenCodeModelRef: async (value: string) =>
-      value === STORED_MODEL_ID
-        ? { providerID: "openrouter", modelID: STORED_MODEL_ID }
-        : null,
+      value === STORED_MODEL_ID ? { providerID: "openrouter", modelID: STORED_MODEL_ID } : null,
   }));
 
   serverSessions = new Map();

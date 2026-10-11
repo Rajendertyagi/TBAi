@@ -138,7 +138,10 @@ describe("the guard is unconditional — no source can raise or skip it", () => 
   it("labels an unknown model as advisory and a known model as not", () => {
     const unknown = evaluateTier2(estimateAt(TIER_2_MAX_TOKENS + 1), "conservative_default");
     const known = evaluateTier2(estimateAt(TIER_2_MAX_TOKENS + 1), "provider_reported");
-    if (unknown.outcome !== "assembly_limit_exceeded" || known.outcome !== "assembly_limit_exceeded")
+    if (
+      unknown.outcome !== "assembly_limit_exceeded" ||
+      known.outcome !== "assembly_limit_exceeded"
+    )
       throw new Error("expected breaches");
     expect(unknown.limitWasAdvisory).toBe(true);
     expect(known.limitWasAdvisory).toBe(false);

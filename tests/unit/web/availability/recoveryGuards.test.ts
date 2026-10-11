@@ -103,7 +103,8 @@ describe("slash-command palette wiring", () => {
     expect(sources.composer).toContain("slashCommandsEnabled ? [] : directSlashEntries");
   });
 
-  it("hides the box when nothing matches (the library stays open on trigger)", () => {    // The library keeps the popover open whenever `/` is detected, even with
+  it("hides the box when nothing matches (the library stays open on trigger)", () => {
+    // The library keeps the popover open whenever `/` is detected, even with
     // zero matches — without this the user gets a small empty bordered box.
     // The `:has` rule hides the container exactly when the item group is
     // empty, so Enter submits the text normally.
@@ -128,13 +129,9 @@ describe("slash-command palette wiring", () => {
 
 describe("offline send gate (Phase 3.7)", () => {
   it("[P3-14a] only offline (not degraded) gates sending", () => {
-    expect(sources.composer).toContain(
-      'useAvailabilityStore((s) => s.status === "offline")',
-    );
+    expect(sources.composer).toContain('useAvailabilityStore((s) => s.status === "offline")');
     expect(sources.composer).toContain("{isOffline ? (");
-    expect(sources.runtime).toContain(
-      'useAvailabilityStore((s) => s.status === "offline")',
-    );
+    expect(sources.runtime).toContain('useAvailabilityStore((s) => s.status === "offline")');
   });
 
   it("[P3-14b] the runtime holds the gate shut, not just the button", () => {
@@ -148,9 +145,7 @@ describe("offline send gate (Phase 3.7)", () => {
   });
 
   it("[P3-14c] the offline affordance keeps its copy and a single Send primitive", () => {
-    expect(sources.composer).toContain(
-      "aria-label={composerConfig.copy.sendOffline}",
-    );
+    expect(sources.composer).toContain("aria-label={composerConfig.copy.sendOffline}");
     expect(sources.composer).toContain("disabled");
     // A single online send affordance: the offline button submits nothing and
     // triggers no prompt/send call of its own.
@@ -181,9 +176,7 @@ describe("elicitation resolve failure contract (Phase 3.11)", () => {
   it("[P3-17] pending is cleared ONLY on res.ok; busy always resets", () => {
     // Scope to the resolve handler: the polling effect above also clears
     // pending (server-side withdrawal), which must not satisfy this pin.
-    const body = sources.elicitation.slice(
-      sources.elicitation.indexOf("const resolve"),
-    );
+    const body = sources.elicitation.slice(sources.elicitation.indexOf("const resolve"));
     const guardAt = body.indexOf("if (!res.ok) return;");
     const clearAt = body.indexOf("setPending(null)");
     expect(guardAt).toBeGreaterThan(-1);
@@ -191,9 +184,7 @@ describe("elicitation resolve failure contract (Phase 3.11)", () => {
     expect(clearAt).toBeGreaterThan(guardAt);
     const finallyAt = body.indexOf("finally");
     expect(finallyAt).toBeGreaterThan(-1);
-    expect(body.indexOf("setBusy(false)", finallyAt)).toBeGreaterThan(
-      finallyAt,
-    );
+    expect(body.indexOf("setBusy(false)", finallyAt)).toBeGreaterThan(finallyAt);
   });
 
   it("[P3-15b] a failed resolve keeps the request visible (no silent dismissal)", () => {
@@ -260,9 +251,7 @@ describe("epoch-driven refetch subscriptions (Phase 3.8)", () => {
 
   it("[P3-09d] OpenCode capabilities + conversation config refetch on recoveryEpoch", () => {
     expect(sources.capabilities).toContain("[enabled, recoveryEpoch]");
-    expect(sources.conversationConfig).toContain(
-      "[conversationId, recoveryEpoch]",
-    );
+    expect(sources.conversationConfig).toContain("[conversationId, recoveryEpoch]");
   });
 });
 

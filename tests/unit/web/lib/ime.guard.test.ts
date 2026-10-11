@@ -33,23 +33,75 @@ import { REPO_ROOT } from "../../../helpers/repo-root";
  * contain a text input a composition can be open in.
  */
 const GUARDED_SITES: ReadonlyArray<{ file: string; helper: string; why: string }> = [
-  { file: "web/src/features/chat/components/ChatHeader.tsx", helper: "isPlainEnter", why: "renames a chat" },
-  { file: "web/src/features/sidebar/components/SidebarThreadRow.tsx", helper: "isPlainEnter", why: "renames a chat" },
-  { file: "web/src/features/sidebar/components/FolderConversationRow.tsx", helper: "isPlainEnter", why: "renames a conversation" },
-  { file: "web/src/features/sidebar/components/FolderHeader.tsx", helper: "isPlainEnter", why: "renames a folder" },
-  { file: "web/src/components/shared/directory-browser.tsx", helper: "isPlainEnter", why: "navigates to a typed path" },
-  { file: "web/src/features/providers/ProviderDialog.tsx", helper: "isPlainEnter", why: "commits a context-window value" },
-  { file: "web/src/features/providers/ProviderDialog.tsx", helper: "isPlainEscape", why: "discards a context-window edit" },
-  { file: "web/src/components/LeftEdgeChrome.tsx", helper: "isPlainEscape", why: "closes the search box" },
-  { file: "web/src/features/opencode/OpenCodeChipShared.tsx", helper: "isPlainEscape", why: "closes the menu from a document listener" },
-  { file: "web/src/components/ChromeShortcuts.tsx", helper: "isComposing", why: "Ctrl/Cmd chords fire during composition too" },
-  { file: "web/src/features/opencode/V2FormCard.tsx", helper: "isIMECompositionEvent", why: "advances a multi-step question" },
+  {
+    file: "web/src/features/chat/components/ChatHeader.tsx",
+    helper: "isPlainEnter",
+    why: "renames a chat",
+  },
+  {
+    file: "web/src/features/sidebar/components/SidebarThreadRow.tsx",
+    helper: "isPlainEnter",
+    why: "renames a chat",
+  },
+  {
+    file: "web/src/features/sidebar/components/FolderConversationRow.tsx",
+    helper: "isPlainEnter",
+    why: "renames a conversation",
+  },
+  {
+    file: "web/src/features/sidebar/components/FolderHeader.tsx",
+    helper: "isPlainEnter",
+    why: "renames a folder",
+  },
+  {
+    file: "web/src/components/shared/directory-browser.tsx",
+    helper: "isPlainEnter",
+    why: "navigates to a typed path",
+  },
+  {
+    file: "web/src/features/providers/ProviderDialog.tsx",
+    helper: "isPlainEnter",
+    why: "commits a context-window value",
+  },
+  {
+    file: "web/src/features/providers/ProviderDialog.tsx",
+    helper: "isPlainEscape",
+    why: "discards a context-window edit",
+  },
+  {
+    file: "web/src/components/LeftEdgeChrome.tsx",
+    helper: "isPlainEscape",
+    why: "closes the search box",
+  },
+  {
+    file: "web/src/features/opencode/OpenCodeChipShared.tsx",
+    helper: "isPlainEscape",
+    why: "closes the menu from a document listener",
+  },
+  {
+    file: "web/src/components/ChromeShortcuts.tsx",
+    helper: "isComposing",
+    why: "Ctrl/Cmd chords fire during composition too",
+  },
+  {
+    file: "web/src/features/opencode/V2FormCard.tsx",
+    helper: "isIMECompositionEvent",
+    why: "advances a multi-step question",
+  },
   // The one that was missed the first time round. It sits inside the dock above
   // and handles Enter BEFORE delegating, so the dock's guard could never see it.
-  { file: "web/src/features/opencode/V2OptionControl.tsx", helper: "isPlainEnter", why: "commits the multiselect custom-answer draft" },
+  {
+    file: "web/src/features/opencode/V2OptionControl.tsx",
+    helper: "isPlainEnter",
+    why: "commits the multiselect custom-answer draft",
+  },
   // Event-signal-only before, which left the Safari ordering case open: the Enter
   // that ENDED a composition selected a model out of a half-typed query.
-  { file: "web/src/components/chat/ModelOptionList.tsx", helper: "isComposing", why: "selects a model from a search box" },
+  {
+    file: "web/src/components/chat/ModelOptionList.tsx",
+    helper: "isComposing",
+    why: "selects a model from a search box",
+  },
 ];
 
 /**
@@ -103,9 +155,7 @@ function read(file: string): string {
  * presence test.
  */
 function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
 describe("IME guards are present at every commit-or-dismiss keydown site", () => {
@@ -142,7 +192,12 @@ describe("no bare `===` key comparison survives on a guarded site", () => {
 describe("the helper module is the one the tests pin", () => {
   it("still exports every helper the guarded sites import", () => {
     const ime = read("web/src/lib/ime.ts");
-    for (const helper of ["isIMECompositionEvent", "isComposing", "isPlainEnter", "isPlainEscape"]) {
+    for (const helper of [
+      "isIMECompositionEvent",
+      "isComposing",
+      "isPlainEnter",
+      "isPlainEscape",
+    ]) {
       expect(ime, `lib/ime.ts should export ${helper}`).toMatch(
         new RegExp(`export function ${helper}\\b|export (const|function) ${helper}\\b`),
       );

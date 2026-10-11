@@ -164,8 +164,20 @@ describe("P2 append-only window commit", () => {
     );
 
     let state = createInitialWindowState();
-    state = commitWindow(state, main, { hasMoreBefore: false, hasMoreAfter: false }, bounds(10, 20), "explicit");
-    state = commitWindow(state, sibling, { hasMoreBefore: false, hasMoreAfter: false }, bounds(10, 20), "explicit");
+    state = commitWindow(
+      state,
+      main,
+      { hasMoreBefore: false, hasMoreAfter: false },
+      bounds(10, 20),
+      "explicit",
+    );
+    state = commitWindow(
+      state,
+      sibling,
+      { hasMoreBefore: false, hasMoreAfter: false },
+      bounds(10, 20),
+      "explicit",
+    );
 
     expect(indexOf(state.window, "m25")).toBe(-1);
     expect(indexOf(state.window, "s25")).toBeGreaterThanOrEqual(0);
@@ -180,9 +192,21 @@ describe("P2 append-only window commit", () => {
  * ------------------------------------------------------------------ */
 
 describe("P2 runtime semantics — streaming and pending interactions", () => {
-  const streaming: RuntimeActivity = { isStreaming: true, hasPendingApproval: false, hasPendingQuestion: false };
-  const approval: RuntimeActivity = { isStreaming: false, hasPendingApproval: true, hasPendingQuestion: false };
-  const question: RuntimeActivity = { isStreaming: false, hasPendingApproval: false, hasPendingQuestion: true };
+  const streaming: RuntimeActivity = {
+    isStreaming: true,
+    hasPendingApproval: false,
+    hasPendingQuestion: false,
+  };
+  const approval: RuntimeActivity = {
+    isStreaming: false,
+    hasPendingApproval: true,
+    hasPendingQuestion: false,
+  };
+  const question: RuntimeActivity = {
+    isStreaming: false,
+    hasPendingApproval: false,
+    hasPendingQuestion: true,
+  };
 
   it("recognises every busy runtime state", () => {
     expect(runtimeStateIsBusy(streaming)).toBe(true);
@@ -201,11 +225,25 @@ describe("P2 runtime semantics — streaming and pending interactions", () => {
   it("preserves active streamed message through a navigation commit", () => {
     const all = chain(100);
     let state = createInitialWindowState();
-    state = commitWindow(state, slice(all, 80, 100), { hasMoreBefore: true, hasMoreAfter: false }, bounds(90, 100), "explicit", streaming);
+    state = commitWindow(
+      state,
+      slice(all, 80, 100),
+      { hasMoreBefore: true, hasMoreAfter: false },
+      bounds(90, 100),
+      "explicit",
+      streaming,
+    );
     expect(state.state).toBe("streaming");
 
     const merged = buildCandidateWindow(state.window, slice(all, 60, 85), "older");
-    state = commitWindow(state, merged, { hasMoreBefore: true, hasMoreAfter: false }, bounds(90, 100), "older", streaming);
+    state = commitWindow(
+      state,
+      merged,
+      { hasMoreBefore: true, hasMoreAfter: false },
+      bounds(90, 100),
+      "older",
+      streaming,
+    );
     expect(indexOf(state.window, "m100")).toBeGreaterThanOrEqual(0);
     expect(state.state).toBe("streaming");
   });
@@ -213,9 +251,23 @@ describe("P2 runtime semantics — streaming and pending interactions", () => {
   it("preserves the message and tool context an approval needs", () => {
     const all = chain(100);
     let state = createInitialWindowState();
-    state = commitWindow(state, slice(all, 80, 100), { hasMoreBefore: true, hasMoreAfter: false }, bounds(90, 95), "explicit", approval);
+    state = commitWindow(
+      state,
+      slice(all, 80, 100),
+      { hasMoreBefore: true, hasMoreAfter: false },
+      bounds(90, 95),
+      "explicit",
+      approval,
+    );
     const merged = buildCandidateWindow(state.window, slice(all, 60, 85), "older");
-    state = commitWindow(state, merged, { hasMoreBefore: true, hasMoreAfter: false }, bounds(90, 95), "older", approval);
+    state = commitWindow(
+      state,
+      merged,
+      { hasMoreBefore: true, hasMoreAfter: false },
+      bounds(90, 95),
+      "older",
+      approval,
+    );
 
     for (const id of ["m90", "m91", "m92", "m93", "m94", "m95"]) {
       expect(indexOf(state.window, id)).toBeGreaterThanOrEqual(0);
@@ -226,11 +278,23 @@ describe("P2 runtime semantics — streaming and pending interactions", () => {
   it("never reorders messages while committing", () => {
     const all = chain(100);
     let state = createInitialWindowState();
-    state = commitWindow(state, slice(all, 80, 100), { hasMoreBefore: true, hasMoreAfter: false }, bounds(90, 100), "explicit");
+    state = commitWindow(
+      state,
+      slice(all, 80, 100),
+      { hasMoreBefore: true, hasMoreAfter: false },
+      bounds(90, 100),
+      "explicit",
+    );
     const order = ids(state.window);
 
     const merged = buildCandidateWindow(state.window, slice(all, 60, 85), "older");
-    state = commitWindow(state, merged, { hasMoreBefore: true, hasMoreAfter: false }, bounds(90, 100), "older");
+    state = commitWindow(
+      state,
+      merged,
+      { hasMoreBefore: true, hasMoreAfter: false },
+      bounds(90, 100),
+      "older",
+    );
 
     const keptOrder = ids(state.window).filter((id) => order.includes(id));
     expect(keptOrder).toEqual(order);
@@ -245,11 +309,23 @@ describe("P2 submission semantics", () => {
   it("keeps a newly submitted message at the tip", () => {
     const all = chain(50);
     let state = createInitialWindowState();
-    state = commitWindow(state, all, { hasMoreBefore: false, hasMoreAfter: false }, bounds(40, 50), "explicit");
+    state = commitWindow(
+      state,
+      all,
+      { hasMoreBefore: false, hasMoreAfter: false },
+      bounds(40, 50),
+      "explicit",
+    );
 
     const submitted = msg("m51", "m50");
     const merged = [...state.window, submitted];
-    state = commitWindow(state, merged, { hasMoreBefore: false, hasMoreAfter: false }, bounds(51, 51), "explicit");
+    state = commitWindow(
+      state,
+      merged,
+      { hasMoreBefore: false, hasMoreAfter: false },
+      bounds(51, 51),
+      "explicit",
+    );
 
     expect(ids(state.window)).toContain("m51");
     expect(state.window[state.window.length - 1].id).toBe("m51");
@@ -315,7 +391,10 @@ describe("P2 request anchors & the append-only contract", () => {
 describe("P2 window invariants", () => {
   it("holds for a valid contiguous chain", () => {
     const all = chain(50);
-    const state = commitWindow(createInitialWindowState(), all, { hasMoreBefore: false, hasMoreAfter: false });
+    const state = commitWindow(createInitialWindowState(), all, {
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+    });
     const report = checkWindowInvariants(state);
 
     expect(report.satisfied).toBe(true);
@@ -324,7 +403,10 @@ describe("P2 window invariants", () => {
 
   it("detects a broken parent link in the window", () => {
     const broken = [msg("m1", null), msg("m2", "m999")]; // m999 is broken parent
-    const state = commitWindow(createInitialWindowState(), broken, { hasMoreBefore: false, hasMoreAfter: false });
+    const state = commitWindow(createInitialWindowState(), broken, {
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+    });
     const report = checkWindowInvariants(state);
 
     expect(report.satisfied).toBe(false);

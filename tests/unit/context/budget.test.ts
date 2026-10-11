@@ -36,14 +36,23 @@ import {
 import type { UIMessage } from "ai";
 
 function assistant(id: string, text: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", state: "done", text }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", state: "done", text }],
+  } as unknown as UIMessage;
 }
 
 function user(id: string, text: string): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
 }
 
-function toolResultMessage(id: string, toolCallId: string, output: string, type = "tool-read"): UIMessage {
+function toolResultMessage(
+  id: string,
+  toolCallId: string,
+  output: string,
+  type = "tool-read",
+): UIMessage {
   return {
     id,
     role: "assistant",
@@ -89,7 +98,10 @@ describe("measurement: the estimate can only be pessimistic, never optimistic", 
 
   it("attributes cost per category rather than only in total", () => {
     const layer: MessagesLayer = {
-      messages: [assistant("a", "some assistant prose"), toolResultMessage("b", "call_1", "R".repeat(500))],
+      messages: [
+        assistant("a", "some assistant prose"),
+        toolResultMessage("b", "call_1", "R".repeat(500)),
+      ],
       currentTurnIds: [],
       retainedIds: ["a", "b"],
     };
@@ -116,8 +128,9 @@ describe("measurement: the estimate can only be pessimistic, never optimistic", 
   });
 
   it("measures instructions as their own category and tolerates absence", () => {
-    expect(measureInstructions(buildInstructionsLayer("S".repeat(300))).byCategory.instructions)
-      .toBeGreaterThan(0);
+    expect(
+      measureInstructions(buildInstructionsLayer("S".repeat(300))).byCategory.instructions,
+    ).toBeGreaterThan(0);
     // Phase 1 found systemPrompt NULL for every conversation in the audit
     // install, so the absent case is the normal case, not an edge case.
     expect(measureInstructions(buildInstructionsLayer(undefined)).estimatedTokens).toBe(0);
@@ -136,7 +149,11 @@ describe("measurement: the estimate can only be pessimistic, never optimistic", 
   it("combines per-layer estimates into one request-level total", () => {
     const combined = combineEstimates([
       measureInstructions(buildInstructionsLayer("I".repeat(300))),
-      measureMessages({ messages: [assistant("a", "A".repeat(300))], currentTurnIds: [], retainedIds: ["a"] }),
+      measureMessages({
+        messages: [assistant("a", "A".repeat(300))],
+        currentTurnIds: [],
+        retainedIds: ["a"],
+      }),
     ]);
     expect(combined.estimatedChars).toBeGreaterThanOrEqual(600);
     expect(combined.byCategory.instructions).toBeGreaterThan(0);
@@ -201,7 +218,11 @@ describe("output reservation: never zero, and not available input", () => {
 
 describe("budget: output is subtracted before input is computed", () => {
   it("reserves output, then margin, from the limit", () => {
-    const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100000 } });
+    const limit = resolveContextLimit({
+      providerType: "anthropic",
+      modelId: "c",
+      model: { contextWindow: 100000 },
+    });
     const budget = computeBudget({ limit });
     const reservation = budget.outputReservation.tokens;
     const expectedMargin = Math.floor((100000 - reservation) * SAFETY_MARGIN_FRACTION);
@@ -212,13 +233,21 @@ describe("budget: output is subtracted before input is computed", () => {
   it("never reports usable input as the full limit", () => {
     // The arithmetic error Phase 2 exists to prevent: treating the window as
     // fully available for input, leaving no room to answer.
-    const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100000 } });
+    const limit = resolveContextLimit({
+      providerType: "anthropic",
+      modelId: "c",
+      model: { contextWindow: 100000 },
+    });
     const budget = computeBudget({ limit });
     expect(budget.usableInputTokens).toBeLessThan(limit.maxInputTokens!);
   });
 
   it("produces a non-negative usable budget for a tiny window", () => {
-    const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100 } });
+    const limit = resolveContextLimit({
+      providerType: "anthropic",
+      modelId: "c",
+      model: { contextWindow: 100 },
+    });
     const budget = computeBudget({ limit });
     expect(budget.usableInputTokens).toBeGreaterThanOrEqual(0);
     expect(budget.safetyMarginTokens).toBeGreaterThanOrEqual(0);
@@ -226,7 +255,11 @@ describe("budget: output is subtracted before input is computed", () => {
 });
 
 describe("budget decision: the mechanism-aware matrix", () => {
-  const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100000 } });
+  const limit = resolveContextLimit({
+    providerType: "anthropic",
+    modelId: "c",
+    model: { contextWindow: 100000 },
+  });
 
   /** A reduction record in which nothing was withheld — the "nothing left to try" state. */
   function noMechanismLeft(overrides: Partial<ReductionRecord> = {}): ReductionRecord {
@@ -238,7 +271,12 @@ describe("budget decision: the mechanism-aware matrix", () => {
   }
 
   /** Synthetic estimate, so a band position can be pinned exactly. */
-  function banded(budget: ContextBudget, point: number, low: number, high: number): InputSizeEstimate {
+  function banded(
+    _budget: ContextBudget,
+    point: number,
+    low: number,
+    high: number,
+  ): InputSizeEstimate {
     return {
       estimatedTokens: point,
       estimatedChars: 0,
@@ -256,7 +294,12 @@ describe("budget decision: the mechanism-aware matrix", () => {
       currentTurnIds: [],
       retainedIds: ["a"],
     });
-    const decision = decideBudget({ estimate, budget, reduction: noMechanismLeft(), limitSource: "provider_reported" });
+    const decision = decideBudget({
+      estimate,
+      budget,
+      reduction: noMechanismLeft(),
+      limitSource: "provider_reported",
+    });
     expect(decision.action).toBe("accept");
     if (decision.action === "accept") expect(decision.headroomTokens).toBeGreaterThan(0);
   });
@@ -268,7 +311,12 @@ describe("budget decision: the mechanism-aware matrix", () => {
       currentTurnIds: [],
       retainedIds: ["a"],
     });
-    const decision = decideBudget({ estimate: huge, budget, reduction: noMechanismLeft(), limitSource: "provider_reported" });
+    const decision = decideBudget({
+      estimate: huge,
+      budget,
+      reduction: noMechanismLeft(),
+      limitSource: "provider_reported",
+    });
     expect(decision.action).toBe("reject");
     if (decision.action === "reject") {
       expect(decision.reason).toBe("over_limit");
@@ -353,25 +401,28 @@ describe("budget decision: the mechanism-aware matrix", () => {
     ["not_eligible", { kind: "withheld", reason: "not_eligible" } as const],
     ["trigger_not_reached", { kind: "withheld", reason: "trigger_not_reached" } as const],
     ["failed", { kind: "withheld", reason: "failed" } as const],
-  ] as const)("ACCEPTS an over-budget request when compaction was withheld (%s) — Case D", (_label, compaction) => {
-    const budget = computeBudget({ limit });
-    const usable = budget.usableInputTokens!;
-    const decision = decideBudget({
-      estimate: banded(budget, usable + 5_000, usable - 100, usable + 9_000),
-      budget,
-      reduction: {
-        toolResults: { kind: "exhausted", reason: "no_reducible_content" },
-        compaction,
-      },
-      limitSource: "provider_reported",
-    });
-    // Sent, deliberately. A conservative policy choice must not be converted into
-    // a hard failure by the budget gate. The withhold is still observable in the
-    // decision record and in diagnostics.
-    expect(decision.action).toBe("accept");
-    expect(decision.reduction.compaction.kind).toBe("withheld");
-    expect(decision.reduction.compaction.reason).toBe(decision.reduction.compaction.reason);
-  });
+  ] as const)(
+    "ACCEPTS an over-budget request when compaction was withheld (%s) — Case D",
+    (_label, compaction) => {
+      const budget = computeBudget({ limit });
+      const usable = budget.usableInputTokens!;
+      const decision = decideBudget({
+        estimate: banded(budget, usable + 5_000, usable - 100, usable + 9_000),
+        budget,
+        reduction: {
+          toolResults: { kind: "exhausted", reason: "no_reducible_content" },
+          compaction,
+        },
+        limitSource: "provider_reported",
+      });
+      // Sent, deliberately. A conservative policy choice must not be converted into
+      // a hard failure by the budget gate. The withhold is still observable in the
+      // decision record and in diagnostics.
+      expect(decision.action).toBe("accept");
+      expect(decision.reduction.compaction.kind).toBe("withheld");
+      expect(decision.reduction.compaction.reason).toBe(decision.reduction.compaction.reason);
+    },
+  );
 
   it("keeps a certain over-limit a rejection even when a mechanism was withheld", () => {
     // Case D does not weaken the one verdict that was always right. When the band
@@ -382,7 +433,10 @@ describe("budget decision: the mechanism-aware matrix", () => {
     const decision = decideBudget({
       estimate: banded(budget, usable + 60_000, usable + 50_000, usable + 80_000),
       budget,
-      reduction: { toolResults: noMechanismLeft().toolResults, compaction: { kind: "withheld", reason: "hysteresis" } },
+      reduction: {
+        toolResults: noMechanismLeft().toolResults,
+        compaction: { kind: "withheld", reason: "hysteresis" },
+      },
       limitSource: "provider_reported",
     });
     expect(decision.action).toBe("reject");
@@ -399,7 +453,12 @@ describe("budget decision: the mechanism-aware matrix", () => {
       generationCap: { tokens: 0, source: "conservative_default", boundedByRemainingWindow: false },
       enforceable: false,
     };
-    const decision = decideBudget({ estimate: banded(budget, 9e9, 9e9, 9e9), budget, reduction: noMechanismLeft(), limitSource: "provider_reported" });
+    const decision = decideBudget({
+      estimate: banded(budget, 9e9, 9e9, 9e9),
+      budget,
+      reduction: noMechanismLeft(),
+      limitSource: "provider_reported",
+    });
     expect(decision.action).toBe("accept");
     expect(decision.reduction.toolResults.kind).toBe("exhausted");
   });
@@ -415,19 +474,32 @@ describe("budget decision: the mechanism-aware matrix", () => {
       banded(budget, usable - 10, usable - 100, usable - 5),
       banded(budget, usable + 5_000, usable - 100, usable + 9_000),
     ]) {
-      const decision = decideBudget({ estimate, budget, reduction, limitSource: "provider_reported" });
+      const decision = decideBudget({
+        estimate,
+        budget,
+        reduction,
+        limitSource: "provider_reported",
+      });
       expect(decision.reduction).toEqual(reduction);
     }
   });
 });
 
 describe("budget diagnostics: the reduction state is observable, never a hardcoded claim", () => {
-  const limit = resolveContextLimit({ providerType: "anthropic", modelId: "c", model: { contextWindow: 100000 } });
+  const limit = resolveContextLimit({
+    providerType: "anthropic",
+    modelId: "c",
+    model: { contextWindow: 100000 },
+  });
   const messages: MessagesLayer = { messages: [], currentTurnIds: [], retainedIds: [] };
 
   it("reports each mechanism's disposition and reason", () => {
     const budget = computeBudget({ limit });
-    const estimate = measureMessages({ messages: [assistant("a", "hi")], currentTurnIds: [], retainedIds: ["a"] });
+    const estimate = measureMessages({
+      messages: [assistant("a", "hi")],
+      currentTurnIds: [],
+      retainedIds: ["a"],
+    });
     const diagnostics = budgetDiagnostics({
       estimate,
       budget,
@@ -455,7 +527,11 @@ describe("budget diagnostics: the reduction state is observable, never a hardcod
 
   it("surfaces the Case D withhold explicitly", () => {
     const budget = computeBudget({ limit });
-    const estimate = measureMessages({ messages: [assistant("a", "hi")], currentTurnIds: [], retainedIds: ["a"] });
+    const estimate = measureMessages({
+      messages: [assistant("a", "hi")],
+      currentTurnIds: [],
+      retainedIds: ["a"],
+    });
     const diagnostics = budgetDiagnostics({
       estimate,
       budget,
@@ -540,7 +616,12 @@ describe("request-side reduction: the context limit, not the render limit", () =
       id: "a",
       role: "assistant",
       parts: [
-        { type: "tool-read", toolCallId: "c1", state: "output-error", errorText: "E".repeat(200_000) },
+        {
+          type: "tool-read",
+          toolCallId: "c1",
+          state: "output-error",
+          errorText: "E".repeat(200_000),
+        },
       ],
     } as unknown as UIMessage;
     const { messages, report } = reduceToolResults([errorMessage]);
@@ -553,25 +634,37 @@ describe("request-side reduction: the context limit, not the render limit", () =
 describe("current-turn identification (guarantee G11)", () => {
   it("is importable and distinguishes a user turn from history", async () => {
     const { identifyCurrentTurn } = await import("@/context/divergence.ts");
-    const { currentIds, retainedIds } = identifyCurrentTurn([user("u1", "first"), assistant("a1", "reply"), user("u2", "second")]);
+    const { currentIds, retainedIds } = identifyCurrentTurn([
+      user("u1", "first"),
+      assistant("a1", "reply"),
+      user("u2", "second"),
+    ]);
     expect(currentIds).toEqual(["u2"]);
     expect(retainedIds).toEqual(["u1", "a1"]);
   });
 
   it("reports no current turn when the array ends on an assistant turn", () => {
     // A continuation whose tool result is last has no user turn to protect.
-    const result = identifyCurrentTurnLocal([user("u1", "go"), toolResultMessage("a1", "c1", "done")]);
+    const result = identifyCurrentTurnLocal([
+      user("u1", "go"),
+      toolResultMessage("a1", "c1", "done"),
+    ]);
     expect(result.currentIds).toEqual([]);
   });
 });
 
 // Local mirror to keep the sync import list small; same logic under test.
-function identifyCurrentTurnLocal(messages: readonly UIMessage[]): { currentIds: string[]; retainedIds: string[] } {
+function identifyCurrentTurnLocal(messages: readonly UIMessage[]): {
+  currentIds: string[];
+  retainedIds: string[];
+} {
   const currentIds: string[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i] as { role?: string; id?: string };
     if (m.role !== "user") continue;
-    const followedByAssistant = messages.slice(i + 1).some((later) => (later as { role?: string }).role === "assistant");
+    const followedByAssistant = messages
+      .slice(i + 1)
+      .some((later) => (later as { role?: string }).role === "assistant");
     if (!followedByAssistant && typeof m.id === "string") currentIds.push(m.id);
   }
   return { currentIds, retainedIds: [] };

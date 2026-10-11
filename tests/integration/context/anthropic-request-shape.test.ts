@@ -87,7 +87,11 @@ function user(id: string, text: string): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
 }
 function assistant(id: string, text: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", text, state: "done" }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text, state: "done" }],
+  } as unknown as UIMessage;
 }
 
 async function send(messages: UIMessage[], system: string): Promise<void> {

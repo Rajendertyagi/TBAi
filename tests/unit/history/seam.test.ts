@@ -75,7 +75,11 @@ function user(id: string, text: string): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] } as unknown as UIMessage;
 }
 function assistant(id: string, text: string): UIMessage {
-  return { id, role: "assistant", parts: [{ type: "text", state: "done", text }] } as unknown as UIMessage;
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", state: "done", text }],
+  } as unknown as UIMessage;
 }
 /** A completed tool call + result pair. */
 function toolTurn(id: string, toolCallId: string): UIMessage {
@@ -224,7 +228,10 @@ function seamHarness(
   };
 }
 
-async function assembleWithoutCompaction(messages: UIMessage[], extra: Record<string, unknown> = {}) {
+async function assembleWithoutCompaction(
+  messages: UIMessage[],
+  extra: Record<string, unknown> = {},
+) {
   return assembleContext({
     conversationId: "conv-seam-test",
     submittedMessages: messages,
@@ -487,7 +494,7 @@ describe("a compaction is durable because it is stored, not recomputed", () => {
     // The durability requirement stated directly: a reload must not change what
     // the model sees.
     const harness = seamHarness();
-    const first = await harness.assemble(oversizedConversation());
+    const _first = await harness.assemble(oversizedConversation());
     const stored = harness.persisted[0];
 
     const reload = seamHarness({ existing: stored });
@@ -496,9 +503,7 @@ describe("a compaction is durable because it is stored, not recomputed", () => {
     const b = await reload.assemble(messages);
     expect(JSON.stringify(a.context.modelMessages)).toBe(JSON.stringify(b.context.modelMessages));
     // And it must match the compacted shape, not the raw history.
-    expect(JSON.stringify(a.context.modelMessages)).not.toBe(
-      JSON.stringify(before(messages)),
-    );
+    expect(JSON.stringify(a.context.modelMessages)).not.toBe(JSON.stringify(before(messages)));
   });
 
   function before(messages: UIMessage[]): string {
@@ -578,9 +583,7 @@ describe("a failed compaction degrades to today's behaviour, never to corruption
     // errors and reports them, so the seam records a specific diagnosis instead of
     // a generic `compaction_error` — which is the containment working, not a
     // weaker path.
-    expect(attempted.context.provenance.compaction?.reason).toBe(
-      "summarize_failed:provider_error",
-    );
+    expect(attempted.context.provenance.compaction?.reason).toBe("summarize_failed:provider_error");
     // Byte-identical to never having tried. This is the load-bearing assertion:
     // a failure must not change the REQUEST.
     expect(JSON.stringify(attempted.context.layerC.messages)).toBe(
@@ -598,7 +601,10 @@ describe("a failed compaction degrades to today's behaviour, never to corruption
     // pass for the wrong reason.
     expect(attempted.decision.reduction.compaction).toEqual({ kind: "withheld", reason: "failed" });
     expect(attempted.decision.action).toBe("accept");
-    expect(untouched.decision.reduction.compaction).toEqual({ kind: "exhausted", reason: "disabled" });
+    expect(untouched.decision.reduction.compaction).toEqual({
+      kind: "exhausted",
+      reason: "disabled",
+    });
     expect(untouched.decision.action).toBe("reject");
     expect(harness.persisted).toHaveLength(0);
   });
@@ -655,7 +661,11 @@ describe("a failed compaction degrades to today's behaviour, never to corruption
     // No amount of retrying helps when a single indivisible span cannot fit one
     // call, so this must stay a precise refusal rather than a silent half-summarise.
     const harness = seamHarness();
-    const oneHugeTurn = [user("u0", "x".repeat(4_000_000)), assistant("a0", "ok"), user("live", "THE LIVE REQUEST")];
+    const oneHugeTurn = [
+      user("u0", "x".repeat(4_000_000)),
+      assistant("a0", "ok"),
+      user("live", "THE LIVE REQUEST"),
+    ];
     const result = await harness.assemble(oneHugeTurn as never);
     // Either refusal is a correct, non-destructive answer: the span could not be
     // shrunk to anything worth summarising, or it could not fit one call. What
@@ -833,9 +843,7 @@ describe("compaction leaves Phase 3's deterministic prefix intact", () => {
     const b = await first.assemble(oversizedConversation());
     // Identical inputs, identical request: the property Phase 3's cache identity
     // depends on must survive compaction.
-    expect(JSON.stringify(a.context.modelMessages)).toBe(
-      JSON.stringify(b.context.modelMessages),
-    );
+    expect(JSON.stringify(a.context.modelMessages)).toBe(JSON.stringify(b.context.modelMessages));
   });
 
   it("the summary sits at a fixed position, not at the end", async () => {
@@ -857,25 +865,31 @@ describe("invariants that must hold for ANY conversation", () => {
   const shapes: Array<[string, () => UIMessage[]]> = [
     ["many turns", oversizedConversation],
     ["two turns", () => [user("u0", "a"), assistant("a0", "b"), user("u1", "c")]],
-    ["tool pairs only", () => {
-      const out: UIMessage[] = [];
-      for (let i = 0; i < 30; i += 1) {
-        out.push(toolTurn(`a${i}`, `tc${i}`));
-        out.push(user(`u${i}`, `q${i} ${"pad ".repeat(200)}`));
-      }
-      out.push(user("live", "live"));
-      return out;
-    }],
-    ["approval mid-history", () => {
-      const out: UIMessage[] = [];
-      for (let i = 0; i < 20; i += 1) {
-        out.push(user(`u${i}`, `q${i} ${"pad ".repeat(200)}`));
-        out.push(assistant(`a${i}`, `r${i}`));
-      }
-      out.push(user("uLive", "delete it"));
-      out.push(approvalPaused("aLive", "tc-x", "ap-x"));
-      return out;
-    }],
+    [
+      "tool pairs only",
+      () => {
+        const out: UIMessage[] = [];
+        for (let i = 0; i < 30; i += 1) {
+          out.push(toolTurn(`a${i}`, `tc${i}`));
+          out.push(user(`u${i}`, `q${i} ${"pad ".repeat(200)}`));
+        }
+        out.push(user("live", "live"));
+        return out;
+      },
+    ],
+    [
+      "approval mid-history",
+      () => {
+        const out: UIMessage[] = [];
+        for (let i = 0; i < 20; i += 1) {
+          out.push(user(`u${i}`, `q${i} ${"pad ".repeat(200)}`));
+          out.push(assistant(`a${i}`, `r${i}`));
+        }
+        out.push(user("uLive", "delete it"));
+        out.push(approvalPaused("aLive", "tc-x", "ap-x"));
+        return out;
+      },
+    ],
   ];
 
   for (const [name, build] of shapes) {

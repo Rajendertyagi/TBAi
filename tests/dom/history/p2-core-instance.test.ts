@@ -27,7 +27,9 @@ const coreOf = (fromDir: string, pkg: string): string => {
   const req = createRequire(path.join(fromDir, "package.json"));
   const entry = req.resolve(pkg);
   const nested = createRequire(entry);
-  return fs.realpathSync(path.dirname(path.dirname(nested.resolve("@assistant-ui/core/package.json"))));
+  return fs.realpathSync(
+    path.dirname(path.dirname(nested.resolve("@assistant-ui/core/package.json"))),
+  );
 };
 
 describe("P2 — single-instance @assistant-ui/core", () => {

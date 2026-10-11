@@ -25,7 +25,7 @@ async function main() {
   });
   const created = await r.json();
   console.log("[api] POST /servers ->", r.status, "id:", created.id);
-  if (r.status !== 201) throw new Error("create failed: " + JSON.stringify(created));
+  if (r.status !== 201) throw new Error(`create failed: ${JSON.stringify(created)}`);
 
   // 3) Poll until connected with tools discovered
   let status = null;
@@ -46,17 +46,28 @@ async function main() {
     "prompts:",
     status?.promptCount,
   );
-  if (status?.status !== "connected") throw new Error("not connected: " + JSON.stringify(status));
+  if (status?.status !== "connected") throw new Error(`not connected: ${JSON.stringify(status)}`);
   if (status.toolCount < 3) throw new Error("tool discovery failed");
 
   // 4) Test connection (one-off, no persist) over HTTP
   r = await fetch(`${BASE}/api/mcp/servers/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "api-test-http", transport: "http", url: "http://localhost:8787/mcp" }),
+    body: JSON.stringify({
+      name: "api-test-http",
+      transport: "http",
+      url: "http://localhost:8787/mcp",
+    }),
   });
   const test = await r.json();
-  console.log("[api] POST /servers/test (http) ->", r.status, "ok:", test.ok, "tools:", test.toolCount);
+  console.log(
+    "[api] POST /servers/test (http) ->",
+    r.status,
+    "ok:",
+    test.ok,
+    "tools:",
+    test.toolCount,
+  );
 
   // 5) Web app is served
   r = await fetch(`${BASE}/`);

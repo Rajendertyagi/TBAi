@@ -44,10 +44,7 @@ export function TemplateGallery({
   return (
     <div className="flex min-h-full flex-col">
       <div
-        className={cn(
-          "mx-auto flex w-full max-w-4xl flex-col gap-6 p-4",
-          onboarding && "my-auto",
-        )}
+        className={cn("mx-auto flex w-full max-w-4xl flex-col gap-6 p-4", onboarding && "my-auto")}
       >
         {onboarding ? (
           <div className="flex flex-col items-center gap-2 text-center">
@@ -55,9 +52,7 @@ export function TemplateGallery({
               <Plus aria-hidden="true" className="size-6" />
             </span>
             <h2 className="text-base font-semibold">{copy.noJobs}</h2>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {copy.noJobsHint}
-            </p>
+            <p className="max-w-md text-sm text-muted-foreground">{copy.noJobsHint}</p>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">

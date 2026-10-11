@@ -8,11 +8,7 @@ import {
   EditFileToolUI,
   DeleteFileToolUI,
 } from "./filesystem/ui";
-import {
-  ProcessListToolUI,
-  ProcessKillToolUI,
-  SystemInfoToolUI,
-} from "./computer/ui";
+import { ProcessListToolUI, ProcessKillToolUI, SystemInfoToolUI } from "./computer/ui";
 import { RunCommandTerminalUI } from "./computer/terminal-ui";
 import { SchedulerToolUI } from "./scheduler/ui";
 import { TodoToolUI } from "./todo/ui";

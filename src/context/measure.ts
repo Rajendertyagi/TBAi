@@ -127,7 +127,10 @@ function classifyPart(part: LoosePart): { category: ContextCategory; chars: numb
   const type = typeof part.type === "string" ? part.type : "";
 
   if (type === "text") {
-    return { category: "assistant_text", chars: typeof part.text === "string" ? part.text.length : 0 };
+    return {
+      category: "assistant_text",
+      chars: typeof part.text === "string" ? part.text.length : 0,
+    };
   }
   if (type === "reasoning") {
     return { category: "reasoning", chars: typeof part.text === "string" ? part.text.length : 0 };
@@ -147,8 +150,10 @@ function classifyPart(part: LoosePart): { category: ContextCategory; chars: numb
   if (type === "tool-call" || type === "dynamic-tool" || type.startsWith("tool-")) {
     // A tool part carries BOTH the call and (usually) its result. The result is
     // the unbounded surface, so it is counted separately from the call.
-    const callChars = measureValueChars(part.input) + (part.toolCallId ? String(part.toolCallId).length : 0);
-    const hasResult = part.output !== undefined || part.state === "output-error" || part.state === "output-denied";
+    const callChars =
+      measureValueChars(part.input) + (part.toolCallId ? String(part.toolCallId).length : 0);
+    const hasResult =
+      part.output !== undefined || part.state === "output-error" || part.state === "output-denied";
     if (!hasResult) return { category: "tool_calls", chars: callChars };
     const resultChars = measureValueChars(part.output);
     const isMcp = type === "dynamic-tool" || type.startsWith("tool-mcp__");
@@ -159,9 +164,10 @@ function classifyPart(part: LoosePart): { category: ContextCategory; chars: numb
   return { category: "other", chars: measureValueChars(part) };
 }
 
-function sumCharsByCategory(
-  categories: Iterable<ContextCategory>,
-): { charsByCategory: Record<ContextCategory, number>; totalChars: number } {
+function _sumCharsByCategory(categories: Iterable<ContextCategory>): {
+  charsByCategory: Record<ContextCategory, number>;
+  totalChars: number;
+} {
   const charsByCategory = emptyCategoryMap();
   let totalChars = 0;
   for (const category of categories) {
@@ -206,8 +212,13 @@ export function measureToolDefinitions(layer: ToolDefinitionLayer): InputSizeEst
   }
   // The description and input schema are the bulk of a tool definition.
   for (const [toolName, tool] of Object.entries(layer.tools)) {
-    const candidate = tool as { description?: unknown; inputSchema?: unknown; providerExecuted?: unknown };
-    totalChars += measureValueChars(candidate?.description) + measureValueChars(candidate?.inputSchema);
+    const candidate = tool as {
+      description?: unknown;
+      inputSchema?: unknown;
+      providerExecuted?: unknown;
+    };
+    totalChars +=
+      measureValueChars(candidate?.description) + measureValueChars(candidate?.inputSchema);
     if (candidate?.providerExecuted === true) totalChars += toolName.length;
   }
   charsByCategory.tool_definitions = totalChars;
@@ -278,7 +289,10 @@ function buildEstimate(
       high: tokenize(totalChars, CHARS_PER_TOKEN_TOKEN_HEAVY),
     },
     byCategory: Object.fromEntries(
-      Object.entries(charsByCategory).map(([k, v]) => [k, tokenize(v as number, CHARS_PER_TOKEN_ESTIMATE)]),
+      Object.entries(charsByCategory).map(([k, v]) => [
+        k,
+        tokenize(v as number, CHARS_PER_TOKEN_ESTIMATE),
+      ]),
     ) as Record<ContextCategory, number>,
     charsByCategory,
   };

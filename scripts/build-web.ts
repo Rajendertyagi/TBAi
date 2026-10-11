@@ -28,11 +28,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  clearBuildStamp,
-  hashWebSource,
-  writeBuildStamp,
-} from "./web-build-provenance";
+import { clearBuildStamp, hashWebSource, writeBuildStamp } from "./web-build-provenance";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WEB_ROOT = path.join(REPO_ROOT, "web");
@@ -55,7 +51,7 @@ const BUILD_LABEL = "cd web && bun run build";
  * @returns True when the build succeeded AND the stamp was written.
  */
 export function buildWebAndStamp(
-  build: () => number | void,
+  build: () => number | undefined,
   onLog: (message: string) => void = (m) => process.stderr.write(`[build:web] ${m}\n`),
 ): boolean {
   // Before, not after: see the module docblock. This is what makes a failed
@@ -63,7 +59,7 @@ export function buildWebAndStamp(
   const hadStamp = clearBuildStamp(WEB_DIST);
   if (hadStamp) onLog("cleared the previous build stamp before rebuilding");
 
-  let code: number | void;
+  let code: number | undefined;
   try {
     code = build();
   } catch (error) {

@@ -128,7 +128,10 @@ afterEach(() => {
   resetAll();
 });
 
-function stubConversations(id: string, seen: { urls: string[]; bodies: Record<string, unknown>[] }): void {
+function stubConversations(
+  id: string,
+  seen: { urls: string[]; bodies: Record<string, unknown>[] },
+): void {
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
     seen.urls.push(String(url));
     if (String(url).endsWith("/api/conversations") && init?.method === "POST") {
@@ -230,9 +233,7 @@ describe("opencode first send never calls /api/chat (case 3)", () => {
   });
 
   it("Composer.sendOpenCodeDraft source: materialize + stash + resolve, no /api/chat literal", async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/components/Composer.tsx"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/components/Composer.tsx")).text();
     const start = source.indexOf("const sendOpenCodeDraft");
     expect(start).toBeGreaterThan(-1);
     const end = source.indexOf("return (", start);
@@ -321,15 +322,11 @@ describe("failed materialization preserves the draft and sends nothing (case 11 
   });
 
   it("Composer source keeps the text on failure (clear only after success)", async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/components/Composer.tsx"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/components/Composer.tsx")).text();
     const start = source.indexOf("const sendOpenCodeDraft");
     const fn = source.slice(start, source.indexOf("return (", start));
     // Success path clears only after the materialize await resolves…
-    expect(fn.indexOf("await materializeDraft")).toBeLessThan(
-      fn.indexOf("clearComposerDraft"),
-    );
+    expect(fn.indexOf("await materializeDraft")).toBeLessThan(fn.indexOf("clearComposerDraft"));
     // …and the failure path surfaces an error instead of clearing.
     expect(fn).toContain("setCodeSendError");
   });
@@ -418,9 +415,7 @@ describe("FirstPromptHandoff settled boundary — source pins the production pat
   });
 
   it("ChatShell binds through the owner record with the live snapshot as backstop", async () => {
-    const source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/app/layout/ChatShell.tsx"),
-    ).text();
+    const source = await Bun.file(path.join(REPO_ROOT, "web/src/app/layout/ChatShell.tsx")).text();
     expect(source).toContain("peekMaterializedEngine(id) ?? getWelcomeEngineSnapshot().engine");
   });
 });

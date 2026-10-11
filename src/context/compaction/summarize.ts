@@ -26,7 +26,7 @@
  * state than before it was attempted.
  */
 
-import { generateText, type LanguageModel, type ToolSet } from "ai";
+import { generateText, type LanguageModel } from "ai";
 import { measureMessages } from "../measure";
 import type { UIMessage } from "ai";
 import type { ContextOrigin } from "./contract";
@@ -157,10 +157,7 @@ export const MIN_ADEQUACY_RATIO = 0.01;
  */
 export function requiredSummaryTokens(spanTokens: number, maxSummaryTokens: number): number {
   const proportional = Math.ceil(spanTokens * MIN_ADEQUACY_RATIO);
-  return Math.max(
-    MIN_SUMMARY_TOKENS,
-    Math.min(proportional, Math.floor(maxSummaryTokens / 2)),
-  );
+  return Math.max(MIN_SUMMARY_TOKENS, Math.min(proportional, Math.floor(maxSummaryTokens / 2)));
 }
 
 /**
@@ -317,10 +314,7 @@ export async function summarizeSpan(input: SummarizeInput): Promise<SummarizeRes
     const bounded = new Promise<never>((_resolve, reject) => {
       rejectOnBound = reject;
     });
-    deadlineTimer = setTimeout(
-      () => rejectOnBound(new SummarizationDeadline()),
-      input.timeoutMs,
-    );
+    deadlineTimer = setTimeout(() => rejectOnBound(new SummarizationDeadline()), input.timeoutMs);
     if (input.abortSignal?.aborted === true) {
       // Already cancelled before this call began — the "no call at all" path.
       rejectOnBound(new CallerAborted());
@@ -457,7 +451,9 @@ export function renderSpanTranscript(spanMessages: readonly UIMessage[]): string
   const lines: string[] = [];
   for (const message of spanMessages) {
     const role = (message as { role?: string }).role ?? "unknown";
-    const parts = ((message as { parts?: unknown[] }).parts ?? []) as Array<Record<string, unknown>>;
+    const parts = ((message as { parts?: unknown[] }).parts ?? []) as Array<
+      Record<string, unknown>
+    >;
     const fragments: string[] = [];
     for (const part of parts) {
       const type = typeof part.type === "string" ? part.type : "";

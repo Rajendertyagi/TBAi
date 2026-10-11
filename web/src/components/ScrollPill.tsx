@@ -48,6 +48,7 @@ export function ScrollPill() {
 
   // Re-read the library's own answer while mounted. Cheap: it is a measurement
   // of one element, and the alternative is owning a parallel scroll state.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `count` is not read in the body on purpose - it is the re-trigger. A new message can change whether the transcript is at the end without any other observed value changing, so the at-end reading has to be retaken whenever the count moves.
   useEffect(() => {
     const read = () => setAtEnd(isTranscriptAtEnd(virtualizer));
     read();

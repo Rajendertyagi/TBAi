@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { appToolkit, NATIVE_TOOL_NAMES, OPENCODE_TOOL_NAMES } from "@web/tools/toolkit";
-import { buildRestingLabel, toStats, toStep, toolMetaKeys } from "@web/components/assistant-ui/elements/session-timeline.tsx";
+import {
+  buildRestingLabel,
+  toStats,
+  toStep,
+  toolMetaKeys,
+} from "@web/components/assistant-ui/elements/session-timeline.tsx";
 
 /**
  * The tool timeline's app-owned half.
@@ -86,9 +91,7 @@ describe("tool timeline — file stats", () => {
   });
 
   it("accepts the line-prefixed result keys too", () => {
-    const stats = toStats([
-      part("edit", {}, { filePath: "b.ts", linesAdded: 2, linesRemoved: 1 }),
-    ]);
+    const stats = toStats([part("edit", {}, { filePath: "b.ts", linesAdded: 2, linesRemoved: 1 })]);
     expect(stats).toEqual([{ file: "b.ts", added: 2, removed: 1 }]);
   });
 

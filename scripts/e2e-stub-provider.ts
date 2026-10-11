@@ -158,8 +158,7 @@ export function startStubProvider(port: number): StubProvider {
   const held = new Set<HeldResponse>();
   const encoder = new TextEncoder();
 
-  const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
   const finish = (entry: HeldResponse): void => {
     entry.done = true;
@@ -304,8 +303,7 @@ export function startStubProvider(port: number): StubProvider {
       // the result and immediately issues the CONTINUATION request, which also
       // offers the tool - so the arm must be cleared here rather than allowed to
       // fire twice. That two-request shape is exactly what the tool specs assert.
-      const toolThisRequest =
-        armedTool && offersTool(armedTool.toolName) ? armedTool : null;
+      const toolThisRequest = armedTool && offersTool(armedTool.toolName) ? armedTool : null;
       if (toolThisRequest) armedTool = null;
 
       // Any straggler from an abandoned hold is released rather than left hanging.
@@ -331,7 +329,11 @@ export function startStubProvider(port: number): StubProvider {
             if (toolThisRequest) {
               controller.enqueue(
                 encoder.encode(
-                  toolCallChunk(toolThisRequest.callId, toolThisRequest.toolName, toolThisRequest.args),
+                  toolCallChunk(
+                    toolThisRequest.callId,
+                    toolThisRequest.toolName,
+                    toolThisRequest.args,
+                  ),
                 ),
               );
               // `tool_calls` is a distinct finish reason from `stop`: the client
@@ -427,10 +429,7 @@ export function startStubProvider(port: number): StubProvider {
 }
 
 /** Register the stub as a provider and make it the active one. */
-export async function seedStubProvider(
-  apiBaseUrl: string,
-  stub: StubProvider,
-): Promise<string> {
+export async function seedStubProvider(apiBaseUrl: string, stub: StubProvider): Promise<string> {
   const response = await fetch(`${apiBaseUrl}/api/providers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

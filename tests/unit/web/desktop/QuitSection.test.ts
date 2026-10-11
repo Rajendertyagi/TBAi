@@ -12,9 +12,7 @@ import { stripComments } from "@web/testing/source-scope";
  * point. Comments are stripped first so prose can never satisfy a test.
  */
 async function sourceOf(relativeFile: string): Promise<string> {
-  return stripComments(
-    await Bun.file(path.join(REPO_ROOT, relativeFile)).text(),
-  );
+  return stripComments(await Bun.file(path.join(REPO_ROOT, relativeFile)).text());
 }
 
 describe("QuitSection wiring", () => {

@@ -116,10 +116,7 @@ export type Tier2Verdict = { readonly outcome: "within_assembly_limit" } | Tier2
  * @param limitSource Resolved provenance, used only to label the diagnostic.
  * @returns A breach when `range.high` exceeds {@link TIER_2_MAX_TOKENS}.
  */
-export function evaluateTier2(
-  estimate: InputSizeEstimate,
-  limitSource: string,
-): Tier2Verdict {
+export function evaluateTier2(estimate: InputSizeEstimate, limitSource: string): Tier2Verdict {
   const observed = estimate.range.high;
 
   if (!Number.isFinite(observed) || observed <= TIER_2_MAX_TOKENS) {

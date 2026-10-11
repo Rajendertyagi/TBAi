@@ -35,17 +35,13 @@ export function createFixtureServer(): McpServer {
     async ({ text }) => ({
       content: [{ type: "text" as const, text }],
       structuredContent: { echoed: text },
-    })
+    }),
   );
 
-  server.registerTool(
-    "fail",
-    { description: "Always returns a tool-level error." },
-    async () => ({
-      content: [{ type: "text" as const, text: "intentional failure" }],
-      isError: true,
-    })
-  );
+  server.registerTool("fail", { description: "Always returns a tool-level error." }, async () => ({
+    content: [{ type: "text" as const, text: "intentional failure" }],
+    isError: true,
+  }));
 
   // NOTE (v2 API): a tool WITHOUT inputSchema receives only (ctx) — the handler
   // would get the context as its first arg. All tools declare a schema so the
@@ -73,14 +69,14 @@ export function createFixtureServer(): McpServer {
           ? String((result.content as Record<string, unknown>).projectName ?? "")
           : "(declined)";
       return { content: [{ type: "text" as const, text: `User answered: ${name}` }] };
-    }
+    },
   );
 
   server.registerResource(
     "config",
     "fixture://config",
     { title: "App Config", mimeType: "text/plain" },
-    async (uri) => ({ contents: [{ uri: uri.href, text: "v1" }] })
+    async (uri) => ({ contents: [{ uri: uri.href, text: "v1" }] }),
   );
 
   server.registerPrompt(
@@ -92,9 +88,12 @@ export function createFixtureServer(): McpServer {
     },
     ({ name }) => ({
       messages: [
-        { role: "user" as const, content: { type: "text" as const, text: `Please greet ${name}.` } },
+        {
+          role: "user" as const,
+          content: { type: "text" as const, text: `Please greet ${name}.` },
+        },
       ],
-    })
+    }),
   );
 
   return server;

@@ -52,9 +52,9 @@ const assistant = (id: string, parts: unknown[]): UIMessage =>
   ({ id, role: "assistant", parts }) as UIMessage;
 
 const toolPartsOf = (message: UIMessage | undefined): Array<Record<string, unknown>> =>
-  (((message as { parts?: unknown[] } | undefined)?.parts ?? []) as Array<Record<string, unknown>>).filter(
-    (p) => String(p.type).startsWith("tool-"),
-  );
+  (
+    ((message as { parts?: unknown[] } | undefined)?.parts ?? []) as Array<Record<string, unknown>>
+  ).filter((p) => String(p.type).startsWith("tool-"));
 
 /** Convert exactly as the production seam does and return the tool-call inputs. */
 async function toolCallInputs(messages: UIMessage[]): Promise<unknown[]> {
@@ -70,9 +70,11 @@ async function toolCallInputs(messages: UIMessage[]): Promise<unknown[]> {
 }
 
 /** Prune then convert — the production order. */
-async function prunedToolCallInputs(
-  history: UIMessage[],
-): Promise<{ inputs: unknown[]; toolMessages: number; stats: ReturnType<typeof pruneStaleMessages>["stats"] }> {
+async function prunedToolCallInputs(history: UIMessage[]): Promise<{
+  inputs: unknown[];
+  toolMessages: number;
+  stats: ReturnType<typeof pruneStaleMessages>["stats"];
+}> {
   const { messages, stats } = pruneStaleMessages(history);
   const modelMessages = await convertToModelMessages(messages, {
     tools: {},
@@ -104,23 +106,30 @@ describe("Generation-400: non-object input is not replayable", () => {
     ["an empty string", ""],
     ["a number", 42],
     ["a boolean", true],
-  ])("input = %s is NOT usable, is dropped, and reaches no provider payload", async (_label, badInput) => {
-    const id = `call_${_label}`;
-    const part = poisonPart(id, { input: badInput });
+  ])(
+    "input = %s is NOT usable, is dropped, and reaches no provider payload",
+    async (_label, badInput) => {
+      const id = `call_${_label}`;
+      const part = poisonPart(id, { input: badInput });
 
-    expect(hasUsableToolInput(part)).toBe(false);
+      expect(hasUsableToolInput(part)).toBe(false);
 
-    const { inputs, toolMessages, stats } = await prunedToolCallInputs([
-      user("write it"),
-      assistant("a1", [{ type: "step-start" }, { type: "text", text: "Creating the file now." }, part]),
-      user("continue", "u2"),
-    ]);
+      const { inputs, toolMessages, stats } = await prunedToolCallInputs([
+        user("write it"),
+        assistant("a1", [
+          { type: "step-start" },
+          { type: "text", text: "Creating the file now." },
+          part,
+        ]),
+        user("continue", "u2"),
+      ]);
 
-    expect(stats.removedToolParts).toEqual([id]);
-    // Absent from the provider payload, and no synthesized result survives it.
-    expect(inputs).toHaveLength(0);
-    expect(toolMessages).toBe(0);
-  });
+      expect(stats.removedToolParts).toEqual([id]);
+      // Absent from the provider payload, and no synthesized result survives it.
+      expect(inputs).toHaveLength(0);
+      expect(toolMessages).toBe(0);
+    },
+  );
 
   it("input: null with a VALID object rawInput is recovered and promoted, not dropped", async () => {
     // Lenient recovery must still win over the stricter shape check: these
@@ -169,7 +178,10 @@ describe("Generation-400: usable shapes are preserved", () => {
 
   it("7. a valid object rawInput is promoted to input", async () => {
     const part = poisonPart("call_legacy", { rawInput: '{"path":"a.txt","content":"x"}' });
-    const { messages, stats } = pruneStaleMessages([user("hi"), assistant("a1", [{ type: "step-start" }, part])]);
+    const { messages, stats } = pruneStaleMessages([
+      user("hi"),
+      assistant("a1", [{ type: "step-start" }, part]),
+    ]);
     expect(stats.removedToolParts).toEqual([]);
     expect(toolPartsOf(messages[1])[0].input).toEqual({ path: "a.txt", content: "x" });
   });
@@ -185,7 +197,10 @@ describe("Generation-400: usable shapes are preserved", () => {
   it("a part with no input and no rawInput is dropped", async () => {
     const { stats } = pruneStaleMessages([
       user("hi"),
-      assistant("a1", [{ type: "step-start" }, { type: "tool-x", toolCallId: "call_none", state: "output-error", errorText: "e" }]),
+      assistant("a1", [
+        { type: "step-start" },
+        { type: "tool-x", toolCallId: "call_none", state: "output-error", errorText: "e" },
+      ]),
     ]);
     expect(stats.removedToolParts).toEqual(["call_none"]);
   });
@@ -208,7 +223,10 @@ describe("Generation-400: approval semantics survive the shape fix", () => {
       input: { path: "a.txt" },
       approval: { id: "ap-1" },
     };
-    const { messages, stats } = pruneStaleMessages([user("hi"), assistant("a1", [{ type: "step-start" }, gate])]);
+    const { messages, stats } = pruneStaleMessages([
+      user("hi"),
+      assistant("a1", [{ type: "step-start" }, gate]),
+    ]);
     expect(stats.removedToolParts).toEqual([]);
     expect(stats.preservedApprovals).toEqual(["call_gate"]);
     expect(toolPartsOf(messages[1])[0]).toEqual(gate);
@@ -226,7 +244,10 @@ describe("Generation-400: approval semantics survive the shape fix", () => {
         approval: { id: "ap-shape" },
         ...(badInput === undefined ? {} : { input: badInput }),
       };
-      const { messages, stats } = pruneStaleMessages([user("hi"), assistant("a1", [{ type: "step-start" }, gate])]);
+      const { messages, stats } = pruneStaleMessages([
+        user("hi"),
+        assistant("a1", [{ type: "step-start" }, gate]),
+      ]);
       expect(stats.removedToolParts).toEqual([]);
       expect(stats.preservedApprovals).toEqual(["call_gate_shape"]);
       expect(toolPartsOf(messages[1])).toHaveLength(1);
@@ -241,7 +262,10 @@ describe("Generation-400: approval semantics survive the shape fix", () => {
       input: { path: "a.txt" },
       approval: { id: "ap-2", approved: true },
     };
-    const { messages, stats } = pruneStaleMessages([user("hi"), assistant("a1", [{ type: "step-start" }, approved])]);
+    const { messages, stats } = pruneStaleMessages([
+      user("hi"),
+      assistant("a1", [{ type: "step-start" }, approved]),
+    ]);
     expect(stats.removedToolParts).toEqual([]);
     expect(stats.preservedApprovals).toEqual(["call_appr"]);
     expect(toolPartsOf(messages[1])[0]).toEqual(approved);
@@ -277,7 +301,11 @@ describe("Generation-400: approval semantics survive the shape fix", () => {
       input: { path: "a.txt" },
       approval: { id: "ap-4", approved: true },
     };
-    const { stats } = pruneStaleMessages([user("hi"), assistant("a1", [{ type: "step-start" }, approved]), user("next", "u2")]);
+    const { stats } = pruneStaleMessages([
+      user("hi"),
+      assistant("a1", [{ type: "step-start" }, approved]),
+      user("next", "u2"),
+    ]);
     expect(stats.removedToolParts).toEqual(["call_expired"]);
     expect(stats.preservedApprovals).toEqual([]);
   });
@@ -292,12 +320,21 @@ describe("Generation-400: no orphan tool message can survive", () => {
         { type: "step-start" },
         { type: "text", text: "mixed" },
         poisonPart("call_null", { input: null }),
-        { type: "tool-x", toolCallId: "call_ok", state: "output-available", input: { p: 1 }, output: { ok: true } },
+        {
+          type: "tool-x",
+          toolCallId: "call_ok",
+          state: "output-available",
+          input: { p: 1 },
+          output: { ok: true },
+        },
       ]),
       user("continue", "u2"),
     ];
     const { messages, stats } = pruneStaleMessages(history);
-    const modelMessages = await convertToModelMessages(messages, { tools: {}, ignoreIncompleteToolCalls: true });
+    const modelMessages = await convertToModelMessages(messages, {
+      tools: {},
+      ignoreIncompleteToolCalls: true,
+    });
 
     expect(stats.removedToolParts).toEqual(["call_null"]);
 
@@ -305,7 +342,8 @@ describe("Generation-400: no orphan tool message can survive", () => {
     const resultIds: string[] = [];
     for (const m of modelMessages) {
       if (m.role === "assistant" && Array.isArray(m.content)) {
-        for (const p of m.content) if (p.type === "tool-call") callIds.push((p as { toolCallId: string }).toolCallId);
+        for (const p of m.content)
+          if (p.type === "tool-call") callIds.push((p as { toolCallId: string }).toolCallId);
       }
       if (m.role === "tool" && Array.isArray(m.content)) {
         for (const p of m.content) resultIds.push((p as { toolCallId: string }).toolCallId);

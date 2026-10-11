@@ -22,10 +22,7 @@ import {
   chatKey,
   useChatTabsStore,
 } from "@web/features/chat/state/chatTabs.ts";
-import {
-  setClientTransportEnabled,
-  setLogLevel,
-} from "@web/lib/logger.ts";
+import { setClientTransportEnabled, setLogLevel } from "@web/lib/logger.ts";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 
 const realFetch = globalThis.fetch;
@@ -229,11 +226,7 @@ describe("reconcileTabMirror — idempotence and singleflight", () => {
     store().openChat("keep");
     serve(allExistExcept(["doomed"]));
 
-    await Promise.all([
-      reconcileTabMirror(),
-      reconcileTabMirror(),
-      reconcileTabMirror(),
-    ]);
+    await Promise.all([reconcileTabMirror(), reconcileTabMirror(), reconcileTabMirror()]);
 
     expect(requests).toHaveLength(1);
     expect(refs()).toEqual(["keep"]);
@@ -309,7 +302,7 @@ describe("evictIfGone — the single eviction rule", () => {
 });
 
 describe("races", () => {
-  it("A: a stale \"exists\" arriving after a \"gone\" cannot resurrect the tab", async () => {
+  it('A: a stale "exists" arriving after a "gone" cannot resurrect the tab', async () => {
     store().openChat("doomed");
     store().openChat("keep");
 
@@ -320,14 +313,19 @@ describe("races", () => {
 
     // Pass 2 answers from a stale snapshot claiming it still exists. Because
     // `exists` has no write path, this can only ever be a no-op.
-    serve(() => ok([["keep", "exists"], ["doomed", "exists"]]));
+    serve(() =>
+      ok([
+        ["keep", "exists"],
+        ["doomed", "exists"],
+      ]),
+    );
     await reconcileTabMirror();
 
     expect(refs()).toEqual(["keep"]);
     expect(refs()).not.toContain("doomed");
   });
 
-  it("B: a late \"gone\" for a tab another surface already closed is a no-op", async () => {
+  it('B: a late "gone" for a tab another surface already closed is a no-op', async () => {
     store().openChat("doomed");
     store().openChat("keep");
 

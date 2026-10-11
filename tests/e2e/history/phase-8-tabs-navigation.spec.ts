@@ -41,10 +41,7 @@ async function idsOf(request: APIRequestContext): Promise<Set<string>> {
   return new Set((await listConversations(request)).map((t) => t.id));
 }
 
-async function createConversation(
-  request: APIRequestContext,
-  marker: string,
-): Promise<string> {
+async function createConversation(request: APIRequestContext, marker: string): Promise<string> {
   const res = await request.post("/api/conversations", {
     data: { title: marker, workspaceMode: "simple" },
   });
@@ -76,16 +73,14 @@ test.beforeEach(async ({ page }) => {
   await waitDraftReady(page);
 });
 
-test("opening the same conversation through two paths yields ONE tab", async ({
-  page,
-}) => {
+test("opening the same conversation through two paths yields ONE tab", async ({ page }) => {
   const created = await createConversation(page.request, "p8-dup-conv");
   try {
     // Path 1: direct route navigation.
     await page.goto(`/#/chat/${created}`);
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/ }),
-    ).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     // Path 2: sidebar row click (the other UI path). The route guard
     // (shouldNavigateToThread) must suppress the duplicate navigation, and the
@@ -93,14 +88,16 @@ test("opening the same conversation through two paths yields ONE tab", async ({
     // renders rows by CONVERSATION TITLE, so the marker is the title. The list
     // was loaded before creation, so reload to pick up the new row.
     await page.reload();
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/ }),
-    ).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     // The conversation row renders in the "Recent" sidebar section (its
     // lastMessageAt is newest). Use a scoped locator to avoid matching the
     // duplicated row in the "Chats" section.
-    const row = page.locator("#sidebar-section-recent").getByRole("button", { name: /p8-dup-conv/i });
+    const row = page
+      .locator("#sidebar-section-recent")
+      .getByRole("button", { name: /p8-dup-conv/i });
     await expect(row).toBeVisible({ timeout: 10000 });
     await row.click();
     await expect(page).toHaveURL(new RegExp(`#/chat/${created}$`), { timeout: 10000 });
@@ -125,7 +122,7 @@ test("opening the same conversation through two paths yields ONE tab", async ({
 test("navigating to a new draft creates NO conversation row", async ({ page }) => {
   const before = await idsOf(page.request);
 
-    await page.locator("button[title='New chat']").first().click();
+  await page.locator("button[title='New chat']").first().click();
   await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 10000 });
 
   const after = await idsOf(page.request);
@@ -133,20 +130,24 @@ test("navigating to a new draft creates NO conversation row", async ({ page }) =
   expect(createdIds, "draft navigation must not mint a conversation").toEqual([]);
 });
 
-test("first send from the draft creates exactly ONE row and one tab", async ({
-  page,
-}) => {
+test("first send from the draft creates exactly ONE row and one tab", async ({ page }) => {
   const MARKER = "p8-first-send-row";
-  let chatCalls = 0;
+  let _chatCalls = 0;
   await page.route("**/api/chat", async (route) => {
-    chatCalls += 1;
+    _chatCalls += 1;
     await route.abort(); // no real model call
   });
 
   const created: string[] = [];
   try {
-    await page.getByRole("textbox", { name: /Send a message/ }).first().fill(MARKER);
-    await page.getByRole("textbox", { name: /Send a message/ }).first().press("Enter");
+    await page
+      .getByRole("textbox", { name: /Send a message/ })
+      .first()
+      .fill(MARKER);
+    await page
+      .getByRole("textbox", { name: /Send a message/ })
+      .first()
+      .press("Enter");
 
     await expect(page).toHaveURL(/#\/chat\/(?!new)/, { timeout: 30000 });
     const match = page.url().match(/#\/chat\/([^/]+)/);
@@ -164,17 +165,19 @@ test("first send from the draft creates exactly ONE row and one tab", async ({
   }
 });
 
-test("closing an inactive tab leaves the active conversation unchanged", async ({
-  page,
-}) => {
+test("closing an inactive tab leaves the active conversation unchanged", async ({ page }) => {
   const a = await createConversation(page.request, "p8-close-a");
   const b = await createConversation(page.request, "p8-close-b");
   try {
     // Two open: A then B → B is active, A inactive.
     await page.goto(`/#/chat/${a}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
     await page.goto(`/#/chat/${b}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     // Close the INACTIVE tab (A) via its X button.
     const strip = page.getByRole("tablist", { name: "Chat tabs" });
@@ -190,20 +193,24 @@ test("closing an inactive tab leaves the active conversation unchanged", async (
   }
 });
 
-test("closing the active tab activates the right neighbour", async ({
-  page,
-}) => {
+test("closing the active tab activates the right neighbour", async ({ page }) => {
   const a = await createConversation(page.request, "p8-neigh-a");
   const doomed = await createConversation(page.request, "p8-neigh-mid");
   const b = await createConversation(page.request, "p8-neigh-b");
   try {
     // Order: a, mid, b — all three opened in sequence → b active last.
     await page.goto(`/#/chat/${a}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
     await page.goto(`/#/chat/${doomed}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
     await page.goto(`/#/chat/${b}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     // Make the middle tab active, then close it.
     const strip = page.getByRole("tablist", { name: "Chat tabs" });
@@ -228,19 +235,25 @@ test("deleting the active conversation falls back safely; deleted id never activ
   try {
     // doomed active, survivor behind it.
     await page.goto(`/#/chat/${survivor}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
     await page.goto(`/#/chat/${doomed}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     // Delete the ACTIVE conversation through the sidebar row's "..." menu.
     // Reload so the freshly-created rows appear in the sidebar list.
     await page.reload();
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/ }),
-    ).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     // Scope to the "Recent" section to avoid matching the duplicated row in "Chats".
-    const row = page.locator("#sidebar-section-recent").getByRole("button", { name: /p8-delete-active/i });
+    const row = page
+      .locator("#sidebar-section-recent")
+      .getByRole("button", { name: /p8-delete-active/i });
     await expect(row).toBeVisible({ timeout: 10000 });
     // Hover to reveal the "..." more-button, then open the menu and pick Delete.
     await row.hover();
@@ -265,8 +278,10 @@ test("browser back/forward creates no conversation row", async ({ page }) => {
     const before = await idsOf(page.request);
 
     await page.goto(`/#/chat/${target}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
-  await page.locator("button[title='New chat']").first().click();
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
+    await page.locator("button[title='New chat']").first().click();
     await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 10000 });
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`#/chat/${target}$`), { timeout: 10000 });
@@ -289,13 +304,15 @@ test("reload restores tabs/URL with no duplicate rows", async ({ page }) => {
     const before = await idsOf(page.request);
 
     await page.goto(`/#/chat/${target}`);
-    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     await page.reload();
     await expect(page).toHaveURL(new RegExp(`#/chat/${target}$`), { timeout: 15000 });
-    await expect(
-      page.getByRole("textbox", { name: /Send a message/ }),
-    ).toHaveCount(1, { timeout: 15000 });
+    await expect(page.getByRole("textbox", { name: /Send a message/ })).toHaveCount(1, {
+      timeout: 15000,
+    });
 
     const after = await idsOf(page.request);
     const newRows = [...after].filter((id) => !before.has(id));

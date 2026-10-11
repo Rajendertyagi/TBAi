@@ -24,7 +24,9 @@ function restoreEnvironment(): void {
 
 afterEach(restoreEnvironment);
 
-const RUNTIME_MODULE_URL = pathToFileURL(path.join(REPO_ROOT, "src/services/opencode/runtime.ts")).href;
+const RUNTIME_MODULE_URL = pathToFileURL(
+  path.join(REPO_ROOT, "src/services/opencode/runtime.ts"),
+).href;
 const AUTH_FIXTURE_PASSWORD = "opencode-runtime-auth-fixture-password";
 const AUTH_REPLACEMENT_PASSWORD = "opencode-runtime-replacement-password";
 const AUTH_REPLACEMENT_ENV_VAR = "TBai_OPENCODE_TEST_REPLACEMENT_PASSWORD";
@@ -95,10 +97,7 @@ async function runAuthInvariantSubprocess(): Promise<AuthInvariantResult> {
     stdout: "pipe",
     stderr: "ignore",
   });
-  const [exitCode, stdout] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-  ]);
+  const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
   if (exitCode !== 0) {
     throw new Error(`OpenCode auth fixture process exited with code ${exitCode}`);
   }
@@ -135,10 +134,7 @@ describe("managed OpenCode binary resolution", () => {
   });
 
   it("does not fall back to PATH when the explicit binary is invalid", () => {
-    const missingExplicitBinary = path.join(
-      import.meta.dir,
-      "__missing_explicit_opencode_v2__",
-    );
+    const missingExplicitBinary = path.join(import.meta.dir, "__missing_explicit_opencode_v2__");
     expect(existsSync(missingExplicitBinary)).toBe(false);
     process.env[OPENCODE_CONFIG.binaryEnvVar] = missingExplicitBinary;
     let pathWasQueried = false;

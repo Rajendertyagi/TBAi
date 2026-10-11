@@ -186,9 +186,7 @@ export function enqueueClientEvent(event: ClientLogEvent): void {
  * Send the current batch. Never rejects; on failure the batch is DROPPED (and
  * counted) rather than retried, so a down backend cannot create a retry loop.
  */
-export async function flushClientEvents(
-  opts: { keepalive?: boolean } = {},
-): Promise<void> {
+export async function flushClientEvents(opts: { keepalive?: boolean } = {}): Promise<void> {
   if (inFlight || queue.length === 0) return;
   const doFetch = resolveFetch();
   if (!doFetch) return;

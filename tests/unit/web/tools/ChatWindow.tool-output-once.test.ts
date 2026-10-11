@@ -78,9 +78,7 @@ describe("tool output is rendered once by TBAi", () => {
 
   beforeAll(async () => {
     chatWindowSource = stripComments(
-      await Bun.file(
-        path.join(REPO_ROOT, "web/src/components/ChatWindow.tsx"),
-      ).text(),
+      await Bun.file(path.join(REPO_ROOT, "web/src/components/ChatWindow.tsx")).text(),
     );
     markdownSource = stripComments(
       await Bun.file(

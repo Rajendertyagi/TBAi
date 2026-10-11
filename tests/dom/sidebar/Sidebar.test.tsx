@@ -10,9 +10,7 @@ describe("Sidebar architectural guard (Step 1B)", () => {
   let syncSource = "";
 
   beforeAll(async () => {
-    sidebarSource = await Bun.file(
-      path.join(REPO_ROOT, "web/src/components/Sidebar.tsx"),
-    ).text();
+    sidebarSource = await Bun.file(path.join(REPO_ROOT, "web/src/components/Sidebar.tsx")).text();
     rowSource = await Bun.file(
       path.join(REPO_ROOT, "web/src/features/sidebar/components/SidebarThreadRow.tsx"),
     ).text();

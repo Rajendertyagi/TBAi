@@ -12,7 +12,12 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 /** Enough persisted messages that the transcript is genuinely scrollable. */
 const SEEDED_MESSAGES = 80;
 
-function storedMessage(id: string, parentId: string | null, text: string, role: "user" | "assistant") {
+function storedMessage(
+  id: string,
+  parentId: string | null,
+  text: string,
+  role: "user" | "assistant",
+) {
   return {
     id,
     parent_id: parentId,
@@ -142,8 +147,7 @@ test("scroll-to-latest moves the real virtualized scroller", async ({ page, requ
       height: el.scrollHeight,
       client: el.clientHeight,
     }));
-    const distanceFromEnd =
-      awayFromEnd.height - awayFromEnd.top - awayFromEnd.client;
+    const distanceFromEnd = awayFromEnd.height - awayFromEnd.top - awayFromEnd.client;
     expect(distanceFromEnd, "timeline is away from the live end").toBeGreaterThan(24);
 
     const control = page.getByRole("button", { name: /scroll to bottom/i });
@@ -155,8 +159,7 @@ test("scroll-to-latest moves the real virtualized scroller", async ({ page, requ
     // assertion polls rather than sampling once.
     await expect
       .poll(
-        async () =>
-          scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
+        async () => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
         { timeout: 8000 },
       )
       .toBeLessThanOrEqual(24);
@@ -166,5 +169,4 @@ test("scroll-to-latest moves the real virtualized scroller", async ({ page, requ
 });
 
 /** Mounted virtual rows. Far fewer than the logical history, by design. */
-const rows = (page: import("@playwright/test").Page) =>
-  page.locator("[data-row-key]");
+const rows = (page: import("@playwright/test").Page) => page.locator("[data-row-key]");

@@ -144,7 +144,8 @@ const SUMMARY_SECTIONS = [
 function buildSummaryReply(): string {
   return SUMMARY_SECTIONS.map((heading, index) => {
     if (index === 0) return `${heading}\nStub conversation.`;
-    if (heading === "## Work State") return `${heading}\n### Completed\n- Stub turn.\n\n### Active\n- (none)\n\n### Blocked\n- (none)`;
+    if (heading === "## Work State")
+      return `${heading}\n### Completed\n- Stub turn.\n\n### Active\n- (none)\n\n### Blocked\n- (none)`;
     if (heading === "## Next Move") return `${heading}\n1. Continue the stub run.`;
     return `${heading}\n- (none)`;
   }).join("\n\n");
@@ -189,12 +190,7 @@ function textChunk(model: string, content: string): string {
 }
 
 /** One streamed tool-call delta, in the shape OpenAI's API uses. */
-function toolCallChunk(
-  model: string,
-  id: string,
-  name: string,
-  args: string,
-): string {
+function toolCallChunk(model: string, id: string, name: string, args: string): string {
   return sseFrame({
     id: "chatcmpl-tbai-stub",
     object: "chat.completion.chunk",
@@ -245,12 +241,16 @@ function usageBlock(promptTokens: number, completionTokens: number): Record<stri
  * @returns A handle exposing the base URL and every recorded request.
  * @throws Error when the server cannot bind.
  */
-export async function startStubProvider(
-  options: StubProviderOptions = {},
-): Promise<StubProvider> {
+export async function startStubProvider(options: StubProviderOptions = {}): Promise<StubProvider> {
   const model = options.model ?? DEFAULT_MODEL;
   const requests: StubRequest[] = [];
   let sequence = 0;
+
+  /** Monotonic request counter. Named so the call site reads as a call, not an assignment. */
+  const nextSequence = (): number => {
+    sequence += 1;
+    return sequence;
+  };
 
   const server = Bun.serve({
     port: 0,
@@ -275,7 +275,7 @@ export async function startStubProvider(
       const promptTokens = countPromptTokens(messages);
       const carriesToolResult = messages.some((message) => message.role === "tool");
       const record: StubRequest = {
-        sequence: (sequence += 1),
+        sequence: nextSequence(),
         model: body.model ?? model,
         messages,
         tools,
@@ -289,10 +289,7 @@ export async function startStubProvider(
         (await options.respond?.(record)) ??
         (looksLikeSummaryRequest(messages) ? "summary" : "text");
 
-      const reply =
-        behaviour === "summary"
-          ? buildSummaryReply()
-          : (options.text ?? DEFAULT_TEXT);
+      const reply = behaviour === "summary" ? buildSummaryReply() : (options.text ?? DEFAULT_TEXT);
       const completionTokens = encode(reply).length;
 
       const frames: string[] = [];

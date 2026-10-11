@@ -1,11 +1,7 @@
 import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 /**
  * One collapsible sidebar section (Folders / Chats / Recent / Archived).
@@ -34,11 +30,7 @@ export function SidebarSection({
   children: ReactNode;
 }) {
   return (
-    <Collapsible
-      open={expanded}
-      onOpenChange={onExpandedChange}
-      className="flex flex-col"
-    >
+    <Collapsible open={expanded} onOpenChange={onExpandedChange} className="flex flex-col">
       <div className="group/section relative">
         <CollapsibleTrigger asChild>
           <button
@@ -68,10 +60,7 @@ export function SidebarSection({
           </div>
         )}
       </div>
-      <CollapsibleContent
-        id={`sidebar-section-${id}`}
-        className="flex flex-col gap-0.5"
-      >
+      <CollapsibleContent id={`sidebar-section-${id}`} className="flex flex-col gap-0.5">
         {children}
       </CollapsibleContent>
     </Collapsible>

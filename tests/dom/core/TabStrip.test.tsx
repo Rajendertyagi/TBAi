@@ -6,9 +6,7 @@ describe("TabStrip architectural guard (Step 1A)", () => {
   let source = "";
 
   beforeAll(async () => {
-    source = await Bun.file(
-      path.join(REPO_ROOT, "web/src/components/TabStrip.tsx"),
-    ).text();
+    source = await Bun.file(path.join(REPO_ROOT, "web/src/components/TabStrip.tsx")).text();
   });
 
   it("does not import or call assistant-ui hooks", () => {

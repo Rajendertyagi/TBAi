@@ -81,7 +81,10 @@ function trackWindowRequests(page: Page): string[] {
 const loadEarlier = (page: Page) => page.getByRole("button", { name: /Load earlier/i });
 
 test.describe("P2d: stale publication reaches production", () => {
-  test("control - an uninvalidated load paginates and issues a request", async ({ page, request }) => {
+  test("control - an uninvalidated load paginates and issues a request", async ({
+    page,
+    request,
+  }) => {
     test.setTimeout(180_000);
     const tag = `ctl-${Date.now()}`;
     const cid = await createConversation(request, `reach-control-${tag}`);
@@ -94,9 +97,7 @@ test.describe("P2d: stale publication reaches production", () => {
 
     const before = requests.length;
     await loadEarlier(page).click();
-    await expect
-      .poll(() => requests.length, { timeout: SETTLE_MS })
-      .toBeGreaterThan(before);
+    await expect.poll(() => requests.length, { timeout: SETTLE_MS }).toBeGreaterThan(before);
   });
 
   test("recovery during an in-flight load leaves paging intact and working", async ({

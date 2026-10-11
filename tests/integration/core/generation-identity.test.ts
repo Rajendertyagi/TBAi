@@ -45,13 +45,15 @@ function collectSteps(model: unknown, stopAt = 20): Promise<GenerationStep[]> {
     tools: { probe_tool: probe },
     stopWhen: stepCountIs(stopAt),
     // The callback returns void: `seen.push` returns a length, and an
-      // arrow with an expression body would hand that number back to the SDK.
-      onStepFinish: (step: GenerationStep) => {
-        seen.push(step);
-      },
+    // arrow with an expression body would hand that number back to the SDK.
+    onStepFinish: (step: GenerationStep) => {
+      seen.push(step);
+    },
   });
   return (async () => {
-    for await (const _ of result.fullStream) { /* drain */ }
+    for await (const _ of result.fullStream) {
+      /* drain */
+    }
     return seen;
   })();
 }
@@ -65,8 +67,17 @@ function toolLoopStream() {
       return {
         stream: convertArrayToReadableStream([
           { type: "stream-start", warnings: [] },
-          { type: "tool-call", toolCallId: "toolcall-xyz", toolName: "probe_tool", input: JSON.stringify({}) },
-          { type: "finish", finishReason: { unified: "tool-calls", raw: "tool-calls" }, usage: USAGE },
+          {
+            type: "tool-call",
+            toolCallId: "toolcall-xyz",
+            toolName: "probe_tool",
+            input: JSON.stringify({}),
+          },
+          {
+            type: "finish",
+            finishReason: { unified: "tool-calls", raw: "tool-calls" },
+            usage: USAGE,
+          },
         ] as never),
       };
     }
@@ -97,7 +108,9 @@ function textStream(text: string) {
 describe("generation identity is (callId, stepNumber)", () => {
   // I — same callId, different stepNumber must be distinguishable generations.
   it("distinguishes two generations that share a callId", async () => {
-    const steps = await collectSteps(new MockLanguageModelV4({ doStream: toolLoopStream() } as never));
+    const steps = await collectSteps(
+      new MockLanguageModelV4({ doStream: toolLoopStream() } as never),
+    );
 
     expect(steps).toHaveLength(2);
     // The premise of the whole design: callId alone would collapse these.
@@ -111,8 +124,12 @@ describe("generation identity is (callId, stepNumber)", () => {
 
   // I (cont.) — different callId, same stepNumber is a different generation.
   it("distinguishes two generations that share a stepNumber across two calls", async () => {
-    const first = await collectSteps(new MockLanguageModelV4({ doStream: textStream("one") } as never));
-    const second = await collectSteps(new MockLanguageModelV4({ doStream: textStream("two") } as never));
+    const first = await collectSteps(
+      new MockLanguageModelV4({ doStream: textStream("one") } as never),
+    );
+    const second = await collectSteps(
+      new MockLanguageModelV4({ doStream: textStream("two") } as never),
+    );
 
     // Both are step 0 — the level that a stepNumber-only identity would merge.
     expect(first[0]?.stepNumber).toBe(0);
@@ -123,8 +140,12 @@ describe("generation identity is (callId, stepNumber)", () => {
 
   // K — a retry (a second streamText) is a new callId under the same run.
   it("gives a retried attempt a new callId while the run identity is unchanged", async () => {
-    const attemptOne = await collectSteps(new MockLanguageModelV4({ doStream: toolLoopStream() } as never));
-    const attemptTwo = await collectSteps(new MockLanguageModelV4({ doStream: textStream("after recovery") } as never));
+    const attemptOne = await collectSteps(
+      new MockLanguageModelV4({ doStream: toolLoopStream() } as never),
+    );
+    const attemptTwo = await collectSteps(
+      new MockLanguageModelV4({ doStream: textStream("after recovery") } as never),
+    );
 
     expect(new Set([attemptOne[0]?.callId, attemptTwo[0]?.callId]).size).toBe(2);
     // `streamId` is owned by the route and identical across both attempts; it is
@@ -134,7 +155,9 @@ describe("generation identity is (callId, stepNumber)", () => {
 
   // J — provider response id is a different identity and must not be equated.
   it("keeps response.id distinct from the callId/stepNumber pair", async () => {
-    const steps = await collectSteps(new MockLanguageModelV4({ doStream: toolLoopStream() } as never));
+    const steps = await collectSteps(
+      new MockLanguageModelV4({ doStream: toolLoopStream() } as never),
+    );
 
     // response.id varies per step; callId does not. Collapsing them would make
     // a per-step fact look like a per-run one.
@@ -148,7 +171,9 @@ describe("generation identity is (callId, stepNumber)", () => {
 
   // J cont. — tool causality survives the join used by the funnel.
   it("exposes the requesting generation's tool call ids", async () => {
-    const steps = await collectSteps(new MockLanguageModelV4({ doStream: toolLoopStream() } as never));
+    const steps = await collectSteps(
+      new MockLanguageModelV4({ doStream: toolLoopStream() } as never),
+    );
 
     const firstToolIds = (steps[0]?.content ?? [])
       .filter((part) => part.type === "tool-call")
@@ -166,8 +191,17 @@ describe("generation identity is (callId, stepNumber)", () => {
       return {
         stream: convertArrayToReadableStream([
           { type: "stream-start", warnings: [] },
-          { type: "tool-call", toolCallId: `toolcall-${call}`, toolName: "probe_tool", input: JSON.stringify({}) },
-          { type: "finish", finishReason: { unified: "tool-calls", raw: "tool-calls" }, usage: USAGE },
+          {
+            type: "tool-call",
+            toolCallId: `toolcall-${call}`,
+            toolName: "probe_tool",
+            input: JSON.stringify({}),
+          },
+          {
+            type: "finish",
+            finishReason: { unified: "tool-calls", raw: "tool-calls" },
+            usage: USAGE,
+          },
         ] as never),
       };
     };
@@ -179,7 +213,9 @@ describe("generation identity is (callId, stepNumber)", () => {
   });
 
   it("carries model identity and provider usage on every generation", async () => {
-    const steps = await collectSteps(new MockLanguageModelV4({ doStream: toolLoopStream() } as never));
+    const steps = await collectSteps(
+      new MockLanguageModelV4({ doStream: toolLoopStream() } as never),
+    );
     for (const step of steps) {
       expect(step.model?.provider).toBe("mock-provider");
       expect(step.model?.modelId).toBe("mock-model-id");

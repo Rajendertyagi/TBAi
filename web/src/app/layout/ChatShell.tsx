@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo } from "react";
-import { AssistantRuntimeProvider, AuiConfig, Tools, Suggestions, makeAssistantDataUI } from "@assistant-ui/react";
+import {
+  AssistantRuntimeProvider,
+  AuiConfig,
+  Tools,
+  Suggestions,
+  makeAssistantDataUI,
+} from "@assistant-ui/react";
 import { useAppChatRuntime } from "../../runtime";
 import { threadListAdapter } from "../adapter";
 import { DevToolsGate } from "../../components/DevToolsGate";
@@ -30,9 +36,7 @@ import { AppShell } from "./AppShell";
 export function ChatShell() {
   const active = useChatTabsStore(activeTab);
   const runtimeThreadId =
-    active?.kind === "chat" && active.ref !== NEW_DRAFT_TAB_ID
-      ? active.ref
-      : undefined;
+    active?.kind === "chat" && active.ref !== NEW_DRAFT_TAB_ID ? active.ref : undefined;
 
   // Runtime-initiated thread changes (sidebar thread click, first send
   // creating a thread, adapter initialize) flow into the tab store; the URL
@@ -54,18 +58,12 @@ export function ChatShell() {
       // the same record afterwards. Falls back to the live snapshot only for
       // rows the owner did not create.
       state.resolveDraftId(id, peekMaterializedEngine(id) ?? getWelcomeEngineSnapshot().engine);
-    } else if (
-      !state.tabs.some((t) => t.kind === "chat" && t.ref === id)
-    ) {
+    } else if (!state.tabs.some((t) => t.kind === "chat" && t.ref === id)) {
       state.openChat(id);
     }
   }, []);
 
-  const runtime = useAppChatRuntime(
-    threadListAdapter,
-    runtimeThreadId,
-    handleThreadIdChange,
-  );
+  const runtime = useAppChatRuntime(threadListAdapter, runtimeThreadId, handleThreadIdChange);
 
   const { loadProviders } = useSettingsStore();
   useEffect(() => {
@@ -83,14 +81,18 @@ export function ChatShell() {
   // `appToolkit` is the native registry plus the OpenCode-name renderers; the
   // MODEL-facing contract stays server-side (src/tools/index.ts), so this only
   // decides which component draws a tool part.
-  const config = useMemo(() => AuiConfig({
-    tools: Tools({ toolkit: appToolkit }),
-    suggestions: Suggestions([
-      "What can you help me with?",
-      "Explain a concept",
-      "Help me write code",
-    ]),
-  }), []);
+  const config = useMemo(
+    () =>
+      AuiConfig({
+        tools: Tools({ toolkit: appToolkit }),
+        suggestions: Suggestions([
+          "What can you help me with?",
+          "Explain a concept",
+          "Help me write code",
+        ]),
+      }),
+    [],
+  );
 
   // Register the TBAi progress data-part renderer globally via AuiConfig.
   const TbaiProgressDataUI = makeAssistantDataUI({

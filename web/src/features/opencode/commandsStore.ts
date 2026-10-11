@@ -1,10 +1,7 @@
 import { create } from "zustand";
 import { logger } from "../../lib/logger";
 import { apiFetch } from "../../lib/platform";
-import {
-  parseCommandFeed,
-  type OpenCodeCommand,
-} from "./slashCommands";
+import { parseCommandFeed, type OpenCodeCommand } from "./slashCommands";
 
 /**
  * OpenCode's command feed, for the composer's `/` palette.
@@ -49,10 +46,7 @@ export const useCommandsStore = create<CommandsState>((set, get) => ({
 
   load: async (opts) => {
     const { loadedAt, commands } = get();
-    const fresh =
-      !opts?.force &&
-      commands.length > 0 &&
-      Date.now() - loadedAt < FEED_TTL_MS;
+    const fresh = !opts?.force && commands.length > 0 && Date.now() - loadedAt < FEED_TTL_MS;
     if (fresh) return;
     if (inFlight) return inFlight;
 

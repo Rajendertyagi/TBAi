@@ -24,13 +24,19 @@ function stubClipboard(writeText: unknown): void {
 }
 
 afterEach(() => {
-  Object.defineProperty(globalThis, "navigator", { value: realNavigator, configurable: true, writable: true });
+  Object.defineProperty(globalThis, "navigator", {
+    value: realNavigator,
+    configurable: true,
+    writable: true,
+  });
 });
 
 describe("writeClipboardText", () => {
   it("reports a confirmed write", async () => {
     const written: string[] = [];
-    stubClipboard(async (text: string) => { written.push(text); });
+    stubClipboard(async (text: string) => {
+      written.push(text);
+    });
     expect(await writeClipboardText("hello")).toBe("copied");
     // Non-vacuity: the text must actually have reached the clipboard, not merely
     // resolved without throwing.
@@ -38,7 +44,9 @@ describe("writeClipboardText", () => {
   });
 
   it("reports a refusal distinctly from an absent API", async () => {
-    stubClipboard(async () => { throw new Error("denied"); });
+    stubClipboard(async () => {
+      throw new Error("denied");
+    });
     expect(await writeClipboardText("hello")).toBe("refused");
   });
 
@@ -52,19 +60,29 @@ describe("writeClipboardText", () => {
     // cannot write. Treating this as "copied" would be a lie the reader cannot
     // detect, because nothing would be on the clipboard.
     stubClipboard(undefined);
-    Object.defineProperty(globalThis, "navigator", { value: { clipboard: {} }, configurable: true, writable: true });
+    Object.defineProperty(globalThis, "navigator", {
+      value: { clipboard: {} },
+      configurable: true,
+      writable: true,
+    });
     expect(await writeClipboardText("hello")).toBe("unavailable");
   });
 
   it("reports unavailable when writeText is present but not callable", async () => {
-    Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: "nope" } }, configurable: true, writable: true });
+    Object.defineProperty(globalThis, "navigator", {
+      value: { clipboard: { writeText: "nope" } },
+      configurable: true,
+      writable: true,
+    });
     expect(await writeClipboardText("hello")).toBe("unavailable");
   });
 
   it("never rejects, whatever the browser does", async () => {
     // The contract the dock relies on: it awaits this to set a status, so a
     // rejection here would be an unhandled rejection in the click handler.
-    stubClipboard(async () => { throw new TypeError("boom"); });
+    stubClipboard(async () => {
+      throw new TypeError("boom");
+    });
     await expect(writeClipboardText("hello")).resolves.toBe("refused");
   });
 
@@ -72,7 +90,9 @@ describe("writeClipboardText", () => {
     // Unlike the menu helper, an empty string is still a real write here: the
     // dock never emits one, but if it did, "copied nothing" must not be
     // reported as "the browser refused".
-    stubClipboard(async () => { /* resolves without writing */ });
+    stubClipboard(async () => {
+      /* resolves without writing */
+    });
     expect(await writeClipboardText("")).toBe("copied");
   });
 });

@@ -24,8 +24,8 @@
  *   2. `hasEstablishedConversations` — an empty database.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { evaluateOrphanSweepSafety, gcOrphanChatDirs } from "@/services/workspace.ts";
 import { conversationService } from "@/services/storage";
 import { getWorkspaceDir } from "@/services/tools.ts";
@@ -35,7 +35,6 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 
 const CHATS_ROOT = path.join(getWorkspaceDir(), "chats");
 const LEGACY_ROOT = path.join(process.env.DATA_DIR!, "chat");
-
 
 /** Refuse to run destructive-GC tests against a non-temporary root. */
 function assertIsolatedRoot(label: string): void {
@@ -49,7 +48,7 @@ function assertIsolatedRoot(label: string): void {
 }
 
 function os_tmpdir(): string {
-  return path.resolve(require("os").tmpdir());
+  return path.resolve(require("node:os").tmpdir());
 }
 
 function clearAll(): void {

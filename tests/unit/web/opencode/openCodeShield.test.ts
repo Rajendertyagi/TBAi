@@ -3,14 +3,13 @@ import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OpenCodeShieldButton, runShieldToggle } from "@web/features/opencode/OpenCodeShieldChip.tsx";
-import { persistAutoApprove } from "@web/features/opencode/autoApproveWrite.ts";
-import { ApprovalGate, Json } from "@web/tools/filesystem/ui";
 import {
-  stripComments,
-  functionBody,
-  commentedBodyOf,
-} from "@web/testing/source-scope";
+  OpenCodeShieldButton,
+  runShieldToggle,
+} from "@web/features/opencode/OpenCodeShieldChip.tsx";
+import type { persistAutoApprove } from "@web/features/opencode/autoApproveWrite.ts";
+import { ApprovalGate, Json } from "@web/tools/filesystem/ui";
+import { stripComments, functionBody, commentedBodyOf } from "@web/testing/source-scope";
 
 /**
  * The Auto Approval Shield UI.
@@ -32,17 +31,9 @@ import {
 
 // ── Static render: the presentational button ────────────────────────────────
 
-function renderButton(props: {
-  enabled: boolean;
-  busy?: boolean;
-  disabled?: boolean;
-}): string {
-  const Any = OpenCodeShieldButton as unknown as (
-    p: Record<string, unknown>,
-  ) => ReactElement;
-  return renderToStaticMarkup(
-    createElement(Any, { ...props, onToggle: () => {} }),
-  );
+function renderButton(props: { enabled: boolean; busy?: boolean; disabled?: boolean }): string {
+  const Any = OpenCodeShieldButton as unknown as (p: Record<string, unknown>) => ReactElement;
+  return renderToStaticMarkup(createElement(Any, { ...props, onToggle: () => {} }));
 }
 
 describe("OpenCodeShieldButton — static render", () => {
@@ -336,9 +327,7 @@ beforeAll(async () => {
     path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeShieldChip.tsx"),
   ).text();
   chipBody = functionBody(stripComments(chipSource), "OpenCodeShieldChip");
-  composerSource = await Bun.file(
-    path.join(REPO_ROOT, "web/src/components/Composer.tsx"),
-  ).text();
+  composerSource = await Bun.file(path.join(REPO_ROOT, "web/src/components/Composer.tsx")).text();
   questionsSource = await Bun.file(
     path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeQuestions.tsx"),
   ).text();
@@ -395,19 +384,14 @@ describe("ApprovalGate — source guards", () => {
   let gateBody = "";
 
   beforeAll(async () => {
-    gateBody = await commentedBodyOf(
-      "ApprovalGate",
-      "web/src/tools/filesystem/ui.tsx",
-    );
+    gateBody = await commentedBodyOf("ApprovalGate", "web/src/tools/filesystem/ui.tsx");
   });
 
   it("renders the argument preview unconditionally, never as the prompt's alternative", () => {
     // The old shape was `{prompt ? <p>{prompt}</p> : details}` — the preview was
     // the else-branch, so any truthy prompt discarded it entirely.
     expect(gateBody).not.toMatch(/: details\b/);
-    expect(gateBody).not.toMatch(
-      /\?\s*<p[^>]*>\s*\{prompt\}\s*<\/p>\s*:\s*details/,
-    );
+    expect(gateBody).not.toMatch(/\?\s*<p[^>]*>\s*\{prompt\}\s*<\/p>\s*:\s*details/);
     // And the preview is still a plain child on every branch that renders it
     // (the auto-decision row and the open gate).
     expect(gateBody).toContain("{details}");

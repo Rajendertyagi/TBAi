@@ -1,4 +1,3 @@
-import path from "path";
 import app from "./routes";
 import { db } from "./db";
 import { DATA_DIR } from "./config/data-dir";
@@ -7,7 +6,11 @@ import { credentialStore } from "./services/credentials";
 import { mcpManager } from "./services/mcp/manager";
 import { openCodeServerManager } from "./services/opencode/serverManager";
 import { chatRuns } from "./services/chat-runs";
-import { initScheduler, beginSchedulerShutdown, abortAllRuns } from "./services/scheduler/scheduler";
+import {
+  initScheduler,
+  beginSchedulerShutdown,
+  abortAllRuns,
+} from "./services/scheduler/scheduler";
 import { gcOrphanChatDirs } from "./services/workspace";
 import { applyPersistedLogSettings } from "./services/log-settings";
 import { recoverOrphanedChatStreams } from "./services/chat-streams/boot";

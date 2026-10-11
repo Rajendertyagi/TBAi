@@ -1,8 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  startControlledProvider,
-  type ControlledProvider,
-} from "../helpers/controlledProvider.ts";
+import { startControlledProvider, type ControlledProvider } from "../helpers/controlledProvider.ts";
 
 /**
  * P2 streaming behaviour through the VIRTUALIZED production path.
@@ -26,9 +23,7 @@ const scroller = (page: Page) => page.locator('[data-testid="virtual-transcript-
 const rows = (page: Page) => page.locator("[data-row-key]");
 
 async function distanceFromEnd(page: Page): Promise<number> {
-  return scroller(page).evaluate(
-    (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-  );
+  return scroller(page).evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
 }
 
 /** A conversation with enough text that the transcript genuinely overflows. */
@@ -112,9 +107,7 @@ test.describe("P2 streaming behaviour (virtualized path)", () => {
 
       // The run is genuinely in flight: the provider received the request and has
       // emitted a frame, and it is being held open.
-      await expect
-        .poll(() => provider.requestCount, { timeout: 60000 })
-        .toBeGreaterThan(0);
+      await expect.poll(() => provider.requestCount, { timeout: 60000 }).toBeGreaterThan(0);
       await expect(page.getByRole("button", { name: /Stop generating/i })).toBeVisible({
         timeout: 30000,
       });
@@ -136,9 +129,7 @@ test.describe("P2 streaming behaviour (virtualized path)", () => {
       // the gesture mid-flight (it measured 24px of a 400px wheel). Poll until
       // the gesture settles rather than asserting on a partial frame - the
       // assertion below is still a strict ">200px away", never a relaxed bound.
-      await expect
-        .poll(() => distanceFromEnd(page), { timeout: 10_000 })
-        .toBeGreaterThan(200);
+      await expect.poll(() => distanceFromEnd(page), { timeout: 10_000 }).toBeGreaterThan(200);
 
       // Let the held run stream and finish.
       provider.complete();

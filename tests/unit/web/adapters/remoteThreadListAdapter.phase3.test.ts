@@ -120,8 +120,7 @@ describe("thread-list last-good retention (Phase 3.5)", () => {
 
   it("[P3-12] network failure never yields [] when a projection is retained", async () => {
     const adapter = createRemoteThreadListAdapter();
-    globalThis.fetch = (async () =>
-      okList([{ id: "a", title: "A" }])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okList([{ id: "a", title: "A" }])) as unknown as typeof fetch;
     await adapter.list();
 
     globalThis.fetch = (async () => {
@@ -134,8 +133,7 @@ describe("thread-list last-good retention (Phase 3.5)", () => {
 
   it("[P3-11] server-returned [] is authoritative and replaces the stale cache", async () => {
     const adapter = createRemoteThreadListAdapter();
-    globalThis.fetch = (async () =>
-      okList([{ id: "a", title: "A" }])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okList([{ id: "a", title: "A" }])) as unknown as typeof fetch;
     await adapter.list();
 
     globalThis.fetch = (async () => okList([])) as unknown as typeof fetch;
@@ -151,8 +149,7 @@ describe("thread-list last-good retention (Phase 3.5)", () => {
 
   it("[P3-06b] invalidateThreadListCache() drops the retained projection", async () => {
     const adapter = createRemoteThreadListAdapter();
-    globalThis.fetch = (async () =>
-      okList([{ id: "a", title: "A" }])) as unknown as typeof fetch;
+    globalThis.fetch = (async () => okList([{ id: "a", title: "A" }])) as unknown as typeof fetch;
     await adapter.list();
 
     invalidateThreadListCache();
@@ -167,8 +164,8 @@ describe("conversation-config mutation failure contract (Phase 3.11)", () => {
   it("[P3-15a] updateCustom 503 throws — the failed write stays unsuccessful", async () => {
     globalThis.fetch = (async () => errStatus(503)) as unknown as typeof fetch;
     const adapter = createRemoteThreadListAdapter();
-    await expect(
-      adapter.updateCustom!("c1", { providerId: "p" }),
-    ).rejects.toThrow("Failed to persist conversation config (503)");
+    await expect(adapter.updateCustom!("c1", { providerId: "p" })).rejects.toThrow(
+      "Failed to persist conversation config (503)",
+    );
   });
 });

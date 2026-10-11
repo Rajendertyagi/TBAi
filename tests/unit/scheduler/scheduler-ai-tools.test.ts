@@ -86,21 +86,21 @@ describe("scheduler AI tool (consolidated)", () => {
   });
 
   /**
- * Narrow a scheduler tool result to its failure branch.
- *
- * The result is a discriminated union on `ok`, but reading `error` after
- * `expect(res.ok).toBe(false)` does not narrow it - the compiler still reports
- * the `ok: true` member at that line. Asserting through a helper keeps the
- * claim AND the narrowing, and a failure prints the result that came back instead
- * of a property-access error naming a type.
- */
-function assertFailed(
-  result: SchedulerResult,
-): asserts result is Extract<SchedulerResult, { ok: false }> {
-  expect(result).toEqual(expect.objectContaining({ ok: false, error: expect.any(String) }));
-}
+   * Narrow a scheduler tool result to its failure branch.
+   *
+   * The result is a discriminated union on `ok`, but reading `error` after
+   * `expect(res.ok).toBe(false)` does not narrow it - the compiler still reports
+   * the `ok: true` member at that line. Asserting through a helper keeps the
+   * claim AND the narrowing, and a failure prints the result that came back instead
+   * of a property-access error naming a type.
+   */
+  function assertFailed(
+    result: SchedulerResult,
+  ): asserts result is Extract<SchedulerResult, { ok: false }> {
+    expect(result).toEqual(expect.objectContaining({ ok: false, error: expect.any(String) }));
+  }
 
-describe("runScheduler actions", () => {
+  describe("runScheduler actions", () => {
     it("create returns ok + job summary and persists it", async () => {
       const res = await runScheduler(baseCreateArgs());
       expect(res.ok).toBe(true);
@@ -113,9 +113,7 @@ describe("runScheduler actions", () => {
     });
 
     it("create validates the provider exists", async () => {
-      const res = await runScheduler(
-        baseCreateArgs({ providerId: "ghost" }),
-      );
+      const res = await runScheduler(baseCreateArgs({ providerId: "ghost" }));
       assertFailed(res);
       expect(res.error).toMatch(/does not exist/i);
     });
@@ -200,9 +198,7 @@ describe("runScheduler actions", () => {
       if (!res.ok) return;
       expect(res.id).toBe(created.job!.id);
       // Soft-deleted: not in the active list, but run history remains queryable.
-      expect(
-        schedulerStore.list().some((j) => j.id === created.job!.id),
-      ).toBe(false);
+      expect(schedulerStore.list().some((j) => j.id === created.job!.id)).toBe(false);
       expect(schedulerStore.get(created.job!.id)?.status).toBe("deleted");
     });
 

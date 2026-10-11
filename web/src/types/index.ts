@@ -190,7 +190,12 @@ export interface FolderGroup {
 
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpAuthType = "none" | "bearer" | "basic" | "oauth";
-export type McpConnectionStatus = "disconnected" | "connecting" | "connected" | "error" | "auth_failed";
+export type McpConnectionStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "error"
+  | "auth_failed";
 
 /**
  * Machine-readable MCP failure reason (backend-classified). The UI renders a

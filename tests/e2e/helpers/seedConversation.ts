@@ -43,27 +43,24 @@ export async function seedConversation(
   const conversation = (await created.json()) as { id: string; title?: string };
 
   if (options.withMessage) {
-    const seeded = await request.post(
-      `/api/conversations/${conversation.id}/messages`,
-      {
-        data: {
-          message: {
-            id: `seed-user-${conversation.id}`,
-            parent_id: null,
-            format: "ai-sdk/v6",
-            content: {
-              role: "user",
-              parts: [
-                {
-                  type: "text",
-                  text: options.messageText ?? "an earlier turn",
-                },
-              ],
-            },
+    const seeded = await request.post(`/api/conversations/${conversation.id}/messages`, {
+      data: {
+        message: {
+          id: `seed-user-${conversation.id}`,
+          parent_id: null,
+          format: "ai-sdk/v6",
+          content: {
+            role: "user",
+            parts: [
+              {
+                type: "text",
+                text: options.messageText ?? "an earlier turn",
+              },
+            ],
           },
         },
       },
-    );
+    });
     if (!seeded.ok()) {
       // Do not leave a half-seeded conversation behind for the next assertion.
       await removeConversation(request, conversation.id);
@@ -75,9 +72,6 @@ export async function seedConversation(
 }
 
 /** Delete a seeded conversation. Never throws: cleanup must not fail a spec. */
-export async function removeConversation(
-  request: APIRequestContext,
-  id: string,
-): Promise<void> {
+export async function removeConversation(request: APIRequestContext, id: string): Promise<void> {
   await request.delete(`/api/conversations/${id}`).catch(() => {});
 }

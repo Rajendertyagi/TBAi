@@ -45,7 +45,10 @@ function record(h: ReturnType<typeof createAudit>): LayerRecord {
   const submitted = h.submissions.at(-1);
   const submittedIds: readonly string[] = submitted?.ids ?? [];
   // `p1pReconstruct` reads `message.id`, so it takes message-shaped input.
-  const p1p = p1pReconstruct(HEAD_CHAIN, submittedIds.map((id) => ({ id })));
+  const p1p = p1pReconstruct(
+    HEAD_CHAIN,
+    submittedIds.map((id) => ({ id })),
+  );
   return {
     visible: h.visibleIds(),
     head: h.headId(),

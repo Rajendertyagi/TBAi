@@ -15,7 +15,10 @@
  *    later publish guard can undo.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { applyWindowToChat, type WindowInstaller } from "@web/features/chat/history/useDirectHistoryWindow.ts";
+import {
+  applyWindowToChat,
+  type WindowInstaller,
+} from "@web/features/chat/history/useDirectHistoryWindow.ts";
 import { createThreadHistoryAdapter } from "@web/adapters/threadHistoryAdapter.ts";
 import {
   clearAllWindowControllers,
@@ -65,7 +68,10 @@ const adapterFor = (remoteId: string) =>
     withFormat: (a: unknown) => { load: () => Promise<unknown> };
   };
 /** A recording installer, standing in for the live feed. */
-function recordingInstaller(): { install: WindowInstaller; readonly installed: Array<{ id: string }> } {
+function recordingInstaller(): {
+  install: WindowInstaller;
+  readonly installed: Array<{ id: string }>;
+} {
   const installed: Array<{ id: string }> = [];
   return {
     installed,
@@ -144,7 +150,8 @@ describe("Defect S - navigation cannot overwrite a replacement's live messages",
     // C1 navigates (goHistorical / restoreTip both route through applyWindowToChat)
     // while C2 replaces it.
     clearAllWindowControllers();
-    globalThis.fetch = (async () => jsonResponse([row("replacement-0", null)])) as unknown as typeof fetch;
+    globalThis.fetch = (async () =>
+      jsonResponse([row("replacement-0", null)])) as unknown as typeof fetch;
     const c2 = ensureWindowController(remoteId, decodeRow as never);
     await c2.loadTip();
 

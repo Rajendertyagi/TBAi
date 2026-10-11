@@ -125,21 +125,30 @@ describe("parseCodexPatch: the refusals", () => {
   };
 
   it("refuses a patch with no Begin marker", () => {
-    refused(`*** Add File: a.ts
+    refused(
+      `*** Add File: a.ts
 +x
-*** End Patch`, "first line of the patch must be");
+*** End Patch`,
+      "first line of the patch must be",
+    );
   });
 
   it("refuses a patch with no End marker", () => {
-    refused(`*** Begin Patch
+    refused(
+      `*** Begin Patch
 *** Add File: a.ts
-+x`, "last line of the patch must be");
++x`,
+      "last line of the patch must be",
+    );
   });
 
   it("refuses an unknown header, naming the three valid ones", () => {
-    refused(`*** Begin Patch
+    refused(
+      `*** Begin Patch
 *** Rename File: a.ts
-*** End Patch`, "is not a valid hunk header");
+*** End Patch`,
+      "is not a valid hunk header",
+    );
     const parsed = parseCodexPatch(`*** Begin Patch
 *** Rename File: a.ts
 *** End Patch`);
@@ -171,17 +180,23 @@ no marker at all
   });
 
   it("refuses a header carrying no path", () => {
-    refused(`*** Begin Patch
+    refused(
+      `*** Begin Patch
 *** Add File:  
 +x
-*** End Patch`, "carries no path");
+*** End Patch`,
+      "carries no path",
+    );
   });
 
   it("refuses an update hunk with no lines", () => {
-    refused(`*** Begin Patch
+    refused(
+      `*** Begin Patch
 *** Update File: a.ts
 @@
-*** End Patch`, "does not contain any lines");
+*** End Patch`,
+      "does not contain any lines",
+    );
   });
 
   it("refuses an empty patch rather than rendering nothing", () => {

@@ -122,10 +122,7 @@ export function resetOperationsForTests(): void {
 }
 
 /** Resolve a fetch input to a URL, or null when it cannot be parsed. Pure. */
-export function resolveRequestUrl(
-  input: URL | RequestInfo,
-  origin: string,
-): URL | null {
+export function resolveRequestUrl(input: URL | RequestInfo, origin: string): URL | null {
   try {
     if (typeof input === "string") return new URL(input, origin);
     if (input instanceof URL) return input;
@@ -187,10 +184,7 @@ export function installOperationHeaderFetch(): void {
   if (fetchInstalled || typeof window === "undefined") return;
   fetchInstalled = true;
   const base = globalThis.fetch.bind(globalThis);
-  globalThis.fetch = (async (
-    input: URL | RequestInfo,
-    init?: RequestInit,
-  ): Promise<Response> => {
+  globalThis.fetch = (async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
     const next = operationInitFor(
       input,
       init,

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import fs from "fs";
-import path from "path";
-import os from "os";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import {
   redactFields,
   normalizeError,
@@ -11,10 +11,7 @@ import {
   resolveLoggerConfig,
   logger,
 } from "@/lib/logger.ts";
-import {
-  sanitizeAiRequest,
-  aiDebugRequestsEnabled,
-} from "@/lib/ai-diagnostics.ts";
+import { sanitizeAiRequest, aiDebugRequestsEnabled } from "@/lib/ai-diagnostics.ts";
 
 // The global logger writes to console; silence it here so test output stays
 // readable. Per-test behavior is verified through pure helpers + a scratch
@@ -137,7 +134,9 @@ describe("sanitized AI diagnostics (J + negatives)", () => {
     },
   ];
   const tools = {
-    write_file: { parameters: { type: "object", required: ["path"], properties: { path: { type: "string" } } } },
+    write_file: {
+      parameters: { type: "object", required: ["path"], properties: { path: { type: "string" } } },
+    },
   };
 
   it("keeps structure, drops user text and secrets", () => {

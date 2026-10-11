@@ -30,10 +30,7 @@ import type {
   SessionSwitchModelInput,
   V2Event,
 } from "@opencode/client";
-import {
-  OPENCODE_DIRECTORY_HEADER,
-  OPENCODE_PROXY_BASE_URL,
-} from "@/config/opencode";
+import { OPENCODE_DIRECTORY_HEADER, OPENCODE_PROXY_BASE_URL } from "@/config/opencode";
 
 export const V2_GENERATION_BRAND = Symbol("tbai-opencode-v2-generation");
 export const V2_HISTORY_READER_BRAND = Symbol("tbai-opencode-v2-history-reader");
@@ -211,29 +208,18 @@ export function createOpenCodeV2Client(
     const scoped = async <TInput extends SessionScopedInput, TResult>(
       input: TInput,
       signal: AbortSignal,
-      call: (
-        scopedInput: TInput,
-        requestOptions: OfficialRequestOptions,
-      ) => Promise<TResult>,
+      call: (scopedInput: TInput, requestOptions: OfficialRequestOptions) => Promise<TResult>,
     ): Promise<TResult> => {
       assertScopedSession(input, scope.sessionId);
-      return callWithGeneration(state, signal, (requestOptions) =>
-        call(input, requestOptions),
-      );
+      return callWithGeneration(state, signal, (requestOptions) => call(input, requestOptions));
     };
     const connectionOperation = <TInput extends SessionScopedInput, TResult>(
       input: TInput,
-      call: (
-        scopedInput: TInput,
-        requestOptions: OfficialRequestOptions,
-      ) => Promise<TResult>,
+      call: (scopedInput: TInput, requestOptions: OfficialRequestOptions) => Promise<TResult>,
     ): Promise<TResult> => scoped(input, state.connectionSignal, call);
     const lifecycleOperation = <TInput extends SessionScopedInput, TResult>(
       input: TInput,
-      call: (
-        scopedInput: TInput,
-        requestOptions: OfficialRequestOptions,
-      ) => Promise<TResult>,
+      call: (scopedInput: TInput, requestOptions: OfficialRequestOptions) => Promise<TResult>,
     ): Promise<TResult> => scoped(input, state.lifecycleSignal, call);
     const history: V2HistoryReader = {
       [V2_HISTORY_READER_BRAND]: true,

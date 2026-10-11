@@ -12,10 +12,7 @@
  * is written after the winner is chosen and is never read while choosing it.
  */
 import { describe, expect, it } from "bun:test";
-import {
-  UNKNOWN_LIMIT_CEILING,
-  resolveContextLimit,
-} from "@/context/limits";
+import { UNKNOWN_LIMIT_CEILING, resolveContextLimit } from "@/context/limits";
 import type { LimitCandidateRecord } from "@/context/types.ts";
 
 const MODEL = "claude-test";
@@ -196,10 +193,24 @@ describe("rejected candidates are reported, not discarded", () => {
   // H — diagnostics never influence selection.
   it("cannot change the winner, whatever it records", () => {
     const cases = [
-      { ...base, model: { contextWindow: 200_000, contextWindowSource: "provider_reported" as const } },
-      { ...base, model: { contextWindow: 128_000, contextWindowSource: "provider_reported" as const }, configuredContextWindow: 512_000 },
-      { ...base, model: { contextWindow: 512_000, contextWindowSource: "provider_reported" as const }, configuredContextWindow: 512_000 },
-      { ...base, model: { contextWindow: 1000.9, contextWindowSource: "provider_reported" as const } },
+      {
+        ...base,
+        model: { contextWindow: 200_000, contextWindowSource: "provider_reported" as const },
+      },
+      {
+        ...base,
+        model: { contextWindow: 128_000, contextWindowSource: "provider_reported" as const },
+        configuredContextWindow: 512_000,
+      },
+      {
+        ...base,
+        model: { contextWindow: 512_000, contextWindowSource: "provider_reported" as const },
+        configuredContextWindow: 512_000,
+      },
+      {
+        ...base,
+        model: { contextWindow: 1000.9, contextWindowSource: "provider_reported" as const },
+      },
       { ...base },
     ] as const;
 

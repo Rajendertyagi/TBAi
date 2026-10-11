@@ -210,9 +210,7 @@ describe("open paths converge on one tab (no duplicates)", () => {
     store().openAgent("c1");
     const state = store();
     // Preserved architecture: separate engine tabs, one conversation id.
-    expect(state.tabs.map((t) => t.key).sort()).toEqual(
-      [agentKey("c1"), chatKey("c1")].sort(),
-    );
+    expect(state.tabs.map((t) => t.key).sort()).toEqual([agentKey("c1"), chatKey("c1")].sort());
     expect(state.tabs.every((t) => t.ref === "c1")).toBe(true);
     // …projected to their own engine routes.
     expect(urlForTab(state.tabs.find((t) => t.kind === "chat")!)).toBe("/chat/c1");

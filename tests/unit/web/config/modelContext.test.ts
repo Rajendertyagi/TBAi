@@ -36,23 +36,21 @@ describe("resolveContextWindow", () => {
 
   it("falls back to the documented default when nothing is configured", () => {
     expect(resolveContextWindow({})).toBe(DEFAULT_MODEL_CONTEXT_WINDOW);
-    expect(
-      resolveContextWindow({ modelId: "m-bare", groups: groups() }),
-    ).toBe(DEFAULT_MODEL_CONTEXT_WINDOW);
-    expect(
-      resolveContextWindow({ modelId: "unknown-model", groups: groups() }),
-    ).toBe(DEFAULT_MODEL_CONTEXT_WINDOW);
-    expect(resolveContextWindow({ modelId: "m-small" })).toBe(
+    expect(resolveContextWindow({ modelId: "m-bare", groups: groups() })).toBe(
       DEFAULT_MODEL_CONTEXT_WINDOW,
     );
+    expect(resolveContextWindow({ modelId: "unknown-model", groups: groups() })).toBe(
+      DEFAULT_MODEL_CONTEXT_WINDOW,
+    );
+    expect(resolveContextWindow({ modelId: "m-small" })).toBe(DEFAULT_MODEL_CONTEXT_WINDOW);
   });
 
   it("ignores non-positive or non-finite inputs at every layer", () => {
     const badValues: unknown[] = [0, -1, NaN, Infinity, undefined];
     for (const bad of badValues) {
-      expect(
-        resolveContextWindow({ limitContext: bad as number | undefined }),
-      ).toBe(DEFAULT_MODEL_CONTEXT_WINDOW);
+      expect(resolveContextWindow({ limitContext: bad as number | undefined })).toBe(
+        DEFAULT_MODEL_CONTEXT_WINDOW,
+      );
       expect(
         resolveContextWindow({
           modelId: "m-small",
@@ -61,9 +59,7 @@ describe("resolveContextWindow", () => {
               providerId: "p",
               providerName: "P",
               isDefault: false,
-              models: [
-                { id: "m-small", provider: "x", contextWindow: bad as number },
-              ],
+              models: [{ id: "m-small", provider: "x", contextWindow: bad as number }],
             },
           ],
         }),

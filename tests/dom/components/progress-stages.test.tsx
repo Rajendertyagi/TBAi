@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ProgressStages, type ProgressData } from "@web/components/assistant-ui/elements/progress-stages.tsx";
+import {
+  ProgressStages,
+  type ProgressData,
+} from "@web/components/assistant-ui/elements/progress-stages.tsx";
 
 /**
  * The progress renderer, and the name it now has.
@@ -35,9 +38,7 @@ const stages = (): ProgressData =>
   ]);
 
 const render = (data: unknown) =>
-  renderToStaticMarkup(
-    createElement(ProgressStages as never, { data } as never),
-  );
+  renderToStaticMarkup(createElement(ProgressStages as never, { data } as never));
 
 describe("the progress panel", () => {
   it("names the progress and every stage", () => {

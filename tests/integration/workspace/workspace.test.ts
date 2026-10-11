@@ -7,9 +7,9 @@
  */
 import { describe, it, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import conversationsApp from "@/routes/conversations.ts";
 import foldersApp from "@/routes/folders.ts";
 import { folderService } from "@/services/folders.ts";

@@ -31,9 +31,7 @@ import { conversationService } from "@/services/storage";
 
 describe("findOpenCodeBinary — resolves the CLI via PATH (hermetic)", () => {
   it("returns the resolved path when the binary is on PATH", () => {
-    expect(findOpenCodeBinary(() => "/fake/bin/opencode")).toBe(
-      "/fake/bin/opencode",
-    );
+    expect(findOpenCodeBinary(() => "/fake/bin/opencode")).toBe("/fake/bin/opencode");
   });
 
   it("returns null when the binary is not installed (edge: absent PATH entry)", () => {
@@ -69,10 +67,7 @@ describe("OpenCodeBinaryMissingError — stable identity + config-owned message"
 });
 
 /** Drive the real Hono route in-process (no server, no network). */
-async function requestRoute(
-  path: string,
-  init?: RequestInit,
-): Promise<Response> {
+async function requestRoute(path: string, init?: RequestInit): Promise<Response> {
   const { default: app } = await import("@/routes/opencode.ts");
   return app.request(`http://localhost${path}`, init);
 }

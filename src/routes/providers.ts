@@ -8,7 +8,12 @@ import { sanitizeStreamError } from "../lib/redact";
 import { logger } from "../lib/logger";
 import { errorLogFields } from "../lib/errors";
 import { discoverModels } from "../services/modelDiscovery";
-import { providerCreateSchema, providerUpdateSchema, providerTestSchema, providerDiscoverSchema } from "../lib/validation";
+import {
+  providerCreateSchema,
+  providerUpdateSchema,
+  providerTestSchema,
+  providerDiscoverSchema,
+} from "../lib/validation";
 import { storageError } from "./shared";
 import type { ProviderConfig } from "../types";
 
@@ -40,14 +45,30 @@ app.post("/api/providers", async (c) => {
   const body = parsed.data;
   const id = generateId();
   const now = Date.now();
-  const activeCount = (db.query("SELECT COUNT(*) as c FROM provider_configs WHERE is_active = 1").get() as { c: number }).c;
+  const activeCount = (
+    db.query("SELECT COUNT(*) as c FROM provider_configs WHERE is_active = 1").get() as {
+      c: number;
+    }
+  ).c;
   const isActive = activeCount === 0 ? 1 : 0;
   const apiProtocol = body.apiProtocol ?? defaultApiProtocol(body.type);
 
   db.run(
     `INSERT INTO provider_configs (id, name, type, endpoint, model, models, thinking, api_protocol, is_active, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, body.name, body.type, body.endpoint || null, body.model, JSON.stringify(body.models ?? []), body.thinking ?? "off", apiProtocol ?? null, isActive, now, now],
+    [
+      id,
+      body.name,
+      body.type,
+      body.endpoint || null,
+      body.model,
+      JSON.stringify(body.models ?? []),
+      body.thinking ?? "off",
+      apiProtocol ?? null,
+      isActive,
+      now,
+      now,
+    ],
   );
 
   let credentialConfigured = false;
@@ -75,13 +96,34 @@ app.put("/api/providers/:id", async (c) => {
   // (e.g. the UI not echoing the secret back) does not wipe the stored key.
   const sets: string[] = [];
   const values: SQLQueryBindings[] = [];
-  if (body.name !== undefined) { sets.push("name = ?"); values.push(body.name); }
-  if (body.type !== undefined) { sets.push("type = ?"); values.push(body.type); }
-  if (body.endpoint !== undefined) { sets.push("endpoint = ?"); values.push(body.endpoint || null); }
-  if (body.model !== undefined) { sets.push("model = ?"); values.push(body.model); }
-  if (body.models !== undefined) { sets.push("models = ?"); values.push(JSON.stringify(body.models)); }
-  if (body.thinking !== undefined) { sets.push("thinking = ?"); values.push(body.thinking); }
-  if (body.apiProtocol !== undefined) { sets.push("api_protocol = ?"); values.push(body.apiProtocol); }
+  if (body.name !== undefined) {
+    sets.push("name = ?");
+    values.push(body.name);
+  }
+  if (body.type !== undefined) {
+    sets.push("type = ?");
+    values.push(body.type);
+  }
+  if (body.endpoint !== undefined) {
+    sets.push("endpoint = ?");
+    values.push(body.endpoint || null);
+  }
+  if (body.model !== undefined) {
+    sets.push("model = ?");
+    values.push(body.model);
+  }
+  if (body.models !== undefined) {
+    sets.push("models = ?");
+    values.push(JSON.stringify(body.models));
+  }
+  if (body.thinking !== undefined) {
+    sets.push("thinking = ?");
+    values.push(body.thinking);
+  }
+  if (body.apiProtocol !== undefined) {
+    sets.push("api_protocol = ?");
+    values.push(body.apiProtocol);
+  }
   sets.push("updated_at = ?");
   values.push(now, id);
 
@@ -160,7 +202,11 @@ app.post("/api/providers/test", async (c) => {
     return c.json({ ok: false, error: "No API key provided" }, 400);
   }
   try {
-    const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint ?? undefined, apiKey: apiKey ?? undefined });
+    const models = await discoverModels({
+      type: cfg.type,
+      endpoint: cfg.endpoint ?? undefined,
+      apiKey: apiKey ?? undefined,
+    });
     return c.json({ ok: true, modelCount: models.length });
   } catch (e) {
     logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });
@@ -190,7 +236,11 @@ app.post("/api/providers/discover", async (c) => {
     return c.json({ ok: false, error: "No API key provided" }, 400);
   }
   try {
-    const models = await discoverModels({ type: cfg.type, endpoint: cfg.endpoint ?? undefined, apiKey: apiKey ?? undefined });
+    const models = await discoverModels({
+      type: cfg.type,
+      endpoint: cfg.endpoint ?? undefined,
+      apiKey: apiKey ?? undefined,
+    });
     return c.json({ ok: true, models });
   } catch (e) {
     logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });

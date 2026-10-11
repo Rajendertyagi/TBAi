@@ -49,10 +49,7 @@ import {
 } from "../../harness/opencodeStubConfig.ts";
 import { startStubProvider, type StubProvider } from "../../harness/opencodeStubProvider.ts";
 // TBAi's own projection, exercised against REAL OpenCode payloads.
-import {
-  resolveCodeOccupancy,
-  occupancyTokens,
-} from "@web/features/opencode/codeOccupancy.ts";
+import { resolveCodeOccupancy, occupancyTokens } from "@web/features/opencode/codeOccupancy.ts";
 
 const reason = runtimeUnavailableReason();
 const describeRuntime = runtimeTestsRequested() ? describe : describe.skip;
@@ -83,24 +80,26 @@ interface CompactionRecord {
   error?: unknown;
 }
 
-
-
 describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
   let stub: StubProvider;
   let server: RuntimeOpenCodeServer;
   let isolation: RuntimeIsolation;
-  let events: string[] = [];
+  const events: string[] = [];
   let stopEvents: (() => void) | null = null;
 
   const headers = (): Record<string, string> => ({ "x-opencode-directory": isolation.homeDir });
   const body = (): Record<string, string> => ({ "content-type": "application/json", ...headers() });
 
   const readMessages = async (id: string): Promise<CompactionRecord[]> =>
-    (await server.json<{ data: CompactionRecord[] }>(`/api/session/${id}/message`, { headers: headers() }))
-      .data;
+    (
+      await server.json<{ data: CompactionRecord[] }>(`/api/session/${id}/message`, {
+        headers: headers(),
+      })
+    ).data;
 
   const readContext = async (id: string): Promise<unknown[]> =>
-    (await server.json<{ data: unknown[] }>(`/api/session/${id}/context`, { headers: headers() })).data;
+    (await server.json<{ data: unknown[] }>(`/api/session/${id}/context`, { headers: headers() }))
+      .data;
 
   const compactions = async (id: string): Promise<CompactionRecord[]> =>
     (await readMessages(id)).filter((m) => m.type === "compaction");
@@ -155,13 +154,9 @@ describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
         (m) => m.type === "compaction" && m.id && !beforeCompactions.has(m.id),
       );
       if (newCompaction) return true;
-      const answered = current.some(
-        (m) => m.type === "assistant" && m.id && !before.has(m.id),
-      );
+      const answered = current.some((m) => m.type === "assistant" && m.id && !before.has(m.id));
       if (answered) return true;
-      const failed = current.some(
-        (m) => m.type === "idle" && m.id && !before.has(m.id),
-      );
+      const failed = current.some((m) => m.type === "idle" && m.id && !before.has(m.id));
       if (failed) return false;
     }
     return false;
@@ -204,8 +199,8 @@ describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          let idx: number;
-          while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          let idx = buffer.indexOf("\n\n");
+          while (idx !== -1) {
             const frame = buffer.slice(0, idx);
             buffer = buffer.slice(idx + 2);
             for (const line of frame.split("\n")) {
@@ -217,6 +212,7 @@ describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
                 /* keep-alive or non-JSON frame */
               }
             }
+            idx = buffer.indexOf("\n\n");
           }
         }
       } catch {
@@ -352,13 +348,13 @@ describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
     const deadline = Date.now() + TURN_TIMEOUT_MS;
     while (Date.now() < deadline && events.length === 0) await Bun.sleep(TURN_POLL_MS);
     const compactionEvents = events.filter((e) => e.includes("compaction"));
-    console.log(
-      `[conformance] event types seen: ${[...new Set(events)].slice(0, 12).join(", ")}`,
-    );
+    console.log(`[conformance] event types seen: ${[...new Set(events)].slice(0, 12).join(", ")}`);
     // The stream is live; whether this binary labels compaction as a lifecycle
     // event is reported, not assumed.
     expect(Array.isArray(events)).toBe(true);
-    console.log(`[conformance] compaction-scoped events: ${compactionEvents.join(", ") || "(none)"}`);
+    console.log(
+      `[conformance] compaction-scoped events: ${compactionEvents.join(", ") || "(none)"}`,
+    );
   }, 300_000);
 
   it("compaction state is durable: /context returns only post-compaction messages", async () => {

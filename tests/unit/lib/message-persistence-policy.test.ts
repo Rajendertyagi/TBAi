@@ -88,9 +88,9 @@ describe("message persistence policy — the interrupted-run phantom", () => {
     expect(hasRenderableAssistantContent("nope")).toBe(true);
     expect(hasRenderableAssistantContent({})).toBe(true);
     expect(hasRenderableAssistantContent({ role: "assistant" })).toBe(true);
-    expect(
-      hasRenderableAssistantContent({ role: "assistant", parts: [{ text: "no type" }] }),
-    ).toBe(true);
+    expect(hasRenderableAssistantContent({ role: "assistant", parts: [{ text: "no type" }] })).toBe(
+      true,
+    );
     // A part type we have never seen is content, not noise.
     expect(
       hasRenderableAssistantContent({ role: "assistant", parts: [{ type: "future-widget" }] }),

@@ -164,8 +164,7 @@ export const toolsConfig = {
       argPreviewTruncated: (dropped: number) =>
         `…${dropped} more character${dropped === 1 ? "" : "s"} not shown`,
       andMoreCount: (count: number) => `…and ${count} more`,
-      approvedWillExecute:
-        "Approved — will execute with your next message in this conversation.",
+      approvedWillExecute: "Approved — will execute with your next message in this conversation.",
       cancelledBeforeCompletion: "Cancelled before completion.",
       failedWithReason: (reason: string) => `Failed: ${reason}`,
       deniedWithReason: (reason: string) => `Denied: ${reason}`,

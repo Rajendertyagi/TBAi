@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import { useFoldersStore } from "@/stores/foldersStore";
 import { FolderHeader } from "./FolderHeader";
-import { conversationIdFromPath } from "@/features/chat/state/chatTabs";import { FolderConversationRow } from "./FolderConversationRow";
+import { conversationIdFromPath } from "@/features/chat/state/chatTabs";
+import { FolderConversationRow } from "./FolderConversationRow";
 import { WorkspaceFolderDialog } from "@/features/folders/WorkspaceFolderDialog";
 import type { Folder } from "@/types";
 
@@ -19,9 +20,7 @@ export function FoldersSection() {
   const folderExpanded = useFoldersStore((s) => s.folderExpanded);
   const setFolderExpanded = useFoldersStore((s) => s.setFolderExpanded);
   const loadFolders = useFoldersStore((s) => s.loadFolders);
-  const [manageLinksFolder, setManageLinksFolder] = useState<Folder | null>(
-    null,
-  );
+  const [manageLinksFolder, setManageLinksFolder] = useState<Folder | null>(null);
   const { pathname } = useLocation();
 
   // Active conversation id from the URL — either engine surface (chat or
@@ -34,27 +33,22 @@ export function FoldersSection() {
 
   return (
     <>
-      {folders.length === 0 ? null : (
-        folders.map((folder) => {
-          const expanded = folderExpanded[folder.id] ?? true;
-          return (
-            <div key={folder.id} className="flex flex-col">
-              <FolderHeader
-                folder={folder}
-                expanded={expanded}
-                onToggle={(id) => setFolderExpanded(id, !expanded)}
-                onManageLinks={setManageLinksFolder}
-              />
-              {expanded && (
-                <FolderConversationRow
-                  folderId={folder.id}
-                  activeId={activeId}
+      {folders.length === 0
+        ? null
+        : folders.map((folder) => {
+            const expanded = folderExpanded[folder.id] ?? true;
+            return (
+              <div key={folder.id} className="flex flex-col">
+                <FolderHeader
+                  folder={folder}
+                  expanded={expanded}
+                  onToggle={(id) => setFolderExpanded(id, !expanded)}
+                  onManageLinks={setManageLinksFolder}
                 />
-              )}
-            </div>
-          );
-        })
-      )}
+                {expanded && <FolderConversationRow folderId={folder.id} activeId={activeId} />}
+              </div>
+            );
+          })}
 
       <WorkspaceFolderDialog
         open={!!manageLinksFolder}

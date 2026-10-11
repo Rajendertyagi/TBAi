@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import path from 'path'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "node:path";
 
 /**
  * Vite configuration.
@@ -38,7 +38,7 @@ import path from 'path'
  * ships: unminified output is several times larger and parses slower, so
  * treating it as a production build would quietly make the app worse.
  */
-const isProfileBuild = process.env.TBAI_PROFILE_BUILD === '1'
+const isProfileBuild = process.env.TBAI_PROFILE_BUILD === "1";
 
 /**
  * Where the shippable SPA is written, relative to this file.
@@ -60,7 +60,7 @@ const isProfileBuild = process.env.TBAI_PROFILE_BUILD === '1'
  * It empties `dist/web` only and never `dist/` itself, so `tbai-server` is not at
  * risk.
  */
-const SHIPPABLE_OUT_DIR = '../dist/web'
+const SHIPPABLE_OUT_DIR = "../dist/web";
 
 /**
  * Where the profiling build writes, relative to this file.
@@ -71,13 +71,13 @@ const SHIPPABLE_OUT_DIR = '../dist/web'
  * the server at this directory through `WEB_DIST_DIR`, so the minified shippable
  * output is never touched by a profiling run.
  */
-const PROFILE_OUT_DIR = 'dist-profile'
+const PROFILE_OUT_DIR = "dist-profile";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      "@": path.resolve(__dirname, "./src"),
     },
   },
   build: isProfileBuild
@@ -99,4 +99,4 @@ export default defineConfig({
         outDir: SHIPPABLE_OUT_DIR,
         emptyOutDir: true,
       },
-})
+});

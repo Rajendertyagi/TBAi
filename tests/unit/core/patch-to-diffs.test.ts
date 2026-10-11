@@ -51,8 +51,7 @@ const strictAddPatch = (count: number, rowText: (i: number) => string = (i) => `
 const countMarkers = (patch: string, markerChar: "+" | "-") =>
   patch
     .split("\n")
-    .filter((line) => line.startsWith(markerChar) && !line.startsWith(markerChar.repeat(3)))
-    .length;
+    .filter((line) => line.startsWith(markerChar) && !line.startsWith(markerChar.repeat(3))).length;
 
 describe("patchToCodeDiffs — within budget (unchanged)", () => {
   it("returns a real patch byte-for-byte as the plain parse", () => {
@@ -90,9 +89,7 @@ describe("patchToCodeDiffs — within budget (unchanged)", () => {
       ["src/index.ts", 2, 1, 5],
     ]);
     // The budget is PER FILE, so a second file never pushes the first over.
-    expect(files.flatMap((f) => f.lines).some((l) => l.text.includes("omitted"))).toBe(
-      false,
-    );
+    expect(files.flatMap((f) => f.lines).some((l) => l.text.includes("omitted"))).toBe(false);
   });
 
   it("leaves a file at exactly the line budget untouched", () => {
@@ -108,13 +105,9 @@ describe("patchToCodeDiffs — within budget (unchanged)", () => {
     // the boundary is inclusive and must not be trimmed.
     const rowLen = 1024;
     const rows = MAX_CHARS / rowLen;
-    const file = patchToCodeDiffs(
-      strictAddPatch(rows, () => "A".repeat(rowLen)),
-    )[0];
+    const file = patchToCodeDiffs(strictAddPatch(rows, () => "A".repeat(rowLen)))[0];
     expect(file.lines).toHaveLength(rows);
-    expect(
-      file.lines.reduce((total, line) => total + line.text.length, 0),
-    ).toBe(MAX_CHARS);
+    expect(file.lines.reduce((total, line) => total + line.text.length, 0)).toBe(MAX_CHARS);
     expect(file.lines.some((l) => l.text.includes("omitted"))).toBe(false);
   });
 
@@ -159,9 +152,7 @@ describe("patchToCodeDiffs — over the line budget", () => {
       "--- a/src/mixed.ts",
       "+++ b/src/mixed.ts",
       "@@ -1,2500 +1,2500 @@",
-      ...Array.from({ length: 5000 }, (_, i) =>
-        i % 2 === 0 ? `+add-${i}` : `-del-${i}`,
-      ),
+      ...Array.from({ length: 5000 }, (_, i) => (i % 2 === 0 ? `+add-${i}` : `-del-${i}`)),
       "",
     ].join("\n");
     const file = patchToCodeDiffs(patch)[0];
@@ -175,12 +166,8 @@ describe("patchToCodeDiffs — over the line budget", () => {
     // The window holds fewer rows, which is exactly why the counts must NOT be
     // re-derived from it.
     expect(file.lines).toHaveLength(MAX_LINES + 1);
-    expect(file.lines.filter((l) => l.kind === "added").length).toBeLessThan(
-      file.additions,
-    );
-    expect(file.lines.filter((l) => l.kind === "removed").length).toBeLessThan(
-      file.deletions,
-    );
+    expect(file.lines.filter((l) => l.kind === "added").length).toBeLessThan(file.additions);
+    expect(file.lines.filter((l) => l.kind === "removed").length).toBeLessThan(file.deletions);
   });
 
   it("never duplicates or loses a row when trimming a pathological file", () => {
@@ -197,9 +184,7 @@ describe("patchToCodeDiffs — over the line budget", () => {
     expect(kept).toHaveLength(SIDE_LINES * 2);
 
     // Every kept row is one of the patch's own rows, and each appears once.
-    const originalIndex = new Map(
-      Array.from({ length: count }, (_, i) => [`row-${i}`, i]),
-    );
+    const originalIndex = new Map(Array.from({ length: count }, (_, i) => [`row-${i}`, i]));
     const indices = kept.map((line) => {
       const index = originalIndex.get(line.text);
       expect(index).toBeDefined();
@@ -213,16 +198,12 @@ describe("patchToCodeDiffs — over the line budget", () => {
     expect(indices[0]).toBe(0);
     expect(indices[indices.length - 1]).toBe(count - 1);
     expect(indices.slice(0, SIDE_LINES).every((i) => i < SIDE_LINES)).toBe(true);
-    expect(
-      indices.slice(SIDE_LINES).every((i) => i >= count - SIDE_LINES),
-    ).toBe(true);
+    expect(indices.slice(SIDE_LINES).every((i) => i >= count - SIDE_LINES)).toBe(true);
   });
 
   it("trims the loose (header-less) parse identically to the strict path", () => {
     const count = 5000;
-    const loosePatch = Array.from({ length: count }, (_, i) => `+row-${i}`).join(
-      "\n",
-    );
+    const loosePatch = Array.from({ length: count }, (_, i) => `+row-${i}`).join("\n");
     const [loose] = patchToCodeDiffs(loosePatch);
     const [strict] = patchToCodeDiffs(strictAddPatch(count));
 
@@ -268,9 +249,7 @@ describe("patchToCodeDiffs — the character budget", () => {
     // Every kept row is one of the patch's own rows, WHOLE — a base64 or
     // minified row has no honest cut point, so it is kept or dropped, never
     // shortened.
-    const originals = new Set(
-      Array.from({ length: rowCount }, (_, i) => hugeRow(i)),
-    );
+    const originals = new Set(Array.from({ length: rowCount }, (_, i) => hugeRow(i)));
     const kept = file.lines.filter((line) => line.text !== file.lines[4].text);
     expect(kept).toHaveLength(8);
     for (const line of kept) {

@@ -101,11 +101,11 @@ test("R1: a row that grows entirely above the fold leaves the reader's anchor ro
   // viewport is tall. Thirteen turns of content is ~600px against a 454px
   // viewport, which is what puts the row ~30px above the fold AND leaves the
   // reader genuinely off the live end.
-  const conversationId = await seedTurnConversation(
-    request,
-    `r1 above-fold growth ${Date.now()}`,
-    { totalMessages: 150, turnIndex: 136, turnParts: reasoningParts(14) },
-  );
+  const conversationId = await seedTurnConversation(request, `r1 above-fold growth ${Date.now()}`, {
+    totalMessages: 150,
+    turnIndex: 136,
+    turnParts: reasoningParts(14),
+  });
 
   try {
     await openConversation(page, conversationId, "seeded-body-149");
@@ -235,7 +235,11 @@ test("R2: an append while the reader is scrolled up does not jump the read posit
 }) => {
   test.setTimeout(240_000);
 
-  const conversationId = await seedTextConversation(request, `r2 append while up ${Date.now()}`, 150);
+  const conversationId = await seedTextConversation(
+    request,
+    `r2 append while up ${Date.now()}`,
+    150,
+  );
 
   try {
     await openConversation(page, conversationId, "seeded-body-149");
@@ -293,10 +297,9 @@ test("R2: an append while the reader is scrolled up does not jump the read posit
     // Proof that an append actually happened, read from the geometry: content
     // BELOW the viewport grew. Without this the next assertion could pass simply
     // because nothing was added.
-    expect(
-      after.distanceFromEnd,
-      "content was appended below the read position",
-    ).toBeGreaterThan(before.distanceFromEnd);
+    expect(after.distanceFromEnd, "content was appended below the read position").toBeGreaterThan(
+      before.distanceFromEnd,
+    );
 
     // THE CLAIM, in the container's own coordinate. The reader asked to read
     // history, so the tail must not be pulled into view under them. Nothing
@@ -563,9 +566,10 @@ test("R4: measurements survive a thread switch and a remount, and come back curr
     // real, not a collapsed or unpopulated box: it exists, and the transcript is
     // genuinely scrollable rather than one screenful.
     expect(back.containerHeight, "the total-size container has a real height").toBeGreaterThan(0);
-    expect(back.scrollHeight, "a 150-turn conversation is far taller than the viewport").toBeGreaterThan(
-      back.clientHeight * 4,
-    );
+    expect(
+      back.scrollHeight,
+      "a 150-turn conversation is far taller than the viewport",
+    ).toBeGreaterThan(back.clientHeight * 4);
 
     // NOT asserted: that the total height after the remount EQUALS the total
     // height on the first visit. TanStack deliberately reuses measurements

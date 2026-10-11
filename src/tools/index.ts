@@ -216,10 +216,7 @@ export const nativeTools = {
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "read_file",
-      (
-        a: z.infer<typeof toolSchemas.read_file>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.read_file>, opts?: { context?: WorkspaceToolContext }) =>
         runRead(
           a,
           requireWorkspace(opts?.context),
@@ -234,10 +231,7 @@ export const nativeTools = {
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "write_file",
-      (
-        a: z.infer<typeof toolSchemas.write_file>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.write_file>, opts?: { context?: WorkspaceToolContext }) =>
         runWrite(
           a,
           requireWorkspace(opts?.context),
@@ -246,16 +240,12 @@ export const nativeTools = {
     ),
   }),
   edit_file: tool({
-    description:
-      "Replace text in a workspace file. Requires user approval before executing.",
+    description: "Replace text in a workspace file. Requires user approval before executing.",
     inputSchema: toolSchemas.edit_file,
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "edit_file",
-      (
-        a: z.infer<typeof toolSchemas.edit_file>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.edit_file>, opts?: { context?: WorkspaceToolContext }) =>
         runEdit(
           a,
           requireWorkspace(opts?.context),
@@ -268,16 +258,12 @@ export const nativeTools = {
     execute: runCommandExecute(),
   }),
   list_dir: tool({
-    description:
-      "List files and folders inside the workspace. Runs without approval.",
+    description: "List files and folders inside the workspace. Runs without approval.",
     inputSchema: toolSchemas.list_dir,
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "list_dir",
-      (
-        a: z.infer<typeof toolSchemas.list_dir>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.list_dir>, opts?: { context?: WorkspaceToolContext }) =>
         runList(
           a,
           requireWorkspace(opts?.context),
@@ -292,10 +278,7 @@ export const nativeTools = {
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "search_files",
-      (
-        a: z.infer<typeof toolSchemas.search_files>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.search_files>, opts?: { context?: WorkspaceToolContext }) =>
         runSearch(
           a,
           requireWorkspace(opts?.context),
@@ -304,16 +287,12 @@ export const nativeTools = {
     ),
   }),
   file_info: tool({
-    description:
-      "Show size, type and timestamps for a workspace path. Runs without approval.",
+    description: "Show size, type and timestamps for a workspace path. Runs without approval.",
     inputSchema: toolSchemas.file_info,
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "file_info",
-      (
-        a: z.infer<typeof toolSchemas.file_info>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.file_info>, opts?: { context?: WorkspaceToolContext }) =>
         runStat(
           a,
           requireWorkspace(opts?.context),
@@ -328,10 +307,7 @@ export const nativeTools = {
     contextSchema: workspaceContext,
     execute: instrumentedExecute(
       "delete_file",
-      (
-        a: z.infer<typeof toolSchemas.delete_file>,
-        opts?: { context?: WorkspaceToolContext },
-      ) =>
+      (a: z.infer<typeof toolSchemas.delete_file>, opts?: { context?: WorkspaceToolContext }) =>
         runDelete(
           a,
           requireWorkspace(opts?.context),
@@ -350,14 +326,12 @@ export const nativeTools = {
     description:
       "Stop a running process by pid. Requires user approval before executing. Cannot kill the app itself or system processes.",
     inputSchema: toolSchemas.process_kill,
-    execute: instrumentedExecute(
-      "process_kill",
-      (a: z.infer<typeof toolSchemas.process_kill>) => runKill(a),
+    execute: instrumentedExecute("process_kill", (a: z.infer<typeof toolSchemas.process_kill>) =>
+      runKill(a),
     ),
   }),
   system_info: tool({
-    description:
-      "Show computer info: OS, CPU, memory and uptime. Runs without approval.",
+    description: "Show computer info: OS, CPU, memory and uptime. Runs without approval.",
     inputSchema: toolSchemas.system_info,
     execute: instrumentedExecute("system_info", () => runSysinfo()),
   }),
@@ -376,10 +350,7 @@ export const nativeTools = {
     needsApproval: (input) => schedulerActionNeedsApproval(input),
     execute: instrumentedExecute(
       "scheduler",
-      (
-        a: z.infer<typeof toolSchemas.scheduler>,
-        opts?: { context?: SchedulerToolContext },
-      ) => {
+      (a: z.infer<typeof toolSchemas.scheduler>, opts?: { context?: SchedulerToolContext }) => {
         const context = opts?.context;
         // The schema is a discriminated union on `action`: narrowing here
         // keeps the create-only defaults injection type-safe, with explicit
@@ -405,16 +376,8 @@ export const nativeTools = {
     contextSchema: todoContext,
     execute: instrumentedExecute(
       "todo",
-      (
-        a: z.infer<typeof toolSchemas.todo>,
-        opts?: { context?: TodoToolContext },
-      ) =>
-        runTodo(
-          a,
-          opts?.context?.threadId
-            ? { threadId: opts.context.threadId }
-            : undefined,
-        ),
+      (a: z.infer<typeof toolSchemas.todo>, opts?: { context?: TodoToolContext }) =>
+        runTodo(a, opts?.context?.threadId ? { threadId: opts.context.threadId } : undefined),
     ),
   }),
   // ---- Browser: read/navigation (agent-browser CLI, no MCP) ----
@@ -424,10 +387,8 @@ export const nativeTools = {
     inputSchema: toolSchemas.browser,
     execute: instrumentedExecute(
       "browser",
-      (
-        a: z.infer<typeof toolSchemas.browser>,
-        opts?: { abortSignal?: AbortSignal },
-      ) => runBrowserRead(a, { abortSignal: opts?.abortSignal }),
+      (a: z.infer<typeof toolSchemas.browser>, opts?: { abortSignal?: AbortSignal }) =>
+        runBrowserRead(a, { abortSignal: opts?.abortSignal }),
     ),
   }),
   // ---- Browser: interactive actions (agent-browser CLI, approval-gated) ----
@@ -437,10 +398,8 @@ export const nativeTools = {
     inputSchema: toolSchemas.browser_action,
     execute: instrumentedExecute(
       "browser_action",
-      (
-        a: z.infer<typeof toolSchemas.browser_action>,
-        opts?: { abortSignal?: AbortSignal },
-      ) => runBrowserAction(a, { abortSignal: opts?.abortSignal }),
+      (a: z.infer<typeof toolSchemas.browser_action>, opts?: { abortSignal?: AbortSignal }) =>
+        runBrowserAction(a, { abortSignal: opts?.abortSignal }),
     ),
   }),
 };
@@ -484,9 +443,7 @@ export function buildToolsContext(input: {
   if (!workspaceDir) {
     throw new ToolError("No workspace root for this conversation");
   }
-  const workspace: WorkspaceToolContext = threadId
-    ? { workspaceDir, threadId }
-    : { workspaceDir };
+  const workspace: WorkspaceToolContext = threadId ? { workspaceDir, threadId } : { workspaceDir };
   return {
     read_file: workspace,
     write_file: workspace,

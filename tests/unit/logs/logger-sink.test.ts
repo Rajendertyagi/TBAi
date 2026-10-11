@@ -1,12 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
-import fs from "fs";
-import path from "path";
-import os from "os";
-import {
-  listLogFiles,
-  logger,
-  pruneLogFiles,
-} from "@/lib/logger.ts";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { listLogFiles, logger, pruneLogFiles } from "@/lib/logger.ts";
 
 let tmpRoot: string;
 

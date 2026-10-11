@@ -35,7 +35,6 @@ import type {
   LimitCandidateField,
   LimitCandidateRecord,
   LimitCandidateRejection,
-  LimitSource,
   OutputReservation,
 } from "./types";
 
@@ -135,7 +134,9 @@ export function selectModelOption(
  * decision, not one taken silently here.
  */
 function validTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /**
@@ -350,7 +351,10 @@ export function resolveContextLimit(input: {
    */
   const withDiagnostics = (
     limit: ContextLimit,
-    annotations: ReadonlyMap<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>,
+    annotations: ReadonlyMap<
+      number,
+      { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+    >,
   ): ContextLimit => {
     // ALWAYS attached, including on the fallback path. That path is precisely
     // where the records matter most: it is the only route by which a reader
@@ -390,9 +394,16 @@ export function resolveContextLimit(input: {
     const observedIndex = records.findIndex((record) => record.field === "observedContextWindow");
 
     if (observedCheck.ok) {
-      const annotations = new Map<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>();
-      if (observedIndex >= 0) annotations.set(observedIndex, { selected: true, outcome: "not_compared" });
-      return withDiagnostics({ ...base, maxInputTokens: observedCheck.value, source: "observed" }, annotations);
+      const annotations = new Map<
+        number,
+        { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+      >();
+      if (observedIndex >= 0)
+        annotations.set(observedIndex, { selected: true, outcome: "not_compared" });
+      return withDiagnostics(
+        { ...base, maxInputTokens: observedCheck.value, source: "observed" },
+        annotations,
+      );
     }
 
     // No real figure. Report the conservative ceiling as a stood-in-for value,
@@ -512,7 +523,8 @@ export function resolveGenerationCap(input: {
 }): GenerationCap {
   const documented = validTokenCount(input.modelOutputTokens);
   const desired = documented ?? DEFAULT_GENERATION_CAP;
-  const source: GenerationCap["source"] = documented !== undefined ? "provider_reported" : "conservative_default";
+  const source: GenerationCap["source"] =
+    documented !== undefined ? "provider_reported" : "conservative_default";
 
   if (input.ceilingTokens === undefined || input.usableInputTokens === undefined) {
     return { tokens: desired, source, boundedByRemainingWindow: false };
@@ -520,11 +532,19 @@ export function resolveGenerationCap(input: {
 
   // Room the window can still give the model after input has been sized.
   const remaining = Math.floor(input.ceilingTokens - input.usableInputTokens);
-  if (remaining <= 0) return { tokens: DEFAULT_GENERATION_CAP, source: "conservative_default", boundedByRemainingWindow: true };
+  if (remaining <= 0)
+    return {
+      tokens: DEFAULT_GENERATION_CAP,
+      source: "conservative_default",
+      boundedByRemainingWindow: true,
+    };
 
   return {
     tokens: Math.min(desired, remaining),
-    source: documented !== undefined && desired <= remaining ? "provider_reported" : "conservative_default",
+    source:
+      documented !== undefined && desired <= remaining
+        ? "provider_reported"
+        : "conservative_default",
     boundedByRemainingWindow: documented !== undefined && desired > remaining,
   };
 }
