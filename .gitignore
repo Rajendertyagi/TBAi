@@ -17,7 +17,14 @@ data/
 .DS_Store
 Thumbs.db
 *.log
-logs/
+# Anchored to the repo root. A bare `logs/` matches a directory of that name at
+# ANY depth, and the only directories it was actually hiding were the test
+# suites: tests/unit/logs, tests/integration/logs and tests/e2e/logs. Seven
+# real tests ran in CI while being invisible to `git add`, so they were never
+# committed and never reviewed. No runtime or build step writes a `logs/`
+# directory - the app's /api/logs route is code, not a directory - and `*.log`
+# above already covers log files, so the root-only rule is all that is needed.
+/logs/
 .bun/
 .cottontail-tmp/
 .hutch/
