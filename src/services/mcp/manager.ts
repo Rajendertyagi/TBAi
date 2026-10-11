@@ -230,11 +230,7 @@ export class McpManager {
     return token;
   }
 
-  private isCurrentConnectionAttempt(
-    id: string,
-    token: symbol,
-    conn?: McpConnection,
-  ): boolean {
+  private isCurrentConnectionAttempt(id: string, token: symbol, conn?: McpConnection): boolean {
     return (
       this.connectionAttemptTokens.get(id) === token &&
       (conn === undefined || this.connections.get(id) === conn)
@@ -356,10 +352,7 @@ export class McpManager {
       );
 
       await this.discoverCapabilities(id);
-      if (
-        !this.isCurrentConnectionAttempt(id, token, conn) ||
-        conn.status !== "connected"
-      ) {
+      if (!this.isCurrentConnectionAttempt(id, token, conn) || conn.status !== "connected") {
         return;
       }
       logger.info("mcp", "mcp.operation", {
@@ -372,10 +365,7 @@ export class McpManager {
     } catch (err) {
       // A failed in-flight connect can settle after disconnect() closed it.
       // Stale attempts must not overwrite "disconnected" or schedule retries.
-      if (
-        !this.isCurrentConnectionAttempt(id, token, conn) ||
-        conn.status === "disconnected"
-      ) {
+      if (!this.isCurrentConnectionAttempt(id, token, conn) || conn.status === "disconnected") {
         try {
           await client.close();
         } catch {

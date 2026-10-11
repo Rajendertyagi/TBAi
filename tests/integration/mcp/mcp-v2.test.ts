@@ -412,9 +412,10 @@ describe("MCP lifecycle (Phase 4)", () => {
         if (new URL(request.url).pathname !== "/mcp") {
           return new Response("not found", { status: 404 });
         }
-        const payload = (await request.clone().json().catch(() => undefined)) as
-          | { method?: string }
-          | undefined;
+        const payload = (await request
+          .clone()
+          .json()
+          .catch(() => undefined)) as { method?: string } | undefined;
         const response = await serverTransport.handleRequest(request);
         if (payload?.method === "initialize") {
           markRequestStarted();
