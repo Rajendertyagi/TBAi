@@ -251,7 +251,11 @@ describe("buildWebAndStamp — a failed build can never leave a trusted artifact
     const webRoot = makeFakeWebRoot();
     const webDist = makeFakeDist();
     // No real build is needed: this test isolates orchestration and stamp order.
-    const ok = buildWebAndStamp(() => 0, () => undefined, { webRoot, webDist });
+    const ok = buildWebAndStamp(
+      () => 0,
+      () => undefined,
+      { webRoot, webDist },
+    );
     expect(ok).toBe(true);
     expect(readBuildStamp(webDist)).not.toBeNull();
     expect(assessWebBuild(webRoot, webDist).status).toBe("current");
@@ -265,7 +269,11 @@ describe("buildWebAndStamp — a failed build can never leave a trusted artifact
     const stampBefore = readBuildStamp(webDist);
     expect(stampBefore).not.toBeNull(); // precondition: a trusted artifact exists
 
-    const ok = buildWebAndStamp(() => 1, () => undefined, { webRoot, webDist });
+    const ok = buildWebAndStamp(
+      () => 1,
+      () => undefined,
+      { webRoot, webDist },
+    );
     expect(ok).toBe(false);
     // The old bundle is still physically present — that is exactly why existence
     // checking was never enough — but it is no longer trusted.
@@ -294,7 +302,11 @@ describe("buildWebAndStamp — a failed build can never leave a trusted artifact
     const { buildWebAndStamp } = await import("../../../scripts/build-web.ts");
     const webRoot = makeFakeWebRoot();
     const webDist = makeFakeDist();
-    buildWebAndStamp(() => 0, () => undefined, { webRoot, webDist });
+    buildWebAndStamp(
+      () => 0,
+      () => undefined,
+      { webRoot, webDist },
+    );
     expect(assessWebBuild(webRoot, webDist).status).toBe("current");
   });
 });
