@@ -38,16 +38,24 @@ clearMarker("SPAWNED");
 clearMarker("REQUESTED");
 if (spawnedMarker) await Bun.write(spawnedMarker, "spawned");
 
-// Announce that the request arrived, then stay silent and alive forever. The
-// client is now waiting on a reply that will never come.
+// Two behaviours, selected by whether a `requested` marker was supplied.
+//
+// WITH a requested marker: read stdin, announce arrival, stay silent. The client
+// has sent `initialize` and is waiting for a reply - the handshake is in flight.
+//
+// WITHOUT one: do not touch stdin at all. The bytes stay buffered in the pipe
+// and the SDK's close settles far more slowly, which is what a case needs when
+// it wants a prior connection whose `client.close()` is measurably SLOW, so it
+// can park a replacement attempt on that close and let something else resolve
+// first. Both behaviours were measured before relying on the difference.
 //
 // The reader API rather than `for await`: `for await` over a ReadableStream
 // needs `DOM.AsyncIterable`, which the test projects deliberately do not enable
 // (see `tests/harness/opencodeRuntimeHarness.ts` for the same decision).
-const reader = Bun.stdin.stream().getReader();
-const first = await reader.read();
-if (!first.done && requestedMarker) {
-  await Bun.write(requestedMarker, "requested");
+if (requestedMarker) {
+  const reader = Bun.stdin.stream().getReader();
+  const first = await reader.read();
+  if (!first.done) await Bun.write(requestedMarker, "requested");
 }
 
 await new Promise(() => {});

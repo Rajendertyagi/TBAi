@@ -97,8 +97,15 @@ const _SSE_PROBE_TIMEOUT_MS = 3000;
 export class McpManager {
   private static instance: McpManager;
   private connections = new Map<string, McpConnection>();
-  /** Latest attempt number per server id; see {@link nextAttemptSeq}. */
-  private attemptSeq = new Map<string, number>();
+  /**
+   * Per-server lifecycle generation; see {@link nextGeneration}.
+   *
+   * An attempt captures the generation when it starts and must still hold it in
+   * order to register or to touch shared state. Every invalidating operation
+   * advances it, so "was this attempt invalidated before it got its turn?"
+   * becomes a fact the attempt can actually observe.
+   */
+  private lifecycleGen = new Map<string, number>();
   private initialized = false;
 
   static getInstance(): McpManager {
@@ -196,6 +203,9 @@ export class McpManager {
   }
 
   deleteConfig(id: string): void {
+    // Synchronous invalidation, before the row goes away: an attempt parked on
+    // an await must not be able to re-register a server that no longer exists.
+    this.invalidate(id);
     const conn = this.connections.get(id);
     if (conn?.reconnectTimer) clearTimeout(conn.reconnectTimer);
     void this.disconnect(id);
@@ -204,6 +214,9 @@ export class McpManager {
   }
 
   setEnabled(id: string, enabled: boolean): void {
+    // Turning a server OFF is an invalidation for the same reason a disconnect
+    // is: a replacement attempt already in flight must not bring it back.
+    if (!enabled) this.invalidate(id);
     db.run("UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE id = ?", [
       enabled ? 1 : 0,
       Date.now(),
@@ -223,15 +236,17 @@ export class McpManager {
   async connect(id: string): Promise<void> {
     const loaded = readStoredRow(id);
     if (!loaded) return;
-    const { row, authToken } = loaded;
-    const config = storedRowToConfig(row);
+    // Named only for the abandon report below. The connection this attempt ends up
+    // building is configured from a FRESH row read after the teardown await, so
+    // nothing here may be carried forward from this snapshot.
+    const config = storedRowToConfig(loaded.row);
 
-    // Claim an attempt number BEFORE the first await, so ownership is decided
-    // by when the attempt STARTED rather than by when it happens to register.
-    // Without this, two overlapping connects could register in the wrong order:
-    // an older attempt resuming after its teardown await could install its
-    // entry over a newer one that had already taken the id.
-    const attemptSeq = this.nextAttemptSeq(id);
+    // Claim a lifecycle generation BEFORE the first await, so ownership is
+    // decided by when this attempt STARTED rather than by when it happens to
+    // register. Everything below - disconnect, delete, disable, or a newer
+    // connect - advances the generation, and an attempt that still holds its own
+    // is the only one allowed to register or to write shared state.
+    const gen = this.nextGeneration(id);
 
     // Tear down any prior connection for this id first.
     const prior = this.connections.get(id);
@@ -249,6 +264,28 @@ export class McpManager {
       }
     }
 
+    // The registration gate. `connections.set` used to run unconditionally here,
+    // so a disconnect, a delete or a disable landing during the close above was
+    // silently undone: the attempt registered a fresh connection anyway, built
+    // from the config it read BEFORE that close.
+    //
+    // Two things are established here. First, that this attempt still owns the
+    // lifecycle - the check that a generation bump makes possible. Second, that
+    // it is registering from the CURRENT row, not a pre-close snapshot: an
+    // attempt must never resurrect a server that has since been disabled, or
+    // bring back one that has been deleted.
+    const current = readStoredRow(id);
+    if (!current || !this.ownsLifecycle(id, gen)) {
+      this.reportAbandoned(config, current ? "superseded-before-registration" : "config-deleted");
+      return;
+    }
+    const liveConfig = storedRowToConfig(current.row);
+    if (!liveConfig.enabled) {
+      this.reportAbandoned(liveConfig, "disabled-before-registration");
+      return;
+    }
+    const liveAuthToken = current.authToken;
+
     const client = new Client(
       { name: "TBAi", version: "0.1.0" },
       {
@@ -260,7 +297,7 @@ export class McpManager {
     );
 
     const conn: McpConnection = {
-      config,
+      config: liveConfig,
       client,
       transport: null as unknown as Transport,
       status: "connecting",
@@ -276,15 +313,18 @@ export class McpManager {
       // SSE-only diagnostic probe: a short read-only GET against the endpoint
       // classifies unreachable / auth / non-SSE responses BEFORE the SDK opens
       // its EventSource. The probe is diagnostic, never the transport itself.
-      if (config.transport === "sse" && config.url) {
-        const probe = await probeSseEndpoint(config.url, buildHeaders(config, authToken));
+      if (liveConfig.transport === "sse" && liveConfig.url) {
+        const probe = await probeSseEndpoint(
+          liveConfig.url,
+          buildHeaders(liveConfig, liveAuthToken),
+        );
         // First await boundary. `disconnect()` may have run while the probe was
         // open, and a newer connect() may have taken the id.
-        if (!this.ownsAttempt(id, conn, attemptSeq)) {
+        if (!this.ownsAttempt(id, conn, gen)) {
           await this.abandonAttempt(conn, "superseded-during-sse-probe");
           return;
         }
-        const reason = classifySseFailure(probe, undefined, authToken !== undefined);
+        const reason = classifySseFailure(probe, undefined, liveAuthToken !== undefined);
         if (
           probe.kind === "unreachable" ||
           probe.kind === "timeout" ||
@@ -292,11 +332,11 @@ export class McpManager {
           reason === "auth_failed" ||
           reason === "incompatible_response"
         ) {
-          this.failConnect(id, conn, config, probe, reason);
+          this.failConnect(id, conn, liveConfig, probe, reason);
           return;
         }
       }
-      const transport = buildTransport(config, authToken);
+      const transport = buildTransport(liveConfig, liveAuthToken);
       conn.transport = transport;
       this.registerNotificationHandlers(id);
       this.registerRequestHandlers(id);
@@ -307,7 +347,7 @@ export class McpManager {
       // resurrection: `disconnect()` closes the client underneath this attempt,
       // and for a stdio child the process can still finish starting afterwards,
       // so `client.connect()` resolves on a transport that is already closed.
-      if (!this.ownsAttempt(id, conn, attemptSeq)) {
+      if (!this.ownsAttempt(id, conn, gen)) {
         await this.abandonAttempt(conn, "superseded-during-connect");
         return;
       }
@@ -325,15 +365,23 @@ export class McpManager {
       this.pushEvent(
         id,
         "connected",
-        `Connected to ${config.name} (era: ${conn.protocolEra ?? "unknown"})`,
+        `Connected to ${liveConfig.name} (era: ${conn.protocolEra ?? "unknown"})`,
       );
 
-      await this.discoverCapabilities(id);
+      await this.discoverCapabilities(id, conn, gen);
+      // Terminal success. Re-checked because discovery is an await boundary: a
+      // disconnect or a replacement landing inside it means this attempt no
+      // longer describes anything live, and reporting success for it would be
+      // the same resurrection one level further down.
+      if (!this.ownsConnection(id, conn, gen)) {
+        await this.abandonAttempt(conn, "superseded-during-discovery");
+        return;
+      }
       logger.info("mcp", "mcp.operation", {
         op: "connect",
         outcome: "ok",
-        mcpServer: config.name,
-        transport: config.transport,
+        mcpServer: liveConfig.name,
+        transport: liveConfig.transport,
         message: `tools=${conn.tools.length} resources=${conn.resources.length} prompts=${conn.prompts.length} era=${conn.protocolEra ?? "unknown"}`,
       });
     } catch (err) {
@@ -342,7 +390,7 @@ export class McpManager {
       // boundaries, and `scheduleReconnect()` below would then undo the caller's
       // explicit teardown. An attempt that no longer owns the id reports
       // nothing and reconnects to nothing.
-      if (!this.ownsAttempt(id, conn, attemptSeq)) {
+      if (!this.ownsAttempt(id, conn, gen)) {
         await this.abandonAttempt(conn, "superseded-during-connect");
         return;
       }
@@ -350,15 +398,15 @@ export class McpManager {
       // SSE endpoints get a post-hoc classification too: the probe was
       // inconclusive, so map the SDK error shape onto a failure reason.
       // Other transports stay on the coarse error status.
-      if (config.transport === "sse" && config.url) {
-        const reason = classifySseFailure({ kind: "error" }, err, authToken !== undefined);
+      if (liveConfig.transport === "sse" && liveConfig.url) {
+        const reason = classifySseFailure({ kind: "error" }, err, liveAuthToken !== undefined);
         const probe: SseProbeOutcome = { kind: "error" };
         if (reason === "auth_failed") {
-          this.failConnect(id, conn, config, probe, reason, message);
+          this.failConnect(id, conn, liveConfig, probe, reason, message);
           return;
         }
         if (reason === "timeout") {
-          this.failConnect(id, conn, config, probe, reason, message);
+          this.failConnect(id, conn, liveConfig, probe, reason, message);
           return;
         }
       }
@@ -370,8 +418,8 @@ export class McpManager {
       logger.error("mcp", "mcp.operation", {
         op: "connect",
         outcome: "error",
-        mcpServer: config.name,
-        transport: config.transport,
+        mcpServer: liveConfig.name,
+        transport: liveConfig.transport,
         category: classifyError(err).category,
         ...normalizeError(err),
       });
@@ -429,14 +477,50 @@ export class McpManager {
   /**
    * Allocate the next attempt number for `id`.
    *
-   * Monotonic and allocated before the first await of `connect()`, so "which
-   * attempt is newer" is a fact rather than an observation about registration
-   * order.
+   * Monotonic, and advanced SYNCHRONOUSLY by every invalidating operation, so
+   * that "was I invalidated before I got my turn?" is a question an attempt can
+   * answer rather than one it has to infer from state that has not been written
+   * yet.
+   *
+   * Advancing it is deliberately NOT the same as closing anything. `disconnect()`
+   * marks and closes asynchronously; the generation bump happens before its
+   * first `await`, so an attempt parked on an await cannot slip a registration
+   * in between the intent to tear down and the teardown finishing.
    */
-  private nextAttemptSeq(id: string): number {
-    const seq = (this.attemptSeq.get(id) ?? 0) + 1;
-    this.attemptSeq.set(id, seq);
-    return seq;
+  private nextGeneration(id: string): number {
+    const gen = (this.lifecycleGen.get(id) ?? 0) + 1;
+    this.lifecycleGen.set(id, gen);
+    return gen;
+  }
+
+  /**
+   * Invalidate every in-flight attempt for `id`.
+   *
+   * Called from `disconnect()`, `deleteConfig()` and a disable, each BEFORE its
+   * first `await`. That ordering is the fix: an attempt between registering and
+   * opening its transport has no connection object yet, so the only way to tell
+   * it the world moved on is a counter it captured before it started.
+   */
+  private invalidate(id: string): void {
+    this.nextGeneration(id);
+  }
+
+  /** Whether `gen` is still the live generation for `id`. */
+  private ownsLifecycle(id: string, gen: number): boolean {
+    return this.lifecycleGen.get(id) === gen;
+  }
+
+  /**
+   * Whether `conn` is still the registered connection for `id`, under a
+   * generation this attempt still holds.
+   *
+   * Deliberately does NOT consult status. Once `connect()` has promoted an entry
+   * to `"connected"` it runs capability discovery, and a check that required
+   * `"connecting"` would be false there by construction - which is exactly the
+   * window discovery runs in. Identity plus generation is what still holds.
+   */
+  private ownsConnection(id: string, conn: McpConnection, gen: number): boolean {
+    return this.connections.get(id) === conn && this.ownsLifecycle(id, gen);
   }
 
   /**
@@ -445,21 +529,34 @@ export class McpManager {
    * Three independent ways to lose ownership, all of which used to be invisible:
    *
    *  - a NEWER `connect()` replaced the entry (identity);
-   *  - this attempt registered late and installed itself over a newer one
-   *    (attempt number);
-   *  - `disconnect()` deliberately marked the entry disconnected while this
-   *    attempt sat on an await (status).
+   *  - `disconnect()`, a delete or a disable landed while this attempt sat on an
+   *    await, including the one BEFORE it registered (generation);
+   *  - the entry it was tearing down was deliberately disconnected underneath it
+   *    (status).
    *
-   * The status half is the one that stops the reported resurrection: a single
-   * in-flight attempt is still the registered entry after `disconnect()`, so
-   * identity alone would wave it straight through.
+   * The status half is not redundant with the identity half, and it is the half
+   * that stops the reported resurrection: after `disconnect()` a single in-flight
+   * attempt is STILL the registered entry, so identity alone would wave it
+   * straight through.
    */
-  private ownsAttempt(id: string, conn: McpConnection, attemptSeq: number): boolean {
-    return (
-      this.connections.get(id) === conn &&
-      this.attemptSeq.get(id) === attemptSeq &&
-      conn.status === "connecting"
-    );
+  private ownsAttempt(id: string, conn: McpConnection, gen: number): boolean {
+    return this.ownsConnection(id, conn, gen) && conn.status === "connecting";
+  }
+
+  /**
+   * Report that an attempt gave up without touching shared state.
+   *
+   * An abandoned attempt writes no status and pushes no event, so without this
+   * line there is no trace that one ever existed.
+   */
+  private reportAbandoned(config: McpServerConfig, why: string): void {
+    logger.info("mcp", "mcp.operation", {
+      op: "connect",
+      outcome: "abandoned",
+      mcpServer: config.name,
+      transport: config.transport,
+      message: why,
+    });
   }
 
   /**
@@ -475,16 +572,15 @@ export class McpManager {
     } catch {
       /* the transport is already gone; nothing to release */
     }
-    logger.info("mcp", "mcp.operation", {
-      op: "connect",
-      outcome: "abandoned",
-      mcpServer: conn.config.name,
-      transport: conn.config.transport,
-      message: why,
-    });
+    this.reportAbandoned(conn.config, why);
   }
 
   async disconnect(id: string): Promise<void> {
+    // Synchronous, and before anything that can await: this is what invalidates
+    // an attempt that is parked between tearing down the prior connection and
+    // registering its own. Marking the entry below is not enough on its own,
+    // because an attempt in that window has not registered an entry to mark.
+    this.invalidate(id);
     const conn = this.connections.get(id);
     if (!conn) return;
     if (conn.reconnectTimer) {
@@ -568,13 +664,42 @@ export class McpManager {
 
   // ---- Capability discovery ----
 
-  private async discoverCapabilities(id: string): Promise<void> {
-    const conn = this.connections.get(id);
+  /**
+   * Discover tools, resources and prompts for a connection.
+   *
+   * Every one of those three calls is an await boundary, and each is followed by
+   * a write. When `expected` is supplied the caller is a `connect()` attempt
+   * that owns `id`, and two guards apply after each await:
+   *
+   *  - **ownership**: identity plus generation. Not status - by the time
+   *    discovery runs the entry is already `"connected"`, so a status check
+   *    would be false by construction and would silently skip every guard.
+   *  - **reporting target**: failures are recorded against `conn`, the
+   *    connection the discovery was actually running for. They used to go
+   *    through `pushEvent(id, ...)`, which resolves whatever connection is live
+   *    NOW - so a discovery that resumed after a disconnect or a replacement
+   *    appended its error to somebody else's event history.
+   *
+   * A superseded discovery therefore writes nothing at all: no stale tool list,
+   * no stale event. `refresh()` omits `expected`, which preserves the
+   * refresh-on-the-live-connection behaviour.
+   */
+  private async discoverCapabilities(
+    id: string,
+    expected?: McpConnection,
+    gen?: number,
+  ): Promise<void> {
+    const conn = expected ?? this.connections.get(id);
     if (!conn) return;
+    const owns = () =>
+      expected === undefined
+        ? this.connections.get(id) === conn
+        : this.ownsConnection(id, conn, gen as number);
     const caps = conn.serverCapabilities ?? {};
     try {
       if (caps.tools !== undefined) {
         const res = await conn.client.listTools();
+        if (!owns()) return;
         conn.tools = (res.tools ?? []).map((t) => ({
           name: t.name,
           description: t.description,
@@ -582,11 +707,13 @@ export class McpManager {
         }));
       }
     } catch (err) {
-      this.pushEvent(id, "error", `Tool discovery failed: ${errMsg(err)}`);
+      if (!owns()) return;
+      this.pushEventTo(conn, "error", `Tool discovery failed: ${errMsg(err)}`);
     }
     try {
       if (caps.resources !== undefined) {
         const res = await conn.client.listResources();
+        if (!owns()) return;
         conn.resources = (res.resources ?? []).map((r) => ({
           uri: r.uri,
           name: r.name,
@@ -595,11 +722,13 @@ export class McpManager {
         }));
       }
     } catch (err) {
-      this.pushEvent(id, "error", `Resource discovery failed: ${errMsg(err)}`);
+      if (!owns()) return;
+      this.pushEventTo(conn, "error", `Resource discovery failed: ${errMsg(err)}`);
     }
     try {
       if (caps.prompts !== undefined) {
         const res = await conn.client.listPrompts();
+        if (!owns()) return;
         conn.prompts = (res.prompts ?? []).map((p) => ({
           name: p.name,
           description: p.description,
@@ -607,7 +736,8 @@ export class McpManager {
         }));
       }
     } catch (err) {
-      this.pushEvent(id, "error", `Prompt discovery failed: ${errMsg(err)}`);
+      if (!owns()) return;
+      this.pushEventTo(conn, "error", `Prompt discovery failed: ${errMsg(err)}`);
     }
   }
 
@@ -658,6 +788,23 @@ export class McpManager {
   private pushEvent(id: string, kind: McpEventKind, message: string, data?: unknown): void {
     const conn = this.connections.get(id);
     if (!conn) return;
+    this.pushEventTo(conn, kind, message, data);
+  }
+
+  /**
+   * Record an event against a SPECIFIC connection rather than whatever is
+   * currently registered for that id.
+   *
+   * The distinction is the whole point: work belonging to a superseded
+   * connection must land on that connection, not on whichever one took the id
+   * while the work was suspended.
+   */
+  private pushEventTo(
+    conn: McpConnection,
+    kind: McpEventKind,
+    message: string,
+    data?: unknown,
+  ): void {
     conn.events.push({ kind, message, at: Date.now(), data });
     if (conn.events.length > MAX_EVENTS) {
       conn.events = conn.events.slice(conn.events.length - MAX_EVENTS);

@@ -38,11 +38,12 @@
  * without touching shared state.
  */
 import { describe, it, expect, afterAll } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { mcpManager } from "@/services/mcp/manager.ts";
 import { logger } from "@/lib/logger.ts";
 import { REPO_ROOT } from "../../helpers/repo-root";
+import { startGatedDiscoveryServer } from "../../fixtures/gated-discovery-server";
 
 /** Unique marker path per case, so cases cannot wait on each other's child. */
 function markerPath(name: string): string {
@@ -181,21 +182,21 @@ function operationsSince(cutoff: number, serverName: string): { op?: string; out
 }
 
 /**
- * Wait briefly for an interrupted `connect()` to settle, then stop waiting.
+ * Wait briefly for a `connect()` to settle, then stop waiting.
  *
  * Whether the SDK's `connect()` promise settles at all after a `close()` during
  * the handshake is not the manager's to decide, and it varies with how far the
- * handshake got. What IS the manager's to decide - and what these cases
- * assert - is the observable state afterwards, so the assertions below never
+ * handshake got. What IS the manager's to decide - and what the cases using
+ * this assert - is the observable state afterwards, so those assertions never
  * depend on that promise settling.
  */
-async function settleOrGiveUp(attempt: Promise<void>): Promise<void> {
+async function settleOrGiveUp(attempt: Promise<void>, budgetMs = 1000): Promise<void> {
   await Promise.race([
     attempt.then(
       () => undefined,
       () => undefined,
     ),
-    Bun.sleep(1000),
+    Bun.sleep(budgetMs),
   ]);
 }
 
@@ -340,5 +341,289 @@ describe("MCP lifecycle ownership: a superseded attempt cannot resurrect itself"
     ).not.toHaveLength(0);
 
     await mcpManager.disconnectAll();
+  });
+});
+
+/**
+ * Gap 1 — the PRE-REGISTRATION window.
+ *
+ * `connect()` reads its config, then `await prior.client.close()`, and only
+ * after that does `connections.set(id, conn)`. The entry it registered during
+ * its OWN run is `prior`, so that await is a window in which the id can be
+ * invalidated — and `connections.set` used to run unconditionally at the end of
+ * it, using the config snapshot read BEFORE the window.
+ *
+ * So a disconnect, a disable or a delete landing in that window was undone: the
+ * attempt registered a fresh connection anyway.
+ *
+ * ## Why these cases need no sleep and no timing luck
+ *
+ * `connect()` reaches `await prior.client.close()` inside its own synchronous
+ * prefix. The caller's next statement therefore runs while the attempt is
+ * parked there, and an awaited call cannot resume until the caller yields. The
+ * invalidating call is issued from that statement, so it is guaranteed to land
+ * inside the window - not probabilistically.
+ *
+ * The discriminator is also deliberately non-parked: these configs use a command
+ * that fails FAST, so a buggy attempt reaches a terminal `"error"` rather than
+ * sitting in `"connecting"`. The gate this covers is about registration, not
+ * about what happens after it, and a terminal wrong state is unambiguous.
+ */
+describe("MCP pre-registration window: an invalidated attempt cannot register", () => {
+  /** A stdio config whose transport fails fast, so a wrong state is terminal. */
+  function failingCommandConfig(name: string): string {
+    const created = mcpManager.createConfig({
+      name,
+      transport: "stdio",
+      command: "definitely-not-a-real-command-9f3a",
+      enabled: true,
+      autoConnect: false,
+    });
+    createdIds.push(created.id);
+    return created.id;
+  }
+
+  /**
+   * Put a live entry in the map so a later `connect()` has a `prior` to close,
+   * then let that first attempt settle. The entry stays; its timer is cleared by
+   * the next attempt's teardown.
+   */
+  async function seedPrior(id: string): Promise<void> {
+    await settleOrGiveUp(mcpManager.connect(id));
+    expect(statusOf(id), "the seeding attempt did not register").not.toBe("missing");
+  }
+
+  it("a replacement interrupted by disconnect does not register", async () => {
+    const id = failingCommandConfig("pre-disconnect");
+    await seedPrior(id);
+
+    // Parked on `await prior.client.close()`.
+    const replacement = mcpManager.connect(id);
+    // Invalidates while it is parked, before it can register.
+    await mcpManager.disconnect(id);
+    await settleOrGiveUp(replacement);
+
+    expect(statusOf(id)).toBe("disconnected");
+  });
+
+  it("a replacement interrupted by a disable does not register", async () => {
+    const id = failingCommandConfig("pre-disable");
+    await seedPrior(id);
+
+    const replacement = mcpManager.connect(id);
+    // `setEnabled(false)` is the user's "turn this server off"; a replacement
+    // that started before it must not bring the connection back.
+    mcpManager.setEnabled(id, false);
+    await settleOrGiveUp(replacement);
+
+    expect(statusOf(id)).toBe("disconnected");
+  });
+
+  it("a replacement interrupted by a delete does not register", async () => {
+    const id = failingCommandConfig("pre-delete");
+    await seedPrior(id);
+    const cutoff = logger.lastSeq;
+
+    const replacement = mcpManager.connect(id);
+    mcpManager.deleteConfig(id);
+    await settleOrGiveUp(replacement);
+
+    // `deleteConfig` drops the row, so `getStatuses()` cannot show a leaked
+    // entry - the config it would be reported under no longer exists. The
+    // observable is therefore the absence of the work a leaked attempt performs:
+    // a registration would reach a transport and record a connect failure.
+    // Absence, so throttling of the log scope cannot make this pass wrongly.
+    const ops = operationsSince(cutoff, "pre-delete");
+    expect(
+      ops.filter((o) => o.op === "connect" && o.outcome === "error"),
+      `a deleted server came back: ${JSON.stringify(ops)}`,
+    ).toHaveLength(0);
+    expect(
+      ops.filter((o) => o.op === "reconnect"),
+      `a deleted server reconnected: ${JSON.stringify(ops)}`,
+    ).toHaveLength(0);
+  });
+
+  // NOT COVERED HERE, DELIBERATELY: an older attempt that resumes from the
+  // PRE-REGISTRATION window after a newer attempt has already registered.
+  //
+  // Reaching it needs the older attempt's `prior.client.close()` to settle after
+  // a newer attempt's, and that ordering lives inside the SDK. A first attempt
+  // was written against a stdio child whose close measures slower than a second
+  // close on the same client, and it failed 3 runs out of 8 under load - a test
+  // whose outcome depends on an unobservable SDK duration is worse than no test,
+  // so it was removed rather than retuned.
+  //
+  // The invariant it would have pinned IS covered, deterministically, by the
+  // SSE-probe superseded-attempt case above: there a genuinely older attempt
+  // resumes after a newer one has registered and must not overwrite it. What is
+  // not covered is that same ordering reached from before registration, which
+  // would need a controllable close to exist.
+});
+
+/**
+ * Gap 2 — capability discovery.
+ *
+ * After `client.connect()`, `connect()` marks the entry `"connected"` and then
+ * awaits `discoverCapabilities(id)`, which awaits `listTools`, `listResources`
+ * and `listPrompts`. Discovery's catch blocks reported through
+ * `pushEvent(id, ...)`, and `pushEvent` resolves the CURRENT connection - so a
+ * discovery that resumed after a disconnect or a replacement appended its error
+ * to someone else's event history. `connect()` also logged `outcome: "ok"`
+ * after the await with no ownership check, so it reported success for a
+ * connection that was no longer live.
+ *
+ * Status cannot be the guard here: the entry is `"connected"` by the time
+ * discovery runs, so an ownership test that requires `"connecting"` is false by
+ * construction. Identity plus the lifecycle generation are the guards that work.
+ *
+ * The gate is the fixture's `tools/list` response, which the fixture writes an
+ * `entered` marker for and withholds until the test releases it.
+ */
+describe("MCP capability discovery cannot outlive its connection", () => {
+  let nextPort = 3241;
+
+  interface Gated {
+    url: string;
+    entered: string;
+    releaseFile: string;
+    release: () => Promise<void>;
+    stop: () => void;
+  }
+
+  async function startGated(
+    name: string,
+    options: { open?: boolean; failOnRelease?: boolean } = {},
+  ): Promise<Gated> {
+    const entered = path.join(REPO_ROOT, "tests/.artifacts", `${name}-entered`);
+    const releasePath = path.join(REPO_ROOT, "tests/.artifacts", `${name}-release`);
+    for (const stale of [entered, releasePath]) {
+      try {
+        rmSync(stale);
+      } catch {
+        /* first run: nothing to clear */
+      }
+    }
+    // An "open" server has its gate already satisfied, so its discovery never
+    // stalls. A replacement pointed at one settles normally, which keeps the
+    // assertion focused on what the STALE attempt does afterwards.
+    if (options.open) await Bun.write(releasePath, "open");
+    const port = nextPort++;
+    const { stop } = await startGatedDiscoveryServer(port, releasePath, entered, options);
+    return {
+      url: `http://127.0.0.1:${port}/mcp`,
+      entered,
+      releaseFile: releasePath,
+      release: async () => {
+        await Bun.write(releasePath, "go");
+      },
+      stop: () => stop(),
+    };
+  }
+
+  function httpConfig(name: string, url: string): string {
+    const created = mcpManager.createConfig({
+      name,
+      transport: "http",
+      url,
+      enabled: true,
+      autoConnect: false,
+    });
+    createdIds.push(created.id);
+    return created.id;
+  }
+
+  it("discovery interrupted by a disconnect reports no success", async () => {
+    const cutoff = logger.lastSeq;
+    const gated = await startGated("disc-disconnect");
+    try {
+      const id = httpConfig("disc-disconnect", gated.url);
+
+      const attempt = mcpManager.connect(id);
+      // Discovery is genuinely under way: the server is holding the response.
+      expect(await waitForMarker(gated.entered), "discovery never started").toBe(true);
+
+      await mcpManager.disconnect(id);
+      // Only now does discovery resume.
+      await gated.release();
+      await settleOrGiveUp(attempt);
+
+      expect(statusOf(id)).toBe("disconnected");
+      const ops = operationsSince(cutoff, "disc-disconnect");
+      expect(
+        ops.filter((o) => o.op === "connect" && o.outcome === "ok"),
+        `a disconnected connection reported success: ${JSON.stringify(ops)}`,
+      ).toHaveLength(0);
+    } finally {
+      gated.stop();
+    }
+  });
+
+  it("a superseded discovery writes no event into a live connection", async () => {
+    // WHAT THIS CASE DOES AND DOES NOT PROVE: it passes on the unfixed manager
+    // as well, so it is NOT evidence for the fix. The reason is a property of
+    // the SDK, measured rather than assumed: closing a client SETTLES its
+    // pending request immediately, and every replacement path closes the old
+    // client BEFORE registering the new entry. The failure therefore lands
+    // before a replacement can exist, so `pushEvent(id, ...)` resolves the old
+    // connection and no interleaving was found that reaches the replacement's
+    // history. The guard in `discoverCapabilities` is defence in depth for that
+    // ordering rather than a demonstrated defect.
+    //
+    // It is kept because the invariant is real and cheap to hold, and because it
+    // would start discriminating the moment the SDK stopped settling pending
+    // requests at close - which is exactly the change that would make the
+    // original leak reachable.
+    const gated = await startGated("disc-superseded", { open: true, failOnRelease: true });
+    const live = await startGated("disc-live", { open: true });
+    try {
+      const id = httpConfig("disc-superseded", gated.url);
+
+      // Connect normally: the gate is open, so discovery completes and the
+      // connection is healthy.
+      await mcpManager.connect(id);
+      expect(statusOf(id), "the first connect should have succeeded").toBe("connected");
+
+      // Re-arm the gate, clearing the marker the first connect left behind, then
+      // drive a SECOND discovery over the same live connection with refresh().
+      // Nothing is torn down, so this parks cleanly inside `listTools` with the
+      // connection still registered - which is the window under test.
+      rmSync(gated.releaseFile);
+      rmSync(gated.entered);
+      const refreshing = mcpManager.refresh(id);
+      expect(await waitForMarker(gated.entered), "refresh discovery never started").toBe(true);
+
+      // Invalidate underneath the parked discovery, then put a healthy
+      // replacement in place. `updateConfig` with a `url` is connection-affecting
+      // and reconnects on its own, so it is what performs the replacement here;
+      // starting a second `connect()` alongside it would just be two attempts
+      // racing for the id.
+      await mcpManager.disconnect(id);
+      mcpManager.updateConfig(id, { url: live.url });
+      expect(await waitForStatus(id, "connected", 15000), "the replacement never connected").toBe(
+        true,
+      );
+
+      const liveEvents = mcpManager.getStatuses().find((s) => s.id === id)?.events.length ?? 0;
+
+      // Now fail the parked discovery. The server answers with a JSON-RPC error,
+      // which is what puts discovery into the catch block that reports through
+      // `pushEvent(id, ...)`. Dropping the connection instead would leave the
+      // request pending, so the catch would never run and nothing would be proved.
+      await gated.release();
+      await settleOrGiveUp(refreshing, 8000);
+
+      // The stale discovery reports nothing. It must not append to the
+      // replacement's event history, and it must not reach into shared state at
+      // all now that its connection is gone.
+      const after = mcpManager.getStatuses().find((s) => s.id === id);
+      expect(
+        after?.events.length ?? 0,
+        "the superseded discovery appended to the replacement's event history",
+      ).toBe(liveEvents);
+    } finally {
+      gated.stop();
+      live.stop();
+    }
   });
 });
