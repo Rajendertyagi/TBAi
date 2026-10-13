@@ -19,7 +19,7 @@
  * A compaction command produces NO assistant message, so it must not create a
  * chat run: a run created before this intercept would never be settled, because
  * there is no stream to settle it. The command carries its own cancellable
- * lifecycle instead. See `direct-compact-command.ts` for the full ordering
+ * lifecycle instead. See `compact-command.ts` for the full ordering
  * argument.
  */
 import {
@@ -29,18 +29,14 @@ import {
   type UIMessage,
 } from "ai";
 import { getModel } from "../../services/ai";
-import { buildReasoningProviderOptions } from "../chat-provider-options";
+import { buildReasoningProviderOptions } from "./provider-options";
 import { conversationService } from "../../services/storage";
 import { credentialStore } from "../../services/credentials";
 import { errorLogFields } from "../../lib/errors";
 import { logger } from "../../lib/logger";
 import { chatMessageMetadataSchema, chatRequestSchema } from "../../lib/validation";
-import { resolveChatModel, UnknownProviderError } from "../chat-model";
-import {
-  beginCompactCommand,
-  detectCompactCommand,
-  runManualCompaction,
-} from "../direct-compact-command";
+import { resolveChatModel, UnknownProviderError } from "./model";
+import { beginCompactCommand, detectCompactCommand, runManualCompaction } from "./compact-command";
 import type { ChatContext, DirectRunSetup, PhaseResult } from "./types";
 
 /** A directive field the server owns; a client may not supply one. */
@@ -219,7 +215,7 @@ export async function validateAndResolve(
   // A compaction command produces no assistant message, so it must not create a
   // chat run: a run created before this intercept would be left non-terminal,
   // because there is no stream to settle it. The command carries its own
-  // cancellable lifecycle instead. See `direct-compact-command.ts` for the full
+  // cancellable lifecycle instead. See `compact-command.ts` for the full
   // ordering argument, and for why this still uses the single assembly seam.
   const compactCommand = detectCompactCommand(messages);
   if (compactCommand) {

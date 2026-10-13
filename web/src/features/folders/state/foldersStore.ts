@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { apiJson } from "../lib/api";
-import type { Folder, FolderGroup, FolderLink } from "../types";
+import { apiJson } from "../../../lib/api";
+import type { Folder, FolderGroup, FolderLink } from "../../../types/index";
 
 /**
  * Registered folder / workspace registry store (codeg-aligned two-mode model).

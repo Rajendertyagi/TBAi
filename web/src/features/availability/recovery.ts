@@ -1,6 +1,6 @@
 import { invalidateHistoryCache } from "../../adapters/threadHistoryAdapter";
 import { invalidateThreadListCache } from "../../adapters/remoteThreadListAdapter";
-import { useSettingsStore } from "../../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "../../lib/logger";
 import { useAvailabilityStore } from "./availabilityStore";
 import { reconcileTabMirror } from "../chat/state/tabReconciliation";

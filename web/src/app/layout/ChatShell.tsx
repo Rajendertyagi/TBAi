@@ -9,7 +9,7 @@ import {
 import { useAppChatRuntime } from "../../runtime";
 import { threadListAdapter } from "../adapter";
 import { DevToolsGate } from "../../components/DevToolsGate";
-import { useSettingsStore } from "../../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../features/chat/state/chatTabs";
 import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngine";
 import { peekMaterializedEngine } from "../../features/chat/state/materializeDraft";

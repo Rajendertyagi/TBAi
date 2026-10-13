@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChatStreamsSchema } from "@/services/chat-streams/schema.ts";
+import { applyChatStreamsSchema } from "@/db/schema/chat-streams.ts";
 import {
   createSqliteResumableStreamStore,
   type SqliteResumableStreamStore,

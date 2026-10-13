@@ -43,7 +43,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { sidebarConfig } from "@/config/sidebar";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
 import type { Folder } from "@/types";
 

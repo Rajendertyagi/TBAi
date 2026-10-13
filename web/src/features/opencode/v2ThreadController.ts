@@ -13,7 +13,7 @@ import {
   OPENCODE_V2_EVENT_BUFFER_LIMIT,
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
-} from "@/config/opencode";
+} from "@/features/opencode/config";
 import {
   AUTO,
   AUTO_RESPONSE,

@@ -2,7 +2,7 @@ import {
   DEFAULT_SECTION_ORDER,
   SIDEBAR_SECTION_IDS,
   type SidebarSectionId,
-} from "../config/sidebar";
+} from "../../../config/sidebar";
 
 /**
  * Pure sidebar section-order logic (no storage, no JSX, no runtime).

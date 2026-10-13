@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { useSettingsStore } from "@web/stores/index.ts";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 import type { ProviderConfig } from "@web/types";
 
 function makeProvider(id: string, isActive: boolean): ProviderConfig {

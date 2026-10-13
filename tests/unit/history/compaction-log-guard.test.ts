@@ -40,9 +40,9 @@ import { REPO_ROOT } from "../../helpers/repo-root";
  * an unrelated new module silently satisfy or break a log guard.
  */
 const LOGGING_FILES: Record<string, string> = {
-  chat: "src/routes/chat.ts",
+  chat: "src/routes/chat/index.ts",
   gate: "src/routes/chat/gate.ts",
-  command: "src/routes/direct-compact-command.ts",
+  command: "src/routes/chat/compact-command.ts",
 };
 
 function readSource(relative: string): string {

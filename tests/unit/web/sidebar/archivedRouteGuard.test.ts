@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 import { REPO_ROOT } from "../../../helpers/repo-root";
 import path from "node:path";
-import { normalizeSectionOrder } from "@web/lib/sidebar-sections";
+import { normalizeSectionOrder } from "@web/features/desktop/state/sidebarSections";
 import { SIDEBAR_SECTION_IDS, type SidebarSectionId } from "@web/config/sidebar";
 
 /**
@@ -10,7 +10,7 @@ import { SIDEBAR_SECTION_IDS, type SidebarSectionId } from "@web/config/sidebar"
  *
  * The router/navigation guards are source-level (no DOM runner); the
  * `normalizeSectionOrder` cases are real behavioural tests of the exported
- * pure function in `lib/sidebar-sections.ts`.
+ * pure function in `features/desktop/state/sidebarSections.ts`.
  */
 
 let routerSource = "";

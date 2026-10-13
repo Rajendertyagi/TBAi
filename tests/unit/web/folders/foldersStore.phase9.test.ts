@@ -6,7 +6,7 @@
  * controlled promise barriers for the overlapping-load race — no sleeps.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { pruneSelectedFolderId, useFoldersStore } from "@web/stores/foldersStore";
+import { pruneSelectedFolderId, useFoldersStore } from "@web/features/folders/state/foldersStore";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 import type { Folder } from "@web/types";
 

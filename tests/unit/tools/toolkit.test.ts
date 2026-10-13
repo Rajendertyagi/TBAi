@@ -71,7 +71,7 @@ describe("OpenCode tool-name registration", () => {
     // name-keyed map.
     // `todowrite` left this list when OpenCode v2 deleted the tool, and `patch`
     // and `execute` joined it because v2 ships both. The v2 names themselves live
-    // in `web/src/lib/opencode-v2-tools.ts`, which `opencode-v2-tools.test.ts`
+    // in `web/src/features/opencode/v2Tools.ts`, which `tests/unit/web/opencode/v2Tools.test.ts`
     // asserts against this registry — so this list and that constant cannot drift
     // apart silently, which is exactly how `todowrite` rotted.
     expect([...OPENCODE_TOOL_NAMES].sort()).toEqual([

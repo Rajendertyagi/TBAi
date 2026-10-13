@@ -12,7 +12,7 @@ import {
   type SidebarSectionId,
   type SidebarSortMode,
 } from "../../../config/sidebar";
-import { moveSectionInOrder, normalizeSectionOrder } from "../../../lib/sidebar-sections";
+import { moveSectionInOrder, normalizeSectionOrder } from "./sidebarSections";
 
 /**
  * Desktop chrome layout + sidebar view preferences (VS Code–like). UI-only

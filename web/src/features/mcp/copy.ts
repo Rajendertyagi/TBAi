@@ -4,7 +4,7 @@
 // reason to the short truthful sentence the MCP panel shows above the raw
 // error text. Pure functions — covered by unit tests. No secrets here.
 
-import type { McpFailureReason } from "../types";
+import type { McpFailureReason } from "../../types/index";
 
 /** Short machine-derived reason line for a failed MCP server or test. */
 export function failureCopy(reason: McpFailureReason | undefined): string | undefined {

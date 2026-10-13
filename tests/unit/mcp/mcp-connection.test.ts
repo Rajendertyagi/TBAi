@@ -19,7 +19,7 @@ import { classifySseFailure, safeEndpointMeta } from "@/services/mcp/classify.ts
 import { decryptSecret, credentialStore } from "@/services/credentials.ts";
 import { db } from "@/db";
 import { logger } from "@/lib/logger.ts";
-import { failureCopy } from "@web/lib/mcpCopy.ts";
+import { failureCopy } from "@web/features/mcp/copy.ts";
 
 // The credential store is initialized by src/server.ts in production; tests
 // must initialize it explicitly (same as src/services/credentials.test.ts).

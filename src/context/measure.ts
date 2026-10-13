@@ -2,7 +2,7 @@
  * Input-size measurement for the Direct context budget.
  *
  * WHAT THIS IS NOT: provider-reported usage. That arrives after the request
- * (`chat.ts:581-583`, `chat-model.ts:116-124`) and is a different fact about a
+ * (`chat/index.ts:581-583`, `chat/model.ts:116-124`) and is a different fact about a
  * different thing. Nothing in this module may be described as "the token count"
  * without the word ESTIMATE, and no caller may store an estimate in a field
  * named like usage.

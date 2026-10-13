@@ -14,8 +14,8 @@ import type { SqliteResumableStreamStore } from "./sqliteResumableStore";
  * Durable reconciliation of completed runs whose assistant history is still
  * outstanding.
  *
- * Why this exists: `routes/chat.ts` finalizes a completed run server-side only
- * when it *knows* the client detached. When the run completes while the server
+ * Why this exists: `routes/chat/index.ts` finalizes a completed run server-side
+ * only when it *knows* the client detached. When the run completes while the server
  * still believes a browser is attached, the server deliberately writes nothing —
  * the assistant-ui `ThreadHistoryAdapter` owns persistence. That ownership is
  * an assumption about the future, and a client that dies, loses the network, or

@@ -6,7 +6,9 @@ import type { Database } from "bun:sqlite";
  *
  * This module is deliberately a LEAF: it imports nothing from the app, so
  * `src/db/index.ts` can apply the DDL without creating an import cycle
- * (db -> services/chat-streams/schema -> services/chat-streams/store -> db).
+ * (db -> db/schema/chat-streams <- services/chat-streams/store). It sits
+ * beside `src/db/index.ts` because `src/db/` owns SQLite schema definitions;
+ * the store in `services/chat-streams/` reaches UP to it, never the reverse.
  * It is the single definition of the DDL — the boot migration and the store's
  * tests both apply this exact string, so the two can never drift.
  *

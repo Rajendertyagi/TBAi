@@ -11,7 +11,7 @@ import {
 } from "@web/features/chat/state/materializeDraft";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 import { useWelcomeEngineStore } from "@web/features/chat/state/welcomeEngine.ts";
-import { useSettingsStore } from "@web/stores";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 
 /**
  * Wave-2 Phase 4 — draft materialization owner (cases 4p, 5, 11p, 13, 14, 16p).

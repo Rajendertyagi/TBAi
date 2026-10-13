@@ -15,7 +15,7 @@ import {
 } from "@web/features/chat/history/useDirectHistoryWindow.ts";
 import { useWelcomeEngineStore } from "@web/features/chat/state/welcomeEngine.ts";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
-import { useSettingsStore } from "@web/stores";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 
 const realFetch = globalThis.fetch;
 

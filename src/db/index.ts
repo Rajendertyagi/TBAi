@@ -4,10 +4,7 @@ import { logger } from "../lib/logger";
 // Leaf module (no app imports) that owns the chat-stream DDL, so the boot
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
-import {
-  applyChatStreamsSchema,
-  addChatStreamsColumnsIfMissing,
-} from "../services/chat-streams/schema";
+import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "./schema/chat-streams";
 import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
 // Anchored to the repository, not to `process.cwd()` — see src/config/data-dir.ts.

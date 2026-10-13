@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { computeBackoffDelay } from "../../lib/backoff";
+import { computeBackoffDelay } from "./backoff";
 import { logger } from "../../lib/logger";
 import { resolveApiUrl } from "../../lib/platform";
 

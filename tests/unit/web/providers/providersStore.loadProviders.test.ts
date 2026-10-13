@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { useSettingsStore } from "@web/stores/index.ts";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 import type { ProviderConfig } from "@web/types";
 
 const realFetch = globalThis.fetch;

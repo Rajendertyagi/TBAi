@@ -23,8 +23,8 @@ import { db } from "@/db";
 import { registry } from "@/config/providers.ts";
 import { conversationService } from "@/services/storage";
 import conversationsApp from "@/routes/conversations.ts";
-import chatApp from "@/routes/chat.ts";
-import { resolveChatModel, UnknownProviderError } from "@/routes/chat-model";
+import chatApp from "@/routes/chat/index.ts";
+import { resolveChatModel, UnknownProviderError } from "@/routes/chat/model.ts";
 import { conversationUpdateSchema } from "@/lib/validation.ts";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 

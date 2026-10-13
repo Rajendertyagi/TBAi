@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Circle, Plus } from "lucide-react";
-import { useMemoryStore } from "../stores";
-import { Button, Textarea } from "./ui";
+import { useMemoryStore } from "@/features/memories/state/memoryStore";
+import { Button, Textarea } from "../../../components/ui";
 import { Trash2, Pencil } from "lucide-react";
-import { SettingRow, SettingsPage, SettingsSection } from "./shared/settings";
+import { SettingRow, SettingsPage, SettingsSection } from "../../../components/shared/settings";
 
 /**
  * Plain-language names for the four Phase 5 screening classes.

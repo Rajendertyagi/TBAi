@@ -1,20 +1,20 @@
 import { Hono } from "hono";
-import { logger, newRequestId } from "../lib/logger";
-import { errorLogFields } from "../lib/errors";
-import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../lib/ai-diagnostics";
-import { streamStatusQuerySchema } from "../lib/validation";
+import { logger, newRequestId } from "../../lib/logger";
+import { errorLogFields } from "../../lib/errors";
+import { sanitizeAiRequest, aiDebugRequestsEnabled } from "../../lib/ai-diagnostics";
+import { streamStatusQuerySchema } from "../../lib/validation";
 import { UI_MESSAGE_STREAM_HEADERS } from "ai";
-import { resumableContext, chatStreamStore } from "../lib/resumable";
+import { resumableContext, chatStreamStore } from "../../lib/resumable";
 import { RESUMABLE_STREAM_ID_HEADER, ResumableStreamError } from "assistant-stream/resumable";
-import { disableIdleTimeout } from "./shared";
-import { validateAndResolve } from "./chat/validate-and-resolve";
-import { gateAssembledContext } from "./chat/gate";
-import type { StreamWriterHolder } from "./chat/types";
-import { createTerminalOutput, executeDirectStream } from "./chat/execute-direct-stream";
-import { mirrorRunToDurableStream } from "./chat/settlement";
-import { assembleForRequest, createRunAndAssemble } from "./chat/assemble-run";
-import { chatRuns } from "../services/chat-runs";
-import { messageService } from "../services/storage";
+import { disableIdleTimeout } from "../shared";
+import { validateAndResolve } from "./validate-and-resolve";
+import { gateAssembledContext } from "./gate";
+import type { StreamWriterHolder } from "./types";
+import { createTerminalOutput, executeDirectStream } from "./execute-direct-stream";
+import { mirrorRunToDurableStream } from "./settlement";
+import { assembleForRequest, createRunAndAssemble } from "./assemble-run";
+import { chatRuns } from "../../services/chat-runs";
+import { messageService } from "../../services/storage";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
 

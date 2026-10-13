@@ -16,7 +16,7 @@
 import { describe, it, expect, afterAll, beforeEach, afterEach } from "bun:test";
 import { Hono } from "hono";
 import { logger } from "@/lib/logger.ts";
-import chatApp from "@/routes/chat.ts";
+import chatApp from "@/routes/chat/index.ts";
 import providersApp from "@/routes/providers.ts";
 import { chatRuns, createChatRunStore } from "@/services/chat-runs.ts";
 

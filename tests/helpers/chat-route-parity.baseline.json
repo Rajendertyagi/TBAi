@@ -6,6 +6,9 @@
     "error|ai|ai.error",
     "error|ai|ai.error",
     "error|ai|ai.error",
+    "error|chat|chat_compact_divider_persist_failed",
+    "error|chat|chat_compact_failed",
+    "error|chat|chat_compact_failed",
     "error|chat|chat_stream_status_failed",
     "error|chat|chat_stream_verdict_failed",
     "error|context|assembly_limit_exceeded",
@@ -13,6 +16,7 @@
     "info|ai|ai.response",
     "info|ai|ai.resume",
     "info|ai|generation_step",
+    "info|chat|chat_compact_command",
     "info|chat|chat_request_received",
     "info|chat|chat_response_closed",
     "info|chat|stream_first_chunk",
@@ -64,10 +68,14 @@
     "c.json({ run: null, requestId }, 200)"
   ],
   "files": [
-    "src/routes/chat.ts",
     "src/routes/chat/assemble-run.ts",
+    "src/routes/chat/compact-command.ts",
     "src/routes/chat/execute-direct-stream.ts",
     "src/routes/chat/gate.ts",
+    "src/routes/chat/index.ts",
+    "src/routes/chat/model.ts",
+    "src/routes/chat/overflow-gate.ts",
+    "src/routes/chat/provider-options.ts",
     "src/routes/chat/settlement.ts",
     "src/routes/chat/types.ts",
     "src/routes/chat/validate-and-resolve.ts"

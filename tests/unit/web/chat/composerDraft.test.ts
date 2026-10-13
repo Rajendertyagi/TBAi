@@ -9,7 +9,7 @@ import {
   resetAvailabilityForTests,
 } from "@web/features/availability/availabilityStore.ts";
 import { registerAvailabilityRecovery } from "@web/features/availability/recovery.ts";
-import { useSettingsStore } from "@web/stores";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 
 function installMemoryStorage(): () => void {
   const holder = globalThis as unknown as { localStorage?: unknown };

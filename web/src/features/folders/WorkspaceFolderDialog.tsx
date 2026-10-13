@@ -8,9 +8,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { DirectoryBrowser } from "@/components/shared/directory-browser";
+import { DirectoryBrowser } from "@/features/folders/components/DirectoryBrowser";
 import { FolderLinksManager } from "./FolderLinksManager";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import type { Folder } from "@/types";
 
 type View = "root" | "links";

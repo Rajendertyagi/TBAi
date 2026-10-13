@@ -97,8 +97,8 @@ explicit compatibility review and approval.
   transports / tool discovery; chat route merges `mcpManager.getAiTools()` into tools.
 - `src/routes/mcp.ts` — `/api/mcp` REST boundary (Zod-validated); the browser's only
   window into MCP config/status.
-- `web/src/components/McpPanel.tsx` + `web/src/stores/mcpStore.ts` — MCP GUI/state only;
-  no MCP protocol code in the frontend.
+- `web/src/features/mcp/components/McpPanel.tsx` + `web/src/features/mcp/state/mcpStore.ts`
+  — MCP GUI/state only; no MCP protocol code in the frontend.
 - `src/lib/validation.ts` — all API input validation (Zod).
 - `web/src/app/router.tsx` (`createHashRouter`) — only place that defines
   application surfaces (`/`, `/chat/:threadId?`, settings pages, `*` → `/`).
@@ -138,9 +138,11 @@ explicit compatibility review and approval.
   rest of the backend (chat route, workspace, tools, scheduler) never imports
   the client; the OpenCode module receives `conversationId` + the already-resolved
   dir via existing entry points (`resolveConversationWorkspace`).
-  `web/src/features/opencode/` is the ONLY frontend code that imports
-  `@opencode/client`; it owns the native V2 client, event reduction, history,
-  permissions, forms, cancellation, and external-store controller.
+  `web/src/features/opencode/` is the ONLY frontend code that depends on
+  `@opencode/client` at runtime (one type-only import of `ToolContent` lives in
+  `web/src/tools/opencode/adapt.ts`); it owns the native V2 client, event
+  reduction, history, permissions, forms, cancellation, and external-store
+  controller.
   `ChatWindow.tsx`, the chat runtime, and all other UI never import the
   OpenCode client or feature internals — Code mode composes through the shared
   `mode="agent"` prop. New OpenCode capability (permissions, forms, models,
@@ -150,6 +152,141 @@ explicit compatibility review and approval.
   (running labels, empty states, summary notices, decisions). Individual tool
   renderers import copy from this module; vendored assistant-ui elements retain
   their upstream copy.
+
+## File ownership — mandatory
+
+Ownership is decided by **what the code is about**, never by convenience. Every
+new file has exactly one owning directory. Putting something in a shared
+directory because that directory already exists is a defect, not a shortcut.
+
+### Frontend (`web/src/`)
+
+| Directory | Owns |
+|---|---|
+| `app/` | Application composition: routing, shell integration, application-level wiring. Never message, thread, or tool state. |
+| `features/<feature>/` | Everything specific to one feature: UI, state/stores, hooks, types, API clients, request logic, feature config. |
+| `components/` | Genuinely shared UI: reusable primitives and cross-feature components. Not feature UI parked in a shared folder. |
+| `lib/`, `config/` | Genuinely shared utilities and shared configuration. Not feature code placed there for convenience. |
+| `adapters/` | The HTTP bridge to assistant-ui runtime contracts (`RemoteThreadListAdapter`, `ThreadHistoryAdapter`). |
+| `tools/` | TBAi-owned tool UI metadata and rendering glue, grouped per tool engine in `tools/<engine>/`. |
+
+- Feature-specific code must not be added to `components/`, `lib/`, or `config/`.
+- Cross-feature sharing needs a stated justification and an owner that is not one
+  of the two features. If no such owner exists, the code stays duplicated until
+  one does.
+- There is no shared `web/src/stores/`. A store whose subject is one feature
+  belongs in that feature's `state/`.
+- **`web/src/tools/<engine>/` is grouped by tool engine, not left as a shared
+  bin.** The engine subdirectories are `browser/`, `computer/`, `filesystem/`,
+  `opencode/`, `scheduler/`, and `todo/`; each is owned by that engine, and new
+  tool rendering joins the matching engine's directory. This is tool rendering,
+  not feature state: feature UI, stores, hooks, and types belong in
+  `web/src/features/<feature>/`. `tools/opencode/` is the frontend's OpenCode
+  tool-UI owner, which is why it may hold a type-only `@opencode/client` import.
+- **The Direct/OpenCode split is a runtime boundary, not a preference.**
+  `web/src/features/opencode/` is the only frontend code that depends on
+  `@opencode/client` at runtime; the single exception is a type-only import of
+  `ToolContent` in `web/src/tools/opencode/adapt.ts`. `ChatWindow.tsx`,
+  `Composer.tsx`, `runtime.ts`, and the rest of the shared UI stay
+  engine-neutral and compose through the `mode="chat" | "agent"` prop. Do not
+  merge the two runtimes, and do not let OpenCode-only capability (Shield,
+  permissions, forms, terminal, diff) leak into Direct Chat. See **Durable
+  forward architecture** below.
+
+### Backend (`src/`)
+
+| Directory | Owns |
+|---|---|
+| `routes/` | The HTTP boundary: request handling, validation, status codes, response shaping. No domain logic. |
+| `services/` | Business logic, orchestration, domain behavior. No HTTP concerns. |
+| `db/` | Database connections, schema/DDL, row mappers. |
+| `lib/` | Cross-cutting pure helpers: logger, validation schemas, message pruning/conversion. |
+| `tools/` | Native AI SDK `tool()` definitions and their Zod schemas. It declares tools; it does not run them. |
+| `context/`, `config/` | Context-window assembly and configuration registries consumed by services. |
+
+The intended dependency direction is **`routes → services → database`**, one way.
+
+- **Tool declaration and tool execution have separate owners.** `src/tools/`
+  holds the `tool()` definitions; `src/services/tools.ts` executes them,
+  consumes grants, and confines **path arguments** to the conversation
+  workspace root. `runBash` confines only its starting directory — the command
+  body runs with the server's own privileges. **Do not describe shell execution
+  as sandboxed**; `src/services/tools.ts` states this in its own header.
+- The database layer must never import from `routes/` or from `services/`. If a
+  persistence helper needs domain behavior, that behavior moves up into
+  `services/`. A route may reference a `db/schema/*` type (`import type`), which
+  creates no runtime edge — but any value-level or runtime dependency from a
+  route straight into `db/` needs a stated reason.
+- Persistence helpers and domain modules have explicit owners. A module that
+  accumulates unrelated aggregates gets split along them, keeping a barrel that
+  preserves existing import paths — as `services/storage/` was split into
+  `conversations.ts` / `messages.ts` / `memories.ts`.
+- Reorganizing modules must preserve lifecycle ordering, transactions, external
+  contracts, and runtime behavior. A structural move that changes behavior is a
+  different task and needs explicit authorization.
+
+### Tests and supporting files
+
+- Every test source and test-only asset lives under `tests/`. That rule is
+  enforced by `bun run test:locations`; see **Test location — hard rule** below.
+  Do not restate it here — follow it.
+- Scripts belong in `scripts/`, documentation in `docs/`.
+- Temporary, generated, and scratch artifacts do not belong in the repository
+  root and must never be committed. Bundles, logs, patches, and evidence go
+  outside the repository.
+- Before relocating production code or a test, enumerate **every** consumer:
+  static importers, **dynamic** `import()`, source-text guards that match the
+  file's text, path strings in configuration, docs that name the path, and CI or
+  Playwright config. A move that updates only the obvious importers is
+  incomplete.
+
+## Change workflow — mandatory checklist
+
+Applies to file additions, moves, extractions, splits, and feature work.
+
+1. **Inspect first.** Read the tree, this file, the relevant `docs/` architecture
+   pages, and one or two comparable existing modules. Match their shape instead
+   of inventing a new one.
+2. **Name the owner.** Decide which feature or architectural layer owns the
+   responsibility, and state it, before creating the file.
+3. **Extend before adding.** Prefer extending the correct existing module over
+   creating a competing implementation, a parallel abstraction, or a second
+   helper that almost does what you need.
+4. **Place it correctly.** Every new file goes in its owning directory, with a
+   one-line purpose.
+5. **Enumerate consumers before moving anything.** See the relocation rule
+   above; dynamic imports and source-text guards are the ones that get missed.
+6. **Preserve contracts.** Public APIs, wire formats, persistence schemas,
+   lifecycle ordering, and runtime behavior stay as-is unless the task explicitly
+   authorizes a change.
+7. **Verify.** Read the complete diff, then run typecheck, lint, format check,
+   and the affected tests. Report real exit codes and real counts.
+8. **Report.** List every file created, moved, split, or removed; give each an
+   owner; and state any unresolved architectural exception.
+
+Ordinary file creation does **not** require prior approval. These operations must
+be surfaced explicitly, with written rationale, **before** implementation:
+
+- changing an architectural boundary (a new top-level ownership area or shared
+  directory);
+- merging previously isolated runtimes — Direct Chat and OpenCode especially;
+- reversing the `routes → services → db` dependency direction;
+- changing a persistent data contract (schema, column, or migration).
+
+## Exceptions and enforcement
+
+- Follow existing repository convention where it does not conflict with these
+  rules. Where it does conflict, these rules win and the convention changes.
+- **Do not move files to make the tree look tidy.** Shared ownership and runtime
+  boundaries matter more than visual uniformity. A file in an odd-looking place
+  with a clear single owner beats a cosmetically uniform tree with ambiguous
+  ownership.
+- When a genuine exception is necessary, record the owning layer, the dependency
+  consequences, and why the standard placement is inappropriate.
+- Agents must **disclose** violations and unresolved exceptions in their report
+  rather than introducing them silently.
+- These rules apply to features, bug fixes, refactors, tests, and maintenance —
+  not only to newly created features.
 
 ## Durable forward architecture
 

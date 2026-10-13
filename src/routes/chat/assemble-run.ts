@@ -65,7 +65,7 @@ import { compactionStore } from "../../services/compaction";
 import type { BashOutputEvent } from "../../services/tools";
 import { resolveConversationWorkspace, WorkspaceError } from "../../services/workspace";
 import { buildToolsContext, type NativeToolSet, type NativeToolsContext } from "../../tools";
-import type { ChatContextState } from "../chat-model";
+import type { ChatContextState } from "./model";
 import type { ChatContext, DirectRunSetup, PhaseResult } from "./types";
 
 /**

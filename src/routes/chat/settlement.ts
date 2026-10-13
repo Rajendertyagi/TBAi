@@ -2,7 +2,8 @@
  * Direct-run settlement vocabulary and the durable-stream mirror.
  *
  * These are module-scope constants and helpers that used to sit at the top of
- * `src/routes/chat.ts`. They moved here when the route's execution phase became
+ * the chat route (`src/routes/chat/index.ts`, formerly `src/routes/chat.ts`).
+ * They moved here when the route's execution phase became
  * `chat/execute-direct-stream.ts`, because BOTH that phase and the cancel
  * endpoint need them: a run's outcome is mirrored onto its durable stream row
  * wherever the run is settled, not only where it streams.
@@ -13,7 +14,7 @@
 import { errorLogFields } from "../../lib/errors";
 import type { logger } from "../../lib/logger";
 import { chatStreamStore } from "../../lib/resumable";
-import type { ChatStreamTerminalKind } from "../../services/chat-streams/schema";
+import type { ChatStreamTerminalKind } from "../../db/schema/chat-streams";
 
 /** A run's terminal state, matching the registry's settlement vocabulary. */
 export type DirectRunSettlement = "completed" | "failed" | "cancelled";

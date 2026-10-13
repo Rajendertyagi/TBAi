@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { useSettingsStore } from "@/stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { apiFetch } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

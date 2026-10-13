@@ -1,7 +1,7 @@
 import { Palette, SpellCheck2 } from "lucide-react";
 import { SettingRow, SettingsPage, SettingsSection } from "../../components/shared/settings";
 import { Switch } from "../../components/ui/switch";
-import { ThemeToggle } from "../../components/theme-toggle";
+import { ThemeToggle } from "./ThemeToggle";
 import { useTheme } from "../../components/theme-provider";
 import { ThemePicker } from "./ThemePicker";
 import { useDesktopLayout } from "../desktop/state/desktopLayout";

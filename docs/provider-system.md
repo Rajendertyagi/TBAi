@@ -132,7 +132,7 @@ timeout and throw on non-2xx; the route catches and returns `{ ok: false, error 
 - **Each conversation owns a persisted default** (`conversations.model_id` /
   `conversations.reasoning_level` in SQLite, source of truth). On create it
   inherits the active provider's `model` / `thinking`; the composer chips
-  (`PaseoComposer`) update it via the adapter's `updateCustom` (PATCH
+  (`Composer.tsx`) update it via the adapter's `updateCustom` (PATCH
   `/api/conversations/:id`) so it survives reloads and is the baseline for
   subsequent messages in that conversation.
 - The composer picker sets a **one-shot** override (`selectedModelId` /
@@ -140,7 +140,7 @@ timeout and throw on non-2xx; the route catches and returns `{ ok: false, error 
   sent as `model` / `providerId` / `reasoningLevel` in the `/api/chat` body and
   overrides the conversation default for that request only — it is cleared after
   send (`revertChatTarget`) and never writes back to `provider.model`.
-- **Resolution order** (`src/routes/chat-model.ts`, mirrored in `web/src/runtime.ts`):
+- **Resolution order** (`src/routes/chat/model.ts`, mirrored in `web/src/runtime.ts`):
   one-shot override → conversation persisted default (`threadListItem.custom`) →
   global active provider default. An absent request field falls back to the
   conversation row so a missing header never silently drops the user's config.

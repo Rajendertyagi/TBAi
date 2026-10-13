@@ -14,7 +14,7 @@
  * becomes model-visible context, so enabling it is a deliberate act by the operator
  * — not something a new build should start doing silently. The same reasoning that
  * keeps compaction behind `TBAI_COMPACTION_ENABLED` applies here, and the same
- * env-flag precedent (`TBAI_CHAT_STREAM_TTL_MS`, `src/services/chat-streams/schema.ts`)
+ * env-flag precedent (`TBAI_CHAT_STREAM_TTL_MS`, `src/db/schema/chat-streams.ts`)
  * is the mechanism.
  *
  * Anything other than an explicit `"1"` or `"true"` is off. A missing value, `"0"`,

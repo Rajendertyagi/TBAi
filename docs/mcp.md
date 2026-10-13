@@ -20,9 +20,10 @@ a server and its tools become model-callable automatically.
   over the `/api/mcp` REST API.
 - **Portable config.** Server definitions are stored in SQLite (`mcp_servers` table). Auth tokens are
   encrypted at rest with the same local DEK as provider keys (see `security.md`).
-- **Non-coder-friendly GUI.** The MCP panel (`web/src/components/McpPanel.tsx`) lets a user add a
-  server by name + transport + command/URL, test the connection, watch live status, browse the
-  discovered tools/resources/prompts, and see recent server notifications — no JSON, no CLI.
+- **Non-coder-friendly GUI.** The MCP panel (`web/src/features/mcp/components/McpPanel.tsx`) lets
+  a user add a server by name + transport + command/URL, test the connection, watch live status,
+  browse the discovered tools/resources/prompts, and see recent server notifications — no JSON, no
+  CLI.
 
 ## Architecture
 
@@ -145,9 +146,9 @@ Auth tokens use the same AES-256-GCM local DEK as provider keys (`encryptSecret`
   `McpServerDraft`.
 - `web/src/config/navigation.ts` — adds a `mcp` view (`ViewId`) and a bottom-nav entry (Plug icon),
   configuration-driven like every other nav item.
-- `web/src/stores/mcpStore.ts` — Zustand store for the server list, selected server, test status, and
-  live events; fetches from `/api/mcp`.
-- `web/src/components/McpPanel.tsx` — the management GUI: add/edit/delete, enable toggle,
+- `web/src/features/mcp/state/mcpStore.ts` — Zustand store for the server list, selected server, test
+  status, and live events; fetches from `/api/mcp`.
+- `web/src/features/mcp/components/McpPanel.tsx` — the management GUI: add/edit/delete, enable toggle,
   connect/disconnect/refresh, **Test connection**, and panels for tools / resources / prompts plus a
   recent-events feed. Non-coder-friendly: transport + auth pickers, key-value env/header editors, no
   raw JSON.

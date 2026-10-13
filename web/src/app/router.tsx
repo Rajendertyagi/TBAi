@@ -74,11 +74,16 @@ export const router = createHashRouter([
           {
             path: "memory",
             lazy: () =>
-              import("../components/MemoryPanel").then((m) => ({ Component: m.MemoryPanel })),
+              import("../features/memories/components/MemoryPanel").then((m) => ({
+                Component: m.MemoryPanel,
+              })),
           },
           {
             path: "mcp",
-            lazy: () => import("../components/McpPanel").then((m) => ({ Component: m.McpPanel })),
+            lazy: () =>
+              import("../features/mcp/components/McpPanel").then((m) => ({
+                Component: m.McpPanel,
+              })),
           },
           {
             path: "logs",

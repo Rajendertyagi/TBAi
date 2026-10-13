@@ -29,7 +29,7 @@ import { db } from "../src/db/index";
 import { registry } from "../src/config/providers";
 import { credentialStore } from "../src/services/credentials";
 import { getModel } from "../src/services/ai";
-import { buildReasoningProviderOptions } from "../src/routes/chat-provider-options";
+import { buildReasoningProviderOptions } from "../src/routes/chat/provider-options";
 import type { ProviderConfig } from "../src/types";
 
 const argv = process.argv.slice(2);

@@ -21,7 +21,7 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import React from "react";
-import { MemoryPanel, memoryStatusLine } from "@web/components/MemoryPanel.tsx";
+import { MemoryPanel, memoryStatusLine } from "@web/features/memories/components/MemoryPanel.tsx";
 import { REPO_ROOT } from "../../helpers/repo-root";
 
 describe("22. derived safety status wording", () => {
@@ -59,7 +59,10 @@ describe("22. derived safety status wording", () => {
 });
 
 describe("the panel wires the status into the existing memory row", () => {
-  const source = readFileSync(path.join(REPO_ROOT, "web/src/components/MemoryPanel.tsx"), "utf8");
+  const source = readFileSync(
+    path.join(REPO_ROOT, "web/src/features/memories/components/MemoryPanel.tsx"),
+    "utf8",
+  );
 
   it("renders memoryStatusLine inside the memory list", () => {
     expect(source).toContain("memoryStatusLine(memory)");

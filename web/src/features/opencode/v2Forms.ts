@@ -5,7 +5,10 @@ import type {
   FormWhen,
   SessionFormReplyInput,
 } from "@opencode/client";
-import { OPENCODE_V2_FORM_FIELD_LIMIT, OPENCODE_V2_FORM_OPTION_LIMIT } from "@/config/opencode";
+import {
+  OPENCODE_V2_FORM_FIELD_LIMIT,
+  OPENCODE_V2_FORM_OPTION_LIMIT,
+} from "@/features/opencode/config";
 
 export type V2FormAnswer = SessionFormReplyInput["answer"];
 type FormValue = V2FormAnswer[string];

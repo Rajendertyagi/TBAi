@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyChatStreamsSchema } from "@/services/chat-streams/schema.ts";
+import { applyChatStreamsSchema } from "@/db/schema/chat-streams.ts";
 import {
   createSqliteResumableStreamStore,
   DEFAULT_CLEANUP_BATCH,
@@ -16,7 +16,7 @@ import {
   startChatStreamCleanup,
   stopChatStreamCleanup,
 } from "@/services/chat-streams/cleanup.ts";
-import { CHAT_STREAM_TTL_ENV, DEFAULT_CHAT_STREAM_TTL_MS } from "@/services/chat-streams/schema.ts";
+import { CHAT_STREAM_TTL_ENV, DEFAULT_CHAT_STREAM_TTL_MS } from "@/db/schema/chat-streams.ts";
 
 /**
  * Periodic cleanup of expired terminal resumable streams.

@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { schedulerViewConfig } from "@/config/scheduler";
+import { schedulerViewConfig } from "@/features/scheduler/config";
 import {
   JOB_TEMPLATES,
   type JobTemplate,

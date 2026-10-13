@@ -16,7 +16,7 @@ import {
   type ChatStreamHistoryState,
   type ChatStreamStatus,
   type ChatStreamTerminalKind,
-} from "./schema";
+} from "../../db/schema/chat-streams";
 
 /**
  * Durable, SQLite-backed implementation of the official assistant-stream

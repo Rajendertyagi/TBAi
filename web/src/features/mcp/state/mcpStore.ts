@@ -1,12 +1,12 @@
 import { create } from "zustand";
-import { apiJson } from "../lib/api";
+import { apiJson } from "../../../lib/api";
 import type {
   McpStatus,
   McpServerDraft,
   McpTestResult,
   McpResourceReadResult,
   McpPromptGetResult,
-} from "../types";
+} from "../../../types";
 
 interface McpState {
   servers: McpStatus[];

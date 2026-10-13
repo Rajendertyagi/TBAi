@@ -1,7 +1,7 @@
 /**
  * Sidebar section-order unit tests (no DOM, no server).
  *
- * Covers the pure helpers in `web/src/lib/sidebar-sections.ts`: section-order
+ * Covers the pure helpers in `web/src/features/desktop/state/sidebarSections.ts`: section-order
  * normalization and moves. Executed with `bun test`.
  *
  * SCOPE NOTE: this file used to also cover `sortThreads`, `filterThreads`, and
@@ -15,7 +15,10 @@
  * ever surface as a module-load SyntaxError at run time.
  */
 import { describe, it, expect } from "bun:test";
-import { moveSectionInOrder, normalizeSectionOrder } from "@web/lib/sidebar-sections";
+import {
+  moveSectionInOrder,
+  normalizeSectionOrder,
+} from "@web/features/desktop/state/sidebarSections";
 
 describe("normalizeSectionOrder", () => {
   it("passes a full permutation through", () => {

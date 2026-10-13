@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Pencil, Plus, Server, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useSettingsStore } from "@/stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { apiFetch } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

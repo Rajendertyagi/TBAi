@@ -3,7 +3,7 @@ import type {
   SessionMessageInfo,
   SessionMessagesResponse,
 } from "@opencode/client";
-import { OPENCODE_V2_HISTORY_PAGE_SIZE } from "@/config/opencode";
+import { OPENCODE_V2_HISTORY_PAGE_SIZE } from "@/features/opencode/config";
 import type { V2HistoryReader } from "./v2Client";
 import type { V2HistorySnapshot, V2MessagePartState, V2MessageState } from "./v2Types";
 import { deriveV2ToolCallId, type V2PermissionView } from "./v2Permissions";

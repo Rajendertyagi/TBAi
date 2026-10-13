@@ -18,9 +18,9 @@
  */
 import type { UIMessage } from "ai";
 import type { Context } from "hono";
-import type { resolveChatModel } from "../chat-model";
+import type { resolveChatModel } from "./model";
 import type { conversationService } from "../../services/storage";
-import type { buildReasoningProviderOptions } from "../chat-provider-options";
+import type { buildReasoningProviderOptions } from "./provider-options";
 import type { getModel } from "../../services/ai";
 
 /** The Hono context shape this route runs under. */

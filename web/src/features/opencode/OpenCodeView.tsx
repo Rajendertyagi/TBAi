@@ -9,7 +9,7 @@ import { ChatWindow } from "@/components/ChatWindow";
 import { ThreadBootSkeleton } from "@/components/assistant-ui/elements/thread-boot-skeleton";
 import { appToolkit } from "@/tools/toolkit";
 import { useConversationTab } from "@/features/chat/state/useConversationTab";
-import { OPENCODE_INIT_TIMEOUT_MS } from "@/config/opencode";
+import { OPENCODE_INIT_TIMEOUT_MS } from "@/features/opencode/config";
 import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
 import { useAvailabilityStore } from "../availability/availabilityStore";
 import { useOpenCodeCapabilities } from "./useOpenCodeCapabilities";

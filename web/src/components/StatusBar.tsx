@@ -2,7 +2,7 @@ import { Circle } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { appConfig, getNavItem } from "../config/navigation";
 import { statusBarConfig } from "../config/statusBar";
-import { useSettingsStore } from "../stores/index";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { useAvailabilityStore } from "../features/availability/availabilityStore";
 import { useOpenCodeConversationConfig } from "../features/opencode/useOpenCodeConversationConfig";
 import { useServerIdentity } from "../features/desktop/state/serverIdentity";

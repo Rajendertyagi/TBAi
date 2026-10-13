@@ -9,7 +9,7 @@ import {
   useRemoteThreadListRuntime,
   type RemoteThreadListAdapter,
 } from "@assistant-ui/react";
-import { useSettingsStore } from "./stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "./lib/logger";
 import { classifyChatError } from "./lib/transport-errors";
 import { currentOperationId } from "./lib/operation";

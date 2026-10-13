@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Link2, Link2Off, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useFoldersStore } from "@/stores/foldersStore";
-import { DirectoryBrowser } from "@/components/shared/directory-browser";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
+import { DirectoryBrowser } from "@/features/folders/components/DirectoryBrowser";
 import type { FolderLink } from "@/types";
 
 /**

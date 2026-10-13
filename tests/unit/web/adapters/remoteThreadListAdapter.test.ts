@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { createRemoteThreadListAdapter } from "@web/adapters/remoteThreadListAdapter.tsx";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 import { useWelcomeEngineStore } from "@web/features/chat/state/welcomeEngine.ts";
-import { useSettingsStore } from "@web/stores";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 
 const realFetch = globalThis.fetch;
 

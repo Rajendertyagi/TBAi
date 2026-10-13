@@ -1,6 +1,6 @@
-import { registry } from "../config/providers";
-import { conversationService } from "../services/storage";
-import type { ProviderConfig } from "../types";
+import { registry } from "../../config/providers";
+import { conversationService } from "../../services/storage";
+import type { ProviderConfig } from "../../types";
 
 /**
  * Effective model + reasoning resolution for a chat request.

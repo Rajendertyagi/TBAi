@@ -2,7 +2,7 @@ import type { SessionInboxItem, SessionMessageInfo, V2Event } from "@opencode/cl
 import {
   OPENCODE_V2_DIAGNOSTIC_COUNT_CAP,
   OPENCODE_V2_RECENT_EVENT_ID_WINDOW,
-} from "@/config/opencode";
+} from "@/features/opencode/config";
 import { resolveCodeOccupancy } from "./codeOccupancy";
 import {
   modelRefToV2Selection,

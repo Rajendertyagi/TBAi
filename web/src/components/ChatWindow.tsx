@@ -40,7 +40,7 @@ import { DIRECT_COMPACT_DATA_NAME } from "../features/chat/compactCommand";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
 import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePicker";
-import { useSettingsStore } from "../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
 import { formatDuration } from "@/tools/elapsed";

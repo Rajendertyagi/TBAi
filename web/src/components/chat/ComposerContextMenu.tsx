@@ -9,7 +9,7 @@ import {
   TextSelect,
 } from "lucide-react";
 import { composerConfig } from "@/config/composer";
-import { useQuickMessagesStore } from "@/stores/quickMessagesStore";
+import { useQuickMessagesStore } from "@/features/quick-messages/state/quickMessagesStore";
 import {
   copyTextFromMenu,
   cutTextareaSelection,

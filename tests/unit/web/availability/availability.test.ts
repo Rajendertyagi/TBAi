@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { computeBackoffDelay } from "@web/lib/backoff.ts";
+import { computeBackoffDelay } from "@web/features/availability/backoff.ts";
 import {
   useAvailabilityStore,
   resetAvailabilityForTests,
@@ -13,7 +13,7 @@ import {
   createThreadHistoryAdapter,
   invalidateHistoryCache,
 } from "@web/adapters/threadHistoryAdapter.ts";
-import { useSettingsStore } from "@web/stores";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 import { statusBarConfig } from "@web/config/statusBar.ts";
 import { readComposerDraft, writeComposerDraft } from "@web/features/chat/state/composerDraft.ts";
 import type { ProviderConfig } from "@web/types";

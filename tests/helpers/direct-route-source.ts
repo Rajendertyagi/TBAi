@@ -4,7 +4,7 @@
  *
  * ## Why this exists
  *
- * Several boundary tests read `src/routes/chat.ts` and assert that something
+ * Several boundary tests read `src/routes/chat/index.ts` and assert that something
  * appears in it exactly once, or that a value flows from one place to another.
  * That is a real invariant — "the memory seam is supplied once", "cache options
  * are merged into the single `providerOptions` argument", "the route
@@ -41,7 +41,7 @@ export const DIRECT_ROUTE_MODULES = ["validate-and-resolve.ts", "assemble-run.ts
 export type DirectRouteModule = (typeof DIRECT_ROUTE_MODULES)[number];
 
 /** The route entry file itself, which stays in `src/routes/`. */
-export const DIRECT_ROUTE_ENTRY = "src/routes/chat.ts";
+export const DIRECT_ROUTE_ENTRY = "src/routes/chat/index.ts";
 
 /**
  * Concatenate the route entry with the named phase modules.

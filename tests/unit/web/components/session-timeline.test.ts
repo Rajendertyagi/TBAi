@@ -174,7 +174,7 @@ describe("tool timeline — TOOL_META covers the registry", () => {
     // 15 OpenCode, not 14: `patch` and `execute` are registered because OpenCode
     // v2 ships both, and `todowrite` was removed because v2 deleted it. Net
     // change of +1, and every individual move is asserted by name in
-    // `web/src/lib/opencode-v2-tools.test.ts` — these counts are the backstop,
+    // `tests/unit/web/opencode/v2Tools.test.ts` — these counts are the backstop,
     // not the reason the names are right.
     expect(Object.keys(appToolkit)).toHaveLength(30);
     expect(NATIVE_TOOL_NAMES).toHaveLength(15);

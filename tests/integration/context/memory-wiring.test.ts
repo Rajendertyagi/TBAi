@@ -603,7 +603,7 @@ describe("Part 5.19-21: continuation paths cannot duplicate or leak memory", () 
     // handler, so widening its input would make it fail for the wrong reason —
     // the assembly phase legitimately contains "memory", and that is fine,
     // because a resumed stream never runs assembly.
-    const routeEntry = readFileSync(path.join(REPO_ROOT, "src/routes/chat.ts"), "utf8");
+    const routeEntry = readFileSync(path.join(REPO_ROOT, "src/routes/chat/index.ts"), "utf8");
     const resume = routeEntry.slice(routeEntry.indexOf('app.get("/api/chat/resume/'));
     const resumeHandler = resume.slice(0, resume.indexOf("\napp."));
     expect(resumeHandler).not.toContain("assembleContext");

@@ -7,7 +7,7 @@ import {
   addChatStreamsColumnsIfMissing,
   applyChatStreamsSchema,
   CHAT_STREAMS_SCHEMA_SQL,
-} from "@/services/chat-streams/schema";
+} from "@/db/schema/chat-streams";
 
 /**
  * Migration tests for the durable chat-stream schema.

@@ -5,7 +5,7 @@ import { useAui, useAuiState } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
 import { Bot, Brain, Check, ChevronDown } from "lucide-react";
 import { composerConfig } from "../../config/composer";
-import { useSettingsStore } from "../../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import type { ReasoningLevel } from "../../types";
 import { ModelOptionList } from "../chat/ModelOptionList";
 import { buildModelGroups, resolveModelOwner } from "../../lib/model-groups";

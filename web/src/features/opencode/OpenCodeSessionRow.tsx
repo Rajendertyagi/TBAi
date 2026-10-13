@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { welcomeConfig } from "@/config/welcome";
 import { probeConversation } from "@/features/chat/state/conversationExistence";
 

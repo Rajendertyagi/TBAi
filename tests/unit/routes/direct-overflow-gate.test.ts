@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { withOverflowRecovery, MAX_PROVIDER_ATTEMPTS } from "@/routes/direct-overflow-gate.ts";
+import { withOverflowRecovery, MAX_PROVIDER_ATTEMPTS } from "@/routes/chat/overflow-gate.ts";
 
 /** Raw part shapes, mirroring what `streamText`'s `fullStream` yields. */
 type Part =

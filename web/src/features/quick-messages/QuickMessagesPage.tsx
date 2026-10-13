@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GripVertical, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { quickMessagesConfig } from "@/config/quick-messages";
-import { useQuickMessagesStore } from "@/stores/quickMessagesStore";
+import { quickMessagesConfig } from "@/features/quick-messages/config";
+import { useQuickMessagesStore } from "@/features/quick-messages/state/quickMessagesStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
  * Quick Messages settings surface (Codeg pixel parity, fixed split).
  * Fluid shell, one divided card (list + editor joined), grip-drag reorder
  * (HTML5 DnD — no motion dependency), dirty-gated save, delete confirm.
- * Copy + layout tokens come from `config/quick-messages.ts`. Drafts sync on
+ * Copy + layout tokens come from `features/quick-messages/config.ts`. Drafts sync on
  * selection change only — never while dirty — so background reloads can't
  * discard unsent edits.
  */

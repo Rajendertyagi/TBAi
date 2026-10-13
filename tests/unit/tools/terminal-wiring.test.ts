@@ -5,7 +5,7 @@
  * options), and `createTerminalBatcher` throttles those events into
  * `data-tbai-terminal` parts with a guaranteed final `done` part.
  *
- * These are the two seams `routes/chat.ts` stitches together; testing them in
+ * These are the two seams `routes/chat/index.ts` stitches together; testing them in
  * isolation covers the wiring without a full HTTP request. `bun test`.
  *
  * Rewritten against the current native-tools API. The per-request rewrapper this

@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { apiResult, errorFromPayload, errorText } from "../lib/api";
-import type { SchedulerJobPublic, SchedulerRun } from "../types";
+import { apiResult, errorFromPayload, errorText } from "../../../lib/api";
+import type { SchedulerJobPublic, SchedulerRun } from "../../../types/index";
 
 interface SchedulerState {
   jobs: SchedulerJobPublic[];

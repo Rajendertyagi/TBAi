@@ -8,7 +8,7 @@ import {
   isStaleApproval,
   useStaleApprovalGuard,
   useStalePermissionsStore,
-} from "@/stores/stalePermissionsStore";
+} from "@/features/permissions/state/stalePermissionsStore";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 import type { V2PermissionView } from "./v2Permissions";
 

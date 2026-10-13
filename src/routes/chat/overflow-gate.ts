@@ -46,7 +46,7 @@
  * permits a third attempt: after attempt 2, any failure is passed through as-is.
  */
 
-import type { OverflowRecoveryDecision } from "../context/recovery";
+import type { OverflowRecoveryDecision } from "../../context/recovery";
 
 /** Attempts this gate will ever make. The second is the recovery; there is no third. */
 export const MAX_PROVIDER_ATTEMPTS = 2;

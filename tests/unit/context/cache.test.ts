@@ -972,7 +972,7 @@ describe("provider-specific cache logic never leaks into the orchestration layer
     // provider-specific cache SYNTAX. Calling `resolveCacheCapability` /
     // `buildCacheProviderOptions` is fine — asking an abstract question is the
     // point. Naming a provider or writing its wire syntax is not.
-    const chatRoute = readFileSync(path.join(REPO_ROOT, "src/routes/chat.ts"), "utf8");
+    const chatRoute = readFileSync(path.join(REPO_ROOT, "src/routes/chat/index.ts"), "utf8");
     const assemble = readFileSync(path.join(REPO_ROOT, "src/context/assemble.ts"), "utf8");
     const budget = readFileSync(path.join(REPO_ROOT, "src/context/budget.ts"), "utf8");
     const limits = readFileSync(path.join(REPO_ROOT, "src/context/limits.ts"), "utf8");

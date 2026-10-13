@@ -15,7 +15,7 @@ import { errorLogFields } from "../lib/errors";
 import mcpApp from "./mcp";
 import logsApp from "./logs";
 import schedulerApp from "./scheduler";
-import chatApp from "./chat";
+import chatApp from "./chat/index";
 import toolsApp from "./tools";
 import providersApp from "./providers";
 import conversationsApp from "./conversations";

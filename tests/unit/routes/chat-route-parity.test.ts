@@ -38,7 +38,7 @@ describe("POST /api/chat static parity", () => {
   it("scans a non-empty source set", () => {
     // An empty scan would make every other assertion below vacuously true.
     expect(current.files.length, "sources were scanned").toBeGreaterThan(0);
-    expect(current.files, "the route is always among them").toContain("src/routes/chat.ts");
+    expect(current.files, "the route is always among them").toContain("src/routes/chat/index.ts");
   });
 
   it("keeps every log event: same level, scope and event name", () => {

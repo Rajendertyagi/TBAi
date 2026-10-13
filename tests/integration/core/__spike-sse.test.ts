@@ -13,7 +13,7 @@ import { conversationInput } from "../../helpers/conversation-fixtures";
 import { chatRuns } from "@/services/chat-runs.ts";
 
 const app = new Hono();
-const { default: chatApp } = await import("@/routes/chat.ts");
+const { default: chatApp } = await import("@/routes/chat/index.ts");
 const { default: conversationsApp } = await import("@/routes/conversations.ts");
 app.route("/", chatApp);
 app.route("/", conversationsApp);

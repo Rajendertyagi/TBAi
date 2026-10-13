@@ -18,7 +18,7 @@ import { db } from "@/db";
 import { registry } from "@/config/providers.ts";
 import { conversationService } from "@/services/storage";
 import conversationsApp from "@/routes/conversations.ts";
-import { resolveChatModel } from "@/routes/chat-model.ts";
+import { resolveChatModel } from "@/routes/chat/model.ts";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 
 const app = new Hono();

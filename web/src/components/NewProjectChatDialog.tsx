@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { EnginePicker } from "@/components/EnginePicker";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { createConversation } from "@/adapters/remoteThreadListAdapter";
 import { threadUrl } from "@/features/chat/state/chatTabs";
 import type { WelcomeEngine } from "@/features/chat/state/welcomeEngine";

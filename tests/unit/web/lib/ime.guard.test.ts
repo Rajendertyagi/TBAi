@@ -54,7 +54,7 @@ const GUARDED_SITES: ReadonlyArray<{ file: string; helper: string; why: string }
     why: "renames a folder",
   },
   {
-    file: "web/src/components/shared/directory-browser.tsx",
+    file: "web/src/features/folders/components/DirectoryBrowser.tsx",
     helper: "isPlainEnter",
     why: "navigates to a typed path",
   },

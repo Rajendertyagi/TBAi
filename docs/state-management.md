@@ -23,8 +23,11 @@ backend (`src/db`, `src/services/*`); the browser never talks to the DB.
 **Zustand is not the persistence layer.** It holds (a) caches/mirrors of server
 data and (b) UI state more than one component needs. Never secrets.
 
-There are 14 stores. Seven live in `web/src/stores/`, the rest are owned by the
-feature they serve (`web/src/features/<name>/`).
+Every store is owned by the feature it serves, and lives in that feature's
+`state/` folder (`web/src/features/<name>/state/`). There is no shared
+`web/src/stores/` directory: a store whose subject is one feature — providers,
+memories, folders, quick messages, scheduler, stale permissions — is placed with
+the code that uses it, so the two can move, be tested, or be deleted together.
 
 ### 2a. Server-mirror caches
 
@@ -164,7 +167,7 @@ three places, each with one job:
 | **Runtime projection** | `threadListItem.custom` (via `remoteThreadListAdapter`) | A live read of the SQLite row projected into the assistant-ui runtime; written back through `updateCustom` (PATCH). It is a mirror, not a store — it must never diverge from SQLite. |
 | **One-shot overrides** | Zustand `selectedProviderId` / `selectedModelId` / `selectedReasoningLevel` | The composer picker's choice for the **next send only**. Cleared via `revertChatTarget` after the transport consumes them. Never the source of truth, never persisted. |
 
-Effective resolution (`src/routes/chat-model.ts`, mirrored in `web/src/runtime.ts`):
+Effective resolution (`src/routes/chat/model.ts`, mirrored in `web/src/runtime.ts`):
 `one-shot override → threadListItem.custom (conversation default) → global active
 provider default`. Zustand holds the overrides only; the conversation default is
 always read from SQLite.

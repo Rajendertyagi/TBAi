@@ -6,7 +6,7 @@ import {
   OPENCODE_V2_MANAGEMENT_TOOLS,
   OPENCODE_V2_TOOLS,
   OPENCODE_V1_REMOVED,
-} from "@web/lib/opencode-v2-tools";
+} from "@web/features/opencode/v2Tools";
 
 /**
  * The OpenCode tool registry, checked against what v2 actually ships.

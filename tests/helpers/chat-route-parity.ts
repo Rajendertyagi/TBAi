@@ -33,8 +33,15 @@ import { join, relative, resolve } from "node:path";
 /** Repo root, derived from this file: tests/helpers -> tests -> repo. */
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 
-/** The route file today, and the phase modules it will become. */
-const ROUTE_ENTRY = "src/routes/chat.ts";
+/**
+ * Every module that makes up `POST /api/chat`.
+ *
+ * The route entry is `index.ts` INSIDE this directory, not a sibling of it —
+ * `src/routes/chat.ts` and `src/routes/chat/` used to coexist, and that
+ * file/directory collision is gone. So the walk alone is the whole source set;
+ * naming the entry separately would scan it twice and report every log event
+ * and response body as a duplicate that the baseline never had.
+ */
 const PHASE_DIR = "src/routes/chat";
 
 /** `<logger>.warn("scope", "event", {` — level, scope and event are literals. */
@@ -70,12 +77,9 @@ function normalize(text: string): string {
     .trim();
 }
 
-/** Every .ts file the extraction owns: the route plus the phase modules. */
+/** Every .ts file the extraction owns: the route entry plus the phase modules. */
 export function collectSources(repoRoot = REPO_ROOT): string[] {
   const files: string[] = [];
-  const entry = join(repoRoot, ROUTE_ENTRY);
-  if (statSync(entry, { throwIfNoEntry: false })?.isFile()) files.push(ROUTE_ENTRY);
-
   const phaseDir = join(repoRoot, PHASE_DIR);
   if (statSync(phaseDir, { throwIfNoEntry: false })?.isDirectory()) {
     const walk = (dir: string) => {

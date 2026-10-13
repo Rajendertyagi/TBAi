@@ -9,11 +9,11 @@ import { commentedBodyOf } from "@web/testing/source-scope";
  * precedes the controls it suppresses — and a static `react-dom/server` render
  * produces identical markup whether the guard runs first or not, so it cannot
  * prove this. The store's own logic is covered behaviourally in
- * `stores/stalePermissionsStore.test.ts`; this file guards the placement, and
+ * `permissions/stalePermissionsStore.test.ts`; this file guards the placement, and
  * the end-to-end behaviour is confirmed in the browser.
  *
  * Division of labour, so the two guard files do not drift:
- * - `stores/stalePermissionsStore.test.ts` owns "is the shared guard applied
+ * - `permissions/stalePermissionsStore.test.ts` owns "is the shared guard applied
  *   at all, on every surface, and is the rule kept in one place".
  * - This file owns "is it applied in the right *place* inside the surface" —
  *   the guard has to precede the controls it suppresses and precede the

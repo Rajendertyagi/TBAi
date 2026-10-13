@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { ArrowUp, File, Image, Mic, Paperclip, Square } from "lucide-react";
 import { composerConfig } from "../config/composer";
 import { logger } from "../lib/logger";
-import { useSettingsStore } from "../stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { useWelcomeEngineStore } from "../features/chat/state/welcomeEngine";
 import { useChatTabsStore } from "../features/chat/state/chatTabs";
 import { captureDraftSnapshot, materializeDraft } from "../features/chat/state/materializeDraft";
@@ -25,7 +25,7 @@ import {
   readComposerDraft,
   writeComposerDraft,
 } from "../features/chat/state/composerDraft";
-import { useMcpStore } from "../stores/mcpStore";
+import { useMcpStore } from "../features/mcp/state/mcpStore";
 import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { ComposerContextMenu } from "./chat/ComposerContextMenu";

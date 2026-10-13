@@ -20,7 +20,7 @@ import { readDirectRouteSource } from "../../../helpers/direct-route-source";
  *
  * 1. **TBAi has no system prompt that asks for an echo.** The Direct engine's
  *    only `instructions` input is `conversation.systemPrompt`
- *    (`src/routes/chat.ts`, `instructions: conversation.systemPrompt`), and it
+ *    (`src/routes/chat/index.ts`, `instructions: conversation.systemPrompt`), and it
  *    is a per-conversation field the USER writes — nullable, unset by default.
  *    Every Direct conversation inspected here has `systemPrompt: null`. There
  *    is no TBAi-authored default, no per-tool instruction, and no tool

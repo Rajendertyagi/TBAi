@@ -45,7 +45,7 @@
 import { logAssembly, logContextOverflow } from "../../context";
 import { chatRuns } from "../../services/chat-runs";
 import { logger } from "../../lib/logger";
-import { persistCompactionDivider } from "../direct-compact-command";
+import { persistCompactionDivider } from "./compact-command";
 import { ASSEMBLY_LIMIT_CODE } from "../../context";
 import type { ChatContext, DirectRunSetup, PhaseResult } from "./types";
 import type { DirectRunAssembly } from "./assemble-run";
@@ -66,7 +66,7 @@ type CompactionPart = {
     /**
      * The summary text, or null when compaction reclaimed space without
      * producing one. Mirrors the stored row's own type (`summary: string |
-     * null` in `direct-compact-command.ts`) rather than narrowing it: the
+     * null` in `compact-command.ts`) rather than narrowing it: the
      * divider must be able to say "compacted, nothing was written down".
      */
     summary: string | null;

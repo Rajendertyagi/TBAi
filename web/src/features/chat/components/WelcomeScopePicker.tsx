@@ -4,7 +4,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { Check, ChevronDown, Folder, MessageSquare } from "lucide-react";
 import { welcomeConfig } from "@/config/welcome";
 import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {

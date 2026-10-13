@@ -7,7 +7,7 @@ import {
   isStaleApproval,
   reportPermissionGone,
   useStalePermissionsStore,
-} from "@web/stores/stalePermissionsStore.ts";
+} from "@web/features/permissions/state/stalePermissionsStore.ts";
 
 describe("isPermissionGone", () => {
   it("recognises the OpenCode server's not-found reply", () => {
@@ -244,7 +244,7 @@ describe("approval parity — every surface shares the ONE guard", () => {
     // If a second copy of the wording appears, a surface has grown its own
     // rule again — which is the bug 3A closes.
     const store = await Bun.file(
-      path.join(REPO_ROOT, "web/src/stores/stalePermissionsStore.ts"),
+      path.join(REPO_ROOT, "web/src/features/permissions/state/stalePermissionsStore.ts"),
     ).text();
     const occurrences = stripComments(store).match(/permission request not found/gi) ?? [];
     expect(occurrences.length).toBe(1);

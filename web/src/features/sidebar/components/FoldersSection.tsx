@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { FolderHeader } from "./FolderHeader";
 import { conversationIdFromPath } from "@/features/chat/state/chatTabs";
 import { FolderConversationRow } from "./FolderConversationRow";

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { AppShell } from "@/app/layout/AppShell";
-import { useSettingsStore } from "@/stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "@/lib/logger";
 import { OpenCodeView } from "./OpenCodeView";
 

@@ -75,8 +75,8 @@ import {
   describePrefixIdentity,
   observeSdkCacheUsage,
 } from "../../context/cache";
-import { buildChatMessageMetadata } from "../chat-model";
-import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "../direct-overflow-gate";
+import { buildChatMessageMetadata } from "./model";
+import { withOverflowRecovery, LIFECYCLE_PART_TYPES } from "./overflow-gate";
 import { assembleForRequest, type DirectRunAssembly } from "./assemble-run";
 import type { DirectRunGate } from "./gate";
 import type { ChatContext, DirectRunSetup, StreamWriterHolder } from "./types";

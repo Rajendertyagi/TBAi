@@ -24,7 +24,7 @@ import {
   isCompactCommandText,
   parseCompactCommand,
   type ManualCompactData,
-} from "@/routes/direct-compact-command.ts";
+} from "@/routes/chat/compact-command.ts";
 
 /** A user message with one text part, which is the only shape detection reads. */
 function user(text: string): UIMessage {

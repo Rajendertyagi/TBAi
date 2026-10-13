@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { schedulerViewConfig } from "@/config/scheduler";
+import { schedulerViewConfig } from "@/features/scheduler/config";
 import {
   formatDuration,
   formatRelative,

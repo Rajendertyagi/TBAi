@@ -86,7 +86,7 @@ import {
   isKnownApprovalOptionKind,
   primaryApprovalOption,
 } from "@/components/shared/approval-options";
-import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
+import { useStaleApprovalGuard } from "@/features/permissions/state/stalePermissionsStore";
 import { textPreview } from "@/tools/text-preview";
 import { logger } from "@/lib/logger";
 

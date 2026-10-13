@@ -6,7 +6,7 @@ import {
   effectLabel,
   openCodeConfigCopy,
   openCodeConfigEffects,
-} from "@web/config/opencodeConfig";
+} from "@web/features/opencode/configCopy";
 import { toPermissionRules } from "@web/features/opencode/openCodeConfig.ts";
 
 /**

@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { apiJson, errorText } from "../lib/api";
-import { logger } from "../lib/logger";
+import { apiJson, errorText } from "../../../lib/api";
+import { logger } from "../../../lib/logger";
 
 export interface QuickMessage {
   id: string;

@@ -6,7 +6,7 @@
  *
  * The only assembly this module performs is `assembleContext` with
  * `forceCompaction: true` — the same seam, and the same flag, that
- * provider-overflow recovery uses (see `direct-overflow-gate.ts`). There is no
+ * provider-overflow recovery uses (see `overflow-gate.ts`). There is no
  * compaction engine here, no second summariser, and no independent "did it
  * shrink?" judgement.
  *
@@ -46,19 +46,19 @@
  */
 
 import type { UIMessage } from "ai";
-import { generateId } from "../lib/utils";
-import { logger } from "../lib/logger";
-import { errorLogFields } from "../lib/errors";
-import { compactionStore } from "../services/compaction";
-import { messageService } from "../services/storage";
-import { assembleContext } from "../context/assemble";
+import { generateId } from "../../lib/utils";
+import { logger } from "../../lib/logger";
+import { errorLogFields } from "../../lib/errors";
+import { compactionStore } from "../../services/compaction";
+import { messageService } from "../../services/storage";
+import { assembleContext } from "../../context/assemble";
 import {
   COMPACTION_SUMMARY_TIMEOUT_MS,
   DEFAULT_COMPACTION_POLICY,
   compactionEnabled,
   describeCompactionOutcome,
-} from "../context/compaction";
-import type { AssembleContextInput, MechanismOutcome } from "../context/types";
+} from "../../context/compaction";
+import type { AssembleContextInput, MechanismOutcome } from "../../context/types";
 
 /**
  * The canonical command string this route intercepts.

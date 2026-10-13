@@ -477,10 +477,11 @@ export function isPhase3ExperimentEligible(limit: ContextLimit): boolean {
  * Resolve the output reservation — the INPUT BUDGET held back so a generation
  * has room to finish.
  *
- * Independent of any display-side context-ring arithmetic (`web/src/stores/
- * utils/contextUtils.ts`), which computes a percentage and is not a request
- * parameter. This value is NOT available input context: it is the room held back,
- * and the two must never be added together.
+ * Independent of any display-side context-ring arithmetic
+ * (`web/src/components/assistant-ui/elements/context-display.tsx`), which
+ * computes a percentage and is not a request parameter. This value is NOT
+ * available input context: it is the room held back, and the two must never be
+ * added together.
  *
  * This is NOT the generation cap. See `resolveGenerationCap`.
  */

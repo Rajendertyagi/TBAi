@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Button, Input, Textarea } from "./ui";
-import { useMcpStore } from "../stores/mcpStore";
-import { useChatTabsStore, urlForTab } from "../features/chat/state/chatTabs";
-import { cn } from "../lib/utils";
-import { failureCopy, authPlaceholder } from "../lib/mcpCopy";
-import { SettingsError, SettingsSection } from "./shared/settings";
+import { Button, Input, Textarea } from "../../../components/ui";
+import { useMcpStore } from "../state/mcpStore";
+import { useChatTabsStore, urlForTab } from "../../chat/state/chatTabs";
+import { cn } from "../../../lib/utils";
+import { failureCopy, authPlaceholder } from "../copy";
+import { SettingsError, SettingsSection } from "../../../components/shared/settings";
 import type {
   McpConnectionStatus,
   McpFailureReason,
@@ -15,7 +15,7 @@ import type {
   McpAuthType,
   McpPrompt,
   McpPromptGetResult,
-} from "../types";
+} from "../../../types";
 import {
   Plus,
   Trash2,

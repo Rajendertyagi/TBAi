@@ -60,7 +60,7 @@ import { chatRuns } from "@/services/chat-runs.ts";
 // read it before, and `/api/chat/stream-status` does not expose it.
 import { chatStreamStore } from "@/lib/resumable.ts";
 import { credentialStore } from "@/services/credentials.ts";
-import chatApp from "@/routes/chat.ts";
+import chatApp from "@/routes/chat/index.ts";
 import { conversationInput } from "../../helpers/conversation-fixtures";
 
 const app = new Hono();

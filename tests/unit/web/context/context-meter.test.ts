@@ -32,7 +32,7 @@ const RING_SOURCE = path.join(
   "elements",
   "context-display.tsx",
 );
-const SERVER_SOURCE = path.join(REPO_ROOT, "src", "routes", "chat-model.ts");
+const SERVER_SOURCE = path.join(REPO_ROOT, "src", "routes", "chat", "model.ts");
 
 const ring = fs.readFileSync(RING_SOURCE, "utf8");
 const server = fs.readFileSync(SERVER_SOURCE, "utf8");

@@ -31,7 +31,7 @@ return useChatRuntime({ transport });
 Key points:
 - The browser sends the selected provider/model identifiers and transport metadata,
   never an API key, system directive, or client tool definition.
-- `src/routes/chat.ts` validates the envelope and UI messages with AI SDK v7,
+- `src/routes/chat/index.ts` validates the envelope and UI messages with AI SDK v7,
   then applies the persisted conversation `systemPrompt` as server-owned
   `instructions`.
 - `ChatWindow.tsx` renders `AssistantRuntimeProvider` + `ThreadPrimitive` /
@@ -83,7 +83,7 @@ are credential/quota conditions, not native-switch defects; verify with
 
 ## Backend
 
-`src/routes/chat.ts` (`POST /api/chat`):
+`src/routes/chat/index.ts` (`POST /api/chat`):
 
 ```ts
 const parsed = chatRequestSchema.safeParse(await c.req.json());
@@ -140,14 +140,14 @@ there is no Agnes- or model-specific fallback in the application.
 
 Thinking is **opt-in per request**, and it is the only thing that produces a
 reasoning ("thinking") block in the UI. The effective level resolves in
-`src/routes/chat-model.ts`:
+`src/routes/chat/model.ts`:
 
 ```
 request `reasoningLevel`  →  conversation default (SQLite)
   →  provider's saved `thinking`  →  "off"
 ```
 
-`src/routes/chat-provider-options.ts` translates the level into provider options.
+`src/routes/chat/provider-options.ts` translates the level into provider options.
 Every branch is a documented provider quirk whose failure mode is **silence** —
 the request succeeds, the model thinks, and the UI renders nothing — so the
 rules live in one readable, unit-testable module rather than inline in the route.

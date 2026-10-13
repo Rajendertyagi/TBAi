@@ -30,7 +30,7 @@ import type {
   SessionSwitchModelInput,
   V2Event,
 } from "@opencode/client";
-import { OPENCODE_DIRECTORY_HEADER, OPENCODE_PROXY_BASE_URL } from "@/config/opencode";
+import { OPENCODE_DIRECTORY_HEADER, OPENCODE_PROXY_BASE_URL } from "@/features/opencode/config";
 
 export const V2_GENERATION_BRAND = Symbol("tbai-opencode-v2-generation");
 export const V2_HISTORY_READER_BRAND = Symbol("tbai-opencode-v2-history-reader");

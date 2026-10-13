@@ -14,7 +14,7 @@ import * as ui from "@web/tools/opencode/ui.tsx";
  *   OpenCode renderer  ->  BackendToolView  ->  ApprovalGate  ->  useStaleApprovalGuard
  *   (tools/opencode/ui.tsx) (filesystem/ui)   (filesystem/ui)    (stalePermissionsStore)
  *
- * The last two links are guarded in `stores/stalePermissionsStore.test.ts`
+ * The last two links are guarded in `permissions/stalePermissionsStore.test.ts`
  * (parity + no local re-implementation) and in `tool-fallback.test.ts`
  * (ordering). This file guards the first link: that the OpenCode renderers add
  * no gate of their own and always hand approval state to the shared dispatcher.

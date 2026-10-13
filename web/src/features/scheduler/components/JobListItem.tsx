@@ -1,7 +1,7 @@
 import { Fragment, useState, type ElementType } from "react";
 import { Copy, Loader2, MoreHorizontal, Pencil, Play, Power, PowerOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { schedulerViewConfig } from "@/config/scheduler";
+import { schedulerViewConfig } from "@/features/scheduler/config";
 import { formatRelative, formatRelativePast } from "@/features/scheduler/lib/scheduler-format";
 import { jobDotClass } from "@/features/scheduler/components/SchedulerStatus";
 import {

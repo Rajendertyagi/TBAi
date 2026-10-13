@@ -23,7 +23,7 @@ import {
   useWelcomeEngineStore,
   getWelcomeEngineSnapshot,
 } from "@web/features/chat/state/welcomeEngine.ts";
-import { useSettingsStore } from "@web/stores";
+import { useSettingsStore } from "@web/features/providers/state/providersStore";
 import { createRemoteThreadListAdapter } from "@web/adapters/remoteThreadListAdapter.tsx";
 import { fireFirstPromptHandoff } from "@web/features/opencode/FirstPromptHandoff.tsx";
 

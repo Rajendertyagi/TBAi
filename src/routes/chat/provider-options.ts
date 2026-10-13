@@ -1,5 +1,5 @@
-import type { ProviderConfig } from "../types";
-import { providerOptionsNamespace } from "../services/ai";
+import type { ProviderConfig } from "../../types";
+import { providerOptionsNamespace } from "../../services/ai";
 
 /**
  * The AI SDK's provider-options contract, restated locally.

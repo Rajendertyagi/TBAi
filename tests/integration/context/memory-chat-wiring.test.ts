@@ -73,7 +73,7 @@ let failNext = false;
 let db: import("bun:sqlite").Database;
 let registry: typeof import("@/config/providers.ts")["registry"];
 let credentialStore: typeof import("@/services/credentials.ts")["credentialStore"];
-let app: typeof import("@/routes/chat.ts")["default"];
+let app: typeof import("@/routes/chat/index.ts")["default"];
 
 const T0 = 1_700_000_000_000;
 
@@ -157,7 +157,7 @@ beforeAll(async () => {
   credentialStore.initialize();
   credentialStore.set(PROVIDER_ID, "p5-wiring-stub-key-not-real");
 
-  app = (await import("@/routes/chat.ts")).default;
+  app = (await import("@/routes/chat/index.ts")).default;
 });
 
 /**

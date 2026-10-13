@@ -5,10 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { ResumableStreamError } from "assistant-stream/resumable";
 import type { SQLQueryBindings } from "bun:sqlite";
-import {
-  applyChatStreamsSchema,
-  DEFAULT_CHAT_STREAM_TTL_MS,
-} from "@/services/chat-streams/schema.ts";
+import { applyChatStreamsSchema, DEFAULT_CHAT_STREAM_TTL_MS } from "@/db/schema/chat-streams.ts";
 import {
   createSqliteResumableStreamStore,
   type SqliteResumableStreamStore,

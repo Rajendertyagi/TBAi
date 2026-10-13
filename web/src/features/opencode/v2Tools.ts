@@ -42,6 +42,24 @@
  * {@link OPENCODE_V2_TOOLS} is registered, every registered name is either a v2
  * tool or a deliberately-kept v1 alias, and nothing from
  * {@link OPENCODE_V1_REMOVED} is registered at all.
+ *
+ * ## Who consumes this today
+ *
+ * Nothing in `web/src` imports it. Its only consumer is
+ * `tests/unit/web/opencode/v2Tools.test.ts`, which pins the v2 set, the v1
+ * aliases and the v1-removed list against the registry the application actually
+ * builds (`tests/unit/tools/toolkit.test.ts`,
+ * `tests/unit/web/components/session-timeline.test.ts`).
+ *
+ * That is deliberate. This file is the EXPECTED SIDE of a drift guard: deleting
+ * it would silently remove the assertion that catches a stale tool registration
+ * — the exact failure described above.
+ *
+ * So it lives with the OpenCode feature rather than in the shared
+ * `web/src/lib/`: it is OpenCode domain knowledge, not cross-feature code. It is
+ * NOT live runtime configuration, and nothing should start importing it as if it
+ * were — an unregistered tool part has to fail the test, not be quietly
+ * tolerated by a lookup here.
  */
 
 /** The built-in tools OpenCode v2 ships. */

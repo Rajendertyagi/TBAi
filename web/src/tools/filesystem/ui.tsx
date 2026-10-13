@@ -15,7 +15,7 @@ import {
   approvalOptionLabel,
   primaryApprovalOption,
 } from "@/components/shared/approval-options";
-import { useStaleApprovalGuard } from "@/stores/stalePermissionsStore";
+import { useStaleApprovalGuard } from "@/features/permissions/state/stalePermissionsStore";
 import { ToolElapsed } from "@/tools/elapsed";
 import { BoundedBody } from "@/tools/body-budget";
 import { FieldsOrJson, ResultList, ResultRow } from "@/tools/result-fields";

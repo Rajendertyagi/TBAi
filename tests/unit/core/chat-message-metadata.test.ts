@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { buildChatMessageMetadata } from "@/routes/chat-model.ts";
+import { buildChatMessageMetadata } from "@/routes/chat/model.ts";
 
 const custom = { providerId: "p1", modelId: "m1", reasoningLevel: "off" };
 
