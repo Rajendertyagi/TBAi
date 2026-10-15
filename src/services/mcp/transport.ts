@@ -112,12 +112,13 @@ export function buildTransport(config: McpServerConfig, authToken?: string): Tra
 }
 
 const CREDENTIAL_PATTERNS: RegExp[] = [
-  // Bearer tokens, JWTs, generic tokens
-  /Bearer\s+[A-Za-z0-9_\-.~+/=]+/gi,
-  // API keys / tokens in standard flag/kv assignments: key=..., token=..., secret=...
-  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi,
-  // Common vendor key prefixes
+  // 1. Authorization headers (Bearer, Basic) with optional padding (=)
+  /\bBearer\s+[A-Za-z0-9_\-.~+/=]+/gi,
+  /\bBasic\s+[A-Za-z0-9+/=]+/gi,
+  // 2. Common vendor key prefixes
   /\b(?:sk-[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{30,}|gho_[a-zA-Z0-9]{30,}|xox[baprs]-[a-zA-Z0-9_-]+)\b/g,
+  // 3. Common assignment keys: token=, client_secret=, secret_key=, authorization=, etc.
+  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|client[_-]?secret|secret[_-]?key|secret|password|private[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
 ];
 
 /**
@@ -135,15 +136,20 @@ export function redactStderr(text: string, configuredSecrets: string[] = []): st
     }
   }
 
-  // 2. Redact heuristic patterns (bearer tokens, key=value, common token prefixes)
+  // 2. Redact heuristic patterns (authorization headers, assignments, vendor tokens)
   for (const pattern of CREDENTIAL_PATTERNS) {
     redacted = redacted.replace(pattern, (match) => {
+      // Match authorization headers explicitly first, regardless of '=' padding inside token
+      if (/^bearer\s+/i.test(match)) {
+        return "Bearer [REDACTED]";
+      }
+      if (/^basic\s+/i.test(match)) {
+        return "Basic [REDACTED]";
+      }
+      // For assignment key=value or key:value
       const eqIdx = match.search(/[:=]/);
       if (eqIdx !== -1) {
         return `${match.slice(0, eqIdx + 1)}[REDACTED]`;
-      }
-      if (/^bearer\s+/i.test(match)) {
-        return "Bearer [REDACTED]";
       }
       return "[REDACTED]";
     });
@@ -155,9 +161,10 @@ export function redactStderr(text: string, configuredSecrets: string[] = []): st
 /**
  * Attach a stderr listener to a stdio transport for diagnostic output.
  *
- * The child process's stderr is drained to prevent it from blocking when the
- * OS pipe buffer fills. Output is logged as structured diagnostics, bounded
- * and filtered to avoid leaking credentials or arbitrary unredacted content.
+ * The child process's stderr is drained incrementally to prevent it from blocking
+ * when the OS pipe buffer fills. Output is logged as structured diagnostics,
+ * bounded, filtered to avoid leaking credentials, and uses a discard-until-newline
+ * state machine if any single line exceeds MAX_STDERR_BUFFER (4096 bytes).
  */
 function attachStdioStderrDiagnostics(
   transport: Transport,
@@ -168,21 +175,73 @@ function attachStdioStderrDiagnostics(
   const stderr = stdioTransport.stderr;
   if (!stderr || typeof stderr.on !== "function") return;
 
-  let buffer = "";
+  let lineBuffer = "";
+  let discardingLine = false;
+
+  const emitLine = (rawLine: string) => {
+    const trimmed = rawLine.trim();
+    if (!trimmed) return;
+    const safeOutput = redactStderr(trimmed, configuredSecrets);
+    logger.warn("mcp", "mcp.stdio_stderr", {
+      mcpServer: serverName,
+      output: safeOutput,
+    });
+  };
+
+  const emitDiscarded = () => {
+    lineBuffer = "";
+    logger.warn("mcp", "mcp.stdio_stderr", {
+      mcpServer: serverName,
+      output: "[discarded oversized stderr line]",
+    });
+  };
+
   stderr.on("data", (chunk: Buffer | string) => {
-    buffer += chunk.toString();
-    // Keep only the last MAX_STDERR_BUFFER bytes to bound memory.
-    if (buffer.length > MAX_STDERR_BUFFER) {
-      buffer = buffer.slice(-MAX_STDERR_BUFFER);
+    let data = chunk.toString();
+
+    while (data.length > 0) {
+      if (discardingLine) {
+        const newlineIdx = data.indexOf("\n");
+        if (newlineIdx === -1) {
+          // Entire chunk belongs to the discarded oversized line
+          return;
+        }
+        // Found newline: drop the remainder of the oversized line and resume normal capture
+        data = data.slice(newlineIdx + 1);
+        discardingLine = false;
+        lineBuffer = "";
+        continue;
+      }
+
+      const newlineIdx = data.indexOf("\n");
+      if (newlineIdx === -1) {
+        lineBuffer += data;
+        if (lineBuffer.length > MAX_STDERR_BUFFER) {
+          // Line exceeded 4096 bytes: enter discard mode until next newline
+          discardingLine = true;
+          emitDiscarded();
+        }
+        return;
+      }
+
+      const segment = data.slice(0, newlineIdx);
+      data = data.slice(newlineIdx + 1);
+
+      if (lineBuffer.length + segment.length > MAX_STDERR_BUFFER) {
+        // Line exceeded bound right at newline boundary
+        emitDiscarded();
+      } else {
+        const completeLine = lineBuffer + segment;
+        lineBuffer = "";
+        emitLine(completeLine);
+      }
     }
   });
+
   stderr.on("end", () => {
-    if (buffer.trim()) {
-      const safeOutput = redactStderr(buffer.slice(0, MAX_STDERR_BUFFER), configuredSecrets);
-      logger.warn("mcp", "mcp.stdio_stderr", {
-        mcpServer: serverName,
-        output: safeOutput,
-      });
+    if (!discardingLine && lineBuffer.trim()) {
+      emitLine(lineBuffer);
+      lineBuffer = "";
     }
   });
 }

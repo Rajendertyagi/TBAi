@@ -5,8 +5,7 @@
  */
 import { describe, it, expect } from "bun:test";
 import { getMcpSdkVersion } from "@/services/mcp/manager.ts";
-import { tool, jsonSchema } from "ai";
-import type { JSONSchema7 } from "json-schema";
+import { tool, jsonSchema, type JSONSchema7 } from "ai";
 
 describe("N8 — MCP SDK version reporting", () => {
   it("resolves the installed SDK version from package.json without throwing", () => {

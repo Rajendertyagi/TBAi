@@ -83,7 +83,7 @@ function snapshot(source: string): ParitySnapshot {
 
 // Captured from the 1,297-line single-file manager.ts, before any move.
 //
-// THREE DELIBERATE ADDITIONS since that capture:
+// FOUR DELIBERATE ADDITIONS since that capture:
 //
 //   - `loggerEventCallCount` 16 -> 17, for the one `mcp.operation` line
 //     `abandonAttempt()` emits when a superseded attempt releases its resources
@@ -91,6 +91,8 @@ function snapshot(source: string): ParitySnapshot {
 //   - `outcomeLabels` gains "abandoned" for the same reason.
 //   - `loggerEventCallCount` 24 -> 25, for the structured diagnostic warn log
 //     emitted when a live transport closes unexpectedly (F3 lifecycle handling).
+//   - `loggerEventCallCount` 25 -> 26, for the structured diagnostic warn log
+//     emitted when an oversized stderr line is safely discarded.
 //
 // Everything else is still pinned byte-for-byte, and the mutation cases at the
 // bottom still bite, so any FURTHER drift still fails here.
@@ -107,7 +109,7 @@ const BASELINE: ParitySnapshot = {
     "warn|mcp|mcp.operation",
     "warn|mcp|mcp.stdio_stderr",
   ],
-  loggerEventCallCount: 25,
+  loggerEventCallCount: 26,
   operationLabels: [
     "connect",
     "disconnect",

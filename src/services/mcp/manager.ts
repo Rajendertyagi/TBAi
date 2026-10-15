@@ -6,8 +6,7 @@ import type {
   ElicitResult,
   Transport,
 } from "@modelcontextprotocol/client";
-import { tool, jsonSchema, generateText } from "ai";
-import type { JSONSchema7 } from "json-schema";
+import { tool, jsonSchema, generateText, type JSONSchema7 } from "ai";
 import { db } from "../../db";
 import { logger, normalizeError } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
