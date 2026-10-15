@@ -117,8 +117,8 @@ const CREDENTIAL_PATTERNS: RegExp[] = [
   /\bBasic\s+[A-Za-z0-9+/=]+/gi,
   // 2. Common vendor key prefixes
   /\b(?:sk-[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{30,}|gho_[a-zA-Z0-9]{30,}|xox[baprs]-[a-zA-Z0-9_-]+)\b/g,
-  // 3. Common assignment keys: token=, client_secret=, secret_key=, authorization=, etc.
-  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|client[_-]?secret|secret[_-]?key|secret|password|private[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
+  // 3. Common assignment keys: token=, client_secret=, secret_key=, authorization=, key=, etc.
+  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|client[_-]?secret|secret[_-]?key|secret|password|private[_-]?key|authorization|key)\s*[:=]\s*[^\s,;]+/gi,
 ];
 
 /**

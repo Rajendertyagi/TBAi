@@ -109,6 +109,9 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
     const ASSIGN_SECRET_KEY = "secret_key: my_top_secret_key_456";
     const ASSIGN_AUTH = "authorization=Bearer eyJhbGciOiJIUzI1NiJ9.tokenpart==";
 
+    const ASSIGN_GENERIC_KEY = "key=custom_key_value_999";
+    const ASSIGN_GENERIC_KEY_COLON = "key: custom_colon_key_val";
+
     // Unit check of redactStderr helper
     const textWithSecrets = `
       Error connecting to service:
@@ -120,6 +123,8 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
       assignment_2: ${ASSIGN_CLIENT_SECRET}
       assignment_3: ${ASSIGN_SECRET_KEY}
       assignment_4: ${ASSIGN_AUTH}
+      assignment_5: ${ASSIGN_GENERIC_KEY}
+      assignment_6: ${ASSIGN_GENERIC_KEY_COLON}
       normal diagnostic output: connection refused at 127.0.0.1:8080
     `;
 
@@ -135,6 +140,8 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
     expect(redacted).not.toContain("my_client_secret_xyz123");
     expect(redacted).not.toContain("my_top_secret_key_456");
     expect(redacted).not.toContain("tokenpart==");
+    expect(redacted).not.toContain("custom_key_value_999");
+    expect(redacted).not.toContain("custom_colon_key_val");
 
     // Standard expected redaction replacements
     expect(redacted).toContain("Bearer [REDACTED]");
@@ -143,7 +150,13 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
     expect(redacted).toContain("client_secret=[REDACTED]");
     expect(redacted).toContain("secret_key:[REDACTED]");
     expect(redacted).toContain("authorization=[REDACTED]");
+    expect(redacted).toContain("key=[REDACTED]");
+    expect(redacted).toContain("key:[REDACTED]");
     expect(redacted).toContain("connection refused at 127.0.0.1:8080");
+
+    // Configured secret length guard (strings < 4 chars are not treated as explicit secret tokens to avoid over-matching)
+    const shortSecretRedacted = redactStderr("code 123 in status", ["123"]);
+    expect(shortSecretRedacted).toContain("123");
 
     // Real child process stderr regression test:
     const cutoff = logger.lastSeq;
@@ -153,6 +166,8 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
       console.error("Authorization: ${BEARER_PADDED}");
       console.error("Authorization: ${BASIC_AUTH}");
       console.error("token=${ASSIGN_TOKEN}");
+      console.error("${ASSIGN_GENERIC_KEY}");
+      console.error("${ASSIGN_GENERIC_KEY_COLON}");
       console.error("Server initialization failed normally");
       process.exit(1);
     `;
@@ -190,21 +205,26 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
     }
   }, 30000);
 
-  it("logs diagnostics incrementally while child is running and enforces discard-until-newline state machine", async () => {
+  it("logs diagnostics incrementally while child is running and enforces discard-until-newline state machine across separate chunks", async () => {
     const cutoff = logger.lastSeq;
     const serverName = "test-incremental-diagnostics";
 
     // Script that:
     // 1. Emits a normal startup diagnostic line
-    // 2. Emits an oversized line (> 4096 bytes) containing sensitive tokens
-    // 3. Emits a subsequent safe line after the newline
-    // 4. Sleeps to stay alive so we prove incremental logging occurs before process exit
-    const oversizedChunk = `${"X".repeat(5000)}Bearer secret-overflow-token==\n`;
+    // 2. Emits an oversized chunk (> 4096 bytes) with NO newline to trigger discard mode
+    // 3. Waits 100ms
+    // 4. Emits remainder of the discarded line with a newline, followed by a subsequent safe line
+    // 5. Sleeps to stay alive so we prove incremental logging occurs before process exit
+    const chunk1 = "X".repeat(5000);
+    const chunk2 =
+      "more-oversized-garbageBearer secret-overflow-token==\nSUBSEQUENT_HEALTHY_LOG_LINE\n";
     const script = `
       console.error("INITIAL_STARTUP_LINE_OK");
-      // Send oversized line with no intermediate newline
-      process.stderr.write(${JSON.stringify(oversizedChunk)});
-      console.error("SUBSEQUENT_HEALTHY_LOG_LINE");
+      // Chunk 1: exceeds 4096 bytes without newline -> enters discardingLine
+      process.stderr.write(${JSON.stringify(chunk1)});
+      await new Promise((r) => setTimeout(r, 100));
+      // Chunk 2: remainder of discarded line + newline + next safe line
+      process.stderr.write(${JSON.stringify(chunk2)});
       await new Promise((r) => setTimeout(r, 2000));
       process.exit(0);
     `;
@@ -220,7 +240,7 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
     const client = new Client({ name: "test-inc-client", version: "1.0.0" });
     const connectPromise = client.connect(transport).catch(() => {});
 
-    // Check after 600ms — process is still alive (it sleeps for 2000ms)
+    // Check after 800ms — process is still alive (it sleeps for 2000ms)
     await new Promise((r) => setTimeout(r, 800));
 
     const earlyLogs = logger
@@ -242,9 +262,10 @@ describe("F2 — Stdio environment isolation (real child process)", () => {
     // Proves sensitive overflow text in discarded line never leaked
     for (const log of earlyLogs) {
       expect((log.output as string).includes("secret-overflow-token")).toBe(false);
+      expect((log.output as string).includes("more-oversized-garbage")).toBe(false);
     }
 
-    // Proves subsequent safe line AFTER the newline was captured cleanly
+    // Proves subsequent safe line AFTER the newline was captured cleanly across the chunk boundary
     const subsequentLog = earlyLogs.find((l) =>
       (l.output as string).includes("SUBSEQUENT_HEALTHY_LOG_LINE"),
     );
