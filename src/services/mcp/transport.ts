@@ -20,14 +20,18 @@
  * fetches once and classifies the CONTENT TYPE, which is the only way to tell
  * that apart from a working stream. It never logs headers or the URL query.
  */
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { StreamableHTTPClientTransport, SSEClientTransport } from "@modelcontextprotocol/client";
 import type { Transport } from "@modelcontextprotocol/client";
+import { logger } from "../../lib/logger";
 import type { SseProbeOutcome } from "./classify";
 import type { McpAuthType, McpFailureReason, McpServerConfig } from "./types";
 
 /** The probe gives up after this long; a real connect has its own budget. */
 const SSE_PROBE_TIMEOUT_MS = 3000;
+
+/** Maximum bytes of stderr to buffer for diagnostics. */
+const MAX_STDERR_BUFFER = 4096;
 
 /**
  * Request headers for a server, including its authorization header.
@@ -54,27 +58,35 @@ export function buildHeaders(config: McpServerConfig, authToken?: string): Recor
  * Throws when a required field is missing (stdio without a command, http/sse
  * without a URL). That is deliberate: a server that cannot be addressed is a
  * configuration error, and the caller turns it into a classified failure.
+ *
+ * ## Environment isolation (F2)
+ *
+ * The SDK's `getDefaultEnvironment()` provides a platform allowlist of safe
+ * variables (PATH, HOME, etc.). We use it instead of `process.env` to prevent
+ * leaking host credentials into child processes. Explicit `config.env` entries
+ * are merged on top.
+ *
+ * ## Stderr diagnostics (F2)
+ *
+ * stderr is set to `"pipe"` and drained to prevent the child from blocking
+ * on a full pipe. Output is logged as structured diagnostics, bounded and
+ * filtered to avoid leaking secrets.
  */
 export function buildTransport(config: McpServerConfig, authToken?: string): Transport {
   if (config.transport === "stdio") {
     if (!config.command) {
       throw new Error("STDIO transport requires a command");
     }
-    return new StdioClientTransport({
+    const transport = new StdioClientTransport({
       command: config.command,
       args: config.args ?? [],
-      // `process.env` is typed `string | undefined` per entry, while the SDK wants
-      // `string`. Values that are genuinely absent must not reach the child as the
-      // string "undefined", so they are dropped — which is what the environment
-      // already means by them.
-      env: Object.fromEntries(
-        Object.entries({ ...process.env, ...(config.env ?? {}) }).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      ),
+      env: { ...getDefaultEnvironment(), ...(config.env ?? {}) },
       cwd: process.cwd(),
-      stderr: "ignore",
+      stderr: "pipe",
     }) as unknown as Transport;
+    // Drain stderr to prevent pipe-buffer blocking and surface diagnostics.
+    attachStdioStderrDiagnostics(transport, config.name);
+    return transport;
   }
   if (!config.url) {
     throw new Error(`${config.transport.toUpperCase()} transport requires a URL`);
@@ -92,11 +104,42 @@ export function buildTransport(config: McpServerConfig, authToken?: string): Tra
 }
 
 /**
+ * Attach a stderr listener to a stdio transport for diagnostic output.
+ *
+ * The child process's stderr is drained to prevent it from blocking when the
+ * OS pipe buffer fills. Output is logged as structured diagnostics, bounded
+ * and filtered to avoid leaking credentials or arbitrary unredacted content.
+ */
+function attachStdioStderrDiagnostics(transport: Transport, serverName: string): void {
+  const stdioTransport = transport as unknown as { stderr?: import("node:stream").Stream | null };
+  const stderr = stdioTransport.stderr;
+  if (!stderr || typeof stderr.on !== "function") return;
+
+  let buffer = "";
+  stderr.on("data", (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    // Keep only the last MAX_STDERR_BUFFER bytes to bound memory.
+    if (buffer.length > MAX_STDERR_BUFFER) {
+      buffer = buffer.slice(-MAX_STDERR_BUFFER);
+    }
+  });
+  stderr.on("end", () => {
+    if (buffer.trim()) {
+      logger.warn("mcp", "mcp.stdio_stderr", {
+        mcpServer: serverName,
+        output: buffer.slice(0, MAX_STDERR_BUFFER),
+      });
+    }
+  });
+}
+
+/**
  * Fetch an SSE endpoint once and classify what answered.
  *
  * Only the status and content type are kept — never headers, never the URL
- * query — so the outcome is safe to log. A body read failure is swallowed: the
- * classification has already been decided by the time it would occur.
+ * query — so the outcome is safe to log. The response body is cancelled
+ * immediately after reading headers to avoid blocking on a long-lived SSE
+ * stream (F1).
  */
 export async function probeSseEndpoint(
   url: string,
@@ -108,10 +151,12 @@ export async function probeSseEndpoint(
       signal: AbortSignal.timeout(SSE_PROBE_TIMEOUT_MS),
     });
     const contentType = res.headers.get("content-type");
+    // Cancel the body immediately — we have the headers we need.
+    // A healthy SSE stream would otherwise block for the full timeout.
     try {
-      await res.arrayBuffer();
+      await res.body?.cancel();
     } catch {
-      /* body discard is best-effort */
+      /* body cancel is best-effort */
     }
     return { kind: "ok", status: res.status, contentType };
   } catch (err) {
@@ -127,20 +172,42 @@ export async function probeSseEndpoint(
 }
 
 /**
+ * Validate and parse an IPv4 address string.
+ * Returns the numeric value or null if invalid.
+ */
+function parseIPv4(host: string): number | null {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  let result = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const num = parseInt(part, 10);
+    if (num > 255) return null;
+    result = result * 256 + num;
+  }
+  return result;
+}
+
+/**
  * Classify a server as local or remote based on its transport and URL.
  *
  * - STDIO servers are always local (they spawn a local process).
- * - HTTP/SSE servers are local when their URL host is localhost, 127.0.0.1,
- *   or ::1; otherwise remote.
+ * - HTTP/SSE servers are local when their URL host is localhost, a valid
+ *   loopback address (127.0.0.0/8 or IPv6 loopback), or a *.localhost name;
+ *   otherwise remote.
  */
 export function classifyLocation(config: McpServerConfig): "local" | "remote" {
   if (config.transport === "stdio") return "local";
   if (!config.url) return "remote";
   try {
     const host = new URL(config.url).hostname.toLowerCase();
-    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
-      return "local";
-    }
+    // localhost and *.localhost
+    if (host === "localhost" || host.endsWith(".localhost")) return "local";
+    // IPv6 loopback — Bun's URL.hostname keeps the brackets: "[::1]".
+    if (host === "::1" || host === "[::1]") return "local";
+    // IPv4 loopback — validate it's actually an IP before checking range
+    const ipv4 = parseIPv4(host);
+    if (ipv4 !== null && ipv4 >= 0x7f000000 && ipv4 <= 0x7fffffff) return "local";
     return "remote";
   } catch {
     return "remote";

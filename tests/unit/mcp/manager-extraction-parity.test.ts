@@ -106,8 +106,9 @@ const BASELINE: ParitySnapshot = {
     "warn|mcp|mcp.filter_empty",
     "warn|mcp|mcp.filter_unknown_entry",
     "warn|mcp|mcp.operation",
+    "warn|mcp|mcp.stdio_stderr",
   ],
-  loggerEventCallCount: 23,
+  loggerEventCallCount: 24,
   operationLabels: [
     "connect",
     "disconnect",

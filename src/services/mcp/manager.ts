@@ -85,6 +85,21 @@ const RECONNECT_DELAY_MS = 5000;
 const _SSE_PROBE_TIMEOUT_MS = 3000;
 
 /**
+ * Report the installed MCP SDK version at runtime.
+ *
+ * Reads from package.json rather than hardcoding, so the log cannot silently
+ * drift when the dependency is upgraded.
+ */
+function getMcpSdkVersion(): string {
+  try {
+    const pkg = require("@modelcontextprotocol/core/package.json") as { version?: string };
+    return pkg.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * True when an update changes a field the live transport was built from.
  *
  * Presence is not change. The settings form re-sends the whole draft on every
@@ -148,7 +163,7 @@ export class McpManager {
   async init(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
-    logger.info("mcp", "mcp.sdk_version", { version: "2.3.1" });
+    logger.info("mcp", "mcp.sdk_version", { version: getMcpSdkVersion() });
     const configs = this.loadConfigs();
     for (const cfg of configs) {
       if (cfg.enabled && cfg.autoConnect) {
@@ -370,6 +385,24 @@ export class McpManager {
       }
       const transport = buildTransport(liveConfig, liveAuthToken);
       conn.transport = transport;
+      // F3: Handle unexpected transport/session loss. The `onclose` callback
+      // fires when the transport closes for any reason (server-initiated session
+      // drop, network failure, etc.). We must not leave the manager reporting a
+      // healthy connection indefinitely.
+      //
+      // The handler checks `ownsConnection` to distinguish intentional closes
+      // (disconnect, delete, disable, replacement) from unexpected ones. Only
+      // unexpected closes trigger a reconnect.
+      transport.onclose = () => {
+        if (!this.ownsConnection(id, conn, gen)) return;
+        if (conn.status !== "connected" && conn.status !== "connecting") return;
+        const msg = "Transport closed unexpectedly";
+        conn.status = "error";
+        conn.error = msg;
+        conn.lastErrorAt = Date.now();
+        this.pushEvent(id, "error", msg);
+        this.scheduleReconnect(id);
+      };
       this.registerNotificationHandlers(id);
       this.registerRequestHandlers(id);
 
@@ -1184,7 +1217,7 @@ export class McpManager {
         };
         tools[toolName] = tool({
           description: `[${conn.config.name}] ${t.description ?? t.name}`,
-          inputSchema: jsonSchema(schema as never),
+          inputSchema: jsonSchema(schema as Record<string, unknown>),
           execute: instrumentedExecute(
             toolName,
             async (args: unknown, options?: { abortSignal?: AbortSignal }) => {

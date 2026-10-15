@@ -166,6 +166,55 @@ describe("Streamable HTTP round-trip (real Bun server)", () => {
   }, 20000);
 });
 
+describe("F3 — unexpected session/transport loss", () => {
+  it("transitions to error and reconnects when transport closes unexpectedly", async () => {
+    const id = await createStdioFixture("v2-session-loss");
+    try {
+      // Verify connected
+      let st = mcpManager.getStatuses().find((s) => s.id === id);
+      expect(st?.status).toBe("connected");
+
+      // Simulate unexpected transport close by closing the underlying client
+      const conn = (mcpManager as any).connections.get(id);
+      if (conn?.client) {
+        await conn.client.close();
+      }
+
+      // Wait for reconnect attempt (status should transition)
+      let reconnected = false;
+      for (let i = 0; i < 50; i++) {
+        st = mcpManager.getStatuses().find((s) => s.id === id);
+        if (st?.status === "connected" || st?.status === "error") {
+          reconnected = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(reconnected).toBe(true);
+    } finally {
+      await mcpManager.disconnect(id);
+    }
+  }, 30000);
+
+  it("does not reconnect on intentional disconnect", async () => {
+    const id = await createStdioFixture("v2-intentional-disconnect");
+    try {
+      let st = mcpManager.getStatuses().find((s) => s.id === id);
+      expect(st?.status).toBe("connected");
+
+      // Intentional disconnect should NOT trigger reconnect
+      await mcpManager.disconnect(id);
+
+      // Wait briefly and verify status stays disconnected
+      await new Promise((r) => setTimeout(r, 500));
+      st = mcpManager.getStatuses().find((s) => s.id === id);
+      expect(st?.status).toBe("disconnected");
+    } finally {
+      // Already disconnected
+    }
+  }, 30000);
+});
+
 const createdIds: string[] = [];
 afterAll(async () => {
   for (const id of createdIds) {
