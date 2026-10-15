@@ -1,20 +1,22 @@
 /**
- * F2 — Stdio environment isolation regression test.
+ * F2 — Stdio environment isolation and stderr secret redaction regression tests.
  *
  * Verifies that:
- * 1. Parent-only secret variables are NOT inherited by the child process.
- * 2. Explicitly configured MCP server env vars ARE passed through.
- * 3. The SDK's getDefaultEnvironment() is used (safe allowlist).
- * 4. stderr is set to "pipe" for diagnostics.
+ * 1. Parent-only secret variables are NOT inherited by a real spawned child process.
+ * 2. Explicitly configured MCP server env vars ARE passed through to the child.
+ * 3. Default environment variables (PATH, etc.) required to run commands exist.
+ * 4. Secrets printed to stderr are redacted before being logged as diagnostics.
  */
 import { describe, it, expect } from "bun:test";
-import { buildTransport } from "@/services/mcp/transport.ts";
+import { buildTransport, redactStderr } from "@/services/mcp/transport.ts";
+import { Client } from "@modelcontextprotocol/client";
 import type { McpServerConfig } from "@/services/mcp/types.ts";
+import { logger } from "@/lib/logger";
 
 function config(partial: Partial<McpServerConfig>): McpServerConfig {
   return {
-    id: "test-1",
-    name: "test",
+    id: "test-env-1",
+    name: "test-env",
     transport: "stdio",
     command: "bun",
     args: [],
@@ -27,25 +29,138 @@ function config(partial: Partial<McpServerConfig>): McpServerConfig {
   };
 }
 
-describe("buildTransport — stdio environment isolation", () => {
-  it("uses getDefaultEnvironment() instead of process.env", () => {
-    // Set a parent-only secret that must NOT reach the child.
-    process.env.TBAI_SECRET_TOKEN = "should-not-propagate";
-    process.env.ANOTHER_SECRET = "also-secret";
+describe("F2 — Stdio environment isolation (real child process)", () => {
+  it("proves parent secrets are absent while configured variables reach the child process", async () => {
+    const PARENT_SECRET_KEY = "TBAI_PARENT_SECRET_VAR_XYZ";
+    const PARENT_SECRET_VAL = "super-secret-parent-token-12345";
+    const CHILD_CONFIGURED_KEY = "TBAI_CHILD_EXPLICIT_VAR_ABC";
+    const CHILD_CONFIGURED_VAL = "configured-explicit-child-val";
+
+    // 1. Set parent-only secret in process.env
+    process.env[PARENT_SECRET_KEY] = PARENT_SECRET_VAL;
+
+    // We run an inline script that checks process.env and exits with code 0 if conditions are met
+    // Condition:
+    // - parent secret is ABSENT (undefined)
+    // - child explicit config is PRESENT and equals CHILD_CONFIGURED_VAL
+    // - PATH or Path exists (from getDefaultEnvironment())
+    const checkScript = `
+      import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+      import { McpServer } from "@modelcontextprotocol/server";
+      import { z } from "zod";
+
+      const server = new McpServer({ name: "env-check-server", version: "1.0.0" });
+      server.registerTool("check_env", { description: "Returns inspected env" }, async () => {
+        const hasParent = Boolean(process.env["${PARENT_SECRET_KEY}"]);
+        const childVal = process.env["${CHILD_CONFIGURED_KEY}"] ?? null;
+        const hasPath = Boolean(process.env.PATH || process.env.Path);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ hasParent, childVal, hasPath })
+          }]
+        };
+      });
+
+      await server.connect(new StdioServerTransport());
+    `;
 
     try {
-      const transport = buildTransport(config({ env: { CUSTOM_ALLOWED_VAR: "yes-this-one" } }));
-      // The transport is a StdioClientTransport. We can't easily inspect its
-      // internal env, but we can verify it was constructed without error.
-      expect(transport).toBeDefined();
-    } finally {
-      delete process.env.TBAI_SECRET_TOKEN;
-      delete process.env.ANOTHER_SECRET;
-    }
-  });
+      const transport = buildTransport(
+        config({
+          command: "bun",
+          args: ["-e", checkScript],
+          env: {
+            [CHILD_CONFIGURED_KEY]: CHILD_CONFIGURED_VAL,
+          },
+        }),
+      );
 
-  it("stderr is set to pipe for diagnostics", () => {
-    const transport = buildTransport(config({}));
-    expect(transport).toBeDefined();
-  });
+      const client = new Client({ name: "test-env-client", version: "1.0.0" });
+      await client.connect(transport);
+
+      try {
+        const res = await client.callTool({ name: "check_env", arguments: {} });
+        const textBlock = (res.content as any[])[0]?.text;
+        expect(textBlock).toBeDefined();
+        const data = JSON.parse(textBlock);
+
+        // Parent-only variable MUST be absent
+        expect(data.hasParent).toBe(false);
+        // Explicitly configured variable MUST be present
+        expect(data.childVal).toBe(CHILD_CONFIGURED_VAL);
+        // Default environment (PATH) MUST be preserved
+        expect(data.hasPath).toBe(true);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      delete process.env[PARENT_SECRET_KEY];
+    }
+  }, 30000);
+
+  it("redacts configured secrets and credential patterns from stderr before logging", async () => {
+    const RAW_SECRET_1 = "very-confidential-api-token-98765";
+    const RAW_SECRET_2 = "sk-ant-live01-1234567890abcdef1234567890abcdef";
+    const BEARER_TOKEN = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-ID";
+
+    // Unit check of redactStderr helper
+    const textWithSecrets = `
+      Error connecting to service:
+      token: ${RAW_SECRET_1}
+      key: ${RAW_SECRET_2}
+      auth: ${BEARER_TOKEN}
+      normal diagnostic output: connection refused at 127.0.0.1:8080
+    `;
+
+    const redacted = redactStderr(textWithSecrets, [RAW_SECRET_1]);
+    expect(redacted).not.toContain(RAW_SECRET_1);
+    expect(redacted).not.toContain(RAW_SECRET_2);
+    expect(redacted).not.toContain(BEARER_TOKEN);
+    expect(redacted).toContain("[REDACTED]");
+    expect(redacted).toContain("connection refused at 127.0.0.1:8080");
+
+    // Real child process stderr regression test:
+    // Spawn child that prints secret to stderr and exits
+    const cutoff = logger.lastSeq;
+    const serverName = "test-stderr-leak-prevention";
+    const script = `
+      console.error("FATAL: secret_key = ${RAW_SECRET_1}");
+      console.error("Authorization: ${BEARER_TOKEN}");
+      console.error("Server initialization failed normally");
+      process.exit(1);
+    `;
+
+    const transport = buildTransport(
+      config({
+        name: serverName,
+        command: "bun",
+        args: ["-e", script],
+        env: { MY_SECRET: RAW_SECRET_1 },
+      }),
+      "my-auth-token-4321",
+    );
+
+    // Wait for child to exit and stderr to drain
+    const client = new Client({ name: "test-stderr-client", version: "1.0.0" });
+    try {
+      await client.connect(transport);
+    } catch {
+      // Expected to fail since child exits with 1
+    }
+
+    // Wait a brief moment for the stderr "end" event callback to complete
+    await new Promise((r) => setTimeout(r, 500));
+
+    const stderrLogs = logger
+      .getRecentEntries(cutoff)
+      .filter((e) => e.event === "mcp.stdio_stderr" && e.mcpServer === serverName);
+
+    expect(stderrLogs.length).toBeGreaterThanOrEqual(1);
+    const loggedOutput = stderrLogs[0].output as string;
+    expect(loggedOutput).not.toContain(RAW_SECRET_1);
+    expect(loggedOutput).not.toContain(BEARER_TOKEN);
+    expect(loggedOutput).toContain("[REDACTED]");
+    expect(loggedOutput).toContain("Server initialization failed normally");
+  }, 30000);
 });

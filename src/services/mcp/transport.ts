@@ -84,8 +84,16 @@ export function buildTransport(config: McpServerConfig, authToken?: string): Tra
       cwd: process.cwd(),
       stderr: "pipe",
     }) as unknown as Transport;
+    // Collect configured secret values for redaction
+    const configuredSecrets: string[] = [];
+    if (authToken) configuredSecrets.push(authToken);
+    if (config.env) {
+      for (const val of Object.values(config.env)) {
+        if (typeof val === "string") configuredSecrets.push(val);
+      }
+    }
     // Drain stderr to prevent pipe-buffer blocking and surface diagnostics.
-    attachStdioStderrDiagnostics(transport, config.name);
+    attachStdioStderrDiagnostics(transport, config.name, configuredSecrets);
     return transport;
   }
   if (!config.url) {
@@ -103,6 +111,47 @@ export function buildTransport(config: McpServerConfig, authToken?: string): Tra
   }) as unknown as Transport;
 }
 
+const CREDENTIAL_PATTERNS: RegExp[] = [
+  // Bearer tokens, JWTs, generic tokens
+  /Bearer\s+[A-Za-z0-9_\-.~+/=]+/gi,
+  // API keys / tokens in standard flag/kv assignments: key=..., token=..., secret=...
+  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi,
+  // Common vendor key prefixes
+  /\b(?:sk-[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{30,}|gho_[a-zA-Z0-9]{30,}|xox[baprs]-[a-zA-Z0-9_-]+)\b/g,
+];
+
+/**
+ * Redact sensitive strings and credential patterns from stderr text.
+ */
+export function redactStderr(text: string, configuredSecrets: string[] = []): string {
+  let redacted = text;
+
+  // 1. Redact configured explicit values (min length 4 to avoid over-matching short words)
+  for (const secret of configuredSecrets) {
+    if (typeof secret === "string" && secret.trim().length >= 4) {
+      // Escape special regex characters in the secret string
+      const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      redacted = redacted.replace(new RegExp(escaped, "g"), "[REDACTED]");
+    }
+  }
+
+  // 2. Redact heuristic patterns (bearer tokens, key=value, common token prefixes)
+  for (const pattern of CREDENTIAL_PATTERNS) {
+    redacted = redacted.replace(pattern, (match) => {
+      const eqIdx = match.search(/[:=]/);
+      if (eqIdx !== -1) {
+        return `${match.slice(0, eqIdx + 1)}[REDACTED]`;
+      }
+      if (/^bearer\s+/i.test(match)) {
+        return "Bearer [REDACTED]";
+      }
+      return "[REDACTED]";
+    });
+  }
+
+  return redacted;
+}
+
 /**
  * Attach a stderr listener to a stdio transport for diagnostic output.
  *
@@ -110,7 +159,11 @@ export function buildTransport(config: McpServerConfig, authToken?: string): Tra
  * OS pipe buffer fills. Output is logged as structured diagnostics, bounded
  * and filtered to avoid leaking credentials or arbitrary unredacted content.
  */
-function attachStdioStderrDiagnostics(transport: Transport, serverName: string): void {
+function attachStdioStderrDiagnostics(
+  transport: Transport,
+  serverName: string,
+  configuredSecrets: string[] = [],
+): void {
   const stdioTransport = transport as unknown as { stderr?: import("node:stream").Stream | null };
   const stderr = stdioTransport.stderr;
   if (!stderr || typeof stderr.on !== "function") return;
@@ -125,9 +178,10 @@ function attachStdioStderrDiagnostics(transport: Transport, serverName: string):
   });
   stderr.on("end", () => {
     if (buffer.trim()) {
+      const safeOutput = redactStderr(buffer.slice(0, MAX_STDERR_BUFFER), configuredSecrets);
       logger.warn("mcp", "mcp.stdio_stderr", {
         mcpServer: serverName,
-        output: buffer.slice(0, MAX_STDERR_BUFFER),
+        output: safeOutput,
       });
     }
   });

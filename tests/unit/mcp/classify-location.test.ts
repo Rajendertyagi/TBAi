@@ -79,10 +79,13 @@ describe("classifyLocation — http transport, loopback hosts", () => {
     expect(classifyLocation(config({ transport: "http", url: "http://[::1]/mcp" }))).toBe("local");
   });
 
-  it("accepts both bracketed and bare IPv6 loopback spellings", () => {
-    // Bun's URL.hostname keeps the brackets ("[::1]"), but the bare form is
-    // accepted too so the rule does not depend on one runtime's spelling.
+  it("handles bracketed IPv6 loopback [::1] as local, and invalid bare IPv6 URL as remote", () => {
+    // Valid standard URL format for IPv6 requires brackets
     expect(classifyLocation(config({ transport: "http", url: "http://[::1]:3000" }))).toBe("local");
+    expect(classifyLocation(config({ transport: "http", url: "http://[::1]/mcp" }))).toBe("local");
+    // Bare IPv6 in a URL (http://::1:3000) is an invalid URL per WHATWG URL spec,
+    // so classifyLocation catches the TypeError and safely falls back to "remote".
+    expect(classifyLocation(config({ transport: "http", url: "http://::1:3000" }))).toBe("remote");
   });
 
   it("classifies *.localhost as local", () => {

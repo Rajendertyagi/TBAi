@@ -83,15 +83,14 @@ function snapshot(source: string): ParitySnapshot {
 
 // Captured from the 1,297-line single-file manager.ts, before any move.
 //
-// TWO DELIBERATE ADDITIONS since that capture, both from the connection-lifecycle
-// ownership fix (see `tests/integration/mcp/connection-lifecycle-race.test.ts`):
+// THREE DELIBERATE ADDITIONS since that capture:
 //
 //   - `loggerEventCallCount` 16 -> 17, for the one `mcp.operation` line
 //     `abandonAttempt()` emits when a superseded attempt releases its resources
-//     and reports nothing else. An abandoned attempt is otherwise invisible: it
-//     deliberately writes no status and no event, so without this line there is
-//     no trace that one ever existed.
+//     and reports nothing else.
 //   - `outcomeLabels` gains "abandoned" for the same reason.
+//   - `loggerEventCallCount` 24 -> 25, for the structured diagnostic warn log
+//     emitted when a live transport closes unexpectedly (F3 lifecycle handling).
 //
 // Everything else is still pinned byte-for-byte, and the mutation cases at the
 // bottom still bite, so any FURTHER drift still fails here.
@@ -108,7 +107,7 @@ const BASELINE: ParitySnapshot = {
     "warn|mcp|mcp.operation",
     "warn|mcp|mcp.stdio_stderr",
   ],
-  loggerEventCallCount: 24,
+  loggerEventCallCount: 25,
   operationLabels: [
     "connect",
     "disconnect",

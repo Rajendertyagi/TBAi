@@ -170,47 +170,96 @@ describe("F3 — unexpected session/transport loss", () => {
   it("transitions to error and reconnects when transport closes unexpectedly", async () => {
     const id = await createStdioFixture("v2-session-loss");
     try {
-      // Verify connected
-      let st = mcpManager.getStatuses().find((s) => s.id === id);
-      expect(st?.status).toBe("connected");
-
-      // Simulate unexpected transport close by closing the underlying client
+      // 1. Verify initial connected state and capture lastConnectedAt
       const conn = (mcpManager as any).connections.get(id);
-      if (conn?.client) {
-        await conn.client.close();
-      }
+      expect(conn).toBeDefined();
+      expect(conn.status).toBe("connected");
+      const initialConnectedAt = conn.lastConnectedAt;
+      expect(typeof initialConnectedAt).toBe("number");
 
-      // Wait for reconnect attempt (status should transition)
-      let reconnected = false;
+      // Verify child process exists on stdio transport
+      const pid = conn.transport.pid;
+      expect(typeof pid).toBe("number");
+      expect(pid).toBeGreaterThan(0);
+
+      const cutoff = logger.lastSeq;
+
+      // 2. Kill the child process directly (simulating unexpected process crash / kill)
+      process.kill(pid, "SIGTERM");
+
+      // 3. Wait for manager to transition to "error"
       for (let i = 0; i < 50; i++) {
-        st = mcpManager.getStatuses().find((s) => s.id === id);
-        if (st?.status === "connected" || st?.status === "error") {
-          reconnected = true;
-          break;
-        }
+        const st = mcpManager.getStatuses().find((s) => s.id === id);
+        if (st?.status === "error") break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe("error");
+
+      // Verify structured warning event was logged
+      const errorLogs = logger
+        .getRecentEntries(cutoff)
+        .filter(
+          (e) =>
+            e.event === "mcp.operation" &&
+            e.op === "connect" &&
+            e.outcome === "error" &&
+            e.mcpServer === "v2-session-loss",
+        );
+      expect(errorLogs.length).toBeGreaterThanOrEqual(1);
+      expect(errorLogs[0].message).toContain("Transport closed unexpectedly");
+
+      // 4. Wait for auto-reconnect to succeed (reconnect delay is 5s)
+      for (let i = 0; i < 80; i++) {
+        const st = mcpManager.getStatuses().find((s) => s.id === id);
+        if (st?.status === "connected") break;
         await new Promise((r) => setTimeout(r, 200));
       }
-      expect(reconnected).toBe(true);
+      const reconnectedConn = (mcpManager as any).connections.get(id);
+      expect(reconnectedConn?.status).toBe("connected");
+      expect(reconnectedConn?.lastConnectedAt).toBeGreaterThan(initialConnectedAt!);
+
+      // 5. Assert the recovered connection can successfully execute a tool call
+      const tools = mcpManager.getAiTools();
+      const toolName = `mcp__${id}__echo`;
+      expect(tools[toolName]).toBeDefined();
+      const res = await tools[toolName].execute({ text: "recovered-hello" }, {});
+      expect(String(res)).toContain("recovered-hello");
     } finally {
       await mcpManager.disconnect(id);
     }
-  }, 30000);
+  }, 45000);
 
   it("does not reconnect on intentional disconnect", async () => {
     const id = await createStdioFixture("v2-intentional-disconnect");
     try {
-      let st = mcpManager.getStatuses().find((s) => s.id === id);
-      expect(st?.status).toBe("connected");
+      const conn = (mcpManager as any).connections.get(id);
+      expect(conn?.status).toBe("connected");
+
+      const cutoff = logger.lastSeq;
 
       // Intentional disconnect should NOT trigger reconnect
       await mcpManager.disconnect(id);
+      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe("disconnected");
 
-      // Wait briefly and verify status stays disconnected
-      await new Promise((r) => setTimeout(r, 500));
-      st = mcpManager.getStatuses().find((s) => s.id === id);
+      // Wait 6 seconds (exceeding the 5s RECONNECT_DELAY_MS)
+      await new Promise((r) => setTimeout(r, 6000));
+
+      // Status must remain disconnected
+      const st = mcpManager.getStatuses().find((s) => s.id === id);
       expect(st?.status).toBe("disconnected");
+
+      // No reconnect operation should have started
+      const reconnectLogs = logger
+        .getRecentEntries(cutoff)
+        .filter(
+          (e) =>
+            e.event === "mcp.operation" &&
+            e.op === "reconnect" &&
+            e.mcpServer === "v2-intentional-disconnect",
+        );
+      expect(reconnectLogs.length).toBe(0);
     } finally {
-      // Already disconnected
+      await mcpManager.disconnect(id);
     }
   }, 30000);
 });

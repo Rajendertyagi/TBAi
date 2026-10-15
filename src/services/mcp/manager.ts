@@ -7,6 +7,7 @@ import type {
   Transport,
 } from "@modelcontextprotocol/client";
 import { tool, jsonSchema, generateText } from "ai";
+import type { JSONSchema7 } from "json-schema";
 import { db } from "../../db";
 import { logger, normalizeError } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
@@ -90,7 +91,7 @@ const _SSE_PROBE_TIMEOUT_MS = 3000;
  * Reads from package.json rather than hardcoding, so the log cannot silently
  * drift when the dependency is upgraded.
  */
-function getMcpSdkVersion(): string {
+export function getMcpSdkVersion(): string {
   try {
     const pkg = require("@modelcontextprotocol/core/package.json") as { version?: string };
     return pkg.version ?? "unknown";
@@ -401,6 +402,13 @@ export class McpManager {
         conn.error = msg;
         conn.lastErrorAt = Date.now();
         this.pushEvent(id, "error", msg);
+        logger.warn("mcp", "mcp.operation", {
+          op: "connect",
+          outcome: "error",
+          mcpServer: liveConfig.name,
+          transport: liveConfig.transport,
+          message: msg,
+        });
         this.scheduleReconnect(id);
       };
       this.registerNotificationHandlers(id);
@@ -1211,13 +1219,13 @@ export class McpManager {
       }
       for (const t of exposedTools) {
         const toolName = `mcp__${conn.config.id}__${t.name}`;
-        const schema = (t.inputSchema as Record<string, unknown>) ?? {
+        const schema = (t.inputSchema as JSONSchema7) ?? {
           type: "object",
           properties: {},
         };
         tools[toolName] = tool({
           description: `[${conn.config.name}] ${t.description ?? t.name}`,
-          inputSchema: jsonSchema(schema as Record<string, unknown>),
+          inputSchema: jsonSchema(schema),
           execute: instrumentedExecute(
             toolName,
             async (args: unknown, options?: { abortSignal?: AbortSignal }) => {
