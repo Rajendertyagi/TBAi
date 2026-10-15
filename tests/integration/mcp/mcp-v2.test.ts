@@ -1,14 +1,11 @@
 import { describe, it, expect, afterAll } from "bun:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import {
-  InMemoryTransport,
-  WebStandardStreamableHTTPServerTransport,
-  McpServer,
-} from "@modelcontextprotocol/server";
+import { InMemoryTransport, McpServer, Server } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { mcpManager } from "@/services/mcp/manager.ts";
 import { logger } from "@/lib/logger.ts";
 import { createFixtureServer } from "../../fixtures/everything-server.ts";
+import { serveStatelessMcpRequest } from "../../helpers/mcp-http-fixture.ts";
 
 // DB isolation guard: tests/setup.ts (bunfig preload) redirects DATA_DIR to tmp.
 describe("test isolation", () => {
@@ -88,23 +85,65 @@ describe("v2 client over InMemoryTransport (era negotiation)", () => {
     await client.close();
     await server.close();
   });
+
+  it("listTools() auto-follows server pagination: every page aggregated, no nextCursor in the result", async () => {
+    // The reference McpServer returns all tools in one page, so a cursor
+    // walk cannot be observed through it. The low-level Server lets this
+    // fixture own the tools/list handler and emit one page at a time with
+    // a nextCursor — the client's no-cursor listTools() must follow the
+    // cursor to the end and hand back the complete aggregate (v2.3.1:
+    // ClientOptions.listMaxPages caps the walk; 2 pages is far inside it).
+    const ALL = ["alpha", "beta", "gamma", "delta"];
+    const PAGE_SIZE = 2;
+    const server = new Server(
+      { name: "fixture-paged", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    server.setRequestHandler("tools/list", (request) => {
+      const start = request.params?.cursor ? Number(request.params.cursor) : 0;
+      const next = start + PAGE_SIZE;
+      return {
+        tools: ALL.slice(start, next).map((name) => ({
+          name,
+          inputSchema: { type: "object" as const, properties: {} },
+        })),
+        ...(next < ALL.length ? { nextCursor: String(next) } : {}),
+      };
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    try {
+      const client = new Client(
+        { name: "tbai-test", version: "1.0.0" },
+        { versionNegotiation: { mode: "auto" } },
+      );
+      await client.connect(clientTransport);
+      const result = await client.listTools();
+      expect(result.tools.map((t) => t.name)).toEqual(ALL);
+      // The aggregate carries no nextCursor: the walk terminated on its own.
+      expect(result.nextCursor).toBeUndefined();
+      await client.close();
+    } finally {
+      await server.close();
+    }
+  }, 20000);
 });
 
 describe("Streamable HTTP round-trip (real Bun server)", () => {
   it("connects, negotiates and calls a tool over HTTP", async () => {
-    const server = new McpServer({ name: "fixture-http", version: "1.0.0" });
-    server.registerTool("ping_tool", { description: "Returns pong." }, async () => ({
-      content: [{ type: "text" as const, text: "pong" }],
-    }));
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    await server.connect(transport);
     const httpServer = Bun.serve({
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
-        if (url.pathname === "/mcp") return transport.handleRequest(req);
+        if (url.pathname === "/mcp") {
+          return serveStatelessMcpRequest(() => {
+            const reqServer = new McpServer({ name: "fixture-http", version: "1.0.0" });
+            reqServer.registerTool("ping_tool", { description: "Returns pong." }, async () => ({
+              content: [{ type: "text" as const, text: "pong" }],
+            }));
+            return reqServer;
+          }, req);
+        }
         return new Response("nf", { status: 404 });
       },
     });
@@ -123,7 +162,6 @@ describe("Streamable HTTP round-trip (real Bun server)", () => {
       await client.close();
     } finally {
       httpServer.stop(true);
-      await server.close();
     }
   }, 20000);
 });

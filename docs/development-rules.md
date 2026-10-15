@@ -94,7 +94,8 @@ Do **not** add: LangChain, LangGraph, Mastra, Redis, PostgreSQL, Docker, or
 unnecessary agent frameworks / abstractions. Add a dependency only with a clear
 technical reason, recorded in `docs/decisions.md`.
 
-The **official `@modelcontextprotocol/sdk`** is the allowed MCP implementation (it provides the
+The **official `@modelcontextprotocol/*` packages** (client v2.3.1, server v2.3.1, core v2.3.1) are the
+allowed MCP implementation (they provide the
 wire protocol, transports, and notification schemas). Do **not** hand-roll JSON-RPC/MCP framing or
 add a second MCP client library. AI SDK v7 `tool()` wraps discovered MCP tools for the model; the
 `@ai-sdk/mcp` helper is intentionally not used (see `decisions.md`).

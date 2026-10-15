@@ -477,6 +477,7 @@ export const mcpServerCreateSchema = z.object({
   authType: z.enum(["none", "bearer", "basic", "oauth"]).default("none"),
   authToken: z.string().max(5000).optional().nullable(),
   roots: z.array(z.string().max(2000)).max(50).optional().nullable(),
+  disabledTools: z.array(z.string().max(200)).max(500).optional().nullable(),
   enabled: z.boolean().optional(),
   autoConnect: z.boolean().optional(),
   notes: z.string().max(2000).optional().nullable(),
@@ -491,6 +492,11 @@ export const mcpServerUpdateSchema = mcpServerCreateSchema.partial();
 
 // Test accepts the same connection shape as create (no id required).
 export const mcpServerTestSchema = mcpServerCreateSchema;
+
+// Enable/disable a server (boolean flag).
+export const mcpServerEnableSchema = z.object({
+  enabled: z.boolean(),
+});
 
 // McpServerCreate/Test describe *input* payloads (defaults like authType apply
 // at parse time), so direct object literals without authType typecheck.

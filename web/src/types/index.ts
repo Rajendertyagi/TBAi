@@ -297,6 +297,8 @@ export interface McpStatus {
   autoConnect: boolean;
   notes?: string;
   roots?: string[];
+  disabledTools?: string[];
+  location?: "local" | "remote";
   pendingElicitation?: McpPendingElicitation;
 }
 
@@ -346,6 +348,7 @@ export interface McpServerDraft {
   autoConnect?: boolean;
   notes?: string;
   roots?: string[];
+  disabledTools?: string[];
 }
 
 // ---- Built-in scheduler (TBAi cron) ----

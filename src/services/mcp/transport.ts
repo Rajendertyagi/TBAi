@@ -126,6 +126,27 @@ export async function probeSseEndpoint(
   }
 }
 
+/**
+ * Classify a server as local or remote based on its transport and URL.
+ *
+ * - STDIO servers are always local (they spawn a local process).
+ * - HTTP/SSE servers are local when their URL host is localhost, 127.0.0.1,
+ *   or ::1; otherwise remote.
+ */
+export function classifyLocation(config: McpServerConfig): "local" | "remote" {
+  if (config.transport === "stdio") return "local";
+  if (!config.url) return "remote";
+  try {
+    const host = new URL(config.url).hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
+      return "local";
+    }
+    return "remote";
+  } catch {
+    return "remote";
+  }
+}
+
 /** Masked hint that an auth type is configured, for a settings screen. */
 export function authHintFor(authType: McpAuthType, authConfigured: boolean): string | undefined {
   if (!authConfigured || authType === "none") return undefined;

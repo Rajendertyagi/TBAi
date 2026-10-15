@@ -24,6 +24,7 @@ import {
   authHintFor,
   buildHeaders,
   buildTransport,
+  classifyLocation,
   errMsg,
   probeSseEndpoint,
   sseFailureMessage,
@@ -84,6 +85,34 @@ const RECONNECT_DELAY_MS = 5000;
 const _SSE_PROBE_TIMEOUT_MS = 3000;
 
 /**
+ * True when an update changes a field the live transport was built from.
+ *
+ * Presence is not change. The settings form re-sends the whole draft on every
+ * save, so a tool-filter toggle arrives alongside an unchanged `command`; only
+ * a value that actually differs may force a reconnect. `authToken` is the
+ * exception: the stored token is never read back, so any supplied token — a
+ * replacement string, or the `""` that clears it — counts as a change.
+ */
+function connectionFieldsChanged(
+  before: McpServerConfig | undefined,
+  input: Partial<McpServerCreate>,
+): boolean {
+  if (!before) return true;
+  const sameJson = (a: unknown, b: unknown) =>
+    JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return (
+    (input.transport !== undefined && input.transport !== before.transport) ||
+    (input.command !== undefined && (input.command ?? undefined) !== before.command) ||
+    (input.args !== undefined && !sameJson(input.args, before.args)) ||
+    (input.url !== undefined && (input.url ?? undefined) !== before.url) ||
+    (input.env !== undefined && !sameJson(input.env, before.env)) ||
+    (input.headers !== undefined && !sameJson(input.headers, before.headers)) ||
+    (input.authType !== undefined && input.authType !== before.authType) ||
+    (input.authToken !== undefined && input.authToken !== null)
+  );
+}
+
+/**
  * Generic MCP client manager.
  *
  * Owns the lifecycle of every configured MCP server connection (register,
@@ -119,6 +148,7 @@ export class McpManager {
   async init(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
+    logger.info("mcp", "mcp.sdk_version", { version: "2.3.1" });
     const configs = this.loadConfigs();
     for (const cfg of configs) {
       if (cfg.enabled && cfg.autoConnect) {
@@ -149,33 +179,35 @@ export class McpManager {
   updateConfig(id: string, input: Partial<McpServerCreate>): McpServerConfig | undefined {
     const conn = this.connections.get(id);
     const wasConnected = conn?.status === "connected";
+    const before = this.getConfig(id);
     const updated = updateStoredConfigRow(id, input);
     if (!updated) return undefined;
     if (!updated.enabled) {
       return updated;
     }
-    // Roots-only (or notes-only) edits must NOT tear down the transport: push
-    // the official roots/list_changed notification on the live connection so
-    // the server re-lists. Connection-affecting edits still reconnect.
-    const connectionAffecting =
-      input.transport !== undefined ||
-      input.command !== undefined ||
-      input.args !== undefined ||
-      input.url !== undefined ||
-      input.env !== undefined ||
-      input.headers !== undefined ||
-      input.authType !== undefined ||
-      input.authToken !== undefined;
-    if (input.roots !== undefined && !connectionAffecting) {
+    // Only a connection-affecting field that actually CHANGED forces a
+    // reconnect. The settings form re-sends the whole draft on every save, so
+    // "present" is not "changed": a tool-filter toggle arrives alongside an
+    // unchanged `command`, and reconnecting for it would tear down a healthy
+    // transport for nothing.
+    if (connectionFieldsChanged(before, input)) {
+      void this.reconnect(id);
+      return updated;
+    }
+    // Non-connection-affecting edits (disabledTools, roots, notes, name) apply
+    // to the live connection in place. `getAiTools()` reads
+    // `conn.config.disabledTools` on every call, so a filter change takes effect
+    // immediately, with no reconnect.
+    if (conn) conn.config = updated;
+    // Roots-only edits additionally push the official roots/list_changed
+    // notification on the live connection so the server re-lists.
+    if (input.roots !== undefined) {
       if (wasConnected) {
         void this.notifyRootsChanged(id);
       } else {
         void this.connect(id);
       }
-      return updated;
     }
-    // Reconnect to apply connection-affecting changes if the server is enabled.
-    void this.reconnect(id);
     return updated;
   }
 
@@ -1112,6 +1144,8 @@ export class McpManager {
         autoConnect: config.autoConnect,
         notes: config.notes,
         roots: config.roots,
+        disabledTools: config.disabledTools,
+        location: classifyLocation(config),
         pendingElicitation: conn?.pendingElicitation?.info,
       } satisfies McpStatus;
     });
@@ -1124,7 +1158,25 @@ export class McpManager {
     const tools: Record<string, any> = {};
     for (const conn of this.connections.values()) {
       if (conn.status !== "connected") continue;
-      for (const t of conn.tools) {
+      const disabled = new Set(conn.config.disabledTools ?? []);
+      const exposedTools = conn.tools.filter((t) => !disabled.has(t.name));
+      // Log unknown entries (stale disabled entries that don't match any discovered tool).
+      for (const entry of disabled) {
+        if (!conn.tools.some((t) => t.name === entry)) {
+          logger.warn("mcp", "mcp.filter_unknown_entry", {
+            mcpServer: conn.config.name,
+            entry,
+          });
+        }
+      }
+      if (exposedTools.length === 0 && conn.tools.length > 0) {
+        logger.warn("mcp", "mcp.filter_empty", {
+          mcpServer: conn.config.name,
+          totalTools: conn.tools.length,
+          disabledCount: disabled.size,
+        });
+      }
+      for (const t of exposedTools) {
         const toolName = `mcp__${conn.config.id}__${t.name}`;
         const schema = (t.inputSchema as Record<string, unknown>) ?? {
           type: "object",
@@ -1151,7 +1203,28 @@ export class McpManager {
             { mcpServer: conn.config.name },
           ),
         });
+        logger.debug("mcp", "mcp.tool_filtered", {
+          mcpServer: conn.config.name,
+          toolName: t.name,
+          reason: "exposed",
+        });
       }
+      // Log filtered (disabled) tools.
+      for (const t of conn.tools) {
+        if (disabled.has(t.name)) {
+          logger.debug("mcp", "mcp.tool_filtered", {
+            mcpServer: conn.config.name,
+            toolName: t.name,
+            reason: "disabled",
+          });
+        }
+      }
+      logger.debug("mcp", "mcp.filter_applied", {
+        mcpServer: conn.config.name,
+        totalTools: conn.tools.length,
+        exposedTools: exposedTools.length,
+        disabledCount: disabled.size,
+      });
     }
     return tools;
   }

@@ -97,12 +97,17 @@ function snapshot(source: string): ParitySnapshot {
 // bottom still bite, so any FURTHER drift still fails here.
 const BASELINE: ParitySnapshot = {
   loggerEvents: [
+    "debug|mcp|mcp.filter_applied",
     "debug|mcp|mcp.operation",
+    "debug|mcp|mcp.tool_filtered",
     "error|mcp|mcp.operation",
     "info|mcp|mcp.operation",
+    "info|mcp|mcp.sdk_version",
+    "warn|mcp|mcp.filter_empty",
+    "warn|mcp|mcp.filter_unknown_entry",
     "warn|mcp|mcp.operation",
   ],
-  loggerEventCallCount: 17,
+  loggerEventCallCount: 23,
   operationLabels: [
     "connect",
     "disconnect",
@@ -118,7 +123,7 @@ const BASELINE: ParitySnapshot = {
   outcomeLabels: ["abandoned", "error", "ok", "started"],
   sqlStatements: [
     "DELETE FROM mcp_servers WHERE id = ?",
-    "INSERT INTO mcp_servers (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO mcp_servers (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, disabled_tools, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     "SELECT * FROM mcp_servers ORDER BY created_at ASC",
     "SELECT * FROM mcp_servers WHERE id = ?",
     "SELECT id, auth_token FROM mcp_servers",

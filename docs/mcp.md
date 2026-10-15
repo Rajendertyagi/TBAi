@@ -1,7 +1,7 @@
 # MCP — Model Context Protocol Client
 
 TBAi includes a **standards-based generic MCP client** built on the official
-[`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk). It
+[`@modelcontextprotocol/client`](https://www.npmjs.com/package/@modelcontextprotocol/client) v2.3.1. It
 connects to **any** compliant MCP server over **STDIO**, **Streamable HTTP**, or **legacy SSE**,
 discovers its capabilities (tools, resources, prompts, server info), and exposes those tools to the
 chat model via **AI SDK v7** `tool()` wrappers. No server-specific code is required — point TBAi at
@@ -75,7 +75,7 @@ A singleton (`mcpManager`) that owns all MCP connections for the process.
     `auth_type`/`auth_token` (bearer → `Authorization: Bearer …`, basic → `Authorization: Basic
     base64(token)`, oauth → bearer).
   - `sse`: `SSEClientTransport` (legacy MCP servers) with the same auth header construction.
-- **Connection lifecycle.** `connect(config)` builds a `Client` (`@modelcontextprotocol/sdk/client`),
+- **Connection lifecycle.** `connect(config)` builds a `Client` (`@modelcontextprotocol/client`),
   passes client capabilities `{ sampling: {}, elicitation: {}, roots: { listChanged: false } }`
   (these are **client** capabilities — do not set `tools/resources/prompts` here; those are server
   capabilities), attaches notification handlers, calls `client.connect()`, then discovers tools /

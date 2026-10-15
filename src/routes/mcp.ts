@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import { mcpManager } from "../services/mcp/manager";
 import { sanitizeStreamError } from "../lib/redact";
 import { logger } from "../lib/logger";
@@ -8,6 +7,7 @@ import {
   mcpServerCreateSchema,
   mcpServerUpdateSchema,
   mcpServerTestSchema,
+  mcpServerEnableSchema,
   mcpResourceReadSchema,
   mcpPromptGetSchema,
   mcpElicitResolveSchema,
@@ -53,7 +53,7 @@ app.delete("/servers/:id", async (c) => {
 
 // Enable/disable a server.
 app.post("/servers/:id/enable", async (c) => {
-  const parsed = z.object({ enabled: z.boolean() }).safeParse(await c.req.json().catch(() => ({})));
+  const parsed = mcpServerEnableSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "enabled boolean required" }, 400);
   mcpManager.setEnabled(c.req.param("id"), parsed.data.enabled);
   return c.json({ success: true });

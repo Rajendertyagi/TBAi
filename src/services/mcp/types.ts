@@ -51,6 +51,8 @@ export interface McpServerConfig {
   authToken?: string;
   /** Client roots advertised to the server (e.g. ["file:///C:/Users/me"]). */
   roots?: string[];
+  /** Tool names disabled by the user (denylist). New tools auto-appear. */
+  disabledTools?: string[];
   enabled: boolean;
   autoConnect: boolean;
   notes?: string;
@@ -167,6 +169,10 @@ export interface McpStatus {
   autoConnect: boolean;
   notes?: string;
   roots?: string[];
+  /** Tool names disabled by the user (denylist). */
+  disabledTools?: string[];
+  /** Whether the server is local (localhost/stdio) or remote. Derived, not stored. */
+  location?: "local" | "remote";
   /** A server-initiated elicitation request awaiting user input, if any. */
   pendingElicitation?: McpPendingElicitation;
 }

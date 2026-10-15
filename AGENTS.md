@@ -16,7 +16,7 @@ lifting. Chat must remain provider-agnostic.
 - Persistence: SQLite via `bun:sqlite`.
 - Client state: Zustand (UI state only).
 - Validation: Zod.
-- MCP client: official `@modelcontextprotocol/sdk` (transports + protocol) + AI SDK v7 `tool()`
+- MCP client: official `@modelcontextprotocol/*` packages (client v2.3.1, core v2.3.1) + AI SDK v7 `tool()`
   wrappers. Do **not** hand-roll JSON-RPC/MCP framing or add a second MCP client library.
 
 ## Core rules
@@ -306,7 +306,7 @@ changes. It is the forward-looking contract for the system. Key non-negotiables:
 - **OpenCode** owns coding-agent sessions/tools/execution behind the OpenCode
   feature boundary. Do not spread OpenCode wire-format assumptions through
   generic TBAi code.
-- **MCP** uses the official `@modelcontextprotocol/sdk`. No hand-rolled
+- **MCP** uses the official `@modelcontextprotocol/*` packages (client v2.3.1, core v2.3.1). No hand-rolled
   JSON-RPC, no second MCP client.
 - **ICM** is the durable shared memory engine, behind TBAi's `MemoryService`.
 - **TBAi SQLite** remains authoritative for application state (conversations,

@@ -42,6 +42,7 @@ export interface McpServerRow {
   auto_connect: number;
   notes: string | null;
   roots: string | null;
+  disabled_tools: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -78,6 +79,7 @@ export function rowToConfig(row: McpServerRow): McpServerConfig {
     autoConnect: row.auto_connect === 1,
     notes: row.notes ?? undefined,
     roots: row.roots ? jsonParseSafe<string[]>(row.roots, []) : undefined,
+    disabledTools: row.disabled_tools ? jsonParseSafe<string[]>(row.disabled_tools, []) : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -127,8 +129,8 @@ export function insertConfig(input: McpServerCreate): McpServerConfig {
   const authTokenEnv = input.authToken ? encryptSecret(input.authToken) : null;
   db.run(
     `INSERT INTO mcp_servers
-        (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, name, transport, command, args, url, env, headers, auth_type, auth_token, enabled, auto_connect, notes, roots, disabled_tools, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.name,
@@ -144,6 +146,7 @@ export function insertConfig(input: McpServerCreate): McpServerConfig {
       autoConnect ? 1 : 0,
       input.notes ?? null,
       input.roots ? JSON.stringify(input.roots) : null,
+      input.disabledTools ? JSON.stringify(input.disabledTools) : null,
       now,
       now,
     ],
@@ -193,6 +196,8 @@ export function updateConfigRow(
     }
   }
   if (input.roots !== undefined) set("roots", input.roots ? JSON.stringify(input.roots) : null);
+  if (input.disabledTools !== undefined)
+    set("disabled_tools", input.disabledTools ? JSON.stringify(input.disabledTools) : null);
   if (input.enabled !== undefined) set("enabled", input.enabled ? 1 : 0);
   if (input.autoConnect !== undefined) set("auto_connect", input.autoConnect ? 1 : 0);
   if (input.notes !== undefined) set("notes", input.notes ?? null);

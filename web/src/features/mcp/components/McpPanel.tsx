@@ -1,18 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Button, Input, Textarea } from "../../../components/ui";
+import { Button, Input } from "../../../components/ui";
 import { useMcpStore } from "../state/mcpStore";
+import { McpServerForm, emptyDraft, type DraftState } from "./McpServerForm";
 import { useChatTabsStore, urlForTab } from "../../chat/state/chatTabs";
 import { cn } from "../../../lib/utils";
-import { failureCopy, authPlaceholder } from "../copy";
-import { SettingsError, SettingsSection } from "../../../components/shared/settings";
+import { failureCopy } from "../copy";
+import { SettingsSection } from "../../../components/shared/settings";
 import type {
   McpConnectionStatus,
   McpFailureReason,
   McpServerDraft,
   McpStatus,
-  McpTransport,
-  McpAuthType,
   McpPrompt,
   McpPromptGetResult,
 } from "../../../types";
@@ -20,8 +19,6 @@ import {
   Plus,
   Trash2,
   Pencil,
-  X,
-  Check,
   Plug,
   RefreshCw,
   Play,
@@ -60,51 +57,6 @@ function formatKV(obj?: Record<string, string>): string {
   return Object.entries(obj)
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
-}
-
-interface DraftState {
-  id: string | null;
-  name: string;
-  transport: McpTransport;
-  command: string;
-  argsText: string;
-  url: string;
-  envText: string;
-  headersText: string;
-  authType: McpAuthType;
-  authToken: string;
-  /** True when the server already stores a credential (presence only, never the value). */
-  authConfigured: boolean;
-  /** Masked hint echoed by the backend (e.g. "Bearer ••••••"). */
-  authHint?: string;
-  /** True after the user clicks "Remove auth": save sends authToken "" to clear. */
-  authClearRequested: boolean;
-  rootsText: string;
-  enabled: boolean;
-  autoConnect: boolean;
-  notes: string;
-}
-
-function emptyDraft(): DraftState {
-  return {
-    id: null,
-    name: "",
-    transport: "stdio",
-    command: "",
-    argsText: "",
-    url: "",
-    envText: "",
-    headersText: "",
-    authType: "none",
-    authToken: "",
-    authConfigured: false,
-    authHint: undefined,
-    authClearRequested: false,
-    rootsText: "",
-    enabled: true,
-    autoConnect: true,
-    notes: "",
-  };
 }
 
 const STATUS_STYLES: Record<McpConnectionStatus, string> = {
@@ -191,6 +143,7 @@ export function McpPanel() {
       enabled: s.enabled,
       autoConnect: s.autoConnect ?? true,
       notes: s.notes ?? "",
+      disabledTools: s.disabledTools ?? [],
     });
     setIsAdding(true);
   };
@@ -234,6 +187,7 @@ export function McpPanel() {
     }
     const roots = parseLines(draft.rootsText);
     if (roots.length) payload.roots = roots;
+    payload.disabledTools = draft.disabledTools;
     return payload;
   };
 
@@ -332,186 +286,19 @@ export function McpPanel() {
       </div>
 
       {(isAdding || draft.id !== null) && (
-        <SettingsSection title={draft.id ? "Edit server" : "Add server"}>
-          <div className="space-y-3">
-            <Input
-              placeholder="Server name (e.g. Desktop Commander)"
-              value={draft.name}
-              onChange={(e) => set({ name: e.target.value })}
-            />
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-20 shrink-0">Transport</span>
-              <select
-                value={draft.transport}
-                onChange={(e) => set({ transport: e.target.value as McpTransport })}
-                className="flex-1 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-              >
-                <option value="stdio">STDIO (local process)</option>
-                <option value="http">Streamable HTTP</option>
-                <option value="sse">SSE (legacy)</option>
-              </select>
-            </div>
-
-            {isStdio ? (
-              <>
-                <Input
-                  placeholder="Command (e.g. npx, bun, node)"
-                  value={draft.command}
-                  onChange={(e) => set({ command: e.target.value })}
-                />
-                <Textarea
-                  placeholder={
-                    "Arguments, one per line\n-y\n@wonderwhy-er/desktop-commander@latest"
-                  }
-                  value={draft.argsText}
-                  onChange={(e) => set({ argsText: e.target.value })}
-                />
-                <Textarea
-                  placeholder={"Environment variables (KEY=VALUE), one per line"}
-                  value={draft.envText}
-                  onChange={(e) => set({ envText: e.target.value })}
-                />
-              </>
-            ) : (
-              <>
-                <Input
-                  placeholder="Server URL (https://...)"
-                  value={draft.url}
-                  onChange={(e) => set({ url: e.target.value })}
-                />
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-20 shrink-0">Auth</span>
-                  <select
-                    value={draft.authType}
-                    onChange={(e) =>
-                      set({ authType: e.target.value as McpAuthType, authClearRequested: false })
-                    }
-                    className="rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-                  >
-                    <option value="none">None</option>
-                    <option value="bearer">Bearer token</option>
-                    <option value="basic">Basic (user:pass)</option>
-                    <option value="oauth">OAuth</option>
-                  </select>
-                  {draft.id &&
-                    draft.authConfigured &&
-                    !draft.authClearRequested &&
-                    draft.authHint && (
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {draft.authHint} stored
-                      </span>
-                    )}
-                </div>
-                {draft.authType !== "none" && !draft.authClearRequested && (
-                  <>
-                    {draft.id && draft.authConfigured && (
-                      <p className="text-xs text-muted-foreground">
-                        A credential is stored. Leave blank to keep it, type a new value to replace
-                        it, or remove it.
-                      </p>
-                    )}
-                    {draft.id && !draft.authConfigured && (
-                      <p className="text-xs text-muted-foreground">
-                        No credential is stored — connections will be unauthenticated until you
-                        enter one.
-                      </p>
-                    )}
-                    <Input
-                      type="password"
-                      placeholder={
-                        draft.id && draft.authConfigured
-                          ? "New value (blank keeps stored credential)"
-                          : authPlaceholder(draft.authType)
-                      }
-                      value={draft.authToken}
-                      onChange={(e) => set({ authToken: e.target.value })}
-                    />
-                  </>
-                )}
-                {draft.id &&
-                  draft.authConfigured &&
-                  !draft.authClearRequested &&
-                  draft.authType !== "none" && (
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => set({ authClearRequested: true, authToken: "" })}
-                      >
-                        <X className="w-3 h-3 mr-1" />
-                        Remove auth
-                      </Button>
-                    </div>
-                  )}
-                {draft.authClearRequested && (
-                  <p className="text-xs text-warning">
-                    Stored credential will be removed on save. Cancel to keep it.
-                  </p>
-                )}
-                <Textarea
-                  placeholder={"Extra headers (KEY=VALUE), one per line"}
-                  value={draft.headersText}
-                  onChange={(e) => set({ headersText: e.target.value })}
-                />
-              </>
-            )}
-
-            <Textarea
-              placeholder="Notes (optional)"
-              value={draft.notes}
-              onChange={(e) => set({ notes: e.target.value })}
-            />
-
-            <Textarea
-              placeholder={
-                "Roots (optional) — file locations the server may access, one URI per line\nfile:///C:/Users/you"
-              }
-              value={draft.rootsText}
-              onChange={(e) => set({ rootsText: e.target.value })}
-            />
-
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={draft.enabled}
-                  onChange={(e) => set({ enabled: e.target.checked })}
-                />
-                Enabled
-              </label>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={draft.autoConnect}
-                  onChange={(e) => set({ autoConnect: e.target.checked })}
-                />
-                Auto-connect on startup
-              </label>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={save} disabled={saving}>
-                <Check className="w-3 h-3 mr-1" />
-                {draft.id ? "Update" : "Save"}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={runTest} disabled={testing}>
-                {testing ? "Testing…" : "Test connection"}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={cancel}>
-                <X className="w-3 h-3 mr-1" />
-                Cancel
-              </Button>
-            </div>
-
-            {formError && <SettingsError>{formError}</SettingsError>}
-            {testResult && (
-              <p className={testResult.ok ? "text-xs text-success" : "text-xs text-destructive"}>
-                {testResult.message}
-              </p>
-            )}
-          </div>
-        </SettingsSection>
+        <McpServerForm
+          draft={draft}
+          set={set}
+          runTest={runTest}
+          save={save}
+          cancel={cancel}
+          formError={formError}
+          testResult={testResult}
+          testing={testing}
+          saving={saving}
+          isStdio={isStdio}
+          tools={draft.id ? servers.find((s) => s.id === draft.id)?.tools : undefined}
+        />
       )}
 
       <SettingsSection
@@ -581,6 +368,18 @@ function ServerCard({
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
               {server.transport}
             </span>
+            {server.location && (
+              <span
+                className={cn(
+                  "text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5",
+                  server.location === "local"
+                    ? "text-success border-success/30"
+                    : "text-muted-foreground border-border",
+                )}
+              >
+                {server.location}
+              </span>
+            )}
             {server.enabled ? (
               <span className="text-[10px] text-success">enabled</span>
             ) : (

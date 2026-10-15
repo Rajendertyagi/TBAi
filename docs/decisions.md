@@ -222,10 +222,10 @@ stack trace.
 
 ## MCP client: official SDK + AI SDK v7 tool wrappers (server-side)
 
-- **Decision:** TBAi connects to MCP servers through the **official `@modelcontextprotocol/sdk`**
-  (`@modelcontextprotocol/sdk/client` `Client` + `StdioClientTransport` /
+- **Decision:** TBAi connects to MCP servers through the **official `@modelcontextprotocol/*` packages**
+  (v2.3.1: `@modelcontextprotocol/client` `Client` + `StdioClientTransport` /
   `StreamableHTTPClientTransport` / `SSEClientTransport`, notification schemas from
-  `@modelcontextprotocol/sdk/types`). Discovered tools are wrapped with **AI SDK v7 `tool()`** and
+  `@modelcontextprotocol/client`). Discovered tools are wrapped with **AI SDK v7 `tool()`** and
   merged into the chat route's `tools` map. The MCP `Client` runs **server-side**; the browser only
   drives config/status over a `/api/mcp` REST API.
 - **Why this SDK:** it is the canonical, spec-track implementation and already handles the three
