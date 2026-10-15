@@ -392,17 +392,19 @@ sqlite.run(`
     auto_connect INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
     roots TEXT,
+    disabled_tools TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )
 `);
 
-// Idempotent migration: add the `roots` column if an older DB lacks it.
-try {
-  sqlite.run("ALTER TABLE mcp_servers ADD COLUMN roots TEXT");
-} catch {
-  // Column already exists; ignore.
-}
+// Idempotent migrations for existing databases: add the `roots` and
+// `disabled_tools` columns if an older DB lacks them. `addColumnIfNotExists`
+// checks `PRAGMA table_info` first, so an already-present column is a no-op
+// while a genuine failure (a locked or corrupt database) still surfaces —
+// unlike a bare `try/catch`, which would report every error as success.
+addColumnIfNotExists("mcp_servers", "roots", "TEXT");
+addColumnIfNotExists("mcp_servers", "disabled_tools", "TEXT");
 
 // Create indexes
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)");
