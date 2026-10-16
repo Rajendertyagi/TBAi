@@ -19,7 +19,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "security": "semgrep scan --config auto",
-    "verify": "bun run typecheck && bun run lint && bun run format:check && bun test && bun run build",
+    "verify": "bun run typecheck && bun run lint && bun run format:check && bun run test:locations && bun run build && bun run test && bun run test:dom",
     "verify:full": "bun run verify && bun run security",
     "test": "bun test --isolate ./tests/unit ./tests/integration --path-ignore-patterns \"**/shutdown-lifecycle.test.ts\" --timeout=30000",
     "test:locations": "bun scripts/check-test-location.ts",

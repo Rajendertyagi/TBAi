@@ -17,7 +17,7 @@
  *   execute receives the sigil-less NAME and lets the caller apply it
  */
 
-import { commandLabel } from "../opencode/slashCommands";
+// commandLabel inlined: `/${name}` (was imported from opencode/slashCommands)
 import { DIRECT_COMPACT_COMMANDS, commandNameOf } from "./compactCommand";
 
 /** One palette row. Structurally the slice of assistant-ui's entry type we use. */
@@ -47,7 +47,7 @@ export function buildDirectCompactEntries(
     const name = commandNameOf(token);
     return {
       id: `${DIRECT_ENTRY_ID_PREFIX}${name}`,
-      label: commandLabel(name),
+      label: `/${name}`,
       description,
       // Selection only INSERTS the text, exactly as the feed's and the built-in's
       // rows do. The command runs on submit through the interception in

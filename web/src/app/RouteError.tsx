@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useRouteError } from "react-router";
 import { Button } from "@/components/ui/button";
 import { logger } from "@/lib/logger";
+import { ROUTES } from "@/config/navigation";
 
 /**
  * Root route error boundary. Catches render crashes anywhere under the app
@@ -36,7 +37,7 @@ export function RouteError() {
         {message}
       </p>
       <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={() => navigate("/chat/new")}>
+        <Button variant="outline" onClick={() => navigate(ROUTES.CHAT_NEW)}>
           New chat
         </Button>
         <Button onClick={() => window.location.reload()}>Reload app</Button>

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { AppShell } from "@/app/layout/AppShell";
+// AppShell is now the universal parent (see router.tsx). CodeShell provides
+// only the OpenCode runtime and renders OpenCodeView.
 import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { logger } from "@/lib/logger";
 import { OpenCodeView } from "./OpenCodeView";
@@ -25,10 +26,8 @@ export function CodeShell() {
   }, []);
 
   return (
-    <AppShell>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <OpenCodeView />
-      </div>
-    </AppShell>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <OpenCodeView />
+    </div>
   );
 }

@@ -37,8 +37,8 @@
  */
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { serveStatelessMcpRequest } from "../helpers/mcp-http-fixture";
 
 /** The one capability this server advertises, so only `tools/list` is called. */
 function buildServer(): McpServer {
@@ -66,10 +66,6 @@ export async function startGatedDiscoveryServer(
   enteredPath: string,
   options: { failOnRelease?: boolean } = {},
 ): Promise<{ stop: () => void }> {
-  const server = buildServer();
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
-
   const http = Bun.serve({
     port,
     fetch: async (req) => {
@@ -114,7 +110,12 @@ export async function startGatedDiscoveryServer(
         }
       }
 
-      return transport.handleRequest(
+      // SDK 2.3.1: a stateless transport serves exactly one request, and its
+      // SSE reply is written asynchronously — the helper builds a fresh
+      // server + transport per request and tears them down only once the
+      // response body has drained.
+      return serveStatelessMcpRequest(
+        buildServer,
         new Request(req.url, { method: req.method, headers: req.headers, body }),
       );
     },

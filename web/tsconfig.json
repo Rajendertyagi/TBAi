@@ -15,7 +15,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
+    // No `baseUrl`. Deprecated in TypeScript 6.0, removed in 7.0. Without it,
+    // `paths` entries resolve relative to this file - which is what the single
+    // entry below already assumed (`baseUrl: "."` meant this same directory).
+    // Vite is unaffected: `vite.config.ts` declares its own `@` -> ./src alias
+    // and never reads these paths.
     "paths": {
       "@/*": ["./src/*"]
     }

@@ -4347,3 +4347,302 @@ guard still fails.
   `lineEnding: "auto"`, which agrees with whatever the platform checkout produced and
   therefore cannot disagree between a Windows developer and a CI runner. A blanket
   `eol=lf` would have renormalised the working tree for no gate benefit.
+
+
+## 2026-10-13 — Maintainability audit: gates first, then rules
+
+A full-tree audit was run against `25b4003` before any model-discovery work. It
+changed production code very little and changed two things about how the
+repository is checked and reviewed.
+
+**Decision 1 — `bun run verify` runs `bun run test`, not bare `bun test`.** The
+script shipped with bare `bun test` while its own documentation and the CI
+workflow both specified the scoped script. Bare `bun test` collects 375 files
+where `bun run test` collects 290 (measured 2026-10-13): it adds the 44 DOM contract files, which need
+`--preload ./tests/setup/dom-preload.ts` and fail without it (measured: 18 fail,
+8 errors), the `shutdown-lifecycle` test `test` deliberately excludes, and the 40
+E2E Playwright specs under `tests/e2e`, which bare `bun test` collects because
+they are named `*.spec.ts`. It also drops `--isolate`, which is what stops the
+shared test database cascading. The
+failure mode was not a red gate but a gate reporting on a different suite than
+CI, from the one command every agent is told to run. `verify` also now runs
+`test:locations` and `test:dom`. Pinned by `tests/unit/tooling/verify-script.test.ts`.
+
+**Decision 1b — the CI `verify` job was missing its build step, and that was a
+real defect, not a documentation nicety.** `tests/integration/core/e2e-build-integrity.test.ts`
+asserts against the real artifact in `dist/`, and fails 5 tests when `dist/` is
+absent. CI ran the suites with no `dist/` present, so those 5 tests were failing
+in the `verify` job. The last green run of that job predates the current version
+of those tests, which at the time used temporary fake directories rather than the
+real artifact — so that green run does not prove the current version is safe.
+`bun run build` has therefore been added to the CI `verify` job, before the
+suites. It cannot be added to the `e2e` job instead: every GitHub-hosted job gets
+a fresh runner, so one job's `dist/` does not exist in the next job's filesystem.
+
+`verify-script.test.ts` now reads the workflow's actual `run:` steps and compares
+the gate sequence — order included — against `package.json`. An earlier version
+of that test only asserted that a comment string still existed in the workflow,
+which is precisely the check that passes while the thing it names has drifted;
+that is the failure mode this decision exists to remove.
+
+**Decision 2 — two new gates, both of which fail today if broken.**
+`tests/unit/tooling/no-orphan-modules.test.ts` fails when a source module in `src/`
+or `web/src/` has zero recognized direct inbound references; it removed four
+modules (`src/db/mappers.ts`, `web/index.ts`,
+`web/src/features/opencode/index.ts`, `web/src/features/opencode/panelInteractions.ts`)
+and carries one self-checking allowed orphan. It is NOT a reachability proof — see
+the correction below.
+`tests/unit/web/components/disclosure-timing.test.ts` pins the two halves of the
+disclosure duration — the CSS custom property and the JS constant `useScrollLock`
+needs — which cannot be merged because CSS cannot read a TS constant.
+
+**Correction to Decision 2 — the guard's claim was overstated.** This entry
+originally said the guard "fails on any source module that no static or dynamic
+import reaches". It checks *zero recognized direct inbound references*, which is
+weaker: a dead module importing another dead module still gives the second one a
+reference. The guard now states its own limits, separates code from string data so
+commented-out imports and test-fixture text are not counted, resolves aliases from
+the tsconfig `paths` maps, and fails loudly — naming the file — when it cannot
+read a file, instead of reporting an orphan verdict from an incomplete view.
+
+**Decision 3 — the `@utility aui-disclosure-timing` migration was completed, not
+documented as completed.** The utility carried a comment explaining that it had
+replaced six copies of `200`; every copy was still present. An abstraction added
+*beside* the duplication it claims to remove reads as solved and is worse than
+none. The rule this establishes is recorded in `AGENTS.md` section 1b.
+
+**Correction to that decision — the count was wrong when first written.** This
+entry originally repeated the comment's "six" and called it a "six-file edit".
+The literal appeared in **four** places: `ANIMATION_DURATION = 200` in
+`reasoning.tsx`, `tool-group.tsx` and `tool-fallback.tsx`, plus
+`--animation-duration: 200ms` in `web/src/styles/globals.css`. The three inline
+`style` props contained no literal — they interpolated their file's constant. The
+original comment's "six" counted three declarations plus three style props; that
+is a legitimate count of *specification sites* and is not a count of copies. The
+mistake was relabelling it as copies without recounting, which is the failure
+mode `AGENTS.md` section 1b now names explicitly: count before writing the
+number.
+
+**Alternatives considered.**
+
+- *A file-size or complexity lint rule.* Rejected. 611 of 844 TypeScript files are
+  already 250 lines or fewer, so any useful threshold fires on a large fraction of
+  the tree and trains people to ignore it. Section 6b rule 8 requires a gate that
+  can fail; a gate nobody can satisfy is one nobody trusts. The measured
+  distribution is recorded in `AGENTS.md` section 1 instead, with file size as a
+  *review trigger* that also requires the absence of a test that would catch a
+  behaviour change.
+- *Splitting the four largest React components.* Rejected for now. `JobEditor`
+  (837-line function), `LogsPanel` (751), `Composer` (695) and `ProviderDialog`
+  (560) have no DOM coverage, so behaviour preservation cannot be demonstrated.
+  Characterization tests first, then the split.
+- *A gate on unused exports.* Rejected. The set is large and several entries are
+  intentional — `features/opencode/v2Tools.ts` is a documented test-only drift
+  guard and `elements/approval-card.tsx` is asserted dead on purpose — so the
+  gate would need more standing exceptions than rules.
+- *Fixing the `routes` to `services` violations the audit found.* Deferred to
+  separate, authorized work. Raw SQL and business rules in `routes/memories.ts`
+  and `routes/providers.ts`, an idempotency state machine with module-level
+  mutable state in `routes/conversations.ts`, and `lib/resumable.ts` importing
+  `db` and a service subtree are all real debt against a documented rule. Each is
+  a layer move that changes where logic lives and what owns the SQLite handle.
+  They are recorded in `AGENTS.md` section 2 so the next agent inherits the list
+  rather than rediscovering it, and they are NOT folded into a cleanup.
+
+## 2026-10-14 — Tab strip migrated to `@dnd-kit/react` (0.5.0)
+
+The tab strip moved off `@dnd-kit/core@6.3.1` / `@dnd-kit/sortable@8.0.0` /
+`@dnd-kit/utilities@3.2.2` onto the current API. Both packages are pre-1.0, so
+both versions are pinned EXACTLY: `^0.5.0` would let a monthly minor bump change
+drag behaviour with no diff in `web/package.json`. The published `0.5.1-beta-*`
+tag was not used.
+
+`@dnd-kit/dom` is declared as a direct dependency rather than left as a
+transitive one, because the sensor configuration imports `PointerSensor`,
+`KeyboardSensor` and `PointerActivationConstraints` from it. AGENTS.md 6 forbids
+relying on undeclared transitives.
+
+**The single most important consequence of the new API: `source` and `target` are
+the same element.** Optimistic sorting reorders the DOM during the drag, so
+`event.operation.source.id === event.operation.target.id` for the whole
+operation. The legacy `onDragEnd` compared those two ids to decide whether
+anything moved; that comparison is not merely unreliable under the new API, it is
+meaningless, and it would have silently stopped reordering at all. The commit now
+reads `initialIndex` and `index` off the sortable source via `isSortable`.
+
+That matters more than it looks, because `reorder(from, to)` is POSITIONAL. A
+second call with the same pair moves a DIFFERENT tab and corrupts the order while
+every other test stays green — the store has no identity-based guard to absorb a
+duplicate event. So `onDragEnd` returns early on `event.canceled` and on
+`initialIndex === index`, and commits exactly one `reorder` otherwise.
+
+**Zustand remains the sole owner of order.** No second tab-state store, no local
+shadow array, no `move` helper from `@dnd-kit/helpers` — the manual `initialIndex`
+path was chosen over the helper precisely so the store stays the single source of
+truth and the existing `reorder(from, to)` contract is untouched.
+
+**Keyboard reordering is new, and it forced a deliberate key split.** The library
+binds `KeyboardSensor` to Space AND Enter by default. Enter is this tab's
+activation key, so the default would make "open this tab" and "pick this tab up"
+the same gesture. `KeyboardSensor` is therefore reconfigured to Space to pick up,
+arrows to move, Space to drop, Escape to cancel — the W3C drag-and-drop keyboard
+pattern — leaving Enter alone for activation. Up/Down are left unbound because the
+strip is a single row.
+
+Making that reachable required a second change. The strip already used a roving
+tabindex, but nothing ever moved focus, so only the active tab was focusable and
+keyboard dragging could not be started at all. Roving now follows FOCUS rather
+than selection, and Arrow/Home/End move it. This is tab-strip-local focus
+management, not a change to application navigation.
+
+**Three things changed that are behaviour, not refactoring, and each is a
+deliberate call:**
+
+- *Collision detection.* Legacy passed `closestCenter` explicitly. That option is
+  gone; the default is `pointerIntersection` falling back to `shapeIntersection`.
+  Not carried over: it is the library's own default for sortable rows and pinning
+  it would mean declaring `@dnd-kit/collision` for no behavioural gain.
+- *Drag feedback.* Legacy applied a runtime `transform`. The new API uses top-layer
+  promotion and optimistic reordering instead, so the inline style object is gone
+  entirely and the drag cue is a Tailwind class. The default 250ms drop animation
+  was KEPT. If a drop ever snaps or animates twice, the documented fix is
+  `Feedback.configure({dropAnimation: null})` — that is the escape hatch, not a
+  change to make speculatively.
+- *Post-drag clicks.* The legacy library suppressed clicks for 50ms after a drag
+  via a capture-phase `click` listener removed on a `setTimeout`. The new library
+  has no such listener (`stopPropagation` appears only inside an active drag's
+  move/up handling), so that window is GONE and was deliberately not
+  reintroduced. The E2E helper `waitForStripToSettle` exists only to work around
+  the old window and is now redundant; it was left in place because the test agent
+  owns test files.
+
+**Follow-up (2026-10-14): the keyboard offset was removed, not documented.**
+
+The paragraph above originally read `KEYBOARD_DRAG_OFFSET_PX` as a coupling to
+"watch". Measurement proved it was worse than a coupling — it was wrong. That
+entry claimed the tab is `grow-0 shrink-0`, so its width IS its `basis-48`. The
+tab is in fact `min-w-0 grow-0 shrink basis-48`: `shrink` (not `shrink-0`) plus
+`min-w-0` lets the strip COMPRESS tabs rather than overflow. Measured rendered
+width: 192px at 4 tabs, 178px at 5, 148px at 6, 127px at 7, 111px at 8, 98.875px at
+9. A fixed 192px offset therefore spans one slot at exactly one tab count and
+1.94 slots at another, and the strip never scrolls horizontally at all
+(`scrollWidth === clientWidth` even with 9 tabs).
+
+`KEYBOARD_DRAG_OFFSET_PX` is deleted. The sensor's `left`/`right` bindings are now
+EMPTY and horizontal movement is driven from `manager.actions.move({ by })` with a
+distance measured from the DOM on each press (`pitchToNeighbour`). One press is
+one tab at any tab count and any rendered width, and it stays correct if a gap is
+ever added between tabs.
+
+Chosen over the alternatives: assigning a drop target directly via
+`actions.setDropTarget` would skip the shape move that drives optimistic sorting,
+so `source.index` would not follow the user and `onDragEnd` would commit a stale
+index — breaking the single-commit guarantee. Moving the shape keeps collision
+detection and the optimistic plugin exactly as they were, so `onDragEnd` still
+reads the same `initialIndex`/`index` pair and still commits exactly one
+`reorder`. Reading the tab's own width instead of the neighbour distance would be
+simpler but breaks if a gap is introduced, and cannot express "no neighbour in
+that direction" at a boundary.
+
+A side effect worth recording: the sensor's undocumented `Shift` = 5x multiplier
+is gone, since it multiplied a fixed offset. Multi-press now means exactly N tabs,
+which is the contract the strip wants. If a faster traversal is ever wanted it
+should be designed as its own feature, not inherited from a pixel heuristic.
+
+**Correction — keyboard bindings are `KeyboardEvent.code`, not `.key`.** The
+published sensors guide states that `keyboardCodes` follows `KeyboardEvent.key`.
+It does not. `isKeycode` in `@dnd-kit/dom` is `codes.includes(event.code)`, and
+the option is typed `KeyCode = KeyboardEvent['code']`. Implementation and typings
+agree; the guide is wrong. Production values (`Space`, `Escape`, `ArrowLeft`,
+`ArrowRight`) are spelled identically under `code` and `key`, so this never
+produced a visible bug here — which is exactly why it needed writing down. It is
+recorded because `code` is layout-dependent (`KeyW` on a Dvorak/AZERTY layout) and
+`key` is not, so a future binding change has to make this choice deliberately.
+
+**Up/Down are intentionally disabled.** The `up` and `down` arrays are empty for a
+reason independent of the offset work: the strip is a single horizontal row, so
+there is no vertical axis to move along, and binding them would produce a gesture
+that appears to do nothing. Home/End are focus-navigation only (the tabs pattern)
+and stay inert while a drag is held.
+
+**Alternatives considered.**
+
+- *Keep `@dnd-kit/core` and add only keyboard support.* Rejected: it leaves the
+  50ms click-suppression window and two majors of drag behaviour in place.
+- *Use `@dnd-kit/helpers`' `move`.* Rejected: it wants the array, and the array here
+  is owned by a persisted Zustand store. Routing it through `reorder` keeps one
+  write path.
+- *Carry `closestCenter` forward.* Rejected as above.
+- *Bind Space AND Enter for pick-up.* Rejected: it destroys tab activation.
+- *Keep the pixel offset but derive it from the measured tab width.* Rejected: a
+  width is not a pitch, so it is wrong the moment a gap is added, and it cannot
+  express the boundary case where there is no neighbour at all.
+
+NOT VERIFIED HERE: this change was typechecked, linted and built, and the new
+API's behaviour was read out of the installed `.d.ts` and JS. No browser or Tauri
+run was performed, so pointer dragging, keyboard dragging, overflow scrolling,
+drop animation and the drag-region interaction all still need the test agent's
+independent verification. The legacy `web/node_modules/@dnd-kit/{core,sortable,
+utilities}` directories are still on disk but are absent from `bun.lock` — stale
+store artifacts, not part of the resolved tree.
+
+## 2026-10-14 - FlexLayout POC (evaluation only; no migration authorized)
+
+`flexlayout-react@0.11.1` was added **for an isolated proof of concept** and
+nothing else. It is not authorized as the production layout foundation, no
+production code was changed to accommodate it, and the existing DnD stack is
+untouched. Recorded because the evaluation found things a later reader would
+otherwise have to rediscover, and because two of them would change how a
+migration must be designed.
+
+**The POC ships nothing.** The route is `/flexlayout-lab`, added in the same
+`import.meta.env.DEV`-only spread as `/theme-lab` and `/keyboard-lab`. The
+production build was inspected: no `flexlayout-react` chunk, no
+`.flexlayout__layout` rule, and the library's own CSS absent from `dist/web`. The
+only residue is the `.flexlayout-lab` token-bridge class in `globals.css`, which
+no shipped route can reach.
+
+**Tab identity would have to be re-derived, not carried over.** FlexLayout
+identifies a tab by its own `id` and treats `name` as free text; two tabs may
+share a name and the model does not prevent it (`chatTabs` keys tabs as
+`chat:<threadId>` / `agent:<conversationId>`, which are stable identities, so
+those values would map onto ids directly). But nothing about a FlexLayout tab
+implies the conversation behind it: a tab restored from a saved model may point
+at a deleted thread. `Model.fromJson` **throws** on a shape it does not
+recognise, so the recovery requirement is real, and a migration would need load
+reconciliation at least as strict as `tabReconciliation`, pointed at a different
+store.
+
+**The model is mutable and replaceable, which is a stale-closure trap.** `Model`
+is mutated in place by every action, and `Model.fromJson(json, previousModel)`
+produces a NEW instance. Callbacks closing over the original kept reporting the
+old layout after a restore, so the toolbar and the panels disagreed about the
+same layout. Found by browser observation, not by a test, and invisible to
+TypeScript. Any adapter must read `modelRef.current` in every callback that
+touches the model, never a captured instance.
+
+**A nested row with ONE tabset produces no internal splitter.** The first fixture
+shape rendered a single `.flexlayout__splitter` and the missing vertical split
+was invisible until the splitter count was asserted. Two tabsets in the child row
+gives three regions, two boundaries, one per axis.
+
+**`Actions.addTab` silently no-ops on an unresolvable target id.** Passing
+`undefined` for a border location (as some examples do) fails the id lookup and
+appears to work while changing nothing. The root row's id is the working target.
+
+**`showPopupMenu` mounts the menu in its own React root**, so menu content does
+not inherit the app's React context. Any production menu needing app state must
+account for that.
+
+**Verified in a real browser** (Vite dev server): mounts clean in React 19 with
+no console errors; the library's own tab ARIA, `aria-keyshortcuts` (note it
+rewrites `Ctrl` to `Control`) and splitter semantics are correct; component state
+survives a tab switch; the serialized model survives a full reload; keyboard
+resize works, persists, and leaves **fractional** weights in the saved JSON.
+**Not verified:** pointer drag-and-drop between tabsets, overflow scrolling,
+popout windows, the Tauri drag region, and anything about the desktop build.
+
+**One finding worth keeping regardless of the decision:** FlexLayout portals tab
+content only when the tab's measured rect is non-zero, so it cannot be exercised
+under happy-dom or jsdom at all. Any future DOM-level test of a FlexLayout-backed
+surface must be an E2E spec; a green DOM suite would prove nothing.

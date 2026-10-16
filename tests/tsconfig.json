@@ -13,7 +13,13 @@
   // which cannot both live here: one program cannot map `@/*` to the backend `src/`
   // and the web `src/` at once, because both contain the same module paths.
   "compilerOptions": {
-    "baseUrl": ".",
+    // No `baseUrl`: deprecated in TypeScript 6.0, removed in 7.0. Every entry
+    // below is already written relative to THIS file's directory, which is what
+    // `baseUrl: "."` resolved to, so nothing here had to move.
+    //
+    // Bun's own module-resolution docs document `paths` with no `baseUrl` at
+    // all, and point the entries at the tsconfig's directory - the same rule
+    // TypeScript applies. That is why the runtime resolver keeps working.
     "paths": {
       "@/*": ["../src/*"],
       "@backend/*": ["../src/*"],

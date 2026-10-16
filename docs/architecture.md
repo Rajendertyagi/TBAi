@@ -262,6 +262,64 @@ runtimes, or letting an OpenCode-only capability (Shield, permissions, forms,
 terminal, diff) leak into Direct Chat, destroys the isolation described under
 **Frontend boundary (shared presentation, isolated execution)** below.
 
+### Shared helpers, and what makes one dead
+
+A shared directory is a promise that a module has more than one owner. Two
+failure modes follow from taking that promise lightly, and both were found in
+this repository rather than hypothesised.
+
+**A module with one consumer does not belong in a shared directory.** It belongs
+to the feature that consumes it. `web/src/lib/utils.ts` existed to hold shared
+utilities; three of its four exports (`getProviderIcon`, `formatDate`,
+`formatRelativeTime`) had zero callers anywhere in the repo, and `getProviderIcon`
+was a hardcoded provider-name switch — a configuration rule in the one layer
+that is not allowed to know provider names. Promote a module to shared when the
+second caller actually arrives, not in anticipation of it.
+
+**A whole file nothing imports costs nothing to keep and everything to
+understand.** It typechecks, it lints, it formats, and no gate notices, because
+an unused *binding* is Biome's business and an unused *file* is nobody's. Three
+accumulated here, each worse than merely dead: `src/db/mappers.ts` read as the
+canonical row→domain mapper layer while `services/storage/conversations.ts` and
+`config/providers.ts` each carried their own live copy — and the dead copy was
+already missing `models`, `thinking` and `apiProtocol`; `web/index.ts` was a
+`console.log("Hello via Bun!")` line from `bun init`; and
+`web/src/features/opencode/index.ts` was a barrel every consumer had already
+bypassed. This is now a gate: `tests/unit/tooling/no-orphan-modules.test.ts`
+fails when a source module in `src/` or `web/src/` has **zero recognized direct
+inbound references**. That is deliberately weaker than "unreachable" — a dead
+module that imports another dead module leaves the second one with a reference,
+so it passes.
+
+The scan reads code from string data (so a commented-out import or fixture text
+is not counted as a reference), resolves aliases from the `paths` maps in the
+tsconfig files, and **resolves them against the importing file's own project
+first**, so `@/` in a web file means `web/src/*` and never a backend module of
+the same name. It **fails loudly, naming the file**, when it cannot read a file
+at all rather than reporting an orphan verdict derived from an incomplete view.
+
+**Scan scope is four trees — `src`, `web/src`, `tests`, `scripts`** — and
+configuration files are outside it. `vite.config.ts`,
+`web/playwright.config.ts`, `biome.jsonc` and `package.json` are never read as
+importers; the tsconfigs are read only for their `paths` maps. A module
+referenced solely from a configuration file would be reported as an orphan. No
+such module exists today, so that is currently true rather than enforced, and
+this gate must not be described as a comprehensive reachability check.
+
+Its one allowed orphan is `components/assistant-ui/elements/approval-card.tsx`,
+which documents its own deadness and is kept because the successor it defers to
+(`components/shared/approval-card.tsx`) is asserted canonical by
+`approval-card-canonical.test.ts` — removing it is an architectural decision
+about the frozen assistant-ui train, not a cleanup. The gate requires that file
+to still carry the sentence explaining why, so the exception cannot outlive its
+reason.
+
+**Dead barrels and dead type surfaces are separate problems.** A barrel is dead
+when every consumer imports the concrete module; delete it rather than keeping
+it as a second entry point. A dead *export* is a much noisier set here —
+several are deliberate test-only drift guards — so it is not gated; see
+`AGENTS.md` §Maintainability protocol for the manual criterion.
+
 ### Tests and supporting files
 
 Every test source and test-only asset lives under `tests/`, organized layer first

@@ -10,20 +10,28 @@
   // that coverage unless a project with the SAME resolution rules picks them up,
   // which is why this extends the web config rather than the root one.
   //
-  // `baseUrl` is NOT overridden: `extends` resolves the base config's relative
-  // paths against the base config's own directory, so the inherited `baseUrl`
-  // is `web/` - meaning web sources resolve exactly as they do under
-  // `bun run typecheck` in `web/`. The `paths` below are therefore written
-  // relative to `web/`, not to the repository root.
+  // This still extends the web config rather than the root one, because that is
+  // where the strictness and DOM lib settings come from. Path RESOLUTION no
+  // longer needs it: `paths` resolve against the file that declares them, so the
+  // entries below are anchored to `tests/` by declaration alone, not by an
+  // inherited `baseUrl`. What `extends` still contributes is everything else.
   "extends": "../web/tsconfig.json",
   "compilerOptions": {
-    // Set EXPLICITLY rather than inherited. `extends` is supposed to re-resolve a
-    // base config's relative `baseUrl` against the base config's own directory,
-    // but relying on that left `@/components/ui/button` unresolvable for every
-    // web source file this project pulled in - 656 errors, none of them real.
-    // `../web` is unambiguous: paths below are written relative to the web root,
-    // exactly as `web/tsconfig.json` resolves them.
-    "baseUrl": "../web",
+    // No `baseUrl`: deprecated in TypeScript 6.0, removed in 7.0. It used to be
+    // `"../web"`, set EXPLICITLY rather than inherited, because relying on
+    // `extends` re-resolution once left `@/components/ui/button` unresolvable
+    // for every web source file in this project - 656 errors, none real.
+    //
+    // That problem is now gone at the root: without `baseUrl`, TypeScript
+    // resolves each `paths` entry relative to the config file that DECLARES it,
+    // so this file's own entries are read relative to `tests/` no matter what it
+    // extends. Every entry below is therefore written against `tests/` directly
+    // rather than against the web root:
+    //     "./src/*"                (was relative to ../web) -> ../web/src/*
+    //     "../tests/helpers/web/*" (was relative to ../web) -> ./helpers/web/*
+    //     "../src/*"               (was relative to ../web) -> ../src/*  (same)
+    // Nothing here is used as a bare-specifier lookup root, so no `"*": [...]`
+    // catch-all is needed to preserve the old behaviour.
     // NOT strict, deliberately - see the same note in tsconfig.backend.json.
     // Shipped code (`web/src` and the backend `src`) is strict; the test tree
     // keeps its previous rules until it is migrated on purpose.
@@ -42,16 +50,16 @@
     // NodeJS.Timeout). Listing only "bun" cascaded into ~250 bogus errors.
     "types": ["bun", "node"],
     "paths": {
-      "@/*": ["./src/*"],
-      "@web/*": ["./src/*"],
+      "@/*": ["../web/src/*"],
+      "@web/*": ["../web/src/*"],
       // Test-only helpers that used to live at `web/src/testing/`. They have
       // zero production importers, so the migration moved them into the canonical
       // test tree; `@web/testing/*` keeps the old specifier resolving rather than
       // leaving 21 test files pointing at a directory that no longer exists.
       //
-      // These paths are relative to `baseUrl` (web/), NOT to this file, so
-      // reaching tests/helpers means going up to the repo root and back down.
-      "@web/testing/*": ["../tests/helpers/web/*"],
+      // Relative to THIS file, so `./helpers/web/*` - previously written as
+      // "../tests/helpers/web/*" against the old `baseUrl: "../web"`.
+      "@web/testing/*": ["./helpers/web/*"],
       "@backend/*": ["../src/*"]
     }
   },

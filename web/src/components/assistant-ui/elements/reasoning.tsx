@@ -12,9 +12,10 @@ import {
 import { cva, type VariantProps } from "class-variance-authority";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { DISCLOSURE_ANIMATION_DURATION_MS } from "@/components/shared/disclosure-timing";
 import { cn } from "@/lib/utils";
 
-export const ANIMATION_DURATION = 200;
+export const ANIMATION_DURATION = DISCLOSURE_ANIMATION_DURATION_MS;
 
 const ReasoningPreviewContext = createContext(false);
 
@@ -99,12 +100,10 @@ function ReasoningRoot({
       data-variant={variant}
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn("group/reasoning-root", reasoningVariants({ variant, className }))}
-      style={
-        {
-          "--animation-duration": `${ANIMATION_DURATION}ms`,
-        } as React.CSSProperties
-      }
+      className={cn(
+        "aui-disclosure-timing group/reasoning-root",
+        reasoningVariants({ variant, className }),
+      )}
       {...props}
     >
       <ReasoningPreviewContext.Provider value={isPreview}>

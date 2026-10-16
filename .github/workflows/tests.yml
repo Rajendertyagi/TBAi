@@ -135,7 +135,7 @@ jobs:
       #
       # With the OpenCode CLI provisioned above, the suites that drive the
       # managed server now execute instead of self-skipping, so
-      # src/services/opencode/codeViewSessionBoundary.test.ts is a real signal
+      # tests/unit/opencode/codeViewSessionBoundary.test.ts is a real signal
       # rather than a silent pass.
       # The test-location policy is a HARD gate, not a lint warning. Every other
       # step here discovers tests by scoping to `tests/`, so a test file written
@@ -145,13 +145,39 @@ jobs:
       - name: Test location policy
         run: bun run test:locations
 
+      # The build runs BEFORE the suites, and this ordering is load-bearing.
+      #
+      # `tests/integration/core/e2e-build-integrity.test.ts` asserts against the
+      # real artifact in `dist/`: it proves the E2E server refuses a build whose
+      # provenance stamp does not match the source. With no `dist/` present it
+      # fails 5 tests, and the messages ("REFUSES a missing artifact", "writes a
+      # stamp only after a successful build") read as a broken build-stamp
+      # contract rather than as "you have not built yet".
+      #
+      # It cannot be fixed in the `e2e` job below instead: every GitHub-hosted
+      # job gets a FRESH runner, so an artifact produced by one job does not
+      # exist in the next one's filesystem. This job is where the suites run, so
+      # this job is where the build has to happen.
+      #
+      # The last green run of this job predates the current version of those
+      # tests, which at that time used temporary fake directories rather than the
+      # real `dist/`. That green run therefore does NOT prove the current
+      # version is safe without a build - it is why this step was missing.
+      #
+      # Matches the local `verify` sequence, which was reordered for the same
+      # reason. Pinned by tests/unit/tooling/verify-script.test.ts, which
+      # compares this job's real steps against package.json rather than a
+      # comment.
+      - name: Build
+        run: bun run build
+
       - name: Test
         run: |
           bun run test 2>&1 | Tee-Object -FilePath test-output.log
           $code = $LASTEXITCODE
           if ($code -ne 0) { exit $code }
 
-      # The DOM/contract suite (`web/tests-dom`). It is a SEPARATE step, not a
+      # The DOM/contract suite (`tests/dom`). It is a SEPARATE step, not a
       # suffix on `bun run test`, for two reasons: `bun run test` scopes its own
       # paths and must keep its exit code intact for the diagnostic step above,
       # and a DOM failure must be attributable on its own.
@@ -222,7 +248,7 @@ jobs:
   # and on a fresh runner that is nothing at all. `bun run test:e2e` builds first,
   # stops on failure before spawning a server, and the server independently
   # refuses any artifact whose provenance stamp does not match the source
-  # (scripts/web-build-provenance.ts). See tests/integration/e2e-build-integrity.test.ts,
+  # (scripts/web-build-provenance.ts). See tests/integration/core/e2e-build-integrity.test.ts,
   # which proves a failed build prevents startup.
   e2e:
     runs-on: windows-latest

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ROUTES } from "@/config/navigation";
 import { useNavigate } from "react-router";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
@@ -149,7 +150,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
     return match?.id ?? match?.remoteId ?? null;
   };
 
-  const handleNewChat = () => navigate("/chat/new");
+  const handleNewChat = () => navigate(ROUTES.CHAT_NEW);
 
   const handleRenameOpen = () => {
     const id = resolveStoreId();
@@ -213,7 +214,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
       });
       return;
     }
-    navigate(`/code/${threadId}`);
+    navigate(`${ROUTES.CODE}/${threadId}`);
   };
 
   const handleDeleteOpen = () => {

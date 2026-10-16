@@ -19,23 +19,98 @@ which is, in order:
 | Types | `bun run typecheck` | Type errors across all four configured projects |
 | Lint | `bun run lint` | Unused bindings, broken React hooks, unsafe optional chaining, regex defects, real a11y errors |
 | Format | `bun run format:check` | Formatting drift |
-| Tests | `bun run test` | Unit and integration behaviour |
+| Test locations | `bun run test:locations` | A test file or test-only asset outside `tests/` |
 | Build | `bun run build` | Anything that compiles but does not bundle |
+| Tests | `bun run test` | Unit and integration behaviour |
+| DOM contracts | `bun run test:dom` | Contracts that need a mounted React tree |
 
-Two more, not part of `verify` because they need extra setup:
+Not part of `verify`, because it needs a browser and a spawned server:
 
 | Gate | Command | Notes |
 | --- | --- | --- |
-| DOM contracts | `bun run test:dom` | hermetic; no browser, network or live server |
-| Test locations | `bun run test:locations` | hard gate; see below |
-| E2E | `bun run test:e2e` | needs a browser and spawns a server |
+| E2E | `bun run test:e2e` | see below |
+| Security | `bun run security` | `verify:full` runs it after `verify` |
+
+### The build runs before the tests, in CI and locally
+
+`tests/integration/core/e2e-build-integrity.test.ts` asserts against the real
+artifact in `dist/` — it proves the E2E server refuses a build whose provenance
+stamp does not match the source. With no `dist/` present it fails **5 tests**,
+and the messages ("REFUSES a missing artifact", "writes a stamp only after a
+successful build") read as a broken build-stamp contract rather than as "you have
+not built yet".
+
+So `bun run test` has an **undeclared dependency on a prior `bun run build`**.
+Both `bun run verify` and the CI `verify` job therefore run `bun run build`
+**before** the suites.
+
+This was a real CI gap, not a local-only ordering preference. The CI `verify` job
+ran the suites with no `dist/` present, so those 5 tests were failing there too.
+The last green run of that job predates the current version of those tests, which
+at that time used temporary fake directories rather than the real artifact, so it
+does **not** prove the current version is safe without a build. Adding the build
+to a different job would not help: every GitHub-hosted job gets a fresh runner, so
+one job's `dist/` does not exist in the next job's filesystem. The build has to
+happen in the job that runs the suites.
+
+If you ever move the build step, re-measure rather than assuming it is free:
+delete `dist/`, run `bun run test`, and count the failures.
+`tests/unit/tooling/verify-script.test.ts` reads the workflow's real steps and
+compares them to `package.json`, sequence included, so removing or reordering the
+step fails that suite.
+
+### `verify` must use the scoped test script, not bare `bun test`
+
+`verify` runs `bun run test`. It must never run bare `bun test`, and the reason
+is not stylistic:
+
+- `bun run test` scopes discovery to `./tests/unit ./tests/integration`, drops
+  `shutdown-lifecycle.test.ts` (it has its own script), passes `--isolate` and
+  sets `--timeout=30000`.
+- Bare `bun test` collects **375** files instead of **290** (measured 2026-10-13).
+  The **85** it adds are the 44 DOM contract files — which need
+  `--preload ./tests/setup/dom-preload.ts`
+  and fail without it (measured: 18 fail, 8 errors) — the shutdown test
+  that `test` deliberately excludes, and the 40 E2E Playwright specs in
+  `tests/e2e`, which bare `bun test` collects because they are named `*.spec.ts`.
+  The totals move as tests are added; the
+  difference of 85 is the part the argument rests on, and it is made up of
+  exactly those three groups: the 44 DOM files, `shutdown-lifecycle.test.ts`,
+  and 40 E2E specs.
+- Without `--isolate` the shared test database cascades "Database has closed",
+  reporting hundreds of phantom failures instead of real ones.
+
+CI states this in `.github/workflows/tests.yml` next to the step it runs. A gate
+that does not do what the repository says it does is worse than no gate, because
+it is trusted: it was reachable from one command (`bun run verify`) and every
+agent is told to run it.
+
+The same is why `verify` runs `test:locations` and `test:dom`. Both are enforced
+by the CI `verify` job; a local `verify` that omits them reports green for a
+regression CI would have caught.
+
+**If you change what `verify` runs, change this table in the same commit.** The
+table is the executable description of the script, and the drift between the two
+is the defect this section exists to prevent.
 
 ### CI
 
-`.github/workflows/tests.yml` runs typecheck, lint, format check, the test-location
-policy, the unit/integration suite and the DOM suite in one fast job. The E2E job is
-separate and deliberately has no `needs:` on it, so an E2E failure cannot be misread
-as a backend or typecheck failure.
+The `verify` job in `.github/workflows/tests.yml` runs, in order: typecheck, lint,
+format check, the test-location policy, **build**, the unit/integration suite and
+the DOM suite. That is the same sequence `bun run verify` runs locally, and the
+two are kept in step deliberately: a local gate that runs less than CI hides
+exactly the regressions CI exists to catch.
+
+The parity is enforced rather than asserted. `tests/unit/tooling/verify-script.test.ts`
+parses the workflow's actual `run:` steps and compares the resulting gate sequence
+— order included — against `package.json`. An earlier version of that test only
+checked that a particular comment still existed in the workflow, which is exactly
+the kind of check that passes while the thing it names has drifted.
+
+The E2E job is separate and deliberately has no `needs:` on it, so an E2E failure
+cannot be misread as a backend or typecheck failure. Because jobs do not share a
+filesystem, that job builds for itself rather than relying on the `verify` job's
+artifact.
 
 `bun run lint` uses `--error-on-warnings`. **A warning is a failure.** A rule that
 reports a genuine defect must not be able to pass CI by being downgraded to a

@@ -42,7 +42,9 @@
     // checked.
     "skipLibCheck": true,
     "types": ["bun"],
-    "baseUrl": ".",
+    // No `baseUrl`. It was deprecated in TypeScript 6.0 and removed in 7.0.
+    // `paths` entries resolve relative to the tsconfig file that declares them
+    // when `baseUrl` is absent, and the single entry below already does.
     "paths": {
       "@/*": ["./src/*"]
     }

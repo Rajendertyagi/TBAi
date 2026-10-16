@@ -14,10 +14,10 @@
  * the parity change is one you can name.
  */
 import { writeFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { capture } from "./chat-route-parity";
+import { REPO_ROOT } from "./repo-root";
 
-const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const BASELINE_PATH = join(REPO_ROOT, "tests/helpers/chat-route-parity.baseline.json");
 
 const force = process.argv.includes("--force");

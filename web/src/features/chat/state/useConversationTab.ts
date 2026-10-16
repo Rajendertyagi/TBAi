@@ -5,6 +5,7 @@ import { threadEngine } from "../../../adapters/remoteThreadListAdapter";
 import { ConversationNotFoundError } from "./conversationExistence";
 import { evictIfGone } from "./tabReconciliation";
 import { logger } from "../../../lib/logger";
+import { ROUTES } from "../../../config/navigation";
 import {
   NEW_DRAFT_TAB_ID,
   activeTab,
@@ -141,7 +142,7 @@ export function useConversationTab(ref: string | undefined, kind: "chat" | "agen
             to: "/chat/new",
             reason: "conversation-not-found",
           });
-          navigate("/chat/new", { replace: true });
+          navigate(ROUTES.CHAT_NEW, { replace: true });
         } else {
           logger.info("app", "navigation.rejected", {
             ref,

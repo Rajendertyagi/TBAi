@@ -39,21 +39,9 @@ import {
 } from "../features/chat/compactCommand";
 import { buildDirectCompactEntries } from "../features/chat/directCompactEntries";
 import { useKeyboardClaimed } from "../lib/focus";
-import { OpenCodeAgentChip } from "../features/opencode/OpenCodeAgentChip";
-import { OpenCodeModelChip } from "../features/opencode/OpenCodeModelChip";
-import { OpenCodeThinkingChip } from "../features/opencode/OpenCodeThinkingChip";
-import { OpenCodeShieldChip } from "../features/opencode/OpenCodeShieldChip";
-import { useCommandsStore } from "../features/opencode/commandsStore";
-import { applyCommandSelection, toSlashCommands } from "../features/opencode/slashCommands";
-import {
-  buildCompactEntry,
-  isCompactCommandText,
-  runCompactSession,
-  shouldOfferCompact,
-} from "../features/opencode/compactSession";
-import { useOpenCodeRuntimeContext } from "../features/opencode/opencodeRuntimeContext";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
-import { OpenCodeContextRing } from "../features/opencode/OpenCodeContextRing";
+import { useOpenCodeComposerState } from "../features/opencode/useOpenCodeComposerState";
+import { OpenCodeChipsAndRing } from "../features/opencode/OpenCodeChipsAndRing";
 import { DirectContextRing } from "./context-ring";
 import {
   DropdownMenu,
@@ -201,27 +189,18 @@ function Composer({
   const draftEngine = useWelcomeEngineStore((s) => s.engine);
   const showOpenCodeDraft = isWelcomeDraft && draftEngine === "opencode";
 
-  // ── Slash commands (OpenCode surface only) ───────────────────────────────
-  // The commands are OpenCode's own; the Direct runtime cannot execute them, so
-  // the palette is mounted only where an OpenCode session is behind the send —
-  // the bound Code surface or the OpenCode new-chat draft. Showing them on
-  // Direct would offer a command that could never run.
+  // ── Slash commands + compact (OpenCode surface only) ─────────────────────
+  // All OpenCode-specific composer state — command feed, runtime context,
+  // compact session — is owned by the OpenCode feature via this hook. The
+  // shared Composer has zero static opencode imports.
   const slashCommandsEnabled = isCodeSurface || showOpenCodeDraft;
-  const openCodeCommands = useCommandsStore((s) => s.commands);
-  const loadOpenCodeCommands = useCommandsStore((s) => s.load);
-  useEffect(() => {
-    if (!slashCommandsEnabled) return;
-    void loadOpenCodeCommands();
-  }, [slashCommandsEnabled, loadOpenCodeCommands]);
-
-  // ── Built-in /compact (bound OpenCode session only) ─────────────────────
-  // `/compact` is NOT in the OpenCode `/command` feed, so it is a TBAi-side
-  // built-in appended after the feed entries — never a fake feed entry. The
-  // ambient runtime context is non-null only inside a session-bound Code
-  // surface (null on Direct and on the session-less welcome draft), so gating
-  // on it keeps `/compact` off every surface that has no session to compact.
-  const openCodeRuntimeContext = useOpenCodeRuntimeContext();
-  const canCompact = shouldOfferCompact(isCodeSurface, openCodeRuntimeContext);
+  const openCode = useOpenCodeComposerState({
+    isCodeSurface,
+    showOpenCodeDraft,
+    composerText,
+    setText,
+    threadKey,
+  });
 
   // The library hook owns trigger detection, filtering and keyboard routing;
   // only the item list and the execute action are ours. Called unconditionally
@@ -239,42 +218,19 @@ function Composer({
   // biome-ignore lint/correctness/useExhaustiveDependencies: false positive. The body passes `composerConfig.copy.compactCommandDescription` straight into `buildDirectCompactEntries`, but Biome does not match this nested member expression against the same expression in the dependency list.
   const directSlashEntries = useMemo(
     () =>
-      buildDirectCompactEntries(composerConfig.copy.compactCommandDescription, (name) =>
-        setText(applyCommandSelection(composerText, name)),
+      buildDirectCompactEntries(
+        composerConfig.copy.compactCommandDescription,
+        openCode.selectCommand,
       ),
-    [composerConfig.copy.compactCommandDescription, composerText, setText],
+    [composerConfig.copy.compactCommandDescription, openCode.selectCommand],
   );
 
   const slashEntries = useMemo(
     () => [
-      ...(slashCommandsEnabled
-        ? toSlashCommands(openCodeCommands, (command) => {
-            // Selection inserts `/name ` and leaves the composer to the user:
-            // the command runs when they send, so arguments stay editable.
-            setText(applyCommandSelection(composerText, command.name));
-            logger.info("opencode", "command.selected", {
-              name: command.name,
-              source: command.source,
-            });
-          })
-        : []),
-      // Built-in compact: selection also only inserts the text — the submit
-      // interception below performs the summarize, so palette and typed input
-      // share one execution path and selection alone never sends anything.
-      ...(canCompact
-        ? [
-            buildCompactEntry((name) => {
-              setText(applyCommandSelection(composerText, name));
-              logger.info("opencode", "command.selected", {
-                name,
-                source: "builtin",
-              });
-            }),
-          ]
-        : []),
+      ...(slashCommandsEnabled ? openCode.slashEntries : []),
       ...(slashCommandsEnabled ? [] : directSlashEntries),
     ],
-    [slashCommandsEnabled, openCodeCommands, canCompact, composerText, setText, directSlashEntries],
+    [slashCommandsEnabled, openCode.slashEntries, directSlashEntries],
   );
   const slash = unstable_useSlashCommandAdapter({
     commands: slashEntries,
@@ -283,39 +239,10 @@ function Composer({
     removeOnExecute: true,
   });
 
-  // Built-in /compact execution (Code surface only). The submit interception
-  // below (`onSubmit` on the Root form) diverts a `/compact` box here BEFORE
-  // the library's own submit handler runs — `preventDefault` in our handler
-  // skips theirs via the library's composed `onSubmit`, so one guard covers
-  // Enter, the Send button, and touch submit together. The literal text is
-  // never sent as a prompt; completion arrives through the normal
-  // session/message sync (the adapter already projects `compaction` parts).
-  // Failure keeps a truthful error and never claims success.
-  const [compacting, setCompacting] = useState(false);
-  const [compactError, setCompactError] = useState<string | null>(null);
-  const runCompact = async () => {
-    const context = openCodeRuntimeContext;
-    if (!context?.compact || compacting) return;
-    // Narrowed to a plain function: the controller builds `compact` as a
-    // closure over its own state, so it never reads `this` and is safe to
-    // hand to the feature module as a value.
-    const compact: () => Promise<void> = context.compact;
-    setCompacting(true);
-    setCompactError(null);
-    try {
-      // The lifecycle events live with the feature, not here: the Composer owns
-      // the buttons, `compactSession` owns what a compact run means.
-      await runCompactSession(() => compact(), {
-        sessionId: context.sessionId,
-      });
-      setText("");
-      clearComposerDraft(threadKey);
-    } catch (err) {
-      setCompactError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCompacting(false);
-    }
-  };
+  // Built-in /compact execution is owned by the OpenCode hook. The submit
+  // interception below (`onSubmit` on the Root form) diverts a `/compact` box
+  // to the hook's `runCompact` BEFORE the library's own submit handler runs.
+  const { runCompact, compactError } = openCode;
   // ── Direct `/compact` execution ─────────────────────────────────────────
   // The conversation as the thread currently holds it. Read during render
   // because `useAuiState` is a subscription, not an imperative getter — the value
@@ -470,7 +397,7 @@ function Composer({
     e.preventDefault();
     // Code/OpenCode has a session-bound compact; its `/compact` must never be
     // re-routed to Direct.
-    if (canCompact && isCompactCommandText(composerText)) {
+    if (openCode.shouldInterceptCompact(composerText)) {
       void runCompact();
       return;
     }
@@ -649,12 +576,7 @@ function Composer({
                  and the Thinking chip auto-hides when the model exposes no
                  variants. Direct chat uses the thinking+model chips. */}
               {isCodeSurface || showOpenCodeDraft ? (
-                <>
-                  <OpenCodeAgentChip />
-                  <OpenCodeModelChip />
-                  <OpenCodeThinkingChip />
-                  <OpenCodeShieldChip />
-                </>
+                <OpenCodeChipsAndRing />
               ) : (
                 <>
                   <ThinkingChip />
@@ -665,9 +587,7 @@ function Composer({
               {/* Context ring: newest-message token totals against the
                 model window (Direct: route metadata; Code: projected message
                 tokens). Hidden until usage exists; beside send in all modes. */}
-              {isCodeSurface || showOpenCodeDraft ? (
-                <OpenCodeContextRing />
-              ) : (
+              {isCodeSurface || showOpenCodeDraft ? null : (
                 <DirectContextRing
                   {...(compactFromPanel === undefined ? {} : { onCompact: compactFromPanel })}
                 />

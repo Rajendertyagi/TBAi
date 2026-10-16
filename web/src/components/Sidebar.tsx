@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent }
 import { useLocation, useNavigate } from "react-router";
 import { FolderOpenDot, MessageSquarePlus, SquarePen } from "lucide-react";
 import { sidebarConfig, SIDEBAR_SECTION_IDS, type SidebarSectionId } from "../config/sidebar";
+import { ROUTES } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { useThreadListQuerySync } from "../features/sidebar/hooks/useThreadListQuerySync";
 import { useConversationsList } from "../features/sidebar/hooks/useConversationsList";
@@ -88,7 +89,7 @@ export function Sidebar() {
 
       {/* Fixed actions above the scrollable list — never scroll away. */}
       <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
-        <SidebarNavButton onClick={() => navigate("/chat/new")}>
+        <SidebarNavButton onClick={() => navigate(ROUTES.CHAT_NEW)}>
           <SquarePen aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">{copy.newChat}</span>
         </SidebarNavButton>

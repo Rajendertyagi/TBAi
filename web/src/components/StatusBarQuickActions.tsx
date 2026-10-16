@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router";
 import { LayoutGrid, MessageSquare } from "lucide-react";
-import { getSettingsNav } from "@/config/navigation";
+import { getSettingsNav, ROUTES } from "@/config/navigation";
 import { statusBarConfig } from "@/config/statusBar";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 import {
@@ -28,7 +28,7 @@ export function StatusBarQuickActions() {
   const areas = getSettingsNav();
 
   const handleNewChat = () => {
-    navigate("/chat/new");
+    navigate(ROUTES.CHAT_NEW);
   };
 
   const handleOpenArea = (route: string) => {

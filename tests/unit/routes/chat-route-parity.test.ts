@@ -17,10 +17,10 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { capture, diff, type Parity } from "../../helpers/chat-route-parity";
+import { REPO_ROOT } from "../../helpers/repo-root";
 
-const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
 const BASELINE_PATH = join(REPO_ROOT, "tests/helpers/chat-route-parity.baseline.json");
 
 const baseline: Parity = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Parity;

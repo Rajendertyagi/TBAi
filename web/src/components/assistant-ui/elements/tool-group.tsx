@@ -6,9 +6,8 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
 import { useTranscriptOwnsScrollCompensation } from "@/components/VirtualizedTranscript";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { DISCLOSURE_ANIMATION_DURATION_MS } from "@/components/shared/disclosure-timing";
 import { cn } from "@/lib/utils";
-
-const ANIMATION_DURATION = 200;
 
 const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
   variants: {
@@ -42,7 +41,7 @@ function ToolGroupRoot({
 }: ToolGroupRootProps) {
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
+  const lockScroll = useScrollLock(collapsibleRef, DISCLOSURE_ANIMATION_DURATION_MS);
   // Inside a virtualized transcript the virtualizer already compensates a row that
   // changes size above the fold; the lock would overwrite that compensation on
   // every scroll event. See reasoning.aui.tsx for the full explanation.
@@ -69,12 +68,11 @@ function ToolGroupRoot({
       data-variant={variant ?? "outline"}
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn(toolGroupVariants({ variant }), "group/tool-group-root", className)}
-      style={
-        {
-          "--animation-duration": `${ANIMATION_DURATION}ms`,
-        } as React.CSSProperties
-      }
+      className={cn(
+        toolGroupVariants({ variant }),
+        "aui-disclosure-timing group/tool-group-root",
+        className,
+      )}
       {...props}
     >
       {children}

@@ -4,6 +4,7 @@ import { Button, Input } from "../../../components/ui";
 import { useMcpStore } from "../state/mcpStore";
 import { McpServerForm, emptyDraft, type DraftState } from "./McpServerForm";
 import { useChatTabsStore, urlForTab } from "../../chat/state/chatTabs";
+import { ROUTES } from "../../../config/navigation";
 import { cn } from "../../../lib/utils";
 import { failureCopy } from "../copy";
 import { SettingsSection } from "../../../components/shared/settings";
@@ -514,7 +515,7 @@ function useGoToChat() {
   return () => {
     const state = useChatTabsStore.getState();
     const tab = [...state.tabs].reverse().find((t) => t.kind === "chat");
-    navigate(tab ? urlForTab(tab) : "/chat/new");
+    navigate(tab ? urlForTab(tab) : ROUTES.CHAT_NEW);
   };
 }
 

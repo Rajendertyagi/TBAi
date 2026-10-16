@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { threadListAdapter } from "../app/adapter";
+import { ROUTES } from "../config/navigation";
 import {
   DndContext,
   closestCenter,
@@ -311,7 +312,7 @@ export function TabStrip() {
           // entries; navigating alone never persists (the draft is UI-only
           // until first send). Already on the draft route: just make sure
           // the draft tab is the active one.
-          if (location.pathname !== "/chat/new") navigate("/chat/new");
+          if (location.pathname !== ROUTES.CHAT_NEW) navigate(ROUTES.CHAT_NEW);
           else setActive(chatKey(NEW_DRAFT_TAB_ID));
         }}
         className="flex items-center px-2 text-muted-foreground transition-colors hover:bg-muted/50"

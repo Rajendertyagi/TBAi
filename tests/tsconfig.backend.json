@@ -13,12 +13,20 @@
   // therefore inherits the resolution rules of the code it exercises, which is
   // the only way a test is checked under the same rules as its subject.
   //
-  // `baseUrl` is deliberately NOT overridden. `extends` resolves the base
-  // config's relative paths against the BASE config's own directory, so the
-  // inherited `baseUrl` is already the repository root - exactly where the root
-  // tsconfig resolves `@/*`. Overriding it was a real bug: it silently repointed
-  // web imports at the backend tree and produced "has no exported member"
-  // errors against perfectly good source.
+  // Paths are written relative to THIS file, not to the repository root.
+  //
+  // This file previously had no `baseUrl` of its own and leaned on the one it
+  // inherited from the root config, which `extends` had already re-resolved to
+  // the repository root. That worked, and the entries below were written against
+  // the root for exactly that reason - overriding the inherited `baseUrl` was a
+  // real bug that repointed web imports at the backend tree.
+  //
+  // The root no longer declares `baseUrl` (deprecated in TypeScript 6.0, removed
+  // in 7.0), so there is nothing to inherit. Without it, `paths` entries resolve
+  // relative to the config file that DECLARES them - this one - so the entries
+  // below had to move onto `tests/`-relative forms. Leaving them root-relative
+  // was measured to break this project outright (TS2307, every `@/` import in the
+  // backend suites).
   "extends": "../tsconfig.json",
   "compilerOptions": {
     // The suites import with explicit `.ts` extensions (the convention
@@ -46,9 +54,9 @@
     "strictNullChecks": false,
     "noImplicitAny": false,
     "paths": {
-      "@/*": ["./src/*"],
-      "@backend/*": ["./src/*"],
-      "@web/*": ["./web/src/*"]
+      "@/*": ["../src/*"],
+      "@backend/*": ["../src/*"],
+      "@web/*": ["../web/src/*"]
     }
   },
   "include": [

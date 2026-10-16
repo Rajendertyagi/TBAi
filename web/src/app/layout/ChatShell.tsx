@@ -18,7 +18,7 @@ import { logger } from "../../lib/logger";
 import { ProgressStages } from "../../components/assistant-ui/elements/progress-stages";
 import { CompactionDivider } from "../../components/assistant-ui/elements/compaction-divider";
 import { DIRECT_COMPACT_DATA_NAME } from "../../features/chat/compactCommand";
-import { AppShell } from "./AppShell";
+import { Outlet } from "react-router";
 
 /**
  * Normal-chat branch shell. Owns the ONE shared assistant-ui thread-list
@@ -117,7 +117,7 @@ export function ChatShell() {
     <AssistantRuntimeProvider runtime={runtime} config={config}>
       <TbaiProgressDataUI />
       <TbaiCompactDataUI />
-      <AppShell />
+      <Outlet />
       <DevToolsGate />
     </AssistantRuntimeProvider>
   );

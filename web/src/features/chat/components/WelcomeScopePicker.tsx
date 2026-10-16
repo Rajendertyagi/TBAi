@@ -6,6 +6,7 @@ import { welcomeConfig } from "@/config/welcome";
 import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
 import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { cn } from "@/lib/utils";
+import { ROUTES } from "@/config/navigation";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -177,7 +178,7 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
               <DropdownMenuItem
                 onSelect={() => {
                   setOpen(false);
-                  navigate("/folders");
+                  navigate(ROUTES.FOLDERS);
                 }}
               >
                 <span className="text-xs text-muted-foreground">{copy.manageFolders}</span>

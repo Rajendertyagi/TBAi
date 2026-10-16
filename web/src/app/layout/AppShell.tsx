@@ -39,11 +39,7 @@ import { registerTabReconciliation } from "../../features/chat/state/tabReconcil
  * The shell only *composes* chrome. Feature menus (e.g. the page-level context
  * menu) live in their own chrome components so this file stays a thin layout.
  */
-export interface AppShellProps {
-  children?: React.ReactNode;
-}
-
-export function AppShell({ children }: AppShellProps = {}) {
+export function AppShell() {
   const sidebarVisible = useDesktopLayout((s) => s.sidebarVisible);
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
@@ -100,7 +96,9 @@ export function AppShell({ children }: AppShellProps = {}) {
 
           {/* Page-level context menu is its own chrome component; the shell only
               composes it around the routed content. */}
-          <PageContextMenu>{children ?? <Outlet />}</PageContextMenu>
+          <PageContextMenu>
+            <Outlet />
+          </PageContextMenu>
         </main>
       </div>
 

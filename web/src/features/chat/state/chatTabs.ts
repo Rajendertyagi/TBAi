@@ -1,28 +1,22 @@
 import { create } from "zustand";
 import { logger } from "../../../lib/logger";
+import { ROUTES } from "../../../config/navigation";
 
 export const NEW_DRAFT_TAB_ID = "new";
 const STORAGE_KEY = "tbai:openTabs";
 const DEFAULT_GROUP_ID = "main";
 
 /**
- * Unified tab model: chat threads AND settings pages live in one strip.
+ * Unified tab model: chat threads and Code conversations live in one strip.
  * - Chat tab: `{ kind: "chat", ref: threadId | "new" }`, key `chat:<ref>`.
  * - Agent tab (OpenCode Code mode): `{ kind: "agent", ref: conversationId }`, key `agent:<ref>`.
- * - Page tab: `{ kind: "page", ref: route }`, key `page:<route>`.
- *   Page tabs are VESTIGIAL (documented, kept): `loadPersisted` drops any
- *   `kind: "page"` entry on every reload, so no user can create or restore one.
- *   `healTab`, `tabForKey`, `urlForTab`, and `openPage` retain the branch for
- *   backwards compatibility with old persisted localStorage shapes that may
- *   still carry a `page:` key; they are inert in practice because
- *   `loadPersisted` filters them out. Do NOT add new page-tab callers.
  * Message/streaming state is NOT here (assistant-ui runtime owns it);
  * this is open-tab layout only. `groupId` is split-screen future-proofing.
  */
 export interface Tab {
   key: string;
-  kind: "chat" | "page" | "agent";
-  /** threadId (or "new" draft) for chat tabs; conversationId for agent tabs; route for page tabs. */
+  kind: "chat" | "agent";
+  /** threadId (or "new" draft) for chat tabs; conversationId for agent tabs. */
   ref: string;
 }
 
@@ -31,7 +25,6 @@ export interface ChatTabsState {
   activeKey: string | undefined;
   groupId: string;
   openChat: (threadId: string) => void;
-  openPage: (route: string) => void; // Vestigial — no production callers; see the Tab doc comment.
   openAgent: (conversationId: string) => void;
   close: (key: string) => void;
   /**
@@ -73,10 +66,6 @@ export function healTab(value: unknown): Tab | null {
   const key: string = t.key;
   // Rebuild from the key prefix — the key is the source of truth, never the
   // stored kind/ref (those are what got poisoned).
-  if (key.startsWith("page:")) {
-    const ref = key.slice(5);
-    return ref.length > 0 ? { key, kind: "page", ref } : null;
-  }
   if (key.startsWith("agent:")) {
     const ref = key.slice(6);
     return ref.length > 0 && !ref.startsWith(":") ? { key, kind: "agent", ref } : null;
@@ -90,11 +79,7 @@ export function healTab(value: unknown): Tab | null {
 
 function loadPersisted(): PersistedTabs {
   const loaded = loadRaw();
-  // Tabs are conversations only (codeg parity): drop any page tabs persisted
-  // by the interim unified-tab build; chat tabs carry over untouched.
-  // Tabs are conversations + agent (Code mode) only; drop any page tabs
-  // persisted by the interim unified-tab build. Chat and agent tabs carry over.
-  const tabs = loaded.tabs.filter((t) => t.kind !== "page");
+  const tabs = loaded.tabs;
   const activeKey = tabs.some((t) => t.key === loaded.activeKey) ? loaded.activeKey : tabs[0]?.key;
   return { tabs, activeKey };
 }
@@ -164,9 +149,6 @@ function withActive(tabs: Tab[], activeKey: string): { tabs: Tab[]; activeKey: s
 }
 
 function tabForKey(key: string): Tab {
-  if (key.startsWith("page:")) {
-    return { key, kind: "page", ref: key.slice(5) };
-  }
   if (key.startsWith("agent:")) {
     return { key, kind: "agent", ref: key.slice(6) };
   }
@@ -180,7 +162,6 @@ function tabForKey(key: string): Tab {
 }
 
 export const chatKey = (threadId: string): string => `chat:${threadId}`;
-export const pageKey = (route: string): string => `page:${route}`;
 export const agentKey = (conversationId: string): string => `agent:${conversationId}`;
 
 /**
@@ -194,8 +175,8 @@ function freshDraftTab(): Tab {
 
 /** URL a tab points at: chat tabs → thread route, agent tabs → code route, page tabs → their route. */
 export function urlForTab(tab: Tab): string {
-  if (tab.kind === "agent") return `/code/${tab.ref}`;
-  return tab.kind === "chat" ? `/chat/${tab.ref}` : tab.ref;
+  if (tab.kind === "agent") return `${ROUTES.CODE}/${tab.ref}`;
+  return `${ROUTES.CHAT}/${tab.ref}`;
 }
 
 /**
@@ -206,7 +187,7 @@ export function urlForTab(tab: Tab): string {
  * engine column and are all Direct.
  */
 export function threadUrl(remoteId: string, engine?: string | null): string {
-  return engine === "opencode" ? `/code/${remoteId}` : `/chat/${remoteId}`;
+  return engine === "opencode" ? `${ROUTES.CODE}/${remoteId}` : `${ROUTES.CHAT}/${remoteId}`;
 }
 
 /**
@@ -216,8 +197,13 @@ export function threadUrl(remoteId: string, engine?: string | null): string {
  * Returns null for non-conversation paths (draft hosts neither axis).
  */
 export function conversationIdFromPath(pathname: string): string | null {
-  if (pathname.startsWith("/chat/") || pathname.startsWith("/code/")) {
-    return pathname.slice(6) || null;
+  const chatPrefix = `${ROUTES.CHAT}/`;
+  if (pathname.startsWith(chatPrefix)) {
+    return pathname.slice(chatPrefix.length) || null;
+  }
+  const codePrefix = `${ROUTES.CODE}/`;
+  if (pathname.startsWith(codePrefix)) {
+    return pathname.slice(codePrefix.length) || null;
   }
   return null;
 }
@@ -232,7 +218,7 @@ export function conversationIdFromPath(pathname: string): string | null {
  * never a conversation route, and query strings never carry identity.
  */
 export function routeStillReferencesRef(pathname: string, ref: string): boolean {
-  return pathname === `/chat/${ref}` || pathname === `/code/${ref}`;
+  return pathname === `${ROUTES.CHAT}/${ref}` || pathname === `${ROUTES.CODE}/${ref}`;
 }
 
 /**
@@ -260,7 +246,7 @@ export const useChatTabsStore = create<ChatTabsState>((set) => ({
     logger.info("chat", "tab.open", { kind: "agent", conversationId });
     set((state) => withActive(state.tabs, agentKey(conversationId)));
   },
-  openPage: (route) => set((state) => withActive(state.tabs, pageKey(route))),
+
   close: (key) =>
     set((state) => {
       const remaining = state.tabs.filter((t) => t.key !== key);

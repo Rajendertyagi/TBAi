@@ -10,7 +10,7 @@ import {
   ContextMenuShortcut,
 } from "./ui/context-menu";
 import { sidebarConfig } from "../config/sidebar";
-import { lastSettingsRoute } from "../config/navigation";
+import { lastSettingsRoute, ROUTES } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { copyTextFromMenu } from "../lib/clipboard";
 import { canCopySelection, readPageSelection } from "../lib/page-selection";
@@ -56,7 +56,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   };
 
   const handleNewChat = () => {
-    navigate("/chat/new");
+    navigate(ROUTES.CHAT_NEW);
   };
 
   /**

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { appConfig, getRailNav, lastSettingsRoute } from "../config/navigation";
+import { appConfig, getRailNav, lastSettingsRoute, ROUTES } from "../config/navigation";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/platform";
 
@@ -60,7 +60,7 @@ export function ActivityBar() {
     >
       <button
         type="button"
-        onClick={() => navigate("/chat")}
+        onClick={() => navigate(ROUTES.CHAT)}
         title={appConfig.branding.appName}
         className="mb-2 flex h-8 w-8 items-center justify-center rounded bg-foreground text-xs font-bold text-background"
       >

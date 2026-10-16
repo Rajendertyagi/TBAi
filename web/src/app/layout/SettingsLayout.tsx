@@ -1,8 +1,5 @@
-import type { ReactNode } from "react";
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router";
-import { ChevronDown } from "lucide-react";
-import { cn } from "../../lib/utils";
 import { rememberSettingsRoute, getSettingsNav } from "../../config/navigation";
 import { PageTitleStrip } from "../../components/PageTitleStrip";
 import { SettingsNav } from "./SettingsNav";
@@ -37,46 +34,6 @@ export function SettingsLayout() {
           <Outlet />
         </div>
       </div>
-    </div>
-  );
-}
-
-/** Collapsible wrapper for long settings sections (codeg disclosure grammar). */
-export function CollapsibleSection({
-  title,
-  icon: Icon,
-  description,
-  defaultOpen = true,
-  children,
-}: {
-  title: string;
-  icon?: ComponentType<{ className?: string }>;
-  description?: string;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="rounded-xl border border-border bg-card">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 p-4 text-left"
-      >
-        {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" />}
-        <span className="flex-1 text-sm font-semibold">{title}</span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180",
-          )}
-        />
-      </button>
-      {description && (
-        <p className="-mt-2 px-4 text-xs leading-5 text-muted-foreground">{description}</p>
-      )}
-      {open && <div className="space-y-3 p-4 pt-3">{children}</div>}
     </div>
   );
 }

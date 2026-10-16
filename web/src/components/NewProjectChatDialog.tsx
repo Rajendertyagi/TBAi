@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { EnginePicker } from "@/components/EnginePicker";
 import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { createConversation } from "@/adapters/remoteThreadListAdapter";
+import { ROUTES } from "@/config/navigation";
 import { threadUrl } from "@/features/chat/state/chatTabs";
 import type { WelcomeEngine } from "@/features/chat/state/welcomeEngine";
 
@@ -122,7 +123,7 @@ export function NewProjectChatDialog({
           <EnginePicker value={engine} onChange={setEngine} />
           <div className="flex w-full justify-between gap-2">
             {" "}
-            <Button variant="outline" onClick={() => navigate("/folders")} type="button">
+            <Button variant="outline" onClick={() => navigate(ROUTES.FOLDERS)} type="button">
               <FolderPlus aria-hidden="true" className="size-4" />
               Manage folders
             </Button>

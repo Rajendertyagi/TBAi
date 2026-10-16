@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router";
 import { ChevronRight, MessagesSquare } from "lucide-react";
 import { sidebarConfig } from "@/config/sidebar";
+import { ROUTES } from "@/config/navigation";
 
 /**
  * Breadcrumb title strip for dedicated pages (codeg `WorkbenchPageTitle`
@@ -16,7 +17,7 @@ export function PageTitleStrip({ title }: { title: string }) {
     <div className="flex h-[var(--title-bar-height)] min-w-0 shrink-0 items-center gap-1 border-b border-border/50 pl-3">
       <button
         type="button"
-        onClick={() => navigate("/chat")}
+        onClick={() => navigate(ROUTES.CHAT)}
         title={sidebarConfig.copy.backToChats}
         aria-label={sidebarConfig.copy.backToChats}
         className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"

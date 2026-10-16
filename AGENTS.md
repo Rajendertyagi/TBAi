@@ -273,6 +273,175 @@ be surfaced explicitly, with written rationale, **before** implementation:
 - reversing the `routes → services → db` dependency direction;
 - changing a persistent data contract (schema, column, or migration).
 
+## Maintainability protocol
+
+Written 2026-10-13 from a full-tree audit, and every number in it is measured
+against this repository rather than asserted. The rules exist because of
+specific defects that were found here — each rule names the evidence, so a
+future agent can tell which parts are load-bearing and which are guidance.
+
+Ownership and dependency rules live in `docs/architecture.md` (§File ownership)
+and are not restated here. This section covers *how to work*, not *where things
+live*.
+
+### 1. File size and complexity — a review trigger, never a gate
+
+Measured distribution of the 844 TypeScript files under `src/`, `web/src/`,
+`tests/` and `scripts/`:
+
+| Lines | Files |
+|---|---|
+| ≤ 250 | **611** |
+| 251–500 | 156 |
+| 501–800 | 51 |
+| 801–1200 | 24 |
+| > 1200 | 2 |
+
+This tree is already well-factored. **Do not add a line-count lint rule and do
+not split a file because it is long.** A gate that fires on a quarter of the
+tree trains people to ignore it, and §6b rule 8 says a gate must be able to
+fail — a gate nobody can satisfy is a gate nobody trusts.
+
+Review is triggered by two conditions, and both must hold:
+
+- **Size**: a single function over ~400 lines, or a module over ~1000 lines.
+- **Consequence**: the file has no automated test that would fail if a
+  behaviour changed during the split.
+
+The largest components by single-function length are
+`scheduler/components/JobEditor.tsx` (837), `components/LogsPanel.tsx` (751),
+`components/Composer.tsx` (695) and `providers/ProviderDialog.tsx` (560). **All
+four are deferred, not fixed**, because none has DOM coverage: splitting them
+cannot be shown to preserve behaviour, and "it still compiles" is not evidence.
+The correct next step for any of them is characterization tests first, then the
+split. By contrast `services/mcp/manager.ts` (1258) and
+`context/compaction/contract.ts` (1028) are **retained deliberately**: both are
+single-owner modules with explicit section markers, and splitting a generation-
+guarded singleton's methods across files would add indirection and risk exactly
+the class of regression that its recent history had to repair.
+
+### 2. Single responsibility and ownership
+
+Decide the owner from *what the code is about* before writing it, and say so in
+the report. "Extend the existing module" beats adding a second helper that
+almost does the same thing.
+
+**Moving logic between layers needs written justification.** The direction rules
+in `docs/architecture.md` are load-bearing, and this audit found real debt
+against them which is **recorded and deferred, not silently fixed**: raw SQL and
+business rules still live in `src/routes/{memories,providers}.ts`, an
+idempotency state machine with module-level mutable state lives in
+`src/routes/conversations.ts`, `src/lib/resumable.ts` imports both `../db` and a
+service subtree, and Zod schemas for HTTP input are declared outside
+`src/lib/validation.ts` in `routes/{opencode,mcp,tools}.ts`. Each is a
+`routes → services` extraction that changes where logic lives and what owns the
+SQLite handle. That is a separate, authorized piece of work — do not fold it
+into a cleanup.
+
+The frontend has the same shape of debt, also deferred: `components/LogsPanel.tsx`
+(1047 lines) is a whole feature with no owning `features/logs/`,
+`components/ElicitationModal.tsx` and `components/Sidebar.tsx` import from
+`features/`, and `features/chat/directCompactEntries.ts` imports from
+`features/opencode`. Relocating these changes the public surface of three
+features at once.
+
+### 3. Duplication and abstractions
+
+**Prove duplication before consolidating.** Two helpers that look alike are not
+duplicates until their semantics match. Checked and deliberately left alone:
+`formatDuration` in `tools/elapsed.tsx` vs `features/scheduler/lib/scheduler-format.ts`
+(different output formats by documented decision); `formatRelativeTime` in
+`lib/utils.ts` vs `formatRelative` in the scheduler formatter (past-absolute vs
+forward-relative); the vendored assistant-ui `utils/range.ts`. Conflating these
+would have been a regression dressed as a cleanup.
+
+**A shared helper needs a second real caller.** See
+`docs/architecture.md` §Shared helpers, and what makes one dead.
+
+**When a value must live in one place, delete the others in the same change.**
+The `aui-disclosure-timing` failure mode is in §1b: an abstraction added *beside*
+the duplication it claims to remove is worse than no abstraction, because it
+reads as solved.
+
+### 4. Dead code
+
+Three whole modules and a duplicated constant were removed in the 2026-10-13
+audit, and a fourth (a barrel) with them. The rule now has a gate:
+**`tests/unit/tooling/no-orphan-modules.test.ts` fails when a source module in
+`src/` or `web/src/` has zero recognized direct inbound references.**
+
+That is the whole claim, and it is weaker than "unreachable": a dead module that
+imports another dead module leaves the second one with a reference, so it passes.
+The known limits live in the test's header — do not restate it as a reachability
+proof.
+
+The scan reads code and string data separately, so a commented-out import, a
+`{@link import("../x")}` inside JSDoc, and an `import("./thing")` written as test
+fixture data are not counted as references. Aliases come from the `paths` maps in
+the tsconfig files, and are resolved against the **importing file's own project
+first** — `@/` means `web/src/*` in a web file and `src/*` in a backend file, so
+a web import is never credited to a backend module of the same name.
+
+**Scan scope is four trees: `src`, `web/src`, `tests`, `scripts`.** The first two
+are the subjects; the other two are read only for references. **Configuration
+files are outside it** — `vite.config.ts`, `web/playwright.config.ts`,
+`biome.jsonc` and `package.json` are never read as importers (the tsconfigs are
+read only for their `paths` maps). A module referenced only from a configuration
+file would therefore be reported as an orphan. No such module exists today, so
+that is currently true rather than enforced. Do not describe this gate as
+comprehensive.
+
+**When the scan cannot read a file — a non-literal dynamic `import(...)`, or an
+alias that resolves nowhere — the suite FAILS and names the file**, rather than
+reporting an orphan verdict derived from an incomplete view. Its single allowed
+orphan must keep carrying the sentence that explains why it is kept.
+
+Unused *exports* are deliberately **not** gated. The set is large and several
+entries are intentional (`features/opencode/v2Tools.ts` is a documented
+test-only drift guard; `components/assistant-ui/elements/approval-card.tsx` is
+asserted dead on purpose). The manual criterion: **before you add an export,
+confirm something imports it**; an export nothing imports is either dead or a
+signal that the owner is wrong.
+
+### 5. Testing and behavior preservation
+
+- A structural change needs a test that **would have failed before it**. Write
+  or identify that test first; if none exists, write characterization tests
+  first and defer the refactor. This is why §1 defers four large components.
+- **Prove a guard can fail.** Make the defect, run the test, watch it fail,
+  revert. Two guards added in this audit were verified this way, and one of them
+  caught a real error in its own first draft — it matched the *consumers* of
+  `--animation-duration` instead of the setter, and passed while the defect was
+  present. A guard never exercised against its defect is a comment.
+- Assert the **invariant, not the layout**: match the dependency, not the
+  formatter's line wrapping.
+
+### 6. Change isolation
+
+- **One diff, one concern.** Do not bundle unrelated changes because they touch
+  the same file. If a cleanup exposes a functional defect, record it separately
+  and report it — do not fix it in passing.
+- **Pre-existing findings are named, not absorbed.** A failure that exists at the
+  base commit is classified as pre-existing and reported with the base numbers
+  beside the new ones. Never make a red gate green by deleting or relaxing a
+  test.
+- **Never touch another contributor's uncommitted work.** Run `git status` and
+  `git log` first; do this class of work in its own worktree.
+- Report real numbers: exit codes, pass/fail/skip counts, and what you skipped.
+
+### 7. Exceptions
+
+An intentional deviation is acceptable when it states the owning layer, the
+dependency consequence, and why the standard placement is inappropriate. It is
+recorded in `docs/decisions.md` and disclosed in the report — never introduced
+silently.
+
+Two enforceable exceptions exist and both are self-checking:
+`no-orphan-modules.test.ts`'s allowed-orphan list (each entry must still carry
+its stated reason), and the Biome `files.includes` exclusions in `biome.jsonc`
+(each carries a comment saying why it is off). If you widen either, you are
+making a decision, not adding a suppression.
+
 ## Exceptions and enforcement
 
 - Follow existing repository convention where it does not conflict with these
@@ -382,6 +551,11 @@ Two companion files are historical and are not guidance:
 Read only the baseline to answer "why did we decide this?" Never execute anything from
 it.
 
+- `docs/2026-10-12-biome-suppression-inventory.md` — point-in-time inventory of all
+  44 `biome-ignore` suppression sites (41 raw line + 3 range pairs), verified
+  against source on 2026-10-12. Re-verify before trusting it; it is a snapshot,
+  not a live gate.
+
 ## How to make architectural changes
 
 Propose in `docs/decisions.md` with the reason and alternatives considered. Keep the
@@ -404,9 +578,12 @@ the non-negotiable rules).
 
 ### 1b. Styling standard (Tailwind v4 + theme tokens)
 
-Established from the 2026-10-11 inline-style audit, which found **14** inline
-style objects across `web/src` — of which **1** was a genuine duplication defect
-and **13** were legitimate runtime or library contracts.
+Re-audited 2026-10-13 against the current tree. `web/src` holds **12** inline
+style objects and 16 `style` bindings in total, down from 15 and 19: the three
+that were removed were identical copies of one value. **Every remaining one is a
+legitimate runtime or library contract** — measured geometry, an interactive
+transform, a CSS custom property carrying a computed value, a caller-supplied
+passthrough, or a colour that *is* the data.
 
 - **Static presentation lives in Tailwind utilities or CSS.** A fixed colour,
   width, height, spacing, position, or border belongs in a class or a
@@ -414,6 +591,28 @@ and **13** were legitimate runtime or library contracts.
 - **Repeated or genuinely complex styling gets one owner.** A Tailwind v4
   `@utility`, a semantic class in `styles/globals.css`, or an existing shared
   component. Prefer the simplest option that fits the actual usage.
+- **Centralising a value is not done until every old copy is deleted.** The
+  `aui-disclosure-timing` utility existed with a comment explaining that it had
+  replaced six copies of `200` — while every copy was still there. An
+  abstraction introduced *beside* the duplication it claims to remove is worse
+  than none: it reads as solved. When you centralise, remove the originals, and
+  prove it with a test rather than a comment. See
+  `tests/unit/web/components/disclosure-timing.test.ts`, which fails if the CSS
+  half and the JS half drift apart.
+  **Count before you write the number.** An earlier version of this rule
+  repeated that comment's "six" verbatim and called it a "six-file edit". The
+  literal actually appeared in **four** places: three
+  `ANIMATION_DURATION = 200` constants (`reasoning`, `tool-group`,
+  `tool-fallback`) plus the stylesheet's `--animation-duration`. The three
+  inline `style` props never contained the literal — they interpolated the
+  constant — so they were specification *sites*, not copies. The original "six"
+  counted three declarations plus three style props; it was a valid count of
+  something else, and it was never a count of copies.
+- **Where two halves of one value genuinely cannot merge, pin them.** CSS cannot
+  read a TS constant, and TS cannot read a custom property at module scope, so
+  the disclosure duration is one literal in the stylesheet and one in
+  `components/shared/disclosure-timing.ts`. That is acceptable only because a
+  test fails the moment they disagree.
 - **Theme tokens beat literal colours.** Use `bg-background`, `text-muted-foreground`,
   `border-border`, `bg-sidebar-accent` and friends. A hex literal in
   `web/src` is legitimate only when the colour IS the data — a user-selectable
@@ -434,7 +633,9 @@ and **13** were legitimate runtime or library contracts.
   numbers, `lib/chrome-vars.ts` is the only module that turns them into CSS
   variables, and components consume `var(--sidebar-width)` and friends. Do not
   add widths, offsets or reserves anywhere else. `AppShell.tsx` composes chrome
-  only; feature chrome belongs to its own component.
+  only; feature chrome belongs to its own component. If a token and a literal
+  state the same number, derive the literal from the token rather than repeating
+  it.
 
 Enforcement: TypeScript plus the existing Biome gate. There is deliberately
 **no custom lint rule** banning `style=` — a blanket rule would fail the

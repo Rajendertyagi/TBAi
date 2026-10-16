@@ -87,10 +87,9 @@ import {
   primaryApprovalOption,
 } from "@/components/shared/approval-options";
 import { useStaleApprovalGuard } from "@/features/permissions/state/stalePermissionsStore";
+import { DISCLOSURE_ANIMATION_DURATION_MS } from "@/components/shared/disclosure-timing";
 import { textPreview } from "@/tools/text-preview";
 import { logger } from "@/lib/logger";
-
-const ANIMATION_DURATION = 200;
 
 const pressable = "active:scale-[0.98]";
 
@@ -113,7 +112,7 @@ function ToolFallbackRoot({
 }: ToolFallbackRootProps) {
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
+  const lockScroll = useScrollLock(collapsibleRef, DISCLOSURE_ANIMATION_DURATION_MS);
   // Inside a virtualized transcript the virtualizer already compensates a row that
   // changes size above the fold; the lock would overwrite that compensation on
   // every scroll event. See reasoning.aui.tsx for the full explanation.
@@ -139,12 +138,10 @@ function ToolFallbackRoot({
       data-slot="tool-fallback-root"
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn("aui-tool-fallback-root group/tool-fallback-root w-full", className)}
-      style={
-        {
-          "--animation-duration": `${ANIMATION_DURATION}ms`,
-        } as React.CSSProperties
-      }
+      className={cn(
+        "aui-disclosure-timing aui-tool-fallback-root group/tool-fallback-root w-full",
+        className,
+      )}
       {...props}
     >
       {children}

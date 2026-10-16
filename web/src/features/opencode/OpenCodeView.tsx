@@ -8,6 +8,7 @@ import { DevToolsGate } from "@/components/DevToolsGate";
 import { ChatWindow } from "@/components/ChatWindow";
 import { ThreadBootSkeleton } from "@/components/assistant-ui/elements/thread-boot-skeleton";
 import { appToolkit } from "@/tools/toolkit";
+import { ROUTES } from "@/config/navigation";
 import { useConversationTab } from "@/features/chat/state/useConversationTab";
 import { OPENCODE_INIT_TIMEOUT_MS } from "@/features/opencode/config";
 import { useOpenCodeRuntime } from "./useOpenCodeRuntime";
@@ -93,7 +94,7 @@ export function OpenCodeView() {
       // with normal chat (engine picker). The first send with the OpenCode
       // engine mints the conversation and routes here, so visiting /code
       // alone must never leave phantom rows behind.
-      navigate("/chat/new", { replace: true });
+      navigate(ROUTES.CHAT_NEW, { replace: true });
       return;
     }
 

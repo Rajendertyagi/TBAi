@@ -34,6 +34,14 @@ export class ProviderRegistry {
       .query<ProviderConfigRow, SQLQueryBindings[]>("SELECT * FROM provider_configs")
       .all();
     this.providers.clear();
+    // The active id is rebuilt from THIS load, never carried over. Carrying it
+    // strands it on a provider that has been deleted: `providers.get()` then
+    // misses, so `getActive()` reports no provider at all while usable ones sit
+    // in the map, and the chat route answers "No provider configured". Resetting
+    // here also keeps the fallback below meaningful — it only runs while this is
+    // null, so a single deletion would otherwise disable it for the life of the
+    // process.
+    this.activeProviderId = null;
     for (const row of rows) {
       let models: ModelOption[] = [];
       try {

@@ -120,11 +120,10 @@ describe("healTab — persisted poison repair", () => {
     });
   });
 
-  it("keeps well-formed chat/agent/page tabs byte-identical", () => {
+  it("keeps well-formed chat/agent tabs byte-identical", () => {
     const good: Tab[] = [
       { key: "chat:t1", kind: "chat", ref: "t1" },
       { key: "agent:a1", kind: "agent", ref: "a1" },
-      { key: "page:/scheduler", kind: "page", ref: "/scheduler" },
     ];
     for (const t of good) expect(healTab(t)).toEqual(t);
   });

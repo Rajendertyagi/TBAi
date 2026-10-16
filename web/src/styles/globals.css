@@ -247,15 +247,25 @@
    colour as the panel it belongs to, otherwise a solid chip appears to hang off
    a translucent surface. */
 /* The collapse/expand animation duration shared by the reasoning, tool-group and
-   tool-fallback disclosures. All three used to declare `ANIMATION_DURATION = 200`
-   AND set `--animation-duration` through an inline `style`, which put the same
-   literal in six places and made a retune a six-file edit.
+   tool-fallback disclosures.
+
+   Each of the three used to declare its own `ANIMATION_DURATION = 200` AND set
+   `--animation-duration` through an inline `style`. The literal `200` therefore
+   lived in FOUR places - three `ANIMATION_DURATION = 200` constants, one per
+   element, plus this declaration - so retuning it was a four-file edit. (The
+   inline styles never held the literal; they interpolated the constant.)
 
    One `@utility` so it lands in the utilities layer like `glass-surface` above:
-   it composes with variants, it can be overridden by an ordinary utility, and
-   the components reference it with `duration-(--animation-duration)` /
-   `animation-duration-(--animation-duration)` exactly as before, so the timing
-   contract is unchanged. Retune the whole disclosure family by changing 200ms. */
+   it composes with variants, and it can be overridden by an ordinary utility.
+   The three roots carry the class and read it with `duration-(--animation-
+   duration)` / `animation-duration-(--animation-duration)` exactly as before, so
+   the timing contract is unchanged.
+
+   The CSS side of the value is here; the JS side `useScrollLock` needs is
+   `DISCLOSURE_ANIMATION_DURATION_MS` in `components/shared/disclosure-timing.ts`.
+   Two literals by necessity - CSS cannot read a TS constant - but pinned
+   together by tests/unit/web/components/disclosure-timing.test.ts, so they cannot
+   drift apart silently. */
 @utility aui-disclosure-timing {
   --animation-duration: 200ms;
 }

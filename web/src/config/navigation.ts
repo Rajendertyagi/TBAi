@@ -1,7 +1,6 @@
 import {
   Archive,
   Circle,
-  Search,
   Plug,
   ScrollText,
   Clock,
@@ -81,17 +80,25 @@ export interface AppConfig {
    * area that opens instead. Change here only.
    */
   settingsIndexRoute: string;
-  features: {
-    /** When false, the Search navigation item is hidden. */
-    search: boolean;
-  };
+  features: Record<string, never>;
   /** Bottom navigation items (Settings / Memory / Search ...). */
   nav: NavItem[];
 }
 
-const features = {
-  search: false,
-};
+const features: Record<string, never> = {};
+
+/**
+ * Route path constants — the only place route literals live (alongside
+ * router.tsx route definitions). Components import these; they never hardcode
+ * paths. NavItem routes reference these constants so there is one source
+ * of truth.
+ */
+export const ROUTES = {
+  CHAT: "/chat",
+  CHAT_NEW: "/chat/new",
+  FOLDERS: "/folders",
+  CODE: "/code",
+} as const;
 
 /** Fallback settings route (no settings-index page exists). */
 const SETTINGS_INDEX_ROUTE = "/providers";
@@ -109,7 +116,7 @@ export const appConfig: AppConfig = {
       label: "Chat",
       icon: MessageSquare,
       view: "chat",
-      route: "/chat",
+      route: ROUTES.CHAT,
       description: "Conversations with any provider",
       visible: true,
       order: 1,
@@ -163,7 +170,7 @@ export const appConfig: AppConfig = {
       label: "Folders",
       icon: FolderCog,
       view: "folders",
-      route: "/folders",
+      route: ROUTES.FOLDERS,
       description: "Registered project folders",
       visible: true,
       railVisible: false,
@@ -200,15 +207,6 @@ export const appConfig: AppConfig = {
       description: "Reusable composer snippets",
       visible: true,
       railVisible: false,
-      order: 8,
-    },
-    {
-      id: "search",
-      label: "Search",
-      icon: Search,
-      view: "search",
-      route: "/memory",
-      visible: features.search,
       order: 8,
     },
     {

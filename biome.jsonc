@@ -131,7 +131,10 @@
       "web/src/**",
       "tests/**",
       "scripts/**",
-      "biome.json",
+      // This config file itself. It was listed as "biome.json", which matched
+      // nothing, so the file every other configuration in the repo is linted by
+      // was the one config nothing checked.
+      "biome.jsonc",
       "package.json",
       "tests/package.json",
       "web/package.json",
@@ -152,7 +155,6 @@
       "!web/dist-profile",
       "!src-tauri/gen",
       "!src-tauri/target",
-      "!docs/tool-ui-atlas",
       // Compiled twins a bare `tsc` used to emit beside every source file. The
       // root tsconfig sets `noEmit`, so these must never reappear; if one does,
       // it is a defect to investigate, not a file to format.

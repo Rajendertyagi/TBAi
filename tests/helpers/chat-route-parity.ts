@@ -28,10 +28,8 @@
  * a move, not a substitute for the behavioural suites.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
-
-/** Repo root, derived from this file: tests/helpers -> tests -> repo. */
-const REPO_ROOT = resolve(import.meta.dir, "..", "..");
+import { join, relative } from "node:path";
+import { REPO_ROOT } from "./repo-root";
 
 /**
  * Every module that makes up `POST /api/chat`.

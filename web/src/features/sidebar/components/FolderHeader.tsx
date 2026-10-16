@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
 import { isPlainEnter } from "@/lib/ime";
+import { ROUTES } from "@/config/navigation";
 import {
   ChevronRight,
   FolderClosed,
@@ -118,7 +119,7 @@ export function FolderHeader({
   // Direct.
   const handleNewConversation = useCallback(() => {
     useWelcomeScopeStore.getState().setScope({ mode: "project", folderId: folder.id });
-    navigate("/chat/new");
+    navigate(ROUTES.CHAT_NEW);
   }, [folder.id, navigate]);
 
   const handleOpenAlias = useCallback(() => {
