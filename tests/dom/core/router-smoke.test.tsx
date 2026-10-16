@@ -17,13 +17,13 @@ describe("router-smoke", () => {
     return raw.replace(/\r\n/g, "\n");
   }
 
-  it("registers AppShell as the universal parent of '/'", async () => {
+  it("registers ChatShell as the component for '/'", async () => {
     const source = await readRouter();
     expect(source).toContain('path: "/",');
-    expect(source).toContain("Component: AppShell,");
+    expect(source).toContain("Component: ChatShell,");
   });
 
-  it("registers IndexRedirect as the index route for ChatShell", async () => {
+  it("registers IndexRedirect as the index route under ChatShell", async () => {
     const source = await readRouter();
     expect(source).toContain("index: true,");
     expect(source).toContain('import("./IndexRedirect")');
@@ -67,18 +67,18 @@ describe("router-smoke", () => {
     expect(source).toContain('{ path: "*", element: <Navigate to="/" replace /> }');
   });
 
-  it("HydrateFallback is preserved on AppShell and CodeShell", async () => {
+  it("HydrateFallback is preserved on ChatShell and CodeShell", async () => {
     const source = await readRouter();
-    expect(source).toContain("Component: AppShell,");
+    expect(source).toContain("Component: ChatShell,");
     expect(source).toContain("HydrateFallback,");
     expect(source).toContain('path: "code/:agentId?"');
   });
 
-  it("errorElement is preserved on AppShell and CodeShell", async () => {
+  it("errorElement is preserved on ChatShell and CodeShell", async () => {
     const source = await readRouter();
-    const appShellSection = source.slice(source.indexOf('path: "/",'));
-    expect(appShellSection).toContain("errorElement: <RouteError />");
-    const codeShellSection = source.slice(source.indexOf('path: "code/:agentId?"'));
-    expect(codeShellSection).toContain("errorElement: <RouteError />");
+    const chatSection = source.slice(source.indexOf('path: "/",'));
+    expect(chatSection).toContain("errorElement: <RouteError />");
+    const codeSection = source.slice(source.indexOf('path: "code/:agentId?"'));
+    expect(codeSection).toContain("errorElement: <RouteError />");
   });
 });

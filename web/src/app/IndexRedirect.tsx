@@ -1,5 +1,6 @@
 import { Navigate } from "react-router";
 import { ROUTES } from "../config/navigation";
+import { activeTab, urlForTab, useChatTabsStore } from "../features/chat/state/chatTabs";
 
 /**
  * Landing route (`/`): codeg-style, there is no dashboard — go straight to
@@ -7,12 +8,12 @@ import { ROUTES } from "../config/navigation";
  * nothing is open). Uses `<Navigate>` instead of an imperative `navigate()`
  * effect — the library owns when the redirect fires.
  *
- * Note: the active tab is read from the store's initial state (set up during
+ * The active tab is read from the store's initial state (set up during
  * module initialization by `loadPersisted`). This is sufficient because the
  * index route only renders once on first load; subsequent tab changes are
  * handled by `TabUrlSync`.
  */
 export function IndexRedirect() {
-  const initialTab = ROUTES.CHAT_NEW;
-  return <Navigate to={initialTab} replace />;
+  const tab = activeTab(useChatTabsStore.getState());
+  return <Navigate to={tab ? urlForTab(tab) : ROUTES.CHAT_NEW} replace />;
 }

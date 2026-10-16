@@ -1,0 +1,104 @@
+# TBAi Phase 5 — Test Prompts (Deferred Cleanup)
+
+This file tracks test prompts for Phase 5 changes. Tests are NOT implemented yet —
+these are descriptions for the dedicated testing agent.
+
+---
+
+## 1. `navigation.ts` — dead `search` entry removed
+
+### Test 13: search nav entry removed
+**File:** `tests/unit/web/navigation/no-search-entry.test.ts`
+**Prompt:** Read `web/src/config/navigation.ts` as text. Assert the source does NOT contain `id: "search"`. Assert the source does NOT contain `import { Search }` or `Search,` from lucide-react. Assert `getVisibleNav()` (or `appConfig.nav`) has no entry with `id: "search"`.
+
+### Test 14: features object is now empty
+**File:** `tests/unit/web/navigation/features-empty.test.ts`
+**Prompt:** Read `web/src/config/navigation.ts`. Assert the `features` constant is `Record<string, never>` or equivalent empty object. Assert no code references `features.search`. Assert `appConfig.features` has no keys.
+
+---
+
+## 2. `navigation.ts` — ROUTES constant used in NavItem routes
+
+### Test 15: NavItem routes reference ROUTES constants
+**File:** `tests/unit/web/navigation/nav-routes-use-constant.test.ts`
+**Prompt:** Read `web/src/config/navigation.ts`. Assert `route: ROUTES.CHAT` appears for the chat entry. Assert `route: ROUTES.FOLDERS` appears for the folders entry. Assert no NavItem route is a bare string literal `"/chat"` or `"/folders"` — they must reference the constant.
+
+---
+
+## 3. `chatTabs.ts` — page tab code removed
+
+### Test 16: pageKey is removed
+**File:** `tests/unit/web/chat/page-key-removed.test.ts`
+**Prompt:** Read `web/src/features/chat/state/chatTabs.ts`. Assert the source does NOT contain `pageKey` or `page:`. Assert the `Tab` type's `kind` is `"chat" | "agent"` (no `"page"`). Assert `openPage` is NOT in the `ChatTabsState` interface.
+
+### Test 17: healTab no longer handles page prefix
+**File:** `tests/unit/web/chat/heal-tab-no-page.test.ts`
+**Prompt:** Unit test `healTab`. Assert `healTab({ key: "page:/scheduler", kind: "page", ref: "/scheduler" })` returns `null` (page prefix is no longer recognized). Assert `healTab({ key: "chat:t1", kind: "chat", ref: "t1" })` still returns the tab unchanged. Assert `healTab({ key: "agent:a1", kind: "agent", ref: "a1" })` still returns the tab unchanged.
+
+### Test 18: tabForKey no longer handles page prefix
+**File:** `tests/unit/web/chat/tab-for-key-no-page.test.ts`
+**Prompt:** Unit test `tabForKey` (if exported) or behavior via the store. Assert that a key with `page:` prefix does NOT produce a page tab. If `tabForKey` is not exported, test via `healTab` that page-prefixed keys are rejected.
+
+### Test 19: urlForTab handles only chat and agent
+**File:** `tests/unit/web/chat/url-for-tab-no-page.test.ts`
+**Prompt:** Unit test `urlForTab`. Assert `urlForTab({ key: "chat:t1", kind: "chat", ref: "t1" })` returns `"/chat/t1"`. Assert `urlForTab({ key: "agent:a1", kind: "agent", ref: "a1" })` returns `"/code/a1"`. Assert the function has no fallback branch for page tabs.
+
+---
+
+## 4. `chatTabs.ts` — loadPersisted no longer filters page tabs
+
+### Test 20: loadPersisted passes through all tabs
+**File:** `tests/unit/web/chat/load-persisted-no-filter.test.ts`
+**Prompt:** Unit test `loadPersisted` or the store initialization. Mock `localStorage.getItem` to return a persisted shape containing a page tab. Assert `loadPersisted()` does NOT filter out page tabs (the filter was removed). Note: this tests the new behavior — page tabs in storage will now be kept (though none should exist in practice). Alternatively, if this is considered undesirable, assert that `healTab` rejects page tabs before they reach `loadPersisted`.
+
+---
+
+## 5. `chatTabs.ts` — conversationIdFromPath uses per-prefix extraction
+
+### Test 21: conversationIdFromPath extracts per-prefix
+**File:** `tests/unit/web/chat/conversation-id-from-path.test.ts`
+**Prompt:** Unit test `conversationIdFromPath`. Assert `conversationIdFromPath("/chat/t1")` returns `"t1"`. Assert `conversationIdFromPath("/code/a1")` returns `"a1"`. Assert `conversationIdFromPath("/chat/")` returns `null` (empty ID). Assert `conversationIdFromPath("/scheduler")` returns `null`. Assert `conversationIdFromPath("/chat")` returns `null` (no trailing slash).
+
+---
+
+## 6. `chatTabs.ts` — routeStillReferencesRef uses ROUTES constants
+
+### Test 22: routeStillReferencesRef matches chat and code routes
+**File:** `tests/unit/web/chat/route-still-references.test.ts`
+**Prompt:** Unit test `routeStillReferencesRef`. Assert `routeStillReferencesRef("/chat/t1", "t1")` is `true`. Assert `routeStillReferencesRef("/code/a1", "a1")` is `true`. Assert `routeStillReferencesRef("/chat/t1", "t2")` is `false`. Assert `routeStillReferencesRef("/scheduler", "t1")` is `false`.
+
+---
+
+## 7. `IndexRedirect.tsx` — declarative Navigate with active-tab restoration
+
+### Test 23: IndexRedirect renders Navigate declaratively (no imperative effect)
+**File:** `tests/dom/core/IndexRedirect.test.tsx`
+**Prompt:** Read `web/src/app/IndexRedirect.tsx` as text. Assert the source does NOT contain `useEffect` or `useNavigate`. Assert the source contains `<Navigate`. Assert the source does NOT contain `return null` (it returns the Navigate element).
+
+### Test 23a: IndexRedirect restores active chat tab
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright)
+**Prompt:** Seed a conversation. Set the persisted tab store with an active chat tab key (`chat:<id>`). Navigate to `/#/`. Assert the resulting URL is `#/chat/<id>` (not `#/chat/new`). Assert the chat surface renders.
+
+### Test 23b: IndexRedirect restores active agent tab
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright)
+**Prompt:** Set the persisted tab store with an active agent tab key (`agent:<id>`). Navigate to `/#/`. Assert the resulting URL is `#/code/<id>`. Assert the Code surface renders.
+
+### Test 23c: IndexRedirect falls back to /chat/new when no tabs exist
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright)
+**Prompt:** Clear the persisted tab store (empty `tabs` array). Navigate to `/#/`. Assert the resulting URL is `#/chat/new`. Assert the welcome draft renders.
+
+---
+
+## 8. Integration — store initialization without page tabs
+
+### Test 24: store initializes correctly without page tab support
+**File:** `tests/unit/web/chat/chat-tabs-no-page.test.ts`
+**Prompt:** Import `useChatTabsStore` or `loadPersisted`. Assert the store's initial state (from `loadPersisted()`) contains no page tabs. Assert `activeTab` returns a chat or agent tab, never a page tab. Assert the store's actions do NOT include `openPage`.
+
+---
+
+## 9. Source guard — no page tab references remain in production code
+
+### Test 25: no page tab references in source
+**File:** `tests/unit/web/chat/no-page-tab-source.test.ts`
+**Prompt:** Read `web/src/features/chat/state/chatTabs.ts`. Assert the source does NOT contain `kind: "page"`. Assert the source does NOT contain `pageKey`. Assert the source does NOT contain `openPage`. Assert the source does NOT contain `page:` (as a string prefix in key construction).
