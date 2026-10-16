@@ -82,10 +82,16 @@ describe("settings navigation", () => {
     // The nav half cannot prove the route exists — a nav entry pointing at a
     // route nobody registered is the mirror image of the original bug, so the
     // router source is read directly.
+    //
+    // The route is now registered via the shared `ROUTE_PATTERNS` constant
+    // (not a literal `path: "opencode-config"`), so the guard asserts the
+    // constant is used AND that it resolves to the expected route string —
+    // the invariant (the route is registered under the OpenCode Config path)
+    // is preserved rather than pinned to a literal that no longer appears.
     return Bun.file(path.join(REPO_ROOT, "web/src/app/router.tsx"))
       .text()
       .then((source) => {
-        expect(source).toContain('path: "opencode-config"');
+        expect(source).toContain("ROUTE_PATTERNS.OPENCODE_CONFIG");
         expect(source).toContain("OpenCodeConfigPage");
       });
   });

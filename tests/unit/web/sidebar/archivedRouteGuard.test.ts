@@ -24,8 +24,12 @@ beforeAll(async () => {
 });
 describe("/archived route registered after scheduler", () => {
   it("registers /scheduler before /archived in the router", () => {
-    const schedIdx = routerSource.indexOf('path: "scheduler"');
-    const archivedIdx = routerSource.indexOf('path: "archived"');
+    // The routes are now registered via the shared `ROUTE_PATTERNS` constants
+    // (not `path: "scheduler"` / `path: "archived"` literals), so the order
+    // invariant is asserted on the constant tokens: the SCHEDULER route must
+    // textually precede the ARCHIVED route in the router source.
+    const schedIdx = routerSource.indexOf("ROUTE_PATTERNS.SCHEDULER");
+    const archivedIdx = routerSource.indexOf("ROUTE_PATTERNS.ARCHIVED");
     expect(schedIdx, "scheduler route must exist").toBeGreaterThan(-1);
     expect(archivedIdx, "archived route must exist").toBeGreaterThan(-1);
     expect(archivedIdx).toBeGreaterThan(schedIdx);
@@ -33,11 +37,11 @@ describe("/archived route registered after scheduler", () => {
 
   it("renders ArchivedPage on the /archived route", () => {
     // The route is registered LAZILY (route-level code splitting), so the pairing
-    // that matters is `path: "archived"` with `ArchivedPage` as that route's
-    // resolved component — inside its `lazy` callback rather than beside the path.
-    // Asserting both halves separately keeps the guard's real intent: the route
-    // exists AND it is the Archived page, without pinning which loading style is used.
-    expect(routerSource).toMatch(/path: "archived"/);
+    // that matters is the archived route with `ArchivedPage` as its resolved
+    // component. Asserting the constant half and the component half separately
+    // keeps the guard's real intent (the route exists AND is the Archived page)
+    // without pinning which loading style is used.
+    expect(routerSource).toMatch(/ROUTE_PATTERNS\.ARCHIVED/);
     expect(routerSource).toMatch(/ArchivedPage/);
   });
 });
@@ -45,7 +49,12 @@ describe("/archived route registered after scheduler", () => {
 describe("rail entry for Archived is present", () => {
   it("navigation.ts declares an archived nav item with a rail-visible default", () => {
     // The item must not opt out of the rail (railVisible: false).
-    expect(navigationSource).toMatch(/id: "archived",[\s\S]*?route: "\/archived"/);
+    //
+    // The route is now the shared `ROUTES.ARCHIVED` constant (not a literal
+    // `route: "/archived"`), so the guard asserts the constant half plus the
+    // id half — the invariant (an archived nav item pointing at the archived
+    // route) is preserved rather than pinned to a literal that moved.
+    expect(navigationSource).toMatch(/id: "archived",[\s\S]*?route: ROUTES\.ARCHIVED/);
     // Confirm the archived entry does not carry `railVisible: false`.
     const archivedBlock = navigationSource.match(/id: "archived",[\s\S]*?order: \d+/);
     expect(archivedBlock, "archived nav item must exist").not.toBeNull();

@@ -229,28 +229,107 @@ test("confirmed 404 evicts missing conversation and redirects safely", async ({ 
 test("transient 5xx server failure retains current tab and route without evicting to new chat", async ({
   page,
 }) => {
-  const fakeId = "transient-failure-id-12345";
-  // Intercept the metadata fetch to simulate a 500 server error
-  await page.route(`**/api/conversations/${fakeId}`, (route) => {
-    route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: JSON.stringify({ error: "Temporary internal server error" }),
+  // Seed a REAL conversation so the boot reconciliation pass (POST
+  // /api/conversations/reconcile) confirms it exists. A fake id would be
+  // reported `gone` by that independent pass and evicted before the simulated
+  // 500 is ever the deciding signal — defeating the test's intent.
+  const { id } = await seedConversation(page.request, { title: "5xx retention target" });
+
+  try {
+    // Start with NO persisted tabs so the route opens a new tab and the
+    // single-record existence probe (GET /api/conversations/<id>) actually
+    // fires. Pre-seeding the tab would let boot reconciliation confirm the
+    // row exists and skip the probe entirely.
+    await seedTabs(page, { tabs: [] });
+
+    // Intercept ONLY the single-record existence probe (GET
+    // /api/conversations/<id>) and simulate a 500. The batch reconciliation POST
+    // and the history /messages GET run through the real server, so the known-
+    // good conversation is confirmed `exists` by the batch while the single-
+    // record probe returns 500.
+    let getIntercepted = 0;
+    const probeUrls: string[] = [];
+    await page.route(`**/api/conversations/${id}`, async (route) => {
+      const req = route.request();
+      const url = req.url();
+      const isExistenceProbe =
+        req.method() === "GET" &&
+        new URL(url).pathname === `/api/conversations/${id}`;
+      if (isExistenceProbe) {
+        getIntercepted += 1;
+        probeUrls.push(url);
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Temporary internal server error" }),
+        });
+        return;
+      }
+      await route.continue();
     });
-  });
+
+    await page.goto(`/#/chat/${id}`);
+
+    // The single-record probe must have fired and been answered with the
+    // simulated 500 — this is the 5xx branch under test.
+    await expect
+      .poll(() => getIntercepted, {
+        message: `GET /api/conversations/<id> probe must have fired (probes: ${() =>
+          probeUrls.join(", ") || "none"})`,
+        timeout: 10000,
+      })
+      .toBeGreaterThanOrEqual(1);
+
+    // A 5xx is UNKNOWN existence, not `gone`: the tab and route are retained.
+    await expect(page).toHaveURL(new RegExp(`#/chat/${id}$`), { timeout: 15000 });
+    await expect(page).not.toHaveURL(/#\/chat\/new$/);
+
+    // Let reconciliation + a possible retry settle, then re-assert retention.
+    await page.waitForTimeout(1500);
+    await expect(page).toHaveURL(new RegExp(`#/chat/${id}$`));
+    await expect(page).not.toHaveURL(/#\/chat\/new$/);
+
+    // The retained tab must exist in persisted state and be active.
+    const storedTabs = await page.evaluate((key) => {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return null;
+      return JSON.parse(raw) as { tabs: { key: string }[]; activeKey?: string };
+    }, TABS_KEY);
+    expect(storedTabs).not.toBeNull();
+    expect(storedTabs!.tabs.some((t) => t.key === `chat:${id}`)).toBe(true);
+    expect(storedTabs!.activeKey).toBe(`chat:${id}`);
+  } finally {
+    await removeConversation(page.request, id);
+  }
+});
+
+test("confirmed 404 evicts a missing conversation and recovers to the draft route", async ({
+  page,
+}) => {
+  // A real seed whose id we then DELETE before opening the route. The boot
+  // reconciliation reports `gone` for the now-missing id, which is the only
+  // evidence that may evict a conversation (the confirmed-404 contract).
+  const { id } = await seedConversation(page.request, { title: "404 eviction target" });
+  await removeConversation(page.request, id);
 
   await seedTabs(page, {
-    tabs: [{ key: `chat:${fakeId}`, kind: "chat", ref: fakeId }],
-    activeKey: `chat:${fakeId}`,
+    tabs: [{ key: `chat:${id}`, kind: "chat", ref: id }],
+    activeKey: `chat:${id}`,
   });
 
-  await page.goto(`/#/chat/${fakeId}`);
+  // No interception: the missing row answers a real 404.
+  await page.goto(`/#/chat/${id}`);
 
-  // URL must be retained on /chat/<fakeId>, not evicted to /chat/new
-  await expect(page).toHaveURL(new RegExp(`#/chat/${fakeId}$`), { timeout: 10000 });
-  await page.waitForTimeout(1000);
-  await expect(page).toHaveURL(new RegExp(`#/chat/${fakeId}$`));
-  await expect(page).not.toHaveURL(/#\/chat\/new$/);
+  // The confirmed-gone verdict evicts the tab and recovers to the draft route.
+  await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 15000 });
+
+  // The evicted tab must no longer be persisted.
+  const storedTabs = await page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as { tabs: { key: string }[]; activeKey?: string };
+  }, TABS_KEY);
+  expect(storedTabs?.tabs.some((t) => t.key === `chat:${id}`)).toBe(false);
 });
 
 test("nested error boundary containment renders recovery UI while preserving AppShell chrome", async ({
@@ -261,16 +340,24 @@ test("nested error boundary containment renders recovery UI while preserving App
 
   await page.goto("/#/scheduler");
 
-  // ChatShell errorElement catches the failure and renders RouteError recovery UI
+  // ChatShell errorElement catches the failure and renders RouteError recovery UI.
+  //
+  // The "New chat" button is not globally unique — the rail, a corner chrome
+  // action, and the recovery panel all carry one. Scope it to the RouteError
+  // panel (the `justify-center` column that owns the "Something went wrong"
+  // heading) so the strict locator resolves to exactly the recovery control.
+  const recoveryPanel = page.locator(
+    'div.justify-center:has(> h1:has-text("Something went wrong"))',
+  );
   await expect(page.getByRole("heading", { name: "Something went wrong" })).toBeVisible({
     timeout: 15000,
   });
-  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+  await expect(recoveryPanel.getByRole("button", { name: "New chat", exact: true })).toBeVisible();
 
   // AppShell chrome (Primary navigation) is preserved and did not crash
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
 
-  // Clicking "New chat" recovers navigation to /chat/new
-  await page.getByRole("button", { name: "New chat" }).click();
+  // Clicking the recovery panel's "New chat" recovers navigation to /chat/new
+  await recoveryPanel.getByRole("button", { name: "New chat", exact: true }).click();
   await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 15000 });
 });

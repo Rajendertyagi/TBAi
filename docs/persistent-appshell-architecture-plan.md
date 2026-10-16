@@ -16,9 +16,11 @@
 
 ## 1. Executive summary
 
-The current architecture mounts `AppShell` (chrome + global singletons) inside both `ChatShell` and `CodeShell`. This causes `AppShell` to unmount and remount on every `/` ↔ `/code` transition, tearing down and restarting application-wide services (availability poller, recovery listeners, tab reconciliation, route-observer continuity).
+**Historical baseline (pre-refactor).** The architecture described below — `AppShell` mounted *inside* both `ChatShell` and `CodeShell` — was the starting point. Phases 1–5 (recorded at the top of this plan and in `tests/test-prompts-phase5.md`) restructured this so `AppShell` is the universal parent of all production routes. Read this section as the "before" state, not the current one.
 
-The proposed fix: make `AppShell` the **universal parent** of all production routes. It mounts once and persists across all navigation. `ChatShell` and `CodeShell` become children that provide their respective runtimes. This eliminates all lifecycle issues at the ownership level — no workarounds, no module-level flags, no accepted gaps.
+The baseline architecture mounted `AppShell` (chrome + global singletons) inside both `ChatShell` and `CodeShell`. This caused `AppShell` to unmount and remount on every `/` ↔ `/code` transition, tearing down and restarting application-wide services (availability poller, recovery listeners, tab reconciliation, route-observer continuity).
+
+The fix (now implemented): make `AppShell` the **universal parent** of all production routes. It mounts once and persists across all navigation. `ChatShell` and `CodeShell` become children that provide their respective runtimes. This eliminates all lifecycle issues at the ownership level — no workarounds, no module-level flags, no accepted gaps.
 
 **Streaming policy:** Option B — Direct runtime stays alive on all "/" routes (chat, scheduler, archived, settings). It unmounts only on `/code` (existing behavior). This preserves recovery-state publishing and background streaming.
 

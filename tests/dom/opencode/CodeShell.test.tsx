@@ -33,15 +33,22 @@ describe("router registers Code as sibling under AppShell", () => {
   });
 
   it("CodeShell is a sibling of ChatShell under AppShell", () => {
-    // CodeShell's lazy import is NOT nested inside ChatShell's children
-    // (check the import specifier, not the bare word — the comment above the
-    // Code route mentions CodeShell by name)
+    // CodeShell's lazy import is NOT nested inside ChatShell's children.
+    //
+    // The router is now built from the shared `ROUTE_PATTERNS` constants, so
+    // the guard asserts the constant half plus the structural halves — the
+    // invariant (CodeShell registered as a sibling of ChatShell under the
+    // universal AppShell, not nested inside it) is preserved rather than
+    // pinned to the literal `path: "code/:agentId?"` string that no longer
+    // appears.
     const chatShellStart = routerSource.indexOf("Component: ChatShell,");
-    const codePathStart = routerSource.indexOf('path: "code/:agentId?"');
+    const codePathStart = routerSource.indexOf("ROUTE_PATTERNS.CODE");
+    expect(chatShellStart).toBeGreaterThan(-1);
+    expect(codePathStart).toBeGreaterThan(chatShellStart);
     const chatShellSection = routerSource.slice(chatShellStart, codePathStart);
     expect(chatShellSection).not.toContain('import("../features/opencode/CodeShell")');
     // CodeShell is registered as a sibling
-    expect(routerSource).toContain('path: "code/:agentId?"');
+    expect(routerSource).toContain("ROUTE_PATTERNS.CODE");
     expect(routerSource).toContain('import("../features/opencode/CodeShell")');
   });
 });

@@ -213,6 +213,13 @@ describe("F3 — unexpected session/transport loss", () => {
       expect(errorLogs.length).toBeGreaterThanOrEqual(1);
       expect(errorLogs[0].message).toContain("Transport closed unexpectedly");
 
+      // 3b. The onclose handler sets status "error" synchronously before
+      // arming the timer, and "Transport closed unexpectedly" is its literal
+      // message. Assert the state transition itself was observed.
+      const errorStatus = mcpManager.getStatuses().find((s) => s.id === id);
+      expect(errorStatus?.status).toBe("error");
+      expect(errorStatus?.error).toBe("Transport closed unexpectedly");
+
       // 4. Wait for the auto-reconnect to succeed. The retry timer fires
       // exactly once (one attempt); scheduleReconnect logs "op=reconnect
       // outcome=started" at fire time - that entry is the marker the delay

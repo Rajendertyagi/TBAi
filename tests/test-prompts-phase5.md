@@ -7,11 +7,11 @@ Status ledger (updated after implementation):
 - Tests 23a/23b/23c (behavioral redirect decision): IMPLEMENTED and PASSING
   (`tests/dom/core/IndexRedirect.behavioral.test.tsx` — executes the real
   store + real `activeTab`/`urlForTab`; rendering is pinned by Test 23).
-- Full end-to-end redirect through a mounted router: DEFERRED — the repo has
-  two copies of react-router (`web/node_modules` vs root), so a test-side
-  `MemoryRouter` cannot provide context to `@web` components. Playwright E2E
-  (`tests/e2e/routing/index-redirect.spec.ts`) remains the vehicle for that
-  coverage and is PENDING.
+- Full end-to-end redirect through a mounted router: IMPLEMENTED and PASSING via
+  Playwright E2E (`tests/e2e/routing/index-redirect.spec.ts`). The repo has two
+  copies of react-router (`web/node_modules` vs root), so a test-side
+  `MemoryRouter` cannot provide context to `@web` components — the E2E spec is
+  the vehicle for that coverage (see Tests 23a/23b/23c and Test 29 below).
 
 Original prompts follow; implemented items are marked [DONE].
 
@@ -153,7 +153,7 @@ against the isolated E2E server (`bun run test:e2e -- index-redirect.spec.ts`).
 ## 13. Full Application Routing, Cross-Engine & Persistence E2E
 
 ### Test 29: Cross-engine, deep link refresh, 404 recovery, 5xx retention, error containment, and AppShell persistence E2E [DONE]
-**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright) — 10 tests.
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright) — 12 tests.
 **Prompt:** Seed real Direct and OpenCode conversations.
 1. Index redirects: Active Direct, active Code, and empty storage fallback.
 2. Cross-engine: Navigate to `/#/chat/<opencodeId>`, assert URL transitions to `#/code/<opencodeId>`. Navigate to `/#/code/<directId>`, assert URL transitions to `#/chat/<directId>`.
