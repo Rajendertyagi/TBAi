@@ -127,6 +127,10 @@ mock.module("@web/features/chat/state/chatTabs.ts", () => ({
 // version, structurally identical) purely for type-checking — it is NOT a
 // value import, so it creates no second runtime copy.
 const webRouterEntry = Bun.resolveSync("react-router", path.join(REPO_ROOT, "web", "src"));
+// Type-only cast: `typeof import("react-router")` resolves to the root
+// `node_modules/react-router` (same version, structurally identical to the
+// web copy) purely for type-checking. It is NOT a value import, so it
+// creates no second runtime copy.
 const { MemoryRouter } = (await import(
   pathToFileURL(webRouterEntry).href
 )) as typeof import("react-router");
