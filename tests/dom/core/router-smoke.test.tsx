@@ -23,7 +23,7 @@ describe("router-smoke", () => {
 
   it("registers AppShell as the universal root component for '/'", async () => {
     const source = await readRouter();
-    expect(source).toContain('path: "/",');
+    expect(source).toContain("path: ROUTE_PATTERNS.INDEX,");
     expect(source).toContain("Component: AppShell,");
   });
 
@@ -31,7 +31,7 @@ describe("router-smoke", () => {
     const source = await readRouter();
     expect(source).toContain("Component: ChatShell,");
     // ChatShell is inside AppShell's children
-    const appShellSection = source.slice(source.indexOf('path: "/",'));
+    const appShellSection = source.slice(source.indexOf("path: ROUTE_PATTERNS.INDEX,"));
     expect(appShellSection).toContain("Component: ChatShell,");
   });
 
@@ -43,18 +43,18 @@ describe("router-smoke", () => {
 
   it("lazy-loads ChatView at /chat/:threadId?", async () => {
     const source = await readRouter();
-    expect(source).toContain('path: "chat/:threadId?"');
+    expect(source).toContain("path: ROUTE_PATTERNS.CHAT");
     expect(source).toContain('import("../features/chat/components/ChatView")');
   });
 
   it("lazy-loads CodeShell at /code/:agentId? as sibling of ChatShell", async () => {
     const source = await readRouter();
-    expect(source).toContain('path: "code/:agentId?"');
+    expect(source).toContain("path: ROUTE_PATTERNS.CODE");
     expect(source).toContain('import("../features/opencode/CodeShell")');
     // CodeShell is NOT nested under ChatShell (check the lazy import, not
     // the bare word — the comment above the Code route mentions CodeShell)
     const chatShellStart = source.indexOf("Component: ChatShell,");
-    const codeShellStart = source.indexOf('path: "code/:agentId?"');
+    const codeShellStart = source.indexOf("path: ROUTE_PATTERNS.CODE");
     expect(codeShellStart).toBeGreaterThan(chatShellStart);
     // The CodeShell section is outside ChatShell's children block
     const chatShellSection = source.slice(chatShellStart, codeShellStart);
@@ -65,37 +65,39 @@ describe("router-smoke", () => {
     const source = await readRouter();
     expect(source).toContain("Component: SettingsLayout,");
     const settingsRoutes = [
-      "memory",
-      "mcp",
-      "logs",
-      "folders",
-      "quick-messages",
-      "providers",
-      "appearance",
-      "desktop",
-      "workspace",
-      "opencode-config",
+      "MEMORY",
+      "MCP",
+      "LOGS",
+      "FOLDERS",
+      "QUICK_MESSAGES",
+      "PROVIDERS",
+      "APPEARANCE",
+      "DESKTOP",
+      "WORKSPACE",
+      "OPENCODE_CONFIG",
     ];
     for (const route of settingsRoutes) {
-      expect(source).toContain(`path: "${route}"`);
+      expect(source).toContain(`path: ROUTE_PATTERNS.${route}`);
     }
   });
 
   it("catch-all '*' redirects to '/'", async () => {
     const source = await readRouter();
-    expect(source).toContain('{ path: "*", element: <Navigate to="/" replace /> }');
+    expect(source).toContain(
+      '{ path: ROUTE_PATTERNS.CATCH_ALL, element: <Navigate to="/" replace /> }',
+    );
   });
 
   it("HydrateFallback is preserved on AppShell and CodeShell", async () => {
     const source = await readRouter();
     expect(source).toContain("Component: AppShell,");
     expect(source).toContain("HydrateFallback,");
-    expect(source).toContain('path: "code/:agentId?"');
+    expect(source).toContain("path: ROUTE_PATTERNS.CODE");
   });
 
   it("errorElement is registered on AppShell, ChatShell, SettingsLayout, and CodeShell", async () => {
     const source = await readRouter();
-    const appShellSection = source.slice(source.indexOf('path: "/",'));
+    const appShellSection = source.slice(source.indexOf("path: ROUTE_PATTERNS.INDEX,"));
     expect(appShellSection).toContain("errorElement: <RouteError />");
 
     const chatShellStart = source.indexOf("Component: ChatShell,");
@@ -106,7 +108,7 @@ describe("router-smoke", () => {
     const settingsSection = source.slice(settingsStart, settingsStart + 300);
     expect(settingsSection).toContain("errorElement: <RouteError />");
 
-    const codeShellSection = source.slice(source.indexOf('path: "code/:agentId?"'));
+    const codeShellSection = source.slice(source.indexOf("path: ROUTE_PATTERNS.CODE"));
     expect(codeShellSection).toContain("errorElement: <RouteError />");
   });
 });

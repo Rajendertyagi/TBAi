@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { logger } from "../../../lib/logger";
-import { ROUTES } from "../../../config/navigation";
+import { ROUTES } from "../../../config/routes";
 
 export const NEW_DRAFT_TAB_ID = "new";
 const STORAGE_KEY = "tbai:openTabs";
@@ -210,7 +210,10 @@ export function conversationIdFromPath(pathname: string): string | null {
  * never a conversation route, and query strings never carry identity.
  */
 export function routeStillReferencesRef(pathname: string, ref: string): boolean {
-  return pathname === ROUTES.chat(ref) || pathname === `${ROUTES.CODE}/${encodeURIComponent(ref)}`;
+  if (ref === NEW_DRAFT_TAB_ID) {
+    return pathname === ROUTES.CHAT_NEW;
+  }
+  return ROUTES.parseConversationId(pathname) === ref;
 }
 
 /**

@@ -79,20 +79,26 @@ test("index route restores the active OpenCode conversation tab", async ({ page 
   }
 });
 
-test("index route falls back to /chat/new with replacement navigation", async ({ page }) => {
+test("index route falls back to /chat/new with replacement navigation without history loops", async ({
+  page,
+}) => {
   await seedTabs(page, { tabs: [] });
-  await page.goto("/#/");
 
+  // Start at a known previous route
+  await page.goto("/#/providers");
+  await expect(page).toHaveURL(/#\/providers$/, { timeout: 15000 });
+
+  // Navigate to index route (which redirects to /chat/new with replace: true)
+  await page.goto("/#/");
   await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
     timeout: 15000,
   });
-  // Replacement navigation: the transient `/` entry is replaced, not pushed.
-  expect(await page.evaluate(() => window.history.length)).toBe(2);
 
-  // Triggering back does not loop back to the index route
+  // Replacement navigation: clicking browser Back returns directly to /providers,
+  // proving the transient index route was replaced and does not loop.
   await page.goBack();
-  expect(page.url()).not.toContain("/#/");
+  await expect(page).toHaveURL(/#\/providers$/, { timeout: 15000 });
 });
 
 test("cross-engine URL reconciliation routes OpenCode conversation to Code surface", async ({
@@ -150,6 +156,27 @@ test("deep-link refresh retains session and active tab", async ({ page }) => {
   }
 });
 
+test("deep-link refresh for valid Code session stays on Code route", async ({ page }) => {
+  const { id: target } = await seedOpenCodeConversation(page.request);
+
+  try {
+    await page.goto(`/#/code/${target}`);
+    await expect(page).toHaveURL(new RegExp(`#/code/${target}$`), { timeout: 15000 });
+    await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible({
+      timeout: 15000,
+    });
+
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`#/code/${target}$`), { timeout: 15000 });
+    await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page).not.toHaveURL(/#\/chat/, { timeout: 5000 });
+  } finally {
+    await removeConversation(page.request, target);
+  }
+});
+
 test("AppShell instance persists across Chat <-> Code navigation without remounting", async ({
   page,
 }) => {
@@ -160,20 +187,29 @@ test("AppShell instance persists across Chat <-> Code navigation without remount
     await page.goto(`/#/chat/${directId}`);
     await expect(page).toHaveURL(new RegExp(`#/chat/${directId}$`), { timeout: 15000 });
 
-    // Mark window with a persistent token
-    await page.evaluate(() => {
-      (window as unknown as { __TBAI_SHELL_TEST_ID?: number }).__TBAI_SHELL_TEST_ID = 88991;
-    });
+    const navLocator = page.locator("nav[aria-label='Primary']");
+    await expect(navLocator).toBeVisible({ timeout: 15000 });
+    const navHandle = await navLocator.elementHandle();
+    expect(navHandle).not.toBeNull();
 
-    // Navigate to Code conversation
-    await page.goto(`/#/code/${codeId}`);
+    // Client navigation to Code conversation
+    await page.evaluate((url) => {
+      window.location.hash = url;
+    }, `#/code/${codeId}`);
     await expect(page).toHaveURL(new RegExp(`#/code/${codeId}$`), { timeout: 15000 });
 
-    // Verify token survived: AppShell did not unmount
-    const token = await page.evaluate(
-      () => (window as unknown as { __TBAI_SHELL_TEST_ID?: number }).__TBAI_SHELL_TEST_ID,
+    // Assert DOM node identity: the primary nav element inside AppShell remained connected and identical
+    const isSameNode = await page.evaluate(
+      ([element]) => {
+        const currentNav = document.querySelector("nav[aria-label='Primary']");
+        return currentNav !== null && element === currentNav;
+      },
+      [navHandle!],
     );
-    expect(token).toBe(88991);
+    expect(isSameNode).toBe(true);
+
+    const isConnected = await navHandle!.evaluate((el) => el.isConnected);
+    expect(isConnected).toBe(true);
   } finally {
     await removeConversation(page.request, directId);
     await removeConversation(page.request, codeId);
@@ -188,4 +224,53 @@ test("confirmed 404 evicts missing conversation and redirects safely", async ({ 
   await expect(page.getByRole("heading", { name: /what do you want to build/i })).toBeVisible({
     timeout: 15000,
   });
+});
+
+test("transient 5xx server failure retains current tab and route without evicting to new chat", async ({
+  page,
+}) => {
+  const fakeId = "transient-failure-id-12345";
+  // Intercept the metadata fetch to simulate a 500 server error
+  await page.route(`**/api/conversations/${fakeId}`, (route) => {
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Temporary internal server error" }),
+    });
+  });
+
+  await seedTabs(page, {
+    tabs: [{ key: `chat:${fakeId}`, kind: "chat", ref: fakeId }],
+    activeKey: `chat:${fakeId}`,
+  });
+
+  await page.goto(`/#/chat/${fakeId}`);
+
+  // URL must be retained on /chat/<fakeId>, not evicted to /chat/new
+  await expect(page).toHaveURL(new RegExp(`#/chat/${fakeId}$`), { timeout: 10000 });
+  await page.waitForTimeout(1000);
+  await expect(page).toHaveURL(new RegExp(`#/chat/${fakeId}$`));
+  await expect(page).not.toHaveURL(/#\/chat\/new$/);
+});
+
+test("nested error boundary containment renders recovery UI while preserving AppShell chrome", async ({
+  page,
+}) => {
+  // Abort lazy bundle load for a route to trigger the nested RouteError boundary
+  await page.route("**/SchedulerPage*", (route) => route.abort());
+
+  await page.goto("/#/scheduler");
+
+  // ChatShell errorElement catches the failure and renders RouteError recovery UI
+  await expect(page.getByRole("heading", { name: "Something went wrong" })).toBeVisible({
+    timeout: 15000,
+  });
+  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+
+  // AppShell chrome (Primary navigation) is preserved and did not crash
+  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+
+  // Clicking "New chat" recovers navigation to /chat/new
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page).toHaveURL(/#\/chat\/new$/, { timeout: 15000 });
 });

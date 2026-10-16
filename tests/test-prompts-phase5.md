@@ -129,8 +129,8 @@ against the isolated E2E server (`bun run test:e2e -- index-redirect.spec.ts`).
 ## 10. Routing Contract and URL Builders
 
 ### Test 26: Routes module separation and path builders [DONE]
-**File:** `tests/unit/web/navigation/routes-contract.test.ts` — 6 pass, 0 fail.
-**Prompt:** Test `ROUTES` object from `web/src/config/routes.ts`. Assert `ROUTES.chat()` resolves to `/chat/new` when given undefined, empty, or `"new"`. Assert `ROUTES.chat("abc")` resolves to `/chat/abc`. Assert `ROUTES.code("abc")` resolves to `/code/abc`. Assert `ROUTES.code("")` throws an error explaining Code draft is not supported. Assert `ROUTES.parseConversationId` safely decodes URL segments and handles both `/chat/` and `/code/` prefixes.
+**File:** `tests/unit/web/navigation/routes-contract.test.ts` — 10 pass, 0 fail.
+**Prompt:** Test `ROUTES` and `ROUTE_PATTERNS` objects from `web/src/config/routes.ts`. Assert `ROUTES.chat()` resolves to `/chat/new` when given undefined, empty, or `"new"`. Assert `ROUTES.chat("abc")` resolves to `/chat/abc`. Assert `ROUTES.code("abc")` resolves to `/code/abc`. Assert `ROUTES.code("")` throws an error explaining Code draft is not supported. Assert `ROUTES.parseConversationId` safely decodes URL segments and handles both `/chat/` and `/code/` prefixes, returns `null` for `/chat/new`, returns `null` on extra raw path segments, safely handles malformed percent sequences without throwing, and round-trips encoded slashes.
 
 ---
 
@@ -144,20 +144,22 @@ against the isolated E2E server (`bun run test:e2e -- index-redirect.spec.ts`).
 
 ## 12. Nested Route Error Containment
 
-### Test 28: Router structural check for nested error elements [DONE]
+### Test 28: Router structural check for nested error elements and ROUTE_PATTERNS [DONE]
 **File:** `tests/dom/core/router-smoke.test.tsx` — 9 pass, 0 fail.
-**Prompt:** Read `web/src/app/router.tsx`. Assert that `errorElement: <RouteError />` is declared on `ChatShell` and `SettingsLayout` in addition to `AppShell` and `CodeShell`.
+**Prompt:** Read `web/src/app/router.tsx`. Assert that `errorElement: <RouteError />` is declared on `ChatShell` and `SettingsLayout` in addition to `AppShell` and `CodeShell`. Assert that route patterns consume centralized `ROUTE_PATTERNS` constants.
 
 ---
 
 ## 13. Full Application Routing, Cross-Engine & Persistence E2E
 
-### Test 29: Cross-engine, deep link refresh, 404 recovery, and AppShell persistence E2E [DONE]
-**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright) — 8 tests.
+### Test 29: Cross-engine, deep link refresh, 404 recovery, 5xx retention, error containment, and AppShell persistence E2E [DONE]
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright) — 10 tests.
 **Prompt:** Seed real Direct and OpenCode conversations.
 1. Index redirects: Active Direct, active Code, and empty storage fallback.
 2. Cross-engine: Navigate to `/#/chat/<opencodeId>`, assert URL transitions to `#/code/<opencodeId>`. Navigate to `/#/code/<directId>`, assert URL transitions to `#/chat/<directId>`.
 3. Refresh: Navigate to `/#/chat/<id>` and `/#/code/<id>`, reload page, assert URL and active tabs remain intact.
-4. AppShell persistence: Attach a unique token to `window` in AppShell, navigate from Chat to Code, assert the token persists (proving AppShell did not unmount).
+4. AppShell persistence: Acquire DOM element handle for the primary navigation rail (`nav[aria-label='Primary']`) inside AppShell, perform client navigation from Chat to Code, assert the element node handle remains connected (`isConnected === true`) and retains its exact DOM identity (`element === currentNav`), proving AppShell did not unmount or remount.
 5. Confirmed 404: Navigate to non-existent ID, assert safe eviction and redirection to `#/chat/new` without looping.
-6. History back: Verify replacement navigation on index redirect so browser back does not bounce in loops.
+6. Transient 5xx retention: Intercept `/api/conversations/<id>` with 500 error, assert current tab and route are retained without evicting to new chat.
+7. Nested error boundary containment: Abort bundle loading for a child route, assert `RouteError` renders while preserving AppShell primary navigation chrome, and clicking "New chat" recovers navigation to `#/chat/new`.
+8. History back: Verify replacement navigation on index redirect so clicking browser back returns directly to the prior route without history loops.

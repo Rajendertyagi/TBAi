@@ -454,11 +454,13 @@ Covered by decision-level unit tests (3 cases) and the E2E spec above.
 
 ### AppShell and Routing Hardening gate
 - [x] Routing contracts isolated in `web/src/config/routes.ts` separated from UI navigation metadata.
+- [x] Centralized `ROUTE_PATTERNS` consumed in `web/src/app/router.tsx` and verified by structural smoke guards.
 - [x] Safe URL builders with encoding/decoding round-trip (`ROUTES.chat`, `ROUTES.code`, `ROUTES.parseConversationId`).
-- [x] Nested error containment added to `ChatShell` and `SettingsLayout` with `<RouteError />`.
+- [x] Hardened route parsing: `/chat/new` returns `null`, malformed percent sequences handled safely without throwing, extra raw path segments rejected, and encoded slashes preserved.
+- [x] Nested error containment added to `ChatShell` and `SettingsLayout` with `<RouteError />` preserving root AppShell chrome.
 - [x] Canonical persisted tab recovery (`loadPersisted`) enforces non-empty draft tab invariant.
 - [x] Legacy migration safely cleans empty, whitespace, duplicate IDs and handles throwing storage.
-- [x] Playwright E2E expanded covering index redirect, cross-engine reconciliation, deep-link refresh, 404 recovery, and AppShell persistence.
+- [x] Playwright E2E suite (`tests/e2e/routing/index-redirect.spec.ts`) expanded covering index redirect, cross-engine reconciliation, deep-link refresh, 404 recovery, transient 5xx retention, nested error containment, browser back replacement history, and AppShell DOM element identity retention across Chat ↔ Code navigation.
 
 ### Final sign-off
 - [x] All phases complete.

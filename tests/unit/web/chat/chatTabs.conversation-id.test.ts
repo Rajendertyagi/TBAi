@@ -50,11 +50,9 @@ describe("conversationIdFromPath — /chat/ and /code/ prefixes (happy path)", (
 
 describe("conversationIdFromPath — non-conversation paths (edge cases)", () => {
   it("returns null for the draft host /chat/new (no real conversation id)", () => {
-    // "new" is a draft sentinel, not a persisted conversation id. The helper
-    // does NOT special-case it — it returns "new". Callers that want to treat
-    // the draft as "no conversation" must compare against NEW_DRAFT_TAB_ID.
-    // We assert the actual contract here: the raw id after the prefix.
-    expect(conversationIdFromPath("/chat/new")).toBe("new");
+    // /chat/new is the fresh-draft route and returns null.
+    // In Code mode, draft URLs are not supported; /code/new is treated as session ID "new".
+    expect(conversationIdFromPath("/chat/new")).toBeNull();
     expect(conversationIdFromPath("/code/new")).toBe("new");
   });
 
@@ -65,7 +63,6 @@ describe("conversationIdFromPath — non-conversation paths (edge cases)", () =>
   });
 
   it("returns null for non-conversation routes (settings, root, unknown)", () => {
-    expect(conversationIdFromPath("/")).toBeNull();
     expect(conversationIdFromPath("/")).toBeNull();
     expect(conversationIdFromPath("/providers")).toBeNull();
     expect(conversationIdFromPath("/scheduler")).toBeNull();
@@ -80,10 +77,20 @@ describe("conversationIdFromPath — non-conversation paths (edge cases)", () =>
     expect(conversationIdFromPath("/x/code/abc")).toBeNull();
   });
 
-  it("trailing segments after the id are preserved in the returned id", () => {
-    // The helper slices everything after the prefix — a real route has no
-    // deeper segments, but the contract is "return the remainder".
-    expect(conversationIdFromPath("/chat/abc/def")).toBe("abc/def");
-    expect(conversationIdFromPath("/code/abc/def")).toBe("abc/def");
+  it("returns null for extra raw path segments after the id", () => {
+    // Valid Chat and Code paths decode exactly one encoded path segment.
+    // Extra raw slashes return null without throwing.
+    expect(conversationIdFromPath("/chat/abc/def")).toBeNull();
+    expect(conversationIdFromPath("/code/abc/def")).toBeNull();
+  });
+
+  it("decodes encoded slashes inside a single segment", () => {
+    expect(conversationIdFromPath("/chat/abc%2Fdef")).toBe("abc/def");
+    expect(conversationIdFromPath("/code/abc%2Fdef")).toBe("abc/def");
+  });
+
+  it("returns null on malformed percent encoding without throwing", () => {
+    expect(conversationIdFromPath("/chat/%E0%A4%A")).toBeNull();
+    expect(conversationIdFromPath("/code/%E0%A4%A")).toBeNull();
   });
 });

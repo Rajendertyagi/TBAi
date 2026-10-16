@@ -1,4 +1,5 @@
 import { createHashRouter, Navigate } from "react-router";
+import { ROUTE_PATTERNS } from "../config/routes";
 import { AppShell } from "./layout/AppShell";
 import { ChatShell } from "./layout/ChatShell";
 import { RouteError } from "./RouteError";
@@ -35,7 +36,7 @@ import { HydrateFallback } from "./HydrateFallback";
  */
 export const router = createHashRouter([
   {
-    path: "/",
+    path: ROUTE_PATTERNS.INDEX,
     Component: AppShell,
     HydrateFallback,
     errorElement: <RouteError />,
@@ -51,7 +52,7 @@ export const router = createHashRouter([
             lazy: () => import("./IndexRedirect").then((m) => ({ Component: m.IndexRedirect })),
           },
           {
-            path: "chat/:threadId?",
+            path: ROUTE_PATTERNS.CHAT,
             lazy: () =>
               import("../features/chat/components/ChatView").then((m) => ({
                 Component: m.ChatView,
@@ -60,7 +61,7 @@ export const router = createHashRouter([
           // Dedicated Scheduler page (top-level workbench route, never inside
           // the settings sub-sidebar).
           {
-            path: "scheduler",
+            path: ROUTE_PATTERNS.SCHEDULER,
             lazy: () =>
               import("../features/scheduler/SchedulerPage").then((m) => ({
                 Component: m.SchedulerPage,
@@ -69,7 +70,7 @@ export const router = createHashRouter([
           // Archived conversations (rail surface; the sidebar keeps
           // Folders → Chats → Recent only).
           {
-            path: "archived",
+            path: ROUTE_PATTERNS.ARCHIVED,
             lazy: () =>
               import("../features/sidebar/ArchivedPage").then((m) => ({
                 Component: m.ArchivedPage,
@@ -80,68 +81,68 @@ export const router = createHashRouter([
             errorElement: <RouteError />,
             children: [
               {
-                path: "memory",
+                path: ROUTE_PATTERNS.MEMORY,
                 lazy: () =>
                   import("../features/memories/components/MemoryPanel").then((m) => ({
                     Component: m.MemoryPanel,
                   })),
               },
               {
-                path: "mcp",
+                path: ROUTE_PATTERNS.MCP,
                 lazy: () =>
                   import("../features/mcp/components/McpPanel").then((m) => ({
                     Component: m.McpPanel,
                   })),
               },
               {
-                path: "logs",
+                path: ROUTE_PATTERNS.LOGS,
                 lazy: () =>
                   import("../components/LogsPanel").then((m) => ({ Component: m.LogsPanel })),
               },
               {
-                path: "folders",
+                path: ROUTE_PATTERNS.FOLDERS,
                 lazy: () =>
                   import("../features/folders/FoldersPage").then((m) => ({
                     Component: m.FoldersPage,
                   })),
               },
               {
-                path: "quick-messages",
+                path: ROUTE_PATTERNS.QUICK_MESSAGES,
                 lazy: () =>
                   import("../features/quick-messages/QuickMessagesPage").then((m) => ({
                     Component: m.QuickMessagesPage,
                   })),
               },
               {
-                path: "providers",
+                path: ROUTE_PATTERNS.PROVIDERS,
                 lazy: () =>
                   import("../features/providers/ProvidersPage").then((m) => ({
                     Component: m.ProvidersPage,
                   })),
               },
               {
-                path: "appearance",
+                path: ROUTE_PATTERNS.APPEARANCE,
                 lazy: () =>
                   import("../features/appearance/AppearancePage").then((m) => ({
                     Component: m.AppearancePage,
                   })),
               },
               {
-                path: "desktop",
+                path: ROUTE_PATTERNS.DESKTOP,
                 lazy: () =>
                   import("../features/desktop/DesktopSettings").then((m) => ({
                     Component: m.DesktopSettings,
                   })),
               },
               {
-                path: "workspace",
+                path: ROUTE_PATTERNS.WORKSPACE,
                 lazy: () =>
                   import("../features/workspace/WorkspacePage").then((m) => ({
                     Component: m.WorkspacePage,
                   })),
               },
               {
-                path: "opencode-config",
+                path: ROUTE_PATTERNS.OPENCODE_CONFIG,
                 lazy: () =>
                   import("../features/opencode/OpenCodeConfigPage").then((m) => ({
                     Component: m.OpenCodeConfigPage,
@@ -156,14 +157,14 @@ export const router = createHashRouter([
         // session) in a dedicated shell — deliberately OUTSIDE the chat
         // runtime/provider. AppShell is the universal parent; CodeShell
         // provides only the OpenCode runtime.
-        path: "code/:agentId?",
+        path: ROUTE_PATTERNS.CODE,
         // Lazy because nothing outside `features/opencode` imports it, and it pulls
         // the whole `@opencode/client` runtime that most sessions never open.
         lazy: () =>
           import("../features/opencode/CodeShell").then((m) => ({ Component: m.CodeShell })),
         errorElement: <RouteError />,
       },
-      { path: "*", element: <Navigate to="/" replace /> },
+      { path: ROUTE_PATTERNS.CATCH_ALL, element: <Navigate to="/" replace /> },
     ],
   },
   // Diagnostic page, DEV BUILDS ONLY, and deliberately outside the chat shell.
@@ -179,7 +180,7 @@ export const router = createHashRouter([
   ...(import.meta.env.DEV
     ? [
         {
-          path: "/theme-lab",
+          path: ROUTE_PATTERNS.THEME_LAB,
           lazy: () =>
             import("../features/appearance/ThemeLab").then((m) => ({
               Component: m.ThemeLab,
@@ -190,7 +191,7 @@ export const router = createHashRouter([
           // browser behaviour no static-markup test can observe, and a miss
           // here is silent -- Enter reaches the composer and sends an empty
           // message instead of approving, which reads as a hung card.
-          path: "/keyboard-lab",
+          path: ROUTE_PATTERNS.KEYBOARD_LAB,
           lazy: () =>
             import("../features/permissions/KeyboardLab").then((m) => ({
               Component: m.KeyboardLab,

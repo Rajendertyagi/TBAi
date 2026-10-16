@@ -1,5 +1,5 @@
 import { Navigate } from "react-router";
-import { ROUTES } from "../config/navigation";
+import { ROUTES } from "../config/routes";
 import { activeTab, urlForTab, useChatTabsStore } from "../features/chat/state/chatTabs";
 
 /**

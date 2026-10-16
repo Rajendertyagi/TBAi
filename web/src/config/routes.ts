@@ -6,6 +6,27 @@
  * of truth for application URLs.
  */
 
+export const ROUTE_PATTERNS = {
+  INDEX: "/",
+  CHAT: "chat/:threadId?",
+  CODE: "code/:agentId?",
+  SCHEDULER: "scheduler",
+  ARCHIVED: "archived",
+  FOLDERS: "folders",
+  MEMORY: "memory",
+  MCP: "mcp",
+  LOGS: "logs",
+  QUICK_MESSAGES: "quick-messages",
+  PROVIDERS: "providers",
+  APPEARANCE: "appearance",
+  DESKTOP: "desktop",
+  WORKSPACE: "workspace",
+  OPENCODE_CONFIG: "opencode-config",
+  THEME_LAB: "/theme-lab",
+  KEYBOARD_LAB: "/keyboard-lab",
+  CATCH_ALL: "*",
+} as const;
+
 export const ROUTES = {
   INDEX: "/",
   CHAT: "/chat",
@@ -51,17 +72,35 @@ export const ROUTES = {
   /**
    * Safe conversation ID parser for both Chat and Code surfaces.
    * Inverse of ROUTES.chat and ROUTES.code, safely decoding path segments.
+   *
+   * Rules:
+   * - /chat/new is the fresh draft route and returns null.
+   * - Valid Chat and Code paths must decode exactly one encoded path segment.
+   * - Empty suffixes, extra raw path segments, malformed percent encoding,
+   *   and non-conversation paths return null without throwing.
    */
   parseConversationId: (pathname: string): string | null => {
     const chatPrefix = `${ROUTES.CHAT}/`;
     if (pathname.startsWith(chatPrefix)) {
       const raw = pathname.slice(chatPrefix.length);
-      return raw ? decodeURIComponent(raw) : null;
+      if (!raw || raw.includes("/")) return null;
+      try {
+        const decoded = decodeURIComponent(raw);
+        return decoded === "new" || decoded.length === 0 ? null : decoded;
+      } catch {
+        return null;
+      }
     }
     const codePrefix = `${ROUTES.CODE}/`;
     if (pathname.startsWith(codePrefix)) {
       const raw = pathname.slice(codePrefix.length);
-      return raw ? decodeURIComponent(raw) : null;
+      if (!raw || raw.includes("/")) return null;
+      try {
+        const decoded = decodeURIComponent(raw);
+        return decoded.length === 0 ? null : decoded;
+      } catch {
+        return null;
+      }
     }
     return null;
   },

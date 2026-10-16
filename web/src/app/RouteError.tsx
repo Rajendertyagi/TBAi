@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useRouteError } from "react-router";
 import { Button } from "@/components/ui/button";
 import { logger } from "@/lib/logger";
-import { ROUTES } from "@/config/navigation";
+import { ROUTES } from "@/config/routes";
 
 /**
  * Root route error boundary. Catches render crashes anywhere under the app

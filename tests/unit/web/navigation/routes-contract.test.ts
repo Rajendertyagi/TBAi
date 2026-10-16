@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { ROUTES } from "@web/config/routes.ts";
+import { ROUTE_PATTERNS, ROUTES } from "@web/config/routes.ts";
 
 describe("ROUTES contract and URL builders", () => {
   it("normalizes chat draft routes to CHAT_NEW", () => {
@@ -34,14 +34,52 @@ describe("ROUTES contract and URL builders", () => {
     expect(ROUTES.parseConversationId("/providers")).toBeNull();
     expect(ROUTES.parseConversationId("/scheduler")).toBeNull();
     expect(ROUTES.parseConversationId("/")).toBeNull();
+    expect(ROUTES.parseConversationId("/chat")).toBeNull();
+    expect(ROUTES.parseConversationId("/code")).toBeNull();
   });
 
-  it("round-trips encode and decode", () => {
-    const ids = ["conv-1", "user:session-42", "path/with/slashes", "symbols_!~*()"];
+  it("treats /chat/new as the fresh draft route and returns null", () => {
+    expect(ROUTES.parseConversationId("/chat/new")).toBeNull();
+    expect(ROUTES.parseConversationId("/chat/%6E%65%77")).toBeNull();
+    expect(ROUTES.parseConversationId("/chat/new/")).toBeNull();
+  });
+
+  it("safely handles malformed percent encoding without throwing", () => {
+    expect(ROUTES.parseConversationId("/chat/%E0%A4%A")).toBeNull();
+    expect(ROUTES.parseConversationId("/code/%E0%A4%A")).toBeNull();
+    expect(ROUTES.parseConversationId("/chat/%")).toBeNull();
+    expect(ROUTES.parseConversationId("/chat/%2")).toBeNull();
+    expect(ROUTES.parseConversationId("/code/%99%ZZ")).toBeNull();
+  });
+
+  it("rejects extra raw path segments", () => {
+    expect(ROUTES.parseConversationId("/chat/conv-123/extra")).toBeNull();
+    expect(ROUTES.parseConversationId("/code/agent-abc/extra")).toBeNull();
+    expect(ROUTES.parseConversationId("/chat/conv-123/sub/path")).toBeNull();
+  });
+
+  it("round-trips encode and decode including encoded slashes", () => {
+    const ids = [
+      "conv-1",
+      "user:session-42",
+      "path/with/slashes",
+      "symbols_!~*()",
+      "deep/nested/path/name",
+    ];
     for (const id of ids) {
       expect(ROUTES.parseConversationId(ROUTES.chat(id))).toBe(id);
       expect(ROUTES.parseConversationId(ROUTES.code(id))).toBe(id);
     }
+  });
+
+  it("defines centralized ROUTE_PATTERNS constants", () => {
+    expect(ROUTE_PATTERNS.INDEX).toBe("/");
+    expect(ROUTE_PATTERNS.CHAT).toBe("chat/:threadId?");
+    expect(ROUTE_PATTERNS.CODE).toBe("code/:agentId?");
+    expect(ROUTE_PATTERNS.SCHEDULER).toBe("scheduler");
+    expect(ROUTE_PATTERNS.ARCHIVED).toBe("archived");
+    expect(ROUTE_PATTERNS.PROVIDERS).toBe("providers");
+    expect(ROUTE_PATTERNS.CATCH_ALL).toBe("*");
   });
 
   it("defines standard application routes", () => {

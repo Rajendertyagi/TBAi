@@ -5,7 +5,7 @@ import { threadEngine } from "../../../adapters/remoteThreadListAdapter";
 import { ConversationNotFoundError } from "./conversationExistence";
 import { evictIfGone } from "./tabReconciliation";
 import { logger } from "../../../lib/logger";
-import { ROUTES } from "../../../config/navigation";
+import { ROUTES } from "../../../config/routes";
 import {
   NEW_DRAFT_TAB_ID,
   activeTab,
