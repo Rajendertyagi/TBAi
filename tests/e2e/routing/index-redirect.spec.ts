@@ -229,10 +229,11 @@ test("confirmed 404 evicts missing conversation and redirects safely", async ({ 
 test("transient 5xx server failure retains current tab and route without evicting to new chat", async ({
   page,
 }) => {
-  // Seed a REAL conversation so the boot reconciliation pass (POST
-  // /api/conversations/reconcile) confirms it exists. A fake id would be
-  // reported `gone` by that independent pass and evicted before the simulated
-  // 500 is ever the deciding signal — defeating the test's intent.
+  // Seed a REAL conversation so the single-record existence probe has a row to
+  // read. With an empty persisted tab list the boot reconciliation pass has no
+  // IDs to check, so the probe is the sole existence signal for this route. A
+  // fake id would make the probe answer 404 (`gone`) and evict the tab before
+  // the simulated 500 is ever the deciding signal — defeating the test's intent.
   const { id } = await seedConversation(page.request, { title: "5xx retention target" });
 
   try {
