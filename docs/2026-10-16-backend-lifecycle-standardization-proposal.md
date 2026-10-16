@@ -1,7 +1,7 @@
 # Backend Lifecycle Standardization — Architecture Proposal (v2.2)
 
 **Repository:** `Rajendertyagi/TBAi` (local: `D:\Temp\ai-chat-app`)
-**Branch:** `fix/mcp-lifecycle-and-history-e2e` · **HEAD:** `2131a8f`
+**Branch:** `fix/mcp-lifecycle-and-history-e2e` · **Original source snapshot:** `2131a8f`
 **Date:** 2026-10-16
 **Mode:** Planning-only revision. This update changes this proposal document only; no production source, tests, or runtime configuration were changed.
 
@@ -9,12 +9,12 @@
 
 ## 1. Source Snapshot and Versioned Evidence Inventory
 
-### 1.1 Git state
+### 1.1 Original Git snapshot reviewed for v2.1
 
 | Item | Value |
 |---|---|
 | Branch | `fix/mcp-lifecycle-and-history-e2e` |
-| HEAD | `2131a8f` (proposal committed as `docs: add backend lifecycle audit and standardization proposal`) |
+| Reviewed source snapshot | `2131a8f` (the snapshot cited by the supplied v2.1 report; not a claim about the current branch HEAD) |
 | Working tree | Clean |
 | Prior HEAD | `b183abe` (used by v1 of this proposal) |
 | Intermediate commit | `c6624d6 fix(root): add react-router as root devDependency for tests/ type resolution` — test-only dependency change, no lifecycle impact |
