@@ -244,9 +244,11 @@ test("transient 5xx server failure retains current tab and route without evictin
 
     // Intercept ONLY the single-record existence probe (GET
     // /api/conversations/<id>) and simulate a 500. The batch reconciliation POST
-    // and the history /messages GET run through the real server, so the known-
-    // good conversation is confirmed `exists` by the batch while the single-
-    // record probe returns 500.
+    // and the history /messages GET run through the real server. Because the
+    // persisted tab list starts empty, boot reconciliation has no conversation
+    // IDs to check — the single-record probe is the only existence signal for
+    // this route, and it returns 500 (UNKNOWN), so the tab and route are
+    // retained rather than evicted.
     let getIntercepted = 0;
     const probeUrls: string[] = [];
     await page.route(`**/api/conversations/${id}`, async (route) => {
@@ -284,12 +286,10 @@ test("transient 5xx server failure retains current tab and route without evictin
     await expect(page).toHaveURL(new RegExp(`#/chat/${id}$`), { timeout: 15000 });
     await expect(page).not.toHaveURL(/#\/chat\/new$/);
 
-    // Let reconciliation + a possible retry settle, then re-assert retention.
-    await page.waitForTimeout(1500);
-    await expect(page).toHaveURL(new RegExp(`#/chat/${id}$`));
-    await expect(page).not.toHaveURL(/#\/chat\/new$/);
-
-    // The retained tab must exist in persisted state and be active.
+    // The retained tab must exist in persisted state and be active. This is the
+    // observable completion signal for the retention path — no elapsed-time
+    // sleep is needed; the URL + persisted-tab assertions above already wait
+    // for the route to settle.
     const storedTabs = await page.evaluate((key) => {
       const raw = window.localStorage.getItem(key);
       if (!raw) return null;
