@@ -3,11 +3,12 @@ import { activeTab, urlForTab, useChatTabsStore } from "@web/features/chat/state
 import { ROUTES } from "@web/config/navigation.ts";
 
 /**
- * Behavioral tests for IndexRedirect's redirect decision.
+ * Helper-level unit tests for IndexRedirect's redirect decision.
  *
  * These execute the REAL tab store and the REAL helpers (`activeTab` +
  * `urlForTab`) that `IndexRedirect` evaluates to compute its `<Navigate
  * to={...}>` target, asserting the destination for all three cases.
+ * They do NOT render `IndexRedirect` and do NOT execute React Router.
  *
  * Why not render `<Navigate>` itself: this repo has TWO copies of
  * react-router (`web/node_modules` for `@web` sources, root `node_modules`

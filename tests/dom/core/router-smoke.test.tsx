@@ -3,11 +3,15 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 import path from "node:path";
 
 /**
- * Router structural smoke tests.
+ * Router STRUCTURAL smoke tests (source guards, not behavioral verification).
  *
  * These verify route registration, lazy-loading boundaries, redirect targets,
- * and catch-all behavior through source guards. Live router mounting is
- * covered by Playwright E2E; DOM tests cannot mount the full router because
+ * and catch-all behavior by matching the router source text. They prove the
+ * routes are DECLARED, not that navigation WORKS — a passing suite here is
+ * necessary but not sufficient for router acceptance.
+ *
+ * Behavioral coverage lives in Playwright E2E (`tests/e2e/routing/`), which
+ * mounts the real application. DOM tests cannot mount the full router because
  * it requires the backend, assistant-ui runtime providers, and lazy-loaded
  * route components.
  */
@@ -89,10 +93,19 @@ describe("router-smoke", () => {
     expect(source).toContain('path: "code/:agentId?"');
   });
 
-  it("errorElement is preserved on AppShell and CodeShell", async () => {
+  it("errorElement is registered on AppShell, ChatShell, SettingsLayout, and CodeShell", async () => {
     const source = await readRouter();
     const appShellSection = source.slice(source.indexOf('path: "/",'));
     expect(appShellSection).toContain("errorElement: <RouteError />");
+
+    const chatShellStart = source.indexOf("Component: ChatShell,");
+    const chatShellSection = source.slice(chatShellStart, chatShellStart + 300);
+    expect(chatShellSection).toContain("errorElement: <RouteError />");
+
+    const settingsStart = source.indexOf("Component: SettingsLayout,");
+    const settingsSection = source.slice(settingsStart, settingsStart + 300);
+    expect(settingsSection).toContain("errorElement: <RouteError />");
+
     const codeShellSection = source.slice(source.indexOf('path: "code/:agentId?"'));
     expect(codeShellSection).toContain("errorElement: <RouteError />");
   });

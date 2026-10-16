@@ -8,6 +8,7 @@ import {
 } from "@web/adapters/remoteThreadListAdapter";
 import { useWelcomeScopeStore } from "@web/features/chat/state/welcomeScope.ts";
 import { useWelcomeEngineStore } from "@web/features/chat/state/welcomeEngine.ts";
+import { ROUTES } from "@web/config/navigation.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -97,7 +98,12 @@ describe("thread-list fetch error taxonomy (Phase 3.4)", () => {
     expect(source).toContain("conversation validation unknown, retaining");
     // Confirmed 404 still closes every tab pointing at the ref + falls back.
     expect(source).toContain("ConversationNotFoundError");
-    expect(source).toContain('navigate("/chat/new"');
+    // The fallback target is the shared route constant, not a literal. Assert
+    // the constant is used AND that it resolves to the new-chat route, so the
+    // invariant (a confirmed 404 falls back to /chat/new) is preserved rather
+    // than dropped alongside the literal.
+    expect(source).toContain("navigate(ROUTES.CHAT_NEW");
+    expect(ROUTES.CHAT_NEW).toBe("/chat/new");
     expect(source).toContain("current.close");
   });
 });

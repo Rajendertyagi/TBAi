@@ -187,31 +187,49 @@ describe("F3 — unexpected session/transport loss", () => {
       // 2. Kill the child process directly (simulating unexpected process crash / kill)
       process.kill(pid, "SIGTERM");
 
-      // 3. Wait for manager to transition to "error"
+      // 3. Wait for the manager to log the error transition.
+      //
+      // The state machine is: onclose -> status "error" + the connect-error
+      // log + scheduleReconnect(id) (a 5s retry timer, one attempt). The
+      // reconnect handshake can complete FAST, so polling status alone races:
+      // it may see "connected" again before "error" is ever observed. The
+      // structured log entry is emitted synchronously inside onclose, BEFORE
+      // the timer is armed - it is the durable, deterministic marker of the
+      // intended error transition.
+      let errorLogs: ReturnType<typeof logger.getRecentEntries> = [];
       for (let i = 0; i < 50; i++) {
-        const st = mcpManager.getStatuses().find((s) => s.id === id);
-        if (st?.status === "error") break;
+        errorLogs = logger
+          .getRecentEntries(cutoff)
+          .filter(
+            (e) =>
+              e.event === "mcp.operation" &&
+              e.op === "connect" &&
+              e.outcome === "error" &&
+              e.mcpServer === "v2-session-loss",
+          );
+        if (errorLogs.length >= 1) break;
         await new Promise((r) => setTimeout(r, 100));
       }
-      expect(mcpManager.getStatuses().find((s) => s.id === id)?.status).toBe("error");
-
-      // Verify structured warning event was logged
-      const errorLogs = logger
-        .getRecentEntries(cutoff)
-        .filter(
-          (e) =>
-            e.event === "mcp.operation" &&
-            e.op === "connect" &&
-            e.outcome === "error" &&
-            e.mcpServer === "v2-session-loss",
-        );
       expect(errorLogs.length).toBeGreaterThanOrEqual(1);
       expect(errorLogs[0].message).toContain("Transport closed unexpectedly");
 
-      // 4. Wait for auto-reconnect to succeed (reconnect delay is 5s)
+      // 4. Wait for the auto-reconnect to succeed. The retry timer fires
+      // exactly once (one attempt); scheduleReconnect logs "op=reconnect
+      // outcome=started" at fire time - that entry is the marker the delay
+      // has elapsed and the connect attempt has begun, which removes the
+      // load-dependent flake of waiting for a wall-clock window.
       for (let i = 0; i < 80; i++) {
+        const started = logger
+          .getRecentEntries(cutoff)
+          .some(
+            (e) =>
+              e.event === "mcp.operation" &&
+              e.op === "reconnect" &&
+              e.outcome === "started" &&
+              e.mcpServer === "v2-session-loss",
+          );
         const st = mcpManager.getStatuses().find((s) => s.id === id);
-        if (st?.status === "connected") break;
+        if (started && st?.status === "connected") break;
         await new Promise((r) => setTimeout(r, 200));
       }
       const reconnectedConn = (mcpManager as any).connections.get(id);

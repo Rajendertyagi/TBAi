@@ -321,6 +321,7 @@ let chipSource = "";
 let chipBody = "";
 let composerSource = "";
 let questionsSource = "";
+let chipsAndRingSource = "";
 
 beforeAll(async () => {
   chipSource = await Bun.file(
@@ -328,6 +329,9 @@ beforeAll(async () => {
   ).text();
   chipBody = functionBody(stripComments(chipSource), "OpenCodeShieldChip");
   composerSource = await Bun.file(path.join(REPO_ROOT, "web/src/components/Composer.tsx")).text();
+  chipsAndRingSource = await Bun.file(
+    path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeChipsAndRing.tsx"),
+  ).text();
   questionsSource = await Bun.file(
     path.join(REPO_ROOT, "web/src/features/opencode/OpenCodeQuestions.tsx"),
   ).text();
@@ -361,8 +365,11 @@ describe("OpenCodeShieldChip — source guards", () => {
   });
 
   it("the composer mounts the Shield in the OpenCode chip row", () => {
-    expect(composerSource).toContain("OpenCodeShieldChip");
-    expect(composerSource).toContain("<OpenCodeShieldChip />");
+    // The Composer no longer imports the Shield directly — it mounts the
+    // OpenCode chip row, which owns every OpenCode chip. Assert BOTH halves so
+    // the Shield cannot silently drop out of the row while the row survives.
+    expect(composerSource).toContain("OpenCodeChipsAndRing");
+    expect(chipsAndRingSource).toContain("<OpenCodeShieldChip />");
   });
 
   it("the questions surface is untouched by the Shield", () => {

@@ -32,6 +32,7 @@ let segments = "";
 let aui = "";
 let composer = "";
 let openCodeRing = "";
+let chipsAndRing = "";
 
 beforeAll(async () => {
   const base = pathToFileURL(REPO_ROOT + path.sep).href;
@@ -61,6 +62,9 @@ beforeAll(async () => {
     ).text(),
   );
   composer = stripComments(await Bun.file(new URL("web/src/components/Composer.tsx", base)).text());
+  chipsAndRing = stripComments(
+    await Bun.file(new URL("web/src/features/opencode/OpenCodeChipsAndRing.tsx", base)).text(),
+  );
   openCodeRing = stripComments(
     await Bun.file(new URL("web/src/features/opencode/OpenCodeContextRing.tsx", base)).text(),
   );
@@ -144,8 +148,12 @@ describe("composer rail mount", () => {
   });
 
   it("mounts the OpenCode ring on Code surfaces", () => {
-    expect(composer).toContain("OpenCodeContextRing");
+    // The Composer mounts the OpenCode chip row on the Code surface, and that
+    // row owns the ring. Assert BOTH halves so the ring cannot silently drop
+    // out of the row (or the row out of the composer) while the gate survives.
+    expect(composer).toContain("OpenCodeChipsAndRing");
     expect(composer).toContain("isCodeSurface || showOpenCodeDraft");
+    expect(chipsAndRing).toContain("OpenCodeContextRing");
   });
 });
 

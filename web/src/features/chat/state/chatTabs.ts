@@ -77,14 +77,27 @@ export function healTab(value: unknown): Tab | null {
   return null;
 }
 
-function loadPersisted(): PersistedTabs {
+export const chatKey = (threadId: string): string => `chat:${threadId}`;
+export const agentKey = (conversationId: string): string => `agent:${conversationId}`;
+
+/**
+ * Fresh draft tab. The workbench never sits at zero tabs (codeg parity), so
+ * closers fall back to exactly one of these instead of inventing ad-hoc
+ * replacements in multiple places.
+ */
+export function freshDraftTab(): Tab {
+  return { key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID };
+}
+
+export function loadPersisted(): PersistedTabs {
   const loaded = loadRaw();
-  const tabs = loaded.tabs;
+  // Workbench never sits at zero tabs (codeg parity)
+  const tabs = loaded.tabs.length > 0 ? loaded.tabs : [freshDraftTab()];
   const activeKey = tabs.some((t) => t.key === loaded.activeKey) ? loaded.activeKey : tabs[0]?.key;
   return { tabs, activeKey };
 }
 
-function loadRaw(): PersistedTabs {
+export function loadRaw(): PersistedTabs {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return { tabs: [], activeKey: undefined };
@@ -95,27 +108,26 @@ function loadRaw(): PersistedTabs {
       parsed !== null &&
       Array.isArray((parsed as { openIds?: unknown }).openIds)
     ) {
-      const openIds = (parsed as { openIds: unknown[] }).openIds.filter(
-        (id): id is string => typeof id === "string",
-      );
-      const tabs = openIds.map((id): Tab => ({ key: `chat:${id}`, kind: "chat", ref: id }));
+      const openIds = (parsed as { openIds: unknown[] }).openIds
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        .filter((id, idx, arr) => arr.indexOf(id) === idx);
+      const tabs = openIds.map((id): Tab => ({ key: chatKey(id), kind: "chat", ref: id }));
       const legacy = parsed as { activeId?: unknown };
       const activeKey =
-        typeof legacy.activeId === "string" ? `chat:${legacy.activeId}` : tabs[0]?.key;
-      return {
-        tabs:
-          activeKey && !tabs.some((t) => t.key === activeKey)
-            ? [...tabs, { key: activeKey, kind: "chat", ref: activeKey.slice(5) }]
-            : tabs,
-        activeKey,
-      };
+        typeof legacy.activeId === "string" && tabs.some((t) => t.ref === legacy.activeId)
+          ? chatKey(legacy.activeId)
+          : tabs[0]?.key;
+      return { tabs, activeKey };
     }
     const unifiedShape =
       typeof parsed === "object" && parsed !== null
         ? (parsed as { tabs?: unknown }).tabs
         : undefined;
     if (Array.isArray(unifiedShape)) {
-      const tabs = unifiedShape.map(healTab).filter((t): t is Tab => t !== null);
+      const tabs = unifiedShape
+        .map(healTab)
+        .filter((t): t is Tab => t !== null)
+        .filter((t, idx, arr) => arr.findIndex((x) => x.key === t.key) === idx);
       const legacy = parsed as { activeKey?: unknown };
       const activeKey =
         typeof legacy.activeKey === "string" && tabs.some((t) => t.key === legacy.activeKey)
@@ -161,22 +173,10 @@ function tabForKey(key: string): Tab {
   return { key: chatKey(key), kind: "chat", ref: key };
 }
 
-export const chatKey = (threadId: string): string => `chat:${threadId}`;
-export const agentKey = (conversationId: string): string => `agent:${conversationId}`;
-
-/**
- * Fresh draft tab. The workbench never sits at zero tabs (codeg parity), so
- * closers fall back to exactly one of these instead of inventing ad-hoc
- * replacements in multiple places.
- */
-function freshDraftTab(): Tab {
-  return { key: chatKey(NEW_DRAFT_TAB_ID), kind: "chat", ref: NEW_DRAFT_TAB_ID };
-}
-
-/** URL a tab points at: chat tabs → thread route, agent tabs → code route, page tabs → their route. */
+/** URL a tab points at: chat tabs → thread route, agent tabs → code route. */
 export function urlForTab(tab: Tab): string {
-  if (tab.kind === "agent") return `${ROUTES.CODE}/${tab.ref}`;
-  return `${ROUTES.CHAT}/${tab.ref}`;
+  if (tab.kind === "agent") return ROUTES.code(tab.ref);
+  return ROUTES.chat(tab.ref);
 }
 
 /**
@@ -187,7 +187,7 @@ export function urlForTab(tab: Tab): string {
  * engine column and are all Direct.
  */
 export function threadUrl(remoteId: string, engine?: string | null): string {
-  return engine === "opencode" ? `${ROUTES.CODE}/${remoteId}` : `${ROUTES.CHAT}/${remoteId}`;
+  return engine === "opencode" ? ROUTES.code(remoteId) : ROUTES.chat(remoteId);
 }
 
 /**
@@ -197,15 +197,7 @@ export function threadUrl(remoteId: string, engine?: string | null): string {
  * Returns null for non-conversation paths (draft hosts neither axis).
  */
 export function conversationIdFromPath(pathname: string): string | null {
-  const chatPrefix = `${ROUTES.CHAT}/`;
-  if (pathname.startsWith(chatPrefix)) {
-    return pathname.slice(chatPrefix.length) || null;
-  }
-  const codePrefix = `${ROUTES.CODE}/`;
-  if (pathname.startsWith(codePrefix)) {
-    return pathname.slice(codePrefix.length) || null;
-  }
-  return null;
+  return ROUTES.parseConversationId(pathname);
 }
 
 /**
@@ -218,7 +210,7 @@ export function conversationIdFromPath(pathname: string): string | null {
  * never a conversation route, and query strings never carry identity.
  */
 export function routeStillReferencesRef(pathname: string, ref: string): boolean {
-  return pathname === `${ROUTES.CHAT}/${ref}` || pathname === `${ROUTES.CODE}/${ref}`;
+  return pathname === ROUTES.chat(ref) || pathname === `${ROUTES.CODE}/${encodeURIComponent(ref)}`;
 }
 
 /**

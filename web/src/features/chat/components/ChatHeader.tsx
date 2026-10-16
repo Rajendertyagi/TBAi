@@ -214,7 +214,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
       });
       return;
     }
-    navigate(`${ROUTES.CODE}/${threadId}`);
+    navigate(ROUTES.code(threadId));
   };
 
   const handleDeleteOpen = () => {

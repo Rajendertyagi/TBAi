@@ -45,6 +45,7 @@ import {
   jsxAttributeBody,
   stripComments,
 } from "@web/testing/source-scope";
+import { ROUTES } from "@web/config/navigation.ts";
 
 /**
  * Read a file under `web/`, path relative to that root.
@@ -359,7 +360,11 @@ describe("page context menu — existing items preserved", () => {
   });
 
   it("still navigates for new chat and settings", () => {
-    expect(constBody(pageMenu, "handleNewChat")).toContain('"/chat/new"');
+    // The new-chat target is the shared route constant, not a literal. Assert
+    // the constant is used AND that it resolves to the new-chat route, so the
+    // invariant (New chat navigates to /chat/new) survives the ROUTES refactor.
+    expect(constBody(pageMenu, "handleNewChat")).toContain("ROUTES.CHAT_NEW");
+    expect(ROUTES.CHAT_NEW).toBe("/chat/new");
     expect(constBody(pageMenu, "handleOpenSettings")).toContain("lastSettingsRoute()");
   });
 });

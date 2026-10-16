@@ -22,6 +22,7 @@ beforeAll(async () => {
   const base = pathToFileURL(REPO_ROOT + path.sep).href;
   const files: Record<string, string> = {
     composer: "web/src/components/Composer.tsx",
+    composerState: "web/src/features/opencode/useOpenCodeComposerState.ts",
     runtime: "web/src/runtime.ts",
     elicitation: "web/src/components/ElicitationModal.tsx",
     openCodeView: "web/src/features/opencode/OpenCodeView.tsx",
@@ -73,13 +74,18 @@ describe("slash-command palette wiring", () => {
   });
 
   it("leaves plain text, never a directive chip (OpenCode wants `/name args`)", () => {
+    // The Composer removes the trigger text on execute (no directive chip);
+    // the plain-text insertion itself is owned by the OpenCode hook the
+    // Composer consumes, so the invariant is asserted where the code now lives.
     expect(sources.composer).toContain("removeOnExecute");
-    expect(sources.composer).toContain("applyCommandSelection(");
+    expect(sources.composerState).toContain("applyCommandSelection(");
   });
 
   it("is feed-driven — the command list is never hardcoded in the composer", () => {
-    expect(sources.composer).toContain("useCommandsStore");
-    expect(sources.composer).toContain("toSlashCommands(");
+    // The feed store and its token→command conversion live in the OpenCode
+    // hook; the shared Composer hardcodes no commands of its own.
+    expect(sources.composerState).toContain("useCommandsStore");
+    expect(sources.composerState).toContain("toSlashCommands(");
   });
 
   it("keeps the OpenCode feed off Direct, and gates the palette on its entries", () => {

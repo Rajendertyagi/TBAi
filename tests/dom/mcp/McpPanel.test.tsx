@@ -11,7 +11,22 @@
  * the mocks):
  *   - @web/features/mcp/state/mcpStore.ts  (stable action refs + mutable server list)
  *   - @web/features/chat/state/chatTabs.ts (chat-tab navigation helpers)
- *   - react-router                         (useNavigate → records calls, no Router needed)
+ *
+ * ROUTER CONTEXT — a REAL router, not a mock.
+ * `McpPanel` and its expanded-capabilities sections (`ResourceSection` /
+ * `PromptSection`) call `useGoToChat()` → `useNavigate()` at render time, so
+ * mounting them requires a live `<Router>`.
+ *
+ * react-router is deliberately NOT mocked, because this repo carries TWO
+ * copies: `web/node_modules/react-router` (what every `@web` source resolves
+ * against) and the root `node_modules/react-router` (what files under
+ * `tests/` resolve against). A test-side `mock.module("react-router", …)`
+ * registers against the ROOT copy, which the component never imports, so it
+ * cannot satisfy the web copy's `useNavigate` — expansion threw
+ * "useNavigate() may be used only in the context of a <Router>".
+ * Instead the mount is wrapped in a real `MemoryRouter` imported from the
+ * web copy's own package path, so the router context comes from the exact
+ * module instance the component's `useNavigate` reads.
  *
  * Two key design constraints that shape every test in this file:
  *
@@ -37,6 +52,9 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { REPO_ROOT } from "../../helpers/repo-root";
 import type { McpStatus } from "@web/types/index.ts";
 
 // ── controllable mock state ─────────────────────────────────────────────────
@@ -95,12 +113,23 @@ mock.module("@web/features/chat/state/chatTabs.ts", () => ({
     tab.kind === "agent" ? `/code/${tab.ref}` : `/chat/${tab.ref}`,
 }));
 
-mock.module("react-router", () => ({
-  useNavigate: () => (path: string) => {
-    if (!calls.navigate) calls.navigate = [];
-    calls.navigate.push([path]);
-  },
-}));
+// ── the SAME react-router instance the component imports ────────────────────
+//
+// NOT `mock.module("react-router", …)` — see the header. `Bun.resolveSync`
+// resolves the bare specifier the way a file under `web/src` would (through
+// `web/node_modules`), returning the EXACT physical entry the component's
+// `react-router` import loads — the `.bun` store's `dist/production/index.js`,
+// NOT the root copy's (verified: `Bun.resolveSync("react-router", <web dir>)`
+// and `Bun.resolveSync("react-router", <tests dir>)` point at two different
+// files, so a Router from the root copy is dead context the hook never sees).
+//
+// The dynamic import is asserted against the root copy's type surface (same
+// version, structurally identical) purely for type-checking — it is NOT a
+// value import, so it creates no second runtime copy.
+const webRouterEntry = Bun.resolveSync("react-router", path.join(REPO_ROOT, "web", "src"));
+const { MemoryRouter } = (await import(
+  pathToFileURL(webRouterEntry).href
+)) as typeof import("react-router");
 
 // ── dynamic import AFTER mocks are registered ─────────────────────────────
 
@@ -136,12 +165,23 @@ function setServers(servers: McpStatus[]) {
   serverList = servers;
 }
 
+/**
+ * Mounts the panel inside a real `<MemoryRouter>`.
+ *
+ * The Router is what lets the expanded-capabilities sections mount at all —
+ * their `useNavigate()` needs router context, and the two-react-router-copies
+ * problem means only a Router from the web copy can provide it (see header).
+ */
 function mount(): { root: Root; container: HTMLElement } {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   act(() => {
-    root.render(<McpPanel />);
+    root.render(
+      <MemoryRouter initialEntries={["/settings/mcp"]}>
+        <McpPanel />
+      </MemoryRouter>,
+    );
   });
   return { root, container };
 }

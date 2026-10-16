@@ -28,6 +28,11 @@ import { REPO_ROOT } from "../../../helpers/repo-root";
 
 const SRC = path.join(REPO_ROOT, "web/src/features/opencode");
 const composer = fs.readFileSync(path.join(SRC, "..", "..", "components", "Composer.tsx"), "utf8");
+// The compact gate, duplicate-request lock and offer predicate moved out of the
+// shared Composer into the OpenCode composer-state hook when the Composer shed
+// its static opencode imports. The assertions below follow them there rather
+// than being deleted — the invariant is unchanged, only the owning file moved.
+const composerState = fs.readFileSync(path.join(SRC, "useOpenCodeComposerState.ts"), "utf8");
 const controller = fs.readFileSync(path.join(SRC, "v2ThreadController.ts"), "utf8");
 const display = fs.readFileSync(
   path.join(SRC, "..", "..", "components", "assistant-ui", "elements", "context-display.tsx"),
@@ -46,20 +51,24 @@ describe("/compact is intercepted locally and never reaches the model", () => {
     // `onSubmit` is composed first, so preventing here means the normal send
     // never fires. This is the structural reason /compact is local.
     expect(composer).toContain("onSubmit={handleComposerSubmit}");
-    expect(composer).toMatch(/if \(canCompact && isCompactCommandText\(composerText\)\)/);
+    // The funnel asks the OpenCode hook's predicate, which is the
+    // `canCompact && isCompactCommandText` gate (now owned by the hook).
+    expect(composer).toContain("openCode.shouldInterceptCompact(composerText)");
+    expect(composerState).toMatch(/canCompact && isCompactCommandText\(text\)/);
   });
 
   it("guards against a duplicate compact request while one is in flight", () => {
-    // Without this the guard, one Enter could admit two compactions.
-    expect(composer).toMatch(/if \(!context\?\.compact \|\| compacting\) return;/);
-    expect(composer).toContain("setCompacting(true)");
-    expect(composer).toContain("setCompacting(false)");
+    // Without this the guard, one Enter could admit two compactions. The
+    // re-entry lock is the `compactingRef` flag set before the await.
+    expect(composerState).toMatch(/if \(!context\?\.compact \|\| compactingRef\.current\) return;/);
+    expect(composerState).toContain("compactingRef.current = true;");
+    expect(composerState).toContain("compactingRef.current = false;");
   });
 
   it("offers the command only where a session exists to compact", () => {
     // A Direct surface has no OpenCode session, so /compact is absent there
     // rather than silently unavailable.
-    expect(composer).toContain("shouldOfferCompact(isCodeSurface, openCodeRuntimeContext)");
+    expect(composerState).toContain("shouldOfferCompact(isCodeSurface, openCodeRuntimeContext)");
   });
 
   it("reports a refused compaction instead of claiming success", () => {

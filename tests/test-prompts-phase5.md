@@ -99,9 +99,14 @@ Original prompts follow; implemented items are marked [DONE].
 **File:** `tests/dom/core/IndexRedirect.behavioral.test.tsx` — Case C passes.
 **Prompt:** Empty store. Assert the destination is `/chat/new`.
 
-### Tests 23a/23b/23c full-router E2E [PENDING]
-**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright — not yet written)
-**Prompt:** Seed a conversation. Navigate to `/#/`. Assert the resulting URL and rendered surface for each of the three cases. Blocked on nothing — uses the existing Playwright harness — but not yet written.
+### Tests 23a/23b/23c full-router E2E [DONE]
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright) — 3 pass, 0 fail
+against the isolated E2E server (`bun run test:e2e -- index-redirect.spec.ts`).
+- 23a: seeded Direct conversation + active `chat:<id>` tab → `#/chat/<id>` + composer.
+- 23b: seeded `engine: "opencode"` conversation + active `agent:<id>` tab →
+  `#/code/<id>` + shell chrome, no fallback to `/chat/new`.
+- 23c: empty store → `#/chat/new` + welcome surface + `history.length === 2`
+  (proves replacement, not push: baseline `about:blank` + one `goto`).
 
 ---
 
@@ -115,6 +120,44 @@ Original prompts follow; implemented items are marked [DONE].
 
 ## 9. Source guard — no page tab references remain in production code
 
-### Test 25: no page tab references in source
+### Test 25: no page tab references in source [DONE]
 **File:** `tests/unit/web/chat/no-page-tab-source.test.ts`
 **Prompt:** Read `web/src/features/chat/state/chatTabs.ts`. Assert the source does NOT contain `kind: "page"`. Assert the source does NOT contain `pageKey`. Assert the source does NOT contain `openPage`. Assert the source does NOT contain `page:` (as a string prefix in key construction).
+
+---
+
+## 10. Routing Contract and URL Builders
+
+### Test 26: Routes module separation and path builders [DONE]
+**File:** `tests/unit/web/navigation/routes-contract.test.ts` — 6 pass, 0 fail.
+**Prompt:** Test `ROUTES` object from `web/src/config/routes.ts`. Assert `ROUTES.chat()` resolves to `/chat/new` when given undefined, empty, or `"new"`. Assert `ROUTES.chat("abc")` resolves to `/chat/abc`. Assert `ROUTES.code("abc")` resolves to `/code/abc`. Assert `ROUTES.code("")` throws an error explaining Code draft is not supported. Assert `ROUTES.parseConversationId` safely decodes URL segments and handles both `/chat/` and `/code/` prefixes.
+
+---
+
+## 11. Tab Persistence and Initial Invariant
+
+### Test 27: Initial draft tab invariant across edge cases [DONE]
+**File:** `tests/unit/web/chat/chatTabs.persistence.test.ts` — 11 pass, 0 fail.
+**Prompt:** Test `loadPersisted()` and `loadRaw()` under synthetic `localStorage` states. Assert that when `localStorage` has no key, invalid JSON, or throwing `getItem`, `loadPersisted()` returns exactly 1 tab with `kind: "chat"`, `ref: "new"`, and `activeKey: "chat:new"`. Assert legacy `{ openIds: ["a", "", "a", "b"], activeId: "c" }` migrates to unique non-empty tabs and picks `chat:a` as activeKey. Assert that a snapshot with only poisoned unrepairable tabs heals to the fresh draft tab.
+
+---
+
+## 12. Nested Route Error Containment
+
+### Test 28: Router structural check for nested error elements [DONE]
+**File:** `tests/dom/core/router-smoke.test.tsx` — 9 pass, 0 fail.
+**Prompt:** Read `web/src/app/router.tsx`. Assert that `errorElement: <RouteError />` is declared on `ChatShell` and `SettingsLayout` in addition to `AppShell` and `CodeShell`.
+
+---
+
+## 13. Full Application Routing, Cross-Engine & Persistence E2E
+
+### Test 29: Cross-engine, deep link refresh, 404 recovery, and AppShell persistence E2E [DONE]
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright) — 8 tests.
+**Prompt:** Seed real Direct and OpenCode conversations.
+1. Index redirects: Active Direct, active Code, and empty storage fallback.
+2. Cross-engine: Navigate to `/#/chat/<opencodeId>`, assert URL transitions to `#/code/<opencodeId>`. Navigate to `/#/code/<directId>`, assert URL transitions to `#/chat/<directId>`.
+3. Refresh: Navigate to `/#/chat/<id>` and `/#/code/<id>`, reload page, assert URL and active tabs remain intact.
+4. AppShell persistence: Attach a unique token to `window` in AppShell, navigate from Chat to Code, assert the token persists (proving AppShell did not unmount).
+5. Confirmed 404: Navigate to non-existent ID, assert safe eviction and redirection to `#/chat/new` without looping.
+6. History back: Verify replacement navigation on index redirect so browser back does not bounce in loops.

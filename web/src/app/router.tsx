@@ -44,6 +44,7 @@ export const router = createHashRouter([
         // ChatShell: Direct runtime provider for all normal app routes.
         // Renders <Outlet /> for its children; AppShell is the universal parent.
         Component: ChatShell,
+        errorElement: <RouteError />,
         children: [
           {
             index: true,
@@ -76,6 +77,7 @@ export const router = createHashRouter([
           },
           {
             Component: SettingsLayout,
+            errorElement: <RouteError />,
             children: [
               {
                 path: "memory",

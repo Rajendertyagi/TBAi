@@ -87,21 +87,11 @@ export interface AppConfig {
 
 const features: Record<string, never> = {};
 
-/**
- * Route path constants — the only place route literals live (alongside
- * router.tsx route definitions). Components import these; they never hardcode
- * paths. NavItem routes reference these constants so there is one source
- * of truth.
- */
-export const ROUTES = {
-  CHAT: "/chat",
-  CHAT_NEW: "/chat/new",
-  FOLDERS: "/folders",
-  CODE: "/code",
-} as const;
+import { ROUTES } from "./routes";
+export { ROUTES };
 
 /** Fallback settings route (no settings-index page exists). */
-const SETTINGS_INDEX_ROUTE = "/providers";
+const SETTINGS_INDEX_ROUTE = ROUTES.SETTINGS.ROOT;
 
 export const appConfig: AppConfig = {
   branding: {
@@ -126,7 +116,7 @@ export const appConfig: AppConfig = {
       label: "Providers",
       icon: Server,
       view: "providers",
-      route: "/providers",
+      route: ROUTES.SETTINGS.PROVIDERS,
       description: "Models, endpoints, API keys",
       visible: true,
       railVisible: false,
@@ -137,7 +127,7 @@ export const appConfig: AppConfig = {
       label: "Appearance",
       icon: Palette,
       view: "appearance",
-      route: "/appearance",
+      route: ROUTES.SETTINGS.APPEARANCE,
       description: "Theme and display",
       visible: true,
       railVisible: false,
@@ -148,7 +138,7 @@ export const appConfig: AppConfig = {
       label: "Workspace",
       icon: FolderCog,
       view: "workspace",
-      route: "/workspace",
+      route: ROUTES.SETTINGS.WORKSPACE,
       description: "Working folder and tools",
       visible: true,
       railVisible: false,
@@ -159,7 +149,7 @@ export const appConfig: AppConfig = {
       label: "OpenCode Config",
       icon: ShieldCheck,
       view: "opencode-config",
-      route: "/opencode-config",
+      route: ROUTES.SETTINGS.OPENCODE,
       description: "The real OpenCode configuration and its permission rules",
       visible: true,
       railVisible: false,
@@ -181,7 +171,7 @@ export const appConfig: AppConfig = {
       label: "Desktop",
       icon: Monitor,
       view: "desktop",
-      route: "/desktop",
+      route: ROUTES.SETTINGS.DESKTOP,
       description: "Window layout and desktop options",
       visible: true,
       railVisible: false,
@@ -192,7 +182,7 @@ export const appConfig: AppConfig = {
       label: "Memory",
       icon: Circle,
       view: "memories",
-      route: "/memory",
+      route: ROUTES.SETTINGS.MEMORY,
       description: "Long-term memories",
       visible: true,
       railVisible: false,
@@ -203,7 +193,7 @@ export const appConfig: AppConfig = {
       label: "Quick Messages",
       icon: MessageSquareText,
       view: "quick-messages",
-      route: "/quick-messages",
+      route: ROUTES.SETTINGS.QUICK_MESSAGES,
       description: "Reusable composer snippets",
       visible: true,
       railVisible: false,
@@ -214,7 +204,7 @@ export const appConfig: AppConfig = {
       label: "MCP",
       icon: Plug,
       view: "mcp",
-      route: "/mcp",
+      route: ROUTES.SETTINGS.MCP,
       description: "External model tools",
       visible: true,
       railVisible: false,
@@ -225,7 +215,7 @@ export const appConfig: AppConfig = {
       label: "Scheduler",
       icon: Clock,
       view: "scheduler",
-      route: "/scheduler",
+      route: ROUTES.SCHEDULER,
       description: "Automated scheduled runs",
       visible: true,
       order: 10,
@@ -235,7 +225,7 @@ export const appConfig: AppConfig = {
       label: "Archived",
       icon: Archive,
       view: "archived",
-      route: "/archived",
+      route: ROUTES.ARCHIVED,
       description: "Archived conversations",
       visible: true,
       order: 11,
@@ -245,7 +235,7 @@ export const appConfig: AppConfig = {
       label: "Logs",
       icon: ScrollText,
       view: "logs",
-      route: "/logs",
+      route: ROUTES.SETTINGS.LOGS,
       description: "Application logs",
       visible: true,
       railVisible: false,
