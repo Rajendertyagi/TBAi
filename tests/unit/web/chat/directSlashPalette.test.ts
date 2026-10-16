@@ -79,13 +79,26 @@ describe("Direct offers its own commands in the palette", () => {
     const src = composer();
     // Selection reaches the composer through the shared insertion helper and nothing
     // else, so selecting a row cannot compact on its own: the command runs on submit.
+    // Post-Phase-2 the insertion helper lives in the OpenCode hook (`selectCommand`);
+    // the Composer passes it through without adding transport calls.
     const entries = src.slice(src.indexOf("const directSlashEntries"));
     expect(entries.slice(0, entries.indexOf("const slashEntries"))).toContain(
-      "applyCommandSelection(composerText, name)",
+      "openCode.selectCommand",
     );
     // Critically: no direct transport call from the palette.
     expect(entries.slice(0, entries.indexOf("const slashEntries"))).not.toContain(
       "runDirectCompact",
+    );
+    // And the hook's selectCommand itself only inserts text.
+    const hook = stripComments(
+      fs.readFileSync(
+        path.join(REPO_ROOT, "web/src/features/opencode/useOpenCodeComposerState.ts"),
+        "utf8",
+      ),
+    );
+    const select = hook.slice(hook.indexOf("const selectCommand"));
+    expect(select.slice(0, select.indexOf("shouldInterceptCompact"))).toContain(
+      "applyCommandSelection(composerText, name)",
     );
   });
 
@@ -97,10 +110,21 @@ describe("Direct offers its own commands in the palette", () => {
   });
 
   it("keeps the Code surface's own entries untouched", () => {
+    // Post-Phase-2 the Code entries live in the OpenCode hook; the Composer
+    // consumes them through it. Assert both halves: the hook still builds
+    // them the same way, and the Composer still wires them into the palette.
+    const hook = stripComments(
+      fs.readFileSync(
+        path.join(REPO_ROOT, "web/src/features/opencode/useOpenCodeComposerState.ts"),
+        "utf8",
+      ),
+    );
+    expect(hook).toContain("toSlashCommands(openCodeCommands");
+    expect(hook).toContain("buildCompactEntry(");
+    expect(hook).toContain("shouldOfferCompact(isCodeSurface, openCodeRuntimeContext)");
     const src = composer();
-    expect(src).toContain("toSlashCommands(openCodeCommands");
-    expect(src).toContain("buildCompactEntry(");
-    expect(src).toContain("shouldOfferCompact(isCodeSurface, openCodeRuntimeContext)");
+    expect(src).toContain("openCode.slashEntries");
+    expect(src).toContain("openCode.shouldInterceptCompact");
   });
 });
 

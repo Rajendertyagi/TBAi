@@ -1,7 +1,19 @@
 # TBAi Phase 5 — Test Prompts (Deferred Cleanup)
 
-This file tracks test prompts for Phase 5 changes. Tests are NOT implemented yet —
-these are descriptions for the dedicated testing agent.
+Status ledger (updated after implementation):
+- Tests 13–15, 16–22, 24–25: IMPLEMENTED and PASSING (see files below).
+- Test 23 (source guard): IMPLEMENTED and PASSING
+  (`tests/dom/core/IndexRedirect.test.tsx`).
+- Tests 23a/23b/23c (behavioral redirect decision): IMPLEMENTED and PASSING
+  (`tests/dom/core/IndexRedirect.behavioral.test.tsx` — executes the real
+  store + real `activeTab`/`urlForTab`; rendering is pinned by Test 23).
+- Full end-to-end redirect through a mounted router: DEFERRED — the repo has
+  two copies of react-router (`web/node_modules` vs root), so a test-side
+  `MemoryRouter` cannot provide context to `@web` components. Playwright E2E
+  (`tests/e2e/routing/index-redirect.spec.ts`) remains the vehicle for that
+  coverage and is PENDING.
+
+Original prompts follow; implemented items are marked [DONE].
 
 ---
 
@@ -71,21 +83,25 @@ these are descriptions for the dedicated testing agent.
 
 ## 7. `IndexRedirect.tsx` — declarative Navigate with active-tab restoration
 
-### Test 23: IndexRedirect renders Navigate declaratively (no imperative effect)
-**File:** `tests/dom/core/IndexRedirect.test.tsx`
+### Test 23: IndexRedirect renders Navigate declaratively (no imperative effect) [DONE]
+**File:** `tests/dom/core/IndexRedirect.test.tsx` — 5 pass, 0 fail.
 **Prompt:** Read `web/src/app/IndexRedirect.tsx` as text. Assert the source does NOT contain `useEffect` or `useNavigate`. Assert the source contains `<Navigate`. Assert the source does NOT contain `return null` (it returns the Navigate element).
 
-### Test 23a: IndexRedirect restores active chat tab
-**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright)
-**Prompt:** Seed a conversation. Set the persisted tab store with an active chat tab key (`chat:<id>`). Navigate to `/#/`. Assert the resulting URL is `#/chat/<id>` (not `#/chat/new`). Assert the chat surface renders.
+### Test 23a: IndexRedirect restores active chat tab [DONE — decision level]
+**File:** `tests/dom/core/IndexRedirect.behavioral.test.tsx` — Case A passes.
+**Prompt:** Set the real store with an active chat tab (`chat:<id>`). Evaluate the same expression the component renders (`activeTab` + `urlForTab`, fallback `ROUTES.CHAT_NEW`). Assert the destination is `/chat/<id>`.
 
-### Test 23b: IndexRedirect restores active agent tab
-**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright)
-**Prompt:** Set the persisted tab store with an active agent tab key (`agent:<id>`). Navigate to `/#/`. Assert the resulting URL is `#/code/<id>`. Assert the Code surface renders.
+### Test 23b: IndexRedirect restores active agent tab [DONE — decision level]
+**File:** `tests/dom/core/IndexRedirect.behavioral.test.tsx` — Case B passes.
+**Prompt:** Set the real store with an active agent tab (`agent:<id>`). Assert the destination is `/code/<id>`.
 
-### Test 23c: IndexRedirect falls back to /chat/new when no tabs exist
-**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright)
-**Prompt:** Clear the persisted tab store (empty `tabs` array). Navigate to `/#/`. Assert the resulting URL is `#/chat/new`. Assert the welcome draft renders.
+### Test 23c: IndexRedirect falls back to /chat/new when no tabs exist [DONE — decision level]
+**File:** `tests/dom/core/IndexRedirect.behavioral.test.tsx` — Case C passes.
+**Prompt:** Empty store. Assert the destination is `/chat/new`.
+
+### Tests 23a/23b/23c full-router E2E [PENDING]
+**File:** `tests/e2e/routing/index-redirect.spec.ts` (Playwright — not yet written)
+**Prompt:** Seed a conversation. Navigate to `/#/`. Assert the resulting URL and rendered surface for each of the three cases. Blocked on nothing — uses the existing Playwright harness — but not yet written.
 
 ---
 

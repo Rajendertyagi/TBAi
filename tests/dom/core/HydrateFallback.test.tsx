@@ -15,8 +15,15 @@ describe("HydrateFallback component & router registration", () => {
     const raw = await Bun.file(path.join(REPO_ROOT, "web/src/app/router.tsx")).text();
     const source = raw.replace(/\r\n/g, "\n");
     expect(source).toContain('import { HydrateFallback } from "./HydrateFallback";');
-    expect(source).toContain('path: "/",\n    Component: ChatShell,\n    HydrateFallback,');
-    expect(source).toContain('path: "/code/:agentId?",');
-    expect(source).toContain("HydrateFallback,\n    errorElement: <RouteError />,");
+    // AppShell is the universal root component for "/"
+    expect(source).toContain('path: "/",');
+    expect(source).toContain("Component: AppShell,");
+    expect(source).toContain("HydrateFallback,");
+    // ChatShell is nested under AppShell
+    expect(source).toContain("Component: ChatShell,");
+    // CodeShell is a sibling branch under AppShell (not under ChatShell)
+    expect(source).toContain('path: "code/:agentId?"');
+    expect(source).toContain("HydrateFallback,");
+    expect(source).toContain("errorElement: <RouteError />");
   });
 });

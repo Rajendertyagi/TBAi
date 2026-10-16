@@ -17,10 +17,18 @@ describe("router-smoke", () => {
     return raw.replace(/\r\n/g, "\n");
   }
 
-  it("registers ChatShell as the component for '/'", async () => {
+  it("registers AppShell as the universal root component for '/'", async () => {
     const source = await readRouter();
     expect(source).toContain('path: "/",');
+    expect(source).toContain("Component: AppShell,");
+  });
+
+  it("registers ChatShell as a nested layout under AppShell", async () => {
+    const source = await readRouter();
     expect(source).toContain("Component: ChatShell,");
+    // ChatShell is inside AppShell's children
+    const appShellSection = source.slice(source.indexOf('path: "/",'));
+    expect(appShellSection).toContain("Component: ChatShell,");
   });
 
   it("registers IndexRedirect as the index route under ChatShell", async () => {
@@ -35,11 +43,18 @@ describe("router-smoke", () => {
     expect(source).toContain('import("../features/chat/components/ChatView")');
   });
 
-  it("lazy-loads CodeShell at /code/:agentId? outside ChatShell", async () => {
+  it("lazy-loads CodeShell at /code/:agentId? as sibling of ChatShell", async () => {
     const source = await readRouter();
     expect(source).toContain('path: "code/:agentId?"');
     expect(source).toContain('import("../features/opencode/CodeShell")');
-    expect(source).toContain("errorElement: <RouteError />,");
+    // CodeShell is NOT nested under ChatShell (check the lazy import, not
+    // the bare word — the comment above the Code route mentions CodeShell)
+    const chatShellStart = source.indexOf("Component: ChatShell,");
+    const codeShellStart = source.indexOf('path: "code/:agentId?"');
+    expect(codeShellStart).toBeGreaterThan(chatShellStart);
+    // The CodeShell section is outside ChatShell's children block
+    const chatShellSection = source.slice(chatShellStart, codeShellStart);
+    expect(chatShellSection).not.toContain('import("../features/opencode/CodeShell")');
   });
 
   it("registers settings routes under SettingsLayout", async () => {
@@ -67,18 +82,18 @@ describe("router-smoke", () => {
     expect(source).toContain('{ path: "*", element: <Navigate to="/" replace /> }');
   });
 
-  it("HydrateFallback is preserved on ChatShell and CodeShell", async () => {
+  it("HydrateFallback is preserved on AppShell and CodeShell", async () => {
     const source = await readRouter();
-    expect(source).toContain("Component: ChatShell,");
+    expect(source).toContain("Component: AppShell,");
     expect(source).toContain("HydrateFallback,");
     expect(source).toContain('path: "code/:agentId?"');
   });
 
-  it("errorElement is preserved on ChatShell and CodeShell", async () => {
+  it("errorElement is preserved on AppShell and CodeShell", async () => {
     const source = await readRouter();
-    const chatSection = source.slice(source.indexOf('path: "/",'));
-    expect(chatSection).toContain("errorElement: <RouteError />");
-    const codeSection = source.slice(source.indexOf('path: "code/:agentId?"'));
-    expect(codeSection).toContain("errorElement: <RouteError />");
+    const appShellSection = source.slice(source.indexOf('path: "/",'));
+    expect(appShellSection).toContain("errorElement: <RouteError />");
+    const codeShellSection = source.slice(source.indexOf('path: "code/:agentId?"'));
+    expect(codeShellSection).toContain("errorElement: <RouteError />");
   });
 });
