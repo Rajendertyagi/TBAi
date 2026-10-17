@@ -22,6 +22,9 @@ which is, in order:
 | Test locations | `bun run test:locations` | A test file or test-only asset outside `tests/` |
 | Build | `bun run build` | Anything that compiles but does not bundle |
 | Tests | `bun run test` | Unit and integration behaviour |
+| Shutdown lifecycle | `bun run test:shutdown` | The shutdown spine, in its own process (it closes the DB singleton) |
+| Startup rollback | `bun run test:startup-rollback` | Failed-boot rollback, in its own process |
+| Lifecycle integration | `bun run test:lifecycle-integration` | Entry-point boot/shutdown wiring, in its own process |
 | DOM contracts | `bun run test:dom` | Contracts that need a mounted React tree |
 
 Not part of `verify`, because it needs a browser and a spawned server:
@@ -96,10 +99,20 @@ is the defect this section exists to prevent.
 ### CI
 
 The `verify` job in `.github/workflows/tests.yml` runs, in order: typecheck, lint,
-format check, the test-location policy, **build**, the unit/integration suite and
-the DOM suite. That is the same sequence `bun run verify` runs locally, and the
-two are kept in step deliberately: a local gate that runs less than CI hides
-exactly the regressions CI exists to catch.
+format check, the test-location policy, **build**, the unit/integration suite, the
+three isolated lifecycle suites, and the DOM suite. That is the same sequence
+`bun run verify` runs locally, and the two are kept in step deliberately: a local
+gate that runs less than CI hides exactly the regressions CI exists to catch.
+
+The three lifecycle suites (`test:shutdown`, `test:startup-rollback`,
+`test:lifecycle-integration`) each close the process-wide database singleton, so
+they cannot run inside `bun run test` — the suite script excludes them by path for
+exactly that reason, and it is why each needs its own `bun test` process. `verify`
+chains them as three scripts and the CI job runs them as three steps, so closing
+the singleton in one cannot poison another, and a failure names the suite that
+failed. Both sides are covered automatically; before this they were run by no gate
+at all, so a change to the shutdown or rollback spine was covered only when
+someone remembered to invoke them by hand.
 
 The parity is enforced rather than asserted. `tests/unit/tooling/verify-script.test.ts`
 parses the workflow's actual `run:` steps and compares the resulting gate sequence

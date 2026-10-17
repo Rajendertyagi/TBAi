@@ -52,6 +52,12 @@ const EXPECTED_SEQUENCE = [
   "test:locations",
   "build",
   "test",
+  // The three isolated lifecycle suites: each closes the process-wide database
+  // singleton, so each needs its own process — locally they are chained
+  // scripts, on CI they are separate steps (see docs/engineering-quality.md).
+  "test:shutdown",
+  "test:startup-rollback",
+  "test:lifecycle-integration",
   "test:dom",
 ] as const;
 
@@ -223,6 +229,12 @@ function buildJob(stepOverrides: Record<string, string>): string {
       "      - name: Test location policy\n        run: bun run test:locations\n",
     Build: "      - name: Build\n        run: bun run build\n",
     Test: "      - name: Test\n        run: |\n          bun run test 2>&1 | Tee-Object -FilePath test-output.log\n          $code = $LASTEXITCODE\n          if ($code -ne 0) { exit $code }\n",
+    "Test (shutdown lifecycle)":
+      "      - name: Test (shutdown lifecycle)\n        run: bun run test:shutdown\n",
+    "Test (startup rollback)":
+      "      - name: Test (startup rollback)\n        run: bun run test:startup-rollback\n",
+    "Test (lifecycle integration)":
+      "      - name: Test (lifecycle integration)\n        run: bun run test:lifecycle-integration\n",
     "Test (DOM contract)": "      - name: Test (DOM contract)\n        run: bun run test:dom\n",
     ...stepOverrides,
   };

@@ -102,6 +102,12 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let intervalMs = DEFAULT_HISTORY_RECONCILE_INTERVAL_MS;
 let ticks = 0;
 let inFlight = false;
+/**
+ * The currently running reconciliation tick, if any. Stored so shutdown can
+ * drain it: clearing the timer stops future ticks, but a tick already writing
+ * must complete before the database closes.
+ */
+let inflightTick: Promise<unknown> | null = null;
 let deps: HistoryReconcilerDeps | null = null;
 let graceMs = DEFAULT_HISTORY_RECONCILE_GRACE_MS;
 let limit = DEFAULT_HISTORY_RECONCILE_LIMIT;
@@ -162,6 +168,10 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
   }
 
   inFlight = true;
+  let resolveTick!: () => void;
+  inflightTick = new Promise<void>((resolve) => {
+    resolveTick = resolve;
+  });
   const report: HistoryReconcileReport = {
     scanned: 0,
     written: 0,
@@ -229,6 +239,8 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
     return null;
   } finally {
     inFlight = false;
+    inflightTick = null;
+    resolveTick();
   }
 }
 
@@ -274,6 +286,15 @@ export function stopHistoryReconciliation(): boolean {
   timer = null;
   deps = null;
   return true;
+}
+
+/**
+ * Await the currently running reconciliation tick, if any. Resolves
+ * immediately when idle. Stopping the timer prevents future ticks; draining
+ * proves no tick is still writing when the database closes.
+ */
+export function drainHistoryReconciliation(): Promise<void> {
+  return inflightTick ? inflightTick.then(() => undefined) : Promise.resolve();
 }
 
 /**

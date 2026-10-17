@@ -53,6 +53,12 @@ const pendingRuns = new Set<Promise<unknown>>();
 /** Set once shutdown begins: fire paths refuse new work. */
 let shuttingDown = false;
 
+/** False until essential boot recovery completes; scheduler routes 503 until then. */
+let schedulerReady = false;
+
+/** Overdue one-time jobs whose execution was deferred past the listener bind. */
+let deferredOverdue: SchedulerJob[] = [];
+
 /** Test seam: invoked after controllerForRun, before ensureJobConversation. */
 let setupDelayHook: (() => Promise<void>) | null = null;
 
@@ -433,6 +439,23 @@ export interface RecoveryReport {
 
 /** Startup recovery: reconcile interrupted runs, rebuild timers, apply missed policy. */
 export async function recover(database: Database = db): Promise<RecoveryReport> {
+  const report = await recoverEssential(database);
+  const overdue = await recoverOverdue(database);
+  report.ranFromGrace += overdue.ranFromGrace;
+  report.missed += overdue.missed;
+  return report;
+}
+
+/**
+ * Essential boot recovery: reconcile interrupted runs, prune, and rebuild all
+ * timers. Fast (database reads + timer registration, no provider calls), so it
+ * runs before the HTTP listener serves scheduler-dependent routes.
+ *
+ * Overdue one-time jobs within their grace window are NOT executed here —
+ * their execution is deferred to recoverOverdue(), which runs after the
+ * listener binds so a slow provider call cannot delay readiness.
+ */
+export async function recoverEssential(database: Database = db): Promise<RecoveryReport> {
   logger.info("scheduler", "scheduler.maintenance", { phase: "started" });
   const report: RecoveryReport = {
     interrupted: 0,
@@ -464,10 +487,11 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
         if (job.execAt == null) continue;
         if (job.execAt <= Date.now()) {
           const overdueSec = Math.floor((Date.now() - job.execAt) / 1000);
-          await handleOverdueOnce(job, database);
           if (overdueSec <= Math.max(0, job.missedGraceSeconds)) {
-            report.ranFromGrace += 1;
+            // Within grace: execution is deferred past the listener bind.
+            deferredOverdue.push(job);
           } else {
+            await handleOverdueOnce(job, database);
             report.missed += 1;
           }
         } else {
@@ -495,14 +519,73 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
   return report;
 }
 
+/**
+ * Deferred overdue execution: run the overdue one-time jobs that
+ * recoverEssential set aside. Runs after the HTTP listener binds, so slow
+ * provider calls delay neither the bind nor the Tauri handshake.
+ */
+export async function recoverOverdue(
+  database: Database = db,
+): Promise<{ ranFromGrace: number; missed: number }> {
+  const jobs = deferredOverdue;
+  deferredOverdue = [];
+  let ranFromGrace = 0;
+  let missed = 0;
+  for (const job of jobs) {
+    try {
+      const overdueSec = Math.floor((Date.now() - (job.execAt ?? Date.now())) / 1000);
+      await handleOverdueOnce(job, database);
+      if (overdueSec <= Math.max(0, job.missedGraceSeconds)) {
+        ranFromGrace += 1;
+      } else {
+        missed += 1;
+      }
+    } catch (err) {
+      logger.warn("scheduler", "scheduler.maintenance", {
+        phase: "job_failed",
+        jobId: job.id,
+        message: err instanceof Error ? err.message : "Recovery failed for job",
+      });
+      schedulerStore.update(
+        job.id,
+        { enabled: false, status: "failed", nextRunAt: null },
+        database,
+      );
+    }
+  }
+  return { ranFromGrace, missed };
+}
+
 /** Boot the scheduler: recover + rebuild all timers. Call once at startup. */
 export async function initScheduler(): Promise<RecoveryReport> {
   return recover(db);
 }
 
+/** Whether essential scheduler recovery has completed (readiness gate). */
+export function isSchedulerReady(): boolean {
+  return schedulerReady;
+}
+
+/**
+ * Mark essential scheduler recovery complete. Called once at startup after
+ * timer rebuild, before overdue execution. Tests reuse it to drive the gate.
+ */
+export function setSchedulerReady(ready: boolean): void {
+  schedulerReady = ready;
+}
+
 /** For tests: how many active timer handles are cached. */
 export function activeTimerCount(): number {
   return timers.size;
+}
+
+/**
+ * Whether any tracked scheduler execution is still unsettled. Used by the
+ * shutdown spine to re-check, just before database closure, that no
+ * write-capable work remains after a fired deadline.
+ */
+export function hasPendingRuns(): boolean {
+  return pendingRuns.size > 0;
 }
 
 /** For tests/shutdown: clear all cached timers without touching the DB. */
@@ -538,17 +621,34 @@ export function setSetupDelayHook(hook: (() => Promise<void>) | null): void {
  */
 export async function abortAllRuns(
   timeoutMs = 10_000,
-): Promise<{ aborted: number; settled: number; timedOut: number }> {
+): Promise<{ aborted: number; settled: number; timedOut: number; deadlineHit: boolean }> {
   shuttingDown = true;
   const snapshot = [...pendingRuns];
   const controllers = [...runControllers.values()];
   for (const controller of controllers) controller.abort();
-  const bound = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
-  await Promise.race([Promise.allSettled(snapshot), bound]);
+  let deadlineHit = false;
+  let boundTimer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    boundTimer = setTimeout(() => {
+      deadlineHit = true;
+      resolve();
+    }, timeoutMs);
+  });
+  // Deliberately referenced while the race is pending: at shutdown this bound is
+  // the handle that keeps the process alive until slow work settles or the bound
+  // expires, so classification and database closure cannot be skipped by an
+  // empty event loop. It is cleared the moment the race resolves, so a clean
+  // shutdown exits immediately instead of lingering for the full bound.
+  try {
+    await Promise.race([Promise.allSettled(snapshot), bound]);
+  } finally {
+    if (boundTimer !== undefined) clearTimeout(boundTimer);
+  }
   const stillPending = snapshot.filter((p) => pendingRuns.has(p)).length;
   return {
     aborted: controllers.length,
     settled: snapshot.length - stillPending,
     timedOut: stillPending,
+    deadlineHit,
   };
 }

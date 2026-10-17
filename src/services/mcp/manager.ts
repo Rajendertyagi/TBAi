@@ -81,6 +81,8 @@ interface McpConnection {
 const MAX_EVENTS = 50;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
+/** Bound for awaiting in-flight connect attempts during disconnectAll/rollback. */
+const INFLIGHT_SETTLE_TIMEOUT_MS = 5000;
 /** Read-only SSE probe budget: 3s, diagnostics only, never the transport. */
 const _SSE_PROBE_TIMEOUT_MS = 3000;
 
@@ -150,6 +152,13 @@ export class McpManager {
    * becomes a fact the attempt can actually observe.
    */
   private lifecycleGen = new Map<string, number>();
+  /**
+   * In-flight connect attempt promises per server id, tracked from generation
+   * claim until the attempt settles (registered or abandoned). An attempt
+   * parked before registration has no `connections` entry, so this is the only
+   * record that a startup rollback or disconnectAll can await.
+   */
+  private inflightConnects = new Map<string, Set<Promise<void>>>();
   private initialized = false;
 
   static getInstance(): McpManager {
@@ -280,7 +289,70 @@ export class McpManager {
 
   // ---- Connection lifecycle ----
 
-  async connect(id: string): Promise<void> {
+  /**
+   * Connect to one server. The attempt is tracked from creation until it
+   * settles so a startup rollback or disconnectAll can await attempts that
+   * have not registered a `connections` entry yet.
+   */
+  connect(id: string): Promise<void> {
+    const attempt = this.runConnect(id);
+    this.trackInflightConnect(id, attempt);
+    return attempt;
+  }
+
+  /** Whether any connect attempt is still in flight (for rollback/shutdown). */
+  hasInflightConnects(): boolean {
+    return this.inflightConnects.size > 0;
+  }
+
+  /**
+   * In-memory connection status for one server, without touching the database.
+   * Returns "missing" when no entry is registered. Used to observe teardown
+   * after the database has closed, where getStatuses() cannot run.
+   */
+  getConnectionStatus(id: string): string {
+    return this.connections.get(id)?.status ?? "missing";
+  }
+
+  private trackInflightConnect(id: string, attempt: Promise<void>): void {
+    let set = this.inflightConnects.get(id);
+    if (!set) {
+      set = new Set();
+      this.inflightConnects.set(id, set);
+    }
+    set.add(attempt);
+    void attempt
+      .finally(() => {
+        set.delete(attempt);
+        if (set.size === 0) this.inflightConnects.delete(id);
+      })
+      .catch(() => {
+        /* connect logs its own failures; the tracker never rejects */
+      });
+  }
+
+  /** Await in-flight connect attempts, bounded so rollback cannot hang. */
+  private async awaitInflightSettled(timeoutMs: number): Promise<void> {
+    const pending = [...this.inflightConnects.values()].flatMap((set) => [...set]);
+    if (pending.length === 0) return;
+    let boundTimer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<void>((resolve) => {
+      boundTimer = setTimeout(resolve, timeoutMs);
+    });
+    // Referenced while the race is pending, so this bound is the handle that
+    // holds the process open until a slow attempt settles or the bound expires.
+    // Cleared the moment the race resolves — including the early-settlement and
+    // rejection paths — so a disconnect whose attempts finished quickly does not
+    // keep the process alive for the full bound (see chat-runs.awaitSettled and
+    // scheduler.abortAllRuns, which clear theirs the same way).
+    try {
+      await Promise.race([Promise.allSettled(pending), bound]);
+    } finally {
+      if (boundTimer !== undefined) clearTimeout(boundTimer);
+    }
+  }
+
+  private async runConnect(id: string): Promise<void> {
     const loaded = readStoredRow(id);
     if (!loaded) return;
     // Named only for the abandon report below. The connection this attempt ends up
@@ -682,8 +754,18 @@ export class McpManager {
 
   /** Disconnect every connection; never throws (used at shutdown). */
   async disconnectAll(): Promise<void> {
+    // Invalidate FIRST: an attempt parked before registration (between claiming
+    // its generation and calling connections.set) has no entry to mark, so the
+    // generation bump is the only signal that can reach it. Awaiting before
+    // invalidating could deadlock if the attempt is waiting on a close that only
+    // invalidation-triggered teardown performs.
+    for (const id of this.inflightConnects.keys()) this.invalidate(id);
+    // Disconnect registered entries BEFORE awaiting in-flight attempts: closing
+    // a client rejects the connect parked on it, which is what lets that
+    // attempt settle. Awaiting first would wait on work only this step ends.
     const ids = [...this.connections.keys()];
     await Promise.allSettled(ids.map((id) => this.disconnect(id)));
+    await this.awaitInflightSettled(INFLIGHT_SETTLE_TIMEOUT_MS);
   }
 
   /** Resolve a pending elicitation as cancelled, if one exists. */

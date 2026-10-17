@@ -32,6 +32,8 @@ export interface ChatStreamCleanupState {
   intervalMs: number;
   /** Completed ticks since start, including the immediate first one. */
   ticks: number;
+  /** Whether a tick is executing right now — see {@link drainChatStreamCleanup}. */
+  inFlight: boolean;
 }
 
 export interface StartChatStreamCleanupOptions {
@@ -48,20 +50,42 @@ export interface StartChatStreamCleanupOptions {
 let timer: ReturnType<typeof setInterval> | null = null;
 let intervalMs = DEFAULT_CLEANUP_INTERVAL_MS;
 let ticks = 0;
+let inFlight = false;
+/**
+ * The currently running cleanup tick, if any. Stored so shutdown can drain it:
+ * clearing the timer stops future ticks, but a tick already reclaiming rows
+ * must complete before the database closes.
+ */
+let inflightTick: Promise<unknown> | null = null;
 let database: Database | null = null;
 let storeOptions: StartChatStreamCleanupOptions = {};
 
 /** Observable timer state, so lifecycle behaviour is testable without fake timers. */
 export function getChatStreamCleanupState(): ChatStreamCleanupState {
-  return { running: timer !== null, intervalMs, ticks };
+  return { running: timer !== null, intervalMs, ticks, inFlight };
 }
 
 /**
  * Run one cleanup tick. Never throws: a failure here must not take the server
  * down, and it is surfaced as a logged error plus a `failures` count.
+ *
+ * A second call while a tick is executing is a deliberate no-op: two overlapping
+ * reclaim passes could only contend for rows they each already hold, and the
+ * single tracked tick is what makes {@link drainChatStreamCleanup} sufficient
+ * (one promise to await, not an unbounded set of them).
  */
 export async function runChatStreamCleanupOnce(): Promise<ChatStreamCleanupReport | null> {
   if (!database) return null;
+  if (inFlight) {
+    logger.debug("ai", "ai.stream_cleanup_overlapped", { signal: "interval" });
+    return null;
+  }
+
+  inFlight = true;
+  let resolveTick!: () => void;
+  inflightTick = new Promise<void>((resolve) => {
+    resolveTick = resolve;
+  });
   let store: SqliteResumableStreamStore | null = null;
   try {
     // Construction is inside the try: a closed database or a missing migration
@@ -90,6 +114,9 @@ export async function runChatStreamCleanupOnce(): Promise<ChatStreamCleanupRepor
     return null;
   } finally {
     store?.dispose();
+    inFlight = false;
+    inflightTick = null;
+    resolveTick();
   }
 }
 
@@ -133,4 +160,19 @@ export function stopChatStreamCleanup(): boolean {
   timer = null;
   database = null;
   return true;
+}
+
+/**
+ * Await the currently running cleanup tick, if any. Resolves immediately when
+ * idle. Clearing the timer prevents future ticks; draining proves no tick is
+ * still writing when the database closes.
+ *
+ * Deliberately unbounded, matching `drainHistoryReconciliation`: a tick can only
+ * await SQLite work that cannot block indefinitely (`cleanupExpired` performs no
+ * asynchronous I/O at all), and the tick resolves its promise from a `finally`,
+ * so it cannot reject. A bound here would be a second failure mode with no
+ * reachable state behind it.
+ */
+export function drainChatStreamCleanup(): Promise<void> {
+  return inflightTick ? inflightTick.then(() => undefined) : Promise.resolve();
 }

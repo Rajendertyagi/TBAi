@@ -187,6 +187,17 @@ jobs:
             if (-not (Test-Path (Join-Path $env:DATA_DIR "chat.db"))) {
               throw "chat.db missing: bun:sqlite did not initialise in the compiled binary"
             }
+            # WEB_DIST_DIR is passed by the shell (src-tauri/src/main.rs) and must be
+            # HONORED: the SPA is served from it, never from the launcher's working
+            # directory. It was set here and never asserted, so a sidecar that ignored
+            # it — or silently fell back to a path that does not exist — still passed
+            # this smoke test. The packaged layout is exe + `web/` side by side; this
+            # asserts the explicit override path, which is the seam the shell uses.
+            $spa = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -TimeoutSec 5
+            if ($spa.StatusCode -ne 200 -or $spa.Content -notmatch '<div id="root"') {
+              throw "WEB_DIST_DIR $env:WEB_DIST_DIR was not served: GET / returned $($spa.StatusCode)"
+            }
+            Write-Output "WEB_DIST_DIR served the SPA (GET / -> 200 with the SPA root element)"
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
           }

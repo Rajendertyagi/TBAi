@@ -243,12 +243,74 @@ fn fetch_instance(port: u32) -> Result<String, &'static str> {
         .ok_or("bad_response")
 }
 
+/// Outcome of the graceful-then-forced shutdown handshake. Distinguishing the
+/// two is what lets a caller (and a test) tell a clean exit from a kill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownOutcome {
+    Graceful,
+    Forced,
+}
+
+/// Bounded wait for the sidecar to exit after a graceful shutdown request.
+/// Production value: three seconds. Kept as a named constant so the limit is
+/// auditable and testable rather than buried in a call site.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
+
+/// Abstraction over a child process so the wait-then-kill decision can be
+/// exercised deterministically without spawning a real process. `CommandChild`
+/// implements it below; tests use a fake.
+trait ChildHandle {
+    fn try_wait(&mut self) -> Result<Option<()>, std::io::Error>;
+    fn kill(&mut self) -> Result<(), std::io::Error>;
+}
+
+impl ChildHandle for CommandChild {
+    fn try_wait(&mut self) -> Result<Option<()>, std::io::Error> {
+        CommandChild::try_wait(self).map(|opt| opt.map(|_| ()))
+    }
+    fn kill(&mut self) -> Result<(), std::io::Error> {
+        CommandChild::kill(self)
+    }
+}
+
+/// Wait up to `timeout` for `child` to exit gracefully; force-kill it if the
+/// deadline expires or `try_wait` errors. Returns which path was taken.
+///
+/// This is the seam that makes the three-second fallback testable: the
+/// production caller passes `SHUTDOWN_TIMEOUT`; tests pass a short duration so
+/// the suite stays fast while still exercising the real decision logic.
+fn wait_or_kill<H: ChildHandle>(child: &mut H, timeout: Duration) -> ShutdownOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return ShutdownOutcome::Graceful,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return ShutdownOutcome::Forced;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                return ShutdownOutcome::Forced;
+            }
+        }
+    }
+}
+
 /// Full quit: stop the owned sidecar, then end the process.
 fn quit_owned(app: &AppHandle) {
     if let Some(owned) = app.try_state::<StartupOwned>() {
         owned.is_quitting.store(true, Ordering::SeqCst);
-        if let Some(child) = owned.child.lock().expect("child lock").take() {
-            let _ = child.kill();
+        if let Some(mut child) = owned.child.lock().expect("child lock").take() {
+            // Graceful handshake: write a newline-terminated shutdown command
+            // to the sidecar's stdin. The backend reads it and runs
+            // shutdownServer("STDIN_SHUTDOWN"). Wait up to SHUTDOWN_TIMEOUT for
+            // the child to exit on its own; if it does not, fall back to kill().
+            let _ = child.write(b"{\"type\":\"shutdown\"}\n");
+            let outcome = wait_or_kill(&mut child, SHUTDOWN_TIMEOUT);
+            eprintln!("[shutdown] sidecar outcome: {outcome:?}");
         }
         *owned.exited.lock().expect("exited lock") = Some("user quit".to_string());
     }
@@ -335,6 +397,7 @@ fn attempt(app: &AppHandle) {
         .env("TBAI_INSTANCE_ID", &expected)
         .env("WEB_DIST_DIR", web_dist.to_string_lossy().to_string())
         .env("DATA_DIR", cfg.data_dir.to_string_lossy().to_string())
+        .set_process_group(true)
         .spawn()
     {
         Ok(pair) => pair,
@@ -708,5 +771,68 @@ mod tests {
         assert_eq!(get_mime_type(Path::new("icon.png")), "image/png");
         assert_eq!(get_mime_type(Path::new("font.woff2")), "font/woff2");
         assert_eq!(get_mime_type(Path::new("binary.wasm")), "application/wasm");
+    }
+
+    // --- shutdown seam tests ---
+
+    struct FakeChild {
+        exits_after: Option<Duration>,
+        started: Instant,
+        killed: std::sync::atomic::AtomicBool,
+    }
+
+    impl FakeChild {
+        fn new(exits_after: Option<Duration>) -> Self {
+            Self {
+                exits_after,
+                started: Instant::now(),
+                killed: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+        fn was_killed(&self) -> bool {
+            self.killed.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl ChildHandle for FakeChild {
+        fn try_wait(&mut self) -> Result<Option<()>, std::io::Error> {
+            if let Some(d) = self.exits_after {
+                if self.started.elapsed() >= d {
+                    return Ok(Some(()));
+                }
+            }
+            Ok(None)
+        }
+        fn kill(&mut self) -> Result<(), std::io::Error> {
+            self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shutdown_graceful_exits_before_deadline() {
+        let mut child = FakeChild::new(Some(Duration::from_millis(50)));
+        let start = Instant::now();
+        let outcome = wait_or_kill(&mut child, Duration::from_millis(500));
+        assert_eq!(outcome, ShutdownOutcome::Graceful);
+        assert!(!child.was_killed());
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn shutdown_forced_kills_when_child_refuses() {
+        let mut child = FakeChild::new(None); // never exits
+        let start = Instant::now();
+        let outcome = wait_or_kill(&mut child, Duration::from_millis(200));
+        assert_eq!(outcome, ShutdownOutcome::Forced);
+        assert!(child.was_killed());
+        // bounded: must not hang, and must have waited roughly the deadline
+        assert!(start.elapsed() < Duration::from_millis(400));
+        assert!(start.elapsed() >= Duration::from_millis(180));
+    }
+
+    #[test]
+    fn shutdown_production_timeout_is_three_seconds() {
+        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_millis(3000));
     }
 }

@@ -286,7 +286,7 @@ describe("chat run settlement + shutdown gate", () => {
     const rec = store.create({});
     store.markCompleted(rec.streamId);
     const result = await store.awaitSettled(100);
-    expect(result).toEqual({ settled: 0, timedOut: 0 });
+    expect(result).toEqual({ settled: 0, timedOut: 0, deadlineHit: false });
   });
 
   it("awaitSettled waits for in-flight runs and reports timedOut on bound", async () => {
@@ -301,5 +301,65 @@ describe("chat run settlement + shutdown gate", () => {
     // b is still running (the route owns the transition).
     expect(b.status).toBe("running");
     store.markCancelled(b.streamId);
+  });
+});
+
+describe("detached-history finalization tracking (Phase 2)", () => {
+  it("awaitSettled waits for a write that starts after settlement resolves", async () => {
+    const store = createChatRunStore();
+    const rec = store.create({});
+    // The M-3 window: settlement resolves first, the history write later.
+    expect(store.markCompleted(rec.streamId)).toBe(true);
+    let releaseWrite!: () => void;
+    const write = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    store.trackFinalization(write);
+    let done = false;
+    const waiting = store.awaitSettled(5000).then((result) => {
+      done = true;
+      return result;
+    });
+    // Settlement alone must not release the drain while the write is pending.
+    await Bun.sleep(50);
+    expect(done).toBe(false);
+    releaseWrite();
+    const result = await waiting;
+    expect(done).toBe(true);
+    expect(result).toEqual({ settled: 1, timedOut: 0, deadlineHit: false });
+  });
+
+  it("awaitSettled reports timedOut for a finalization that never settles", async () => {
+    const store = createChatRunStore();
+    store.trackFinalization(new Promise<void>(() => {}));
+    const result = await store.awaitSettled(100);
+    expect(result).toEqual({ settled: 0, timedOut: 1, deadlineHit: true });
+  });
+
+  it("tracked finalizations self-remove so the set cannot grow", async () => {
+    const store = createChatRunStore();
+    store.trackFinalization(Promise.resolve());
+    // Let the tracker's finally-chain run.
+    await Bun.sleep(10);
+    expect(await store.awaitSettled(100)).toEqual({ settled: 0, timedOut: 0, deadlineHit: false });
+  });
+
+  it("hasUnsettledWork reflects running records and tracked finalizations", async () => {
+    const store = createChatRunStore();
+    expect(store.hasUnsettledWork()).toBe(false);
+    const rec = store.create({});
+    expect(store.hasUnsettledWork()).toBe(true);
+    store.markCompleted(rec.streamId);
+    expect(store.hasUnsettledWork()).toBe(false);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    store.trackFinalization(pending);
+    expect(store.hasUnsettledWork()).toBe(true);
+    release();
+    await pending;
+    await Bun.sleep(10);
+    expect(store.hasUnsettledWork()).toBe(false);
   });
 });

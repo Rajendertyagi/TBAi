@@ -7,7 +7,8 @@ import { logger } from "../lib/logger";
 import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "./schema/chat-streams";
 import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
-// Anchored to the repository, not to `process.cwd()` — see src/config/data-dir.ts.
+// Anchored to the install (the checkout in dev, the executable when packaged),
+// not to `process.cwd()` — see src/config/data-dir.ts.
 const DATA_DIR = APP_DATA_DIR;
 const DB_PATH = APP_DB_PATH;
 

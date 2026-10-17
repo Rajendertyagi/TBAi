@@ -2368,8 +2368,10 @@ the SPA to `$out/web/` beside `tbai-server.exe`, so `dist/` was already the shap
 of the artifact being distributed, while a local build produced something else.
 
 **`dist/web` is the single output location.** `web/vite.config.ts` emits to
-`../dist/web`, and the `DIST_DIR` default in `src/routes/index.ts` resolves to
-`<cwd>/dist/web`. Local and packaged output are now the same layout and `dist/` is
+`../dist/web`, and the served directory resolves inside the install anchor:
+`<repo>/dist/web` in a checkout and `<exeDir>/web` in a packaged binary (it was
+`<cwd>/dist/web` until 2026-10-17 — see the web-dist entry at the end of this
+file). Local and packaged output are now the same layout and `dist/` is
 one folder to copy. `WEB_DIST_DIR` remains the only seam that redirects the served
 artifact, which is what still lets the CPU-profiling run and the e2e suite point at
 a different build without touching production code.
@@ -4646,3 +4648,177 @@ popout windows, the Tauri drag region, and anything about the desktop build.
 content only when the tab's measured rect is non-zero, so it cannot be exercised
 under happy-dom or jsdom at all. Any future DOM-level test of a FlexLayout-backed
 surface must be an E2E spec; a green DOM suite would prove nothing.
+
+## 2026-10-17 - Data dir anchor: two branches (checkout vs packaged)
+
+`DATA_DIR`'s default was anchored to `path.resolve(import.meta.dir, "../..")`
+alone. That is correct in a source checkout and meaningless inside a
+`bun build --compile` bundle, where `import.meta.dir` is Bun's VIRTUAL filesystem
+(`B:\~BUN\root` on Windows, `/$bunfs/root` elsewhere): `../..` collapses to a
+drive root, so `DATA_DIR` became `<root>\data` and `src/db/index.ts`'s
+`mkdirSync(DATA_DIR, { recursive: true })` died at module init with
+`EPERM: operation not permitted, mkdir '\'`. The standalone `dist/tbai-server.exe`
+could not start at all. The Tauri shell masked it — `src-tauri/src/main.rs` passes
+`DATA_DIR` explicitly — so only a directly launched binary reached the broken
+default.
+
+- **Decision:** the default now has two branches, chosen by whether the anchor is
+  really the repository (a root marker file, the same test
+  `tests/helpers/repo-root.ts` uses). A checkout resolves `<REPO_ROOT>/data` as
+  before; anything else resolves `<dirname(process.execPath)>/data` — the rule
+  `src-tauri`'s `resolve_data_dir()` already applies, so the desktop app and a
+  standalone binary agree on one portable folder. `DATA_DIR` env still overrides
+  everything.
+- **Reason:** a packaged program has no repository to anchor to, and the
+  executable's directory is both writable and the convention the shell half of
+  the app already uses. Choosing the branch by marker file, rather than by
+  matching `~BUN` / `$bunfs`, avoids pinning Bun's internal layout across
+  platforms and versions.
+- **`DEFAULT_DATA_DIR` shares the one resolver.** It is the baseline the
+  relocated-install guard compares `DATA_DIR` against. With the old split the two
+  could not match in a packaged build (`DATA_DIR` from the shell, the default from
+  a virtual path), so every packaged install looked "relocated" and the orphan
+  sweep stood down permanently (`evaluateOrphanSweepSafety`,
+  `src/services/workspace.ts`).
+- **Verification:** the resolution is a pure exported function, so both branches
+  are pinned in process (`tests/unit/config/data-dir.test.ts`); the packaged
+  branch cannot be reached by importing the module. End to end, a compiled
+  `tbai-server.exe` run with no `DATA_DIR` created `<exeDir>/data/chat.db`, served
+  the SPA (`HTTP 200` on `/`), and logged `started … data=<exeDir>\data` — where it
+  previously exited with EPERM.
+- **Closed on 2026-10-17, the same day:** this entry originally ended with a known
+  limit — the served-directory fallback was still `process.cwd()/dist/web`, so a
+  standalone binary served the UI only when launched from the repository root. The
+  anchor was extracted into one owner and shared; see the web-dist entry at the end
+  of this file.
+
+## 2026-10-17 - Web dist anchor: the install anchor gets one owner, and the served SPA leaves `cwd`
+
+**The defect had the same shape as the data-dir one, in a second place.** A compiled
+`tbai-server.exe` launched outside the repository resolved the SPA directory from
+`<cwd>/dist/web` (the `DIST_DIR` constant in `src/routes/index.ts`), so a directly
+launched binary served nothing for `GET /` — the server was healthy and the UI was
+simply absent. The tauri build never saw it because `main.rs` passes `WEB_DIST_DIR`
+explicitly.
+
+**One anchor, one owner.** The branch decision (checkout vs packaged, by a root
+marker file) now lives in `src/config/install-root.ts` and is consumed by both
+derived paths: `src/config/data-dir.ts` (where data lives) and
+`src/config/web-dist.ts` (which SPA is served). `web-dist.ts` is its own module
+rather than a constant in `src/routes/index.ts` because that file is a
+side-effecting composition root and cannot be imported by a unit test.
+
+- **Checkout:** `<repo root>/dist/web`, the 2026-10-03 layout, unchanged.
+- **Packaged:** `<dirname(process.execPath)>/web` — the folder the portable/tauri
+  workflow already ships beside the binary.
+- **`WEB_DIST_DIR` remains the only override seam**, and it wins in both branches.
+
+**A missing directory is reported, never silently replaced.** `src/routes/index.ts`
+emits one `server.web_dist_missing` warning at boot when the resolved directory does
+not exist. It deliberately does not fall back to `cwd`: a fallback that serves
+nothing is how this defect stayed invisible.
+
+**Verification.** `tests/unit/config/web-dist.test.ts` pins both branches, the
+absence of a nested `dist/dist/web`, the absence of a filesystem root, and — in two
+child processes — that the default does not follow `cwd` and that `WEB_DIST_DIR`
+still wins without moving the default. End to end, the compiled binary was laid out
+as `<tmp>/app/tbai-server.exe` + `<tmp>/app/web/` and launched with `cwd=<tmp>/app`:
+`GET /` returned 200 containing `<div id="root"`, the SPA was served from
+`<tmp>/app/web`, `GET /api/health` returned ok, and the database was created at
+`<tmp>/app/data/chat.db` — never at a drive root, never in the repository, and never
+in a Bun virtual path. An explicit `DATA_DIR` won and no `data/` appeared beside the
+executable.
+
+## 2026-10-17 — Process handlers get one owner, SQLite close semantics are measured, the lifecycle suites are gated, and rollback stays conservative
+
+**§3 Process handlers: one implementation, exercised by the tests.** The
+`unhandledRejection` / `uncaughtException` handlers lived inline in `src/index.ts`
+and the child fixtures carried a *copy* annotated "Install the same handler as
+index.ts". A copy passes the same assertions as the original, so the suite could
+stay green while production regressed.
+
+- They now live in `src/services/process-handlers.ts`
+  (`installProcessErrorHandlers`), called by the entry point and by the fixtures.
+- `tests/integration/core/process-handlers.test.ts` adds two guards: exactly one
+  module registers these handlers, and the entry point plus the three fixtures
+  call the installer. Both were proven to fail — a second registration gives 5
+  pass / 1 fail, and deleting `process.exit(1)` from the production handler fails
+  the fixture case, which shows the test binds to production code.
+- `tests/fixtures/no-exit-handler-child.ts` keeps a local handler **on purpose**:
+  it demonstrates the runtime behaviour the production handler corrects (log only
+  → the process keeps running), and a counterfactual cannot share the
+  implementation under test.
+
+**§4 SQLite close semantics with statements outstanding: measured, not inferred.**
+Verified on the installed Bun (1.4.3) against temporary databases:
+
+- `db.close(true)` does **not** throw for statements that merely exist — a cached
+  `.query()` handle or an outstanding `.prepare()`. It invalidates them: later use
+  throws `Database has closed`, and a prepared INSERT run after close does not
+  write (row count unchanged on reopen). It is idempotent.
+- `db.close()` — the default, and not what production uses — leaves a `.prepare()`
+  handle live: its `run()` after close returned `changes: 1` and the row persisted.
+  That is a real write-after-close.
+- So the existing contract is the safe one and **no shutdown code changed**; the
+  flag is load-bearing, and both production close sites already pass it. The
+  comment at the shutdown close site claimed `close(true)` "finalizes outstanding
+  .prepare() statements" and "does not throw for .query() statements" — both
+  details were wrong, and it now states the measured contract.
+- Pinned by `tests/unit/persistence/sqlite-close-contract.test.ts`, including a
+  guard that fails if a `src/` `db.close(` site drops the flag (proven to fail with
+  an unflagged probe) and a case asserting the **unsafe** mode, so a Bun change that
+  removes the difference is reported instead of silently trusted.
+
+**§5 Tauri and Windows.** No Rust toolchain exists in this checkout (`cargo` and
+`rustc` are absent), so the shell cannot be compiled or launched here: the Windows
+build and the shell's own shutdown behaviour are **UNVERIFIED** locally.
+
+- `.github/workflows/tauri-build.yml` already runs on `windows-latest` with
+  `cargo check --all-targets` and `bunx tauri build`, so the Rust compile has a
+  configured Windows path. It was extended minimally: its smoke step set
+  `WEB_DIST_DIR` and never asserted it, so a sidecar that ignored the variable
+  still passed. It now also fetches `/` and requires 200 carrying the SPA root
+  element.
+- **Descendants.** The earlier report's claim that a forced kill orphans the
+  sidecar's children does **not** reproduce. Measured on Windows/Bun 1.4.3 with a
+  real `mcpManager` stdio child: the graceful path (`disconnectAll`) and a forced
+  kill both take the child with them, and an external `taskkill /F` of the parent
+  gives the same result as Bun's own kill. The mechanism is Bun's parent-lifetime
+  binding — a `detached: true` child survives the identical kill, a non-detached
+  child does not — and nothing in `src/` spawns detached on Windows
+  (`services/opencode/serverManager.ts` sets `detached` for POSIX only; the MCP
+  SDK's stdio transport never sets it).
+- Consequence: **no Job Object or process-tree termination was added.** It is not
+  needed for the sidecar's children, and it could not be verified here. Pinned by
+  `tests/integration/core/descendant-cleanup.test.ts`, so a future `detached` spawn
+  becomes a leak that fails a test rather than a silent orphan.
+- Still unverified: the shell's own 3000 ms fallback and whether it reports
+  honestly when the fallback was needed (Rust, unrun); a hard kill of the *shell*,
+  which would orphan the sidecar because Rust's `Command` does not bind it; and the
+  real OpenCode child (same non-detached mechanism, not directly measured).
+
+**§6 The three lifecycle suites are gated.** They close the process-wide database
+singleton, so they still cannot join `bun run test` — the exclusion stays. Instead
+`bun run verify` chains them as three scripts and the CI `verify` job runs them as
+three separate steps, so each keeps its own process and a failure names the suite
+that failed. `tests/unit/tooling/verify-script.test.ts` pins the new order on both
+sides; deleting one CI step makes it fail 16 pass / 3 fail.
+
+**§7 Rollback deadline policy: kept conservative, deliberately unlike shutdown.**
+Normal shutdown records a fired bound and then **re-checks** outstanding work,
+closing the database when the re-check is clean (`deadline_expired`, exit 0).
+Rollback keeps a fired bound terminal: any expired bound or failed drain sets
+`timedOut`, and it then returns `{ ok: false, dbClosed: false }` without
+re-checking, so the caller exits 1 with the database open. Both paths agree on the
+property that matters — never close a database a write-capable operation could
+still touch — and rollback pays for it with an unclosed handle on an install that
+is aborting anyway, which is the safe side of that trade. Pinned by
+`tests/integration/core/startup-rollback.test.ts` ("keeps the database open when a
+run outlives the deadline; the late writer still writes"): the 10 s bound really
+expires (elapsed asserted), the result is `ok:false / dbClosed:false / timedOut:true`,
+`server.startup_rollback_failed` is logged, and a real INSERT through the still-open
+connection succeeds. Removing the conservative refusal makes it fail.
+Not covered: the entry point cannot be driven into the rollback `!ok` branch from
+outside (no chat or scheduler run can exist before serving), so that terminal
+mapping is verified by inspection plus the `ok` half through the entry point in
+`lifecycle-integration.test.ts`.

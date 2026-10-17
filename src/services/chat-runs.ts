@@ -69,6 +69,12 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
   const records = new Map<string, ChatRunRecord>();
   /** Per-record settlement resolvers, cleaned on settle and sweep. */
   const settleResolvers = new Map<string, () => void>();
+  /**
+   * Detached-history finalization promises, tracked from creation until they
+   * settle. A completed run's `settled` resolves before its history write
+   * finishes, so awaiting `settled` alone cannot prove the write completed.
+   */
+  const finalizations = new Set<Promise<unknown>>();
   /** Set by abortAll(): create() then refuses new runs (shutdown gate). */
   let shuttingDown = false;
 
@@ -229,22 +235,74 @@ export function createChatRunStore(opts: ChatRunStoreOptions = {}) {
       return aborted;
     },
 
-    /** Await in-flight runs' settlement, bounded; returns settled vs timed out. */
-    async awaitSettled(timeoutMs = 10_000): Promise<{ settled: number; timedOut: number }> {
+    /**
+     * Track a detached-history finalization promise so shutdown awaits the
+     * write, not just the settlement signal that precedes it. Self-removing
+     * on settle, so the set cannot grow without bound.
+     */
+    trackFinalization(promise: Promise<unknown>): void {
+      finalizations.add(promise);
+      void promise
+        .finally(() => {
+          finalizations.delete(promise);
+        })
+        .catch(() => {
+          /* finalization reports its own outcome; the tracker never rejects */
+        });
+    },
+
+    /**
+     * Await in-flight runs' settlement AND tracked history finalizations,
+     * bounded; returns settled vs timed out.
+     */
+    async awaitSettled(
+      timeoutMs = 10_000,
+    ): Promise<{ settled: number; timedOut: number; deadlineHit: boolean }> {
       const snapshot = [...records.values()].filter((r) => r.status === "running");
-      if (snapshot.length === 0) return { settled: 0, timedOut: 0 };
+      const finals = [...finalizations];
+      if (snapshot.length === 0 && finals.length === 0)
+        return { settled: 0, timedOut: 0, deadlineHit: false };
       let boundTimer: ReturnType<typeof setTimeout> | undefined;
+      let deadlineHit = false;
       const bound = new Promise<void>((resolve) => {
-        boundTimer = setTimeout(resolve, timeoutMs);
+        boundTimer = setTimeout(() => {
+          deadlineHit = true;
+          resolve();
+        }, timeoutMs);
       });
-      // The bound must never keep the process alive on its own.
-      (boundTimer as unknown as { unref?: () => void }).unref?.();
-      await Promise.race([Promise.allSettled(snapshot.map((r) => r.settled)), bound]);
+      // Referenced while pending: at shutdown this bound keeps the process alive
+      // until the runs settle or the bound expires, so a wedged run cannot let
+      // the event loop empty and exit before classification. It is cleared when
+      // the race resolves, so a clean shutdown does not linger for the full bound.
+      try {
+        await Promise.race([
+          Promise.allSettled([...snapshot.map((r) => r.settled), ...finals]),
+          bound,
+        ]);
+      } finally {
+        if (boundTimer !== undefined) clearTimeout(boundTimer);
+      }
       const stillRunning = snapshot.filter((r) => r.status === "running").length;
-      return { settled: snapshot.length - stillRunning, timedOut: stillRunning };
+      const stillPending = finals.filter((p) => finalizations.has(p)).length;
+      return {
+        settled: snapshot.length - stillRunning + (finals.length - stillPending),
+        timedOut: stillRunning + stillPending,
+        deadlineHit,
+      };
     },
 
     sweep,
+
+    /**
+     * Whether any write-capable work remains: a still-running record or a
+     * tracked finalization that has not settled. Used by the shutdown spine
+     * to re-check, just before database closure, that a fired deadline did
+     * not leave a writer behind.
+     */
+    hasUnsettledWork(): boolean {
+      if ([...records.values()].some((r) => r.status === "running")) return true;
+      return finalizations.size > 0;
+    },
 
     /** For tests and diagnostics: current record count by status. */
     counts(): Record<ChatRunStatus, number> {
