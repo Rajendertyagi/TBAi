@@ -224,10 +224,15 @@ jobs:
       - name: Publish complete test failure list (diagnostic)
         if: failure()
         run: |
-          $fails = Select-String -Path test-output.log -Pattern '^\(fail\)' | ForEach-Object { $_.Line }
-          if (-not $fails) { $fails = @('(no (fail) lines captured - inspect the job log)') }
-          $totals = Select-String -Path test-output.log -Pattern '^\s*\d+ (pass|fail|skip|todo)|^Ran ' | ForEach-Object { $_.Line }
-          if (-not $totals) { $totals = @('(no suite totals captured)') }
+          if (Test-Path test-output.log) {
+            $fails = Select-String -Path test-output.log -Pattern '^\(fail\)' | ForEach-Object { $_.Line }
+            if (-not $fails) { $fails = @('(no (fail) lines captured - inspect the job log)') }
+            $totals = Select-String -Path test-output.log -Pattern '^\s*\d+ (pass|fail|skip|todo)|^Ran ' | ForEach-Object { $_.Line }
+            if (-not $totals) { $totals = @('(no suite totals captured)') }
+          } else {
+            $fails = @('(test-output.log not present - an earlier gate failed before the test suite ran)')
+            $totals = @('(no suite totals captured)')
+          }
           # Workflow-command escaping: % first, then CR/LF. Order matters.
           $failBody = (($fails -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')
           $totalBody = (($totals -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A')

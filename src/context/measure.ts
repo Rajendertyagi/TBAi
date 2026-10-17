@@ -164,20 +164,6 @@ function classifyPart(part: LoosePart): { category: ContextCategory; chars: numb
   return { category: "other", chars: measureValueChars(part) };
 }
 
-function _sumCharsByCategory(categories: Iterable<ContextCategory>): {
-  charsByCategory: Record<ContextCategory, number>;
-  totalChars: number;
-} {
-  const charsByCategory = emptyCategoryMap();
-  let totalChars = 0;
-  for (const category of categories) {
-    const chars = charsByCategory[category];
-    charsByCategory[category] = chars;
-    totalChars += chars;
-  }
-  return { charsByCategory, totalChars };
-}
-
 /**
  * Measure Layer A (instructions).
  *

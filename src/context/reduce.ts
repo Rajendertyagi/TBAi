@@ -111,11 +111,6 @@ function resultChars(part: LoosePart): number {
   return typeof part.output === "string" ? part.output.length : 0;
 }
 
-function _isMcpPart(part: LoosePart): boolean {
-  const type = typeof part.type === "string" ? part.type : "";
-  return type === "dynamic-tool" || type.startsWith("tool-mcp__");
-}
-
 /**
  * Reduce a single oversized result.
  *

@@ -224,7 +224,6 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   // Splicing a partial prefix silently drops client messages from the request,
   // which is strictly worse than trusting the client.
   let effectiveMessages = submittedMessages;
-  let _p1pApplied = false;
 
   if (conversationId && !input.disableP1p) {
     try {
@@ -253,7 +252,6 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
               .map((m) => m.content as UIMessage);
             // The ENTIRE submission is retained, boundary included.
             effectiveMessages = [...serverPrefix, ...submittedMessages];
-            _p1pApplied = true;
           }
         }
       }

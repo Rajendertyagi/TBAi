@@ -83,8 +83,6 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
 /** Bound for awaiting in-flight connect attempts during disconnectAll/rollback. */
 const INFLIGHT_SETTLE_TIMEOUT_MS = 5000;
-/** Read-only SSE probe budget: 3s, diagnostics only, never the transport. */
-const _SSE_PROBE_TIMEOUT_MS = 3000;
 
 /**
  * Report the installed MCP SDK version at runtime.
