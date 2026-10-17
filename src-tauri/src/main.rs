@@ -260,16 +260,16 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
 /// exercised deterministically without spawning a real process. `CommandChild`
 /// implements it below; tests use a fake.
 trait ChildHandle {
-    fn try_wait(&mut self) -> Result<Option<()>, std::io::Error>;
-    fn kill(&mut self) -> Result<(), std::io::Error>;
+    fn poll_exit(&mut self) -> Result<Option<()>, std::io::Error>;
+    fn terminate(&mut self) -> Result<(), std::io::Error>;
 }
 
 impl ChildHandle for CommandChild {
-    fn try_wait(&mut self) -> Result<Option<()>, std::io::Error> {
-        CommandChild::try_wait(self).map(|opt| opt.map(|_| ()))
+    fn poll_exit(&mut self) -> Result<Option<()>, std::io::Error> {
+        self.try_wait().map(|opt| opt.map(|_| ()))
     }
-    fn kill(&mut self) -> Result<(), std::io::Error> {
-        CommandChild::kill(self)
+    fn terminate(&mut self) -> Result<(), std::io::Error> {
+        self.kill()
     }
 }
 
@@ -282,17 +282,17 @@ impl ChildHandle for CommandChild {
 fn wait_or_kill<H: ChildHandle>(child: &mut H, timeout: Duration) -> ShutdownOutcome {
     let deadline = Instant::now() + timeout;
     loop {
-        match child.try_wait() {
+        match child.poll_exit() {
             Ok(Some(_)) => return ShutdownOutcome::Graceful,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
+                    let _ = child.terminate();
                     return ShutdownOutcome::Forced;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(_) => {
-                let _ = child.kill();
+                let _ = child.terminate();
                 return ShutdownOutcome::Forced;
             }
         }
@@ -795,7 +795,7 @@ mod tests {
     }
 
     impl ChildHandle for FakeChild {
-        fn try_wait(&mut self) -> Result<Option<()>, std::io::Error> {
+        fn poll_exit(&mut self) -> Result<Option<()>, std::io::Error> {
             if let Some(d) = self.exits_after {
                 if self.started.elapsed() >= d {
                     return Ok(Some(()));
@@ -803,7 +803,7 @@ mod tests {
             }
             Ok(None)
         }
-        fn kill(&mut self) -> Result<(), std::io::Error> {
+        fn terminate(&mut self) -> Result<(), std::io::Error> {
             self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }

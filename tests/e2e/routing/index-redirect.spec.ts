@@ -256,8 +256,7 @@ test("transient 5xx server failure retains current tab and route without evictin
       const req = route.request();
       const url = req.url();
       const isExistenceProbe =
-        req.method() === "GET" &&
-        new URL(url).pathname === `/api/conversations/${id}`;
+        req.method() === "GET" && new URL(url).pathname === `/api/conversations/${id}`;
       if (isExistenceProbe) {
         getIntercepted += 1;
         probeUrls.push(url);
