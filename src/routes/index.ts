@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sanitizeStreamError } from "../lib/redact";
 import { db } from "../db";
+import { WEB_DIST_DIR } from "../config/web-dist";
 import { accountingMiddleware, metricsText, logLossMetricsText } from "../services/http-metrics";
 import {
   logger,
@@ -188,15 +189,29 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 /**
  * Where the built SPA is served from.
  *
- * Defaults to `<cwd>/dist/web` — the same `dist/` that holds the compiled
- * `tbai-server`, and the same layout the packaged/portable build produces. One
- * folder to copy, and no chance of local output diverging from what CI ships.
+ * `<installRoot>/dist/web` in a checkout and `<dirname(executable)>/web` when
+ * packaged — the same `dist/` that holds the compiled `tbai-server`, so one
+ * folder is the whole product and local output cannot diverge from what ships.
+ *
+ * Anchored to the install rather than to `process.cwd()`: the served directory
+ * must not depend on where the process was launched. Resolution and its
+ * rationale live in `src/config/web-dist.ts`.
  *
  * `WEB_DIST_DIR` remains the only seam that redirects this, which is what lets the
  * e2e suite and the CPU-profiling run serve a different artifact without touching
  * production code.
  */
-const DIST_DIR = process.env.WEB_DIST_DIR || path.join(process.cwd(), "dist", "web");
+const DIST_DIR = WEB_DIST_DIR;
+
+// A missing served directory is a deployment fault, and the symptom (every
+// route falls through to a 404) is indistinguishable from a routing bug. Say so
+// once, at composition, naming the path that was tried.
+if (!fs.existsSync(DIST_DIR)) {
+  logger.warn("server", "web_dist_missing", {
+    webDistDir: DIST_DIR,
+    message: "served SPA directory does not exist; GET / will 404",
+  });
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
