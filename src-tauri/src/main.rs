@@ -256,46 +256,39 @@ enum ShutdownOutcome {
 /// auditable and testable rather than buried in a call site.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
 
-/// Abstraction over a child process so the wait-then-kill decision can be
-/// exercised deterministically without spawning a real process. `CommandChild`
-/// implements it below; tests use a fake.
-trait ChildHandle {
-    fn poll_exit(&mut self) -> Result<Option<()>, std::io::Error>;
-    fn terminate(&mut self) -> Result<(), std::io::Error>;
-}
+/// Bounded wait between polls of the exit record. Named so the cadence is
+/// auditable rather than buried in the loop.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-impl ChildHandle for CommandChild {
-    fn poll_exit(&mut self) -> Result<Option<()>, std::io::Error> {
-        self.try_wait().map(|opt| opt.map(|_| ()))
-    }
-    fn terminate(&mut self) -> Result<(), std::io::Error> {
-        self.kill()
-    }
-}
-
-/// Wait up to `timeout` for `child` to exit gracefully; force-kill it if the
-/// deadline expires or `try_wait` errors. Returns which path was taken.
+/// Wait up to `timeout` for the sidecar to exit gracefully; force-terminate it
+/// when the deadline expires. `exited` is the app's own record of the child's
+/// exit (written by the termination watcher), and `terminate` consumes the
+/// child. Returns which path was taken.
 ///
-/// This is the seam that makes the three-second fallback testable: the
-/// production caller passes `SHUTDOWN_TIMEOUT`; tests pass a short duration so
-/// the suite stays fast while still exercising the real decision logic.
-fn wait_or_kill<H: ChildHandle>(child: &mut H, timeout: Duration) -> ShutdownOutcome {
+/// The seam is closure-based because `tauri_plugin_shell`'s `CommandChild`
+/// exposes no `try_wait` and `kill(self)` consumes the child: the wait needs
+/// the exit record the app already keeps, and the kill needs ownership, which
+/// `quit_owned` already holds via `owned.child.lock().take()`.
+///
+/// The exit record is re-checked on every iteration, including the one that
+/// reaches the deadline, so a child that exits concurrently with the timeout
+/// is observed as graceful rather than being killed. `terminate` is `FnOnce`,
+/// so it can be invoked at most once.
+fn wait_or_kill(
+    exited: impl Fn() -> bool,
+    terminate: impl FnOnce(),
+    timeout: Duration,
+) -> ShutdownOutcome {
     let deadline = Instant::now() + timeout;
     loop {
-        match child.poll_exit() {
-            Ok(Some(_)) => return ShutdownOutcome::Graceful,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.terminate();
-                    return ShutdownOutcome::Forced;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => {
-                let _ = child.terminate();
-                return ShutdownOutcome::Forced;
-            }
+        if exited() {
+            return ShutdownOutcome::Graceful;
         }
+        if Instant::now() >= deadline {
+            terminate();
+            return ShutdownOutcome::Forced;
+        }
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -309,7 +302,13 @@ fn quit_owned(app: &AppHandle) {
             // shutdownServer("STDIN_SHUTDOWN"). Wait up to SHUTDOWN_TIMEOUT for
             // the child to exit on its own; if it does not, fall back to kill().
             let _ = child.write(b"{\"type\":\"shutdown\"}\n");
-            let outcome = wait_or_kill(&mut child, SHUTDOWN_TIMEOUT);
+            let outcome = wait_or_kill(
+                || owned.exited.lock().expect("exited lock").is_some(),
+                || {
+                    let _ = child.kill();
+                },
+                SHUTDOWN_TIMEOUT,
+            );
             eprintln!("[shutdown] sidecar outcome: {outcome:?}");
         }
         *owned.exited.lock().expect("exited lock") = Some("user quit".to_string());
@@ -430,10 +429,13 @@ fn attempt(app: &AppHandle) {
                     let note = format!("exited (code {:?}, signal {:?})", payload.code, payload.signal);
                     eprintln!("[server] sidecar {note}");
                     if let Some(owned) = app_handle.try_state::<StartupOwned>() {
+                        // Recorded before the quit check: the graceful handshake
+                        // in `quit_owned` polls this record, so a quit that
+                        // skipped it could never be observed as graceful.
+                        *owned.exited.lock().expect("exited lock") = Some(note);
                         if owned.is_quitting.load(Ordering::SeqCst) {
                             break;
                         }
-                        *owned.exited.lock().expect("exited lock") = Some(note);
                         *owned.verified.lock().expect("verified lock") = false;
                         *owned.verified_endpoint.lock().expect("endpoint lock") = None;
 
@@ -775,60 +777,76 @@ mod tests {
 
     // --- shutdown seam tests ---
 
-    struct FakeChild {
-        exits_after: Option<Duration>,
-        started: Instant,
-        killed: std::sync::atomic::AtomicBool,
-    }
-
-    impl FakeChild {
-        fn new(exits_after: Option<Duration>) -> Self {
-            Self {
-                exits_after,
-                started: Instant::now(),
-                killed: std::sync::atomic::AtomicBool::new(false),
-            }
-        }
-        fn was_killed(&self) -> bool {
-            self.killed.load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-
-    impl ChildHandle for FakeChild {
-        fn poll_exit(&mut self) -> Result<Option<()>, std::io::Error> {
-            if let Some(d) = self.exits_after {
-                if self.started.elapsed() >= d {
-                    return Ok(Some(()));
-                }
-            }
-            Ok(None)
-        }
-        fn terminate(&mut self) -> Result<(), std::io::Error> {
-            self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
     #[test]
     fn shutdown_graceful_exits_before_deadline() {
-        let mut child = FakeChild::new(Some(Duration::from_millis(50)));
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let killed = AtomicBool::new(false);
         let start = Instant::now();
-        let outcome = wait_or_kill(&mut child, Duration::from_millis(500));
+        let outcome = wait_or_kill(
+            || start.elapsed() >= Duration::from_millis(50),
+            || {
+                killed.store(true, Ordering::SeqCst);
+            },
+            Duration::from_millis(500),
+        );
         assert_eq!(outcome, ShutdownOutcome::Graceful);
-        assert!(!child.was_killed());
+        assert!(!killed.load(Ordering::SeqCst));
         assert!(start.elapsed() < Duration::from_millis(500));
     }
 
     #[test]
     fn shutdown_forced_kills_when_child_refuses() {
-        let mut child = FakeChild::new(None); // never exits
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let killed = AtomicBool::new(false);
         let start = Instant::now();
-        let outcome = wait_or_kill(&mut child, Duration::from_millis(200));
+        let outcome = wait_or_kill(
+            || false, // never exits
+            || {
+                killed.store(true, Ordering::SeqCst);
+            },
+            Duration::from_millis(200),
+        );
         assert_eq!(outcome, ShutdownOutcome::Forced);
-        assert!(child.was_killed());
+        assert!(killed.load(Ordering::SeqCst));
         // bounded: must not hang, and must have waited roughly the deadline
         assert!(start.elapsed() < Duration::from_millis(400));
         assert!(start.elapsed() >= Duration::from_millis(180));
+    }
+
+    #[test]
+    fn shutdown_concurrent_exit_terminates_at_most_once() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // The exit record flips true right at the deadline boundary. The seam
+        // must re-check the exit state at the deadline (so a concurrent exit is
+        // observed as graceful rather than killed), and `terminate` is `FnOnce`,
+        // so it can be invoked at most once.
+        let killed = AtomicBool::new(false);
+        let exited = AtomicBool::new(false);
+        let start = Instant::now();
+        let outcome = wait_or_kill(
+            || {
+                if start.elapsed() >= Duration::from_millis(195) {
+                    exited.store(true, Ordering::SeqCst);
+                }
+                exited.load(Ordering::SeqCst)
+            },
+            || {
+                assert!(
+                    !killed.swap(true, Ordering::SeqCst),
+                    "terminate invoked more than once"
+                );
+            },
+            Duration::from_millis(200),
+        );
+        match outcome {
+            ShutdownOutcome::Graceful => {
+                assert!(exited.load(Ordering::SeqCst));
+                assert!(!killed.load(Ordering::SeqCst));
+            }
+            ShutdownOutcome::Forced => {
+                assert!(killed.load(Ordering::SeqCst));
+            }
+        }
     }
 
     #[test]
