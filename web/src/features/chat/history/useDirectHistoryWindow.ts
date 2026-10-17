@@ -265,13 +265,43 @@ export function dropWindowController(conversationId: string): void {
   uiSnapshots.delete(conversationId);
   // Coordinated recovery forces a fresh, authoritative read, so a stale failure
   // record must not outlive the window it described.
-  loadFailures.delete(conversationId);
-  recoveryAttempted.delete(conversationId);
+  const hadFailure = loadFailures.delete(conversationId);
+  const hadAttempt = recoveryAttempted.delete(conversationId);
+  if (hadFailure || hadAttempt) {
+    logger.info("chat", "history.controller_dropped", { conversationId, hadFailure, hadAttempt });
+  }
 }
 
 /** Forget every conversation's window (coordinated recovery / full reset). */
 export function clearAllWindowControllers(): void {
-  for (const id of [...controllers.keys()]) dropWindowController(id);
+  const ids = [...controllers.keys()];
+  logger.info("chat", "history.all_controllers_cleared", { count: ids.length, ids });
+  for (const id of ids) {
+    // Coordinated (availability) recovery drops the window projection (so the
+    // next load re-reads authoritatively) but must NOT clobber the
+    // per-conversation failure record or the recovery latch: doing so made a
+    // failed load silently render as an empty conversation (the failure row
+    // vanished and the re-arm never fired). The failure record is cleared only
+    // by a successful load (clearHistoryLoadFailed) or by deleting the
+    // conversation (dropWindowController).
+    //
+    // The ui snapshot is retained (not deleted) so its `loadFailed` flag
+    // survives; only the paging fields are reset, so a stale "Load earlier"
+    // control cannot outlive the controller it pointed at.
+    endHistoryReload(id);
+    controllers.delete(id);
+    activities.delete(id);
+    const prev = uiSnapshots.get(id);
+    if (prev) {
+      uiSnapshots.set(id, {
+        ...prev,
+        hasEarlier: false,
+        historical: false,
+        hasMoreAfter: false,
+        revision: prev.revision + 1,
+      });
+    }
+  }
   resetHistoryVisit();
   for (const listener of uiListeners) listener();
 }
@@ -380,7 +410,10 @@ export function resetHistoryVisit(): void {
 export function markHistoryLoadFailed(conversationId: string): void {
   // The load SETTLED (failed), so a user-triggered reload is no longer running.
   endHistoryReload(conversationId);
-  if (loadFailures.has(conversationId)) return;
+  if (loadFailures.has(conversationId)) {
+    logger.info("chat", "history.load_failed_already", { conversationId });
+    return;
+  }
   loadFailures.add(conversationId);
   logger.warn("chat", "history.load_failed", { conversationId });
 }
@@ -394,7 +427,10 @@ export function clearHistoryLoadFailed(conversationId: string): void {
   // return below: a reload that succeeds clears no failure flag (there was none),
   // and leaving the latch held then would disable Retry for good.
   endHistoryReload(conversationId);
-  if (!loadFailures.delete(conversationId)) return;
+  if (!loadFailures.delete(conversationId)) {
+    logger.info("chat", "history.clear_failed_noop", { conversationId });
+    return;
+  }
   logger.info("chat", "history.load_recovered", { conversationId });
 }
 

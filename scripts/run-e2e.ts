@@ -40,6 +40,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 // E2E specs live in the canonical test tree, not under web/. One root for every
 // test file in the repository - see the AGENTS.md test-location section.
 const E2E_DIR = path.join(REPO_ROOT, "tests", "e2e");
+const E2E_DATA_DIR = path.join(REPO_ROOT, "tests", ".artifacts", "e2e-data");
 const WEB_ROOT = path.join(REPO_ROOT, "web");
 const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 const E2E_PORT = process.env.TBAI_E2E_PORT ?? "3101";
@@ -221,6 +222,28 @@ for (const file of files) {
   // Bun's Subprocess resolves `exited` to the exit code; there is no Node-style
   // 'exit' event on it.
   const code = await run.exited;
+
+  // Preserve the spawned server's log (including the frontend's redacted
+  // client-plane events that land in tbai.log) so a failed run can be
+  // diagnosed after the data dir is wiped for the next spec. Never contains
+  // secrets: the backend logger redacts them, and only the log file is copied.
+  const serverLog = path.join(E2E_DATA_DIR, "tbai.log");
+  const logDir = path.join(REPO_ROOT, "tests", ".artifacts", "e2e-server-logs");
+  if (fs.existsSync(serverLog)) {
+    fs.mkdirSync(logDir, { recursive: true });
+    const safeName = file.replace(/[\\/]/g, "_");
+    fs.copyFileSync(serverLog, path.join(logDir, safeName));
+    if (code !== 0) {
+      const tail = fs
+        .readFileSync(serverLog, "utf8")
+        .split(/\\r?\\n/)
+        .slice(-50)
+        .join("\\n");
+      console.log(`[e2e] --- tail of ${file} server log ---`);
+      console.log(tail);
+      console.log(`[e2e] --- end tail ---`);
+    }
+  }
 
   server.kill();
   await waitForPortFree(Number(E2E_PORT), 20_000);

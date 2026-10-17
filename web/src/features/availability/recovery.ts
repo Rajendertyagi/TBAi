@@ -40,6 +40,7 @@ async function safeLoadProviders(): Promise<void> {
 }
 
 async function runRecoverySequence(): Promise<void> {
+  logger.info("availability", "recovery.sequence_start", {});
   invalidateThreadListCache();
   invalidateHistoryCache();
   await safeLoadProviders();

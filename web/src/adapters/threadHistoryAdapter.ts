@@ -95,6 +95,10 @@ function retainedHistory<T>(remoteId: string): T[] {
 export function invalidateHistoryCache(remoteId?: string): void {
   // The bounded window is a retained projection too: coordinated recovery must
   // force a fresh read, so a stale window cannot outlive the cache it replaced.
+  logger.info("chat", "history.cache_invalidated", {
+    remoteId: remoteId ?? null,
+    scope: remoteId ? "single" : "all",
+  });
   if (remoteId) {
     lastGoodHistory.delete(remoteId);
     dropWindowController(remoteId);

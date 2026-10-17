@@ -26,6 +26,7 @@ import { ArrowUp, RefreshCw } from "lucide-react";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { toast } from "sonner";
 import { historyConfig } from "../../../config/history";
+import { logger } from "../../../lib/logger";
 import { TooltipIconButton } from "../../../components/assistant-ui/elements/tooltip-icon-button";
 import {
   beginHistoryReload,
@@ -106,15 +107,24 @@ export function DirectViewportBridge() {
   const isHistoryLoading = useAuiState((s) => s.thread.isLoading);
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId) {
+      logger.info("chat", "history.recovery_visit", {
+        conversationId: undefined,
+        loadFailed,
+        skipped: "no-conversation",
+      });
+      return;
+    }
     // Consulted and consumed in the SAME effect, so no render can slip between
     // re-arming an exhausted budget and spending it.
     const isNewVisit = beginHistoryVisit(conversationId);
+    logger.info("chat", "history.recovery_visit", { conversationId, isNewVisit, loadFailed });
 
     if (!loadFailed) {
       // The thread loaded (or is empty), so a future failure is recoverable
       // again rather than permanently suppressed by an old attempt.
       clearHistoryRecoveryAttempted(conversationId);
+      logger.info("chat", "history.recovery_skipped", { conversationId, reason: "no-failure" });
       return;
     }
     if (isNewVisit) {
@@ -122,9 +132,20 @@ export function DirectViewportBridge() {
       // — attempt.
       clearHistoryRecoveryAttempted(conversationId);
     }
-    if (hasAttemptedHistoryRecovery(conversationId)) return;
-    if (isRunning) return;
+    if (hasAttemptedHistoryRecovery(conversationId)) {
+      logger.info("chat", "history.recovery_skipped", {
+        conversationId,
+        reason: "already-attempted",
+        isNewVisit,
+      });
+      return;
+    }
+    if (isRunning) {
+      logger.info("chat", "history.recovery_skipped", { conversationId, reason: "running" });
+      return;
+    }
     markHistoryRecoveryAttempted(conversationId);
+    logger.info("chat", "history.recovery_started", { conversationId });
     void aui.threads.reloadMainThread().catch(() => {
       // The refresh itself failed; the failure signal stays set, and the next
       // visit into this conversation re-arms the budget and tries again.
