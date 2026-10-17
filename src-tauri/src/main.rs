@@ -79,6 +79,13 @@ fn resolve_web_dir() -> Option<PathBuf> {
 /// Data dir: prefer a `data` folder next to the executable (portable, writable),
 /// falling back to the current directory.
 fn resolve_data_dir() -> PathBuf {
+    // Honor DATA_DIR when it is set (the backend does the same), so a packaged
+    // app can be pointed at an isolated data directory for testing/verification.
+    if let Ok(dir) = std::env::var("DATA_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             return parent.join("data");
