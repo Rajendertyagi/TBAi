@@ -258,7 +258,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
 
 /// Bounded wait between polls of the exit record. Named so the cadence is
 /// auditable rather than buried in the loop.
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Wait up to `timeout` for the sidecar to exit gracefully; force-terminate it
 /// when the deadline expires. `exited` is the app's own record of the child's
@@ -288,7 +288,7 @@ fn wait_or_kill(
             terminate();
             return ShutdownOutcome::Forced;
         }
-        std::thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(SHUTDOWN_POLL_INTERVAL);
     }
 }
 
