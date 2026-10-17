@@ -40,7 +40,7 @@ export function hashNamespaceSeed(seed: string): string {
 /**
  * Daemon namespace for browser children. An operator-set
  * `AGENT_BROWSER_NAMESPACE` always wins; otherwise it derives from the
- * install's data dir (same `DATA_DIR || ./data` rule as db/workspace), so two
+ * install's data dir (the same single `DATA_DIR` as db/workspace), so two
  * servers (e.g. portable + workspace) never share the `default` daemon and
  * trip the "different daemon configuration" conflict.
  */

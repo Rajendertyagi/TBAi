@@ -55,6 +55,8 @@ import {
   beginSchedulerShutdown,
   resetSchedulerShutdown,
   setSetupDelayHook,
+  setSchedulerReady,
+  hasPendingRuns,
 } from "@/services/scheduler/scheduler.ts";
 import schedulerApp from "@/routes/scheduler.ts";
 import providersApp from "@/routes/providers.ts";
@@ -91,6 +93,13 @@ afterAll(() => {
     /* already closed */
   }
   blackhole = null;
+});
+
+// Route tests exercise the scheduler HTTP boundary without booting the
+// server, so they establish the readiness boot would have established.
+// (The 503-until-ready gate itself is covered by readiness.test.ts.)
+beforeEach(() => {
+  setSchedulerReady(true);
 });
 
 async function seedBlackholeProvider(): Promise<string> {
@@ -1230,8 +1239,46 @@ describe("abortAllRuns (shutdown spine)", () => {
     expect(second.aborted).toBe(0);
     expect(second.settled).toBe(0);
     expect(second.timedOut).toBe(0);
+    expect(second.deadlineHit).toBe(false);
     // The run stays cancelled; a second shutdown must not resurrect it.
     expect(schedulerStore.getRun(runId)?.status).toBe("cancelled");
+  }, 15000);
+
+  it("abortAllRuns reports deadlineHit only when the bound fires", async () => {
+    const providerId = await seedBlackholeProvider();
+    const job = makeJob({ providerId, modelId: "void" });
+    let releaseHook: () => void = () => {};
+    const hookGate = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    let hookCalled = false;
+    setSetupDelayHook(async () => {
+      hookCalled = true;
+      await hookGate;
+    });
+    try {
+      const resultPromise = runJobNow(job.id);
+      for (let i = 0; i < 100 && !hookCalled; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(hookCalled).toBe(true);
+      expect(hasPendingRuns()).toBe(true);
+      // Bound fires while setup is still held: deadline hit, work pending.
+      const bounded = await abortAllRuns(100);
+      expect(bounded.deadlineHit).toBe(true);
+      expect(bounded.timedOut).toBeGreaterThanOrEqual(1);
+      expect(hasPendingRuns()).toBe(true);
+      releaseHook();
+      const result = await resultPromise;
+      assertRunStarted(result);
+    } finally {
+      setSetupDelayHook(null);
+    }
+    // After settlement the pending set drains.
+    for (let i = 0; i < 100 && hasPendingRuns(); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(hasPendingRuns()).toBe(false);
   }, 15000);
 
   it("shutdown during provider execution: run settles to cancelled, DB write lands before close", async () => {

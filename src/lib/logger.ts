@@ -85,7 +85,7 @@ export interface LoggerConfig {
  *
  * The `env` parameter exists so a caller can supply an explicit override (the E2E
  * harness does). With no override it defers to the single canonical
- * `DATA_DIR`, which is anchored to the repository rather than to `process.cwd()`
+ * `DATA_DIR`, which is anchored to the install rather than to `process.cwd()`
  * — a cwd-relative path built a second, empty database whenever the app was
  * launched from a subdirectory. See `src/config/data-dir.ts`.
  */

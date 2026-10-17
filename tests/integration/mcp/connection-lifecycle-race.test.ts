@@ -40,6 +40,7 @@
 import { describe, it, expect, afterAll } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { mcpManager } from "@/services/mcp/manager.ts";
 import { logger } from "@/lib/logger.ts";
 import { REPO_ROOT } from "../../helpers/repo-root";
@@ -626,4 +627,52 @@ describe("MCP capability discovery cannot outlive its connection", () => {
       live.stop();
     }
   });
+});
+describe("MCP shutdown drain: the settle bound does not outlive its attempts", () => {
+  /**
+   * `disconnectAll()` awaits in-flight attempts under a bound whose handle is
+   * referenced, so a bound left pending is a shutdown that cannot finish until
+   * it fires. The attempt here settles on its own well before the bound, so the
+   * only thing that can keep the process alive afterwards is that handle.
+   *
+   * Measured as the child's own post-disconnect lifetime rather than the test's
+   * wall clock, so process start-up and module loading cannot influence the
+   * number: with the handle cleared it is ~0 ms, and with it referenced it is
+   * the remainder of the 5 s bound.
+   */
+  it("a disconnect whose attempts settle early does not hold the process for the bound", async () => {
+    const managerUrl = pathToFileURL(path.join(REPO_ROOT, "src/services/mcp/manager.ts")).href;
+    const storeUrl = pathToFileURL(path.join(REPO_ROOT, "src/services/mcp/store.ts")).href;
+    const script = `
+const mgr = (await import(${JSON.stringify(managerUrl)})).mcpManager;
+const store = await import(${JSON.stringify(storeUrl)});
+let finishedAt = 0;
+process.on("exit", () => {
+  console.log("linger_ms=" + (Date.now() - finishedAt));
+});
+const created = store.insertConfig({
+  name: "shutdown-bound-probe",
+  transport: "stdio",
+  command: process.execPath,
+  args: ["-e", "setTimeout(() => process.exit(1), 200);"],
+});
+void mgr.connect(created.id).catch(() => {});
+await mgr.disconnectAll();
+finishedAt = Date.now();
+store.deleteConfigRow(created.id);
+`;
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      cwd: REPO_ROOT,
+      env: { ...process.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    expect(code).toBe(0);
+    const sample = /linger_ms=(\d+)/.exec(stdout);
+    expect(sample, `child reported no linger sample:\n${stdout}`).not.toBeNull();
+    // The bound is INFLIGHT_SETTLE_TIMEOUT_MS (5 s). A second of headroom
+    // absorbs event-loop jitter without coming close to the bound itself.
+    expect(Number(sample?.[1])).toBeLessThan(1000);
+  }, 30000);
 });

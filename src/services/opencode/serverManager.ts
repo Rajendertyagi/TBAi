@@ -447,11 +447,18 @@ export class OpenCodeServerManager {
     const child = this.child;
     if (!child) return;
     child.kill("SIGTERM");
-    const timeout = new Promise<boolean>((resolve) =>
-      setTimeout(() => resolve(false), this.config.shutdownTimeoutMs),
-    );
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<boolean>((resolve) => {
+      timeoutTimer = setTimeout(() => resolve(false), this.config.shutdownTimeoutMs);
+    });
     const exited = child.exited.then(() => true).catch(() => false);
-    if (!(await Promise.race([exited, timeout]))) {
+    let timedOut = false;
+    try {
+      timedOut = !(await Promise.race([exited, timeout]));
+    } finally {
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+    }
+    if (timedOut) {
       child.kill("SIGKILL");
     }
     this.child = null;

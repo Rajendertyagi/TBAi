@@ -333,7 +333,8 @@ explicitly frozen/pinned by decision, not by drift.
 ### F. Data, security, and runtime principles
 
 - **Storage ownership** — one SQLite database (`data/chat.db`; `DATA_DIR`
-  redirects it; anchored to the repository root) is the source of truth for
+  redirects it; anchored to the install — the checkout root, or the executable's
+  directory when packaged) is the source of truth for
   all application state: `provider_configs`, `conversations`, `messages`,
   `memories`, `mcp_servers`, `folders`/`folder_groups`/`folder_links`,
   `quick_messages`, `scheduler_jobs`/`scheduler_runs`, `app_settings`,

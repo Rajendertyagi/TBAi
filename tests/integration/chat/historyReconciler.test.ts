@@ -9,6 +9,7 @@ import {
   type SqliteResumableStreamStore,
 } from "@/services/chat-streams/sqliteResumableStore.ts";
 import {
+  drainHistoryReconciliation,
   getHistoryReconciliationState,
   runHistoryReconciliationOnce,
   startHistoryReconciliation,
@@ -549,5 +550,43 @@ describe("history reconciliation — pass bounds and lifecycle", () => {
 
     expect(report).toMatchObject({ failed: 1 });
     expect(historyStateOf(h, id)).toBe("skipped");
+  });
+});
+
+// ── Shutdown drain: an in-flight tick must complete before the DB closes ────
+describe("history reconciliation drain (Phase 2)", () => {
+  it("drainHistoryReconciliation awaits an in-flight tick", async () => {
+    const h = harness();
+    const id = await settledRun(h, { id: "run_drain", terminalKind: "completed" });
+    let open = (): void => {};
+    h.gate = { promise: new Promise<void>((r) => (open = r)), open: () => {} };
+    startPass(h);
+
+    const tick = runHistoryReconciliationOnce();
+    // Let the pass reach the gated write: the tick is provably parked, not
+    // merely started, before the drain is observed.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(getHistoryReconciliationState().inFlight).toBe(true);
+
+    let drained = false;
+    const draining = drainHistoryReconciliation().then(() => {
+      drained = true;
+    });
+    // The drain must not resolve while the tick is still parked on the gate.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(drained).toBe(false);
+
+    open();
+    await draining;
+    expect(drained).toBe(true);
+    expect(await tick).toMatchObject({ written: 1 });
+    expect(historyStateOf(h, id)).toBe("done");
+  });
+
+  it("drainHistoryReconciliation resolves immediately when idle", async () => {
+    const h = harness();
+    startPass(h);
+    expect(getHistoryReconciliationState().inFlight).toBe(false);
+    await drainHistoryReconciliation();
   });
 });

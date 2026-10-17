@@ -21,7 +21,7 @@ export interface DesktopStdinShutdownOptions {
    * Invoked once per received `{"type":"shutdown"}` line. The caller resolves
    * the live server and runs the shutdown spine; this module does not.
    */
-  onShutdown: () => void;
+  onShutdown: () => void | Promise<void>;
 }
 
 /**
@@ -31,25 +31,40 @@ export interface DesktopStdinShutdownOptions {
  */
 export function installDesktopStdinShutdown(options: DesktopStdinShutdownOptions): void {
   const reader = Bun.stdin.stream().getReader();
+  let shutdownTriggered = false;
+
   void (async () => {
     const decoder = new TextDecoder();
     let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break; // EOF — never a shutdown trigger (see header)
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const msg = JSON.parse(trimmed) as { type?: string };
-          if (msg.type === "shutdown") options.onShutdown();
-        } catch {
-          /* malformed line: ignore */
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break; // EOF — never a shutdown trigger (see header)
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const msg = JSON.parse(trimmed) as { type?: string };
+            if (msg.type === "shutdown" && !shutdownTriggered) {
+              shutdownTriggered = true;
+              try {
+                await reader.cancel();
+              } catch {
+                /* stream cancellation ignore */
+              }
+              await options.onShutdown();
+              return;
+            }
+          } catch {
+            /* malformed line: ignore */
+          }
         }
       }
+    } catch {
+      /* stream error or cancelled: reader loop exits cleanly */
     }
   })();
 }

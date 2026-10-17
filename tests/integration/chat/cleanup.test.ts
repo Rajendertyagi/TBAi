@@ -11,6 +11,7 @@ import {
 } from "@/services/chat-streams/sqliteResumableStore.ts";
 import {
   DEFAULT_CLEANUP_INTERVAL_MS,
+  drainChatStreamCleanup,
   getChatStreamCleanupState,
   runChatStreamCleanupOnce,
   startChatStreamCleanup,
@@ -425,6 +426,75 @@ describe("cleanup — timer lifecycle", () => {
     await Bun.sleep(60);
     expect(rowExists(fsx, "run_live")).toBe(true);
     expect(storeFor(fsx).describe("run_live")!.storedStatus).toBe("streaming");
+  });
+});
+
+describe("cleanup — shutdown drain", () => {
+  it("resolves immediately when no tick is in flight", async () => {
+    expect(getChatStreamCleanupState().inFlight).toBe(false);
+    await drainChatStreamCleanup();
+  });
+
+  it("drains the in-flight tick so the database can close safely", async () => {
+    const fsx = harness();
+    await seedTerminal(fsx, "expired_now", "completed");
+    expireAll(fsx);
+
+    startChatStreamCleanup(fsx.db, { intervalMs: 10_000 });
+    // The immediate tick is executing right now, and stopping the timer does not
+    // stop it — it is already inside the reclaim pass.
+    expect(getChatStreamCleanupState().inFlight).toBe(true);
+    expect(stopChatStreamCleanup()).toBe(true);
+
+    let drained = false;
+    const drain = drainChatStreamCleanup().then(() => {
+      drained = true;
+    });
+    // No await has happened, so a drain that resolved immediately would be a
+    // no-op that proves nothing.
+    expect(drained).toBe(false);
+
+    await drain;
+    expect(drained).toBe(true);
+    expect(getChatStreamCleanupState().inFlight).toBe(false);
+    // The tick finished its work, and only now is the close below safe.
+    expect(rowExists(fsx, "expired_now")).toBe(false);
+
+    fsx.db.close();
+    // Once stopped and drained, no further tick can reach the closed database.
+    expect(await runChatStreamCleanupOnce()).toBeNull();
+    await drainChatStreamCleanup();
+  });
+
+  it("a failing tick still resolves the drain (no hang, no rejection)", async () => {
+    const fsx = harness();
+    startChatStreamCleanup(fsx.db, { intervalMs: 10_000, runImmediately: false });
+    fsx.db.close();
+
+    // A tick against a closed database fails inside its own try — store
+    // construction is synchronous — so it settles before its promise is even
+    // observed: nothing escapes as a rejection, and no in-flight tick is left
+    // behind for the drain to wait on.
+    expect(await runChatStreamCleanupOnce()).toBeNull();
+    expect(getChatStreamCleanupState().inFlight).toBe(false);
+    await drainChatStreamCleanup();
+  });
+
+  it("a second tick while one is running is a no-op", async () => {
+    const fsx = harness();
+    await seedTerminal(fsx, "expired_now", "completed");
+    expireAll(fsx);
+    startChatStreamCleanup(fsx.db, { intervalMs: 10_000, runImmediately: false });
+
+    const first = runChatStreamCleanupOnce();
+    expect(getChatStreamCleanupState().inFlight).toBe(true);
+    // Overlapping passes would leave the drain with more than one promise to
+    // await; the guard is what makes one tracked tick sufficient.
+    expect(await runChatStreamCleanupOnce()).toBeNull();
+
+    expect((await first)?.deleted).toBe(1);
+    expect(getChatStreamCleanupState().ticks).toBe(1);
+    expect(rowExists(fsx, "expired_now")).toBe(false);
   });
 });
 

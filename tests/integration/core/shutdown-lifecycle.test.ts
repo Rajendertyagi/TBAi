@@ -37,7 +37,13 @@ describe("shutdown lifecycle", () => {
     expect(await res.text()).toBe("ok");
 
     // Graceful shutdown: resolves without throwing.
-    await shutdownServer(server, "test");
+    // Repeated triggers share the same completion: both callers observe the
+    // one teardown rather than racing a second one.
+    const first = shutdownServer(server, "test");
+    const second = shutdownServer(server, "test-again");
+    expect(second).toBe(first);
+    await first;
+    await second;
 
     // The shared db singleton is now closed: a query must throw.
     let threw = false;

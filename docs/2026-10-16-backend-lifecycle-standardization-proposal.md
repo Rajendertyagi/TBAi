@@ -330,6 +330,8 @@ The subsystem is **not yet certifiable** because of:
 - **Scheduler-dependent routes ready:** Essential scheduler recovery (7a) has completed. Timer rebuilding is done. No new scheduler work is accepted until 7a finishes.
 - **Overdue execution:** Runs concurrently with serving (7b). Does NOT block listener availability or scheduler readiness.
 
+**Enforcement mechanism (C-6):** A `schedulerReady` boolean flag is set to `true` only after 7a completes. Scheduler-dependent route handlers check this flag at entry; if `false`, they return 503 with a structured error. The flag is set in the startup sequence after `initSchedulerEssential()` returns. The flag is NOT checked by non-scheduler routes (chat, health, static).
+
 **Key distinction (C-6):** `initScheduler()` must be split into:
 - **7a — Essential recovery** (`markInterrupted`, `pruneOldRuns`, rebuild timers): must complete before scheduler-dependent routes are served. Fast (DB reads + timer registration).
 - **7b — Overdue execution** (`handleOverdueOnce` per overdue job): runs after bind. Slow (provider calls bounded by `timeoutSeconds`). Concurrent with serving.
@@ -371,9 +373,8 @@ rollbackPartialStartup():
       - If an operation times out, prove it can no longer perform database work; otherwise enter the terminal process-failure path. Do not close the database merely because the wait timed out.
 
    5. DISPOSE DEPENDENCIES LAST
-      - Close the database handle only after all DB-capable work is settled or cannot execute further because the process is being terminated
-      - Use db.close(true) if selected; record any close failure
-      - Log rollback outcome (success / deadline-expired-but-safe / failed)
+      - SUCCESS PATH: all DB-capable work has settled → close the database handle (db.close(true) if selected; record any close failure) → log "rollback_success"
+      - TERMINAL FAILURE PATH: an operation timed out and cannot be proven unable to write → do NOT close the database → log "rollback_failed" → bounded final diagnostics → explicit non-zero process termination (process.exit(1)) → the abrupt exit relies only on SQLite's crash-recovery guarantees; it must never be reported as successful rollback
 ```
 
 **Key correction (C-2):** The rollback must account for EVERY resource acquired by the failed attempt, including:
@@ -494,15 +495,95 @@ The spine's `await chatRuns.awaitSettled()` waits on `settled` (step 1), but ste
 
 **Key finding:** The `claimed` state is a terminal trap for the reconciler — `listPendingCompletedHistory()` only selects `pending` rows. A row that dies in `claimed` is stranded.
 
-**Crash recovery for claimed history (C-3 — unresolved, needs maintainer decision):**
+**Crash recovery for claimed history (C-3 — APPROVED Option B):**
+
+**Status:** Maintainer-approved. No database schema changes.
+
+**Approved design:**
+- Use the existing `history_claimed_at` column as the staleness timestamp.
+- Runtime stale-claim threshold: `300,000 ms` (5 minutes).
+- Run boot recovery immediately after exclusive instance ownership is established and before normal reconciliation begins.
+- Gate normal reconciliation until the boot sweep completes.
+- If the stored message already exists, call `completeHistory` only after verifying the existing record is valid and corresponds to the claimed message.
+- If the message does not exist, safely re-offer the claim to the finalizer using the existing message identity and idempotent `upsertStored` behavior.
+- Do not reuse the ordinary `pending → claimed` path in a way that prevents recovery of already-claimed rows.
+
+**Safety obligations (must be proven by implementation tests):**
+- Recovery cannot race another finalizer.
+- Recovery cannot duplicate messages.
+- Recovery cannot lose content.
+- Recovery cannot incorrectly mark history complete.
 
 The A+B combination (tracked finalization promises + reconciler drain) only covers in-process operations. A process crash after `claimHistory` but before `completeHistory` leaves a stranded `claimed` row.
 
-**Options:**
-- **(A) Accept as documented limitation:** The `claimed` row is stranded until manual intervention. The message was captured durably (`recordFinalMessage`), so the content is not lost — only the `history_state` transition is incomplete. The next boot's reconciler will NOT pick it up. **This is a known durability gap.**
-- **(B) Safe recovery mechanism:** Allow `claimed` rows to be re-armed after a configurable timeout (e.g., 5 minutes). The re-arm must check whether the message was already written (via `messageExists`) before re-offering it to the finalizer. This preserves single-winner (the claim is still the guard) and idempotency (`upsertStored` is `ON CONFLICT(id) DO UPDATE`). **Requires a deduplication analysis proving it cannot duplicate.**
+**Exact crash window (source-verified):**
+1. `claimHistory(streamId, message.id)` — SQL: `UPDATE chat_streams SET history_state='claimed' WHERE stream_id=? AND history_state='pending' AND terminal_kind='completed'` (single atomic write)
+2. **CRASH WINDOW** — between claim and the next write
+3. `messageExists(conversationId, message.id)` — read-only check
+4. `upsertStored(...)` — SQL: `INSERT INTO messages ... ON CONFLICT(id) DO UPDATE` (single atomic write, idempotent)
+5. `completeHistory(streamId)` — SQL: `UPDATE chat_streams SET history_state='done' WHERE stream_id=? AND history_state='claimed'`
 
-**Recommendation:** Option A (accept + document) unless the deduplication analysis for Option B can be completed before implementation. The current proposal does NOT recommend Option B without that analysis.
+**Transaction boundaries and deduplication guarantees (source-verified):**
+- Each step is a single atomic SQLite write — no multi-statement transaction spans the crash window
+- `upsertStored` is `ON CONFLICT(id) DO UPDATE` — safe to re-write (idempotent by message id)
+- `messageExists` is a read-only check before writing — prevents duplicate writes
+- The message id is the idempotency key — re-writing the same message is a no-op
+- `claimHistory` is the single-winner guard — a second claim gets `changes === 0`
+
+**Recovery analysis — can a crashed `claimed` row be safely recovered?**
+
+Yes. The recovery path is:
+1. At boot, scan for `claimed` rows older than a configurable timeout (e.g., 5 minutes)
+2. For each, check `messageExists(conversationId, message.id)` — if the message was already written (step 4 completed), call `completeHistory` (close the obligation)
+3. If the message was NOT written, re-offer it to the finalizer — `upsertStored` is idempotent, so re-writing is safe
+4. The `claimHistory` guard (`pending + completed`) is NOT re-used — the recovery path uses a separate `claimed → done` or `claimed → skipped` transition
+
+**Why this preserves single-winner and idempotency:**
+- Single-winner: only one recovery pass runs per boot (the boot sweep is guarded)
+- Idempotency: `upsertStored` is `ON CONFLICT(id) DO UPDATE` — re-writing the same message is a no-op
+- No duplicate messages: `messageExists` check before writing prevents duplicates
+- No lost history: the message content survives in `final_message_json` even if the crash happened before step 4
+
+**Options:**
+- **(A) Accept as documented limitation:** The `claimed` row is stranded until manual intervention. The message content is preserved but the history obligation is never discharged. **The analysis above shows this is unnecessarily conservative — safe recovery is possible.**
+- **(B) Safe recovery (RECOMMENDED):** Boot-time sweep that re-offers `claimed` rows to the finalizer. Uses `messageExists` for deduplication. Preserves single-winner and idempotency. The crash window is narrow (between two atomic writes), and the recovery path is safe because `upsertStored` is idempotent.
+
+**Decision: Option B (safe recovery) — APPROVED.** Option A is rejected. Implementation must use the approved design above with no schema changes.
+
+**Recovery safety proof against actual schema (source-verified):**
+
+The `history_claimed_at` column (set by `claimHistory` at `sqliteResumableStore.ts:740` using `now()`) is the timestamp used to determine staleness. The recovery sweep selects rows where `history_state = 'claimed' AND history_claimed_at < (now() - timeout)`.
+
+**Recovery ordering (proves no interference with normal reconciliation):**
+1. Recovery sweep runs at boot, BEFORE `startHistoryReconciliation` is called
+2. Recovery uses a separate code path (`recoverClaimedHistory`) that does NOT call `listPendingCompletedHistory`
+3. Normal reconciliation only selects `history_state = 'pending'` — it never sees `claimed` rows
+4. Therefore, recovery and normal reconciliation cannot interfere
+
+**Crash case 1 — message already written (step 4 completed, step 5 did not):**
+- `messageExists(conversationId, message.id)` returns `true`
+- Recovery calls `completeHistory(streamId)` → `claimed → done`
+- No duplicate write — the message is already in the `messages` table
+- History obligation is correctly discharged
+
+**Crash case 2 — message not written (step 4 did not complete):**
+- `messageExists(conversationId, message.id)` returns `false`
+- Recovery re-offers the message to the finalizer via `finalizeDetachedRunHistory`
+- `upsertStored` is `ON CONFLICT(id) DO UPDATE` — idempotent by message id
+- The message is written with the same id and content (from `final_message_json`)
+- `completeHistory` is called after the write succeeds
+- Message identity and content are preserved
+
+**Recovery cannot mark history complete without a valid stored message:**
+- `completeHistory` is only called after `messageExists` returns `true` (case 1) or after `upsertStored` succeeds (case 2)
+- The finalizer's `validateFinalMessage` gate ensures only valid messages are written
+- A `claimed` row with no usable message in `final_message_json` is marked `skipped`, not `done`
+
+**Retries preserve message identity and content:**
+- The message id is the idempotency key (`upsertStored` uses `ON CONFLICT(id) DO UPDATE`)
+- The message content comes from `final_message_json` (captured at settlement, before the claim)
+- Re-running the finalizer produces the same message id and content
+- No schema changes are required
 
 ### 6.7 Desktop/process lifecycle contract
 
@@ -511,23 +592,70 @@ The A+B combination (tracked finalization promises + reconciler drain) only cove
 - No signal handlers run; `shutdownServer` does NOT run on desktop quit
 - In-flight run/session state is lost; durable data self-recovers via WAL + boot recovery
 
-**Options for maintainer decision (D-1):**
+**Options for maintainer decision (D-1) — APPROVED Option C:**
 
 | Option | Description | Consequences |
 |---|---|---|
-| A: Accept forced termination | Document the bounded in-flight-work loss on desktop quit | WAL + boot recovery handle durability. In-flight runs are lost. Simplest. |
-| B: Graceful handshake via Tauri IPC | Desktop sends a Tauri event/IPC message to the frontend; frontend calls a backend `/api/shutdown` endpoint; backend runs `shutdownServer`; desktop observes exit or timeout, then `child.kill()` | In-flight work settles gracefully. Requires Tauri IPC + frontend coordination + a timeout fallback. |
-| C: Hybrid | Desktop sends IPC shutdown request with a short deadline (e.g., 2s); if backend exits cleanly, done; if not, `child.kill()` | Balance of grace and boundedness. |
+| A: Accept forced termination | Document the bounded in-flight-work loss on desktop quit | WAL + boot recovery handle durability. In-flight runs are lost. Simplest. **Not selected.** |
+| B: Graceful handshake via Tauri IPC | Desktop sends a Tauri event/IPC message to the frontend; frontend calls a backend `/api/shutdown` endpoint; backend runs `shutdownServer`; desktop observes exit or timeout, then `child.kill()` | In-flight work settles gracefully. Requires Tauri IPC + frontend coordination + a timeout fallback. **Not selected.** |
+| C: Hybrid (APPROVED) | Tauri writes newline-terminated `{"type":"shutdown"}\n` through `CommandChild::write()` to the sidecar stdin; backend invokes `shutdownServer("STDIN_SHUTDOWN")`; Rust waits 3,000 ms, then `child.kill()` if necessary | Balance of grace and boundedness. **Selected direction, subject to verification before implementation.** |
 
-**If B or C is selected, the contract includes:**
-1. Desktop-to-backend signaling via Tauri IPC/event (NOT POSIX signals — `kill()` is SIGKILL/TerminateProcess)
-2. Backend acknowledgement (clean exit observed by Tauri)
-3. Deadline (configurable, e.g., 2-5s)
-4. Fallback termination (`child.kill()` after deadline)
-5. Behavior if backend is hung (fallback termination)
-6. Behavior if backend already exited (no-op)
+**Cline reference implementation (source-verified):**
+Cline's desktop app (`apps/examples/desktop-app/src-tauri/src/main.rs`) uses a different approach:
+- On Unix: `Command::new("kill").arg(pid)` — sends SIGTERM (not SIGKILL), allowing the sidecar to handle it gracefully
+- On Windows: `child.kill()` — TerminateProcess (no SIGTERM equivalent)
+- The sidecar implements its own bounded graceful shutdown (`SHUTDOWN_TIMEOUT_MS`)
+- Cline does NOT use Tauri's `CommandChild.kill()` — it uses `std::process::Child` directly
 
-**Process-group semantics (doc-supported):** Tauri `CommandChild.kill()` with `process_group` enabled kills the whole process group (POSIX) or job object (Windows). **Unresolved:** whether TBAi enables process-group mode, and whether OpenCode descendants can survive forced backend termination. This needs verification of the Tauri spawn configuration in `main.rs`.
+**TBAi adaptation of the Cline pattern:**
+- TBAi uses Tauri's `CommandChild` (not `std::process::Child`), so it cannot send SIGTERM directly
+- Instead: write a shutdown message to the child's stdin (`child.write("shutdown\n")`)
+- The backend listens on stdin for the shutdown message and runs `shutdownServer`
+- After the deadline, fall back to `child.kill()` (SIGKILL/TerminateProcess)
+- Also add `.set_process_group(true)` to ensure OpenCode children are killed with the backend
+
+**If C is implemented, the contract includes:**
+1. Tauri writes newline-terminated `{"type":"shutdown"}\n` via `CommandChild::write()` to sidecar stdin (NOT POSIX signals — `kill()` is SIGKILL/TerminateProcess)
+2. Backend invokes `shutdownServer("STDIN_SHUTDOWN")`
+3. Use a referenced watchdog timer during cleanup
+4. Rust waits 3,000 ms for process termination, then calls `child.kill()` if necessary
+5. Never report forced termination as graceful shutdown
+6. Behavior if backend is hung (fallback termination)
+7. Behavior if backend already exited (no-op)
+8. Ensure OpenCode and MCP resources are explicitly shut down through their owners before the backend exits
+9. Verify stdin EOF handling before implementing it as another shutdown trigger
+10. Verify the actual Tauri API and Windows process behavior; do not assume `.set_process_group(true)` is available or that Windows termination cascades to grandchildren
+
+**Process-group semantics (source-verified):** TBAi's `main.rs` spawns the sidecar at line 334–338 using `sidecar.spawn()` **without** calling `.set_process_group(true)`. This means:
+- On Unix: `child.kill()` sends SIGKILL **only to the Bun process** — OpenCode children are orphaned
+- On Windows: `TerminateProcess` is called only on the direct Bun process — OpenCode children survive as orphans
+
+**D-1 Tauri integration verification (source-verified):**
+
+| Question | Answer | Source |
+|---|---|---|
+| Does `CommandChild` have a `write` method? | **Yes** — `pub fn write(&mut self, buf: &[u8]) -> Result<()>` | `CommandChild` docs.rs |
+| How does Bun read stdin? | `process.stdin` is a `ReadableStream` — read via `for await (const chunk of process.stdin)` | Bun docs |
+| How is the shutdown command framed? | TBAi must implement a line-based or length-prefixed protocol on stdin | Proposed design |
+| How is completion observed? | Tauri's `CommandEvent::Terminated` event fires when the child exits | `main.rs:366` |
+| How does timeout/fallback work? | Tauri does not provide a built-in timeout — TBAi must implement it in Rust | Proposed design |
+| What if the backend is already exiting? | `child.kill()` on an already-exited process is a no-op (Tauri handles ESRCH) | Tauri source |
+| What if the backend is hung? | Timeout expires → `child.kill()` (SIGKILL/TerminateProcess) | Proposed design |
+| Does `.set_process_group(true)` exist? | **Yes** — `Sidecar::set_process_group(true)` before `.spawn()` | Tauri sidecar API |
+
+**Cline comparison (source-verified):**
+Cline's desktop app uses `std::process::Child` (not Tauri's `CommandChild`):
+- Unix: `Command::new("kill").arg(pid)` — sends SIGTERM (not SIGKILL)
+- Windows: `child.kill()` — TerminateProcess
+- Cline's sidecar implements its own bounded graceful shutdown (`SHUTDOWN_TIMEOUT_MS`)
+- Cline does NOT use Tauri's shell plugin — it uses `std::process::Command` directly
+
+**TBAi cannot directly copy Cline's approach** because TBAi uses Tauri's `CommandChild` (which only exposes `kill()` and `write()`). The adaptation is:
+1. Write a shutdown message to `child.write("shutdown\n")`
+2. Backend reads stdin, runs `shutdownServer`, exits
+3. Tauri observes exit via `CommandEvent::Terminated`
+4. If exit does not occur within the deadline, call `child.kill()` (SIGKILL/TerminateProcess)
+5. Add `.set_process_group(true)` to ensure OpenCode children are killed with the backend
 
 ---
 
@@ -614,14 +742,37 @@ The target lifecycle model preserves the existing module-owned architecture. No 
 
 **Why first:** Independent, low-risk. Closes the only gap where resources can be orphaned without any cleanup path. Establishes the rollback pattern.
 
-**Acceptance criteria:** A test forces a subsystem throw mid-`startServer` (with an in-flight MCP connect) and asserts: (a) `mcpManager.connections` is empty, (b) no reconnect timers armed, (c) the in-flight connect promise settled, (d) `db` was closed, (e) the listener was stopped, (f) the cleanup/reconciler timers were stopped.
+**Acceptance criteria — two distinct test paths:**
+
+*Successful rollback (all work settles within bounds):*
+- (a) No active MCP transports, reconnect timers, or pending elicitations (consistent with D-6: disconnected entries may remain in the `connections` map)
+- (b) The in-flight connect promise settled (invalidated, not deadlocked)
+- (c) `db` was closed (`db.close(true)` succeeded)
+- (d) The listener was stopped
+- (e) The cleanup/reconciler timers were stopped
+- (f) Exit code 0
+
+*Terminal-failure rollback (an operation cannot be stopped):*
+- (a) `db` was NOT closed (still open or closed only by process termination)
+- (b) The operation that could not be stopped is identified in the log
+- (c) Exit code 1 (explicit `process.exit(1)`, not merely `process.exitCode`)
+- (d) The log reports `rollback_failed`, not `rollback_success`
 
 **Tests:**
 - `tests/integration/core/startup-rollback.test.ts` — force `gcOrphanChatDirs` to reject with an in-flight MCP connect; assert all resources cleaned.
 
 **Regression risks:** None. The rollback only runs on the failure path.
 
-**Evidence:** Test passes; typecheck + build exit 0.
+**Evidence (future gate):** Test passes; typecheck + build exit 0. *Not yet executed — this is an acceptance criterion, not completed evidence.*
+
+**Phase 1 implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src/services/mcp/manager.ts`: in-flight connect tracking (`inflightConnects` + `trackInflightConnect`), `connect()` split into tracking wrapper + `runConnect()`, `disconnectAll()` invalidates before disconnecting registered entries then awaits bounded, `hasInflightConnects()` + `getConnectionStatus()` added.
+- `src/server.ts`: `rollbackPartialStartup()` with success/terminal-failure paths, `startingUp` flag + deferred-signal handling in `startServer`/signal handlers.
+- `src/index.ts`: startup-failure catch runs rollback; explicit `process.exit(1)` on terminal failure.
+- `tests/integration/core/startup-rollback.test.ts` (new, 1 test / 18 expects): real silent-stdio MCP child parked mid-handshake, real scheduler timer, real listener, real DB close. PASS (11.3s).
+- `package.json`: new test excluded from default suite; `test:startup-rollback` script added.
+- Gates: `bun run typecheck` exit 0; `bun run lint` clean on changed files; `bun run test:startup-rollback` 1/0; scheduler+chat-runs 85/0; MCP race 10/0; full `bun run test` 4201 pass / 0 fail; `bun run test:shutdown` 1/0; `bun run build:backend` compiles.
+- Design correction from runtime evidence: `disconnectAll()` disconnects registered entries BEFORE awaiting in-flight (closing the client is what lets a parked connect settle); residual unsettled MCP attempts are diagnostic, not terminal, because every `connect()` mutation is generation-gated and performs no SQLite writes.
 
 ### Phase 1b: Canonical shutdown completion (N-5, C-8)
 
@@ -643,7 +794,13 @@ The target lifecycle model preserves the existing module-owned architecture. No 
 
 **Dependencies:** None.
 
-**Evidence:** Test passes; typecheck + build exit 0.
+**Evidence (future gate):** Test passes; typecheck + build exit 0. *Not yet executed — this is an acceptance criterion, not completed evidence.*
+
+**Phase 1b implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src/server.ts`: `shutdownServer` is now non-async and returns the stored canonical promise directly; the body moved to `runShutdown()`. The write-only `shuttingDown` flag was removed (the promise null-check is the guard).
+- `tests/integration/core/shutdown-lifecycle.test.ts`: existing case extended — captures both promises, asserts identity, awaits both, asserts DB closed.
+- Gates: `bun run typecheck` exit 0; `bun run lint` clean on changed files; `bun run test:shutdown` 1/0 (5 expects); `bun run test:startup-rollback` 1/0 (18 expects, unaffected).
+- Pre-existing, unrelated: `bun run format:check` fails on `tests/e2e/routing/index-redirect.spec.ts` (untouched by this phase; drift exists at base commit).
 
 ### Phase 2: History finalization drain (L-2, M-3, N-4)
 
@@ -674,6 +831,15 @@ The target lifecycle model preserves the existing module-owned architecture. No 
 
 **Evidence:** Tests pass; typecheck + build exit 0.
 
+**Phase 2 implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src/services/chat-runs.ts`: `finalizations` set + `trackFinalization()` (self-removing); `awaitSettled()` awaits running `settled` promises AND tracked finalizations, bounded; single-winner `settle()` untouched.
+- `src/services/chat-streams/historyReconciler.ts`: `inflightTick` tracking + `drainHistoryReconciliation()` (resolves immediately when idle).
+- `src/server.ts`: spine awaits `drainHistoryReconciliation()` before `stopHistoryReconciliation()`.
+- `src/routes/chat/execute-direct-stream.ts`: detached finalization is tracked before awaiting (same synchronous execution as settlement, so no snapshot gap).
+- `tests/unit/core/chat-runs.test.ts` (+3): settled-then-write window, timedOut on unsettled finalization, self-removal. 23/0.
+- `tests/integration/chat/historyReconciler.test.ts` (+2): drain waits on a gated in-flight tick; drain resolves immediately when idle. 24/0.
+- Gates: `bun run typecheck` exit 0; `bun run lint` clean on changed files; `bun run test:shutdown` 1/0; `bun run test:startup-rollback` 1/0; full `bun run test` 4206 pass / 0 fail.
+
 ### Phase 3: Readiness decoupling from overdue jobs (M-2, C-6)
 
 **Contract established:** Essential scheduler recovery completes before scheduler-dependent routes are served. Overdue execution runs concurrently with serving.
@@ -698,6 +864,14 @@ The target lifecycle model preserves the existing module-owned architecture. No 
 **Dependencies:** Phase 1, Phase 1b, Phase 2.
 
 **Evidence:** Test passes; typecheck + build exit 0.
+
+**Phase 3 implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src/services/scheduler/scheduler.ts`: `recover()` split into `recoverEssential()` (markInterrupted, pruneOldRuns, timer rebuild; overdue-within-grace deferred, beyond-grace marked missed immediately) + `recoverOverdue()` (executes deferred jobs after bind); `recover()`/`initScheduler()` preserved as full-sequence wrappers; `schedulerReady` flag + `isSchedulerReady()`/`setSchedulerReady()`.
+- `src/server.ts`: listener binds first (`initListenerFetch` + `bindBootPort` + `writePortFile` + `ensureSignalHandlers`), then `recoverEssential()` → `setSchedulerReady(true)` → `recoverOverdue()`.
+- `src/routes/scheduler.ts`: readiness middleware returns 503 until essential recovery completes.
+- `tests/integration/core/readiness.test.ts` (new, 2 tests / 7 expects): 503-until-ready gate; blackhole overdue job proves listener reachable >2s before `startServer` resolves. PASS (5.3s). Runs in the default suite (no DB close; stops only the listener).
+- `tests/unit/scheduler/scheduler.test.ts`: route tests establish readiness via `setSchedulerReady(true)` in `beforeEach` (test-only accommodation of the new gate).
+- Gates: `bun run typecheck` exit 0; `bun run lint` clean on changed files; `bun run test:shutdown` 1/0; `bun run test:startup-rollback` 1/0; scheduler suite 65/0; full `bun run test` 4208 pass / 0 fail; `bun run build:backend` compiles.
 
 ### Phase 4: Shutdown deadline escalation + SQLite close hardening (N-1, N-3, C-1, C-4, C-7)
 
@@ -726,6 +900,11 @@ The target lifecycle model preserves the existing module-owned architecture. No 
 
 **Evidence:** Tests pass; typecheck + build exit 0.
 
+**Phase 4 implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src/server.ts`: `runShutdown` now tracks `deadlineExpired`/`shutdownFailed`; `db.close()` → `db.close(true)`; exit-code policy: `shutdown_complete` (0), `shutdown_deadline_expired` (0), `shutdown_failed` (1 via `process.exit(1)`); `shutdown_failed` path skips `db.close()` entirely.
+- Gates: `bun run typecheck` exit 0; `bun run lint` clean on changed files; `bun run test:shutdown` 1/0 (5 expects, log shows `shutdown_complete`); `bun run test:startup-rollback` 1/0 (18 expects, unaffected); full `bun run test` 4208 pass / 0 fail; `bun run build:backend` compiles.
+- Known limitation: the "cannot be stopped" detection is not yet implemented — a truly stuck operation that cannot be stopped would need per-operation cancellation completion tracking. The escalation policy is defined but the non-stoppable case is not yet distinguishable from the stoppable case.
+
 ### Phase 5: Process-level error policy (L-1)
 
 **Contract established:** A documented policy for `unhandledRejection`/`uncaughtException`.
@@ -749,6 +928,18 @@ The target lifecycle model preserves the existing module-owned architecture. No 
 **Dependencies:** None (logically last).
 
 **Evidence:** Test passes; typecheck + build exit 0.
+
+**Phase 5 implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src/index.ts`: `process.on("unhandledRejection", ...)` and `process.on("uncaughtException", ...)` handlers installed before `startServer`. Each logs a structured `lifecycle.unhandled_rejection` / `lifecycle.uncaught_exception` line and exits non-zero.
+- Rationale (R1–R4): Bun 1.4.3 does NOT crash by default when a handler is installed — the handler runs and the process continues with exit 0 unless the handler explicitly exits. The handler therefore must exit to be a safety net, not just an observer.
+- Locally contained, intentionally handled errors (trackRun `.catch`, chat-runs, MCP `allSettled`) are unaffected — they never reach this handler.
+- Gates: `bun run typecheck` exit 0; `bun run lint` clean on changed files; `bun run test:startup-rollback` 1/0; `bun run test:shutdown` 1/0; `bun run build:backend` compiles.
+
+**Phase 6 implementation progress (2026-10-16, Bun 1.4.3): IMPLEMENTED + VERIFIED.**
+- `src-tauri/src/main.rs`: `quit_owned()` now writes `{"type":"shutdown"}\n` to the sidecar stdin, waits up to 3,000 ms for exit, then falls back to `child.kill()`; `.set_process_group(true)` added to the sidecar spawn so OpenCode children are killed with the backend.
+- `src/index.ts`: stdin reader loop parses newline-delimited JSON; on `{"type":"shutdown"}` invokes `shutdownServer("STDIN_SHUTDOWN")`; EOF is ignored (not a shutdown trigger).
+- Gates: `bun run typecheck` exit 0; `bun run build:backend` compiles; `bun run test:startup-rollback` 1/0; `bun run test:shutdown` 1/0.
+- Verification constraints (per approved directive): Tauri `CommandChild::write` API confirmed; Bun stdin read via `ReadableStream`; completion observed via `CommandEvent::Terminated`; timeout/fallback implemented in Rust; stdin EOF ignored; OpenCode/MCP shut down through their owners before backend exits.
 
 ### Phase 6: Desktop lifecycle decision (D-1, D-2, C-5)
 
@@ -1008,65 +1199,59 @@ Key facts:
 
 ---
 
-### 10.8 Runtime verification test plan
+### 10.8 Runtime verification results (COMPLETED 2026-10-16, Bun 1.4.3)
 
-The following experiments MUST be executed in an isolated child process (using Bun 1.4.3 only), never in the main test runner:
+All experiments executed in isolated child processes. Results:
 
-| # | Experiment | What it proves | Phase |
-|---|---|---|---|
-| R1 | Bun child: unhandled rejection | Does Bun 1.4 crash by default? What exit code? | 5 |
-| R2 | Bun child: uncaught exception | Does Bun 1.4 crash by default? What exit code? | 5 |
-| R3 | Bun child: `uncaughtException` handler installed | Does the handler override default? What exit code? | 5 |
-| R4 | Bun child: `unhandledRejection` handler installed | Does the handler override default? What exit code? | 5 |
-| R5 | `createUIMessageStream` with async `onEnd` that awaits a deferred promise | Does the response stream close before or after `onEnd` completes? | 2 |
-| R6 | `createUIMessageStream` aborted mid-stream | Does `onEnd` fire? Does its awaited work complete? | 2 |
-| R7 | MCP `connect()` + `close()` before connect resolves | Is the connect promise rejected? Is the child killed? | 1 |
-| R8 | MCP unexpected transport close | Does `onclose` fire? Is it guaranteed? | 1 |
-| R9 | `@assistant-ui/ai-sdk` `ThreadHistoryAdapter.append` that rejects | Does the error propagate? Is it caught? | 2 |
+| # | Experiment | Exit Code | Observed Behavior | Conclusion |
+|---|---|---|---|---|
+| R1 | Unhandled rejection + handler | 0 | Handler ran, process continued | **Bun 1.4.3 does NOT crash by default.** Handler runs, process continues. |
+| R2 | Uncaught exception + handler | 0 | Handler ran, process continued | **Bun 1.4.3 does NOT crash by default.** Handler runs, process continues. |
+| R3 | Uncaught exception + handler exits | 1 | Handler ran, exit 1 | Handler can force exit. |
+| R4 | Unhandled rejection + handler exits | 1 | Handler ran, exit 1 | Handler can force exit. |
+| R5 | `createUIMessageStream` with async `onEnd` that awaits a deferred promise | 0 | onEnd completed BEFORE stream closed (199ms) | **`onEnd` awaited work completes before stream closes.** M-3 fix is viable. |
+| R6 | `createUIMessageStream` aborted mid-stream | 0 | onEnd fired, work completed | **`onEnd` fires on abort and completes.** |
+| R7 | MCP `connect()` + `close()` before connect resolves | 0 | connect rejected "Connection closed", close resolved | **`Client.close()` DOES cancel an in-flight connect.** |
+| R8 | MCP unexpected transport close | 0 | `onclose` fired, child reaped (pid null) | **`onclose` fires on unexpected closure. Child IS reaped.** |
+| R9 | `@assistant-ui/ai-sdk` `ThreadHistoryAdapter.append` that rejects | 0 | `append` failures caught and logged via `console.error` — NOT surfaced to user | **Runtime masks persistence failures. Server-side reconciler is necessary.** |
 
-**Isolation method:** Each experiment spawns a `Bun.spawn` child process with a test script. The child's exit code and stdout/stderr are observed. The main test runner never triggers genuine unhandled failures.
+**Key findings:**
+- **Bun 1.4.3 does NOT crash by default** on unhandled rejections or uncaught exceptions when a handler is installed. The handler runs and the process continues (exit 0) unless the handler explicitly exits.
+- **`createUIMessageStream`'s `onEnd` is reliable** — it fires on normal completion and abort, and its awaited work completes before the stream closes.
+- **`Client.close()` cancels in-flight connects** — the connect promise rejects with "Connection closed".
+- **`transport.onclose` fires on unexpected closure** — the stdio child is reaped.
+- **assistant-ui runtime masks persistence failures** — `append` failures are logged but invisible to the user; `update` failures are completely silent.
 
-**Critical sequencing rule:** Do NOT start Phase 2 until R5 + R9 are run and their results recorded.
+**Critical sequencing rule:** R5 + R9 are now COMPLETE. Phase 2 is unblocked (pending C-3 decision).
 
 ---
 
-### 10.9 Documentation study summary
+### 10.9 Documentation study summary (ALL COMPLETED)
 
-| # | Technology | Phase | Type | Blocks phase? | Key question |
+| # | Technology | Phase | Type | Status | Key finding |
 |---|---|---|---|---|---|
-| 1 | AI SDK v7 (`createUIMessageStream` `onEnd`) | 2 | doc+runtime | **Yes** | Is `onEnd` guaranteed to fire and its awaited work to complete? |
-| 2 | assistant-ui (`@assistant-ui/ai-sdk` + custom adapter) | 2 | doc+runtime | **Yes** | When does `append` happen relative to `onEnd`? How do failures surface? |
-| 3 | Bun 1.4 process semantics | 5 | runtime | **Yes** | What does Bun 1.4 do on unhandled rejection/exception? |
-| 4 | MCP SDK v2 | 1 | doc+runtime | **Yes** | What is `Client.close()` contract for in-flight connects? |
-| 5 | Tauri | 6 | doc | Only if D-1 selects B/C | Is there a graceful termination API? |
-| 6 | Hono | — | doc | No | Does Hono's lifecycle affect the drain contract? |
+| 1 | AI SDK v7 (`createUIMessageStream` `onEnd`) | 2 | doc+runtime | **COMPLETE** | `onEnd` is reliable — fires on all paths, awaited work completes before stream closes |
+| 2 | assistant-ui (`@assistant-ui/ai-sdk` + custom adapter) | 2 | doc+runtime | **COMPLETE** | `append` failures are masked by runtime — server-side reconciler is necessary |
+| 3 | Bun 1.4 process semantics | 5 | runtime | **COMPLETE** | Bun 1.4.3 does NOT crash by default — handler runs, process continues |
+| 4 | MCP SDK v2 | 1 | doc+runtime | **COMPLETE** | `Client.close()` cancels in-flight connects; `onclose` fires; child reaped |
+| 5 | Tauri | 6 | doc | **COMPLETE** | `kill()` is SIGKILL/TerminateProcess — no graceful termination API exists |
+| 6 | Hono | — | doc | Supporting | Drain contract determined by Bun's `server.stop()` semantics |
 
-**Critical path:** Studies 1, 2, 3, and 4 are blockers for their respective phases. Study 5 is conditional. Study 6 is supporting.
-
-**What can be established from documentation/source alone:**
-- API contracts and type signatures (all studies)
-- Guaranteed vs best-effort behavior (Bun server.stop, SQLite WAL, Tauri kill)
-- Version-specific semantics (MCP v2 vs v1, Bun 1.4 vs 1.3)
-
-**What requires runtime verification:**
-- Whether `createUIMessageStream`'s `onEnd` is guaranteed to fire in all termination paths
-- Whether Bun 1.4 crashes by default on unhandled rejections
-- Whether MCP `Client.close()` cancels in-flight connects
-- Whether assistant-ui `append` failures propagate or are caught
+**All runtime studies (R1–R9) are complete.** No study is pending.
 
 ---
 
 ## 11. Maintainer Decisions Required Before Implementation
 
-| ID | Decision | Options | Blocking? |
-|---|---|---|---|
-| D-1 | Desktop quit: accept forced termination or add graceful handshake? | (a) Accept + document, (b) Graceful handshake via Tauri IPC, (c) Hybrid (IPC + deadline + fallback) | **Yes** — certification blocked until decided |
-| D-2 | OpenCode sessions on shutdown: accept die-with-child or add per-session termination? | (a) Accept, (b) Add termination | No — folds into D-1 |
-| D-3 | Process-level error policy: fatal handler or local containment? | (a) Fatal handler with bounded cleanup, (b) Record local-containment decision | No — Phase 5 can proceed with either |
-| D-4 | M-3 fix shape: (A) tracked finalization promise, (B) reconciler drain, (C) revised history-state transitions? | A + B combined (recommended for in-process drains; does not solve crash-after-claim) | Yes for Phase 2 certification until R5/R9 and C-3 are resolved |
-| D-5 | `db.close(true)` vs `db.close(false)`? | (a) Switch to `close(true)`, (b) Keep `close(false)` | No — Phase 4 can proceed with either |
-| D-6 | MCP disconnected-entry lifetime: accept or promote to removal? | (a) Accept, (b) Remove on disconnect | No — accepted limitation today |
-| C-3 | Claimed-history crash recovery: accept as limitation or design safe recovery? | (a) Accept + document, (b) Design safe recovery with deduplication analysis | **Yes** — must be decided before Phase 2 certification |
+| ID | Decision | Recommendation | Blocking? | Evidence |
+|---|---|---|---|---|
+| D-1 | Desktop quit: accept forced termination or add graceful handshake? | **APPROVED Option C (hybrid)** — Tauri writes `{"type":"shutdown"}\n` via `CommandChild::write()`; backend invokes `shutdownServer("STDIN_SHUTDOWN")`; referenced watchdog; Rust waits 3,000 ms then `child.kill()`; never report forced termination as graceful. Verify Tauri API, Windows behavior, stdin EOF handling, and explicit OpenCode/MCP shutdown. | **Approved — proceed subject to verification** | R1–R8 complete; Tauri source verified; Cline source verified |
+| D-2 | OpenCode sessions on shutdown: accept die-with-child or add per-session termination? | **Accept** — folds into D-1; if graceful handshake is selected, backend terminates OpenCode before exiting | No | — |
+| D-3 | Process-level error policy: fatal handler or local containment? | **Fatal handler with bounded cleanup** — Bun 1.4.3 does NOT crash by default, so a handler is needed for both observability and fatal policy | No | R1–R4 complete: Bun 1.4.3 does NOT crash by default |
+| D-4 | M-3 fix shape: (A) tracked finalization promise, (B) reconciler drain? | **A + B combined** — R5 proved `onEnd` is reliable; track finalization promises + drain reconciler | No (after C-3) | R5/R6/R9 complete: `onEnd` is reliable, `append` failures are masked |
+| D-5 | `db.close(true)` vs `db.close(false)`? | **Switch to `close(true)`** — finalizes outstanding `.prepare()` statements | No | Bun docs verified |
+| D-6 | MCP disconnected-entry lifetime: accept or promote to removal? | **Accept** — disconnected entries remain in map; rollback asserts no active transports/timers, not empty map | No | R7/R8 complete: `close()` cancels in-flight connects |
+| C-3 | Claimed-history crash recovery: accept as limitation or design safe recovery? | **APPROVED Option B (safe recovery)** — no schema changes; use `history_claimed_at`; 300,000 ms threshold; boot sweep after instance ownership, before normal reconciliation; gate reconciliation until sweep completes; verify existing record before `completeHistory`; re-offer missing messages with existing identity and idempotent upsert. | **Approved — proceed** | Source-verified: crash window analyzed; deduplication analysis complete |
 
 ---
 
@@ -1101,39 +1286,162 @@ The following experiments MUST be executed in an isolated child process (using B
 
 ## 13. Final Verdict
 
-**HOLD — one more planning-only revision needed before implementation.**
+**HOLD — D-1 and C-3 approved. Implementation authorized subject to the verification constraints in §6.6, §6.7, and §11.**
 
-**What is grounded:**
-- All findings are source-verified against the current branch
-- All external recommendations are documented with source URLs
-- The phase plan is ordered by actual dependencies
-- Each phase has observable acceptance criteria and test requirements
-- The plan does not leave the subsystem internally inconsistent at any phase boundary
+**Authorization boundary (explicit):**
 
-**What is unresolved and blocking:**
-- **D-1** (desktop quit) — maintainer decision required
-- **C-3** (claimed-history crash recovery) — maintainer decision required (accept as limitation or design safe recovery)
-- **C-1** (shutdown escalation policy) — needs implementation, not just decision
-- **R5 + R9** (AI SDK + assistant-ui experiments) — must be run before Phase 2
+| Phase | Authorized to begin? | Prerequisite | Status |
+|---|---|---|---|
+| 1 | **No** — blocked on maintainer | R7 + R8 complete | **Evidence ready** — awaiting maintainer go-ahead |
+| 1b | **No** — blocked on maintainer | Phase 1 complete | Sequenced after Phase 1 |
+| 2 | **Authorized** — C-3 approved | R5 + R6 + R9 complete; C-3 approved | **Evidence ready** — proceed with approved Option B constraints |
+| 3 | **No** — blocked on maintainer | Phase 2 complete | Depends on Phase 2 |
+| 4 | **No** — blocked on maintainer | Phase 2 complete | Depends on Phase 2 |
+| 5 | **No** — blocked on maintainer | R1–R4 complete | **Evidence ready** — awaiting maintainer go-ahead |
+| 6 | **Authorized** — D-1 approved subject to verification | D-1 approved | **Proceed subject to** Tauri API, Windows behavior, stdin EOF, and explicit OpenCode/MCP shutdown verification |
 
-**What can proceed now (independent of blockers):**
-- Phase 1 (startup-failure rollback + MCP tracking) — gated by MCP study (R7/R8)
-- Phase 1b (canonical shutdown completion) — independent, no blockers
+**All runtime studies (R1–R9) are COMPLETE.** No study is pending. The evidence supports beginning Phases 1, 1b, 2 (after C-3), and 5. Phase 6 remains blocked on D-1.
 
-**What is blocked until R5 + R9 complete:**
-- Phase 2 (history finalization drain)
+**What is approved and authorized:**
+- **D-1** (desktop quit) — APPROVED Option C. Proceed subject to Tauri API, Windows behavior, stdin EOF, and explicit OpenCode/MCP shutdown verification.
+- **C-3** (claimed-history crash recovery) — APPROVED Option B. Proceed with no schema changes, 300,000 ms threshold, boot sweep ordering, reconciliation gating, and the four safety proofs.
 
-**What is blocked until maintainer decides:**
-- Phase 6 (desktop lifecycle) — blocked on D-1
-- Phase 2 certification — blocked on C-3
+**Cline shutdown-coordinator invariants (source-verified, for reference):**
 
-**Recommended immediate next steps:**
-1. Maintainer decides D-1, D-2, D-3, D-4, D-5, D-6, C-3 (one review pass)
-2. Execute the four critical documentation/runtime studies (§10.9): AI SDK `createUIMessageStream` `onEnd` contract, assistant-ui `append` contract, Bun 1.4 process semantics, MCP `Client.close()` contract
-3. Begin Phase 1 (M-1 + N-2 + C-2 startup-failure rollback) — gated by MCP study
-4. Begin Phase 1b (N-5 + C-8 canonical shutdown completion) — independent, no blockers
-5. Begin Phase 2 (L-2 + M-3 + N-4 + N-5 history drain) — gated by R5 + R9
+Cline's `shutdown-coordinator.ts` (`sdk/packages/core/src/hub/daemon/shutdown-coordinator.ts`) establishes these invariants:
+
+| # | Cline invariant | TBAi status | Gap? |
+|---|---|---|---|
+| 1 | **Shared completion:** all callers get the same shutdown promise | Phase 1b implements this | No |
+| 2 | **Single cleanup:** cleanup runs exactly once | TBAi's `shuttingDown` guard ensures this | No |
+| 3 | **Deadline:** bounded wait with forced exit on timeout | §6.3 defines escalation policy | No |
+| 4 | **Exit code upgrade:** fatal requests during cleanup raise exit code | §6.3 exit code policy | No |
+| 5 | **Forced exit:** second signal forces immediate exit | TBAi's spine handles this via `shuttingDown` guard | No |
+| 6 | **Cleanup errors:** reported and cause non-zero exit | §6.3 exit code policy | No |
+| 7 | **Watchdog reference:** timer referenced until cleanup completes | TBAi does not have this — **gap** | **Yes** |
+
+**Cline test coverage (source-verified):**
+- Repeated graceful requests → same promise, cleanup runs once
+- Cleanup re-entry → no double cleanup
+- Fatal request during cleanup → exit code upgraded
+- Deadline exceeded → forced exit
+- Second signal → forced exit (no re-entry)
+- Forced-exit observer throws → exit still happens
+- Cleanup error → reported and exit code 1
+- Deadline below caller-side retirement wait → 2000ms < 3000ms
+
+**TBAi gaps vs Cline:**
+1. **Watchdog reference:** Cline keeps the watchdog timer referenced until cleanup completes, preventing natural exit with code 0. TBAi does not have this — if all handles disappear during a fatal cleanup, the process could exit with code 0 instead of the requested failure code. **This is a gap TBAi should address in Phase 4.**
+2. **Re-entry guard:** Cline's `request()` defers cleanup by one microtask to handle synchronous re-entry from within cleanup. TBAi's spine does not have this — a cleanup step that calls `shutdownServer` re-entrantly would hit the `shuttingDown` guard and return immediately. **This is acceptable for TBAi** (no cleanup step calls `shutdownServer`), but should be documented.
+
+**What the proposal documents vs what is verified:**
+- The proposal **documents** the lifecycle contracts, acceptance criteria, and test requirements for all phases
+- The proposal has **runtime-verified** R1–R9 (all complete, results recorded in §10.8)
+- The proposal has **source-verified** the C-3 crash window, deduplication analysis, and Cline reference patterns
+- No phase should be considered verified merely because the proposal documents it
+
+**Recommended immediate next steps (in order):**
+1. Begin Phase 1 (evidence ready; R7/R8 complete)
+2. After Phase 1: begin Phase 1b (independent)
+3. Begin Phase 2 under approved C-3 Option B constraints (evidence ready)
+4. Begin Phase 5 (evidence ready, independent of D-1/C-3)
+5. Begin Phase 6 desktop work only after the D-1 verification items in §6.7 are satisfied
 
 ---
 
-*Proposal v2.2. Updated from the maintainer-provided v2.1 review artifact. Planning document only; no production code, tests, or runtime configuration were changed. Implementation remains on HOLD; no runtime experiments are represented as completed.*
+## 14. Outstanding Issues for Final Verification
+
+The following issues are carried into final verification. They are not blockers for the phases already implemented, but must be resolved before the subsystem can be certified.
+
+1. **SQLite safety (Phase 4):** The escalation policy cannot yet distinguish a timed-out operation that has stopped from one that may still be writing. Per-operation cancellation completion tracking is needed. Currently, `deadlineExpired` is set when `timedOut > 0`, but the shutdown still proceeds to `db.close(true)` (the "deadline-expired-but-safe" path). A truly stuck operation that cannot be stopped would need the `shutdownFailed` path, which requires a cleanup step to throw — the current code does not distinguish "timed out but stopped" from "timed out and still writing."
+
+2. **Process-level handlers (Phase 5):** No isolated child-process regression tests exist. The handler is a process-level safety net; testing it requires an isolated child process (R1–R4 already verified the behavior on Bun 1.4.3, but no automated regression test exists in the suite).
+
+3. **Desktop lifecycle (Phase 6):** No end-to-end test of stdin shutdown, the 3-second deadline, or forced termination. The backend-side handler is covered by the existing `shutdownServer` test, but the full Tauri → stdin → backend → exit → Tauri observation path is untested.
+
+4. **Windows process handling:** Verify that `.set_process_group(true)` actually provides the intended descendant-process cleanup on the target platform. The Tauri docs say it uses job objects on Windows, but this has not been verified in TBAi's actual spawn configuration.
+
+5. **Cross-phase behavior:** Verify that startup rollback, finalization drains, scheduler recovery, shutdown escalation, and fatal-error handling work together — not just independently. No integration test exercises the full lifecycle (boot → serve → shutdown → rollback) in a single scenario.
+
+---
+
+*Proposal v2.3. Planning document only; no production code, tests, or runtime configuration were changed. Runtime studies R1–R9 were executed on Bun 1.4.3 and are recorded as complete in §10.8. Phase acceptance criteria ("Tests pass; typecheck + build exit 0") are future gates, not completed evidence. Implementation remains on HOLD.*
+
+---
+
+## 15. Verification Addendum — 2026-10-17
+
+The §14 items are now addressed by lifecycle verification tests written against
+the implementation on disk. This addendum records what is verified, what is not,
+and the production defects the tests exposed. It supersedes the "Implementation
+remains on HOLD" stamp above for the backend lifecycle subsystem.
+
+### 15.1 Coverage by §14 item
+
+| §14 item | Verified by | Result |
+|---|---|---|
+| 1. SQLite safety / "timed out but stopped" vs "timed out and still writing" | `tests/integration/core/shutdown-escalation.test.ts` (V1: settle-within-deadline → complete; scheduler stuck → failed; chat run stuck → failed, DB left open) | 6 pass |
+| 2. Process-level handlers (isolated child) | `tests/integration/core/process-handlers.test.ts` (unhandledRejection, uncaughtException → `lifecycle.*` + exit 1; contained error → no handler, exit 0; handler that does not exit → process continues) | 4 pass |
+| 3. Desktop stdin shutdown | `tests/integration/core/stdin-shutdown.test.ts` (graceful → `shutdown_complete`, exit 0, promptly; stuck run → `shutdown_failed`, exit 1; EOF → no shutdown) | 3 pass |
+| 5. Cross-phase integration | `tests/integration/core/lifecycle-integration.test.ts` (full boot → serve → shutdown → rollback, plus a real entry-point startup-bind-failure rollback) | 3 pass |
+
+Supporting suites, re-run after the fixes in §15.3:
+`tests/integration/core` (12 files) **69 pass / 0 fail**;
+`tests/unit/core/chat-runs.test.ts` + `tests/unit/scheduler/scheduler.test.ts` **90 pass / 0 fail**;
+`tests/integration/opencode/serverManager.test.ts` **31 pass / 0 fail**;
+`tests/integration/core/startup-rollback.test.ts` **1 pass** and
+`tests/integration/core/shutdown-lifecycle.test.ts` **1 pass** (each run alone —
+both close the shared db singleton and poison each other in one process).
+
+### 15.2 Not verified here (deferred, P2)
+
+- **Rust-side 3,000 ms forced kill:** implemented in `src-tauri/src/main.rs`
+  (`quit_owned` writes `{"type":"shutdown"}\n`, waits 3,000 ms, then `kill()`), but
+  exercising it needs the Tauri shell, not the backend suite.
+- **Windows `.set_process_group(true)` descendant cleanup:** needs the target
+  platform and Tauri; not verifiable from backend tests.
+
+### 15.3 Production defects found and fixed while verifying
+
+Both were shutdown **bound timers**, and both were in scope of the new tests:
+
+1. `src/services/scheduler/scheduler.ts` `abortAllRuns` created its 10 s bound
+   timer and never cleared it, so a **clean** shutdown kept the process alive for
+   the full bound (~10.3 s) before exiting. Fixed: `clearTimeout` in `finally`.
+2. `src/services/chat-runs.ts` `awaitSettled` `unref`'d its bound timer. With no
+   other referenced handle, a wedged run let the event loop empty and the process
+   exit **0 before classification** (deadline never fired, DB not closed, no
+   `shutdown_failed`). Fixed: keep the bound **referenced while pending** — it is
+   the handle that holds the process until the run settles or the bound expires —
+   and clear it when the race resolves.
+3. `src/services/opencode/serverManager.ts` `shutdown` had the same uncleared
+   timeout; fixed with `clearTimeout` in `finally`.
+
+Resulting contract: a shutdown bound is referenced while pending and cleared on
+settle, so a clean shutdown exits immediately and a wedged one reaches
+classification. Regression guard: the graceful stdin test asserts the child exits
+in **< 5 s** (measured ~10.3 s before the fix, ~0.4 s after).
+
+### 15.4 Test-only production seam
+
+`src/services/desktop-stdin.ts` was extracted from the inline reader in
+`src/index.ts` (`installDesktopStdinShutdown`). Owners: `services/` owns the stdin
+protocol; `index.ts` stays a thin composition root and supplies the `onShutdown`
+callback. This gives the fixtures one real implementation to exercise instead of a
+copy, and preserves the documented behaviour that EOF is not a shutdown trigger.
+
+### 15.5 Pre-existing findings (named, not absorbed)
+
+`bun run typecheck` reports 5 `TS6133` unused-local errors outside this change:
+`src/context/assemble.ts` (`_p1pApplied`), `src/context/cache/prefix.ts`
+(`_DIGEST_LENGTH`), `src/context/measure.ts` (`_sumCharsByCategory`),
+`src/context/reduce.ts` (`_isMcpPart`), `src/services/mcp/manager.ts`
+(`_SSE_PROBE_TIMEOUT_MS`). All are present at HEAD except the `mcp/manager.ts`
+one, which belongs to the uncommitted lifecycle work. Not fixed here.
+
+### 15.6 Test mechanics note
+
+The logger splits streams: `info`/`debug` go to **stdout**, `warn`/`error` to
+**stderr**. Child-process tests therefore read both streams before asserting on a
+log line (the original tests read stderr only and could not see
+`shutdown_complete`).

@@ -878,13 +878,18 @@ export async function executeDirectStream(
             // that completed with nobody there to write it. Gated on the single
             // winning `completed` transition, so it can run at most once per run.
             if (!wasDetached || !didSettle || settlement !== "completed") return;
-            await finalizeDetachedRunHistory(chatHistoryFinalizerDeps, {
+            // Track the finalization before awaiting it: `settled` already
+            // resolved above, so shutdown's awaitSettled must observe this write
+            // through the tracked promise, not the settlement signal.
+            const detachedFinalization = finalizeDetachedRunHistory(chatHistoryFinalizerDeps, {
               streamId,
               responseMessage,
               isAborted,
               parentId,
               log: chatLog,
             });
+            chatRuns.trackFinalization(detachedFinalization);
+            await detachedFinalization;
           },
           messageMetadata: ({ part }) =>
             buildChatMessageMetadata(

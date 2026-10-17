@@ -1,4 +1,4 @@
-import { startServer, rollbackPartialStartup, shutdownServer } from "./server";
+import { startServer, rollbackPartialStartup, handleProcessShutdown } from "./server";
 import { getActiveServer } from "./services/server-listener";
 import { installDesktopStdinShutdown } from "./services/desktop-stdin";
 import { resolveConfiguredPort } from "./services/server-port";
@@ -19,9 +19,8 @@ installProcessErrorHandlers();
 // spine for the CURRENT listener — resolved lazily, so a port restart is
 // honored. EOF is NOT a shutdown trigger (it can occur on a Tauri crash).
 installDesktopStdinShutdown({
-  onShutdown: () => {
-    const server = getActiveServer();
-    if (server) void shutdownServer(server, "STDIN_SHUTDOWN");
+  onShutdown: async () => {
+    await handleProcessShutdown(getActiveServer(), "STDIN_SHUTDOWN");
   },
 });
 

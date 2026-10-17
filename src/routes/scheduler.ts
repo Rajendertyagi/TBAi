@@ -14,7 +14,13 @@ import {
 import { schedulerStore } from "../services/scheduler/schedulerStore";
 import type { JobCreate } from "../services/scheduler/schedulerStore";
 import { conversationService } from "../services/storage";
-import { cancelRun, runJobNow, scheduleJob, unscheduleJob } from "../services/scheduler/scheduler";
+import {
+  cancelRun,
+  isSchedulerReady,
+  runJobNow,
+  scheduleJob,
+  unscheduleJob,
+} from "../services/scheduler/scheduler";
 import {
   assertValidTimezone,
   computeNextRuns,
@@ -30,6 +36,19 @@ import {
 import type { SchedulerJob } from "../services/scheduler/schedulerTypes";
 
 const app = new Hono();
+
+/**
+ * Readiness gate: essential boot recovery (interrupted-run reconciliation +
+ * timer rebuild) must complete before scheduler-dependent routes are served.
+ * The window is milliseconds on a normal boot, but a request landing inside
+ * it would otherwise observe partially initialized scheduler state.
+ */
+app.use(async (c, next) => {
+  if (!isSchedulerReady()) {
+    return c.json({ error: "Scheduler is still recovering; try again shortly" }, 503);
+  }
+  await next();
+});
 
 /** List/detail views never dump full prompts — preview + length only. */
 function toJobPublic(job: SchedulerJob) {

@@ -43,28 +43,53 @@ let signalsRegistered = false;
 let startingUp = false;
 /** A signal that arrived during startup, handled once startup settles. */
 let pendingSignal: string | null = null;
+let signalCount = 0;
+let processExitHandled = false;
+
+/**
+ * Coordinate process-level shutdown and exit.
+ * Safe against concurrent triggers (signals, stdin, deferred startup signals).
+ */
+export async function handleProcessShutdown(
+  server: BunServer | null,
+  signal: string,
+): Promise<ShutdownResult> {
+  const active = server ?? getActiveServer();
+  if (!active) {
+    if (!processExitHandled) {
+      processExitHandled = true;
+      process.exit(0);
+    }
+    return { outcome: "complete", exitCode: 0 };
+  }
+
+  const result = await shutdownServer(active, signal);
+  if (!processExitHandled) {
+    processExitHandled = true;
+    process.exit(result.exitCode);
+  }
+  return result;
+}
 
 function ensureSignalHandlers(): void {
   if (signalsRegistered) return;
   signalsRegistered = true;
-  // Resolve the server lazily: a port restart swaps the owned listener, and
-  // a signal arriving afterwards must shut down the CURRENT one.
-  process.on("SIGINT", () => {
+
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => {
+    signalCount++;
     if (startingUp) {
-      pendingSignal = "SIGINT";
+      pendingSignal = signal;
       return;
     }
-    const server = getActiveServer();
-    if (server) void shutdownServer(server, "SIGINT");
-  });
-  process.on("SIGTERM", () => {
-    if (startingUp) {
-      pendingSignal = "SIGTERM";
+    if (shutdownPromise) {
+      logger.warn("server", "shutdown_signal_repeated", { signal, count: signalCount });
       return;
     }
-    const server = getActiveServer();
-    if (server) void shutdownServer(server, "SIGTERM");
-  });
+    void handleProcessShutdown(getActiveServer(), signal);
+  };
+
+  process.on("SIGINT", () => onSignal("SIGINT"));
+  process.on("SIGTERM", () => onSignal("SIGTERM"));
 }
 
 export async function startServer(port = resolveConfiguredPort().port) {
@@ -157,8 +182,8 @@ export async function startServer(port = resolveConfiguredPort().port) {
     pendingSignal = null;
     if (deferred) {
       // A signal arrived mid-startup and was deferred; the server is fully up,
-      // so honor it now through the normal spine.
-      void shutdownServer(server, deferred);
+      // so honor it now through the normal spine and process exit.
+      void handleProcessShutdown(server, deferred);
     }
 
     return server;
@@ -297,12 +322,19 @@ export async function rollbackPartialStartup(): Promise<StartupRollbackResult> {
   return { ok: true, dbClosed: true, timedOut };
 }
 
+export type ShutdownOutcome = "complete" | "deadline_expired" | "failed";
+
+export interface ShutdownResult {
+  outcome: ShutdownOutcome;
+  exitCode: 0 | 1;
+}
+
 /**
  * Canonical shutdown promise. Repeated triggers observe the same completion
  * (shared completion semantics): every caller gets this promise, so no caller
  * can mistake a still-pending teardown for a finished one.
  */
-let shutdownPromise: Promise<void> | null = null;
+let shutdownPromise: Promise<ShutdownResult> | null = null;
 
 /**
  * Graceful shutdown: stop accepting new work immediately, cancel and settle
@@ -316,18 +348,18 @@ let shutdownPromise: Promise<void> | null = null;
  * Idempotent: the first call starts the single teardown and every later call
  * returns the same promise. Deliberately non-async so the stored promise is
  * returned directly rather than wrapped per call.
+ *
+ * Reusable and safe for in-process tests: never calls process.exit().
  */
 export function shutdownServer(
   server: ReturnType<typeof Bun.serve>,
   signal = "manual",
-): Promise<void> {
+): Promise<ShutdownResult> {
   if (!shutdownPromise) {
     shutdownPromise = runShutdown(server, signal);
   }
   return shutdownPromise;
 }
-
-export type ShutdownOutcome = "complete" | "deadline_expired" | "failed";
 
 /**
  * Classify a shutdown from what the drains observed. Pure function so the
@@ -353,7 +385,10 @@ export function classifyShutdownCompletion(input: {
   return "complete";
 }
 
-async function runShutdown(server: ReturnType<typeof Bun.serve>, signal: string): Promise<void> {
+async function runShutdown(
+  server: ReturnType<typeof Bun.serve>,
+  signal: string,
+): Promise<ShutdownResult> {
   logger.info("server", "shutdown_initiated", { signal });
 
   // Gate the scheduler before anything else: no new fire/schedule can start,
@@ -496,16 +531,16 @@ async function runShutdown(server: ReturnType<typeof Bun.serve>, signal: string)
     }
   } else {
     // Required cleanup failed or write-capable work may remain: do not close
-    // the database. Terminate explicitly so no application task can touch it.
+    // the database. Return failure outcome with exitCode 1 so the database remains protected.
     logger.error("server", "shutdown_failed", { reason: "required_cleanup_failed" });
-    process.exit(1);
-    return;
+    process.exitCode = 1;
+    return { outcome: "failed", exitCode: 1 };
   }
 
   if (dbCloseFailed) {
     logger.error("server", "shutdown_failed", { dbCloseFailed });
-    process.exit(1);
-    return;
+    process.exitCode = 1;
+    return { outcome: "failed", exitCode: 1 };
   }
 
   if (outcome === "deadline_expired") {
@@ -514,8 +549,7 @@ async function runShutdown(server: ReturnType<typeof Bun.serve>, signal: string)
     logger.info("server", "shutdown_complete", {});
   }
 
-  // All owned resources are closed above. Let the event loop drain naturally
-  // so Bun/Node can flush stdout/file logging; forcing process.exit() here can
-  // truncate the final shutdown evidence when stdout is piped.
+  // All owned resources are closed above. Set exit code 0.
   process.exitCode = 0;
+  return { outcome, exitCode: 0 };
 }
