@@ -373,7 +373,7 @@ describe("history reconciliation — no fabrication", () => {
 
     const report = await runHistoryReconciliationOnce();
 
-    expect(report).toMatchObject({ written: 0, skipped: 1 });
+    expect(report).toMatchObject({ written: 0, unrecoverable: 1 });
     expect(h.writes).toHaveLength(0);
     expect(historyStateOf(h, id)).toBe("skipped");
   });

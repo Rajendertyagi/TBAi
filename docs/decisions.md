@@ -5096,7 +5096,7 @@ writer, or introduce a second message format.
 Verified on this tree: `bun run verify` — typecheck (backend, backend tests, web tests,
 web), lint, `format:check`, `test:locations`, build, the backend suite, the three
 separately-gated lifecycle suites and the DOM suite — **exit 0**, with the backend suite
-**4308 pass / 41 skip / 0 fail across 319 files** (4349 tests, 329.11 s) against the base
+**4309 pass / 43 skip / 0 fail across 319 files** (4352 tests, 367.67 s) against the base
 commit's 4275 pass / 43 skip / 0 fail: a net +33 tests, all of them this work's and the
 recurring follow-up's. The
 recovery suite is 39 pass / 0 fail and
@@ -5157,14 +5157,16 @@ function, identical in shape to `startChatStreamCleanup` / `startHistoryReconcil
 - **First-tick gating:** the recurring task's first tick awaits the boot sweep's drain
   result, so it cannot overlap the boot sweep.
 
-**Verified on this tree.** `bun run verify` exit 0 (backend 4308 pass / 41 skip / 0 fail
-across 319 files, 4349 tests). Targeted: recovery suite 44 pass / 0 fail (5 new
-scheduled-behaviour tests), unit `historyFinalizer` 20 pass / 0 fail, both history
+**Verified on this tree.** `bun run verify` exit 0 (backend 4309 pass / 43 skip / 0 fail
+across 319 files, 4352 tests). Targeted: recovery suite 47 pass / 0 fail (8 new
+scheduled-behaviour and invalid-capture tests), unit `historyFinalizer` 20 pass / 0 fail, both history
 suites 66 pass / 0 fail. Verified scenarios: a 20 ms interval with a
 fresh claim never recovers it; advancing the clock past the window recovers it on the
 next scheduled tick without a restart; two overlapping ticks leave one row; a throwing
 store on the first tick is followed by a successful second tick; stop+drain completes
-an in-flight tick before the database closes.
+an in-flight tick before the database closes; parseable but invalid captures (empty
+parts, invalid role, empty id) are abandoned with no message written and the claim
+never marked done.
 
 **Residual.** The recurring sweep still respects the 5-minute staleness window, so a
 claim younger than that is not recovered early (by design). Cross-process contention

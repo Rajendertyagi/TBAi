@@ -1225,6 +1225,60 @@ describe("listStaleClaimedHistory", () => {
 
 // ── 12. The schema the guard writes to ────────────────────────────────────
 
+// ── 14. Invalid captured messages ────────────────────────────────────────────
+
+describe("claimed history recovery — invalid captures", () => {
+  it("abandons a claim whose capture has an empty parts array", async () => {
+    const h = harness();
+    await abandonedClaim(h, {
+      id: "run_empty_parts",
+      capture: { id: ASSISTANT_MESSAGE_ID, role: "assistant", parts: [] } as FinalUIMessage,
+    });
+
+    const report = await recover(h.recovery, h.clock);
+
+    expect(report).toMatchObject({ scanned: 1, written: 0, abandoned: 1, stopReason: "drained" });
+    expect(historyStateOf("run_empty_parts")).toBe("skipped");
+    expect(getStoredMessageSync(h.conversationId, ASSISTANT_MESSAGE_ID)).toBeNull();
+  });
+
+  it("abandons a claim whose capture has an invalid role", async () => {
+    const h = harness();
+    await abandonedClaim(h, {
+      id: "run_bad_role",
+      capture: {
+        id: ASSISTANT_MESSAGE_ID,
+        role: "user",
+        parts: [{ type: "text", text: ANSWER }],
+      } as FinalUIMessage,
+    });
+
+    const report = await recover(h.recovery, h.clock);
+
+    expect(report).toMatchObject({ scanned: 1, written: 0, abandoned: 1, stopReason: "drained" });
+    expect(historyStateOf("run_bad_role")).toBe("skipped");
+    expect(getStoredMessageSync(h.conversationId, ASSISTANT_MESSAGE_ID)).toBeNull();
+  });
+
+  it("abandons a claim whose capture has an empty id", async () => {
+    const h = harness();
+    await abandonedClaim(h, {
+      id: "run_empty_id",
+      capture: {
+        id: "",
+        role: "assistant",
+        parts: [{ type: "text", text: ANSWER }],
+      } as FinalUIMessage,
+    });
+
+    const report = await recover(h.recovery, h.clock);
+
+    expect(report).toMatchObject({ scanned: 1, written: 0, abandoned: 1, stopReason: "drained" });
+    expect(historyStateOf("run_empty_id")).toBe("skipped");
+    expect(getStoredMessageSync(h.conversationId, ASSISTANT_MESSAGE_ID)).toBeNull();
+  });
+});
+
 describe("the messages table the guard writes to", () => {
   it("is the effective schema, with a nullable role and a format column", () => {
     // The guard reads `format` and writes `role = NULL` (the runtime's storage

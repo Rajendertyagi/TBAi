@@ -215,10 +215,10 @@ export function validateFinalMessage(
  * Recover a captured final message from its stored text.
  *
  * Returns null — never a guess — for anything that is not a JSON object carrying
- * a string id. Whether a message is actually persistable is decided by the
- * finalizer's own `validateFinalMessage`, which runs on this value exactly as it
- * ran when the message was captured, so a row cannot acquire a second, looser
- * verdict here.
+ * a non-empty string id, an assistant role, and a non-empty parts array. Whether a
+ * message is actually persistable is decided by the finalizer's own
+ * `validateFinalMessage`, which runs on this value exactly as it ran when the
+ * message was captured, so a row cannot acquire a second, looser verdict here.
  *
  * Exported because both recovery paths — `historyReconciler` (a `pending` row) and
  * `claimedHistoryRecovery` (an abandoned `claimed` row) — read the same captured
@@ -234,7 +234,21 @@ export function parseCapturedFinalMessage(json: string | null): FinalUIMessage |
   }
   if (typeof parsed !== "object" || parsed === null) return null;
   const candidate = parsed as Partial<FinalUIMessage>;
-  return typeof candidate.id === "string" ? (candidate as FinalUIMessage) : null;
+  // Mirror `validateFinalMessage`'s structural contract: a captured message must
+  // carry a non-empty id, an assistant role, and a non-empty parts array. JSON
+  // parsing and a string id alone are not enough — a parseable but unusable
+  // capture is treated as no capture at all, so recovery abandons it rather than
+  // writing an invalid message.
+  if (
+    typeof candidate.id !== "string" ||
+    candidate.id.length === 0 ||
+    candidate.role !== "assistant" ||
+    !Array.isArray(candidate.parts) ||
+    candidate.parts.length === 0
+  ) {
+    return null;
+  }
+  return candidate as FinalUIMessage;
 }
 
 /**
