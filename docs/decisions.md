@@ -5099,7 +5099,7 @@ separately-gated lifecycle suites and the DOM suite — **exit 0**, with the bac
 **4309 pass / 43 skip / 0 fail across 319 files** (4352 tests, 367.67 s) against the base
 commit's 4275 pass / 43 skip / 0 fail: a net +33 tests, all of them this work's and the
 recurring follow-up's. The
-recovery suite is 39 pass / 0 fail and
+recovery suite is 47 pass / 0 fail and
 `tests/integration/history/detached-history-finalization.test.ts` 27 pass / 0 fail;
 `test:shutdown` 1 pass, `test:startup-rollback` 2 pass, `test:lifecycle-integration`
 3 pass, `test:dom` 518 pass / 0 fail across 50 files. The defect experiments behind the
@@ -5108,7 +5108,7 @@ transaction-wrapper, permissive-parent and dangled-parent experiments were re-me
 after the boot-order test was added, so the counts above are the final tree's, not an
 earlier suite's. The suites a live experiment ever overlapped were re-run afterwards
 (`historyFinalizer` 20 pass / 0 fail, `lifecycle-integration` 3 pass / 0 fail, and both
-history suites 66 pass / 0 fail together).
+history suites 71 pass / 0 fail together).
 
 **Deliberately not done.** No index was added for the claim scan: a partial index
 `WHERE history_state='claimed'` would be a schema change, which the C-3 approval
@@ -5160,7 +5160,7 @@ function, identical in shape to `startChatStreamCleanup` / `startHistoryReconcil
 **Verified on this tree.** `bun run verify` exit 0 (backend 4309 pass / 43 skip / 0 fail
 across 319 files, 4352 tests). Targeted: recovery suite 47 pass / 0 fail (8 new
 scheduled-behaviour and invalid-capture tests), unit `historyFinalizer` 20 pass / 0 fail, both history
-suites 66 pass / 0 fail. Verified scenarios: a 20 ms interval with a
+suites 71 pass / 0 fail. Verified scenarios: a 20 ms interval with a
 fresh claim never recovers it; advancing the clock past the window recovers it on the
 next scheduled tick without a restart; two overlapping ticks leave one row; a throwing
 store on the first tick is followed by a successful second tick; stop+drain completes
@@ -5170,4 +5170,6 @@ never marked done.
 
 **Residual.** The recurring sweep still respects the 5-minute staleness window, so a
 claim younger than that is not recovered early (by design). Cross-process contention
-still has no real-database reproduction (`contended`). Tauri build/E2E unverified.
+still has no real-database reproduction (`contended`). Tauri build and E2E verified
+via GitHub Actions run 39160063675 (commit 697cfa3): all three jobs (verify, e2e,
+tauri) completed with success, including the Tauri build and smoke test.
