@@ -70,6 +70,31 @@ export function readChatStreamTtlMs(env: NodeJS.ProcessEnv = process.env): numbe
 }
 
 /**
+ * Extra retention granted to an UNRESOLVED history claim: seven days.
+ *
+ * A `claimed` row with a valid captured message is not garbage. It is a reply the
+ * server still holds and could not yet write, because its identity, ownership, or
+ * parent link disagrees with the stored message (so recovery refuses to guess) or
+ * because its write hit lock contention. Deleting it at the normal stream TTL
+ * would silently discard the last copy of that reply.
+ *
+ * This is BOUNDED retention, not durability: after the extra window the row is
+ * deleted like any other, and the reply is gone. That is deliberate - an
+ * unresolved row is unresolvable from the UI, so retaining it forever would grow
+ * the database without ever discharging the obligation. Seven days is long enough
+ * for a human to notice the diagnostic and long enough that no ordinary restart
+ * sequence can outlast it.
+ */
+export const DEFAULT_UNRESOLVED_HISTORY_HOLD_MS = 7 * 24 * 60 * 60 * 1000;
+export const UNRESOLVED_HISTORY_HOLD_ENV = "TBAI_UNRESOLVED_HISTORY_HOLD_MS";
+
+/** Read the unresolved-claim retention hold from the environment, falling back to 7 days. */
+export function readUnresolvedHistoryHoldMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env[UNRESOLVED_HISTORY_HOLD_ENV] ?? DEFAULT_UNRESOLVED_HISTORY_HOLD_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_UNRESOLVED_HISTORY_HOLD_MS;
+}
+
+/**
  * DDL for the durable store. Additive only: two new tables and one index, no
  * change to any existing table, so it applies cleanly to a fresh database and
  * to a pre-existing one.

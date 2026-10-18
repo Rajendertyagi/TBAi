@@ -11,8 +11,9 @@
  * "The run settled after the bound but before the re-check" is a window of
  * microseconds, so no timer can land in it honestly. The fixture instead parks
  * the spine at its last await before the re-check — the history drain — with a
- * real reconciliation tick held open on the finalizer's own `messageExists`
- * dependency. That turns the ordering into a condition instead of a stopwatch:
+ * real reconciliation tick held open on its boot gate (the one production seam on
+ * the tick's path that is genuinely awaited: every store method it calls is
+ * synchronous). That turns the ordering into a condition instead of a stopwatch:
  *
  *   1. the spine's `stopChatStreamCleanup()` has already run, so the cleanup
  *      gate closing proves `chatRuns.awaitSettled()` returned — i.e. the bound
@@ -40,6 +41,7 @@ import {
 } from "../../src/services/chat-streams/cleanup.ts";
 import {
   chatHistoryReconcilerDeps,
+  getHistoryReconciliationState,
   runHistoryReconciliationOnce,
   startHistoryReconciliation,
 } from "../../src/services/chat-streams/historyReconciler.ts";
@@ -62,15 +64,11 @@ process.once("exit", () => {
 initListenerFetch(() => new Response("ok"));
 const bound = bindBootPort(0);
 
-// ── The park: one reconciliation tick, held inside its finalizer ────────────
+// ── The park: one reconciliation tick, held on its boot gate ────────────────
 
 let releasePark!: () => void;
-const park = new Promise<void>((resolve) => {
-  releasePark = resolve;
-});
-let signalParked!: () => void;
-const parked = new Promise<void>((resolve) => {
-  signalParked = resolve;
+const park = new Promise<boolean>((resolve) => {
+  releasePark = () => resolve(true);
 });
 
 const capturedMessage = JSON.stringify({
@@ -93,7 +91,11 @@ const deps: typeof chatHistoryReconcilerDeps = {
     // Synchronous in the real store, exactly as it is here: the claim is the
     // single-winner gate, and this tick is the winner.
     claimHistory: () => true,
-    completeHistory: () => true,
+    // `guard_missed` is a fully typed no-op for this fixture: the real guard's
+    // message work would touch the `messages` table, and the park's purpose is to
+    // hold the TICK open, not to exercise finalization. The tick still runs its real
+    // classification and reaches a real terminal outcome.
+    completeHistoryWithVerifiedMessage: () => ({ status: "guard_missed" }),
     skipHistory: () => true,
     getRunContext: () => ({
       conversationId: "conv_late",
@@ -105,15 +107,16 @@ const deps: typeof chatHistoryReconcilerDeps = {
       historyClaimedAt: null,
     }),
   },
-  messageExists: () => {
-    signalParked();
-    return park.then(() => true);
-  },
 };
 
-startHistoryReconciliation({ deps, runImmediately: false, graceMs: 0 });
+startHistoryReconciliation({ deps, runImmediately: false, graceMs: 0, gate: park });
 void runHistoryReconciliationOnce();
-await parked;
+// The tick's body up to its first await is synchronous, so it is already in flight
+// and parked on the gate. Asserted rather than assumed: everything below depends on
+// `inflightTick` being live when the spine drains.
+if (!getHistoryReconciliationState().inFlight) {
+  throw new Error("reconciliation tick was not in flight");
+}
 
 // ── One chat run that cannot settle on its own ──────────────────────────────
 

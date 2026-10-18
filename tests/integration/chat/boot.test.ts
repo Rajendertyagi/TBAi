@@ -147,8 +147,11 @@ describe("boot recovery — orphaned streaming rows", () => {
     await leaveOrphan(before, "boot_one", "run_done", `{"type":"text","delta":"hi"}`);
     const store = storeFor(before, "boot_one");
     store.recordRunVerdict("run_done", "completed");
+    // A reply that was genuinely written belongs to a conversation, and the claim
+    // records which one. Without that binding the claim could not be closed at all.
+    store.bindRunContext("run_done", { conversationId: "conv_boot_test" });
     expect(store.claimHistory("run_done", "msg_assistant")).toBe(true);
-    store.completeHistory("run_done");
+    expect(store.completeHistory("run_done")).toBe(true);
     before.db.close();
 
     // New process: the byte stream is dead, but the run did not fail.

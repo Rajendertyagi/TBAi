@@ -64,7 +64,6 @@ const PROVIDER_ERROR_MARKER = "DETACHED_HISTORY_PROVIDER_ERROR_MARKER";
 
 const PROVIDER_ID = "prov-detached-history";
 const MODEL_ID = "void-model";
-const USER_MESSAGE_ID = "msg-detached-history-user-1";
 
 // ── Controlled OpenAI-compatible provider ────────────────────────────────────
 /** Park after the first delta so a test can detach the client mid-stream. */
@@ -178,8 +177,17 @@ afterEach(() => {
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function userMessage(text: string): Record<string, unknown> {
-  return { id: USER_MESSAGE_ID, role: "user", parts: [{ type: "text", text }] };
+/**
+ * The user message id for one conversation. `messages` is keyed by id alone, so
+ * real ids are globally unique — the runtime mints one per message — and a
+ * per-conversation value is what a browser sends and then persists.
+ */
+function userIdFor(conversationId: string): string {
+  return `msg-detached-history-user-${conversationId}`;
+}
+
+function userMessage(conversationId: string, text: string): Record<string, unknown> {
+  return { id: userIdFor(conversationId), role: "user", parts: [{ type: "text", text }] };
 }
 
 async function createDirectConversation(title: string): Promise<string> {
@@ -193,6 +201,18 @@ async function createDirectConversation(title: string): Promise<string> {
       engine: "direct",
     }),
   );
+  // The row a real browser has already written by the time a run settles: it
+  // persists the user message it sent through
+  // `POST /api/conversations/:id/messages` (`threadHistoryAdapter`, measured in
+  // `Composer.tsx`), and that row is the reply's parent. Seeding it keeps every
+  // run here production-shaped — without it the captured parent would dangle, and
+  // the guard refuses to write a reply under a dangling link.
+  await messageService.upsertStored(conv.id, {
+    id: userIdFor(conv.id),
+    parent_id: null,
+    format: "ai-sdk/v6",
+    content: { role: "user", parts: [{ type: "text", text: USER_TEXT_MARKER }] },
+  });
   return conv.id;
 }
 
@@ -284,7 +304,7 @@ async function runAttached(conversationId: string): Promise<{ streamId: string; 
     providerId: PROVIDER_ID,
     model: MODEL_ID,
     id: conversationId,
-    messages: [userMessage(USER_TEXT_MARKER)],
+    messages: [userMessage(conversationId, USER_TEXT_MARKER)],
   });
   expect(res.status).toBe(200);
   const streamId = streamIdOf(res);
@@ -310,7 +330,7 @@ async function runDetached(
     providerId: PROVIDER_ID,
     model: MODEL_ID,
     id: conversationId,
-    messages: [userMessage(USER_TEXT_MARKER)],
+    messages: [userMessage(conversationId, USER_TEXT_MARKER)],
   });
   expect(res.status).toBe(200);
   const streamId = streamIdOf(res);
@@ -433,7 +453,7 @@ describe("Detached history finalization — detached completion", () => {
       expect(text).toContain(ANSWER_TEXT_MARKER);
 
       // The reply chains onto the user message the run continued.
-      expect(row!.parent_id).toBe(USER_MESSAGE_ID);
+      expect(row!.parent_id).toBe(userIdFor(conversationId));
     } finally {
       await conversationService.delete(conversationId);
     }
@@ -508,16 +528,17 @@ describe("History reconciliation — outstanding completed run", () => {
 
       // One write for this conversation. The scan is store-wide, and earlier
       // tests in this file leave completed+pending rows behind whose
-      // conversations their `finally` deleted — those are reported as `failed`
-      // rather than silently ignored, which is the truthful outcome for a
-      // conversation that no longer exists.
+      // conversations their `finally` deleted — those are reported as unresolved
+      // (`conflicted`: the captured parent row went with the conversation) rather
+      // than silently ignored, which is the truthful outcome for a thread that no
+      // longer exists. What matters here is that only this conversation is written.
       expect(report?.written).toBe(1);
       const assistantRows = (await storedRows(conversationId)).filter(
         (r) => (r.content as { role?: string })?.role === "assistant",
       );
       expect(assistantRows.length).toBe(1);
       expect(assistantRows[0].id).toBe(assistantMessageIdIn(body));
-      expect(assistantRows[0].parent_id).toBe(USER_MESSAGE_ID);
+      expect(assistantRows[0].parent_id).toBe(userIdFor(conversationId));
       expect(historyStateOf(streamId)).toBe("done");
 
       const reconciled = logEntriesSince(since).filter(
@@ -549,7 +570,7 @@ describe("History reconciliation — outstanding completed run", () => {
     }
   }, 30000);
 
-  it("leaves a reply the client did persist completely alone", async () => {
+  it("replaces a reply the client persisted that is not the run's own reply", async () => {
     await seedControlledProvider();
     const conversationId = await createDirectConversation("reconcile-clientfirst");
 
@@ -557,10 +578,15 @@ describe("History reconciliation — outstanding completed run", () => {
       const { streamId, body } = await runAttached(conversationId);
       const messageId = assistantMessageIdIn(body);
 
-      // The browser got there first through its own history adapter.
+      // The browser got there first through its own history adapter, but what it
+      // stored is not this run's reply. The captured reply is the authority for what
+      // the run's own message id contains, so the obligation is not closed over the
+      // browser's variant — the row is replaced in place. A row that IS this reply
+      // is left untouched; that is asserted by the browser/server convergence suite
+      // below and by the C-3 recovery suite.
       await messageService.upsertStored(conversationId, {
         id: messageId,
-        parent_id: USER_MESSAGE_ID,
+        parent_id: userIdFor(conversationId),
         format: "ai-sdk/v6",
         content: { role: "assistant", parts: [{ type: "text", text: "CLIENT_VERSION" }] },
       });
@@ -568,13 +594,45 @@ describe("History reconciliation — outstanding completed run", () => {
 
       const report = await reconcileNow();
 
-      expect(report).toMatchObject({ alreadyPersisted: 1, written: 0 });
+      expect(report).toMatchObject({ alreadyPersisted: 0, repaired: 1, written: 0 });
       const row = await assistantRow(conversationId);
-      // The client's own content and its position in the thread are untouched.
-      expect(JSON.stringify(row!.content)).toContain("CLIENT_VERSION");
-      expect(JSON.stringify(row!.content)).not.toContain(ANSWER_TEXT_MARKER);
+      expect(JSON.stringify(row!.content)).toContain(ANSWER_TEXT_MARKER);
+      expect(JSON.stringify(row!.content)).not.toContain("CLIENT_VERSION");
+      // Converged on the browser's own row: same id, same position, one row.
+      expect(row!.id).toBe(messageId);
       expect(orderSeqOf(conversationId, messageId)).toBe(clientOrder);
       expect(historyStateOf(streamId)).toBe("done");
+    } finally {
+      await conversationService.delete(conversationId);
+    }
+  }, 30000);
+
+  it("leaves the reply unresolved when its captured parent is not a row of the conversation", async () => {
+    await seedControlledProvider();
+    const conversationId = await createDirectConversation("reconcile-dangling-parent");
+
+    try {
+      const { streamId } = await runAttached(conversationId);
+
+      // The user row the run chained onto is gone — deleted, or a client append that
+      // never landed. The reply must NOT be written under a dangling link: the walk
+      // that reads the conversation back would then be incomplete above it, so the
+      // claim is taken and released again and the obligation stays open, reported.
+      db.run("DELETE FROM messages WHERE conversation_id = ? AND id = ?", [
+        conversationId,
+        userIdFor(conversationId),
+      ]);
+
+      const report = await reconcileNow();
+
+      expect(report).toMatchObject({
+        conflicted: 1,
+        written: 0,
+        repaired: 0,
+        alreadyPersisted: 0,
+      });
+      expect(historyStateOf(streamId)).toBe("claimed");
+      expect(await assistantRow(conversationId)).toBeNull();
     } finally {
       await conversationService.delete(conversationId);
     }
@@ -591,7 +649,7 @@ describe("History reconciliation — outstanding completed run", () => {
         providerId: PROVIDER_ID,
         model: MODEL_ID,
         id: conversationId,
-        messages: [userMessage(USER_TEXT_MARKER)],
+        messages: [userMessage(conversationId, USER_TEXT_MARKER)],
       });
       expect(res.status).toBe(200);
       const streamId = streamIdOf(res);
@@ -668,7 +726,7 @@ describe("Resume endpoint — contract and observability", () => {
         providerId: PROVIDER_ID,
         model: MODEL_ID,
         id: conversationId,
-        messages: [userMessage(USER_TEXT_MARKER)],
+        messages: [userMessage(conversationId, USER_TEXT_MARKER)],
       });
       expect(res.status).toBe(200);
       const streamId = streamIdOf(res);
@@ -891,12 +949,12 @@ describe("History finalization — browser/server convergence", () => {
     return streamId;
   }
 
-  const browserWrite = async (conversationId: string, messageId: string, parentId: string) => {
+  const browserWrite = async (conversationId: string, messageId: string) => {
     // Exactly what the assistant-ui adapter posts: the id in the entry, the
     // message body without it.
     await messageService.upsertStored(conversationId, {
       id: messageId,
-      parent_id: parentId,
+      parent_id: userIdFor(conversationId),
       format: "ai-sdk/v6",
       content: {
         role: "assistant",
@@ -914,7 +972,7 @@ describe("History finalization — browser/server convergence", () => {
         parts: [{ type: "text", text: ANSWER_TEXT_MARKER, state: "done" }],
       },
       isAborted: false,
-      parentId: USER_MESSAGE_ID,
+      parentId: userIdFor(conversationId),
       log: { info: () => {}, warn: () => {}, error: () => {} },
     }).then((outcome) => ({ outcome, conversationId }));
 
@@ -923,7 +981,7 @@ describe("History finalization — browser/server convergence", () => {
     const messageId = "msg_assistant_browser_first";
     try {
       const streamId = await completedStreamRow(conversationId, messageId);
-      await browserWrite(conversationId, messageId, USER_MESSAGE_ID);
+      await browserWrite(conversationId, messageId);
       const orderSeqBefore = orderSeqOf(conversationId, messageId);
 
       // The browser already wrote this id, so the obligation is satisfied and the
@@ -953,7 +1011,7 @@ describe("History finalization — browser/server convergence", () => {
 
       // The browser now catches up — e.g. the user reconnected and the runtime
       // re-persisted the message it holds.
-      await browserWrite(conversationId, messageId, USER_MESSAGE_ID);
+      await browserWrite(conversationId, messageId);
 
       const rows = (await storedRows(conversationId)).filter((r) => r.id === messageId);
       expect(rows.length).toBe(1);
@@ -1001,7 +1059,7 @@ describe("History finalization — browser/server convergence", () => {
       expect((await finalize(streamId, messageId, conversationId)).outcome).toBe("written");
       const row = (await storedRows(conversationId)).find((r) => r.id === messageId);
       expect(row).toBeDefined();
-      expect(row?.parent_id).toBe(USER_MESSAGE_ID);
+      expect(row?.parent_id).toBe(userIdFor(conversationId));
       expect((row?.content as { id?: unknown } | undefined)?.id).toBeUndefined();
       expect(row?.format).toBe("ai-sdk/v6");
     } finally {
@@ -1043,7 +1101,7 @@ describe("Detached history finalization — non-completed runs", () => {
         providerId: PROVIDER_ID,
         model: MODEL_ID,
         id: conversationId,
-        messages: [userMessage(USER_TEXT_MARKER)],
+        messages: [userMessage(conversationId, USER_TEXT_MARKER)],
       });
       expect(res.status).toBe(200);
       const streamId = streamIdOf(res);

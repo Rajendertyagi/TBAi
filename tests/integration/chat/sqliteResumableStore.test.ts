@@ -883,6 +883,9 @@ describe("sqlite resumable store — history claim", () => {
     const id = "run_claim";
     await producerOf(store, id);
     store.recordRunVerdict(id, "completed");
+    // The claim captures the conversation that owns the reply, which is what makes
+    // the reply closable at all.
+    store.bindRunContext(id, { conversationId: "conv_claim" });
 
     expect(store.claimHistory(id, "msg_1")).toBe(true);
     // A duplicate finalization callback, a re-entrant call, and a concurrent
@@ -895,6 +898,20 @@ describe("sqlite resumable store — history claim", () => {
     expect(store.getRunContext(id)!.historyState).toBe("done");
     // `done` is final: a later claim can never reopen the row.
     expect(store.claimHistory(id, "msg_3")).toBe(false);
+  });
+
+  it("refuses to complete a claim that captured no conversation", async () => {
+    const { store } = harness();
+    const id = "run_claim_no_conversation";
+    await producerOf(store, id);
+    store.recordRunVerdict(id, "completed");
+    expect(store.claimHistory(id, "msg_1")).toBe(true);
+
+    // The claim has nowhere to say the reply belongs, so `done` would assert a
+    // message with no home. It stays `claimed` for recovery to abandon truthfully
+    // rather than being closed as written.
+    expect(store.completeHistory(id)).toBe(false);
+    expect(store.getRunContext(id)!.historyState).toBe("claimed");
   });
 
   it("refuses to claim anything that is not a completed run", async () => {

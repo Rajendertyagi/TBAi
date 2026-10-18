@@ -34,6 +34,7 @@ import { conversationService } from "../../services/storage";
 import { credentialStore } from "../../services/credentials";
 import { errorLogFields } from "../../lib/errors";
 import { logger } from "../../lib/logger";
+import { COMPACT_DIVIDER_PART_TYPE } from "../../lib/message-persistence-policy";
 import { chatMessageMetadataSchema, chatRequestSchema } from "../../lib/validation";
 import { resolveChatModel, UnknownProviderError } from "./model";
 import { beginCompactCommand, detectCompactCommand, runManualCompaction } from "./compact-command";
@@ -242,7 +243,7 @@ export async function validateAndResolve(
       response: createUIMessageStreamResponse({
         stream: createUIMessageStream({
           execute: async ({ writer }) => {
-            writer.write({ type: "data-tbai-compact", id: "compact", data: compact });
+            writer.write({ type: COMPACT_DIVIDER_PART_TYPE, id: "compact", data: compact });
           },
         }),
       }),

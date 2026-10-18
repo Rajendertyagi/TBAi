@@ -29,6 +29,23 @@
 export const TBAI_PROGRESS_PART_TYPE = "data-tbai-progress";
 
 /**
+ * TBAi's compaction divider part, as stored in history.
+ *
+ * The AI SDK's on-the-wire form (`data-tbai-*`), the same envelope every other
+ * TBAi-owned part uses — not assistant-ui's internal `{ type: "data", name }`.
+ *
+ * It is PRESENTATION, not message text, and that distinction is load-bearing in two
+ * places. The browser's history adapter strips it before persisting
+ * (`web/src/adapters/threadHistoryAdapter.ts`), so a stored row that lacks it and a
+ * captured stream message that carries it describe the SAME message — comparing
+ * them literally would rewrite a row the client legitimately owns. It is declared
+ * here, in the module that already owns TBAi's part-type vocabulary for persisted
+ * messages, so the route that writes the divider and the storage layer that
+ * compares it cannot drift.
+ */
+export const COMPACT_DIVIDER_PART_TYPE = "data-tbai-compact";
+
+/**
  * Part types that carry no visible reply of their own. `step-start` is a
  * multi-step boundary marker, not something a user reads.
  */

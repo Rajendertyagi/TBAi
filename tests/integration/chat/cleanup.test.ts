@@ -148,6 +148,8 @@ describe("cleanup — deletion criteria", () => {
       scanned: 1,
       deleted: 1,
       skippedStreaming: 0,
+      heldUnresolved: 0,
+      expiredUnresolved: 0,
       failures: 0,
       deletedChunks: 1,
     });
@@ -181,6 +183,8 @@ describe("cleanup — deletion criteria", () => {
       scanned: 0,
       deleted: 0,
       skippedStreaming: 0,
+      heldUnresolved: 0,
+      expiredUnresolved: 0,
       failures: 0,
       deletedChunks: 0,
     });
@@ -260,6 +264,8 @@ describe("cleanup — deletion criteria", () => {
       scanned: 0,
       deleted: 0,
       skippedStreaming: 0,
+      heldUnresolved: 0,
+      expiredUnresolved: 0,
       failures: 0,
       deletedChunks: 0,
     });

@@ -5,6 +5,9 @@ import { logger } from "../lib/logger";
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
 import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "./schema/chat-streams";
+// Leaf module (no app imports) that owns the messages DDL, so the boot migration
+// and the tests that need a real `messages` table apply one definition.
+import { MESSAGES_REBUILD_SQL, MESSAGES_TABLE_SQL } from "./schema/messages";
 import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
 // Anchored to the install (the checkout in dev, the executable when packaged),
@@ -156,36 +159,9 @@ sqlite.run(`
 `);
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_todos_thread ON todos(thread_id, position)");
 
-const CREATE_MESSAGES = `
-  CREATE TABLE messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT,
-    content TEXT NOT NULL,
-    parent_id TEXT,
-    order_seq INTEGER NOT NULL DEFAULT 0,
-    status TEXT,
-    format TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-  )
-`;
+const CREATE_MESSAGES = MESSAGES_REBUILD_SQL;
 
-sqlite.run(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-    content TEXT NOT NULL,
-    parent_id TEXT,
-    order_seq INTEGER NOT NULL DEFAULT 0,
-    status TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-  )
-`);
+sqlite.run(MESSAGES_TABLE_SQL);
 
 // Idempotent migrations for existing databases (add columns introduced for
 // assistant-ui thread history persistence). The content column already exists;

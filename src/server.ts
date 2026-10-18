@@ -23,6 +23,13 @@ import {
   drainChatStreamCleanup,
 } from "./services/chat-streams/cleanup";
 import {
+  chatClaimedHistoryRecoveryDeps,
+  drainClaimedHistoryRecovery,
+  recoverStaleClaimedHistory,
+  startClaimedHistoryRecovery,
+  stopClaimedHistoryRecovery,
+} from "./services/chat-streams/claimedHistoryRecovery";
+import {
   chatHistoryReconcilerDeps,
   drainHistoryReconciliation,
   startHistoryReconciliation,
@@ -137,15 +144,42 @@ export async function startServer(port = resolveConfiguredPort().port) {
 
     await Promise.all([mcpManager.init(), gcOrphanChatDirs()]);
 
+    // Boot recovery of abandoned history claims: a process that died between the
+    // guarded history claim and its closing write leaves a `claimed` row that no
+    // component scans (reconciliation reads `pending` only). The sweep closes those
+    // rows before cleanup and reconciliation run, and both are gated on it so neither
+    // starts until it has had its chance. Started here, after exclusive instance
+    // ownership exists, and not awaited: it is bounded bookkeeping and the gates keep
+    // dependent work behind it.
+    const claimedRecovery = recoverStaleClaimedHistory(chatClaimedHistoryRecoveryDeps);
+    // The sweep reports its own failures and never rejects. Catching here keeps that
+    // guarantee local, so a gate torn down before it settles (a shutdown during boot)
+    // cannot surface as an unhandled rejection.
+    const swept = claimedRecovery.catch(() => null);
+    // Cleanup may only reclaim expired rows once the sweep has PROVEN it examined the
+    // whole candidate set. A failed sweep reads as `null`, which is not `drained`.
+    const recoveryGate = swept.then((report) => report?.stopReason === "drained");
+    // Recurring recovery: the boot sweep above is one-shot, so claims that were too
+    // fresh at startup (younger than the staleness window) would otherwise wait for
+    // the next process. This timer re-runs the SAME sweep periodically; it is gated
+    // on the boot sweep and does not fire immediately, since the boot sweep already
+    // handled everything it could.
+    startClaimedHistoryRecovery(chatClaimedHistoryRecoveryDeps, {
+      gate: recoveryGate,
+      runImmediately: false,
+    });
+
     // Periodic reclamation of expired terminal resumable streams. Starts after
     // boot recovery (which owns orphaned `streaming` rows) and is idempotent, so a
-    // repeated startServer never accumulates timers.
-    startChatStreamCleanup(db);
+    // repeated startServer never accumulates timers. Only its first tick is gated,
+    // and the store's own hold on unresolved claims protects those rows regardless.
+    startChatStreamCleanup(db, { gate: recoveryGate });
 
     // Reconciliation of completed runs whose client never persisted the reply.
     // Separate from cleanup on purpose: cleanup owns expiry, this owns an
-    // unfinished history obligation. Both are unref'd and idempotent.
-    startHistoryReconciliation({ deps: chatHistoryReconcilerDeps });
+    // unfinished history obligation. Both are unref'd and idempotent. Gated on the
+    // claim sweep above so it cannot begin until abandoned claims are settled.
+    startHistoryReconciliation({ deps: chatHistoryReconcilerDeps, gate: swept });
 
     // Transport backstop: Bun kills connections idle for 10s by default, which
     // murders quiet streams (a thinking model, a long tool run). 240s covers
@@ -274,6 +308,22 @@ export async function rollbackPartialStartup(): Promise<StartupRollbackResult> {
     }
   } catch (err) {
     logger.warn("chat", "shutdown_history_reconcile_failed", { ...normalizeError(err) });
+    timedOut = true;
+  }
+  try {
+    if (stopClaimedHistoryRecovery()) {
+      logger.info("chat", "chat_history_claimed_recovery_stopped", { signal: "rollback" });
+    }
+  } catch (err) {
+    logger.warn("chat", "shutdown_claimed_history_recovery_failed", { ...normalizeError(err) });
+    timedOut = true;
+  }
+  try {
+    await drainClaimedHistoryRecovery();
+  } catch (err) {
+    logger.warn("chat", "shutdown_claimed_history_recovery_drain_failed", {
+      ...normalizeError(err),
+    });
     timedOut = true;
   }
 
@@ -496,6 +546,23 @@ async function runShutdown(
     }
   } catch (err) {
     logger.warn("chat", "shutdown_history_reconcile_failed", { ...normalizeError(err) });
+    shutdownFailed = true;
+  }
+
+  try {
+    if (stopClaimedHistoryRecovery()) {
+      logger.info("chat", "chat_history_claimed_recovery_stopped", { signal: "shutdown" });
+    }
+  } catch (err) {
+    logger.warn("chat", "shutdown_claimed_history_recovery_failed", { ...normalizeError(err) });
+    shutdownFailed = true;
+  }
+  try {
+    await drainClaimedHistoryRecovery();
+  } catch (err) {
+    logger.warn("chat", "shutdown_claimed_history_recovery_drain_failed", {
+      ...normalizeError(err),
+    });
     shutdownFailed = true;
   }
 

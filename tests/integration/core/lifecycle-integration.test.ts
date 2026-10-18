@@ -38,8 +38,9 @@ import {
 import type { SchedulerJob } from "@/services/scheduler/schedulerTypes.ts";
 import {
   chatHistoryReconcilerDeps,
-  startHistoryReconciliation,
+  drainHistoryReconciliation,
   getHistoryReconciliationState,
+  startHistoryReconciliation,
 } from "@/services/chat-streams/historyReconciler.ts";
 import { startChatStreamCleanup, stopChatStreamCleanup } from "@/services/chat-streams/cleanup.ts";
 import { REPO_ROOT } from "../../helpers/repo-root";
@@ -56,6 +57,20 @@ afterEach(() => {
 
 describe("cross-phase lifecycle integration", () => {
   it("full lifecycle: start → in-flight work → shutdown → db closed", async () => {
+    // Phase 2 addendum (boot order): an abandoned history claim left by a previous
+    // process is closed by the boot sweep before reconciliation begins, never left
+    // as a `claimed` tombstone. Seeded with no captured message so recovery closes
+    // it as `skipped` without needing a real conversation or message write.
+    const claimedStreamId = "run_boot_claimed";
+    db.run(
+      `INSERT INTO chat_streams
+         (stream_id, status, terminal_kind, boot_id, history_state, history_message_id,
+          history_claimed_at, final_message_json, expires_at, created_at, updated_at)
+       VALUES (?, 'done', 'completed', 'prev_boot', 'claimed', 'msg_orphan',
+               ?, NULL, ?, ?, ?)`,
+      [claimedStreamId, Date.now() - 10_000_000, Date.now() + 3_600_000, Date.now(), Date.now()],
+    );
+
     // 1. Start the server (Phase 3: readiness decoupling)
     const server = await startServer(0);
     expect(server.port).toBeGreaterThan(0);
@@ -63,6 +78,16 @@ describe("cross-phase lifecycle integration", () => {
     // Verify the server is live
     const res = await fetch(`http://127.0.0.1:${server.port}/healthz`);
     expect(res.status).toBe(200);
+
+    // The boot sweep is gated into the first reconciliation pass, so draining that
+    // pass proves the sweep it waited on has finished.
+    await drainHistoryReconciliation();
+    const bootRow = db
+      .query<{ history_state: string }, [string]>(
+        "SELECT history_state FROM chat_streams WHERE stream_id = ?",
+      )
+      .get(claimedStreamId);
+    expect(bootRow?.history_state).toBe("skipped");
 
     // 2. Create in-flight work (Phase 2: history finalization)
     const chatRec = chatRuns.create({ requestId: "lifecycle-chat" });

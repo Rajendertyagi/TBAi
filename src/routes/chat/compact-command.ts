@@ -51,6 +51,7 @@ import { logger } from "../../lib/logger";
 import { errorLogFields } from "../../lib/errors";
 import { compactionStore } from "../../services/compaction";
 import { messageService } from "../../services/storage";
+import { COMPACT_DIVIDER_PART_TYPE } from "../../lib/message-persistence-policy";
 import { assembleContext } from "../../context/assemble";
 import {
   COMPACTION_SUMMARY_TIMEOUT_MS,
@@ -188,14 +189,6 @@ export interface ManualCompactData {
 
 /** Which trigger produced a compaction. One vocabulary for every producer. */
 export type CompactionOrigin = "manual" | "automatic" | "recovery";
-
-/**
- * The wire part type the transcript divider is stored as.
- *
- * The AI SDK's on-the-wire form, matching every other stored row: `data-tbai-*`
- * rather than assistant-ui's internal `{ type: "data", name }`.
- */
-export const COMPACT_DIVIDER_PART_TYPE = "data-tbai-compact";
 
 /** The storage format every assistant-ui row in this database uses. */
 const DIVIDER_STORAGE_FORMAT = "ai-sdk/v6";

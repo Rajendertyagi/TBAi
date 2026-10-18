@@ -12,6 +12,7 @@ import {
   STREAM_ID_PATTERN,
   UI_MESSAGE_TERMINAL_MARKERS,
   readChatStreamTtlMs,
+  readUnresolvedHistoryHoldMs,
   type ChatStreamRow,
   type ChatStreamHistoryState,
   type ChatStreamStatus,
@@ -73,6 +74,23 @@ export const DEFAULT_CLEANUP_BATCH = 200;
 /** Hard ceiling on a cleanup batch, whatever the caller asks for. */
 const MAX_CLEANUP_BATCH = 1000;
 
+/**
+ * SQLite's lock-contention errors, by message.
+ *
+ * Detected textually because `bun:sqlite` surfaces the engine's message on a
+ * plain `Error` with no code field. This is only ever a CLASSIFIER: it lets the
+ * caller report contention as retryable instead of mistaking it for a lost
+ * compare-and-set, and never changes what is done about the failure.
+ */
+const SQLITE_LOCK_ERROR_PATTERN =
+  /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i;
+
+/** True when an error is SQLite lock contention rather than any other failure. */
+function isSqliteLockError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return SQLITE_LOCK_ERROR_PATTERN.test(message);
+}
+
 /** Cursor encoding, matching the in-memory store exactly (base36 sequence). */
 function cursorOf(seq: number): string {
   return seq.toString(36);
@@ -123,6 +141,18 @@ export interface ChatStreamCleanupReport {
   deleted: number;
   /** Expired rows deliberately left alone because they are still `streaming`. */
   skippedStreaming: number;
+  /**
+   * Expired `claimed` rows held back because they still carry an unwritten
+   * captured reply (see `DEFAULT_UNRESOLVED_HISTORY_HOLD_MS`). Not a failure: a
+   * held row is the retention policy working.
+   */
+  heldUnresolved: number;
+  /**
+   * Held rows whose extra window had elapsed and which this tick therefore
+   * deleted. Their captured reply is now permanently lost - the diagnostic that
+   * says so, and the reason the hold exists at all.
+   */
+  expiredUnresolved: number;
   /** Rows that could not be removed; the tick continued past them. */
   failures: number;
   /** Chunk rows reclaimed alongside the deleted stream rows. */
@@ -132,6 +162,11 @@ export interface ChatStreamCleanupReport {
 export interface ChatStreamCleanupOptions {
   /** Max rows per tick. Bounded so one tick cannot do unbounded work. */
   limit?: number;
+  /**
+   * Extra retention for expired `claimed` rows that still carry a captured reply.
+   * Defaults to `readUnresolvedHistoryHoldMs()` (seven days); tests set it.
+   */
+  unresolvedHoldMs?: number;
 }
 
 /**
@@ -292,8 +327,57 @@ export interface SqliteResumableStreamStore extends ResumableStreamStore {
    * browser write and a server write converge on one row in either order.
    */
   claimHistory(streamId: string, messageId: string): boolean;
-  /** Mark the claimed history write as finished. Guarded on `history_state='claimed'`. */
+  /**
+   * Mark the claimed history write as finished, as the FIRST statement of the
+   * caller's transaction.
+   *
+   * Two guards: `history_state='claimed'` makes this the single-writer
+   * compare-and-set that two finalizers cannot both win, and
+   * `conversation_id IS NOT NULL` means a row that can never name the
+   * conversation its message belongs to is never closed as done.
+   *
+   * `history_claimed_at` is NOT rewritten here. It records when the claim was
+   * taken (`claimHistory`), which is what the staleness bound measures; moving it
+   * on completion would make a long-running finalizer look freshly claimed to
+   * anything measuring the window.
+   *
+   * Prefer `completeHistoryWithVerifiedMessage` from a finalizer: on its own this
+   * closes the obligation without proving the message was written.
+   */
   completeHistory(streamId: string): boolean;
+  /**
+   * Close one claimed history obligation and verify its message in ONE
+   * transaction.
+   *
+   * The guard's first database statement is the guarded
+   * `claimed -> done` transition itself. Everything the verifier does - reading
+   * the stored row, writing or repairing it, reading it back - therefore runs
+   * while this transaction already holds SQLite's write lock, so a
+   * deferred-transaction read can never be followed by a write-lock upgrade
+   * (`SQLITE_BUSY`) part-way through. Committing the `done` mark and the message
+   * write together means there is no observable state in which the obligation is
+   * closed but its reply is not stored, and any throw rolls back BOTH.
+   *
+   * The verifier is supplied by the caller because this store is a persistence
+   * layer and holds no opinion about message validity - the same division as
+   * `listPendingCompletedHistory`, which reports the raw capture and lets the
+   * caller judge it. It MUST be synchronous: `db.transaction` does not await a
+   * promise-returning callback, so an async verifier's writes would land outside
+   * the transaction.
+   *
+   * @param streamId The claimed row to close.
+   * @param verify Runs inside the transaction, after the transition, and returns
+   *   the caller's own resolution value on success.
+   * @returns `committed` with the verifier's value; `guard_missed` when the
+   *   transition matched no row (someone else closed it, it was never claimed, or
+   *   it has no conversation); or `failed` with the thrown error and whether it
+   *   was SQLite lock contention, which the caller must distinguish from a lost
+   *   compare-and-set.
+   */
+  completeHistoryWithVerifiedMessage<T>(
+    streamId: string,
+    verify: (context: VerifiedHistoryContext) => T,
+  ): VerifiedHistoryCompletion<T>;
   /**
    * Mark history finalization as deliberately not done, so the row is never
    * retried. Written when the completed run has no usable final message, or when
@@ -330,6 +414,41 @@ export interface SqliteResumableStreamStore extends ResumableStreamStore {
    * client may still be writing normally.
    */
   listPendingCompletedHistory(options: { before: number; limit: number }): PendingHistoryRow[];
+  /**
+   * Completed runs whose history obligation was claimed but never closed, oldest
+   * claim first.
+   *
+   * A `claimed` row normally lives for microseconds: the finalizer claims, writes,
+   * and marks `done` in one turn. A claim that is still open after the staleness
+   * bound means the process holding it died between `claimHistory` and
+   * `completeHistory`/`skipHistory`, and `history_state='claimed'` is invisible to
+   * `listPendingCompletedHistory` (which selects `pending`), so nothing would ever
+   * close it. This is the boot recovery candidate set and nothing else.
+   *
+   * Candidates are the two terminal statuses, `done` and `error`, with
+   * `terminal_kind='completed'`. The live finalizer claims while the byte stream is
+   * still open, so a crashed claim is left `streaming` and boot recovery relabels it
+   * `error` before this scan runs; `done` covers a claim abandoned by the
+   * reconciler. The other two terms keep `error` narrow: a failed, cancelled, or
+   * interrupted run, and any row never claimed, are not candidates.
+   *
+   * The `before` bound is the staleness window, not a grace window: a claim newer
+   * than it may belong to a live finalizer, so it is deliberately excluded.
+   * A NULL `history_claimed_at` is INCLUDED: it cannot be shown to be recent, and
+   * excluding it would strand a corrupt row forever. The caller reports how many
+   * NULLs it saw.
+   *
+   * Paged by a `stream_id` keyset cursor rather than an offset, so a row that
+   * cannot be closed does not stall the sweep. `stream_id` is the primary key, so
+   * it is a unique, total, and stable order: `afterStreamId` (pass `""` for the
+   * first page) advances strictly past every row already examined, whether it was
+   * closed or left open, and no row is visited twice or skipped.
+   */
+  listStaleClaimedHistory(options: {
+    before: number;
+    limit: number;
+    afterStreamId?: string;
+  }): StaleClaimedHistoryRow[];
   /**
    * Guarded terminal transition. Returns true only for the single durable
    * winner; a superseded lease or an already-settled row returns false. Throws a
@@ -368,6 +487,53 @@ export interface PendingHistoryRow {
   finalMessageJson: string | null;
   finalParentId: string | null;
 }
+
+/**
+ * One abandoned history claim, exactly as stored.
+ *
+ * Same shape as a pending row plus the identity the claim recorded
+ * (`historyMessageId`) and when it was taken (`historyClaimedAt`). The store holds
+ * no opinion about whether the claim should be completed or skipped: it reports
+ * the row as written and the recovery decides, exactly as reconciliation does.
+ */
+export interface StaleClaimedHistoryRow {
+  streamId: string;
+  conversationId: string | null;
+  finalMessageJson: string | null;
+  finalParentId: string | null;
+  /** The message id the abandoned claim was recorded against; null only if corrupt. */
+  historyMessageId: string | null;
+  historyClaimedAt: number | null;
+}
+
+/**
+ * The row facts a verification step may rely on, read INSIDE the guard's
+ * transaction after the `claimed -> done` transition succeeded.
+ *
+ * `historyMessageId` is the identity the claim recorded, which is what the
+ * verifier compares its message against. It is typed nullable because a corrupt
+ * claim can hold NULL; `conversationId` is not, because the transition's own
+ * predicate proved it is present.
+ */
+export interface VerifiedHistoryContext {
+  conversationId: string;
+  historyMessageId: string | null;
+}
+
+/**
+ * What one guarded close did.
+ *
+ * `guard_missed` and `failed` are deliberately separate: the first is a lost
+ * compare-and-set (another writer already closed the row, or the row was never
+ * claimable), the second is an exception. `busy` distinguishes SQLite lock
+ * contention - which is retryable and must never be reported as a guard miss -
+ * from any other write error. SQLite already waited `busy_timeout` before
+ * throwing, so a busy failure means the lock outlived that wait.
+ */
+export type VerifiedHistoryCompletion<T> =
+  | { status: "committed"; resolution: T }
+  | { status: "guard_missed" }
+  | { status: "failed"; error: unknown; busy: boolean };
 
 let leaseCounter = 0;
 
@@ -746,13 +912,63 @@ export function createSqliteResumableStreamStore(
 
   const completeHistory = (streamId: string): boolean => {
     assertValidStreamId(streamId);
+    // The `conversation_id IS NOT NULL` term is the invariant the caller's
+    // verification depends on (`VerifiedHistoryContext.conversationId` is not
+    // nullable). It is a no-op on the production path today - `bindRunContext` is
+    // fill-only and only ever moves NULL -> a value - which is exactly why it is
+    // asserted in the SQL rather than assumed by the caller.
     return (
       db.run(
-        `UPDATE chat_streams SET history_state = 'done', history_claimed_at = ?
-          WHERE stream_id = ? AND history_state = 'claimed'`,
-        [now(), streamId],
+        `UPDATE chat_streams SET history_state = 'done'
+          WHERE stream_id = ? AND history_state = 'claimed' AND conversation_id IS NOT NULL`,
+        [streamId],
       ).changes === 1
     );
+  };
+
+  /**
+   * The single transactional close used by BOTH the live finalizer and boot
+   * recovery. See the interface docs for the guarantees; the order below is the
+   * load-bearing part.
+   */
+  const completeHistoryWithVerifiedMessage = <T>(
+    streamId: string,
+    verify: (context: VerifiedHistoryContext) => T,
+  ): VerifiedHistoryCompletion<T> => {
+    try {
+      return db.transaction((): VerifiedHistoryCompletion<T> => {
+        // FIRST database statement, on purpose: this takes SQLite's write lock
+        // and the compare-and-set together, so everything below - the message
+        // read, the write or repair, the read-back - runs as a writer. A read
+        // first would leave a deferred transaction needing a lock upgrade when
+        // the write arrived, which is the one upgrade SQLite refuses to queue.
+        if (!completeHistory(streamId)) return { status: "guard_missed" };
+        const row = db
+          .query<
+            { conversation_id: string | null; history_message_id: string | null },
+            SQLQueryBindings[]
+          >("SELECT conversation_id, history_message_id FROM chat_streams WHERE stream_id = ?")
+          .get(streamId);
+        // `completeHistory` proved both facts, so this cannot fail. It is a
+        // defensive throw for a store that broke its own contract: rolling the
+        // whole transaction back is strictly better than committing a bare `done`
+        // over a message nobody wrote.
+        if (!row || row.conversation_id === null) {
+          throw new Error(`History guard lost conversation ownership: ${streamId}`);
+        }
+        const resolution = verify({
+          conversationId: row.conversation_id,
+          historyMessageId: row.history_message_id,
+        });
+        return { status: "committed", resolution };
+      })();
+    } catch (error) {
+      // The wrapper rolled the transaction back, so no message write and no
+      // `done` mark survive. Which failure this is - identity conflict, lost
+      // write, lock contention - is the caller's classification to make; `busy`
+      // is reported so contention is never mistaken for a guard miss.
+      return { status: "failed", error, busy: isSqliteLockError(error) };
+    }
   };
 
   const skipHistory = (streamId: string): boolean => {
@@ -815,6 +1031,70 @@ export function createSqliteResumableStreamStore(
       }));
   };
 
+  const listStaleClaimedHistory = (options: {
+    before: number;
+    limit: number;
+    afterStreamId?: string;
+  }): StaleClaimedHistoryRow[] => {
+    const limit = Math.max(1, Math.trunc(options.limit));
+    return db
+      .query<
+        {
+          stream_id: string;
+          conversation_id: string | null;
+          final_message_json: string | null;
+          final_parent_id: string | null;
+          history_message_id: string | null;
+          history_claimed_at: number | null;
+        },
+        SQLQueryBindings[]
+      >(
+        // `terminal_kind='completed'` mirrors `claimHistory`'s own guard: a row can
+        // only be `claimed` on a completed run, and asserting it here means a
+        // corrupt row is skipped rather than finalized on a weaker condition.
+        //
+        // BOTH terminal statuses are candidates, and that is load-bearing. The live
+        // finalizer claims in the run's `onEnd`, while the byte stream is still open
+        // (settlement records only `terminal_kind`; `status` belongs to the official
+        // `finalize`), so a process that dies between the claim and its closing write
+        // is ALWAYS left `status='streaming'`. Boot recovery settles that row to
+        // `error` — preserving the recorded `completed` verdict — and it runs BEFORE
+        // this sweep, so a `status='done'` filter would exclude precisely the rows
+        // this exists to repair. `done` remains a candidate for a claim abandoned by
+        // the reconciler, which claims a row that had already settled.
+        //
+        // `error` does not widen the set to unrelated terminal failures: with
+        // `history_state='claimed'` (set only by `claimHistory`, only for a
+        // `completed` run) and `terminal_kind='completed'` both required, a failed,
+        // cancelled, or interrupted run is still skipped, and so is a row that was
+        // never claimed.
+        //
+        // `(history_claimed_at IS NULL OR ...)` includes a row that cannot be shown
+        // to be recent. A NULL claim timestamp is corruption, not a live writer, and
+        // the sweep reports how many it saw. `stream_id > ?` is the keyset cursor:
+        // `stream_id` is the primary key, so the order is a unique total order and
+        // the sweep can advance past rows it left unresolved.
+        `SELECT stream_id, conversation_id, final_message_json, final_parent_id,
+                history_message_id, history_claimed_at
+           FROM chat_streams
+          WHERE status IN ('done', 'error') AND terminal_kind = 'completed'
+            AND history_state = 'claimed'
+            AND (history_claimed_at IS NULL OR history_claimed_at <= ?)
+            AND stream_id > ?
+          ORDER BY stream_id ASC
+          LIMIT ?`,
+      )
+      .all(options.before, options.afterStreamId ?? "", limit)
+      .map((row) => ({
+        streamId: row.stream_id,
+        conversationId: row.conversation_id,
+        finalMessageJson: row.final_message_json,
+        finalParentId: row.final_parent_id,
+        historyMessageId: row.history_message_id,
+        historyClaimedAt: row.history_claimed_at,
+      }));
+  };
+
   const countChunks = (streamId: string): number =>
     db
       .query<{ c: number }, SQLQueryBindings[]>(
@@ -830,24 +1110,60 @@ export function createSqliteResumableStreamStore(
       1,
       Math.min(cleanupOptions.limit ?? DEFAULT_CLEANUP_BATCH, MAX_CLEANUP_BATCH),
     );
+    const holdMs = cleanupOptions.unresolvedHoldMs ?? readUnresolvedHistoryHoldMs();
     // Deletion criteria: expired AND not `streaming`. An expired streaming row
     // is an orphan awaiting boot recovery, never a cleanup candidate.
+    //
+    // A `claimed` row that still carries a captured, parseable reply is held for
+    // `holdMs` BEYOND its expiry: it is an unwritten reply, not garbage, and
+    // deleting it would destroy the last copy. A `claimed` row with no usable
+    // capture has nothing to protect and expires normally.
+    const hittable = `status != 'streaming' AND expires_at <= ?
+        AND (
+          history_state != 'claimed'
+          OR final_message_json IS NULL
+          OR NOT json_valid(final_message_json)
+          OR expires_at + ? <= ?
+        )`;
     const candidates = db
-      .query<{ stream_id: string }, SQLQueryBindings[]>(
-        "SELECT stream_id FROM chat_streams WHERE status != 'streaming' AND expires_at <= ? ORDER BY expires_at ASC LIMIT ?",
+      .query<{ stream_id: string; held_capture: number }, SQLQueryBindings[]>(
+        `SELECT stream_id,
+                CASE WHEN history_state = 'claimed'
+                       AND final_message_json IS NOT NULL
+                       AND json_valid(final_message_json)
+                     THEN 1 ELSE 0 END AS held_capture
+           FROM chat_streams
+          WHERE ${hittable}
+          ORDER BY expires_at ASC LIMIT ?`,
       )
-      .all(timestamp, limit);
+      .all(timestamp, holdMs, timestamp, limit);
     const skippedStreaming =
       db
         .query<{ c: number }, SQLQueryBindings[]>(
           "SELECT COUNT(*) AS c FROM chat_streams WHERE status = 'streaming' AND expires_at <= ?",
         )
         .get(timestamp)?.c ?? 0;
+    // Held rows are reported for monitoring: a non-zero count means at least one
+    // reply is waiting on a human, and it is visible in the tick rather than only
+    // in the deletion that eventually follows.
+    const heldUnresolved =
+      db
+        .query<{ c: number }, SQLQueryBindings[]>(
+          `SELECT COUNT(*) AS c FROM chat_streams
+            WHERE history_state = 'claimed'
+              AND final_message_json IS NOT NULL
+              AND json_valid(final_message_json)
+              AND expires_at <= ?
+              AND expires_at + ? > ?`,
+        )
+        .get(timestamp, holdMs, timestamp)?.c ?? 0;
 
     const report: ChatStreamCleanupReport = {
       scanned: candidates.length,
       deleted: 0,
       skippedStreaming,
+      heldUnresolved,
+      expiredUnresolved: 0,
       failures: 0,
       deletedChunks: 0,
     };
@@ -857,6 +1173,7 @@ export function createSqliteResumableStreamStore(
         deleteStream(candidate.stream_id);
         report.deleted += 1;
         report.deletedChunks += chunks;
+        if (candidate.held_capture === 1) report.expiredUnresolved += 1;
       } catch {
         // Per-row isolation: one unremovable row must not strand the rest of
         // the batch. The tick stays observable via the failure count.
@@ -996,9 +1313,11 @@ export function createSqliteResumableStreamStore(
     getRunContext,
     claimHistory,
     completeHistory,
+    completeHistoryWithVerifiedMessage,
     skipHistory,
     recordFinalMessage,
     listPendingCompletedHistory,
+    listStaleClaimedHistory,
 
     describe(streamId: string): ChatStreamDescription | null {
       assertValidStreamId(streamId);

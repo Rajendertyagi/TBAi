@@ -4822,3 +4822,350 @@ Not covered: the entry point cannot be driven into the rollback `!ok` branch fro
 outside (no chat or scheduler run can exist before serving), so that terminal
 mapping is verified by inspection plus the `ok` half through the entry point in
 `lifecycle-integration.test.ts`.
+
+## 2026-10-17 — Abandoned history claims get a boot sweep (C-3, Option B), which closes the crash window the "no `claimed` tombstone" ADR left unrepaired
+
+**The gap.** A completed Direct run's reply is written to history under a guarded
+claim (`pending` → `claimed`), closed `done`/`skipped` in the same turn. If the
+process dies between `claimHistory` and that closing write, the row is left
+`history_state='claimed'` with no writer, and *nothing* reclaims it:
+`listPendingCompletedHistory` selects `pending`, `claimHistory` requires `pending`,
+and cleanup only removes expired rows. The reply is lost for the row's whole 24 h
+retention window, silently. This was the residual window the 2026-09-25 design
+recorded as "documented rather than repaired."
+
+**What was built** (`src/services/chat-streams/claimedHistoryRecovery.ts`, new
+owner; one shared transactional transition; one new store read):
+
+- **One transition, one transaction.** `completeHistoryWithVerifiedMessage(streamId,
+  verify)` in `sqliteResumableStore.ts` is the single close used by BOTH the live
+  finalizer and boot recovery. Its first database statement is the guarded
+  `claimed`→`done` transition itself (`completeHistory`, now the ONLY writer of
+  `done`), so the message read, the write or repair, and the read-back all run while
+  the transaction already holds SQLite's write lock. The `done` mark and the reply
+  commit together or not at all, and a verifier that throws rolls BACK both. The
+  store keeps no opinion about message validity — the verifier is supplied by the
+  caller (`resolveMessageForHistorySync`) — and the guard reports
+  `committed | guard_missed | failed{error, busy}`, so a lost compare-and-set, a live
+  holder, and a lock timeout stay three different facts instead of one "not recovered".
+- **`completeHistory` narrowed, not widened.** Its SQL is now
+  `SET history_state='done' WHERE stream_id=? AND history_state='claimed' AND
+  conversation_id IS NOT NULL`, which makes "a row that cannot name the conversation
+  its reply belongs to is never closed `done`" an invariant of the statement rather
+  than an assumption in its caller. It also stops rewriting `history_claimed_at`: that
+  column records when the claim was TAKEN, which is what the staleness bound measures,
+  and moving it on completion would make a long-running finalizer look freshly claimed.
+- **What verification decides** (`src/services/storage/messages.ts`):
+  1. IDENTITY — the id the claim recorded must equal the id being written; a different
+     id, including a NULL one `claimHistory` cannot produce, is an anomaly.
+  2. PARENT — the captured parent is authoritative, under `upsertStored`'s existing
+     null-never-downgrades-a-real-parent rule, and it must RESOLVE to a row of this
+     conversation. A self-link, a parent row in another conversation, and a parent with
+     no row at all are one class of defect, so all three write nothing and leave the row
+     open. The absent case is an anomaly rather than the normal shape because the
+     conversation's history is READ by walking `parent_id`: `getHeadChain` and
+     `getWindowSlice` fail closed on a dangling link — `complete: false`, and "a missing
+     parent is NOT a legitimate root" (`tests/unit/context/p1p-differential.test.ts:1085`,
+     `tests/integration/history/direct-history-window-slice.test.ts:325`) — so a reply
+     written under one would leave the whole chain unprovable, not merely its own row
+     unreachable. The parent row is normally present: the browser persists the user
+     message a run continued, through this same table's route
+     (`web/src/adapters/threadHistoryAdapter.ts` → `POST /api/conversations/:id/messages`,
+     and `web/src/components/Composer.tsx` records the browser measurement), before the
+     run settles. This corrects an earlier draft of this ADR, which read the harness shape
+     of `tests/integration/history/detached-history-finalization.test.ts` as evidence that
+     the server never persists the parent; that suite posted the user message in the chat
+     request body only and never wrote the row, so it proved nothing about production.
+
+     Consequence, stated: a reply whose parent never landed cannot be recovered. It stays
+     `claimed`, is reported `conflicted`, is held the 7-day window, then deleted. Writing
+     it would make the conversation's history unprovable and the reply unrenderable, which
+     is strictly worse than one unrecovered reply the sweep log makes visible.
+  3. OWNERSHIP — a row with this id in another conversation is refused by
+     `upsertStoredSync` (`MessageOwnershipError`) and can never be repointed.
+  4. CONTENT — canonical `{role, parts}` decides `matched`; `data-tbai-compact` parts
+     are stripped and `metadata` is excluded, because those are the two differences the
+     two writers legitimately produce. Anything else means the stored row is not this
+     reply, and the captured one replaces it in place (`repaired`).
+- **One classification shifts, and is named rather than hidden.** A run whose conversation
+  row is deleted mid-run now surfaces as `conflicted` (`reason: parent`, the captured
+  parent row went with the conversation) rather than as a write `failed` via the message
+  FK. The outcome is unchanged where it matters — nothing written, nothing closed, the row
+  still `claimed`, still reported, still retired by the 7-day hold — and only the
+  diagnostic differs. Pinned in
+  `tests/integration/history/claimed-history-recovery.test.ts` (`reports a deleted
+  conversation as an unresolvable claim, not a retryable failure`), and the comment in
+  `detached-history-finalization.test.ts` that described those leftovers as `failed` was
+  corrected to match. Classifying a deleted conversation as `abandoned{no_conversation}`
+  the way the NULL-conversation case is would need a conversation-existence check inside
+  the guard, which is not in this change's scope; the behaviour is recorded here as the
+  honest consequence rather than changed silently.
+- **Anomalies stay unresolved.** An identity, parent, or ownership contradiction writes
+  nothing, leaves the row `claimed` for a later sweep, and is reported under its own
+  reason. They are deliberately NOT closed `skipped`: closing one would turn a reply
+  that could not be written into one that can never be written again. Only
+  `no_conversation` and `unreadable_capture` abandon an obligation, and even then the
+  skip is verified by re-reading the row (`abandonClaimedHistory`), so a failed skip is
+  never reported as a closure.
+- **The sweep** (`recoverStaleClaimedHistory`) selects the crash candidates
+  `terminal_kind='completed' AND history_state='claimed'` in **either terminal status,
+  `done` or `error`**, and nothing else. Both statuses are load-bearing: the claim is
+  taken in the run's `onEnd` while the byte stream is still open (settlement records
+  only `terminal_kind`; `status` belongs to the official `finalize`), so a crash in that
+  window always leaves `status='streaming'`, and boot recovery — which runs first —
+  relabels it `error` while preserving the recorded `completed` verdict. A
+  `status='done'` filter therefore excluded exactly the rows this work exists to repair;
+  that was the defect the independent audit of this change found, and including `error`
+  is the fix. It does not admit unrelated terminal faults: a failed, cancelled, or
+  interrupted run has a different `terminal_kind`, and a row that was never claimed has
+  a different `history_state`, so both stay out (pinned by
+  `listStaleClaimedHistory > also returns the claim boot recovery relabelled to error,
+  and no other terminal row`). The sweep then walks keyset pages (`afterStreamId` —
+  `stream_id` is the primary key, so its order is a unique total order and a row left
+  unresolved cannot be returned to forever), includes rows whose `history_claimed_at`
+  is NULL and counts them (`nullTimestamp`, because a NULL claim time is corruption
+  rather than a live worker), isolates each row's failure, and stops with
+  `stopReason: "scan_failed"` when a page cannot be read while keeping what it has
+  already closed. Contention and any other write failure are deferred to the next
+  sweep; recovery never rejects. The sweep runs **once per boot** — `server.ts` calls it
+  once, it holds no timer, and `before` is fixed when it starts — so a claim younger than
+  the staleness window is NOT recovered on the boot that first sees it, even though a
+  crash seconds earlier is exactly the case this repairs; the next chance is a later boot
+  whose sweep finds the claim past the window. What keeps the reply alive in between is
+  the 7-day hold, not the sweep. The window is kept deliberately: a sibling process
+  sharing the database file may hold a genuinely live claim, and the sweep must not steal
+  it.
+- **Retention.** A `claimed` row that still carries a parseable captured reply is held
+  `DEFAULT_UNRESOLVED_HISTORY_HOLD_MS` (**7 days**, `TBAI_UNRESOLVED_HISTORY_HOLD_MS`)
+  past `expires_at`, and the cleanup report counts both the rows being held
+  (`heldUnresolved`) and the ones deleted at the end of that window
+  (`expiredUnresolved`). This is bounded retention, not durability: after the window the
+  row is deleted and the reply is gone, because an unresolved row cannot be discharged
+  from the UI and keeping it forever would grow the database without ever closing the
+  obligation.
+- **Ordering and gating.** `server.ts` runs `recoverOrphanedChatStreams` first — it
+  settles every orphaned `streaming` row to `error`, preserving a verdict the crashed
+  process had already recorded, which is what turns a claim left mid-finalization into
+  a sweep candidate — and then starts the sweep after exclusive instance ownership
+  exists, passing it to BOTH `startHistoryReconciliation({ gate })` and
+  `startChatStreamCleanup({ gate })`. The cleanup gate is consumed on the FIRST tick
+  only, and a gated-out tick does not count as a tick. Its boolean comes from the
+  sweep's own report (`stopReason === "drained"`), never from the promise merely
+  settling: a sweep that stopped early must not unblock deletion. Shutdown safety comes
+  free — the parked first tick is the `inflightTick` that `drainHistoryReconciliation`
+  and `drainChatStreamCleanup` await, so draining also drains the sweep before
+  `db.close(true)`.
+- No new table and no schema change: `listStaleClaimedHistory` is a `SELECT`, and
+  recovery claims nothing (it has no `claimHistory` in its store surface) — it only
+  finishes a claim a dead process already took. A `claimed` row is invisible to both
+  `listPendingCompletedHistory` (which selects `pending`) and `claimHistory` (which
+  requires `pending`), so only the sweep retries it — once per boot, and only once the
+  claim is past the staleness window — and only the 7-day hold removes it.
+- **Two extractions this needed.** The `messages` DDL moved to a leaf
+  `src/db/schema/messages.ts` so the guard's schema is stated once, and
+  `COMPACT_DIVIDER_PART_TYPE` moved to `src/lib/message-persistence-policy.ts`, which
+  already owns TBAi's part-type vocabulary: the storage layer may not import a route,
+  and a second copy of a wire literal is a second contract. All four former sites
+  (the route that writes the divider, the gate's part type and its value, and the
+  validate-and-resolve writer) now import the one definition.
+
+**The one behaviour this changes, deliberately: a stored reply that differs from the
+captured one is now REPLACED.** Before this change an existing row with the message id
+meant "already persisted", the obligation was closed, and nothing was written. Now the
+row is read back and compared, and if it does not canonically hold the run's own reply
+the captured reply replaces it in place — same row, same `order_seq`, one row. The
+reason is that the two cases cannot be told apart otherwise: the reply in question is
+that one run's own output under the id that run minted, so a stored row that differs
+from it is a stale, truncated, or contentless variant of the same reply — the
+progress-only phantom rows `src/lib/message-persistence-policy.ts` documents — and
+closing `done` over it would assert a reply that is not there. The product risk,
+stated: the server can now overwrite a reply the browser saved itself.
+`tests/integration/history/detached-history-finalization.test.ts:552` asserted the old
+behaviour and now asserts the new one; a stored row that canonically IS the reply is
+still left untouched, which `:921` and `tests/unit/chat/historyFinalizer.test.ts`
+continue to assert. `historyReconciler`'s contract sentence and the
+`already_persisted` outcome doc were corrected in the same change, since the code would
+otherwise contradict its own documentation.
+
+**Reconciliation with the 2026-09-25 ADR (decision 3), not a reversal.** The older
+ADR's two statements are both honoured:
+
+- *"No `claimed` tombstone"* (below, §Durable Direct runs) means a failure in
+  **normal operation** must mark the row `skipped`, not leave a `claimed` with no
+  recovery. That is unchanged for a failed WRITE — `persistClaimedHistory` still
+  closes it as `skipped`. It is **narrowed deliberately for a contradiction**: an
+  identity, parent, or ownership anomaly is left `claimed` instead. The older ADR's
+  intent was that a bare `claimed` must never be a dead end, and it is not one here —
+  the row is retried by every later boot's sweep and finally removed by the 7-day hold (the
+  candidate set accepts the `error` state boot recovery relabels a crashed stream to,
+  so this holds for a claim left mid-finalization and not only for one left on a row
+  that already settled), and
+  it is invisible to the reconciler (which reads `pending`) and to `claimHistory`
+  (which requires `pending`), so it cannot re-arm the byte stream. Closing it
+  `skipped` would be the worse violation: it would take a reply that could not be
+  written and make it permanently unwritable. The sweep still does not *create* a
+  tombstone for a crash; it removes the one a crash can create.
+- *"no boot path reconstructs one"* (design §9 "crash window") forbids rebuilding a
+  reply from replayable bytes. The sweep does not: it re-offers the **exact message
+  the run captured at settlement** (`final_message_json`), the same value
+  `historyReconciler` already re-offers for `pending` rows. So it stays inside
+  decision 3's boundary and closes only the interval the ADR itself named as the
+  window it was not repairing.
+
+Both ADRs therefore stand; the sweep is the narrow repair the 2026-10-16 C-3
+approval (Option B) called for, and it does not re-arm the byte stream, add a second
+writer, or introduce a second message format.
+
+**Safety properties, each pinned by a test that was proven to fail.**
+
+- Cannot close an obligation without its reply: dropping the `db.transaction` wrapper
+  from `completeHistoryWithVerifiedMessage` fails **8 of the 39** recovery-suite tests —
+  `refuses a capture whose id disagrees with the id the claim recorded`, `refuses a
+  self-referential parent`, `refuses a parent in another conversation, and leaves that
+  row alone`, `refuses a reply whose id is already owned by another conversation`,
+  `refuses a parent that is not a row of this conversation`, `leaves no message row
+  behind when the write itself cannot land`, `reports a deleted conversation as an
+  unresolvable claim, not a retryable failure`, and `advances past a row it cannot close
+  instead of returning to it forever` — because the `done` mark then survives a
+  verification throw instead of rolling back with it. (Measured at 6 of 35 before the
+  two parent-rule tests below were added, and re-measured at 8 of the 39 after the
+  boot-order regression test; both re-measurements are on the final tree.)
+- Cannot write a reply under a parent the conversation does not contain: restoring the
+  permissive check (`owner && …` instead of `!owner || …`) fails the two tests that pin the
+  rule — `refuses a parent that is not a row of this conversation` (recovery) and
+  `leaves the reply unresolved when its captured parent is not a row of the conversation`
+  (reconciliation) — 2 pass / 2 fail. The same defect also fails `reports a deleted
+  conversation as an unresolvable claim…`, which then reports `failed` instead of
+  `conflicted`. Verified in the other direction too: seeding the harness's user row under a
+  different id, so the captured parent dangles, fails **15 of the 39** recovery-suite tests
+  (14 of 37 before the boot-order regression test was added, since it resolves against that
+  same row) — the seeded row is what the default-parent cases actually resolve against, not
+  decoration.
+- Cannot close a claim that names no conversation: dropping `conversation_id IS NOT
+  NULL` from `completeHistory` fails 2 tests (81 pass / 2 fail), among them
+  `sqlite resumable store — history claim > refuses to complete a claim that captured no
+  conversation`.
+- Cannot delete an unresolved reply at the ordinary TTL: dropping the hold term from the
+  cleanup predicate fails 7 tests (28 pass / 7 fail), starting with `holds an expired
+  claimed row that still carries a captured reply`.
+- Cannot return to an unresolved row forever: changing the keyset cursor `stream_id > ?`
+  to `>=` fails `listStaleClaimedHistory > advances strictly past the cursor and
+  respects the limit`.
+- Cannot treat a live claim as stale, or a NULL claim time as fresh: `returns only
+  completed claimed rows past the bound, ordered by stream id` asserts the bound, the
+  contiguous order, and the NULL-timestamp inclusion in one read.
+- Cannot mistake contention for a lost claim or a write failure: `the client may have
+  persisted already > defers to a live holder instead of stealing or abandoning its
+  claim` (unit). Proved by making `classifyGuardMiss` return `state_read_failed` for a
+  row that is still `claimed` — the outcome became `failed` and the row would have been
+  marked `skipped`, so the test fails 0 pass / 1 fail. Coverage stated honestly: that
+  classification is pinned with the fake store, against a guard forced to miss. The
+  real-database contention case (`lock contention > defers a contended write and recovers
+  it on the next sweep`) asserts the `busy`/`failed` path instead, because producing
+  `contended` genuinely needs a second writer to win the row inside the losing writer's
+  own window, which the transactional guard makes a narrow race rather than a settable
+  state. `contended` is therefore a real branch with a unit-pinned classification and no
+  real-database reproduction in this suite — reported, deferred, never stolen, and
+  disclosed as the one outcome here without end-to-end coverage.
+- Cannot run before recovery: `boot ordering > does not let reconciliation scan until
+  the sweep has settled`. Proved by removing the `await bootGate` — fails 0 pass / 1 fail.
+- Cannot miss the crash it exists to repair: `boot ordering > recovers a claim taken while
+  the byte stream was still open, after boot recovery relabels it` drives the production
+  order on the real store (verdict → capture → claim while `status='streaming'`, then the
+  real `recoverOrphanedChatStreams`, then the sweep) and asserts the reply is persisted and
+  the claim reaches `done`. Narrowing the candidate statuses back to `status = 'done'`
+  fails it and the read-surface test above — **37 pass / 2 fail** of 39 on this tree. The
+  sequence is the real one, not a fabricated row: the route claims inside the AI SDK's
+  `onEnd`, which the transform awaits before its readable side closes, so the byte stream
+  is provably still open at claim time. What the test does NOT prove, stated: the sweep
+  that closes the row is one whose `before` bound is already past the claim, and the test
+  advances its clock to that later boot. On the boot immediately after the crash the claim
+  is seconds old, so the staleness window still excludes it (the one-shot-sweep residual
+  stated in the sweep bullet above).
+- Cannot duplicate a message: `closes without writing when the stored row already holds
+  the same message`, `reports a row already closed as done, never as a second write`, and
+  `detached-history-finalization > stays at one row when the same run is finalized
+  repeatedly and concurrently`; a second sweep is a no-op.
+- Cannot leave a bare claim: `never leaves a bare claim when the write throws` (unit) and
+  `leaves no message row behind when the write itself cannot land` (integration).
+- Boot wiring is real: `tests/integration/core/lifecycle-integration.test.ts` seeds an
+  abandoned claim before `startServer` and asserts it is `skipped` after boot (draining
+  the gated pass first). Proved by replacing the sweep with a resolved promise — the row
+  stayed `claimed` and the suite failed 2 pass / 1 fail.
+
+Verified on this tree: `bun run verify` — typecheck (backend, backend tests, web tests,
+web), lint, `format:check`, `test:locations`, build, the backend suite, the three
+separately-gated lifecycle suites and the DOM suite — **exit 0**, with the backend suite
+**4308 pass / 41 skip / 0 fail across 319 files** (4349 tests, 329.11 s) against the base
+commit's 4275 pass / 43 skip / 0 fail: a net +33 tests, all of them this work's and the
+recurring follow-up's. The
+recovery suite is 39 pass / 0 fail and
+`tests/integration/history/detached-history-finalization.test.ts` 27 pass / 0 fail;
+`test:shutdown` 1 pass, `test:startup-rollback` 2 pass, `test:lifecycle-integration`
+3 pass, `test:dom` 518 pass / 0 fail across 50 files. The defect experiments behind the
+"proven to fail" list above were each run on this tree and each reverted; the
+transaction-wrapper, permissive-parent and dangled-parent experiments were re-measured
+after the boot-order test was added, so the counts above are the final tree's, not an
+earlier suite's. The suites a live experiment ever overlapped were re-run afterwards
+(`historyFinalizer` 20 pass / 0 fail, `lifecycle-integration` 3 pass / 0 fail, and both
+history suites 66 pass / 0 fail together).
+
+**Deliberately not done.** No index was added for the claim scan: a partial index
+`WHERE history_state='claimed'` would be a schema change, which the C-3 approval
+excluded, and the scan is a bounded once-per-boot read of a table whose rows live 24 h
+(plus up to the 7-day hold). Residual risk, stated: that scan is sequential; if a future
+install carries a very large `chat_streams` table the boot cost grows with it. No retry
+loop was added for a failed transaction: a lock timeout is deferred to the next sweep or
+the next boot, which is what `busy` is reported for. No backend `DATA_DIR` lock was
+introduced, deliberately — the transactional guard makes a second process on the same
+file safe for these rows, so a lock would buy nothing for this work and would be its own
+availability risk. The known Windows-unverified shell path (see the entry above) is
+unchanged.
+
+---
+
+## ADR: Recurring stale-claim recovery sweep (C-3 follow-up)
+
+**Status:** Implemented (pending independent review; C-3 remains HOLD).
+
+**Problem.** The boot sweep (`recoverStaleClaimedHistory`) runs once per process. A claim
+taken seconds before a crash is younger than the 5-minute staleness window, so the boot
+sweep that immediately follows the crash skips it; with no later sweep in that process's
+lifetime, the reply survived only on the 7-day hold and was then deleted. The fix is a
+recurring sweep, not a shorter window.
+
+**Decision.** Add a timer-driven recurring sweep that re-runs the *same*
+`recoverStaleClaimedHistory` function. No new candidate query, transaction, guard,
+writer, or transition path: the recurring task is a scheduler around the existing
+function, identical in shape to `startChatStreamCleanup` / `startHistoryReconciliation`.
+
+- **Interval:** `DEFAULT_CLAIMED_RECOVERY_POLL_MS = 5 * 60 * 1000`, equal to
+  `DEFAULT_STALE_HISTORY_CLAIM_MS`. Polling faster than the staleness window cannot
+  recover anything new (claims younger than 5 min are excluded by the predicate), so 5
+  min is the natural cadence; polling slower only delays recovery. The staleness
+  threshold is unchanged.
+- **Overlap:** a single `inFlight` flag; a tick that fires while one is running is a
+  deliberate no-op (`runClaimedHistoryRecoveryOnce` returns `null`). Cross-process
+  safety remains the existing transactional compare-and-set in `completeHistory`.
+- **Lifecycle:** started in `server.ts` after the boot sweep, gated on the boot sweep's
+  drain result, with `runImmediately: false` (the boot sweep already handled what it
+  could). Stopped and drained in both the normal and rollback shutdown paths before
+  `db.close(true)`, so the database cannot close while a sweep is active.
+- **Failure handling:** `recoverStaleClaimedHistory` never rejects; a page-read failure
+  yields `stopReason: "scan_failed"` and the timer survives. An unexpected throw is
+  caught and logged. A failed sweep does not disable subsequent sweeps.
+- **First-tick gating:** the recurring task's first tick awaits the boot sweep's drain
+  result, so it cannot overlap the boot sweep.
+
+**Verified on this tree.** `bun run verify` exit 0 (backend 4308 pass / 41 skip / 0 fail
+across 319 files, 4349 tests). Targeted: recovery suite 44 pass / 0 fail (5 new
+scheduled-behaviour tests), unit `historyFinalizer` 20 pass / 0 fail, both history
+suites 66 pass / 0 fail. Verified scenarios: a 20 ms interval with a
+fresh claim never recovers it; advancing the clock past the window recovers it on the
+next scheduled tick without a restart; two overlapping ticks leave one row; a throwing
+store on the first tick is followed by a successful second tick; stop+drain completes
+an in-flight tick before the database closes.
+
+**Residual.** The recurring sweep still respects the 5-minute staleness window, so a
+claim younger than that is not recovered early (by design). Cross-process contention
+still has no real-database reproduction (`contended`). Tauri build/E2E unverified.

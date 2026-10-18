@@ -18,13 +18,13 @@ import {
   COMPACT_COMMAND,
   COMPACT_COMMAND_ALIASES,
   COMPACT_COMMANDS,
-  COMPACT_DIVIDER_PART_TYPE,
   buildDividerStoredContent,
   detectCompactCommand,
   isCompactCommandText,
   parseCompactCommand,
   type ManualCompactData,
 } from "@/routes/chat/compact-command.ts";
+import { COMPACT_DIVIDER_PART_TYPE } from "@/lib/message-persistence-policy.ts";
 
 /** A user message with one text part, which is the only shape detection reads. */
 function user(text: string): UIMessage {

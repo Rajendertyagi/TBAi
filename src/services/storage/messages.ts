@@ -17,6 +17,7 @@
  */
 
 import { db } from "../../db";
+import { COMPACT_DIVIDER_PART_TYPE } from "../../lib/message-persistence-policy";
 import type { SQLQueryBindings } from "bun:sqlite";
 
 interface MessageRow {
@@ -58,6 +59,244 @@ export class MessageOwnershipError extends Error {
     );
     this.name = "MessageOwnershipError";
   }
+}
+
+/**
+ * A stored message contradicts the history obligation that named it.
+ *
+ * Distinct from `MessageOwnershipError` (a client-side 409 about a request
+ * addressing a row it does not own) and from `MessageVerificationError` (the write
+ * did not land as asked): this one is a refusal to GUESS. The row exists, its
+ * identity or its parent link provably disagrees with the claim, and either choice
+ * could overwrite a reply or fork a chain. The caller leaves the obligation
+ * unresolved and reports it; the row never becomes `done`.
+ */
+export type MessageIdentityReason = "identity" | "parent";
+
+export class MessageIdentityError extends Error {
+  constructor(
+    readonly messageId: string,
+    readonly reason: MessageIdentityReason,
+  ) {
+    super(`Message ${messageId} failed history identity verification: ${reason}`);
+    this.name = "MessageIdentityError";
+  }
+}
+
+/**
+ * A message write did not produce the row it asked for.
+ *
+ * Raised only after the INSERT/UPDATE ran, so it describes a lost write rather
+ * than a rejected one. It is retryable and is treated as an ordinary write
+ * failure, never as an unresolved identity anomaly.
+ */
+export class MessageVerificationError extends Error {
+  constructor(
+    readonly messageId: string,
+    readonly reason: "read_back_missing" | "content" | "parent",
+  ) {
+    super(`Message ${messageId} was not stored as written: ${reason}`);
+    this.name = "MessageVerificationError";
+  }
+}
+
+/** The entry shape the runtime's storage format adapter produces. */
+export interface StoredMessageEntry {
+  readonly id: string;
+  readonly parent_id: string | null;
+  readonly format: string;
+  readonly content: unknown;
+}
+
+/** A stored message read back for verification, with its parsed body. */
+export interface StoredMessageSnapshot {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly parentId: string | null;
+  readonly format: string | null;
+  readonly content: unknown;
+}
+
+/**
+ * The outcome of reconciling a captured message against its stored row.
+ *
+ * `matched` means the stored row already holds this message (nothing was written).
+ * `written` means there was no row. `repaired` means a row existed but did not
+ * match the captured representation, so the captured one replaced it — the same
+ * authority ordering `upsertStored` has always used on conflict.
+ */
+export type HistoryResolution = "matched" | "written" | "repaired";
+
+/** What `resolveMessageForHistorySync` needs to reach one verdict. */
+export interface HistoryMessageResolutionInput {
+  /** The conversation the stream row proved ownership of. */
+  readonly conversationId: string;
+  /** The message id the claim recorded; null only for a corrupt claim. */
+  readonly historyMessageId: string | null;
+  readonly messageId: string;
+  /** The exact object to persist, already stripped of its id. */
+  readonly content: unknown;
+  readonly parentId: string | null;
+  readonly format: string;
+}
+
+function isCompactPart(part: unknown): boolean {
+  return (
+    typeof part === "object" &&
+    part !== null &&
+    (part as { type?: unknown }).type === COMPACT_DIVIDER_PART_TYPE
+  );
+}
+
+/**
+ * The comparable shape of a message body: its role and its non-presentation parts.
+ *
+ * `data-tbai-compact` parts (`COMPACT_DIVIDER_PART_TYPE`) are stripped and
+ * `metadata`
+ * is excluded because it is provider bookkeeping that the two writers do not agree
+ * on — comparing it would rewrite rows whose content is already correct. Returns
+ * null for a body that is not an object with a parts array, which includes a row
+ * whose JSON would not parse; such a row cannot match and is therefore repaired.
+ */
+function canonicalMessageShape(content: unknown): { role: unknown; parts: unknown[] } | null {
+  if (typeof content !== "object" || content === null) return null;
+  const body = content as { role?: unknown; parts?: unknown };
+  if (!Array.isArray(body.parts)) return null;
+  return { role: body.role ?? null, parts: body.parts.filter((part) => !isCompactPart(part)) };
+}
+
+function canonicalShapesEqual(a: unknown, b: unknown): boolean {
+  const left = canonicalMessageShape(a);
+  const right = canonicalMessageShape(b);
+  if (left === null || right === null) return false;
+  return left.role === right.role && JSON.stringify(left.parts) === JSON.stringify(right.parts);
+}
+
+/** Read one stored message by (conversation, id), or null. Never throws on bad JSON. */
+export function getStoredMessageSync(
+  conversationId: string,
+  messageId: string,
+): StoredMessageSnapshot | null {
+  const row = db
+    .query<
+      {
+        id: string;
+        conversation_id: string;
+        parent_id: string | null;
+        format: string | null;
+        content: string;
+      },
+      SQLQueryBindings[]
+    >(
+      "SELECT id, conversation_id, parent_id, format, content FROM messages WHERE conversation_id = ? AND id = ?",
+    )
+    .get(conversationId, messageId);
+  if (!row) return null;
+  let content: unknown = null;
+  try {
+    content = JSON.parse(row.content);
+  } catch {
+    // A row whose body will not parse cannot match a capture, so it is repaired
+    // rather than treated as an identity conflict.
+    content = null;
+  }
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    parentId: row.parent_id,
+    format: row.format,
+    content,
+  };
+}
+
+/**
+ * Resolve one captured message against history, inside the caller's transaction.
+ *
+ * Called by the history guard as its verification step, so every read here happens
+ * after the guard has taken SQLite's write lock and shares the guard's transaction:
+ * the read, the write, and the `claimed`→`done` transition commit together or not
+ * at all.
+ *
+ * The decisions, in order:
+ *  1. IDENTITY. The claim recorded which message it meant to write. A different id
+ *     — including a NULL one, which `claimHistory` cannot produce — is an anomaly,
+ *     not a race: nothing is written and the row stays open.
+ *  2. PARENT. The captured parent is authoritative, with the same
+ *     null-never-downgrades-a-real-parent rule `upsertStored` applies, and it
+ *     must RESOLVE to a row of this conversation. A self-link, a parent row in
+ *     another conversation, and a parent with no row at all are one class of
+ *     defect: a link this reply cannot legally hang from, so nothing is written
+ *     and the row stays open.
+ *
+ *     The absent case is an anomaly rather than the normal shape because the
+ *     conversation's history is READ by walking `parent_id`. `getHeadChain` and
+ *     `getWindowSlice` fail closed on a dangling link — `complete: false`, and
+ *     "a missing parent is NOT a legitimate root" — so a reply written under one
+ *     would leave the whole chain unprovable, not merely its own row unreachable.
+ *     The parent row is normally present: the browser persists the user message a
+ *     run continued, through this same table's HTTP route
+ *     (`web/src/adapters/threadHistoryAdapter.ts` → `POST
+ *     /api/conversations/:id/messages`, measured in `Composer.tsx`), before the
+ *     run settles. An absent parent is a partial-write state.
+ *  3. OWNERSHIP. A row with this id in another conversation is refused by
+ *     `upsertStoredSync` (`MessageOwnershipError`), so it can never be repointed.
+ *  4. CONTENT. Canonical role + parts decide `matched`; anything else means the
+ *     captured representation wins and the row is repaired.
+ *
+ * Throws `MessageIdentityError` for (1)/(2), `MessageOwnershipError` for (3) — both
+ * roll the transaction back — and `MessageVerificationError` when the read-back
+ * disagrees with what was written.
+ *
+ * @returns `matched`, `written`, or `repaired`.
+ */
+export function resolveMessageForHistorySync(
+  input: HistoryMessageResolutionInput,
+): HistoryResolution {
+  const { conversationId, historyMessageId, messageId, content, parentId, format } = input;
+
+  if (historyMessageId !== messageId) {
+    throw new MessageIdentityError(messageId, "identity");
+  }
+
+  const stored = getStoredMessageSync(conversationId, messageId);
+  // The effective parent preserves a real stored link against a null capture, the
+  // rule `upsertStored` documents; it is what the row must hold afterwards.
+  const effectiveParent =
+    stored && stored.parentId !== null && parentId === null ? stored.parentId : parentId;
+
+  if (parentId !== null) {
+    if (parentId === messageId) throw new MessageIdentityError(messageId, "parent");
+    // One query answers both halves: no row at all and a row in another
+    // conversation are the same defect (a parent this reply cannot hang from),
+    // and both leave the claim open rather than writing an unprovable link.
+    const owner = db
+      .query<{ conversation_id: string }, SQLQueryBindings[]>(
+        "SELECT conversation_id FROM messages WHERE id = ?",
+      )
+      .get(parentId);
+    if (!owner || owner.conversation_id !== conversationId) {
+      throw new MessageIdentityError(messageId, "parent");
+    }
+  }
+
+  if (
+    stored &&
+    stored.format === format &&
+    stored.parentId === effectiveParent &&
+    canonicalShapesEqual(stored.content, content)
+  ) {
+    return "matched";
+  }
+
+  upsertStoredSync(conversationId, { id: messageId, parent_id: parentId, format, content });
+
+  const back = getStoredMessageSync(conversationId, messageId);
+  if (!back) throw new MessageVerificationError(messageId, "read_back_missing");
+  if (back.parentId !== effectiveParent) throw new MessageVerificationError(messageId, "parent");
+  if (!canonicalShapesEqual(back.content, content)) {
+    throw new MessageVerificationError(messageId, "content");
+  }
+  return stored ? "repaired" : "written";
 }
 
 /**
@@ -138,6 +377,115 @@ export const WINDOW_SCAN_CEILING = 5000;
 
 function toChainMessage(row: MessageRow, content: unknown): HeadChainMessage {
   return { id: row.id, parent_id: row.parent_id, format: row.format, content };
+}
+
+/**
+ * Upserts one stored message entry (keyed by message id).
+ *
+ * The entry is the runtime's storage format (`{ id, parent_id, format, content }`);
+ * `content` is an opaque serialized object produced by the runtime's format
+ * adapter and is stored verbatim so it can be restored on reload.
+ *
+ * Synchronous on purpose: `messageService.upsertStored` is this function, and the
+ * history guard calls it directly inside its transaction. An async wrapper would
+ * not be transactional - `db.transaction` does not await a promise-returning
+ * callback, so the callback's writes would land outside the transaction.
+ *
+ * ## A null parent never overwrites a real one
+ *
+ * `parent_id` is only meaningful at CREATION. Downgrading an existing link to
+ * null (`X -> null`) is never a legitimate update: every real re-parent - an
+ * edit, a regenerate, a branch switch, the scheduler chaining a run onto the
+ * tip - supplies a NON-null parent, because each of those genuinely knows
+ * where the message now hangs.
+ *
+ * It is, however, exactly what a BOUNDED WINDOW produces. The window's oldest
+ * row has no parent inside the window, so the repository seed hands it
+ * `parentId: null` (`windowController.withBoundedRoot`, and the same shape in
+ * `threadHistoryAdapter`). Paging prepends a page through the runtime, which
+ * persists it, so the synthesized root used to overwrite a perfectly good
+ * stored parent and FORK the chain. Measured: after one "Load earlier" the
+ * stored chain gained a second root, the backend then correctly reported
+ * "root reached" at that message, and paging could never advance again.
+ *
+ * Keeping the stored link is therefore fail-closed and data-preserving: it
+ * refuses a write that would silently discard history it already holds.
+ *
+ * @throws {MessageOwnershipError} when `entry.id` already names a row in another
+ *   conversation.
+ */
+export function upsertStoredSync(conversationId: string, entry: StoredMessageEntry): void {
+  const now = Date.now();
+  // Ownership is read WITH the conversation scope, and checked before anything
+  // is written: `id` alone is not a sufficient key for this decision, because
+  // the conflict path below mutates the existing row in place.
+  const existing = db
+    .query<
+      { conversation_id: string; order_seq: number; parent_id: string | null },
+      SQLQueryBindings[]
+    >("SELECT conversation_id, order_seq, parent_id FROM messages WHERE id = ?")
+    .get(entry.id);
+  if (existing && existing.conversation_id !== conversationId) {
+    throw new MessageOwnershipError(entry.id, conversationId, existing.conversation_id);
+  }
+  const parentId =
+    existing && existing.parent_id !== null && entry.parent_id === null
+      ? existing.parent_id
+      : entry.parent_id;
+  const orderSeq = existing
+    ? existing.order_seq
+    : (db
+        .query<{ next: number }, SQLQueryBindings[]>(
+          "SELECT COALESCE(MAX(order_seq), -1) + 1 AS next FROM messages WHERE conversation_id = ?",
+        )
+        .get(conversationId)?.next ?? -1);
+
+  // The `WHERE` is defence in depth, not the primary guard: it makes the
+  // ownership invariant hold inside the statement itself, so a future caller
+  // that reaches this SQL without the check above still cannot repoint or
+  // overwrite another conversation's row.
+  db.run(
+    `INSERT INTO messages (id, conversation_id, role, content, parent_id, order_seq, status, format, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       content = excluded.content,
+       parent_id = excluded.parent_id,
+       format = excluded.format,
+       updated_at = excluded.updated_at
+     WHERE messages.conversation_id = excluded.conversation_id`,
+    [
+      entry.id,
+      conversationId,
+      null,
+      JSON.stringify(entry.content),
+      parentId,
+      orderSeq,
+      null,
+      entry.format,
+      now,
+      now,
+    ],
+  );
+
+  // Auto-title: name the conversation from the first user message text.
+  // Only fires when title_source is NULL (new thread) or explicitly 'auto';
+  // user-assigned titles are never overwritten by scheduler or chat runs.
+  const userText = threadMessageText(entry.content);
+  if (userText) {
+    const conv = db
+      .query<{ title: string; title_source: string | null }, SQLQueryBindings[]>(
+        "SELECT title, title_source FROM conversations WHERE id = ?",
+      )
+      .get(conversationId);
+    if (conv && (conv.title === "New Conversation" || conv.title_source === "auto")) {
+      const title = userText.length > 50 ? `${userText.slice(0, 50)}…` : userText;
+      db.run("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?", [
+        title,
+        now,
+        conversationId,
+      ]);
+    }
+  }
 }
 
 export const messageService = {
@@ -514,106 +862,13 @@ export const messageService = {
   /**
    * Upserts a single stored message entry (keyed by message id). Called by the
    * ThreadHistoryAdapter's `withFormat` adapter on every append/update during a
-   * run. The entry is the runtime's storage format (`{ id, parent_id, format,
-   * content }`); `content` is an opaque serialized object produced by the
-   * runtime's format adapter and is stored verbatim so it can be restored on
-   * reload.
+   * run.
    *
-   * ## A null parent never overwrites a real one
-   *
-   * `parent_id` is only meaningful at CREATION. Downgrading an existing link to
-   * null (`X -> null`) is never a legitimate update: every real re-parent - an
-   * edit, a regenerate, a branch switch, the scheduler chaining a run onto the
-   * tip - supplies a NON-null parent, because each of those genuinely knows
-   * where the message now hangs.
-   *
-   * It is, however, exactly what a BOUNDED WINDOW produces. The window's oldest
-   * row has no parent inside the window, so the repository seed hands it
-   * `parentId: null` (`windowController.withBoundedRoot`, and the same shape in
-   * `threadHistoryAdapter`). Paging prepends a page through the runtime, which
-   * persists it, so the synthesized root used to overwrite a perfectly good
-   * stored parent and FORK the chain. Measured: after one "Load earlier" the
-   * stored chain gained a second root, the backend then correctly reported
-   * "root reached" at that message, and paging could never advance again.
-   *
-   * Keeping the stored link is therefore fail-closed and data-preserving: it
-   * refuses a write that would silently discard history it already holds.
+   * Delegates to `upsertStoredSync` so the history guard can run the SAME write
+   * inside its transaction; there is exactly one message-write implementation.
    */
-  async upsertStored(
-    conversationId: string,
-    entry: { id: string; parent_id: string | null; format: string; content: unknown },
-  ): Promise<void> {
-    const now = Date.now();
-    // Ownership is read WITH the conversation scope, and checked before anything
-    // is written: `id` alone is not a sufficient key for this decision, because
-    // the conflict path below mutates the existing row in place.
-    const existing = db
-      .query<
-        { conversation_id: string; order_seq: number; parent_id: string | null },
-        SQLQueryBindings[]
-      >("SELECT conversation_id, order_seq, parent_id FROM messages WHERE id = ?")
-      .get(entry.id);
-    if (existing && existing.conversation_id !== conversationId) {
-      throw new MessageOwnershipError(entry.id, conversationId, existing.conversation_id);
-    }
-    const parentId =
-      existing && existing.parent_id !== null && entry.parent_id === null
-        ? existing.parent_id
-        : entry.parent_id;
-    const orderSeq = existing
-      ? existing.order_seq
-      : (db
-          .query<{ next: number }, SQLQueryBindings[]>(
-            "SELECT COALESCE(MAX(order_seq), -1) + 1 AS next FROM messages WHERE conversation_id = ?",
-          )
-          .get(conversationId)?.next ?? -1);
-
-    // The `WHERE` is defence in depth, not the primary guard: it makes the
-    // ownership invariant hold inside the statement itself, so a future caller
-    // that reaches this SQL without the check above still cannot repoint or
-    // overwrite another conversation's row.
-    db.run(
-      `INSERT INTO messages (id, conversation_id, role, content, parent_id, order_seq, status, format, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         content = excluded.content,
-         parent_id = excluded.parent_id,
-         format = excluded.format,
-         updated_at = excluded.updated_at
-       WHERE messages.conversation_id = excluded.conversation_id`,
-      [
-        entry.id,
-        conversationId,
-        null,
-        JSON.stringify(entry.content),
-        parentId,
-        orderSeq,
-        null,
-        entry.format,
-        now,
-        now,
-      ],
-    );
-
-    // Auto-title: name the conversation from the first user message text.
-    // Only fires when title_source is NULL (new thread) or explicitly 'auto';
-    // user-assigned titles are never overwritten by scheduler or chat runs.
-    const userText = threadMessageText(entry.content);
-    if (userText) {
-      const conv = db
-        .query<{ title: string; title_source: string | null }, SQLQueryBindings[]>(
-          "SELECT title, title_source FROM conversations WHERE id = ?",
-        )
-        .get(conversationId);
-      if (conv && (conv.title === "New Conversation" || conv.title_source === "auto")) {
-        const title = userText.length > 50 ? `${userText.slice(0, 50)}…` : userText;
-        db.run("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?", [
-          title,
-          now,
-          conversationId,
-        ]);
-      }
-    }
+  async upsertStored(conversationId: string, entry: StoredMessageEntry): Promise<void> {
+    upsertStoredSync(conversationId, entry);
   },
 
   /**

@@ -3,7 +3,7 @@ import { chatStreamStore } from "../../lib/resumable";
 import {
   chatHistoryFinalizerDeps,
   finalizeDetachedRunHistory,
-  type FinalUIMessage,
+  parseCapturedFinalMessage,
   type HistoryFinalizeOutcome,
   type HistoryFinalizerDeps,
   type HistoryFinalizerStore,
@@ -32,8 +32,13 @@ import type { SqliteResumableStreamStore } from "./sqliteResumableStore";
  * What it deliberately does not do:
  *  - it never finalizes a `failed`, `cancelled` or `interrupted` run. The store's
  *    claim is guarded on `terminal_kind='completed'`, and so is this scan;
- *  - it never writes a message the client already persisted (it closes the
- *    obligation as `already_persisted` instead);
+ *  - it never DUPLICATES a row the client already persisted. The reply it offers is
+ *    keyed by the run's own message id, so a stored row holding that same reply is
+ *    closed as `already_persisted` with nothing rewritten, and one holding anything
+ *    else is replaced in place (`repaired` — same row, same position). The captured
+ *    reply is the run's own validated output, so it is the authority for what that
+ *    id contains; the alternative is closing an obligation `done` over a row that
+ *    holds a stale, truncated, or contentless variant of it;
  *  - it never invents content. A row with no usable captured message is reported
  *    and closed as `skipped`, not reconstructed from replayable bytes;
  *  - it never deletes rows, and is not part of retention. `cleanup.ts` remains
@@ -76,7 +81,7 @@ export interface HistoryReconcileReport {
   scanned: number;
   /** Assistant messages written because nobody else had. */
   written: number;
-  /** Obligations closed because the client had already persisted the reply. */
+  /** Obligations closed because the stored row already held this exact reply. */
   alreadyPersisted: number;
   /** Closed with no usable message (aborted, corrupt, or no conversation). */
   skipped: number;
@@ -86,6 +91,14 @@ export interface HistoryReconcileReport {
   failed: number;
   /** Rows with no captured final message at all, so nothing could be written. */
   unrecoverable: number;
+  /** Stored rows that existed but did not match the capture and were replaced. */
+  repaired: number;
+  /**
+   * Obligations left UNRESOLVED because the stored message contradicts them
+   * (identity, ownership, or parent). The row stays `claimed` for the next sweep,
+   * and is reported here rather than counted as a write failure or a skip.
+   */
+  conflicted: number;
 }
 
 export interface StartHistoryReconciliationOptions {
@@ -96,6 +109,17 @@ export interface StartHistoryReconciliationOptions {
   now?: () => number;
   /** Skip the immediate first tick (used to isolate timer behaviour in tests). */
   runImmediately?: boolean;
+  /**
+   * A boot-time promise that must settle before ANY pass scans.
+   *
+   * Boot recovery of abandoned history claims (`claimedHistoryRecovery`) runs at
+   * startup and touches the same stream rows and the same message store this
+   * reconciler writes. Gating the first pass on it keeps the two from overlapping:
+   * reconciliation never begins until recovery has completed (or failed, which it
+   * reports itself). It is not an error for the gate to reject — recovery owns its
+   * own failure logging — so a rejection is swallowed and the pass proceeds.
+   */
+  gate?: Promise<unknown>;
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -112,6 +136,11 @@ let deps: HistoryReconcilerDeps | null = null;
 let graceMs = DEFAULT_HISTORY_RECONCILE_GRACE_MS;
 let limit = DEFAULT_HISTORY_RECONCILE_LIMIT;
 let now: () => number = Date.now;
+/**
+ * Boot recovery that must settle before the first pass scans. Awaiting a promise
+ * that is already resolved is a no-op, so this is cheap on every later tick.
+ */
+let bootGate: Promise<unknown> | null = null;
 
 /** Observable timer state, so lifecycle behaviour is testable without fake timers. */
 export function getHistoryReconciliationState(): {
@@ -123,32 +152,13 @@ export function getHistoryReconciliationState(): {
   return { running: timer !== null, intervalMs, ticks, inFlight };
 }
 
-/**
- * Recover a captured final message from its stored text.
- *
- * Returns null — never a guess — for anything that is not a JSON object. Whether
- * a message is actually persistable is decided by the finalizer's own
- * `validateFinalMessage`, which runs on this value exactly as it ran when the
- * message was captured, so a row cannot acquire a second, looser verdict here.
- */
-function parseFinalMessage(json: string | null): FinalUIMessage | null {
-  if (json === null) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const candidate = parsed as Partial<FinalUIMessage>;
-  return typeof candidate.id === "string" ? (candidate as FinalUIMessage) : null;
-}
-
 function countOutcome(report: HistoryReconcileReport, outcome: HistoryFinalizeOutcome): void {
   if (outcome === "written") report.written += 1;
+  else if (outcome === "repaired") report.repaired += 1;
   else if (outcome === "already_persisted") report.alreadyPersisted += 1;
   else if (outcome === "not_claimed") report.notClaimed += 1;
   else if (outcome === "skipped") report.skipped += 1;
+  else if (outcome === "conflicted") report.conflicted += 1;
   else report.failed += 1;
 }
 
@@ -180,9 +190,23 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
     notClaimed: 0,
     failed: 0,
     unrecoverable: 0,
+    repaired: 0,
+    conflicted: 0,
   };
 
   try {
+    // Wait for boot recovery before scanning: it writes the same rows and the same
+    // message store, so the first pass must not start until it has finished. The
+    // tick promise is already live, so a shutdown draining this tick also drains
+    // the gated work. A rejecting gate is recovery's own logged failure, not ours.
+    if (bootGate) {
+      try {
+        await bootGate;
+      } catch {
+        /* claimedHistoryRecovery logs its own failures */
+      }
+    }
+
     const rows = deps.store.listPendingCompletedHistory({
       before: now() - graceMs,
       limit,
@@ -190,7 +214,7 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
     report.scanned = rows.length;
 
     for (const row of rows) {
-      const message = parseFinalMessage(row.finalMessageJson);
+      const message = parseCapturedFinalMessage(row.finalMessageJson);
       if (message === null) {
         // The run either predates capture or had no persistable message. There is
         // nothing to write and nothing to invent, so the obligation is closed
@@ -228,6 +252,8 @@ export async function runHistoryReconciliationOnce(): Promise<HistoryReconcileRe
         notClaimed: report.notClaimed,
         failed: report.failed,
         unrecoverable: report.unrecoverable,
+        repaired: report.repaired,
+        conflicted: report.conflicted,
       });
     }
     return report;
@@ -260,6 +286,7 @@ export function startHistoryReconciliation(options: StartHistoryReconciliationOp
   graceMs = Math.max(0, options.graceMs ?? DEFAULT_HISTORY_RECONCILE_GRACE_MS);
   limit = Math.max(1, options.limit ?? DEFAULT_HISTORY_RECONCILE_LIMIT);
   now = options.now ?? Date.now;
+  bootGate = options.gate ?? null;
   ticks = 0;
 
   if (options.runImmediately !== false) {
@@ -285,6 +312,7 @@ export function stopHistoryReconciliation(): boolean {
   clearInterval(timer);
   timer = null;
   deps = null;
+  bootGate = null;
   return true;
 }
 

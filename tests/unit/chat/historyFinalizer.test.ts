@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { MessageIdentityError, type HistoryResolution } from "@/services/storage/messages.ts";
 import {
   ASSISTANT_UI_STORAGE_FORMAT,
   finalizeDetachedRunHistory,
@@ -52,11 +53,29 @@ function fakeStore(overrides: Partial<FakeStore> = {}): FakeStore {
       store.claims.push(messageId);
       return true;
     },
-    completeHistory: () => {
-      if (store.historyState !== "claimed") return false;
-      store.historyState = "done";
-      store.completes += 1;
-      return true;
+    // Mirrors the real transactional guard: the transition and the verification
+    // commit together, a verification throw leaves the row untouched, and a row with
+    // no conversation can never be closed as `done`.
+    completeHistoryWithVerifiedMessage: <T>(
+      _streamId: string,
+      verify: (context: { conversationId: string; historyMessageId: string | null }) => T,
+    ) => {
+      if (store.historyState !== "claimed" || store.conversationId === null) {
+        return { status: "guard_missed" as const };
+      }
+      try {
+        const resolution = verify({
+          conversationId: store.conversationId,
+          historyMessageId: store.claims[0] ?? null,
+        });
+        store.historyState = "done";
+        store.completes += 1;
+        return { status: "committed" as const, resolution };
+      } catch (error) {
+        // `completes` is deliberately NOT incremented: the rollback means the
+        // `claimed -> done` write never happened.
+        return { status: "failed" as const, error, busy: false };
+      }
     },
     skipHistory: () => {
       if (store.historyState === "done" || store.historyState === "skipped") return false;
@@ -74,16 +93,59 @@ interface WriteCall {
   entry: { id: string; parent_id: string | null; format: string; content: unknown };
 }
 
-function recordingDeps(store: HistoryFinalizerStore, failWith?: Error) {
+/** One call into the message resolver, recorded so the guard's inputs are assertable. */
+interface ResolutionCall {
+  conversationId: string;
+  historyMessageId: string | null;
+  messageId: string;
+  parentId: string | null;
+  format: string;
+  content: unknown;
+}
+
+/**
+ * The finalizer's message dependency, faked at the ONE call the guard makes.
+ *
+ * `writes` records only resolutions that actually write, so `matched` (already in
+ * history) is distinguishable from `written`/`repaired` without reaching into the
+ * real store - the same distinction the real transactional resolver makes.
+ */
+function recordingDeps(
+  store: HistoryFinalizerStore,
+  options: { failWith?: Error; resolution?: HistoryResolution } = {},
+) {
   const writes: WriteCall[] = [];
+  const calls: ResolutionCall[] = [];
   const deps: HistoryFinalizerDeps = {
     store,
-    upsertStored: async (conversationId, entry) => {
-      if (failWith) throw failWith;
-      writes.push({ conversationId, entry });
+    messages: {
+      resolveMessageForHistorySync: (input) => {
+        calls.push({
+          conversationId: input.conversationId,
+          historyMessageId: input.historyMessageId,
+          messageId: input.messageId,
+          parentId: input.parentId,
+          format: input.format,
+          content: input.content,
+        });
+        if (options.failWith) throw options.failWith;
+        const resolution = options.resolution ?? "written";
+        if (resolution !== "matched") {
+          writes.push({
+            conversationId: input.conversationId,
+            entry: {
+              id: input.messageId,
+              parent_id: input.parentId,
+              format: input.format,
+              content: input.content,
+            },
+          });
+        }
+        return resolution;
+      },
     },
   };
-  return { deps, writes };
+  return { deps, writes, calls };
 }
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {} };
@@ -282,7 +344,7 @@ describe("history finalizer — failure handling", () => {
     const store = fakeStore();
     // A foreign-key failure is the realistic case: the conversation was deleted
     // while the run was streaming.
-    const { deps } = recordingDeps(store, new Error("FOREIGN KEY constraint failed"));
+    const { deps } = recordingDeps(store, { failWith: new Error("FOREIGN KEY constraint failed") });
 
     const outcome = await finalizeDetachedRunHistory(deps, {
       streamId: "run_1",
@@ -295,6 +357,7 @@ describe("history finalizer — failure handling", () => {
     expect(outcome).toBe("failed");
     // `claimed` with no recovery path would silently lose an otherwise good reply.
     expect(store.historyState).toBe("skipped");
+    // The transaction rolled back: the `claimed -> done` write never happened.
     expect(store.completes).toBe(0);
   });
 
@@ -320,8 +383,7 @@ describe("history finalizer — failure handling", () => {
 describe("history finalizer — the client may have persisted already", () => {
   it("closes the obligation without writing when the message is already in history", async () => {
     const store = fakeStore();
-    const { deps, writes } = recordingDeps(store);
-    deps.messageExists = () => true;
+    const { deps, writes } = recordingDeps(store, { resolution: "matched" });
 
     const outcome = await finalizeDetachedRunHistory(deps, {
       streamId: "run_1",
@@ -339,13 +401,52 @@ describe("history finalizer — the client may have persisted already", () => {
     expect(store.historyState).toBe("done");
   });
 
-  it("asks about the message's own conversation, not the stream's", async () => {
+  it("resolves against the message's own conversation and the claimed identity", async () => {
+    const store = fakeStore();
+    const { deps, writes, calls } = recordingDeps(store);
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: null,
+      log: silentLog,
+    });
+
+    // The stream row's conversation is the scope, and the id the CLAIM recorded is the
+    // expected identity - not any id the captured message happens to carry.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].conversationId).toBe("conv_1");
+    expect(calls[0].messageId).toBe("msg_assistant_1");
+    expect(calls[0].historyMessageId).toBe("msg_assistant_1");
+    expect(outcome).toBe("written");
+    expect(writes).toHaveLength(1);
+  });
+
+  it("reports a repair when a stored row did not match the capture", async () => {
+    const store = fakeStore();
+    const { deps, writes } = recordingDeps(store, { resolution: "repaired" });
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: null,
+      log: silentLog,
+    });
+
+    expect(outcome).toBe("repaired");
+    expect(writes).toHaveLength(1);
+    expect(store.historyState).toBe("done");
+  });
+
+  it("leaves the row open, and writes nothing, when the stored row contradicts the capture", async () => {
     const store = fakeStore();
     const { deps, writes } = recordingDeps(store);
-    const asked: Array<[string, string]> = [];
-    deps.messageExists = (conversationId, messageId) => {
-      asked.push([conversationId, messageId]);
-      return false;
+    // The real resolver's refusals, classified by the caller rather than collapsed
+    // into a write failure.
+    deps.messages.resolveMessageForHistorySync = () => {
+      throw new MessageIdentityError("msg_assistant_1", "identity");
     };
 
     const outcome = await finalizeDetachedRunHistory(deps, {
@@ -356,36 +457,16 @@ describe("history finalizer — the client may have persisted already", () => {
       log: silentLog,
     });
 
-    expect(asked).toEqual([["conv_1", "msg_assistant_1"]]);
-    expect(outcome).toBe("written");
-    expect(writes).toHaveLength(1);
-  });
-
-  it("still writes when the check says the message is absent", async () => {
-    const store = fakeStore();
-    const { deps, writes } = recordingDeps(store);
-    deps.messageExists = () => false;
-
-    const outcome = await finalizeDetachedRunHistory(deps, {
-      streamId: "run_1",
-      responseMessage: assistantMessage(),
-      isAborted: false,
-      parentId: null,
-      log: silentLog,
-    });
-
-    expect(outcome).toBe("written");
-    expect(writes).toHaveLength(1);
+    expect(outcome).toBe("conflicted");
+    expect(writes).toHaveLength(0);
+    // NOT skipped: closing it would turn an unresolved reply into a discarded one.
+    expect(store.historyState).toBe("claimed");
+    expect(store.skips).toBe(0);
   });
 
   it("checks for the message only after winning the claim", async () => {
     const store = fakeStore({ historyState: "claimed" });
-    const { deps, writes } = recordingDeps(store);
-    let asked = false;
-    deps.messageExists = () => {
-      asked = true;
-      return true;
-    };
+    const { deps, writes, calls } = recordingDeps(store);
 
     const outcome = await finalizeDetachedRunHistory(deps, {
       streamId: "run_1",
@@ -398,7 +479,30 @@ describe("history finalizer — the client may have persisted already", () => {
     // The claim is the authority on who may finalize, so a finalizer that lost it
     // must not go looking at — or touching — the message at all.
     expect(outcome).toBe("not_claimed");
-    expect(asked).toBe(false);
+    expect(calls).toHaveLength(0);
     expect(writes).toHaveLength(0);
+  });
+
+  it("defers to a live holder instead of stealing or abandoning its claim", async () => {
+    const store = fakeStore();
+    // The transition misses, but the row read back is still `claimed` WITH a
+    // conversation: a live finalizer holds it, or the compare-and-set raced. That is
+    // contention — not a lost claim and not a write failure — so the row must be
+    // neither stolen nor marked `skipped`.
+    store.completeHistoryWithVerifiedMessage = () => ({ status: "guard_missed" });
+    const { deps, writes } = recordingDeps(store);
+
+    const outcome = await finalizeDetachedRunHistory(deps, {
+      streamId: "run_1",
+      responseMessage: assistantMessage(),
+      isAborted: false,
+      parentId: null,
+      log: silentLog,
+    });
+
+    expect(outcome).toBe("not_claimed");
+    expect(writes).toHaveLength(0);
+    expect(store.historyState).toBe("claimed");
+    expect(store.skips).toBe(0);
   });
 });

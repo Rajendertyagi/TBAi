@@ -44,12 +44,10 @@ interface Harness {
   db: Database;
   store: SqliteResumableStreamStore;
   clock: { now: number };
-  /** Every write the finalizer attempted, in order. */
+  /** Every write the resolver attempted, in order. */
   writes: Array<{ conversationId: string; entry: Record<string, unknown> }>;
-  /** Ids the client already has in history, i.e. `messageExists` answers from. */
+  /** Ids the client already has in history: the resolver answers `matched` for these. */
   persisted: Set<string>;
-  /** Optional gate held open to force two passes to overlap. */
-  gate: { promise: Promise<void>; open: () => void } | null;
   deps: HistoryReconcilerDeps;
 }
 
@@ -66,7 +64,6 @@ function harness(): Harness {
     store: undefined as unknown as SqliteResumableStreamStore,
     writes: [] as Harness["writes"],
     persisted: new Set<string>(),
-    gate: null as Harness["gate"],
     deps: undefined as unknown as HistoryReconcilerDeps,
   };
 
@@ -86,11 +83,24 @@ function harness(): Harness {
 
   h.deps = {
     store: h.store,
-    upsertStored: async (conversationId, entry) => {
-      if (h.gate) await h.gate.promise;
-      h.writes.push({ conversationId, entry: entry as unknown as Record<string, unknown> });
+    // The guard's own verification step, faked at the one call it makes. Synchronous
+    // by contract, exactly as the real resolver is, so the gate that parks a pass is
+    // the reconciler's boot gate rather than the write.
+    messages: {
+      resolveMessageForHistorySync: (input) => {
+        if (h.persisted.has(input.messageId)) return "matched";
+        h.writes.push({
+          conversationId: input.conversationId,
+          entry: {
+            id: input.messageId,
+            parent_id: input.parentId,
+            format: input.format,
+            content: input.content,
+          },
+        });
+        return "written";
+      },
     },
-    messageExists: (_conversationId, messageId) => h.persisted.has(messageId),
   };
 
   open.push(h);
@@ -177,7 +187,10 @@ function historyStateOf(h: Harness, id: string): string {
  * process. Taking ownership explicitly makes this suite independent of file
  * ordering, instead of relying on no earlier suite having left a timer running.
  */
-function startPass(h: Harness, overrides: { graceMs?: number; limit?: number } = {}): void {
+function startPass(
+  h: Harness,
+  overrides: { graceMs?: number; limit?: number; gate?: Promise<boolean> } = {},
+): void {
   stopHistoryReconciliation();
   const started = startHistoryReconciliation({
     deps: h.deps,
@@ -185,6 +198,7 @@ function startPass(h: Harness, overrides: { graceMs?: number; limit?: number } =
     graceMs: overrides.graceMs ?? 60 * 1000,
     limit: overrides.limit ?? 50,
     now: () => h.clock.now,
+    gate: overrides.gate,
   });
   expect(started).toEqual({ started: true, alreadyRunning: false });
 }
@@ -488,19 +502,23 @@ describe("history reconciliation — pass bounds and lifecycle", () => {
   it("refuses to start a second overlapping pass", async () => {
     const h = harness();
     await settledRun(h, { id: "run_slow", terminalKind: "completed" });
-    let open = (): void => {};
-    h.gate = { promise: new Promise<void>((r) => (open = r)), open: () => {} };
-    startPass(h);
+    // Park the pass on its boot gate. Every store method the pass calls is
+    // synchronous, so the gate is the only place a tick can genuinely be held open.
+    let releaseGate = (): void => {};
+    const gate = new Promise<boolean>((resolve) => {
+      releaseGate = () => resolve(true);
+    });
+    startPass(h, { gate });
 
     const first = runHistoryReconciliationOnce();
-    // Let the pass reach the gated write before the second is attempted.
+    // Let the pass start and reach its first await before the second is attempted.
     await new Promise((r) => setTimeout(r, 5));
     expect(getHistoryReconciliationState().inFlight).toBe(true);
 
     const second = await runHistoryReconciliationOnce();
     expect(second).toBeNull();
 
-    open();
+    releaseGate();
     expect(await first).toMatchObject({ written: 1 });
   });
 
@@ -541,7 +559,7 @@ describe("history reconciliation — pass bounds and lifecycle", () => {
   it("a write that throws leaves a truthful skipped state, never a bare claim", async () => {
     const h = harness();
     const id = await settledRun(h, { id: "run_throw", terminalKind: "completed" });
-    h.deps.upsertStored = async () => {
+    h.deps.messages.resolveMessageForHistorySync = () => {
       throw new Error("disk gone");
     };
     startPass(h);
@@ -558,12 +576,14 @@ describe("history reconciliation drain (Phase 2)", () => {
   it("drainHistoryReconciliation awaits an in-flight tick", async () => {
     const h = harness();
     const id = await settledRun(h, { id: "run_drain", terminalKind: "completed" });
-    let open = (): void => {};
-    h.gate = { promise: new Promise<void>((r) => (open = r)), open: () => {} };
-    startPass(h);
+    let releaseGate = (): void => {};
+    const gate = new Promise<boolean>((resolve) => {
+      releaseGate = () => resolve(true);
+    });
+    startPass(h, { gate });
 
     const tick = runHistoryReconciliationOnce();
-    // Let the pass reach the gated write: the tick is provably parked, not
+    // Let the pass start and reach its boot gate: the tick is provably parked, not
     // merely started, before the drain is observed.
     await new Promise((r) => setTimeout(r, 5));
     expect(getHistoryReconciliationState().inFlight).toBe(true);
@@ -576,7 +596,7 @@ describe("history reconciliation drain (Phase 2)", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(drained).toBe(false);
 
-    open();
+    releaseGate();
     await draining;
     expect(drained).toBe(true);
     expect(await tick).toMatchObject({ written: 1 });

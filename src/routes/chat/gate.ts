@@ -45,6 +45,7 @@
 import { logAssembly, logContextOverflow } from "../../context";
 import { chatRuns } from "../../services/chat-runs";
 import { logger } from "../../lib/logger";
+import { COMPACT_DIVIDER_PART_TYPE } from "../../lib/message-persistence-policy";
 import { persistCompactionDivider } from "./compact-command";
 import { ASSEMBLY_LIMIT_CODE } from "../../context";
 import type { ChatContext, DirectRunSetup, PhaseResult } from "./types";
@@ -52,7 +53,7 @@ import type { DirectRunAssembly } from "./assemble-run";
 
 /** The stream part announcing a compaction, as written to the UI stream. */
 type CompactionPart = {
-  type: "data-tbai-compact";
+  type: typeof COMPACT_DIVIDER_PART_TYPE;
   id: string;
   data: {
     kind: "tbai-compact";
@@ -254,7 +255,7 @@ export async function gateAssembledContext(
     const report = current.context.provenance.compaction;
     if (report?.applied !== true) return undefined;
     return {
-      type: "data-tbai-compact" as const,
+      type: COMPACT_DIVIDER_PART_TYPE,
       id: "compact",
       data: {
         kind: "tbai-compact" as const,

@@ -74,6 +74,7 @@ ai-chat-app/
 │  │                        #   messages.parent_id/order_seq/status/format/content,
 │  │                        #   mcp_servers)
 │  ├─ db/schema/chat-streams.ts # leaf module owning the chat-stream DDL + TTL
+│  ├─ db/schema/messages.ts  # leaf module owning the messages DDL + its rebuild
 │  ├─ lib/validation.ts      # Zod schemas for all API input
 │  └─ types/index.ts
 ├─ web/                      # frontend (React + Vite)
