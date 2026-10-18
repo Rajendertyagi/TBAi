@@ -215,10 +215,10 @@ export function validateFinalMessage(
  * Recover a captured final message from its stored text.
  *
  * Returns null — never a guess — for anything that is not a JSON object carrying
- * a non-empty string id, an assistant role, and a non-empty parts array. Whether a
- * message is actually persistable is decided by the finalizer's own
- * `validateFinalMessage`, which runs on this value exactly as it ran when the
- * message was captured, so a row cannot acquire a second, looser verdict here.
+ * a persistable assistant message. Structural validation is delegated to
+ * `validateFinalMessage` (with `isAborted: false`, the captured fact), so a
+ * recovered capture satisfies the exact same contract it was checked against at
+ * settlement and cannot acquire a second, looser verdict here.
  *
  * Exported because both recovery paths — `historyReconciler` (a `pending` row) and
  * `claimedHistoryRecovery` (an abandoned `claimed` row) — read the same captured
@@ -233,22 +233,12 @@ export function parseCapturedFinalMessage(json: string | null): FinalUIMessage |
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const candidate = parsed as Partial<FinalUIMessage>;
-  // Mirror `validateFinalMessage`'s structural contract: a captured message must
-  // carry a non-empty id, an assistant role, and a non-empty parts array. JSON
-  // parsing and a string id alone are not enough — a parseable but unusable
-  // capture is treated as no capture at all, so recovery abandons it rather than
-  // writing an invalid message.
-  if (
-    typeof candidate.id !== "string" ||
-    candidate.id.length === 0 ||
-    candidate.role !== "assistant" ||
-    !Array.isArray(candidate.parts) ||
-    candidate.parts.length === 0
-  ) {
-    return null;
-  }
-  return candidate as FinalUIMessage;
+  // Reuse the finalizer's own validator so a recovered capture satisfies the
+  // exact same contract it was checked against at settlement. Malformed or
+  // structurally invalid captures yield null and follow the existing
+  // unusable-capture recovery policy.
+  const { message } = validateFinalMessage(parsed as FinalUIMessage, false);
+  return message;
 }
 
 /**

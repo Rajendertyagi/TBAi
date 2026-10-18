@@ -1239,7 +1239,13 @@ describe("claimed history recovery — invalid captures", () => {
 
     expect(report).toMatchObject({ scanned: 1, written: 0, abandoned: 1, stopReason: "drained" });
     expect(historyStateOf("run_empty_parts")).toBe("skipped");
-    expect(getStoredMessageSync(h.conversationId, ASSISTANT_MESSAGE_ID)).toBeNull();
+    const rowsEmptyParts = db
+      .query<{ content: string }, string[]>(
+        "SELECT content FROM messages WHERE conversation_id = ?",
+      )
+      .all(h.conversationId);
+    expect(rowsEmptyParts).toHaveLength(1);
+    expect((JSON.parse(rowsEmptyParts[0].content) as { role?: string }).role).toBe("user");
   });
 
   it("abandons a claim whose capture has an invalid role", async () => {
@@ -1257,7 +1263,13 @@ describe("claimed history recovery — invalid captures", () => {
 
     expect(report).toMatchObject({ scanned: 1, written: 0, abandoned: 1, stopReason: "drained" });
     expect(historyStateOf("run_bad_role")).toBe("skipped");
-    expect(getStoredMessageSync(h.conversationId, ASSISTANT_MESSAGE_ID)).toBeNull();
+    const rowsBadRole = db
+      .query<{ content: string }, string[]>(
+        "SELECT content FROM messages WHERE conversation_id = ?",
+      )
+      .all(h.conversationId);
+    expect(rowsBadRole).toHaveLength(1);
+    expect((JSON.parse(rowsBadRole[0].content) as { role?: string }).role).toBe("user");
   });
 
   it("abandons a claim whose capture has an empty id", async () => {
@@ -1275,7 +1287,15 @@ describe("claimed history recovery — invalid captures", () => {
 
     expect(report).toMatchObject({ scanned: 1, written: 0, abandoned: 1, stopReason: "drained" });
     expect(historyStateOf("run_empty_id")).toBe("skipped");
-    expect(getStoredMessageSync(h.conversationId, ASSISTANT_MESSAGE_ID)).toBeNull();
+    // No assistant message anywhere in the conversation — only the pre-existing
+    // user message may remain.
+    const rowsEmptyId = db
+      .query<{ content: string }, string[]>(
+        "SELECT content FROM messages WHERE conversation_id = ?",
+      )
+      .all(h.conversationId);
+    expect(rowsEmptyId).toHaveLength(1);
+    expect((JSON.parse(rowsEmptyId[0].content) as { role?: string }).role).toBe("user");
   });
 });
 
