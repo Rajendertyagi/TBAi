@@ -22,7 +22,12 @@ export function buildOpenCodeServeArgs(
   port: number,
   binary: string = OPENCODE_CONFIG.binaryName,
 ): string[] {
-  return [binary, "serve", "--port", String(port)];
+  const args = [binary, "serve", "--port", String(port)];
+  // On Windows, .cmd launchers cannot be spawned directly; wrap with cmd /c.
+  if (process.platform === "win32" && binary.toLowerCase().endsWith(".cmd")) {
+    return ["cmd", "/c", ...args];
+  }
+  return args;
 }
 
 /** Allocates a free loopback port by binding :0 and releasing it. */

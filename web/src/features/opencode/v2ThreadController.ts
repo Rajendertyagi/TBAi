@@ -12,6 +12,7 @@ import { logger } from "@/lib/logger";
 import {
   OPENCODE_V2_EVENT_BUFFER_LIMIT,
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
+  OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
 } from "@/features/opencode/config";
 import {
@@ -475,6 +476,17 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
 
   function scheduleReconnect(error: V2SafeError): void {
     if (disposed || reconnectTimer !== null) return;
+    // Terminal failure: no more auto-retries after exhausting the budget.
+    if (reconnectAttempt >= OPENCODE_V2_MAX_RECONNECT_ATTEMPTS) {
+      dispatch({
+        type: "connection_changed",
+        connection: { type: "failed", attempt: reconnectAttempt },
+      });
+      dispatch({ type: "load_failed", error });
+      rejectReady?.(new V2ControllerError(error));
+      rejectReady = null;
+      return;
+    }
     const failedGeneration = generation;
     generation = null;
     connectionController?.abort();

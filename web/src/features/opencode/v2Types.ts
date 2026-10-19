@@ -151,6 +151,7 @@ export type V2ConnectionState =
   | { readonly type: "waiting-for-server" }
   | { readonly type: "connected"; readonly serverVersion: string | null }
   | { readonly type: "reconnecting"; readonly attempt: number }
+  | { readonly type: "failed"; readonly attempt: number }
   | { readonly type: "closed" };
 
 export type V2ExecutionState =

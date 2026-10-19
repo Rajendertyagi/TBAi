@@ -8,6 +8,7 @@ export const OPENCODE_V2_EVENT_BUFFER_LIMIT = 512;
 export const OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256;
 export const OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS = 250;
 export const OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000;
+export const OPENCODE_V2_MAX_RECONNECT_ATTEMPTS = 10;
 /**
  * Idle re-sync cadence for the auxiliary snapshot (inbox, permissions, forms).
  *

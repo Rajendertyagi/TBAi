@@ -89,9 +89,12 @@ export function detectOpenCodeVersion(
   binaryPath: string,
   config: OpenCodeConfig = OPENCODE_CONFIG,
 ): string {
+  // On Windows, .cmd launchers cannot be spawned directly; wrap with cmd /c.
+  const isCmd = process.platform === "win32" && binaryPath.toLowerCase().endsWith(".cmd");
+  const cmd = isCmd ? ["cmd", "/c", binaryPath, "--version"] : [binaryPath, "--version"];
   let result: ReturnType<typeof Bun.spawnSync>;
   try {
-    result = Bun.spawnSync([binaryPath, "--version"], {
+    result = Bun.spawnSync(cmd, {
       stdout: "pipe",
       stderr: "pipe",
     });
