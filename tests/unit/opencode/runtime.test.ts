@@ -5,11 +5,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import {
+  OpenCodeBinaryMissingError,
+  UnsupportedOpenCodeVersionError,
+  detectOpenCodeVersion,
   isSupportedOpenCodeVersion,
   parseOpenCodeVersion,
   resolveAndValidateManagedBinary,
   resolveManagedBinary,
 } from "@/services/opencode/runtime.ts";
+import { buildOpenCodeServeArgs } from "@/services/opencode/serverManager.ts";
 
 const originalBinaryOverride = process.env[OPENCODE_CONFIG.binaryEnvVar];
 
@@ -146,6 +150,75 @@ describe("managed OpenCode binary resolution", () => {
       }),
     ).toThrow();
     expect(pathWasQueried).toBe(false);
+  });
+
+  it("throws OpenCodeBinaryMissingError when no executable is resolved", () => {
+    delete process.env[OPENCODE_CONFIG.binaryEnvVar];
+    expect(() => resolveManagedBinary(OPENCODE_CONFIG, () => null)).toThrow(
+      OpenCodeBinaryMissingError,
+    );
+  });
+
+  it("throws UnsupportedOpenCodeVersionError for an unsupported version", () => {
+    // Create a temporary .cmd that reports an unsupported version
+    const tmpDir = path.join(import.meta.dir, "__tmp_version_test__");
+    const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
+    mkdirSync(tmpDir, { recursive: true });
+    const cmdPath = path.join(tmpDir, "bad-version.cmd");
+    writeFileSync(cmdPath, "@echo opencode 1.0.0\n");
+    try {
+      expect(() => detectOpenCodeVersion(cmdPath)).toThrow(UnsupportedOpenCodeVersionError);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps .cmd launchers with cmd /c in buildOpenCodeServeArgs", () => {
+    // On Windows, .cmd files cannot be spawned directly.
+    if (process.platform !== "win32") return;
+    expect(buildOpenCodeServeArgs(4173, "opencode.cmd")).toEqual([
+      "cmd",
+      "/c",
+      "opencode.cmd",
+      "serve",
+      "--port",
+      "4173",
+    ]);
+    // Non-.cmd binaries are not wrapped.
+    expect(buildOpenCodeServeArgs(4173, "opencode.exe")).toEqual([
+      "opencode.exe",
+      "serve",
+      "--port",
+      "4173",
+    ]);
+  });
+
+  it("times out and does not classify as missing when binary hangs", () => {
+    const tmpDir = path.join(import.meta.dir, "__tmp_timeout_test__");
+    const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
+    mkdirSync(tmpDir, { recursive: true });
+    const cmdPath = path.join(tmpDir, "slow.cmd");
+    writeFileSync(cmdPath, "@ping -n 10 127.0.0.1 > nul\n@echo opencode 2.0.16\n");
+    try {
+      expect(() => detectOpenCodeVersion(cmdPath)).toThrow(/did not respond within 2000ms/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+  it("wraps .cmd launchers with cmd /c in detectOpenCodeVersion probe", () => {
+    // Verify the function accepts a .cmd path without throwing a type error.
+    // The actual probe will fail (binary does not exist), but it should throw
+    // a plain Error, not OpenCodeBinaryMissingError.
+    const cmdPath = path.join(import.meta.dir, "nonexistent.cmd");
+    expect(() => detectOpenCodeVersion(cmdPath)).toThrow();
+    // Verify it is not classified as missing (it is a probe failure)
+    try {
+      detectOpenCodeVersion(cmdPath);
+    } catch (e) {
+      expect(e).not.toBeInstanceOf(OpenCodeBinaryMissingError);
+      // The error message should mention the binary path, not "not found"
+      expect((e as Error).message).toContain("nonexistent.cmd");
+    }
   });
 });
 

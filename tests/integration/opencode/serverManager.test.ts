@@ -48,6 +48,33 @@ describe("buildOpenCodeServeArgs", () => {
     ]);
   });
 
+  it("wraps .cmd launchers with cmd /c on Windows", () => {
+    if (process.platform !== "win32") return;
+    expect(buildOpenCodeServeArgs(4173, "opencode.cmd")).toEqual([
+      "cmd",
+      "/c",
+      "opencode.cmd",
+      "serve",
+      "--port",
+      "4173",
+    ]);
+    // Paths with spaces are preserved as a single argument.
+    expect(buildOpenCodeServeArgs(4173, "C:\\path with spaces\\opencode.cmd")).toEqual([
+      "cmd",
+      "/c",
+      "C:\\path with spaces\\opencode.cmd",
+      "serve",
+      "--port",
+      "4173",
+    ]);
+    // Non-.cmd binaries are not wrapped.
+    expect(buildOpenCodeServeArgs(4173, "opencode.exe")).toEqual([
+      "opencode.exe",
+      "serve",
+      "--port",
+      "4173",
+    ]);
+  });
   it("handles edge ports (0 and max)", () => {
     expect(buildOpenCodeServeArgs(0)).toEqual([OPENCODE_CONFIG.binaryName, "serve", "--port", "0"]);
     expect(buildOpenCodeServeArgs(65535)[3]).toBe("65535");
