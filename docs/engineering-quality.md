@@ -70,16 +70,18 @@ is not stylistic:
 - `bun run test` scopes discovery to `./tests/unit ./tests/integration`, drops
   `shutdown-lifecycle.test.ts` (it has its own script), passes `--isolate` and
   sets `--timeout=30000`.
-- Bare `bun test` collects **375** files instead of **290** (measured 2026-10-13).
-  The **85** it adds are the 44 DOM contract files — which need
+- Bare `bun test` collects **412** files instead of **319** (measured 2026-10-20:
+  319 and 50 are the file counts the two `verify` test steps report, 42 is the
+  number of E2E specs on disk, 1 is the shutdown test, and 412 is their sum).
+  The **93** it adds are the 50 DOM contract files — which need
   `--preload ./tests/setup/dom-preload.ts`
   and fail without it (measured: 18 fail, 8 errors) — the shutdown test
-  that `test` deliberately excludes, and the 40 E2E Playwright specs in
+  that `test` deliberately excludes, and the 42 E2E Playwright specs in
   `tests/e2e`, which bare `bun test` collects because they are named `*.spec.ts`.
   The totals move as tests are added; the
-  difference of 85 is the part the argument rests on, and it is made up of
-  exactly those three groups: the 44 DOM files, `shutdown-lifecycle.test.ts`,
-  and 40 E2E specs.
+  difference of 93 is the part the argument rests on, and it is made up of
+  exactly those three groups: the 50 DOM files, `shutdown-lifecycle.test.ts`,
+  and 42 E2E specs.
 - Without `--isolate` the shared test database cascades "Database has closed",
   reporting hundreds of phantom failures instead of real ones.
 

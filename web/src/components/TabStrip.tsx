@@ -3,15 +3,14 @@ import { useLocation, useNavigate } from "react-router";
 import { threadListAdapter } from "../app/adapter";
 import { ROUTES } from "../config/navigation";
 import {
-  DndContext,
-  closestCenter,
+  KeyboardSensor,
+  PointerActivationConstraints,
   PointerSensor,
-  useSensor,
-  useSensors,
   type DragEndEvent,
-} from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+  type Sensors,
+} from "@dnd-kit/dom";
+import { DragDropProvider } from "@dnd-kit/react";
+import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -83,31 +82,51 @@ function useTabRunning(_ref: string): boolean {
   return false;
 }
 
+/**
+ * Sensor configuration for the strip.
+ *
+ * `@dnd-kit/dom` registers `[PointerSensor, KeyboardSensor]` on every manager,
+ * so this keeps that list and swaps in the two configured variants. Written as
+ * a function rather than a plain array for exactly that reason: an array
+ * REPLACES the defaults, and any sensor the library adds later would be dropped
+ * silently.
+ */
+const tabStripSensors = (defaults: Sensors): Sensors => [
+  ...defaults.filter((sensor) => sensor !== PointerSensor && sensor !== KeyboardSensor),
+  PointerSensor.configure({
+    activationConstraints: [
+      new PointerActivationConstraints.Distance({
+        value: tabStripConfig.drag.activationDistancePx,
+      }),
+    ],
+  }),
+  KeyboardSensor.configure({ keyboardCodes: tabStripConfig.drag.keyboardCodes }),
+];
+
 function SortableTab({
   tab,
+  index,
   active,
   onSelect,
   onClose,
 }: {
   tab: Tab;
+  index: number;
   active: boolean;
   onSelect: () => void;
   onClose: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: tab.key,
-  });
+  // `index` is what makes this item sortable: the library compares the index
+  // the gesture started from with the one it ended on, and that pair is the
+  // only thing it hands back. The drag transform and transition are applied to
+  // the element by the library, so this component sets no inline style.
+  const { ref: sortableRef, isDragging } = useSortable({ id: tab.key, index });
   const title = useTabTitle(tab.ref);
   const running = useTabRunning(tab.ref);
   const nodeRef = useRef<HTMLDivElement | null>(null);
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.6 : 1,
-  };
 
   const setRefs = (el: HTMLDivElement | null) => {
-    setNodeRef(el);
+    sortableRef(el);
     nodeRef.current = el;
   };
 
@@ -125,9 +144,6 @@ function SortableTab({
     <ContextMenuTrigger asChild>
       <div
         ref={setRefs}
-        style={style}
-        {...attributes}
-        {...listeners}
         onClick={onSelect}
         onMouseDown={(e) => {
           // Middle-click closes (browser parity); the dnd-kit sensor only
@@ -138,16 +154,23 @@ function SortableTab({
           }
         }}
         role="tab"
-        // Roving tabindex, set AFTER the dnd-kit spread so it wins. The tabs
-        // pattern requires exactly one tab stop for the whole strip: the active
-        // tab is reachable, the rest are reached with the arrow keys. Only a
-        // PointerSensor is configured, so nothing here depends on dnd-kit's own
-        // `tabIndex` from `attributes`.
+        // Roving tabindex: the tabs pattern requires exactly one tab stop for
+        // the whole strip. The drag library supplies none of this — it returns
+        // refs and drag flags only — so the tab stop and the key handling below
+        // are ours.
+        //
+        // This is also what makes a keyboard drag reachable at all: the sensor
+        // starts on the focused element, and the active tab is the one that can
+        // hold focus.
         tabIndex={active ? 0 : -1}
         onKeyDown={(e) => {
-          // Enter/Space activate, because this is a `div` acting as a button and
+          // Enter activates, because this is a `div` acting as a button and
           // therefore gets none of the native keyboard behaviour for free.
-          if (e.key === "Enter" || e.key === " ") {
+          // Space is deliberately NOT handled here: it is the drag pick-up key
+          // (`tabStripConfig.drag.keyboardCodes`), so the keyboard sensor owns
+          // it. Nothing is lost — the roving tabindex already admits only the
+          // active tab, and activating the active tab is a no-op.
+          if (e.key === "Enter") {
             e.preventDefault();
             onSelect();
           }
@@ -158,7 +181,7 @@ function SortableTab({
         className={cn(
           "min-w-0 grow-0 shrink basis-48 cursor-pointer select-none",
           active && "z-10",
-          isDragging && "z-50",
+          isDragging && "z-50 opacity-60",
         )}
       >
         <div
@@ -218,14 +241,23 @@ export function TabStrip() {
   const close = useChatTabsStore((s) => s.close);
   const reorder = useChatTabsStore((s) => s.reorder);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-
-  const onDragEnd = (e: DragEndEvent) => {
-    const { active, over } = e;
-    if (!over || active.id === over.id) return;
-    const from = tabs.findIndex((t) => t.key === active.id);
-    const to = tabs.findIndex((t) => t.key === over.id);
-    if (from !== -1 && to !== -1) reorder(from, to);
+  /**
+   * Commit the one pair of indices a gesture produced.
+   *
+   * Optimistic sorting keeps `source` and `target` on the SAME element for the
+   * whole gesture, so the question the legacy code asked — "is the id under the
+   * pointer the one I picked up?" — has no answer here. What the library tracks
+   * is the source's own from/to index, and an unchanged pair must commit
+   * nothing: `reorder` is positional, so applying a no-op pair would move a
+   * different tab.
+   */
+  const onDragEnd = (event: DragEndEvent) => {
+    // A cancelled drag (Escape) leaves the order exactly as it was.
+    if (event.canceled) return;
+    const { source } = event.operation;
+    if (!isSortable(source)) return;
+    if (source.initialIndex === source.index) return;
+    reorder(source.initialIndex, source.index);
   };
 
   const select = (tab: Tab) => {
@@ -272,39 +304,38 @@ export function TabStrip() {
       aria-label="Chat tabs"
       className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto"
     >
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <SortableContext items={tabs.map((t) => t.key)} strategy={horizontalListSortingStrategy}>
-          {tabs.map((tab) => (
-            <ContextMenu key={tab.key}>
-              <SortableTab
-                tab={tab}
-                active={tab.key === activeKey}
-                onSelect={() => select(tab)}
-                onClose={() => close(tab.key)}
-              />
-              <ContextMenuContent className="min-w-44">
-                <ContextMenuItem onSelect={() => close(tab.key)}>
-                  {tabStripConfig.copy.close}
-                </ContextMenuItem>
-                <ContextMenuItem onSelect={() => closeOthers(tab.key)}>
-                  {tabStripConfig.copy.closeOthers}
-                </ContextMenuItem>
-                <ContextMenuItem onSelect={() => closeToRight(tab.key)}>
-                  {tabStripConfig.copy.closeToRight}
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem onSelect={() => copyLink(tab)}>
-                  {tabStripConfig.copy.copyLink}
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem onSelect={() => closeAll()}>
-                  {tabStripConfig.copy.closeAll}
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          ))}
-        </SortableContext>
-      </DndContext>
+      <DragDropProvider sensors={tabStripSensors} onDragEnd={onDragEnd}>
+        {tabs.map((tab, index) => (
+          <ContextMenu key={tab.key}>
+            <SortableTab
+              tab={tab}
+              index={index}
+              active={tab.key === activeKey}
+              onSelect={() => select(tab)}
+              onClose={() => close(tab.key)}
+            />
+            <ContextMenuContent className="min-w-44">
+              <ContextMenuItem onSelect={() => close(tab.key)}>
+                {tabStripConfig.copy.close}
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => closeOthers(tab.key)}>
+                {tabStripConfig.copy.closeOthers}
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => closeToRight(tab.key)}>
+                {tabStripConfig.copy.closeToRight}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => copyLink(tab)}>
+                {tabStripConfig.copy.copyLink}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => closeAll()}>
+                {tabStripConfig.copy.closeAll}
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ))}
+      </DragDropProvider>
       <button
         type="button"
         onClick={() => {

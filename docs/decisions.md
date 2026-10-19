@@ -4451,18 +4451,40 @@ number.
   They are recorded in `AGENTS.md` section 2 so the next agent inherits the list
   rather than rediscovering it, and they are NOT folded into a cleanup.
 
-## 2026-10-14 — Tab strip migrated to `@dnd-kit/react` (0.5.0)
+## 2026-10-14 — Tab strip migrated to `@dnd-kit/react` (corrected 2026-10-20)
 
-The tab strip moved off `@dnd-kit/core@6.3.1` / `@dnd-kit/sortable@8.0.0` /
-`@dnd-kit/utilities@3.2.2` onto the current API. Both packages are pre-1.0, so
-both versions are pinned EXACTLY: `^0.5.0` would let a monthly minor bump change
-drag behaviour with no diff in `web/package.json`. The published `0.5.1-beta-*`
-tag was not used.
+**This entry was corrected on 2026-10-20. As first written it described a
+migration that had never happened.** The strip still ran on
+`@dnd-kit/core@6.3.1` / `@dnd-kit/sortable@8.0.0` / `@dnd-kit/utilities@3.2.2`:
+those three were the versions declared in `web/package.json` and resolved in
+`bun.lock`, `web/node_modules/@dnd-kit` held only them, and no branch, reflog entry
+or dangling commit in this repository ever contained `@dnd-kit/react`,
+`@dnd-kit/dom` or `DragDropProvider`. Two of the entry's checkable claims were also
+backwards: it said the legacy directories were "absent from `bun.lock`" (they were
+declared there, and were the only copies on disk) and that an E2E helper
+`waitForStripToSettle` "was left in place" (that identifier exists nowhere outside
+that sentence). Its technical reasoning, however, was sound, and the real migration
+was performed on 2026-10-20 along the lines it had proposed. Everything below has
+now been verified against the installed package or measured in a browser; the
+sentences that were wrong are marked *Corrected*.
 
-`@dnd-kit/dom` is declared as a direct dependency rather than left as a
-transitive one, because the sensor configuration imports `PointerSensor`,
-`KeyboardSensor` and `PointerActivationConstraints` from it. AGENTS.md 6 forbids
-relying on undeclared transitives.
+The strip now runs on `@dnd-kit/react@0.5.1` + `@dnd-kit/dom@0.5.1`, both pinned
+EXACTLY: the line is pre-1.0, so `^0.5.1` would let a minor bump change drag
+behaviour with no diff in `web/package.json`. `@dnd-kit/core`, `@dnd-kit/sortable`
+and `@dnd-kit/utilities` are REMOVED, not left behind.
+
+**Why the current line rather than the 8→10 bump.** The legacy line is frozen (core
+6.3.1 published 2024-12-05, sortable 10.0.0 2024-12-04, utilities 3.2.2
+2023-11-06) while the new family ships in lockstep (0.5.1 published 2026-10-15).
+The cheaper alternative — sortable 8.0.0 → 10.0.0, two patch-level majors with
+unchanged peers — was superseded by this migration and was therefore not
+performed.
+
+**`@dnd-kit/dom` is a direct dependency, not a transitive one**, because the
+sensor configuration imports `PointerSensor`, `KeyboardSensor` and
+`PointerActivationConstraints` from it. AGENTS.md §6 forbids relying on undeclared
+transitives. The resolved tree has exactly one `@dnd-kit/dom` (0.5.1), so the
+sensors and the sortable hooks share one manager instance.
 
 **The single most important consequence of the new API: `source` and `target` are
 the same element.** Optimistic sorting reorders the DOM during the drag, so
@@ -4487,106 +4509,112 @@ truth and the existing `reorder(from, to)` contract is untouched.
 binds `KeyboardSensor` to Space AND Enter by default. Enter is this tab's
 activation key, so the default would make "open this tab" and "pick this tab up"
 the same gesture. `KeyboardSensor` is therefore reconfigured to Space to pick up,
-arrows to move, Space to drop, Escape to cancel — the W3C drag-and-drop keyboard
-pattern — leaving Enter alone for activation. Up/Down are left unbound because the
-strip is a single row.
+arrows to move, Space to drop, Escape to cancel, leaving Enter alone for
+activation. Up/Down are left unbound because the strip is a single row.
 
-Making that reachable required a second change. The strip already used a roving
-tabindex, but nothing ever moved focus, so only the active tab was focusable and
-keyboard dragging could not be started at all. Roving now follows FOCUS rather
-than selection, and Arrow/Home/End move it. This is tab-strip-local focus
-management, not a change to application navigation.
+That split costs nothing today: the roving tabindex already admits only the ACTIVE
+tab, and activating the active tab is a no-op, so Space-as-activation could not do
+anything a keyboard user would notice. `TabStrip.tsx`'s key handler now answers
+Enter only.
+
+*Corrected:* the first version claimed keyboard dragging "could not be started at
+all", and that making it reachable required roving tabindex to follow FOCUS with
+Arrow/Home/End. That was wrong, and no focus-management change was made. The sensor
+starts on the focused element, and the active tab already holds the strip's single
+tab stop, so a keyboard drag is reachable with the tab stop exactly as it was. The
+E2E spec below starts one without touching focus.
 
 **Three things changed that are behaviour, not refactoring, and each is a
 deliberate call:**
 
 - *Collision detection.* Legacy passed `closestCenter` explicitly. That option is
-  gone; the default is `pointerIntersection` falling back to `shapeIntersection`.
+  gone; the default — read out of the installed `@dnd-kit/collision` — is
+  `defaultCollisionDetection = (args) => pointerIntersection(args) ?? shapeIntersection(args)`.
   Not carried over: it is the library's own default for sortable rows and pinning
   it would mean declaring `@dnd-kit/collision` for no behavioural gain.
-- *Drag feedback.* Legacy applied a runtime `transform`. The new API uses top-layer
-  promotion and optimistic reordering instead, so the inline style object is gone
-  entirely and the drag cue is a Tailwind class. The default 250ms drop animation
-  was KEPT. If a drop ever snaps or animates twice, the documented fix is
+- *Drag feedback.* Legacy applied a runtime `transform` and an inline `opacity`.
+  The new API promotes the dragged element and reorders optimistically, so the
+  inline style object is gone and the drag cue is a Tailwind class (`opacity-60`,
+  alongside the `z-50` that was already there). The library's default drop
+  animation is KEPT: `DEFAULT_DURATION = 250` / `DEFAULT_EASING = "ease"` in
+  `@dnd-kit/dom`'s `Feedback`, which is registered by the default preset. If a drop
+  ever snaps or animates twice, the documented fix is
   `Feedback.configure({dropAnimation: null})` — that is the escape hatch, not a
   change to make speculatively.
-- *Post-drag clicks.* The legacy library suppressed clicks for 50ms after a drag
-  via a capture-phase `click` listener removed on a `setTimeout`. The new library
-  has no such listener (`stopPropagation` appears only inside an active drag's
-  move/up handling), so that window is GONE and was deliberately not
-  reintroduced. The E2E helper `waitForStripToSettle` exists only to work around
-  the old window and is now redundant; it was left in place because the test agent
-  owns test files.
+- *Post-drag clicks.* *Corrected:* the first version said the new library has no
+  click suppression, so the legacy 50 ms window was "GONE". That is false. 0.5.1
+  installs a capture-phase `click` listener on drag end which prevents and
+  immediately stops the click when `clickEvent.target === document.body`. It is
+  narrower than the legacy time window, not absent, and it does not need
+  reproducing: the outcome that matters is asserted directly in the E2E spec — a
+  drag does not activate the tab it moved.
 
-**Follow-up (2026-10-14): the keyboard offset was removed, not documented.**
+**No pixel offset, and no pitch measurement either.** The first version of this
+entry described a `KEYBOARD_DRAG_OFFSET_PX` constant, then a follow-up that
+replaced it with a DOM-measured `pitchToNeighbour`. Neither existed in any commit.
+What the migration actually relies on is shorter: `SortableKeyboardPlugin`
+(TOLERANCE = 10px) moves the dragged item to the neighbouring droppable in the
+direction of travel rather than by a fixed number of pixels, so one press moves one
+tab whatever the tab's rendered width. The E2E spec asserts that outcome directly.
+The strip's tabs do compress (`min-w-0 grow-0 shrink basis-48`: about 192px at four
+tabs down to about 99px at nine, with no horizontal scrolling) — which is precisely
+why a fixed pixel offset would have been the wrong primitive.
+`manager.actions.move({ by })` and `actions.setDropTarget` are both unused:
+assigning a drop target directly would skip the shape move that drives optimistic
+sorting, so `source.index` would not follow the user and `onDragEnd` would commit a
+stale index.
 
-The paragraph above originally read `KEYBOARD_DRAG_OFFSET_PX` as a coupling to
-"watch". Measurement proved it was worse than a coupling — it was wrong. That
-entry claimed the tab is `grow-0 shrink-0`, so its width IS its `basis-48`. The
-tab is in fact `min-w-0 grow-0 shrink basis-48`: `shrink` (not `shrink-0`) plus
-`min-w-0` lets the strip COMPRESS tabs rather than overflow. Measured rendered
-width: 192px at 4 tabs, 178px at 5, 148px at 6, 127px at 7, 111px at 8, 98.875px at
-9. A fixed 192px offset therefore spans one slot at exactly one tab count and
-1.94 slots at another, and the strip never scrolls horizontally at all
-(`scrollWidth === clientWidth` even with 9 tabs).
+**Key spelling: the first version's "correction" was wrong in both directions.**
+It claimed the sensor matches `KeyboardEvent.code` through a function `isKeycode`
+(`codes.includes(event.code)`) and that the published guide was wrong. There is no
+`isKeycode`, and the sensor compares against `event.key`: the shipped matcher is
+`codes.some((code) => normalizeKey(code) === normalizeKey(event.key))`, where
+`normalizeKey` maps `" "`/`"Spacebar"` to `space`, `KeyA` to `a` and `Digit5` to
+`5`. Both spellings work, the option is typed `KeyboardEvent['key']`, and the guide
+is right. It is recorded because the distinction is real in other circumstances:
+`code` is layout-dependent (`KeyW` on a Dvorak or AZERTY layout) where `key` is
+not, so a future binding change still has to make that choice deliberately. The
+values used here (`Space`, `Escape`, `ArrowLeft`, `ArrowRight`) normalize
+identically under either spelling, which is why the mistake never produced a
+visible bug.
 
-`KEYBOARD_DRAG_OFFSET_PX` is deleted. The sensor's `left`/`right` bindings are now
-EMPTY and horizontal movement is driven from `manager.actions.move({ by })` with a
-distance measured from the DOM on each press (`pitchToNeighbour`). One press is
-one tab at any tab count and any rendered width, and it stays correct if a gap is
-ever added between tabs.
+**Up/Down are intentionally disabled.** The `up` and `down` arrays are empty
+because the strip is a single horizontal row: there is no vertical axis to move
+along, and binding them would produce a gesture that appears to do nothing.
 
-Chosen over the alternatives: assigning a drop target directly via
-`actions.setDropTarget` would skip the shape move that drives optimistic sorting,
-so `source.index` would not follow the user and `onDragEnd` would commit a stale
-index — breaking the single-commit guarantee. Moving the shape keeps collision
-detection and the optimistic plugin exactly as they were, so `onDragEnd` still
-reads the same `initialIndex`/`index` pair and still commits exactly one
-`reorder`. Reading the tab's own width instead of the neighbour distance would be
-simpler but breaks if a gap is introduced, and cannot express "no neighbour in
-that direction" at a boundary.
-
-A side effect worth recording: the sensor's undocumented `Shift` = 5x multiplier
-is gone, since it multiplied a fixed offset. Multi-press now means exactly N tabs,
-which is the contract the strip wants. If a faster traversal is ever wanted it
-should be designed as its own feature, not inherited from a pixel heuristic.
-
-**Correction — keyboard bindings are `KeyboardEvent.code`, not `.key`.** The
-published sensors guide states that `keyboardCodes` follows `KeyboardEvent.key`.
-It does not. `isKeycode` in `@dnd-kit/dom` is `codes.includes(event.code)`, and
-the option is typed `KeyCode = KeyboardEvent['code']`. Implementation and typings
-agree; the guide is wrong. Production values (`Space`, `Escape`, `ArrowLeft`,
-`ArrowRight`) are spelled identically under `code` and `key`, so this never
-produced a visible bug here — which is exactly why it needed writing down. It is
-recorded because `code` is layout-dependent (`KeyW` on a Dvorak/AZERTY layout) and
-`key` is not, so a future binding change has to make this choice deliberately.
-
-**Up/Down are intentionally disabled.** The `up` and `down` arrays are empty for a
-reason independent of the offset work: the strip is a single horizontal row, so
-there is no vertical axis to move along, and binding them would produce a gesture
-that appears to do nothing. Home/End are focus-navigation only (the tabs pattern)
-and stay inert while a drag is held.
+**Evidence, 2026-10-20.** `tests/e2e/components/tab-strip-reorder.spec.ts` drives
+real pointer and keyboard input through Edge (the `edge-headless` project) against
+a freshly built bundle. It was written BEFORE the component changed, so it pinned
+the legacy behaviour first: 3 passed, 1 failed — the failure being keyboard drag,
+which did not exist yet. The same four tests then passed on the migrated component
+(4 passed (4.7s)). That covers the drag commit, the no-op drop, the "a drag is not
+a click" guarantee, and the keyboard capability the migration adds.
 
 **Alternatives considered.**
 
-- *Keep `@dnd-kit/core` and add only keyboard support.* Rejected: it leaves the
-  50ms click-suppression window and two majors of drag behaviour in place.
+- *Keep `@dnd-kit/core` and add only keyboard support.* Rejected: it leaves two
+  majors of drag behaviour on a line with no release since 2024, and leaves the
+  legacy click window as the only thing protecting "a drag is not a click".
 - *Use `@dnd-kit/helpers`' `move`.* Rejected: it wants the array, and the array here
   is owned by a persisted Zustand store. Routing it through `reorder` keeps one
   write path.
 - *Carry `closestCenter` forward.* Rejected as above.
 - *Bind Space AND Enter for pick-up.* Rejected: it destroys tab activation.
-- *Keep the pixel offset but derive it from the measured tab width.* Rejected: a
-  width is not a pitch, so it is wrong the moment a gap is added, and it cannot
-  express the boundary case where there is no neighbour at all.
+- *Reintroduce the legacy click-suppression window.* Rejected as unnecessary: the
+  outcome it protected is asserted directly by the E2E spec and holds without it.
+- *Add Arrow/Home/End focus movement to the strip.* Rejected for this change: it is
+  a WAI-ARIA tabs-pattern feature in its own right, it is not needed to start a
+  keyboard drag, and folding it into a library migration would bundle an unrelated
+  behaviour change.
+- *Do the sortable 8.0.0 → 10.0.0 bump as a smaller step first.* Rejected: it is
+  superseded by this migration, and doing both would mean changing the drag layer
+  twice.
 
-NOT VERIFIED HERE: this change was typechecked, linted and built, and the new
-API's behaviour was read out of the installed `.d.ts` and JS. No browser or Tauri
-run was performed, so pointer dragging, keyboard dragging, overflow scrolling,
-drop animation and the drag-region interaction all still need the test agent's
-independent verification. The legacy `web/node_modules/@dnd-kit/{core,sortable,
-utilities}` directories are still on disk but are absent from `bun.lock` — stale
-store artifacts, not part of the resolved tree.
+**Still not verified here.** The Tauri desktop run: the strip's interaction with the
+`data-tauri-drag-region` tail and with native windowing was not exercised. The
+appearance of the 250 ms drop animation was not judged — only that a drop commits
+the expected order. Overflow behaviour under many tabs is unchanged by this
+migration but was not re-measured.
 
 ## 2026-10-14 - FlexLayout POC (evaluation only; no migration authorized)
 
@@ -5173,3 +5201,183 @@ claim younger than that is not recovered early (by design). Cross-process conten
 still has no real-database reproduction (`contended`). Tauri build and E2E verified
 via GitHub Actions run 39160063675 (commit 697cfa3): all three jobs (verify, e2e,
 tauri) completed with success, including the Tauri build and smoke test.
+
+---
+
+## 2026-10-19 - OpenCode V2 thread controller: a testable retry budget, and one owner for lifecycle settlement
+
+The reconnect policy in `web/src/features/opencode/v2ThreadController.ts` could
+not be tested honestly in real time: the delays are 250, 500, 1000, 2000, 4000,
+8000 and then 10000 ms, so the ten-attempt cap is only reached after 55.75 s.
+Three decisions follow from that.
+
+- **The delay is a pure function, not a scheduling seam.** `computeReconnectDelay(attempt, delays)`
+  is exported, and `scheduleReconnect` is its only caller, passing the controller's
+  configured delay pair. A fake timer, an injected clock, or a 55-second wall-clock
+  test would each assert the same arithmetic while adding machinery; the extraction
+  asserts it directly, including the injected-delay case the retry tests rely on.
+  `attempt` is zero-based (`attempt 0` → 250 ms, `attempt 6` → 10000 ms, and the
+  cap holds for every later index). This is deliberately *not* a new scheduler
+  abstraction: `Bun.cron`/the scheduler service remain unrelated owners.
+- **The attempt budget is injectable, the policy is not.** `createV2ThreadController`
+  takes an optional `config?: Partial<V2ThreadControllerConfig>`, merged over
+  `DEFAULT_V2_CONTROLLER_CONFIG` (which is built from the existing
+  `OPENCODE_V2_*` constants). Production call sites pass nothing and keep the
+  shipped values; tests pass `maxReconnectAttempts: 3`. No production behaviour
+  changes and no caller is required to know the retry numbers.
+- **Lifecycle rules now have one stated contract (D2/D4/D5/D6).** One retry per
+  burst, with `reconnectAttempt` reset only after a successful `hydrate`; a manual
+  `load()` cancels the pending retry timer and takes over; a failed
+  `client.connect()` re-arms the cycle from `startConnection`'s catch, which
+  covers both the timer path and the manual path; `dispose()` settles readiness
+  with `V2_DISPOSED_MESSAGE` and clears both readiness callbacks so a late
+  resolution cannot resurrect a disposed controller.
+
+**Verified on this tree.** `bun run lint` exit 0 (929 files), `bun run format:check`
+exit 0, `bun run typecheck` exit 0, `bun run test:locations` exit 0, `bun run build`
+exit 0, `bun run test` 4320 pass / 43 skip / 0 fail (4363 tests, 319 files),
+`bun run test:dom` 518 pass / 0 fail (50 files). Targeted: the controller suite
+35 pass / 0 fail; `tests/unit/mcp/stdio-env-isolation.test.ts` 3 pass / 0 fail.
+
+**Residual.** The disposal test proves that `dispose()` clears a pending retry
+timer (no further `connect()` calls). It does *not* prove that `awaitReady()`
+rejects while a connect is blocked: the fake client in the suite cannot observe
+the abort, so that half of D4 remains covered by source inspection only.
+
+**Environment note.** The lint gate had been returning exit 53 with no
+diagnostics on this machine because the native `biome.exe` could not load:
+`0xC0000135` (STATUS_DLL_NOT_FOUND), missing `VCRUNTIME140.dll`. Installing the
+Microsoft Visual C++ 2015-2022 x64 redistributable fixed it; that is a machine
+prerequisite, not a repository dependency, and Bun remains the only runtime the
+project requires.
+
+---
+
+## 2026-10-20 - Dependencies taken to current in verified batches, and what was left frozen
+
+The maintainer authorized "use latest". Read literally that is a blanket major
+migration, which is a decision of its own, so the work was split: every package
+whose current major was safe to move went into a named batch, and each batch had to
+pass the complete gate set before the next one started. Nothing in the
+`@assistant-ui/*` train was touched, and four web UI majors were audited and
+deliberately deferred.
+
+**Method, because the details are what make it safe.**
+
+- Batches are `bun update <pkgs>`, not `bun upgrade --latest`, so each batch names
+  what it moves and a failure is attributable to one batch rather than to "the
+  upgrades".
+- A package is bumped in the manifest that DECLARES it: the root `package.json` for
+  root-only dependencies, `web/package.json` for web-only ones, and both for
+  packages declared in both (`@opencode/client`, `@tanstack/react-virtual`,
+  `@tanstack/virtual-core`).
+- `bun update` rewrites `package.json` with LF, which the repository's format gate
+  rejects, so every batch ends with `biome format --write package.json
+  web/package.json`. Biome is invoked from the pinned local binary
+  (`node_modules/.bin/biome.exe`), never `bunx`.
+- Each batch was followed by `bun run typecheck`, `bun run lint` and the affected
+  tests, and the whole set by a full `bun run verify`.
+
+**What moved.**
+
+| Batch | Packages |
+|---|---|
+| 1 | `playwright` / `@playwright/test` 1.63.0 → 1.64.1; `@tauri-apps/cli` 2.12.0 → 2.12.3; `@types/bun` → 1.4.3; `react-router` → ^8.5.0 |
+| 2 | `@ai-sdk/anthropic` → ^4.0.83; `@ai-sdk/google` → ^4.0.100; `@ai-sdk/openai` → ^4.0.97; `assistant-stream` → ^0.3.52; `react` / `react-dom` → ^19.3.1; `zod` → ^4.6.7 |
+| 3 | `@opencode/client` 2.0.25 → 2.0.32 (both manifests) |
+| 4 | `ai` 7.0.137 → 7.0.144; `@ai-sdk/openai-compatible` 3.0.44 → 3.0.72 |
+| 5 | `@tauri-apps/plugin-opener` → ^2.7.2; `tw-shimmer` → ^0.4.14; `typo-js` → ^1.4.0; `@tanstack/react-virtual` 3.14.21 / `@tanstack/virtual-core` 3.19.6 (both manifests) |
+| 6 | the tab-strip drag layer, `@dnd-kit/react` + `@dnd-kit/dom` 0.5.1 — its own entry above (2026-10-14, corrected 2026-10-20) |
+
+**Verified on this tree, 2026-10-20.** `bun run verify` exit 0: typecheck (backend,
+tests, web), `biome ci --error-on-warnings` over 930 files, `biome format`, the
+test-location gate, the backend and web builds, then the suites — unit +
+integration **4320 pass / 43 skip / 0 fail** (4363 tests across 319 files),
+`shutdown-lifecycle` 1 pass, `startup-rollback` 2 pass, `lifecycle-integration`
+3 pass, DOM **518 pass / 0 fail** across 50 files. Those counts are identical to the
+pre-migration baseline, which is the point: this is a version change, and no test
+was added, removed or weakened to make it pass. The one new test file is the E2E
+spec in the tab-strip entry, which runs in its own CI job: **4 passed**, and 3
+passed / 1 failed against the pre-migration build.
+
+**The `@assistant-ui/*` train is frozen and did not move.** Resolved versions
+confirmed in `bun.lock` after every batch: `@assistant-ui/react` 0.15.27,
+`ai-sdk` 0.0.12, `react-markdown` 0.14.15, `core` 0.3.26, `store` 0.3.19,
+`tap` 0.9.22, `devtools` 1.2.24. The manifests declare caret ranges
+(`^0.15.26` and similar); the freeze is enforced by never running an update for
+them, which is why the resolved versions are recorded here rather than the ranges.
+
+**Four web UI majors were audited and deliberately NOT done.** Each is a migration
+with its own risk, not a version bump:
+
+- `radix-ui` 1.6.7 → 1.8.1. Widest blast radius: the app imports only the umbrella
+  package — 11 sites, zero `@radix-ui/react-*` imports — and those back ~50
+  primitives behind `components/ui/*`. It also has a duplicate-instance nuance that
+  the audit had to check rather than assume; see below.
+- `lucide-react` 0.469 → 1.59. Crosses 1.0, where deprecated aliases are removed.
+  The oracle is typecheck, which fails loudly and per symbol, not a changelog.
+- `sonner` 1.7.4 → 2.0.8. NOT routine, and the reason is measurable: 1.7.4 wraps
+  every rule in `:where()` (62 occurrences, zero specificity), so `globals.css`
+  overrides win outright; 2.0.8 has none, so they stop winning and instead tie at
+  (0,2,0) with sonner's own `[data-sonner-toast][data-styled='true']`, decided by
+  source order. Nothing asserts computed toast style, so this would ship silently
+  broken. The `globals.css` comment claiming `--normal-border` is written inline
+  also has to be re-measured, because 2.0.8 sets that variable from a stylesheet
+  rule on `[data-sonner-toaster][data-sonner-theme=...]`.
+- `@dnd-kit/sortable` 8.0.0 → 10.0.0. Superseded by batch 6 and therefore not done:
+  doing both would have changed the drag layer twice.
+
+**Named, pre-existing conditions found while verifying this (not introduced here,
+not fixed here).**
+
+- *Two `radix-ui` copies coexist, on purpose.* The app pins `radix-ui` 1.6.7
+  exactly; `@assistant-ui/react` 0.15.27 declares `radix-ui ^1.7.0`, which 1.6.7
+  cannot satisfy, so `bun.lock` resolves a second, nested copy —
+  `"@assistant-ui/react/radix-ui": ["radix-ui@1.8.1", ...]`. Each copy is internally
+  consistent and the two never share a React context, because the app's primitives
+  and assistant-ui's primitives are separate trees; the 518 DOM tests and the E2E
+  suite pass against this arrangement. One consequence is worth recording for the
+  deferred bump: moving the app to 1.8.1 would make both use ONE copy, since 1.8.1
+  satisfies `^1.7.0`. The risk of that bump is not duplication — it is the ~50
+  primitives whose behaviour changed across radix 1.7 and 1.8.
+- *Manifest range drift for five packages — found, then fixed.* `@playwright/test`,
+  `react-router`, `assistant-stream`, `react` and `react-dom` are declared in both
+  manifests but were updated in the root only (batches 1 and 2), so `web/package.json`
+  still read `^1.63.0`, `^8.3.1`, `^0.3.48`, `^19.3.0` while the root already asked
+  for `^1.64.1`, `^8.5.0`, `^0.3.52`, `^19.3.1`. It was harmless while it lasted, for
+  the reason this bullet originally gave: both ranges are carets over the same minor
+  and bun resolves them against the one lockfile, so the installed `react` was already
+  a single 19.3.1. It is aligned now, and the alignment is proven rather than assumed —
+  `bun install` reported **no changes** across 470 packages, the `bun.lock` diff is
+  exactly those five range strings and nothing else, and after deleting both
+  `node_modules` directories a `bun install --frozen-lockfile` installed 400 packages
+  and left one `react` 19.3.1 linked in the root and in `web/node_modules`, one
+  `@dnd-kit/dom` 0.5.1, and no second copy of anything. That clean install also
+  disposed of three directories `bun remove` had left behind in batch 6 —
+  `web/node_modules/@dnd-kit/{core,sortable,utilities}` — which were dead links rather
+  than declared dependencies: neither `bun.lock` nor either manifest named them. The
+  full gate set and the E2E spec were re-run on the aligned tree and report the same
+  numbers as above.
+- *The bun install store holds stale entries by design.* `node_modules/.bun` still
+  contains `react@19.3.0`, `radix-ui@1.7.0`, `@dnd-kit/sortable@10.0.0` and
+  `@assistant-ui+react@0.15.29` — versions that no manifest declares and `bun.lock`
+  does not resolve. They are cache entries (bun does not prune the store), not part
+  of the tree. Worth stating because "there are two copies on disk" reads exactly
+  like the duplicate-instance defect AGENTS.md warns about, and here it is not.
+
+**Residual risk, stated rather than buried.**
+
+- `@ai-sdk/openai-compatible` 3.0.44 → 3.0.72 is a 28-release jump on the
+  custom-provider wire format. Types held and 41 provider / AI-SDK tests pass, but
+  no test asserts a live gateway response SHAPE outside E2E, so a real gateway
+  remains the only true verification.
+- One timing-sensitive test has been seen red once: `waitForHttpReady` >
+  "resolves when a probe is slower than the poll interval", during batch 3's first
+  full run. It passed on immediate re-run and 5/5 in isolation. Its assertion is
+  `elapsed < readyPollMs * 2` (500 ms against a deliberate 300 ms probe), so it is
+  load-sensitive and pre-existing; it is NOT fixed here, and it is not one of the
+  known-in-advance ones in `docs/development-rules.md` §8.
+- The `channel: "chromium"` E2E project cannot run on this machine: the
+  `%USERPROFILE%\AppData\Local\ms-playwright` cache is absent. System Edge is
+  installed, so `--project=edge-headless` runs the suite with no download. Which
+  projects must pass remains CI's call, not this note's.

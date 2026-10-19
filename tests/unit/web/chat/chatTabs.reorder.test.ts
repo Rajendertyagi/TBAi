@@ -4,7 +4,7 @@
  * ## Why this file exists
  *
  * `reorder` had ZERO coverage before this file. It is the single seam between the
- * drag layer (`components/TabStrip.tsx`, which uses `@dnd-kit/react` 0.5.0)
+ * drag layer (`components/TabStrip.tsx`, which uses `@dnd-kit/react` 0.5.1)
  * and persisted application state, so it is the one contract that must survive a
  * change of drag library. Nothing else in the store is reachable by a drag: opening,
  * closing and deleting all go through other actions.
