@@ -97,11 +97,17 @@ export function detectOpenCodeVersion(
     result = Bun.spawnSync(cmd, {
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 2000,
     });
   } catch (error) {
-    throw new OpenCodeBinaryMissingError(`OpenCode binary could not be started: ${binaryPath}`, {
+    // A resolved binary that cannot be launched is a probe/startup failure,
+    // not a missing binary. Do not misclassify it as OpenCodeBinaryMissingError.
+    throw new Error(`OpenCode binary could not be started: ${binaryPath}`, {
       cause: error,
     });
+  }
+  if (result.exitedDueToTimeout) {
+    throw new Error(`OpenCode binary did not respond within 2000ms: ${binaryPath}`);
   }
   const output = new TextDecoder().decode(result.stdout);
   const version = parseOpenCodeVersion(output);
