@@ -241,8 +241,34 @@ function modelInput(model: V2ModelSelection): {
   };
 }
 
+export function computeReconnectDelay(
+  attempt: number,
+  delays: Pick<
+    V2ThreadControllerConfig,
+    "initialReconnectDelayMs" | "maxReconnectDelayMs"
+  > = DEFAULT_V2_CONTROLLER_CONFIG,
+): number {
+  return Math.min(delays.maxReconnectDelayMs, delays.initialReconnectDelayMs * 2 ** attempt);
+}
+
+export type V2ThreadControllerConfig = {
+  readonly maxReconnectAttempts: number;
+  readonly initialReconnectDelayMs: number;
+  readonly maxReconnectDelayMs: number;
+};
+
+const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
+  maxReconnectAttempts: OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
+  initialReconnectDelayMs: OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
+  maxReconnectDelayMs: OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
+};
+
 /** Creates the single native OpenCode V2 session controller. */
-export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadController {
+export function createV2ThreadController(
+  client: OpenCodeV2Client,
+  config?: Partial<V2ThreadControllerConfig>,
+): V2ThreadController {
+  const cfg: V2ThreadControllerConfig = { ...DEFAULT_V2_CONTROLLER_CONFIG, ...config };
   let state = createInitialV2ThreadState(client.sessionId);
   let generation: OpenCodeV2Generation | null = null;
   let connectionController: AbortController | null = null;
@@ -477,7 +503,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
   function scheduleReconnect(error: V2SafeError): void {
     if (disposed || reconnectTimer !== null) return;
     // Terminal failure: no more auto-retries after exhausting the budget.
-    if (reconnectAttempt >= OPENCODE_V2_MAX_RECONNECT_ATTEMPTS) {
+    if (reconnectAttempt >= cfg.maxReconnectAttempts) {
       dispatch({
         type: "connection_changed",
         connection: { type: "failed", attempt: reconnectAttempt },
@@ -499,14 +525,15 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     dispatch({ type: "load_failed", error });
     rejectReady?.(new V2ControllerError(error));
     rejectReady = null;
-    const delay = Math.min(
-      OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
-      OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS * 2 ** reconnectAttempt,
-    );
+    const delay = computeReconnectDelay(reconnectAttempt, cfg);
     reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      void startConnection().catch(() => undefined);
+      loadPromise = startConnection().catch((error) => {
+        loadPromise = null;
+        throw error;
+      });
+      void loadPromise.catch(() => undefined);
     }, delay);
   }
 
@@ -743,6 +770,7 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
       rejectReady?.(new V2ControllerError(safe));
       rejectReady = null;
       resolveReady = null;
+      if (!disposed) scheduleReconnect(safe);
       throw new V2ControllerError(safe);
     }
     if (disposed || connectionController.signal.aborted) {
@@ -769,6 +797,11 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
 
   async function ensureLoaded(): Promise<void> {
     if (loadPromise) return loadPromise;
+    // D2: manual load during a pending timer cancels the timer and takes over.
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     loadPromise = startConnection().catch((error) => {
       loadPromise = null;
       throw error;
@@ -1188,6 +1221,9 @@ export function createV2ThreadController(client: OpenCodeV2Client): V2ThreadCont
     reconnectTimer = null;
     connectionController?.abort();
     lifecycleController?.abort();
+    rejectReady?.(new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }));
+    rejectReady = null;
+    resolveReady = null;
     const current = generation;
     generation = null;
     if (current) void current.events.close();

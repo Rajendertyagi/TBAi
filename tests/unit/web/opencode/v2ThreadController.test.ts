@@ -32,6 +32,7 @@ import {
 } from "@web/features/opencode/v2Client.ts";
 import { projectV2RepositoryItems } from "@web/features/opencode/v2MessageProjection.ts";
 import {
+  computeReconnectDelay,
   createV2ThreadController,
   type V2ThreadController,
 } from "@web/features/opencode/v2ThreadController.ts";
@@ -442,6 +443,31 @@ function createClient(generations: readonly FakeGeneration[]): FakeClient {
   };
 }
 
+function createRejectingAfterFirstClient(generations: readonly FakeGeneration[]): FakeClient {
+  const signals: V2ConnectionSignals[] = [];
+  let index = 0;
+
+  return {
+    sessionId: SESSION_ID,
+    directory: DIRECTORY,
+    async connect(nextSignals) {
+      signals.push(nextSignals);
+      index += 1;
+      if (index > 1) throw new Error("connection refused");
+      const generation = generations[0];
+      generation.bindSignals(nextSignals);
+      return generation;
+    },
+    get connectCount() {
+      return index;
+    },
+    signals,
+    async waitForConnect(count: number) {
+      while (index < count) await new Promise((r) => setTimeout(r, 5));
+    },
+  };
+}
+
 describe("native V2 thread controller lifecycle", () => {
   it("hydrates authoritative state and resolves readiness once", async () => {
     const inbox = userInbox("inbox_initial", "queue");
@@ -563,6 +589,93 @@ describe("native V2 thread controller lifecycle", () => {
       expect(client.connectCount).toBe(2);
       expect(first.events.closeCount).toBe(1);
       expect(controller.getState().messages[STALE_ASSISTANT_MESSAGE_ID]).toBeUndefined();
+    } finally {
+      controller.dispose();
+    }
+  });
+});
+
+describe("native V2 reconnect delay", () => {
+  it("doubles from the initial delay and saturates at the cap", () => {
+    const delays = [0, 1, 2, 3, 4, 5, 6, 7, 20].map((attempt) => computeReconnectDelay(attempt));
+    expect(delays).toEqual([250, 500, 1000, 2000, 4000, 8000, 10_000, 10_000, 10_000]);
+  });
+
+  it("honours an injected delay budget", () => {
+    const budget = { initialReconnectDelayMs: 10, maxReconnectDelayMs: 40 };
+    const delays = [0, 1, 2, 3, 10].map((attempt) => computeReconnectDelay(attempt, budget));
+    expect(delays).toEqual([10, 20, 40, 40, 40]);
+  });
+});
+
+describe("native V2 retry budget and disposal", () => {
+  it("reaches the terminal gate after consecutive connect failures with no successful hydration", async () => {
+    // Only one generation: connect succeeds once, then every retry rejects.
+    // No hydrate ever succeeds on retries, so reconnectAttempt never resets.
+    const generation = createGeneration(1);
+    const client = createRejectingAfterFirstClient([generation]);
+    const controller = createV2ThreadController(client, {
+      maxReconnectAttempts: 3,
+      initialReconnectDelayMs: 10,
+    });
+
+    try {
+      await controller.awaitReady();
+      generation.events.fail(new Error("event stream failed"));
+
+      await waitForState(controller, (state) => state.connection.type === "failed");
+
+      expect(client.connectCount).toBe(4); // 1 initial success + 3 rejected retries (budget=3)
+      expect(controller.getState().connection).toEqual({ type: "failed", attempt: 3 });
+      expect(controller.getState().load.type).toBe("error");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("dispose clears pending retry timer and settles readiness", async () => {
+    const generation = createGeneration(1);
+    const client = createRejectingAfterFirstClient([generation]);
+    const controller = createV2ThreadController(client, {
+      maxReconnectAttempts: 3,
+      initialReconnectDelayMs: 60_000,
+    });
+
+    try {
+      await controller.awaitReady();
+      generation.events.fail(new Error("event stream failed"));
+      await waitForState(controller, (state) => state.connection.type === "reconnecting");
+
+      controller.dispose();
+
+      // Advance well past the 60s retry delay — no further connect should occur.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(client.connectCount).toBe(1);
+      expect(controller.getState().connection.type).toBe("reconnecting");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("manual load during a pending timer cancels the timer and takes over", async () => {
+    const generation = createGeneration(1);
+    const client = createRejectingAfterFirstClient([generation]);
+    const controller = createV2ThreadController(client, {
+      maxReconnectAttempts: 3,
+      initialReconnectDelayMs: 5_000,
+    });
+
+    try {
+      await controller.awaitReady();
+      generation.events.fail(new Error("event stream failed"));
+
+      await waitForState(controller, (state) => state.connection.type === "reconnecting");
+
+      const loadPromise = controller.load();
+      await expect(loadPromise).rejects.toBeDefined();
+
+      // Only 2 connects: initial + manual take-over. No timer-fired connect.
+      expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
     }
