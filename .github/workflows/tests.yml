@@ -16,6 +16,11 @@ name: Verify
 
 on:
   workflow_dispatch:
+    inputs:
+      live_opencode:
+        description: "Run the live Big Pickle Code-mode E2E (OpenCode free tier)"
+        type: boolean
+        default: false
   push:
     branches: [main, ci/tauri-e2e-verify]
   pull_request:
@@ -319,6 +324,93 @@ jobs:
           p2-live-runtime.spec.ts
           p2-tool-result-persistence.spec.ts
           phase-8-tabs-navigation.spec.ts
+
+  # LIVE, opt-in acceptance for Code mode against the OpenCode free tier.
+  #
+  # Deliberately NOT part of the normal gate: the answer comes from a real
+  # third-party model, so a quota change or an outage would turn a green code
+  # base red for a reason the code cannot fix. It runs only when dispatched with
+  # `live_opencode=true`, and it proves the whole path: managed `opencode serve`,
+  # a real session bound to `opencode/big-pickle`, the composer, the SSE stream,
+  # the rendered transcript, and history after reload.
+  #
+  # The OpenCode CLI install is duplicated from `verify` rather than shared:
+  # GitHub-hosted jobs get fresh runners, so an artifact from another job does
+  # not exist here. The tarball is pinned and integrity-checked for the same
+  # reason as above.
+  e2e-big-pickle:
+    if: github.event_name == 'workflow_dispatch' && inputs.live_opencode
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:OPENCODE_VERSION
+          $url = "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-$version.tgz"
+          $tgz = Join-Path $env:RUNNER_TEMP 'opencode-cli.tgz'
+          Invoke-WebRequest -Uri $url -OutFile $tgz
+          $sha = [System.Security.Cryptography.SHA512]::Create()
+          $actual = 'sha512-' + [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($tgz)))
+          if ($actual -ne $env:OPENCODE_CLI_SHA512) {
+            throw "opencode tarball integrity mismatch: expected $env:OPENCODE_CLI_SHA512 but downloaded $actual"
+          }
+          $unpack = Join-Path $env:RUNNER_TEMP 'opencode-cli'
+          Remove-Item $unpack -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $unpack | Out-Null
+          tar -xzf $tgz -C $unpack
+          $exe = Join-Path $unpack 'package/bin/opencode.exe'
+          if (-not (Test-Path $exe)) { throw "opencode.exe was not present in the $version tarball" }
+          (Join-Path $unpack 'package/bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Output "Unpacked opencode $version from the npm registry (sha512 verified)."
+
+      - name: Verify OpenCode is available
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reported = (& opencode --version | Out-String).Trim()
+          Write-Output "opencode --version: $reported"
+          if ($reported -notmatch [regex]::Escape($env:OPENCODE_VERSION)) {
+            throw "expected opencode $($env:OPENCODE_VERSION) but the binary reported '$reported'"
+          }
+
+      - name: Run the live Big Pickle spec
+        env:
+          TBAI_E2E_LIVE: "1"
+        run: bun run test:e2e opencode/opencode-big-pickle-live.spec.ts
+
+      - name: Upload live evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: big-pickle-live
+          path: |
+            tests/.artifacts/playwright
+            tests/.artifacts/e2e-server-logs
+          if-no-files-found: warn
 
   # Tauri desktop end-to-end verification. Builds the REAL packaged app
   # (Tauri shell + sidecar + loose web assets) and exercises it on the runner,
