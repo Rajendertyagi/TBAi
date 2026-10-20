@@ -5330,6 +5330,8 @@ with its own risk, not a version bump:
   broken. The `globals.css` comment claiming `--normal-border` is written inline
   also has to be re-measured, because 2.0.8 sets that variable from a stylesheet
   rule on `[data-sonner-toaster][data-sonner-theme=...]`.
+  **Done 2026-10-20** - see the migration entry at the end of this file. The guard
+  this entry says is missing now exists, and was proved to fail against the defect.
 - `@dnd-kit/sortable` 8.0.0 → 10.0.0. Superseded by batch 6 and therefore not done:
   doing both would have changed the drag layer twice.
 
@@ -5614,3 +5616,59 @@ as every run in this series.
 **Not verified.** Nothing about happy-dom 21's new opt-in loading paths, because this repo
 deliberately does not use them; if a future test needs real CSS or iframe loading it must turn
 them on explicitly, and the default it will meet is now "off".
+
+## 2026-10-20 - sonner 1.7.4 -> 2.0.8: the override stops winning, so stop overriding
+
+`sonner` is pinned exactly at `2.0.8` (it was `^1.7.2`, resolved 1.7.4). The visual contract is
+unchanged; the mechanism that delivers it had to change.
+
+**What actually broke, measured rather than read off a changelog.** 1.7.4 wraps every rule in
+`:where()` - 62 occurrences in `dist/styles.css` - so its whole stylesheet sits at zero
+specificity and `globals.css` won outright. 2.0.8 has zero `:where()` and styles the toast with
+`[data-sonner-toast][data-styled='true']` at (0,2,0), the same weight as the app's
+`[data-sonner-toaster] [data-sonner-toast]`. Sonner also injects its stylesheet from JavaScript at
+import time (`__insertCSS(...)` in `dist/index.mjs`), i.e. after the built app CSS, so the tie went
+to sonner. The same happened to `--border-radius`: both sides declare it on
+`[data-sonner-toaster]` at (0,1,0). With the old rules still in place, the guard below read back
+`backgroundColor: rgb(0, 0, 0)`, `borderColor: rgb(51, 51, 51)`, `backdropFilter: none`,
+`borderRadius: 8px` and sonner's `rgba(0,0,0,0.1) 0px 4px 12px 0px` shadow - five properties, all
+silently lost.
+
+**Decision: use sonner's documented `toastOptions.style`.** The styling guide's "Global styles"
+path applies the object as an inline style on every toast root (`...style` is spread into the
+toast's own style attribute in `dist/index.mjs`). Inline declarations do not compete on specificity
+or source order, so the contract is no longer coupled to sonner's selector shape or injection
+order. `AppToaster.tsx` owns the surface; `globals.css` keeps two custom properties
+(`--tbai-toast-surface`, `--tbai-toast-backdrop`) solely because an inline style cannot contain
+`@media (prefers-reduced-transparency: reduce)`. Sonner's own `--normal-*` variables are still not
+overridden: 2.0.8 derives them from `[data-sonner-toaster][data-sonner-theme=...]` rules and also
+uses `--normal-bg` for the close button.
+
+**No, to the three alternatives.** (a) Raising specificity to
+`[data-sonner-toast][data-styled='true']` would work today but depends on an internal attribute 2.0
+introduced, and the next reshuffle breaks it the same silent way. (b) `!important` is what sonner's
+docs recommend for `toastOptions.classNames`, and it is forbidden here by the layering rule. (c)
+`unstyled`/headless is the docs' full-control path, but it means owning toast markup, layout and
+animation for a skin-only change - more custom code, not less.
+
+**The guard, and proof it can fail.** `tests/e2e/components/toast-visuals.spec.ts` drives the real
+Quick Messages flow to raise a toast and compares its computed backgroundColor / borderColor /
+backdropFilter / boxShadow / borderRadius with probe elements carrying the same declarations, so
+the assertion is "the glass surface", not a literal colour, and holds across themes. Deleting the
+override rules made both tests fail with exactly the five defaults above; restoring them made them
+pass. The reduced-transparency branch is emulated through CDP
+(`Emulation.setEmulatedMedia`), and the test asserts `matchMedia` flipped before asserting the
+flattened surface, so the branch cannot pass unexercised.
+
+**Verified on this tree, 2026-10-20.** Clean install (root and `web` `node_modules` removed) exit
+0; `bun.lock` moves only `sonner`, 1.7.4 -> 2.0.8. `bun run verify` exit 0: typecheck,
+`biome ci --error-on-warnings` and `format:check` over 932 files, `test:locations`, `build`, unit
+and integration 4320 pass / 43 skip / 0 fail across 319 files, DOM 518 pass / 0 fail across 50
+files. Full E2E (`--project=edge-headless`): `spec files ok: 34, failed: 5` - the five known
+failures plus the new guard. `quick-messages.spec.ts`, which depends on sonner's hover-pause
+behaviour, stays green.
+
+**Not verified.** `prefers-reduced-transparency` is not Baseline; the branch is asserted only under
+Chromium/Edge emulation. Browsers without the feature keep the default glass surface, exactly as
+before. Sonner 2's new capabilities (`toast.custom`, multiple toasters, `getHistory`) are not
+adopted.

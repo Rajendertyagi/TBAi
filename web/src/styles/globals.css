@@ -288,35 +288,24 @@
 }
 
 /* ---- sonner toasts ----
-   Configured through sonner's OWN custom properties where possible, and against
-   its own attributes where it is not. Every rule in `sonner/dist/styles.css` is
-   wrapped in `:where()`, so it all sits at zero specificity and these win
-   outright.
+   The surface is applied by `components/AppToaster.tsx` through sonner's
+   documented `toastOptions.style`, which lands inline on each toast. Sonner 2
+   removed the `:where()` wrappers that used to leave its stylesheet at zero
+   specificity, and injects it after this file, so the old
+   `[data-sonner-toaster] [data-sonner-toast]` overrides tied at (0,2,0) and lost
+   the tie. Inline styles do not compete with it.
 
-   `--normal-border` is NOT set here: sonner writes that variable INLINE on the
-   toaster element, and an inline declaration beats any stylesheet rule — so
-   setting it from here silently did nothing, leaving a hard grey edge on a
-   borderless glass toast (measured `hsl(0,0%,20%)`, i.e. sonner's default).
-   `border-color` below is not inline and therefore does take effect.
-
-   `--normal-bg` is deliberately left alone — sonner also reads it as the text
-   colour of an inverted action button (styles.css:185), so replacing it would
-   blank that button's label. Only the toast's own background is redirected. */
+   These properties carry the reduced-transparency branch into that inline style,
+   which cannot contain a media query. `--normal-bg` stays untouched: sonner also
+   uses it for the close button. */
 [data-sonner-toaster] {
-  --border-radius: calc(var(--radius) * 1.2);
-}
-[data-sonner-toaster] [data-sonner-toast] {
-  border-color: transparent;
-  background-color: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  box-shadow: var(--elevation-floating);
+  --tbai-toast-surface: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
+  --tbai-toast-backdrop: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
 @media (prefers-reduced-transparency: reduce) {
-  [data-sonner-toaster] [data-sonner-toast] {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    background-color: var(--popover);
+  [data-sonner-toaster] {
+    --tbai-toast-surface: var(--popover);
+    --tbai-toast-backdrop: none;
   }
 }
 
