@@ -5583,3 +5583,34 @@ action and a 7% context readout.
 OpenAI-compatible endpoint is compiled against by the provider/AI-SDK unit tests but never spoken
 to here, so wire-format behaviour rests on the package's own release rather than on an assertion
 in this repo.
+
+## 2026-10-20 - happy-dom 20.14.6 -> 21.0.3: a major whose one break this repo never opted into
+
+`happy-dom` and `@happy-dom/global-registrator` moved together from `^20.14.5` to `^21.0.3`
+(resolved 21.0.3 each). They cannot move separately: the registrator depends on
+`happy-dom ^21.0.3`. Both are dev dependencies — they are the DOM the web test suite runs in,
+not anything the product ships, so there is no runtime surface to walk afterwards.
+
+**What 21.0.0 actually breaks, and why it does not reach here.** The release has a single
+breaking change, and it is a security one: CSS-file and iframe page loading are now **disabled by
+default** to prevent SSRF from untrusted markup, `disableCSSFileLoading` is deprecated, and the
+opt-in settings are `enableCSSFileLoading` and `enableIframePageLoading`. That is inert in this
+repo, and inertness was checked rather than assumed: `tests/setup/dom-preload.ts` registers with
+`{ url, width, height }` and sets no loading settings, no test sets either flag, and no test
+creates an `<iframe>` or expects a `<link rel="stylesheet">` to fetch. The declared dependency set
+is also unchanged between 20.14.6 and 21.0.3 (ws, entities, whatwg-mimetype, buffer-image-size
+and the type packages), so the major brings no new transitive surface.
+
+**The DOM suite was run first, alone, as the oracle.** It is the only test process that can see
+this dependency at all: 518 pass / 0 fail across 50 files, identical to the pre-bump run.
+
+**Verified on this tree, 2026-10-20.** Clean install (root and `web` `node_modules` removed) exit
+0, resolving `happy-dom` and the registrator at 21.0.3. `bun run verify` exit 0: typecheck,
+`biome ci --error-on-warnings` and `format:check` over 931 files, `test:locations`, `build`, unit
+and integration 4320 pass / 43 skip / 0 fail across 319 files, DOM 518 pass / 0 fail across 50
+files. Full E2E (`--project=edge-headless`): `spec files ok: 33, failed: 5` — the same five files
+as every run in this series.
+
+**Not verified.** Nothing about happy-dom 21's new opt-in loading paths, because this repo
+deliberately does not use them; if a future test needs real CSS or iframe loading it must turn
+them on explicitly, and the default it will meet is now "off".
