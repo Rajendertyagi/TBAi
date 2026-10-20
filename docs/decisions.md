@@ -5543,3 +5543,43 @@ paint as SVGs with no missing or blank glyph.
 inline text icons against 16–18px toolbar icons), and the appearance of the new
 `aria-hidden="true"` in a real screen reader was not exercised. Neither affects behaviour, but
 both are the kind of thing a person notices and a test does not.
+
+## 2026-10-20 - the three exact pins: ai, @ai-sdk/openai-compatible, gpt-tokenizer
+
+Three dependencies are pinned exactly in the root manifest (`web/` does not declare them), and
+they moved: `ai` 7.0.144 -> 7.0.145, `@ai-sdk/openai-compatible` 3.0.72 -> 3.0.73, and
+`gpt-tokenizer` 4.0.0 -> 4.1.0 (dev). Batch 4 in the entry above is where those exact pins were
+written. They stay exact rather than becoming carets: `ai` is the core runtime, `^7.0.145` would
+admit 7.x minors, and the convention here is to pin the version that was verified.
+
+**Containment is measured from the two versions' declared trees, not inferred from semver.**
+
+- `ai`: the only transitive move is `@ai-sdk/gateway` 4.0.117 -> 4.0.118. `@ai-sdk/provider`
+  stays at 4.0.30 and `@ai-sdk/provider-utils` at 5.0.63, so no second copy of either appears.
+- `@ai-sdk/openai-compatible`: its declared tree is identical (provider 4.0.30, provider-utils
+  5.0.63) — no transitive change at all.
+- `gpt-tokenizer`: zero dependencies, and it is reached only from the test harness
+  (`tests/harness/opencodeStubProvider.ts` and one integration test), never from `src/`.
+
+**Pre-existing, named rather than absorbed.** `@ai-sdk/react` 4.0.140 — reached through the
+frozen `@assistant-ui/ai-sdk`, whose `useChatThread.js` imports it — declares `ai` as a
+*dependency pinned to 7.0.137*, so the tree carries a second copy of the AI SDK core plus nested
+`@ai-sdk/provider` 4.0.26 and `@ai-sdk/provider-utils` 5.0.58. This batch does not change that
+(it was 7.0.144 beside 7.0.137 before), and it is deliberately not fixed here: collapsing it
+means either overriding another package's exact dependency or bumping the frozen train, and both
+are decisions of their own.
+
+**Verified on this tree, 2026-10-20.** Clean install (root and `web` `node_modules` removed) exit
+0, resolving the three versions above. `bun run verify` exit 0: typecheck, `biome ci
+--error-on-warnings` and `format:check` over 931 files, `test:locations`, `build`, unit and
+integration 4320 pass / 43 skip / 0 fail across 319 files, DOM 518 pass / 0 fail across 50
+files. Full E2E (`--project=edge-headless`): `spec files ok: 33, failed: 5` — again the same five
+files. A real streamed reply on an isolated instance: the request reached the stub provider,
+`send.stream_end` logged `outcome=finish`, the history recovery pass logged `loadFailed=false`
+with `recovery_skipped reason=no-failure`, and the assistant message rendered with its Copy
+action and a 7% context readout.
+
+**Residual risk.** The stub provider is the only gateway this evidence covers. A real
+OpenAI-compatible endpoint is compiled against by the provider/AI-SDK unit tests but never spoken
+to here, so wire-format behaviour rests on the package's own release rather than on an assertion
+in this repo.
