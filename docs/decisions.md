@@ -5314,8 +5314,14 @@ with its own risk, not a version bump:
   package — 11 sites, zero `@radix-ui/react-*` imports — and those back ~50
   primitives behind `components/ui/*`.
   **Done 2026-10-20** - see the migration entry at the end of this file.
-- `lucide-react` 0.469 → 1.59. Crosses 1.0, where deprecated aliases are removed.
-  The oracle is typecheck, which fails loudly and per symbol, not a changelog.
+- `lucide-react` 0.469 → 1.59. Crosses 1.0, and the risk assumed here — that
+  deprecated aliases are removed — does not apply: all 135 names this app imports
+  still exist in 1.59.0, including the 22 `*Icon` suffix aliases (`XCircleIcon`,
+  `LoaderIcon` …), read out of the package's own `d.ts` on disk. What 1.0 drops is
+  the brand set: `Github`, `Twitter`, `Chrome` and `Facebook` are absent from
+  1.59.0, and this app imports no brand icon. The oracle remains typecheck, which
+  fails loudly and per symbol, not a changelog.
+  **Done 2026-10-20** - see the entry at the end of this file.
 - `sonner` 1.7.4 → 2.0.8. NOT routine, and the reason is measurable: 1.7.4 wraps
   every rule in `:where()` (62 occurrences, zero specificity), so `globals.css`
   overrides win outright; 2.0.8 has none, so they stop winning and instead tie at
@@ -5488,3 +5494,52 @@ no wrapper.
 **Not verified here.** The Tauri desktop window and the `data-tauri-drag-region` path were not
 exercised, and neither was a real provider gateway — the AI path was exercised against the
 stub only.
+
+## 2026-10-20 - lucide-react 0.469.0 -> 1.59.0: a major that changes artwork, not wiring
+
+`lucide-react` moved from `^0.469.0` to `^1.59.0` (resolved `1.59.0`) in `web/package.json`. It
+crosses 1.0, which is why it sat in the deferred list; the premise recorded there was wrong, and
+correcting it is the first finding of this entry.
+
+**The deferral's premise was wrong.** The note said the 1.0 line removes deprecated aliases, so
+typecheck would be the oracle. All 135 names this app imports still exist in 1.59.0, including
+the 22 `*Icon` suffix aliases (`XCircleIcon`, `LoaderIcon`, `TerminalIcon` …) — read out of the
+package's own `d.ts`, and confirmed per symbol by a clean typecheck. What 1.0 drops is the
+**brand set**: `Github`, `Twitter`, `Chrome` and `Facebook` are absent from 1.59.0, and no file
+here imports a brand icon. The risk that actually existed was visual, not symbol-level, so
+typecheck alone would have been a weak oracle for this bump.
+
+**What changes, measured against both versions rather than inferred.** The old and new packages
+were installed side by side in a scratch project and every imported name was rendered twice — at
+default props and at `size={16} className="size-4"` — giving 270 comparable renders:
+
+- **Names:** 135 checked, 0 missing from either version.
+- **Wiring:** identical. `width`, `height`, `viewBox`, `fill`, `stroke`, `stroke-width`,
+  `stroke-linecap` and `stroke-linejoin` match for every icon; the `size`, `className`, `color`
+  and `strokeWidth` props behave the same. The package still has **zero runtime dependencies**
+  and its peer range is unchanged (`react ^16.5.1 || ^17 || ^18 || ^19`).
+- **Two additive attribute changes:** every icon now emits `aria-hidden="true"` (correct for
+  decorative SVGs, and the reason an icon-only control still needs its own label), and an alias
+  icon now carries both classes — `lucide-circle-alert lucide-alert-circle`. Nothing that reads
+  `lucide-<name>` loses its match.
+- **Artwork:** 85 of the 135 are pixel-identical; **50 were redrawn**. The redraws are
+  refinements of the same shapes (simpler path data, tighter radii, more even optical weight),
+  not redesigns — the affected set includes `Settings`, `Search`, `Trash2`, `Mail`, `Mic`,
+  `Play`, `Pause`, `Terminal`, `Zap`, `Clock` and `Paperclip`. A side-by-side sheet of all 50
+  was rendered for review as scratch evidence; it is reproducible by rendering both versions and
+  is deliberately not committed.
+
+**Verified on this tree, 2026-10-20.** Clean install (`node_modules` for both root and `web`
+removed, then `bun install`) exit 0 with `lucide-react` resolving to `1.59.0` and `radix-ui`
+still `1.8.1`. `bun run verify` exit 0: typecheck across all four tsconfigs, `biome ci
+--error-on-warnings` and `format:check` over 931 files, `test:locations`, `build`, unit and
+integration 4320 pass / 43 skip / 0 fail across 319 files, DOM 518 pass / 0 fail across 50
+files. Full E2E (`--project=edge-headless`): `spec files ok: 33, failed: 5` — the same five
+files that fail on the pre-lucide tree, with the radix guard among the 33. Read by hand on an
+isolated instance: the shell's nav rail, header actions, mode icons and composer controls all
+paint as SVGs with no missing or blank glyph.
+
+**Not verified here.** The redraws were not judged at every size the app uses them at (12px
+inline text icons against 16–18px toolbar icons), and the appearance of the new
+`aria-hidden="true"` in a real screen reader was not exercised. Neither affects behaviour, but
+both are the kind of thing a person notices and a test does not.
