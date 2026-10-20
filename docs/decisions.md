@@ -5672,3 +5672,76 @@ behaviour, stays green.
 Chromium/Edge emulation. Browsers without the feature keep the default glass surface, exactly as
 before. Sonner 2's new capabilities (`toast.custom`, multiple toasters, `getHistory`) are not
 adopted.
+
+## 2026-10-20 - assistant-ui train 0.15.27/0.0.12/0.3.52 -> 0.15.30/0.0.14/0.3.53
+
+The assistant-ui train was frozen pending an explicit compatibility review. This entry is that
+review, and the maintainer approved the bump on 2026-10-20. It is one dependency commit: no TBAi
+capability was rewritten, and no persistence or wire contract changed.
+
+| Package | Was | Now | How |
+|---|---|---|---|
+| `@assistant-ui/react` | 0.15.27 | 0.15.30 | floor raised to the verified version |
+| `@assistant-ui/ai-sdk` | 0.0.12 | 0.0.14 | floor edit - `^0.0.12` cannot reach 0.0.14 |
+| `assistant-stream` | 0.3.52 | 0.3.53 | floor raised |
+| `@assistant-ui/core` | 0.3.26 | 0.3.30 | transitive |
+| `@assistant-ui/store` | 0.3.19 | 0.3.22 | transitive |
+| `@assistant-ui/tap` | 0.9.22 | 0.9.24 | transitive |
+| `@assistant-ui/react-devtools` | 1.2.24 | 1.2.25 | dev-only; aligns its `tap` peer |
+| `safe-content-frame` | 0.0.33 | 0.0.34 | transitive |
+
+`@assistant-ui/react-markdown` 0.14.15 (peer `^0.15.0`), `assistant-cloud` 0.2.7 and `react-markdown`
+do not move. The three floors were raised together, not just the one that had to be, so a clean
+install cannot fall back below the set that was tested; `^0.0.14` still cannot cross to 0.0.15.
+
+**Dependency delta is exactly those eight lockfile rows.** `@assistant-ui/core` 0.3.30 also
+promotes `assistant-cloud` from an optional peer to a dependency; 0.2.7 was already resolved.
+
+**Context identity, checked after a clean install.** One `radix-ui` 1.8.1 (assistant-ui still
+declares `^1.7.0`, so the exact app pin keeps winning), one React 19.3.1, one `zustand` 5.0.15, and
+one version of each package above. `@ai-sdk/react` stayed at 4.0.140 - 0.0.14's `^4.0.133` is
+satisfied by the existing lockfile - so it still pins its own `ai` 7.0.137 beside the app's 7.0.145.
+That duplicate is unchanged from the `ai` batch entry and is still deliberately not fixed here.
+
+**What in the diff can reach TBAi, and what cleared it.**
+
+- The remote thread list now installs on the store client, and a later adapter's `unstable_Provider`
+  is honored only alongside `unstable_useAdapters`. `remoteThreadListAdapter.tsx` already provides
+  both, which is the documented supported path. `p2-core-instance` plus all ten history E2E specs
+  are green.
+- `initialize(threadId, { custom })` gained an optional argument. TBAi's zero-argument
+  implementation stays assignable, and drafts are still materialized from `captureDraftSnapshot()`,
+  not from the adapter contract. `phase-4-first-send` and `newchat-flow` are green.
+- `generateTitle` is now retried after the first run when the thread still has no title. TBAi
+  returns a no-op stream and the server titles the row, so the retry is a second no-op rather than a
+  duplicate write. History specs stayed green.
+- The thread viewport gained a shared scroll controller and counts the footer toward the bottom.
+  All eight `virtualizer/*` specs are green, including scroll anchoring and scroll-to-latest.
+- Composer state is readable as soon as `setText` returns. The DOM suite is green, and the composer
+  textbox assertions in `composer-bar` pass.
+- Resume is opt-in through `canResume`/`resumeRun`. TBAi never renders `ComposerPrimitive.Resume`
+  and keeps its own `StreamRecovery`; `refresh-flash` and `p2-history-load-recovery` are green.
+- History ordering (parent-first) and the external-store delete/branch/attachment fixes sit under
+  the custom `threadHistoryAdapter`; the history suite is green.
+- `assistant-stream` 0.3.53 touches resumable lease/idle-timer internals. The `resumable` type
+  surface - `ResumableStreamStore`, `ResumableStreamContextOptions`, `createResumableStreamContext`
+  and `types.d.ts` - is byte-identical between 0.3.52 and 0.3.53, so `src/lib/resumable.ts` and the
+  SQLite store need no change.
+
+**Pre-existing, named rather than absorbed.** `components/composer-bar` is still red. Run alone it
+fails 5/5 with the identical `292.640625px` send/stop geometry difference it showed before the
+bump; it passed once in the full run on timing. Counting that pass as a fix would be false, so it
+is recorded as the pre-existing layout race it is. The other four are unchanged and fail
+identically: `context-menu-spellcheck` (the page Copy item is disabled), `phase-ua-d`,
+`running-indicator`, `tool-body-budget`.
+
+**Verified on this tree, 2026-10-20.** Clean install (root and `web` `node_modules` removed) exit 0.
+`bun run verify` exit 0: typecheck, `biome ci --error-on-warnings` and `format:check` over 932
+files, `test:locations`, `build`, unit and integration 4320 pass / 43 skip / 0 fail across 319
+files, DOM 518 pass / 0 fail across 50 files. Targeted E2E (ten history, eight virtualizer,
+`phase-ua-a`, `refresh-flash`, `quick-messages`, both component guards, `newchat-flow`,
+`opencode-v2-code-route`): 25/25 green. Full E2E (`--project=edge-headless`): `spec files ok: 35,
+failed: 4` - the four above, with the single `composer-bar` pass explained by the timing race.
+
+**Not verified.** Real-provider streaming: the suite runs the stub provider, the same limit as the
+previous dependency entries. The six OpenCode `*-live` specs need credentials and were not run.
