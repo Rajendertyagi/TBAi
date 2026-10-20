@@ -16,8 +16,8 @@ export const TooltipIconButton = forwardRef<HTMLButtonElement, TooltipIconButton
     return (
       <TooltipProvider>
         <Tooltip>
-          {/* Installed radix-ui@1.6.7 TooltipTrigger supports asChild but not
-            the newer `render` prop the registry file used. */}
+          {/* The registry copy used radix's `render` prop; this vendored copy uses
+            `asChild`, which every radix version we install supports. */}
           <TooltipTrigger asChild>
             <Button
               variant="ghost"

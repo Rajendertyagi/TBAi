@@ -5312,8 +5312,8 @@ with its own risk, not a version bump:
 
 - `radix-ui` 1.6.7 → 1.8.1. Widest blast radius: the app imports only the umbrella
   package — 11 sites, zero `@radix-ui/react-*` imports — and those back ~50
-  primitives behind `components/ui/*`. It also has a duplicate-instance nuance that
-  the audit had to check rather than assume; see below.
+  primitives behind `components/ui/*`.
+  **Done 2026-10-20** - see the migration entry at the end of this file.
 - `lucide-react` 0.469 → 1.59. Crosses 1.0, where deprecated aliases are removed.
   The oracle is typecheck, which fails loudly and per symbol, not a changelog.
 - `sonner` 1.7.4 → 2.0.8. NOT routine, and the reason is measurable: 1.7.4 wraps
@@ -5330,16 +5330,17 @@ with its own risk, not a version bump:
 **Named, pre-existing conditions found while verifying this (not introduced here,
 not fixed here).**
 
-- *Two `radix-ui` copies coexist, on purpose.* The app pins `radix-ui` 1.6.7
-  exactly; `@assistant-ui/react` 0.15.27 declares `radix-ui ^1.7.0`, which 1.6.7
-  cannot satisfy, so `bun.lock` resolves a second, nested copy —
-  `"@assistant-ui/react/radix-ui": ["radix-ui@1.8.1", ...]`. Each copy is internally
-  consistent and the two never share a React context, because the app's primitives
-  and assistant-ui's primitives are separate trees; the 518 DOM tests and the E2E
-  suite pass against this arrangement. One consequence is worth recording for the
-  deferred bump: moving the app to 1.8.1 would make both use ONE copy, since 1.8.1
-  satisfies `^1.7.0`. The risk of that bump is not duplication — it is the ~50
-  primitives whose behaviour changed across radix 1.7 and 1.8.
+- *Two `radix-ui` copies coexisted — found, then resolved.* The app pinned `radix-ui`
+  1.6.7 exactly; `@assistant-ui/react` 0.15.27 declares `radix-ui ^1.7.0`, which 1.6.7
+  cannot satisfy, so `bun.lock` resolved a second, nested copy —
+  `"@assistant-ui/react/radix-ui": ["radix-ui@1.8.1", ...]`. Neither copy was broken:
+  each was internally consistent, and the two never shared a React context, because
+  the app's primitives and assistant-ui's are separate trees and no provider/consumer
+  pair crossed them — checked, not assumed: the app renders no `DirectionProvider`,
+  and no primitive is nested inside its own kind from the other copy. The bump was
+  taken on 2026-10-20 and the duplicate is gone; see the migration entry at the end of
+  this file. The risk was never the duplication — it was the 51 children whose
+  behaviour moved across radix 1.7 and 1.8, and that is what the browser pass answers.
 - *Manifest range drift for five packages — found, then fixed.* `@playwright/test`,
   `react-router`, `assistant-stream`, `react` and `react-dom` are declared in both
   manifests but were updated in the root only (batches 1 and 2), so `web/package.json`
@@ -5381,3 +5382,109 @@ not fixed here).**
   `%USERPROFILE%\AppData\Local\ms-playwright` cache is absent. System Edge is
   installed, so `--project=edge-headless` runs the suite with no download. Which
   projects must pass remains CI's call, not this note's.
+
+---
+
+## 2026-10-20 - radix-ui 1.6.7 -> 1.8.1: the deferred bump, taken because it could be measured first
+
+`radix-ui` is pinned exactly in `web/package.json`, and it moved to `1.8.1`. Of the four
+web UI majors deferred in the entry above, this is the one whose risk could be measured
+*before* anything changed, for a blunt reason: the new version was already on this
+machine. `@assistant-ui/react` 0.15.27 declares `radix-ui ^1.7.0`, so 1.8.1 and its whole
+child set were already installed and rendering in this app.
+
+**Why it is safe, in numbers rather than adjectives.**
+
+- Both versions declare the same 55 children: 0 added, 0 removed, 51 moved.
+- The 1.8.1 umbrella exports all nine names the app imports from it — `Slot`, `Dialog`,
+  `AlertDialog`, `DropdownMenu`, `ContextMenu`, `Popover`, `Select`, `Tooltip`,
+  `Collapsible` — read out of its own `dist/index.d.ts` on disk, not from a changelog.
+- The app's nine moved as follows: slot 1.3.3 -> 1.5.0, dialog 1.1.23 -> 1.3.1,
+  alert-dialog 1.1.23 -> 1.2.1, dropdown-menu 2.1.24 -> 2.2.1, context-menu 2.3.7 ->
+  2.4.1, popover 1.1.23 -> 1.3.1, select 2.3.7 -> 2.4.1, tooltip 1.2.16 -> 1.4.1,
+  collapsible 1.1.20 -> 1.2.1.
+- No file imports an individual `@radix-ui/react-*` package; the umbrella is the app's
+  only radix import, at 11 sites, and every one of the ten wrappers in
+  `components/ui/` is mounted somewhere (alert-dialog in 9 files, dialog 8,
+  dropdown-menu 9, context-menu 6, collapsible 7, select 4, tooltip 2, popover 2,
+  marker 1, badge 4), so there is no dead wrapper to hide a break in.
+
+**What actually changed for this app is a list of fixes, not of breaks.** The 1.7/1.8
+line carries: `Slot` creating a new ref callback on every render under React 19 (the app
+uses `Slot` in button, badge and marker); stale `onEscapeKeyDown`/`onDismiss` handlers on
+React 19.2; a Dismissable Layer bug where a nested popover closed every layer on an
+outside click (settings dialogs contain selects); `Tooltip.Content` mounting its children
+twice; `Select.Value` logging an invalid-prop error when used with `asChild` and a
+placeholder; presence-based exit animations for `Select`; and the removal of a global
+`React.CSSProperties` augmentation — the one change that could have reached the app's
+types, and did not.
+
+**The duplicate is gone.** `bun.lock` now holds one `radix-ui` resolution — `1.8.1` — and
+the nested `"@assistant-ui/react/radix-ui"` entry no longer exists; the umbrella's store
+entry carries its own 55 children, one version each. The only radix package still
+duplicated is `@radix-ui/react-primitive` 2.1.11, required directly by the frozen
+`@assistant-ui/react-markdown` 0.14.15; it holds no `createContext` — checked in its
+`dist`, not inferred from its name — so no context is split by it.
+
+**What no test covered, and what now does.** Nothing in the suite pinned a radix internal:
+no test asserted `data-radix-*`, `aria-labelledby`, `aria-describedby`, a computed custom
+property or popup geometry, so a rename inside radix would have left every gate green while
+a tooltip or a popup rendered mis-anchored. `tests/e2e/components/radix-primitives.spec.ts`
+closes that gap for the properties the app's own wrapper classes read. Reading them
+back qualified what those class names imply — that radix supplies all three — as follows:
+
+- **Tooltip.** Tooltip is always popper-positioned, so radix does publish
+  `--radix-tooltip-content-transform-origin`; measured on the composer's attach button it
+  reads `30.5px 38px` and the computed `transform-origin` resolves to the same pixel pair.
+  Radix also sets that property's value **inline** through the popper, so the app's
+  `origin-(--radix-tooltip-content-transform-origin)` class is redundant rather than
+  load-bearing: renaming the variable in that class during the guard's defect proof changed
+  the computed value to a different pixel pair and nothing else. The guard therefore asserts
+  the resolved origin and the tooltip's placement (centred on its trigger, sitting just above
+  it) rather than the class's own contribution.
+- **Select.** The wrapper supports both of radix's positioning modes, and the properties
+  behind `max-h-(...)`, `w-(...)` and `origin-(...)` are popper-only — radix gates them on
+  `data-[position=popper]` in its own stylesheet. No call site in this app passes
+  `position="popper"`, so every select is item-aligned, where radix publishes **none** of
+  them: measured, `--radix-select-content-available-height` reads empty, the content carries
+  radix's inline `max-height: 100%`, and the real clamp is the content wrapper's inline
+  `max-height: 700px`. Those classes are therefore inert today rather than broken, and the
+  item-aligned branch is byte-for-byte identical in 1.6.7 and 1.8.1 — read on disk in both
+  `dist` trees, not assumed. Switching one select to popper mode during the defect proof made
+  the property live (`522px`) and the app's `max-h-(...)` resolve, which is the positive
+  control that the class is correct in the mode it is written for.
+
+The guard asserts the behaviour either mechanism must produce — the popup is height-bounded,
+stays inside the viewport, keeps its chosen item on the trigger's centre line, closes on
+Escape, and actually paints (measured opacity, because `toBeVisible()` ignores it) — rather
+than pinning the mechanism, which would fail the next time radix legitimately changes it.
+Both halves were proven able to fail: flipping a select to popper mode fails it on
+`data-align-trigger`, and moving the attach tooltip's `side` from top to bottom fails it with
+`gap = -59.45` ("tooltip should sit just above its trigger"). It passes unchanged on 1.6.7,
+so it pins the contract rather than the version.
+
+**Verified on this tree, 2026-10-20.** `bun run verify` exit 0: typecheck (backend, tests,
+web), `biome ci --error-on-warnings`, `format:check`, `test:locations` and `build` all clean;
+unit and integration 4320 pass / 43 skip / 0 fail across 319 files, DOM 518 pass / 0 fail
+across 50 files. The full E2E suite reports `spec files ok: 33, failed: 5`, with the new spec
+among the 33 — it printed `TOOLTIP_PROBE {"published":"30.500000000000007px 38px",
+"transformOrigin":"30.5px 38px"}` and `SELECT_PROBE {"published":"","maxHeight":"100%",
+"wrapperMaxHeight":"700px","alignTrigger":"true"}`. The five failures are
+`components/composer-bar`, `components/context-menu-spellcheck`, `core/phase-ua-d`,
+`core/running-indicator` and `tools/tool-body-budget`. They are pre-existing, not a
+consequence of this bump, and that is measured rather than assumed: a scoped re-run of those
+five files plus the new spec on the unmodified 1.6.7 tree gives the same `ok: 1, failed: 5`
+with the same assertion text (`composer-bar`'s `Received: 292.640625` on both versions).
+
+Read by hand on an isolated instance, with screenshots, because a passing assertion is not the
+same as a painted popup: a select opening with its five options, the checked item marked,
+anchored to its trigger and dismissed on an outside click; a select nested inside a dialog
+painting **above** the dialog and staying item-aligned; a dialog; an alert-dialog cancelled
+from its destructive action; a dropdown menu; a popover; the sidebar collapsible closing and
+reopening; and a real streamed stub reply rendering with Copy and Regenerate. The composer's
+`[data-slot="tooltip-trigger"]` resolves to the button element itself, so `asChild` still adds
+no wrapper.
+
+**Not verified here.** The Tauri desktop window and the `data-tauri-drag-region` path were not
+exercised, and neither was a real provider gateway — the AI path was exercised against the
+stub only.
