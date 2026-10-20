@@ -59,6 +59,11 @@ const EXPECTED_SEQUENCE = [
   "test:startup-rollback",
   "test:lifecycle-integration",
   "test:dom",
+  // The OpenCode defect-regression quarantine guard. It is a gate like any
+  // other, because a stale quarantine entry means a finding was fixed without
+  // its regression test being promoted - a silent loss of coverage, which is
+  // the one thing this repository's guards exist to prevent.
+  "test:quarantine",
 ] as const;
 
 async function readRepoFile(relativePath: string): Promise<string> {
@@ -236,6 +241,8 @@ function buildJob(stepOverrides: Record<string, string>): string {
     "Test (lifecycle integration)":
       "      - name: Test (lifecycle integration)\n        run: bun run test:lifecycle-integration\n",
     "Test (DOM contract)": "      - name: Test (DOM contract)\n        run: bun run test:dom\n",
+    "OpenCode quarantine guard":
+      "      - name: OpenCode quarantine guard\n        run: bun run test:quarantine\n",
     ...stepOverrides,
   };
   const body = Object.values(steps).join("\n");

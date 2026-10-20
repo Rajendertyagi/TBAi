@@ -26,6 +26,7 @@ which is, in order:
 | Startup rollback | `bun run test:startup-rollback` | Failed-boot rollback, in its own process |
 | Lifecycle integration | `bun run test:lifecycle-integration` | Entry-point boot/shutdown wiring, in its own process |
 | DOM contracts | `bun run test:dom` | Contracts that need a mounted React tree |
+| OpenCode quarantine | `bun run test:quarantine` | A defect-regression entry left in the quarantine after its finding was fixed — i.e. a finding closed without its regression test being promoted |
 
 Not part of `verify`, because it needs a browser and a spawned server:
 

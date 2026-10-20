@@ -215,6 +215,27 @@ jobs:
       - name: Test (DOM contract)
         run: bun run test:dom
 
+      # The OpenCode defect-regression quarantine.
+      #
+      # The OpenCode findings are pinned two ways: a baseline test that asserts
+      # today's behaviour (defects included) and a `test.todo` that asserts the
+      # behaviour the finding says the product should have. A todo body is never
+      # executed by an ordinary run, so the quarantine cannot break the build -
+      # which is exactly why it needs its own step.
+      #
+      # This step runs the quarantine WITH `--todo` and fails when an entry has
+      # gone STALE: a todo whose body now PASSES means the underlying defect has
+      # been fixed and the entry must be promoted to a real test in the same
+      # commit that deletes the baseline test. The decision is made on the
+      # MESSAGE bun prints, never on the exit code - a file of only failing todos
+      # exits 0 in both modes, so an exit code cannot distinguish "the
+      # quarantine is healthy" from "something else broke".
+      #
+      # A stale entry is reported by name, so the failure says which finding is
+      # ready to be converted rather than only that something changed.
+      - name: OpenCode quarantine guard
+        run: bun run test:quarantine
+
       # DIAGNOSTIC ONLY - no test, production, or opencode behaviour changes.
       #
       # GitHub caps check-run annotations at 10 per run and downloading the job

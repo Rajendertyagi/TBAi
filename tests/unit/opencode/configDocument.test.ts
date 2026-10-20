@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import { join } from "node:path";
 import {
   OpenCodeConfigUnreadableError,
@@ -180,6 +180,32 @@ describe("setOpenCodePermissionEffect", () => {
         "allow",
       ),
     ).toThrow(OpenCodeConfigUnreadableError);
+  });
+
+  /**
+   * DEFECT REGRESSION (H3) — quarantined as `test.todo`.
+   *
+   * A rule is currently addressed by its CONTENT — the `(action, resource)`
+   * pair — and the first exact match is edited. A configuration that contains
+   * the same pair twice (which TBAi's own append path refuses to create, but a
+   * hand-edited file or another tool can) therefore has one of the two
+   * changed arbitrarily, and the page reports success.
+   *
+   * The correct contract is that an ambiguous pair is REFUSED rather than
+   * applied to an arbitrary one, and that the edit addresses the rule by
+   * POSITION plus a re-checked identity.
+   *
+   * Run `bun test --todo tests/unit/opencode/configDocument.test.ts` to see the
+   * failure this pins. It is committed as a todo so it cannot break the build.
+   */
+  test.todo("R-H3: an ambiguous (action, resource) pair is refused, not applied to the first match", () => {
+    const duplicated = [
+      { action: "question", resource: "*", effect: "ask" },
+      { action: "question", resource: "*", effect: "deny" },
+    ];
+    expect(() =>
+      setOpenCodePermissionEffect(duplicated, { action: "question", resource: "*" }, "allow"),
+    ).toThrow();
   });
 });
 

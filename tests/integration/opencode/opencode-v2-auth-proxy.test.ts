@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it, test } from "bun:test";
 import { getOpenCodeAuthHeaders } from "@/services/opencode/runtime.ts";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
 
@@ -132,5 +132,45 @@ describe("OpenCode proxy authentication", () => {
     expect(capturedRequests[0]?.url).toBe(
       `${fixtureBaseUrl}/api/event?directory=%2Fworkspace%2Fproject-one`,
     );
+  });
+
+  /**
+   * DEFECT REGRESSION (M8) — quarantined as `test.todo`.
+   *
+   * The proxy forwards the browser's `x-opencode-directory` verbatim, so the
+   * CALLER chooses the upstream's location. Upstream resolves the location of
+   * every request from exactly that header (or the `location[directory]`
+   * query parameter), so a caller can point the managed server at a directory
+   * it does not own — and read the event stream of a workspace that is not
+   * theirs.
+   *
+   * The correct contract: the proxy never forwards a caller-supplied
+   * directory. It derives the location server-side and sets the header
+   * itself, so the upstream's scope is the server's decision.
+   *
+   * The test above ("preserves session paths and directory headers…") pins
+   * today's behaviour and is deleted when this finding is fixed.
+   *
+   * Run `bun test --todo tests/integration/opencode/opencode-v2-auth-proxy.test.ts`
+   * to see the failure this pins.
+   */
+  test.todo("R-M8: a caller-supplied directory never reaches the upstream", async () => {
+    capturedRequests.length = 0;
+
+    const response = await openCodeApp.request(
+      `http://localhost/api/opencode/session/${fixtureSessionId}`,
+      {
+        headers: {
+          Authorization: browserAuthorization,
+          "x-opencode-directory": encodedFixtureDirectory,
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(capturedRequests).toHaveLength(1);
+    // CORRECT: the upstream is told the SERVER's directory, never the
+    // caller's.
+    expect(capturedRequests[0]?.directory).not.toBe(encodedFixtureDirectory);
   });
 });
