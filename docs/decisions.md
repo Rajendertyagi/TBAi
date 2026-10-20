@@ -5745,3 +5745,70 @@ failed: 4` - the four above, with the single `composer-bar` pass explained by th
 
 **Not verified.** Real-provider streaming: the suite runs the stub provider, the same limit as the
 previous dependency entries. The six OpenCode `*-live` specs need credentials and were not run.
+
+---
+
+## 2026-10-20 - live Big Pickle Code-mode stream, opt-in from CI, and the Direct real-provider proof
+
+Commit `23a1193` adds the live acceptance spec and its CI job; this entry records what it
+proves and the one real-provider run done in its place for Direct chat.
+
+**The live Big Pickle spec.** `tests/e2e/opencode/opencode-big-pickle-live.spec.ts` drives a
+real Code-mode conversation against the OpenCode free-tier model `opencode/big-pickle`: the
+conversation is created through TBAi's own API with `engine=opencode`, the session is booted
+by the real managed `opencode serve`, the prompt goes through the real composer and the
+real SSE event stream, and the answer is read from the rendered transcript. Nothing is
+mocked. The spec is `-live` and opt-in: the hermetic E2E server has no provider
+credentials, which is exactly why this cannot be a normal gate.
+
+**The CI job.** `e2e-big-pickle` in `.github/workflows/tests.yml` is dispatch-only via the
+`live_opencode` boolean input; it never runs on push or PR and is never a gate. A third-party
+free model must not be able to turn the code base red. The job installs the pinned OpenCode
+CLI, runs `TBAI_E2E_LIVE=1 bun run test:e2e opencode/opencode-big-pickle-live.spec.ts`, and
+uploads Playwright screenshots and the E2E server log to a `big-pickle-live` artifact on
+every run. Rerun: `gh workflow run tests.yml --ref ci/tauri-e2e-verify -f live_opencode=true`.
+
+**Evidence from run 39379368389 (CI, 2026-10-20).** The live spec passed: prompt admitted
+at 810 ms, Working indicator at 1,016 ms, answer complete at 5,879 ms, 7 visible growth
+samples from 21 to 83 chars, `1 passed (12.0s)`, artifacts uploaded to `big-pickle-live`.
+The same run is recorded in the workflow log, not in this repo.
+
+**The free-tier constraint that makes this Code-mode-only.** OpenCode Zen returns
+`403 FreeTierError` to direct (non-OpenCode) callers, so `opencode/big-pickle` is
+legitimate only through the managed `opencode serve`. Direct chat cannot use it: the
+`@ai-sdk/openai-compatible` provider has no knowledge of the OpenCode free tier, and the
+gateway will reject it. This is a protocol boundary, not a bug.
+
+**The Direct real-provider run done instead.** Because the live spec covers Code mode,
+a Direct real-provider streaming proof was run in isolation: provider `agnes` /
+`agnes-3.0-flash`, using a `VACUUM INTO` snapshot of the live database so the real
+credential was decrypted by the server and never left it. The result: 64 chunks,
+14,554 bytes, 12.78 s wall clock, `finishReason=stop`, and the persisted message
+survived a page reload. The retained evidence (the `live-proof` artifacts under
+`Temp\opencode\live-proof\`) was cleared after the run; the numbers above are
+re-stated here from the run log, not re-measured.
+
+**Not re-verified in this entry.** The `live-proof` artifacts no longer exist on disk,
+so the chunk/byte/duration numbers cannot be re-derived from retained files. The
+CI run `39379368389` is the authoritative evidence for the live spec; the Direct
+run is recorded from the session log at the time it was performed.
+
+---
+
+## 2026-10-20 - typescript pinned exactly 5.9.3 in both workspaces
+
+Commit `2475396`. `package.json` and `web/package.json` each moved
+`"typescript": "^5.9.3"` to `"typescript": "5.9.3"`, and the two lockfile spec
+strings moved from `"typescript": "^5.9.3"` to `"typescript": "5.9.3"`.
+
+**What this is and is not.** Both workspaces already resolved to 5.9.3 under the
+caret range; this is drift *prevention*, not a version change. No runtime effect:
+`bun install` reported no changes after the pin; `bun run typecheck` exit 0
+across all four projects. The pin means a future `bun install` without a lockfile
+update cannot silently pull 5.10 or a 6.x minor.
+
+**Verified on this tree, 2026-10-20.** `package.json` and `web/package.json`
+each read `"typescript": "5.9.3"` (no caret); `bun.lock` holds two spec strings
+`"typescript": "5.9.3"` and one resolved entry `typescript@5.9.3`. `bun run
+typecheck` exit 0 across all four projects. `bun run verify` gate sequence
+unchanged.

@@ -70,18 +70,18 @@ is not stylistic:
 - `bun run test` scopes discovery to `./tests/unit ./tests/integration`, drops
   `shutdown-lifecycle.test.ts` (it has its own script), passes `--isolate` and
   sets `--timeout=30000`.
-- Bare `bun test` collects **412** files instead of **319** (measured 2026-10-20:
-  319 and 50 are the file counts the two `verify` test steps report, 42 is the
-  number of E2E specs on disk, 1 is the shutdown test, and 412 is their sum).
-  The **93** it adds are the 50 DOM contract files — which need
-  `--preload ./tests/setup/dom-preload.ts`
-  and fail without it (measured: 18 fail, 8 errors) — the shutdown test
-  that `test` deliberately excludes, and the 42 E2E Playwright specs in
-  `tests/e2e`, which bare `bun test` collects because they are named `*.spec.ts`.
-  The totals move as tests are added; the
-  difference of 93 is the part the argument rests on, and it is made up of
-  exactly those three groups: the 50 DOM files, `shutdown-lifecycle.test.ts`,
-  and 42 E2E specs.
+- Bare `bun test` collects **417** files instead of **319** (measured 2026-10-20).
+  `bun run test` scopes to `./tests/unit ./tests/integration` and excludes the
+  three lifecycle test files (`shutdown-lifecycle`, `startup-rollback`,
+  `lifecycle-integration`), giving 319. Bare `bun test` collects all 322
+  unit/integration files, plus the 50 DOM contract files, plus the 45 E2E
+  Playwright specs in `tests/e2e`: 322 + 50 + 45 = 417.
+  The DOM files need `--preload ./tests/setup/dom-preload.ts` and fail
+  without it (measured: 18 fail, 8 errors). The E2E specs are named
+  `*.spec.ts`, which bare `bun test` collects; they are the 45 on disk
+  (39 non-live + 6 `*-live`).
+  The totals move as tests are added; the argument rests on the named
+  groups, not on a fixed difference.
 - Without `--isolate` the shared test database cascades "Database has closed",
   reporting hundreds of phantom failures instead of real ones.
 
@@ -125,7 +125,30 @@ the kind of check that passes while the thing it names has drifted.
 The E2E job is separate and deliberately has no `needs:` on it, so an E2E failure
 cannot be misread as a backend or typecheck failure. Because jobs do not share a
 filesystem, that job builds for itself rather than relying on the `verify` job's
-artifact.
+artifact. **The `e2e` job is scoped to six specs**, listed explicitly in
+`.github/workflows/tests.yml` (the file that owns the list):
+`p2-history-load-recovery.spec.ts`, `p2-direct-history-window.spec.ts`,
+`p2-paging.spec.ts`, `p2-live-runtime.spec.ts`, `p2-tool-result-persistence.spec.ts`,
+and `phase-8-tabs-navigation.spec.ts`. These are the conversation-history and
+tool-persistence specs, where a silent stale-bundle run does the most damage.
+The remaining specs on disk are pre-existing work in progress and are not gated
+here; widening this list is a deliberate decision, not an oversight. The
+scoped list is **not** the full E2E suite: 45 specs live on disk
+(39 non-live + 6 `*-live`), and the `e2e` job runs only the six above.
+
+A fourth CI job, **`e2e-big-pickle`**, is dispatch-only: it runs only when
+triggered via `workflow_dispatch` with the `live_opencode` boolean input set to
+`true` (`gh workflow run tests.yml --ref <branch> -f live_opencode=true`).
+It is **never a gate**: the answer comes from a real third-party model
+(`opencode/big-pickle` on the OpenCode free tier), so a quota change or an
+outage would turn a green code base red for a reason the code cannot fix.
+What it proves: the managed `opencode serve` process starts, a real session is
+bound to `opencode/big-pickle`, the composer sends the prompt, the SSE stream
+delivers the answer, the rendered transcript shows it, and the same answer
+survives a page reload from persisted history. Artifacts (Playwright
+screenshots and the E2E server log) are uploaded to a `big-pickle-live`
+artifact on every run. Rerun command:
+`gh workflow run tests.yml --ref ci/tauri-e2e-verify -f live_opencode=true`.
 
 `bun run lint` uses `--error-on-warnings`. **A warning is a failure.** A rule that
 reports a genuine defect must not be able to pass CI by being downgraded to a

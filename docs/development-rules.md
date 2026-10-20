@@ -109,10 +109,16 @@ provider switching works when applicable.
 The mandatory gates and what each one catches are in **`docs/engineering-quality.md`**.
 Run them all with `bun run verify`.
 
-- The suite is **green**: 3975 pass / 43 skip / 0 fail across 4018 tests
-  (measured 2026-10-11 at `quality/foundation-2026-10-11`). An earlier note here
-  claimed a baseline of "259 unique failing tests" from cross-file SQLite
-  contention; that is no longer true and was removed rather than left to mislead.
+- The suite is **green** when all ten `bun run verify` gate steps exit 0
+  (measured 2026-10-20 at `ci/tauri-e2e-verify`): typecheck, lint,
+  `format:check`, `test:locations`, build, unit/integration
+  (4320 pass / 43 skip / 0 fail across 319 files), the three isolated
+  lifecycle suites, and the DOM contract suite (518 pass / 0 fail across
+  50 files). `docs/engineering-quality.md` is the single owner of the gate
+  definitions and the measured counts; this bullet points at it rather than
+  duplicating numbers that drift. An earlier note here claimed a baseline of
+  "259 unique failing tests" from cross-file SQLite contention; that is no
+  longer true and was removed rather than left to mislead.
 - **A failure in-suite is still not automatically a regression.** One test is
   timing-sensitive under full-suite load and fails intermittently on its own:
   `MCP lifecycle (Phase 4) > disconnectAll on a mid-connect connection` in

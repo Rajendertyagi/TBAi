@@ -16,7 +16,7 @@
 
 ## 1. Executive summary
 
-**Historical baseline (pre-refactor).** The architecture described below — `AppShell` mounted *inside* both `ChatShell` and `CodeShell` — was the starting point. Phases 1–5 (recorded at the top of this plan and in `tests/test-prompts-phase5.md`) restructured this so `AppShell` is the universal parent of all production routes. Read this section as the "before" state, not the current one.
+**Historical baseline (pre-refactor).** The architecture described below - `AppShell` mounted *inside* both `ChatShell` and `CodeShell` - was the starting point. Phases 1-5 (recorded at the top of this plan, with test prompts previously tracked in `tests/test-prompts-phase5.md`, since removed from the repository) restructured this so `AppShell` is the universal parent of all production routes. Read this section as the "before" state, not the current one.
 
 The baseline architecture mounted `AppShell` (chrome + global singletons) inside both `ChatShell` and `CodeShell`. This caused `AppShell` to unmount and remount on every `/` ↔ `/code` transition, tearing down and restarting application-wide services (availability poller, recovery listeners, tab reconciliation, route-observer continuity).
 
@@ -271,7 +271,7 @@ main.tsx
 
 **Deviation from original plan:**
 - Original criterion was "Zero `features/opencode` imports." Actual result: Composer has 2 imports from `features/opencode/` (the encapsulated hook + component), consistent with the `OpenCodeStatusBarLabel` pattern already established. The 9 imports that exposed OpenCode internals are gone.
-- No tests written (per user instruction: "you dont need to add test just create a file keep adding prompt for test in this file"). Test prompts tracked in `tests/test-prompts.md`.
+- No tests written (per user instruction: "you dont need to add test just create a file keep adding prompt for test in this file"). Test prompts were tracked in `tests/test-prompts.md`, since removed from the repository.
 
 **Acceptance criteria (revised):**
 - Zero direct imports of OpenCode internal modules in shared components. ✅
@@ -306,7 +306,7 @@ main.tsx
 - `web/src/features/opencode/OpenCodeView.tsx`
 
 **Deviation from original plan:**
-- No test written (per user instruction: "you dont need to add test just create a file keep adding prompt for test in this file"). Test prompt tracked in `tests/test-prompts.md`.
+- No test written (per user instruction: "you dont need to add test just create a file keep adding prompt for test in this file"). Test prompt was tracked in `tests/test-prompts.md`, since removed from the repository.
 
 **Acceptance criteria:**
  Zero hardcoded route literals outside `navigation.ts` and `router.tsx`. Verified by grep — no matches.
