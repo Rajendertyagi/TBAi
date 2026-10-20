@@ -2,11 +2,32 @@
 
 **Repository:** `Rajendertyagi/TBAi` (local: `D:\Temp\ai-chat-app`)
 **Branch:** `ci/tauri-e2e-verify` — **Audited commit:** `2475396ce36fdf33b53afc09779027ed7e6684b6`
-**Date:** 2026-10-20
+**Date:** 2026-10-20 — **last updated:** 2026-10-21 (after Phase 0)
 **Reference study:** `D:\Temp\openchamber` @ `bf977d2ed89c079ec592210d7cd0e2d649ba0636` (branch `main`)
 **Official-API study:** `https://opencode.ai/config.json` (published JSON Schema), `https://opencode.ai/docs/*.md` (published doc sources), and the installed `@opencode/client@2.0.32` type/contract surface
 **Upstream-source study:** `sst/opencode@dev` (resolves to `anomalyco/opencode`) — the authoritative V2 permission semantics
-**Mode:** Planning-only. This document changes nothing else in the repository. No production source, test, configuration, dependency, migration, or runtime setting is modified by it, and it does **not** authorize implementation.
+**Status:** **Phase 0 delivered and committed** (`f4d93c1`). **Phase 1 and later are NOT authorized.** No defect is fixed: all 29 findings remain exactly as open as the audit found them.
+
+---
+
+## 0.1 Progress ledger
+
+| Phase | Unit | State | Commit | Gate evidence | Next |
+|---|---|---|---|---|---|
+| **0** | Baseline, characterization, quarantined regression tests, and the G-TODO guard | **DONE** | `f4d93c1` | `bun run verify` exit 0 — 4329 pass / 43 skip / 9 todo / 0 fail across 321 files / 4381 tests; typecheck, lint, format:check, test:locations, build, test:shutdown, test:startup-rollback, test:lifecycle-integration, test:dom and test:quarantine all green | — |
+| **1** | **A1** — the proxy route allowlist | Not started | — | — | **Next, and separately approvable.** Closes the Critical **execute** half; waits on nothing |
+| **1** | **A2** — server-side workspace authorization | Not started | — | — | Atomic with A1; waits on nothing |
+| **1** | **A3** — CORS narrowing | Not started | — | — | **Held on G1 and G2** — the origin list cannot be written without them |
+| **1** | **B** — credential redaction | Not started | — | — | Separately approvable |
+| **1** | **C** — permission-row identity | Not started | — | — | Separately approvable; partly held on G7 (a maintainer policy call) |
+| **1** | **D** — event-scope validation | Not started | — | — | Separately approvable |
+| **2–8** | Ownership extraction, attempt ownership, snapshot merge, settlement, retention, surfaces, verification | Not started | — | — | — |
+
+**What Phase 0 changed and did not change.** It added tests and one gate; it moved the controller test's harness into a shared helper as a **pure move** (every test body byte-for-byte identical). **It fixed no defect.** Its whole purpose is to make every later fix provable: the B-series pins the broken behaviour, the R-series asserts the correct behaviour and fails today, and the guard fails the build if a finding is fixed without its regression test being promoted.
+
+**How a later phase retires a finding.** The phase that fixes it promotes that finding's `test.todo` to a real test, deletes the B-test that pinned the old behaviour **in the same commit**, and the G-TODO guard stops reporting it. A baseline test that survives its own fix is a finding that was not really fixed.
+
+---
 
 ---
 
@@ -22,6 +43,8 @@ This plan is the merged output of three independent investigations against the s
 §4 states the target architecture and its ownership map. §5 is the ordered work and its acceptance tests. §6 is the dependency graph. §7 is the gate-level acceptance criteria. §8 is risks and non-goals. **§9 states the recommended decision for each of the eighteen architectural questions** — with the residual evidence gaps labelled explicitly rather than left as open questions. §10–§14 are the evidence and citation indices, and **§15 is the readiness verdict**.
 
 **Status of every finding in this document:** the audit confirmed **1 Critical, 2 High, 17 Medium, 9 Low** defects, plus **7 hypotheses disproven or withdrawn** — one of the withdrawn ones (L6) was a false positive of this plan's own making, caught by reading the upstream source. Nothing here is speculative. Where a decision still depends on evidence that could not be obtained without side effects, §9.1 names the gap instead of guessing.
+
+**All 29 findings are still OPEN.** Phase 0 (§5.1) established the verification baseline and the defect-regression quarantine; it did not close any of them. The progress ledger is §0.1.
 
 ---
 
@@ -1457,7 +1480,7 @@ Source: `sst/opencode@dev` (redirects to `anomalyco/opencode`), fetched read-onl
 
 ### 15.1 Ready for maintainer approval — with its limitations stated
 
-**The architecture and the phase plan are ready for maintainer approval.** Not "ready to implement" — that requires a separate, explicit authorization, and §5.2 (the capability boundary) should be approved **on its own merits**, because it is the only phase that changes the security posture and the only one with a HIGH blast radius.
+**Phase 0 is approved, delivered and committed** (`f4d93c1`); see the progress ledger in §0.1 and the outcome record in §5.1.1. **The rest of the programme is ready for approval, unit by unit.** The next approval is **§5.2.A1** (the proxy route allowlist), which is deliberately separable: it changes the security posture on its own, it has its own tests and its own rollback, and it waits on no evidence gap.
 
 **The limitations travel with the approval.** This plan is **not** fully verified, and the following were not established:
 
@@ -1469,9 +1492,9 @@ Source: `sst/opencode@dev` (redirects to `anomalyco/opencode`), fetched read-onl
 | **G7** — the policy for a pre-existing exact-duplicate rule | The config page's duplicate-row behaviour (5.2.C) is held; the rest of Unit C, and Units A1, A2, A3, B and D, are not |
 | Any **live** OpenCode evaluation, prompt, session, or configuration write | Every finding is source-confirmed or runtime-verified against the **real controller**, but none was exercised against a live OpenCode server |
 
-**What *is* verified**, and carries the weight of this plan: the 15 deterministic tests driving the real controller from outside the repository; the upstream V2 permission semantics read from `sst/opencode@dev`; the pinned client's real route surface; the published JSON Schema; and a byte-for-byte reproduction of the CORS middleware, including the preflight.
+**What *is* verified**, and carries the weight of this plan: the 15 deterministic tests driving the real controller from outside the repository; the upstream V2 permission semantics read from `sst/opencode@dev`; the pinned client's real route surface; the published JSON Schema; a byte-for-byte reproduction of the CORS middleware, including the preflight; and — since Phase 0 — **the repository's own full gate suite, green end to end** (`bun run verify` exit 0, 4329 pass / 43 skip / 9 todo / 0 fail), with the 9 R-tests demonstrably failing on demand against the current code.
 
-**What this verdict is, and is not.** It says the *architecture and the phase plan* are ready to be approved and started. It says **nothing about whether the proposed fixes work** — **not one of them has been implemented, and none has been exercised.** The evidence below establishes that the *defects are real*; it establishes nothing about the *remedies*, because the remedies do not exist yet. Every fix remains an untested hypothesis until its phase lands its R-test and that test passes.
+**What this verdict is, and is not.** It says the *architecture and the phase plan* are ready to be approved and started, and that **Phase 0 has been approved, delivered and verified**. It says **nothing about whether the proposed fixes work** — **not one of them has been implemented, and none has been exercised.** The evidence establishes that the *defects are real*; it establishes nothing about the *remedies*, because the remedies do not exist yet. Every fix remains an untested hypothesis until its phase lands its R-test and that test passes. **Phase 0 is the one thing that has been implemented, and it is the verification apparatus, not a remedy.**
 
 **Why ready despite the gaps.** The gaps are **evidence gaps with named closures and owning phases**, not open questions. Every finding has a reproduced failure mechanism; every one of the eighteen decisions has a reasoned recommendation (§9.2); every phase carries fail-before/pass-after tests (§5.10), a risk, a rollback, and an explicit "must not change" list.
 
