@@ -1,12 +1,13 @@
 /**
  * OpenCode slash commands → assistant-ui composer entries.
  *
- * OpenCode is the authority for which commands exist: `GET /command` (reached
- * through the existing `/api/opencode/*` proxy) returns them, already merged
- * with the skills the server exposes as commands and tagged by `source`
- * (`"command"` for real commands, `"skill"` for skill-backed ones). Nothing
- * here hardcodes a command name — the feed is the only source of truth, so a
- * new `.opencode/commands/*.md` or skill appears without a code change.
+ * OpenCode is the authority for which commands exist: the command feed (read
+ * by the backend and served from `/api/opencode/commands`) returns them,
+ * already merged with the skills the server exposes as commands and tagged by
+ * `source` (`"command"` for real commands, `"skill"` for skill-backed ones).
+ * Nothing here hardcodes a command name — the feed is the only source of
+ * truth, so a new `.opencode/commands/*.md` or skill appears without a code
+ * change.
  *
  * Pure and dependency-free (the library's command type is imported as a TYPE
  * only), so every edge below is directly unit-testable with no DOM.

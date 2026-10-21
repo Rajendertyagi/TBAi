@@ -170,9 +170,12 @@ export function getOpenCodeAuthHeaders(
   return { Authorization: `Basic ${credentials}` };
 }
 
+/** The header the managed server reads a request's working directory from. */
+export const OPENCODE_DIRECTORY_HEADER = "x-opencode-directory";
+
 /** Builds a safe V2 directory header for official client calls. */
 export function getOpenCodeDirectoryHeaders(directory?: string | null): Record<string, string> {
-  return directory ? { "x-opencode-directory": encodeURIComponent(directory) } : {};
+  return directory ? { [OPENCODE_DIRECTORY_HEADER]: encodeURIComponent(directory) } : {};
 }
 
 /** Logs only non-secret managed binary metadata. */

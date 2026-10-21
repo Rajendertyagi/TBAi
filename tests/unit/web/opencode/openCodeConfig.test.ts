@@ -44,8 +44,8 @@ describe("toPermissionRules", () => {
       { action: "question", resource: "*", effect: "ask" },
     ]);
     expect(rules).toHaveLength(2);
-    expect(rules[0].action).toBe("shell");
-    expect(rules[1].action).toBe("question");
+    expect(rules[0]?.rule.action).toBe("shell");
+    expect(rules[1]?.rule.action).toBe("question");
     expect(skipped).toBe(0);
   });
 
@@ -55,7 +55,7 @@ describe("toPermissionRules", () => {
       { action: "shell", resource: "*", effect: "ask" },
     ]);
     expect(rules).toHaveLength(1);
-    expect(rules[0].action).toBe("shell");
+    expect(rules[0]?.rule.action).toBe("shell");
     expect(skipped).toBe(1);
   });
 
@@ -66,7 +66,7 @@ describe("toPermissionRules", () => {
       { action: "grep", resource: "*", effect: "deny" },
     ]);
     expect(rules).toHaveLength(1);
-    expect(rules[0].action).toBe("grep");
+    expect(rules[0]?.rule.action).toBe("grep");
     expect(skipped).toBe(2);
   });
 
@@ -81,8 +81,8 @@ describe("toPermissionRules", () => {
       { action: "question", resource: "*", effect: "ask" },
       { action: "todowrite", resource: "*", effect: "deny" },
     ]);
-    expect(rules.find((r) => r.action === "question")?.effect).toBe("ask");
-    expect(rules.find((r) => r.action === "todowrite")?.effect).toBe("deny");
+    expect(rules.find((r) => r.rule.action === "question")?.rule.effect).toBe("ask");
+    expect(rules.find((r) => r.rule.action === "todowrite")?.rule.effect).toBe("deny");
   });
 });
 
@@ -157,7 +157,7 @@ describe("fetchOpenCodeConfig", () => {
 });
 
 describe("saveOpenCodePermissionEffect", () => {
-  it("sends only the rule identity and the new effect, never a document", async () => {
+  it("sends the rule's position, identity and the new effect — never a document", async () => {
     let sent: { url: string; init?: RequestInit } | null = null;
     await withFetch(
       (async (url: string | URL | Request, init?: RequestInit) => {
@@ -168,14 +168,19 @@ describe("saveOpenCodePermissionEffect", () => {
         });
       }) as unknown as typeof fetch,
       async () => {
-        const result = await saveOpenCodePermissionEffect(QUESTION_RULE, "allow");
+        const result = await saveOpenCodePermissionEffect(3, QUESTION_RULE, "allow");
         expect(result.changed).toBe(true);
         expect(sent?.init?.method).toBe("PUT");
         const body = JSON.parse(String(sent?.init?.body)) as Record<string, unknown>;
         // Preservation is structural: the request has no room to carry a
         // ruleset, so it cannot overwrite one.
-        expect(Object.keys(body).sort()).toEqual(["action", "effect", "resource"]);
-        expect(body).toEqual({ action: "question", resource: "*", effect: "allow" });
+        expect(Object.keys(body).sort()).toEqual(["action", "effect", "index", "resource"]);
+        expect(body).toEqual({
+          index: 3,
+          action: "question",
+          resource: "*",
+          effect: "allow",
+        });
       },
     );
   });
@@ -188,7 +193,7 @@ describe("saveOpenCodePermissionEffect", () => {
           headers: { "Content-Type": "application/json" },
         })) as unknown as typeof fetch,
       async () => {
-        expect((await saveOpenCodePermissionEffect(QUESTION_RULE, "ask")).changed).toBe(false);
+        expect((await saveOpenCodePermissionEffect(0, QUESTION_RULE, "ask")).changed).toBe(false);
       },
     );
   });
@@ -201,7 +206,7 @@ describe("saveOpenCodePermissionEffect", () => {
           { status: 422, headers: { "Content-Type": "application/json" } },
         )) as unknown as typeof fetch,
       async () => {
-        await expect(saveOpenCodePermissionEffect(QUESTION_RULE, "allow")).rejects.toThrow(
+        await expect(saveOpenCodePermissionEffect(0, QUESTION_RULE, "allow")).rejects.toThrow(
           /refusing to write/,
         );
       },

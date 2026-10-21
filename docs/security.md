@@ -143,9 +143,50 @@ approval. OpenCode permissions remain owned by the separate OpenCode boundary.
   shown. If accepted, the rule is **remembered by OpenCode across all chats**,
   outside TBAi's scope policy and outside TBAi's ability to revoke it. TBAi
   implements no host-side persistence for this choice.
+- **The proxy is route-allowlisted.** `/api/opencode/*` forwards only the routes
+  the browser's client actually calls (`src/services/opencode/proxyRoutes.ts`).
+  Everything else the managed server exposes — the shell, the filesystem
+  reader/writer, credential storage, config writes, RPC, MCP registration, PTY,
+  plugin updates — is refused before any upstream request is made. An allowlist
+  is used rather than a blocklist so a route added upstream later is unreachable
+  by default.
+- **The proxy is workspace-scoped.** The caller never chooses the working
+  directory. The proxy resolves the session the request names
+  (`session → conversation → folder → absolute directory`, through
+  `conversationService.findByOpenCodeSessionId` and
+  `resolveConversationWorkspace`), strips the caller's `x-opencode-directory`,
+  `x-tbai-session` and `location[directory]`, and forwards the server's own
+  directory. A session id is a **selector** over workspaces the local database
+  already knows about; it can never name an arbitrary path. An unknown session,
+  a session header that disagrees with the path, and an unresolvable workspace
+  are all refused.
+- **The configuration response is redacted.** `GET /api/opencode/config` returns
+  a **projection** in which every credential-bearing value is masked: provider
+  `settings` / `headers` / `body`, MCP `environment` / `headers` / OAuth client
+  secrets, plugin and LSP environment values, and any key that names a
+  credential. The `{env:VAR}` and `{file:path}` substitution forms are masked
+  whole, because the reference itself names the secret. The file on disk keeps
+  its real values, and the write path reads the file — so the preservation
+  guarantee is untouched.
+- **Events are scope-checked.** An event that names a different workspace in its
+  official `location` is not applied to the view.
+- **CORS trusts only TBAi's own pages.** The packaged desktop webview
+  (`http://app.localhost` — Windows WebView2's origin for the custom `app`
+  protocol Tauri registers) and TBAi's own pages on the port the listener is
+  on, plus the port it just replaced (the page that triggered a restart is
+  still on the old origin when it probes the new one). Every other `localhost` /
+  `127.0.0.1` port, a public origin, an opaque origin, and a request with no
+  `Origin` header receive no `Access-Control-Allow-Origin`, so the browser
+  refuses to hand the response to the page. The origins are **derived** from the
+  live listener, never listed: the port is the user's choice, so a fixed port
+  in the policy would break the first time it moved. The list and its evidence
+  are in `src/config/cors.ts`.
+- **CORS is not authorization.** A refused origin's request is still executed
+  by the server; what the browser cannot do is read the response. What a
+  request may *do* is decided by the route allowlist and the server-side
+  workspace authorization above, which hold regardless of the origin.
 
 ## Logging / redaction
-
 - Keys are never logged. Error messages that might accidentally include a secret are
   scrubbed by `src/lib/redact.ts` before being written to logs or returned in
   responses (e.g. provider auth errors that echo the key are redacted to

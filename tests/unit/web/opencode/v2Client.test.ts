@@ -10,6 +10,7 @@ const OTHER_SESSION_ID = "ses_v2_client_other";
 const DIRECTORY = "D:\\workspace\\project one%20";
 const ABSOLUTE_ORIGIN = "https://app.example";
 const RELATIVE_ORIGIN = "/relative-origin";
+const SESSION_HEADER = "x-tbai-session";
 const DIRECTORY_HEADER = "x-opencode-directory";
 const PROXY_PATH = "/api/opencode";
 const SERVER_INFO = {
@@ -245,7 +246,7 @@ describe("createOpenCodeV2Client", () => {
     expect(restRequests(fixture)).toHaveLength(0);
   });
 
-  it("adds the encoded directory header to both event and REST requests", async () => {
+  it("names the session and never a directory on both event and REST requests", async () => {
     const fixture = makeFixture();
     const client = createOpenCodeV2Client(
       { sessionId: SESSION_ID, directory: DIRECTORY },
@@ -258,12 +259,15 @@ describe("createOpenCodeV2Client", () => {
       await generation.operations.serverInfo();
       const eventRequest = requestForPath(fixture, "/event");
       const restRequest = requestForPath(fixture, "/api/info");
-      const encodedDirectory = encodeURIComponent(DIRECTORY);
 
       expect(eventRequest?.url).toBe(`${ABSOLUTE_ORIGIN}${PROXY_PATH}/api/event`);
       expect(restRequest?.url).toBe(`${ABSOLUTE_ORIGIN}${PROXY_PATH}/api/info`);
-      expect(eventRequest?.headers.get(DIRECTORY_HEADER)).toBe(encodedDirectory);
-      expect(restRequest?.headers.get(DIRECTORY_HEADER)).toBe(encodedDirectory);
+      expect(eventRequest?.headers.get(SESSION_HEADER)).toBe(SESSION_ID);
+      expect(restRequest?.headers.get(SESSION_HEADER)).toBe(SESSION_ID);
+      // The browser's directory is display-only. The backend resolves the
+      // workspace, so the browser must not choose one.
+      expect(eventRequest?.headers.get(DIRECTORY_HEADER)).toBeNull();
+      expect(restRequest?.headers.get(DIRECTORY_HEADER)).toBeNull();
       expect(eventRequest?.headers.get("authorization")).toBeNull();
       expect(restRequest?.headers.get("authorization")).toBeNull();
     } finally {
@@ -271,7 +275,7 @@ describe("createOpenCodeV2Client", () => {
     }
   });
 
-  it("omits the directory header for a null scope directory", async () => {
+  it("names the session even when the scope directory is null", async () => {
     const fixture = makeFixture();
     const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, {
       fetch: fixture.fetch,
@@ -283,6 +287,8 @@ describe("createOpenCodeV2Client", () => {
       const eventRequest = requestForPath(fixture, "/event");
       const restRequest = requestForPath(fixture, "/api/info");
 
+      expect(eventRequest?.headers.get(SESSION_HEADER)).toBe(SESSION_ID);
+      expect(restRequest?.headers.get(SESSION_HEADER)).toBe(SESSION_ID);
       expect(eventRequest?.headers.get(DIRECTORY_HEADER)).toBeNull();
       expect(restRequest?.headers.get(DIRECTORY_HEADER)).toBeNull();
     } finally {

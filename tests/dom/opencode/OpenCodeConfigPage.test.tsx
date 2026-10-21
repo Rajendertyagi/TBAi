@@ -97,8 +97,8 @@ describe("permission rule narrowing (what the table would render)", () => {
       { action: "question", resource: "*", effect: "ask" },
       { action: "todowrite", resource: "*", effect: "allow" },
     ]);
-    expect(rules.map((r) => r.action)).toEqual(["shell", "question", "todowrite"]);
-    expect(rules.find((r) => r.action === "todowrite")?.effect).toBe("allow");
+    expect(rules.map((r) => r.rule.action)).toEqual(["shell", "question", "todowrite"]);
+    expect(rules.find((r) => r.rule.action === "todowrite")?.rule.effect).toBe("allow");
   });
 
   it("preserves the exact order OpenCode resolves in", () => {
@@ -108,7 +108,20 @@ describe("permission rule narrowing (what the table would render)", () => {
     const { rules } = toPermissionRules(
       order.map((action) => ({ action, resource: "*", effect: "ask" })),
     );
-    expect(rules.map((r) => r.action)).toEqual(order);
+    expect(rules.map((r) => r.rule.action)).toEqual(order);
+  });
+
+  it("keeps each rule's position in the FILE, not in the rendered list", () => {
+    // A rule the page cannot read still occupies its place in the file's
+    // array, so the position a write names must be the FILE's position —
+    // otherwise the write addresses a different rule than the one clicked.
+    const { rules, skipped } = toPermissionRules([
+      { action: "shell", resource: "*", effect: "ask" },
+      { resource: "*", effect: "ask" },
+      { action: "question", resource: "*", effect: "ask" },
+    ]);
+    expect(skipped).toBe(1);
+    expect(rules.map((r) => r.index)).toEqual([0, 2]);
   });
 });
 

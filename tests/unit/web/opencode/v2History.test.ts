@@ -21,6 +21,7 @@ const message = (id: string, text: string, created: number): SessionMessageInfo 
 function repositoryState(projection: ReturnType<typeof projectV2History>): V2ThreadState {
   return {
     sessionId: "session-1",
+    directory: null,
     connection: { type: "connected", serverVersion: "2.0.16" },
     load: { type: "ready" },
     execution: { type: "idle" },

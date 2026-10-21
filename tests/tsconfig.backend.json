@@ -69,7 +69,13 @@
     // internals; including them here would drag web sources into a program where
     // `@/*` means the BACKEND tree, and every one of their `@/...` imports would
     // fail to resolve. They are checked by tsconfig.web.json instead.
+    //
+    // `helpers/web/source-scope.ts` is the one exception: it reads source TEXT
+    // and imports nothing from `web/src` (only `node:path`, `node:url` and the
+    // root resolver above), so the backend's source-shape guards can share it
+    // instead of each keeping a private comment stripper.
     "helpers/repo-root.ts",
+    "helpers/web/source-scope.ts",
     "integration/**/*.ts",
     "tests/unit/mcp/mcp-connection.test.ts",
     "integration/**/*.tsx",

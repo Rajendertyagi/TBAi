@@ -111,6 +111,23 @@ export const openCodeConfigCopy = {
     effect: "Effect",
     empty: "This configuration has no permission rules, so OpenCode uses its own defaults.",
     noKey: "This configuration has no permissions key. OpenCode is using its built-in defaults.",
+    /**
+     * The read-only override notice.
+     *
+     * Stated in terms of what OpenCode actually does (verified live against
+     * `opencode serve` 2.0.32): the LAST matching rule wins, so a rule a
+     * later one shadows is not the rule that decides. The notice names the
+     * row that takes over, because "this rule does not apply" without saying
+     * which one does is not actionable.
+     */
+    override: (kind: "full" | "partial", byRow: number) =>
+      kind === "full"
+        ? `Never applies — row ${byRow} wins for every request.`
+        : `Partly overridden — row ${byRow} wins for the resources it matches.`,
+    overrideTitle: (kind: "full" | "partial", byRow: number) =>
+      kind === "full"
+        ? `OpenCode resolves the last matching rule, and row ${byRow} matches everything this rule matches, so this rule is never the one that decides.`
+        : `OpenCode resolves the last matching rule, and row ${byRow} is narrower, so it wins for the resources it matches and this rule still applies to the rest.`,
     skipped: (count: number) =>
       `${count} rule${count === 1 ? "" : "s"} could not be read and ${count === 1 ? "is" : "are"} not shown. Nothing was changed.`,
     notConfigurable: (action: string) =>
@@ -127,8 +144,10 @@ export const openCodeConfigCopy = {
   },
   json: {
     description:
-      "The configuration file exactly as it is on disk, including any field this page does not model.",
+      "The configuration file with every credential masked. Keys and structure are exactly as they are on disk; provider keys, headers, OAuth secrets and environment values are replaced with [redacted].",
     empty: "The file is empty or does not exist yet.",
+    withheld:
+      "The file could not be parsed, so its text cannot be redacted and is not shown here. The file is at the path above.",
   },
   save: {
     idle: "Save",

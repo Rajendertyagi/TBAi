@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 /**
  * Live acceptance: the OpenCode Configuration page against the REAL managed
@@ -49,6 +50,18 @@ async function readConfig(request: import("@playwright/test").APIRequestContext)
   const response = await request.get("/api/opencode/config");
   expect(response.ok()).toBe(true);
   return (await response.json()) as ConfigSnapshot;
+}
+
+/**
+ * The configuration FILE, read from disk.
+ *
+ * The HTTP response is a **redacted** projection: every credential in it is
+ * masked, so it can no longer prove that a credential survived a save. The
+ * file is the thing that holds the real value, so the credential assertion
+ * reads the file.
+ */
+function readConfigFile(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
 /** The effect currently on disk for one (action, resource) pair. */
@@ -186,7 +199,7 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     const question = before.permissions?.find((r) => r.action === "question");
     test.skip(!question, "This configuration has no question rule to edit.");
 
-    const beforeParsed = JSON.parse(before.raw) as Record<string, unknown>;
+    const beforeParsed = readConfigFile(before.path);
     const beforeKeys = Object.keys(beforeParsed);
     const beforeProviders = JSON.stringify(beforeParsed.providers ?? null);
 
@@ -209,7 +222,7 @@ test.describe("OpenCode Configuration against the real managed server", () => {
       main.getByText(/Saved to the OpenCode configuration\.|Already set to this effect\./),
     ).toBeVisible({ timeout: 30_000 });
 
-    const afterParsed = JSON.parse((await readConfig(request)).raw) as Record<string, unknown>;
+    const afterParsed = readConfigFile((await readConfig(request)).path);
 
     // Every top-level key the file had is still there — including any field
     // this page does not model.

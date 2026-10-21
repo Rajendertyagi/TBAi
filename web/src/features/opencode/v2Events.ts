@@ -146,6 +146,85 @@ function getEventSessionId(event: V2Event): string | null {
   return typeof sessionID === "string" ? sessionID : null;
 }
 
+/**
+ * The directory an event was produced in, when the event says.
+ *
+ * Every V2 event carries an optional `location` (`LocationRef`), and the
+ * contract provides it precisely so a client can verify the scope of what it
+ * receives.
+ */
+function getEventDirectory(event: V2Event): string | null {
+  if (!("location" in event)) return null;
+  const location: unknown = event.location;
+  if (!location || typeof location !== "object") return null;
+  const directory = (location as { readonly directory?: unknown }).directory;
+  return typeof directory === "string" && directory.length > 0 ? directory : null;
+}
+
+/**
+ * A path in a comparable form: trailing separators removed and the separator
+ * unified, so two spellings of one directory compare equal.
+ */
+function normalizeDirectory(directory: string): string {
+  const trimmed = directory.trim().replace(/[\\/]+$/, "");
+  const unified = trimmed.replace(/\\/g, "/");
+  return unified.length > 0 ? unified : directory.trim();
+}
+
+/** Whether a normalized path is a Windows drive path, which is case-insensitive. */
+function isWindowsStylePath(directory: string): boolean {
+  return /^[a-zA-Z]:\//.test(directory);
+}
+
+/**
+ * Whether two paths name the same directory.
+ *
+ * The comparison is about the DIRECTORY, not about the spelling: a trailing
+ * separator and a `\` versus `/` are the same path, and a Windows path is
+ * case-insensitive. Two different directories never compare equal.
+ */
+function sameDirectory(left: string, right: string): boolean {
+  const a = normalizeDirectory(left);
+  const b = normalizeDirectory(right);
+  if (a === b) return true;
+  if (isWindowsStylePath(a) && isWindowsStylePath(b)) return a.toLowerCase() === b.toLowerCase();
+  return false;
+}
+
+/**
+ * Whether an event belongs to the workspace this view is subscribed to.
+ *
+ * This is **defence in depth**, not the scope control itself: the backend
+ * already refuses a request that names another workspace, and the upstream
+ * scopes the event stream. What this adds is that the client does not APPLY
+ * an event that says it came from somewhere else.
+ *
+ * Two directories are accepted as this view's own:
+ *
+ * - the directory the client subscribed to, and
+ * - the directory the SERVER reports for the session, which is the same
+ *   directory in the server's spelling. Accepting it keeps a difference in
+ *   how the two spell one path from silencing the whole stream.
+ *
+ * An event with no `location` is kept: it is location-scoped by definition
+ * (`server.connected` is the case the contract names), and there is nothing to
+ * compare.
+ */
+function isEventInScope(state: V2ThreadState, event: V2Event): boolean {
+  const eventDirectory = getEventDirectory(event);
+  if (eventDirectory === null) return true;
+
+  const subscribed = state.directory;
+  if (subscribed !== null && sameDirectory(subscribed, eventDirectory)) return true;
+
+  const sessionDirectory = state.session?.location.directory ?? null;
+  if (sessionDirectory !== null && sameDirectory(sessionDirectory, eventDirectory)) return true;
+
+  // Neither scope is known, so nothing can be compared: the event is kept
+  // rather than every event being dropped.
+  return subscribed === null && sessionDirectory === null;
+}
+
 function getDurableSequence(event: V2Event): { aggregateID: string; seq: number } | null {
   if (!("durable" in event) || !event.durable) return null;
   return event.durable;
@@ -983,6 +1062,7 @@ export function reduceV2Event(
   }
   const sessionId = getEventSessionId(event);
   if (sessionId !== null && sessionId !== state.sessionId) return incrementDiagnostic(state);
+  if (!isEventInScope(state, event)) return incrementDiagnostic(state);
   if (state.eventIdentity.recentObservedEventIds.includes(event.id) && mode === "observe-only") {
     return state;
   }
@@ -1020,10 +1100,20 @@ export function reduceV2ThreadState(state: V2ThreadState, action: V2ThreadAction
   return reduceAction(state, action);
 }
 
-/** Creates the initial state for one scoped OpenCode session. */
-export function createInitialV2ThreadState(sessionId: string): V2ThreadState {
+/**
+ * Creates the initial state for one scoped OpenCode session.
+ *
+ * @param sessionId - The session this view is about.
+ * @param directory - The workspace the event stream is subscribed to, or
+ *   `null` when the server did not report a scope.
+ */
+export function createInitialV2ThreadState(
+  sessionId: string,
+  directory: string | null = null,
+): V2ThreadState {
   return {
     sessionId,
+    directory,
     connection: { type: "waiting-for-server" },
     load: { type: "idle" },
     execution: { type: "idle" },

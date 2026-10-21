@@ -30,7 +30,7 @@ import type {
   SessionSwitchModelInput,
   V2Event,
 } from "@opencode/client";
-import { OPENCODE_DIRECTORY_HEADER, OPENCODE_PROXY_BASE_URL } from "@/features/opencode/config";
+import { OPENCODE_PROXY_BASE_URL, OPENCODE_SESSION_HEADER } from "@/features/opencode/config";
 
 export const V2_GENERATION_BRAND = Symbol("tbai-opencode-v2-generation");
 export const V2_HISTORY_READER_BRAND = Symbol("tbai-opencode-v2-history-reader");
@@ -155,9 +155,12 @@ export function createOpenCodeV2Client(
   options?: OpenCodeV2ClientOptions,
 ): OpenCodeV2Client {
   const baseUrl = resolveProxyBaseUrl(origin);
-  const headers = scope.directory
-    ? { [OPENCODE_DIRECTORY_HEADER]: encodeURIComponent(scope.directory) }
-    : undefined;
+  // The session id is the ONLY scope input the browser sends. The backend
+  // resolves it to the workspace the session is rooted in and forwards that
+  // directory; the browser's copy of the directory is display-only and is
+  // deliberately not sent, because a caller-chosen directory is what let any
+  // page on the origin read another workspace's session and event stream.
+  const headers = { [OPENCODE_SESSION_HEADER]: scope.sessionId };
   const officialClient: OpenCodeClient = OpenCode.make({
     baseUrl,
     fetch: options?.fetch,

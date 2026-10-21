@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { join } from "node:path";
 import {
   OpenCodeConfigUnreadableError,
@@ -6,6 +6,7 @@ import {
   serializeOpenCodeConfig,
   setOpenCodeConfigValue,
   setOpenCodePermissionEffect,
+  setOpenCodePermissionEffectAt,
   appendOpenCodePermissionRule,
   removeOpenCodePermissionRule,
   readOpenCodeConfigDocument,
@@ -183,29 +184,95 @@ describe("setOpenCodePermissionEffect", () => {
   });
 
   /**
-   * DEFECT REGRESSION (H3) — quarantined as `test.todo`.
+   * DEFECT REGRESSION (H3).
    *
-   * A rule is currently addressed by its CONTENT — the `(action, resource)`
-   * pair — and the first exact match is edited. A configuration that contains
+   * A rule used to be addressed by its CONTENT — the `(action, resource)`
+   * pair — and the FIRST exact match was edited. A configuration that contains
    * the same pair twice (which TBAi's own append path refuses to create, but a
-   * hand-edited file or another tool can) therefore has one of the two
-   * changed arbitrarily, and the page reports success.
+   * hand-edited file or another tool can) therefore had one of the two changed
+   * arbitrarily, and the page reported success.
+   *
+   * That is not a harmless choice: OpenCode resolves the array last-match-wins,
+   * so the LAST of the two is the one in force. Editing the first changed a
+   * rule that never decides anything.
    *
    * The correct contract is that an ambiguous pair is REFUSED rather than
    * applied to an arbitrary one, and that the edit addresses the rule by
    * POSITION plus a re-checked identity.
-   *
-   * Run `bun test --todo tests/unit/opencode/configDocument.test.ts` to see the
-   * failure this pins. It is committed as a todo so it cannot break the build.
    */
-  test.todo("R-H3: an ambiguous (action, resource) pair is refused, not applied to the first match", () => {
+  it("R-H3: an ambiguous (action, resource) pair is refused, not applied to the first match", () => {
     const duplicated = [
       { action: "question", resource: "*", effect: "ask" },
       { action: "question", resource: "*", effect: "deny" },
     ];
     expect(() =>
       setOpenCodePermissionEffect(duplicated, { action: "question", resource: "*" }, "allow"),
-    ).toThrow();
+    ).toThrow(OpenCodeConfigUnreadableError);
+  });
+});
+
+describe("setOpenCodePermissionEffectAt", () => {
+  const DUPLICATED = [
+    { action: "question", resource: "*", effect: "ask" },
+    { action: "question", resource: "*", effect: "deny" },
+    { action: "shell", resource: "*", effect: "ask" },
+  ];
+
+  it("changes the rule at the position it was read at", () => {
+    const next = setOpenCodePermissionEffectAt(
+      DUPLICATED,
+      1,
+      { action: "question", resource: "*" },
+      "allow",
+    ) as Array<Record<string, unknown>>;
+
+    // The SECOND of the two identical rules changed, and the first did not.
+    expect(next[0]?.effect).toBe("ask");
+    expect(next[1]?.effect).toBe("allow");
+    // Every other rule kept its position, identity and effect.
+    expect(next[2]).toEqual(DUPLICATED[2]);
+    expect(next).toHaveLength(DUPLICATED.length);
+  });
+
+  it("leaves the input array untouched (no mutation)", () => {
+    const before = DUPLICATED.map((rule) => ({ ...rule }));
+    setOpenCodePermissionEffectAt(before, 1, { action: "question", resource: "*" }, "allow");
+    expect(before).toEqual(DUPLICATED);
+  });
+
+  it("refuses a position whose rule is not the one the caller read", () => {
+    expect(() =>
+      setOpenCodePermissionEffectAt(DUPLICATED, 2, { action: "question", resource: "*" }, "allow"),
+    ).toThrow(OpenCodeConfigUnreadableError);
+  });
+
+  it("refuses a position that no longer holds a rule", () => {
+    expect(() =>
+      setOpenCodePermissionEffectAt(DUPLICATED, 9, { action: "question", resource: "*" }, "allow"),
+    ).toThrow(OpenCodeConfigUnreadableError);
+  });
+
+  it("refuses a value that is not an array of rules", () => {
+    expect(() =>
+      setOpenCodePermissionEffectAt(
+        { question: "ask" },
+        0,
+        { action: "question", resource: "*" },
+        "allow",
+      ),
+    ).toThrow(OpenCodeConfigUnreadableError);
+  });
+
+  it("keeps an unknown extra field on the edited rule", () => {
+    const current = [{ action: "question", resource: "*", effect: "ask", futureField: 42 }];
+    const next = setOpenCodePermissionEffectAt(
+      current,
+      0,
+      { action: "question", resource: "*" },
+      "allow",
+    ) as Array<Record<string, unknown>>;
+    expect(next[0]?.futureField).toBe(42);
+    expect(next[0]?.effect).toBe("allow");
   });
 });
 

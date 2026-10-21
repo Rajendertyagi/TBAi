@@ -73,6 +73,35 @@ describe("parseCommandFeed — defensive, feed-driven", () => {
     expect(parsed[0].description).toBeUndefined();
     expect(parsed[0].template).toBeUndefined();
   });
+
+  /**
+   * CHARACTERIZATION — the upstream's real payload, pinned.
+   *
+   * The server does NOT return a bare array. Measured against a live managed
+   * `opencode serve` (2.0.32) with an isolated config directory:
+   *
+   *     GET /api/command -> 200
+   *     {"location":{"directory":"D:\\..."},"data":[]}
+   *
+   * which is exactly the shape the installed client's `CommandListOutput`
+   * declares (`{ location, data }`). The parser only understands a bare
+   * array, so the REAL payload yields no commands and the composer's `/`
+   * palette renders empty.
+   *
+   * This case pins that behaviour so the mismatch cannot drift unnoticed, and
+   * so the transport contract is stated in one place: the endpoint
+   * (`tests/integration/opencode/opencode-commands.test.ts`) delivers the
+   * server's payload verbatim, and the parser is what does not understand
+   * it. Fixing the parser WILL fail this case, which is intended: the fix
+   * and this characterization must change together.
+   */
+  it("yields no commands from the upstream's real { location, data } payload", () => {
+    const real = {
+      location: { directory: "D:\\workspace\\project" },
+      data: [{ name: "init", description: "Start here", source: "command" }],
+    };
+    expect(parseCommandFeed(real)).toEqual([]);
+  });
 });
 
 describe("commandLabel", () => {

@@ -216,6 +216,15 @@ export type V2RevertRecoveryState =
 
 export interface V2ThreadState {
   readonly sessionId: string;
+  /**
+   * The workspace this view is subscribed to.
+   *
+   * `null` when the server did not report a scope. It is the basis of the
+   * event-scope check: an event that names a different directory is not this
+   * view's event and is not applied. The directory is display-and-scope data
+   * the backend resolved; the browser never chooses one.
+   */
+  readonly directory: string | null;
   readonly connection: V2ConnectionState;
   readonly load: V2LoadState;
   readonly execution: V2ExecutionState;

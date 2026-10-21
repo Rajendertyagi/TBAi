@@ -1,6 +1,8 @@
-import { afterAll, describe, expect, it, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { getOpenCodeAuthHeaders } from "@/services/opencode/runtime.ts";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
+import { conversationService } from "@/services/storage/conversations.ts";
+import { resolveConversationWorkspace } from "@/services/workspace.ts";
 
 const browserAuthorization = "Bearer browser-controlled-secret";
 const backendAuthorization = getOpenCodeAuthHeaders().Authorization;
@@ -47,6 +49,21 @@ const originalEnsureBaseUrl = openCodeServerManager.ensureBaseUrl;
 
 const { default: openCodeApp } = await import("@/routes/opencode.ts");
 
+/** The directory the server resolves for the fixture session. */
+let serverDirectory = "";
+
+beforeAll(async () => {
+  const conversation = await conversationService.create({
+    title: "Proxy auth fixture",
+    providerId: "",
+    workspaceMode: "simple",
+    opencodeSessionId: fixtureSessionId,
+    engine: "opencode",
+  });
+  const workspace = await resolveConversationWorkspace(conversation.id);
+  serverDirectory = workspace.dir;
+});
+
 afterAll(() => {
   fixtureServer.stop(true);
   (openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
@@ -58,7 +75,7 @@ describe("OpenCode proxy authentication", () => {
     capturedRequests.length = 0;
 
     const response = await openCodeApp.request(
-      "http://localhost/api/opencode/api/config?probe=rest",
+      "http://localhost/api/opencode/api/info?probe=rest",
       { headers: { Authorization: browserAuthorization } },
     );
 
@@ -67,7 +84,7 @@ describe("OpenCode proxy authentication", () => {
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0]?.authorization).toBe(backendAuthorization);
     expect(capturedRequests[0]?.authorization).not.toBe(browserAuthorization);
-    expect(capturedRequests[0]?.url).toBe(`${fixtureBaseUrl}/api/config?probe=rest`);
+    expect(capturedRequests[0]?.url).toBe(`${fixtureBaseUrl}/api/info?probe=rest`);
   });
 
   it("proxies the V2 server info endpoint with backend auth", async () => {
@@ -84,17 +101,12 @@ describe("OpenCode proxy authentication", () => {
     expect(capturedRequests[0]?.url).toBe(`${fixtureBaseUrl}/api/info`);
   });
 
-  it("preserves session paths and directory headers while replacing browser auth", async () => {
+  it("preserves session paths while replacing browser auth", async () => {
     capturedRequests.length = 0;
 
     const response = await openCodeApp.request(
       `http://localhost/api/opencode/session/${fixtureSessionId}`,
-      {
-        headers: {
-          Authorization: browserAuthorization,
-          "x-opencode-directory": encodedFixtureDirectory,
-        },
-      },
+      { headers: { Authorization: browserAuthorization } },
     );
 
     expect(response.status).toBe(200);
@@ -102,7 +114,7 @@ describe("OpenCode proxy authentication", () => {
     expect(capturedRequests).toEqual([
       {
         authorization: backendAuthorization,
-        directory: encodedFixtureDirectory,
+        directory: encodeURIComponent(serverDirectory),
         method: "GET",
         url: `${fixtureBaseUrl}/api/session/${fixtureSessionId}`,
       },
@@ -112,15 +124,13 @@ describe("OpenCode proxy authentication", () => {
   it("proxies native V2 SSE requests while replacing browser auth", async () => {
     capturedRequests.length = 0;
 
-    const response = await openCodeApp.request(
-      "http://localhost/api/opencode/event?directory=%2Fworkspace%2Fproject-one",
-      {
-        headers: {
-          Accept: "text/event-stream",
-          Authorization: browserAuthorization,
-        },
+    const response = await openCodeApp.request("http://localhost/api/opencode/event", {
+      headers: {
+        Accept: "text/event-stream",
+        Authorization: browserAuthorization,
+        "x-tbai-session": fixtureSessionId,
       },
-    );
+    });
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -128,33 +138,25 @@ describe("OpenCode proxy authentication", () => {
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0]?.authorization).toBe(backendAuthorization);
     expect(capturedRequests[0]?.authorization).not.toBe(browserAuthorization);
-    expect(capturedRequests[0]?.directory).toBeNull();
-    expect(capturedRequests[0]?.url).toBe(
-      `${fixtureBaseUrl}/api/event?directory=%2Fworkspace%2Fproject-one`,
-    );
+    expect(capturedRequests[0]?.directory).toBe(encodeURIComponent(serverDirectory));
+    expect(capturedRequests[0]?.url).toBe(`${fixtureBaseUrl}/api/event`);
   });
 
   /**
-   * DEFECT REGRESSION (M8) — quarantined as `test.todo`.
+   * DEFECT REGRESSION (M8) — promoted from the quarantine.
    *
-   * The proxy forwards the browser's `x-opencode-directory` verbatim, so the
-   * CALLER chooses the upstream's location. Upstream resolves the location of
-   * every request from exactly that header (or the `location[directory]`
-   * query parameter), so a caller can point the managed server at a directory
-   * it does not own — and read the event stream of a workspace that is not
-   * theirs.
+   * The proxy used to forward the browser's `x-opencode-directory` verbatim,
+   * so the CALLER chose the upstream's location. Upstream resolves the
+   * location of every request from exactly that header (or the
+   * `location[directory]` query parameter), so a caller could point the
+   * managed server at a directory it does not own — and read the event
+   * stream of a workspace that is not theirs.
    *
    * The correct contract: the proxy never forwards a caller-supplied
    * directory. It derives the location server-side and sets the header
    * itself, so the upstream's scope is the server's decision.
-   *
-   * The test above ("preserves session paths and directory headers…") pins
-   * today's behaviour and is deleted when this finding is fixed.
-   *
-   * Run `bun test --todo tests/integration/opencode/opencode-v2-auth-proxy.test.ts`
-   * to see the failure this pins.
    */
-  test.todo("R-M8: a caller-supplied directory never reaches the upstream", async () => {
+  it("R-M8: a caller-supplied directory never reaches the upstream", async () => {
     capturedRequests.length = 0;
 
     const response = await openCodeApp.request(
@@ -172,5 +174,6 @@ describe("OpenCode proxy authentication", () => {
     // CORRECT: the upstream is told the SERVER's directory, never the
     // caller's.
     expect(capturedRequests[0]?.directory).not.toBe(encodedFixtureDirectory);
+    expect(capturedRequests[0]?.directory).toBe(encodeURIComponent(serverDirectory));
   });
 });

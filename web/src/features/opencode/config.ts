@@ -1,6 +1,15 @@
 /** Centralized OpenCode frontend configuration. No magic paths inline. */
 export const OPENCODE_PROXY_BASE_URL = "/api/opencode";
-export const OPENCODE_DIRECTORY_HEADER = "x-opencode-directory";
+/**
+ * The TBAi-owned header that names the OpenCode session a request belongs to.
+ *
+ * It is a **selector**, not an instruction: the backend resolves it to the
+ * one workspace that session is rooted in and forwards that directory. The
+ * browser therefore never chooses a working directory — it used to send
+ * `x-opencode-directory` itself, which let any caller point the managed
+ * server at a directory it did not own.
+ */
+export const OPENCODE_SESSION_HEADER = "x-tbai-session";
 /** Bounded wait for session init before surfacing a retry affordance. */
 export const OPENCODE_INIT_TIMEOUT_MS = 15_000;
 export const OPENCODE_V2_HISTORY_PAGE_SIZE = 100;

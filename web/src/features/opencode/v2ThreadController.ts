@@ -269,7 +269,7 @@ export function createV2ThreadController(
   config?: Partial<V2ThreadControllerConfig>,
 ): V2ThreadController {
   const cfg: V2ThreadControllerConfig = { ...DEFAULT_V2_CONTROLLER_CONFIG, ...config };
-  let state = createInitialV2ThreadState(client.sessionId);
+  let state = createInitialV2ThreadState(client.sessionId, client.directory);
   let generation: OpenCodeV2Generation | null = null;
   let connectionController: AbortController | null = null;
   let lifecycleController: AbortController | null = null;

@@ -5,6 +5,8 @@ import path from "node:path";
 import { sanitizeStreamError } from "../lib/redact";
 import { db } from "../db";
 import { WEB_DIST_DIR } from "../config/web-dist";
+import { isAllowedCorsOrigin } from "../config/cors";
+import { getActivePort, getReplacedPort } from "../services/server-listener";
 import { accountingMiddleware, metricsText, logLossMetricsText } from "../services/http-metrics";
 import {
   logger,
@@ -35,26 +37,64 @@ import serverApp from "./server";
  */
 const app = new Hono<{ Variables: { requestId: string } }>();
 
+/**
+ * The ports TBAi serves its own pages on: the live listener's port, and the
+ * port that listener replaced.
+ *
+ * The replaced port is what makes a port change work in a browser: the page is
+ * still on the old origin when the new one comes up, and it asks the new
+ * origin whether it is ready. That request is cross-origin, so the new
+ * listener has to trust the page it replaced.
+ */
+function servedPagePorts(): number[] {
+  return [getActivePort(), getReplacedPort()].filter((port) => port > 0);
+}
+
 app.use(
   "*",
   cors({
-    origin: (origin) => {
-      if (
-        !origin ||
-        origin === "http://app.localhost" ||
-        /^http:\/\/localhost(:\d+)?$/.test(origin) ||
-        /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)
-      ) {
-        return origin || "*";
-      }
-      return null;
-    },
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    /**
+     * Only the origins TBAi actually serves a page from may read a response:
+     * the packaged desktop webview, and TBAi's own pages on the port the
+     * listener is on (or the one it just replaced).
+     *
+     * The ports are DERIVED, never listed: the port is the user's choice, so
+     * a fixed port in the policy would break the first time the user moved
+     * off it — and it already had: the browser-mode restart probes the new
+     * origin from the page that is still on the old one, and that request is
+     * cross-origin.
+     *
+     * A request with **no** `Origin` header gets no CORS headers at all: it
+     * is a same-origin or a non-browser request, and neither is subject to
+     * CORS. The pre-narrowing policy answered `Access-Control-Allow-Origin: *`
+     * there, which handed a wildcard to anything that asked.
+     *
+     * The origins, and the evidence for each, are in `src/config/cors.ts`.
+     */
+    origin: (origin) => (isAllowedCorsOrigin(origin, servedPagePorts()) ? origin : null),
+    /**
+     * The methods the app actually calls.
+     *
+     * `PATCH` was missing from this list, and the app calls it in fifteen
+     * places (conversation rename, folder rename, memory edit, quick-message
+     * edit, scheduler job edit, the auto-approve toggle, the OpenCode chip).
+     * A `PATCH` is never a "simple" request, so the browser preflights it —
+     * and a preflight whose `Access-Control-Allow-Methods` omits the
+     * requested method FAILS, so the browser never sends the request. In the
+     * packaged app, where every API call is cross-origin, that blocked all
+     * of them. The method list has to name the methods the app uses:
+     * omitting one is not a restriction, it is a broken client.
+     */
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
       "Accept",
       "X-TBAI-Operation-ID",
-      "x-opencode-directory",
+      // The browser's only OpenCode scope input. It names the session; the
+      // backend resolves the workspace. The browser no longer sends a
+      // directory of its own choosing, and `x-opencode-directory` is
+      // deliberately not allowed here either.
+      "x-tbai-session",
       "x-request-id",
     ],
     exposeHeaders: ["x-resumable-stream-id", "x-request-id", "Content-Type"],

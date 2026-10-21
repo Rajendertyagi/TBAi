@@ -5812,3 +5812,328 @@ each read `"typescript": "5.9.3"` (no caret); `bun.lock` holds two spec strings
 `"typescript": "5.9.3"` and one resolved entry `typescript@5.9.3`. `bun run
 typecheck` exit 0 across all four projects. `bun run verify` gate sequence
 unchanged.
+---
+
+## 2026-10-21 - Phase 1: the OpenCode proxy is allowlisted and workspace-scoped; the configuration response is redacted
+
+Plan: docs/2026-10-20-opencode-runtime-remediation-plan.md (units A1, A2, B, C-write-path,
+D). A3 (the CORS narrowing) is **held** on G1/G2 and is not part of this entry.
+
+**The proxy allowlist (A1).** /api/opencode/* used to forward every path to the managed
+OpenCode server, which exposes a shell, a filesystem reader/writer, credential storage,
+config writes, RPC, MCP registration, PTY and plugin updates. It is now an **allowlist** of
+exactly the routes the browser's client calls (src/services/opencode/proxyRoutes.ts), and
+everything else is refused with a 404 before any upstream request is made. An allowlist
+rather than a blocklist: a blocklist must name every dangerous route in advance and
+silently allows everything else, so a route added upstream later would be reachable by
+default.
+
+**The list is checked against the client, from both directions.** The table is written by
+hand but not trusted. 	ests/integration/opencode/opencode-proxy-allowlist.test.ts drives
+the **real installed @opencode/client** through the **real proxy** and fails if the
+client asks for a route the list does not name, and if the list names a route no client
+operation produces. 	ests/unit/web/opencode/v2ClientProxyRoutes.test.ts does the same
+against the **real web client**, so neither side can drift alone. The allowlist module is
+deliberately import-free so the web test project can read it without dragging backend
+sources into a program where @/* means the web tree.
+
+**The workspace scope is a capability, not metadata (A2).** The managed server resolves a
+request's location from location[directory] or x-opencode-directory and falls back to
+process.cwd(). A caller-chosen location therefore reads and writes in a directory the
+server did not choose ï¿½ and the event stream of a workspace that is not the caller's. The
+proxy now resolves the session the request names through the local database
+(session -> conversation -> folder -> absolute directory), strips the caller's
+x-tbai-session, x-opencode-directory and location[directory], and forwards the
+server's own directory. A session id is a **selector** over workspaces the database already
+knows about; it can never name an arbitrary path.
+
+**The missing link, added.** conversationService.findByOpenCodeSessionId and an index on
+conversations.opencode_session_id did not exist, so nothing could resolve a session id to
+a conversation. esolveConversationWorkspace remains **the** workspace authority ï¿½ the same
+function that roots the session in the first place ï¿½ so the proxy and the session can never
+disagree about where a conversation lives.
+
+**The browser no longer chooses a directory.** 2Client.ts used to send
+x-opencode-directory itself. It now sends x-tbai-session, which is a selector the
+backend resolves; the browser's copy of the directory is display-only. The alternative
+considered and rejected: validating the caller's directory instead of replacing it. That
+leaves the caller's directory as the scope, which is the defect.
+
+**Credential redaction (B).** GET /api/opencode/config returned the configuration
+verbatim, including every provider credential. It now returns a **redacted projection**:
+the locations are derived from the published schema (https://opencode.ai/config.json), the
+whole of a provider's settings object is masked because the schema's llOf permits
+undeclared keys (so piKey is *allowed but undeclared*), and the {env:VAR} /
+{file:path} substitution forms are masked whole because the reference itself names the
+secret. The alternative considered and rejected: a "reveal" affordance. Any origin that
+can reach the API could use it, so the native view is redacted permanently (plan
+decision D15). The redaction operates on the **response projection** only; the write path
+still reads the file, so the byte-identical round trip is preserved.
+
+**A malformed configuration file is no longer shown verbatim.** Text that does not parse
+cannot be redacted ï¿½ there is no structure to walk, and a textual scan would be a guess
+that could leak the very value it was meant to hide. Such text is withheld, and the page
+says so.
+
+**Event scope (D).** Every V2 event carries an optional location, and the contract
+provides it precisely so a client can verify the scope of what it receives. An event whose
+location.directory differs from the subscribed workspace is no longer applied. The
+server's own report of the session's location is accepted as well, so a difference in how
+two sides spell one path cannot silence the whole stream.
+
+**Permission-row identity (C, write path).** A rule is addressed by **position plus a
+re-checked identity**, and an ambiguous (action, resource) pair is **refused** rather than
+applied to an arbitrary match. The reason is the upstream's own resolution: OpenCode
+resolves the array last-match-wins, so of two identical rules the LAST is the one in force,
+and editing the first changed a rule that never decides anything while the page reported
+success. The config page's behaviour for a pre-existing exact duplicate (refuse, warn, or
+edit normally) is a maintainer policy call and is **not** decided here.
+
+**A correction made inside Phase 1: the command catalogue is served by the backend.** The proxy
+allowlist broke the composer's `/` palette on first landing, and the reason was a false
+premise in this programme: the browser was assumed to reach OpenCode only through the
+official client, so the location-scoped catalogue routes were believed to be backend-only. The
+app calls `/api/opencode/*` directly as well, and the `/` palette fetched OpenCode's
+**command catalogue** that way. The catalogue is now read by the backend and served from
+TBAi's own `/api/opencode/commands` route, the server's payload verbatim, so the proxy's
+forwarded surface stays exactly the routes the browser's session client calls. A guard now
+fails the build when the app names a proxy path that is not one of TBAi's own routes.
+**What is deliberately not decided here.** The CORS origin policy is unchanged: the
+packaged origin is pp://localhost while the policy carries http://app.localhost, and
+the Vite dev origin is 5173 by default against the 3000 that 	auri.conf.json expects.
+Narrowing that list without the evidence would break either the packaged app or the
+developer's workflow, so it waits.
+---
+
+## 2026-10-21 - Phase 1 A3: the CORS policy trusts exactly the two origins TBAi serves
+
+Plan: `docs/2026-10-20-opencode-runtime-remediation-plan.md` (unit A3). The evidence gaps
+**G1** and **G2** are closed below, and **one premise of the plan was wrong and is corrected
+here**.
+
+**The packaged origin is `http://app.localhost` ï¿½ the plan said it was wrong.** The plan
+recorded that the allow-list entry `http://app.localhost` "carries the wrong scheme and
+matches nothing TBAi serves". It is the opposite: it is the correct Windows WebView2 origin,
+and the entry was never stale.
+
+The evidence, from three independent places:
+
+- The desktop shell registers a custom URI scheme named `app`
+  (`src-tauri/src/main.rs:603`, `register_asynchronous_uri_scheme_protocol`) and the
+  window loads `app://localhost` (`src-tauri/tauri.conf.json:10`). The **scheme name** is
+  not the origin.
+- Tauri's own API documentation for that exact function states that a page loaded from a
+  custom protocol has a different origin per platform, and names them: macOS/iOS/Linux get
+  `<scheme>://localhost/`; **Windows and Android get `http://<scheme>.localhost/`** by
+  default. TBAi is Windows-x64-only (`web/src/lib/platform.ts`), so the packaged app's origin
+  is `http://app.localhost`.
+- This repository had already recorded it (`docs/architecture.md`: "Windows WebView2 produces
+  the origin `http://app.localhost`"), and `docs/PROJECT_MANAGER_PROTOCOL.md` says the same.
+
+**The development origin is `http://localhost:3000`.** `tauri.conf.json` sets `devUrl:
+"http://localhost:3000"` and `beforeDevCommand: "bun run dev"`; the root `dev` script starts
+the **backend**, whose port authority is `PORT` â†’ persisted `server.port` â†’ 3000. The backend
+serves the SPA itself, so the dev window's origin is the backend's own and the dev URL and the
+launch command agree. The dev window is a Tauri webview, so the app calls the API at
+`http://127.0.0.1:<port>` ï¿½ a different origin ï¿½ which is why the entry is required.
+
+**The policy before and after.** Before: every `http://localhost:<any port>` and
+`http://127.0.0.1:<any port>` was trusted, plus `http://app.localhost`, plus a wildcard
+(`Access-Control-Allow-Origin: *`) for any request with no `Origin` header. After: exactly
+`http://app.localhost` and `http://localhost:3000`; everything else, including a missing
+`Origin`, gets no CORS header at all. The list lives in `src/config/cors.ts`.
+
+**The Vite dev server is not a CORS participant, and its port is now pinned.** That flow is a
+plain browser session: the app's API calls are relative, so they are same-origin and CORS does
+not apply (historically they went through a `/api` proxy to the backend on 3000). Its port is
+pinned to 5173 with `strictPort: true` in `web/vite.config.ts`, so it can never drift
+silently to an origin nothing is configured for. The Tauri dev window's origin is 3000 whether
+the frontend is served by the backend or by Vite.
+
+**`PATCH` was missing from the allowed methods, and that was a live defect.** The app calls
+`PATCH` in fifteen places (conversation rename, folder rename, memory edit, quick-message
+edit, scheduler job edit, the auto-approve toggle, the OpenCode chip). A `PATCH` is never a
+"simple" request, so the browser preflights it ï¿½ and a preflight whose
+`Access-Control-Allow-Methods` omits the requested method **fails**, so the browser never
+sends the request. In the packaged app every API call is cross-origin, so all fifteen were
+blocked. Verified against the real middleware before the change: the preflight answered
+`Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS`. The list now names the methods
+the app uses.
+
+**The command-catalogue contract, reported and not changed.** The upstream's `/api/command`
+does **not** return a bare array. Measured against a live managed `opencode serve` (2.0.32)
+with an isolated config directory: `GET /api/command` â†’ `200` and the body
+`{"location":{"directory":"D:\\..."},"data":[]}` ï¿½ the shape the installed client's
+`CommandListOutput` declares. The browser's `parseCommandFeed` only understands a bare
+array, so the composer's `/` palette renders **empty**. That is a pre-existing defect, it is
+not a security issue, and it is not fixed here: A3 changed the transport, not the parsing. The
+transport is now explicit (the backend reads the catalogue and serves it from
+`/api/opencode/commands`, the server's payload verbatim), and a characterization test pins
+the parser's current behaviour against the real payload so the mismatch cannot drift unnoticed.
+The palette's own unit tests drive a synthetic array, which is why the mismatch was invisible.
+
+**CORS is not authorization.** A refused origin's request is still executed by the server; what
+the browser cannot do is read the response. What a request may *do* is decided by the OpenCode
+proxy's route allowlist and its server-side workspace authorization, which hold regardless of
+the origin ï¿½ and the CORS suite asserts that separately, from an allowed origin.
+---
+
+## 2026-10-21 - The web port is the user's choice, so the CORS origins are derived from the listener
+
+**The problem.** A3 narrowed the CORS policy to two fixed origins, one of which
+was `http://localhost:3000` - the default port, hardcoded. The port is the
+USER's choice (Settings -> Web server), so a fixed port in the policy is wrong
+by construction, and it was wrong in a way that broke a real workflow.
+
+**The concrete failure.** A browser-mode port change works like this: the page
+is still on the OLD origin, it asks the NEW origin whether it is up, and only
+then navigates. That readiness probe is a **cross-origin** request, so the new
+listener has to trust the origin it replaced. With `localhost:3000`
+hardcoded, the first port change away from 3000 made that probe unreadable -
+the browser refused to hand the response over - and the Settings page then
+reported the restart as failed even though the server had moved. The user was
+told the opposite of what happened.
+
+**The decision.** The allowed origins are DERIVED from the architecture's own
+state, not listed:
+
+- `http://app.localhost` - the packaged desktop webview. Fixed by the
+  platform, not by any port TBAi listens on (Tauri's documented Windows
+  WebView2 origin for the custom `app` protocol; see the A3 entry).
+- the loopback origins on the port the listener is **on**, and on the port it
+  **replaced** - because those are exactly the origins TBAi's own pages are
+  served from, and the page that triggered a restart is still on the old one
+  while it probes the new one.
+
+The ports come from `services/server-listener.ts`, which already owns the
+single listener and the restart swap, so the policy follows the real state
+instead of a second copy of it. `src/config/cors.ts` stays PURE (no service
+imports): it is the rule, and the route supplies the numbers.
+
+**What was rejected.** A wildcard (`http://localhost:*`) would have made the
+port work and would also have handed every page on the machine read access to
+the API - the whole class of disclosure the allowlist and the server-side
+workspace authorization exist to prevent. A fixed list of ports would rot the
+moment the user picked another one.
+
+**The page origin and the listening port are different things.** The packaged
+app's page comes from the `app://` protocol, so its origin does not move
+when the port does; the API moves to `http://127.0.0.1:<port>` and the
+request becomes cross-origin. The development window's page is served BY the
+backend, so its origin IS a loopback origin on the backend's port - which is
+why the active port is in the set, and why a fixed port could not be.
+
+**What was verified.** `tests/integration/core/cors-policy.test.ts` binds a
+REAL listener and drives the real middleware: the derived origins are trusted,
+a foreign port is not, and a real restart proves the new listener still trusts
+the page it replaced. The guard was proved able to fail: with the port
+hardcoded again, four of its cases fail, including the port-change one.
+`tests/integration/server/port-configurability.test.ts` drives the real
+routes against a real socket: save without restart, restart onto the new port,
+an occupied port (the working listener survives and the request is not
+recorded), the instance identity across a port change, the port mirror, the
+persisted port across a relaunch, and the `PORT` environment lock.
+`tests/dom/desktop/ServerSection.test.tsx` covers the page itself: the
+locked input, save-without-restart, an occupied port, the restart that moves
+the API base URL without navigating, and a restart that never came up.
+
+**Unchanged on purpose.** The OpenCode proxy's route allowlist, the
+server-side workspace authorization, the configuration credential redaction
+and the event-scope check are untouched: CORS and authorization are separate
+controls, and a port change must not relax either. The separately reported
+command-catalogue parser mismatch was not touched either.
+---
+
+## 2026-10-21 - OpenCode permission rows: live evaluation verified, and duplicate rows are independently editable
+
+Plan: `docs/2026-10-20-opencode-runtime-remediation-plan.md` (unit C, gaps G3 and G7).
+
+### G3 — the live evaluation, and what it actually says
+
+The plan's permission semantics were read from the upstream source. They were then
+**verified live**, because the read-only override indicator may only claim what the
+running server does.
+
+**Setup.** A managed `opencode serve` **2.0.32** (`D:\Coding\OpenCode\opencode.exe`)
+was started with `XDG_CONFIG_HOME` pointed at a **temporary** directory, so the
+user's real OpenCode configuration was never read or written. Its only provider was
+the repository's own local stub (`scripts/e2e-stub-provider.ts`) — an
+OpenAI-compatible HTTP server with no credentials and no network — armed with one
+`shell` tool call per case. The ruleset under test travelled in the isolated
+configuration's `permissions` key; nothing else was written.
+
+**Observations.** Twelve cases, each with its own server and its own ruleset:
+
+| ruleset (same action) | observed |
+|---|---|
+| `*` allow | the call RAN |
+| `*` ask | the server ASKED — `permission.asked` with `action=shell`, `resources=["echo g3"]` |
+| `*` deny | the tool was **not offered** to the model at all, and never called |
+| `*` allow, then `*` deny | not offered — the **LAST** rule won |
+| `*` deny, then `*` allow | offered, and the call RAN — the **LAST** rule won |
+| `*` allow + `git *` deny, command `git status` | refused: `{"type":"permission.rejected","message":"Permission denied: shell"}` |
+| `*` allow + `git *` deny, command `echo hi` | RAN — the narrow rule did not match |
+| `git *` ask, command `git status` | ASKED, with the resource `["git status"]` |
+| `git *` ask, command `echo hi` | not asked — the rule did not match |
+| `write *` deny, `shell` called | the `shell` call RAN — the **action is the tool's name** |
+| `* *` deny (both dimensions) | no tool was offered — the action's `*` matches every tool |
+| `git *` deny then `*` allow, command `git status` | RAN — the later, broader rule won |
+
+**What the plan assumed, and what the live server says.** The plan's `findLast` and
+wildcard reading is **confirmed, not contradicted**. Three details the source did
+not spell out for the reader, and the live run settled:
+
+- The upstream's shell tool is named `shell`, not `bash` — the permission
+  action is the **tool's name**.
+- The resource is the **command string** (`permission.asked` carried
+  `resources: ["git status"]`).
+- A `deny` rule does not only refuse a call: it removes the tool from the list
+  the model is offered, so the model never asks for it.
+
+### G7 — Option C, and what it means for the write path
+
+**Approved by the maintainer: Option C — duplicate rows are independently
+editable, using a stable, position-aware identity.**
+
+The page therefore keys its rows by the rule's **position in the configuration
+file**, names each row's controls with its row number, and sends that position
+with the write. The backend's protection is unchanged and was not relaxed: it
+re-checks the identity at that position and **refuses** a rule that moved or
+changed since the page read it.
+
+Two details this exposed, both fixed by the same change:
+
+- The page's rows were keyed by the `(action, resource)` pair, so two
+  identical rules shared one React key and one "pending edit" identity — an edit
+  on one of them marked both.
+- The **remove** path sent the row's number on screen, not the rule's position in
+  the file. Those differ whenever a rule the page cannot read is present, so a
+  removal could have addressed a different rule than the one clicked. It now
+  sends the file's position, and the backend's identity re-check refuses a
+  mismatch.
+
+### The override indicator, and what it deliberately does not do
+
+The indicator is **read-only** and says which later rule takes over. It is
+computed from the relations the live run established, using exact string
+comparisons and one fact about the upstream's wildcard — that `*` matches every
+string:
+
+- a later rule with the **same** action and resource overrides the earlier one
+  **completely** (it matches exactly the same requests, and it is later);
+- a later rule whose action or resource is `*` overrides the earlier one
+  completely when the other dimension is the same or also `*`;
+- a later rule that is **narrower** overrides the earlier one only for the
+  resources it matches — the earlier rule still applies to the rest.
+
+Every claim the indicator makes is therefore **sound**: it never reports an
+override OpenCode would not act on. It is deliberately **incomplete**: two
+overlapping patterns whose relation cannot be decided from equality and `*`
+alone are reported as *not* overridden, because guessing would be worse than
+saying nothing.
+
+**What it is not.** It is not the upstream's evaluation. TBAi does not evaluate
+permissions; OpenCode does, and re-implementing that here is forbidden by the
+plan. What the page owns is the display question — *is this row the one that
+wins?* — and the plan's "Must not" is respected: no rule is rejected, no
+wildcard-overlapping ruleset is hidden, and the evaluation itself is untouched.

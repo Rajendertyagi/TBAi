@@ -9,6 +9,7 @@ const CONVERSATION_ID = "conv_v2_thread_list";
 
 const state: V2ThreadState = {
   sessionId: SESSION_ID,
+  directory: null,
   connection: { type: "connected", serverVersion: "2.0.16" },
   load: { type: "ready" },
   execution: { type: "idle" },

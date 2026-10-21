@@ -22,6 +22,11 @@ export type FetchHandler = (req: Request) => Response | Promise<Response>;
 let fetchHandler: FetchHandler | null = null;
 let activeServer: BunServer | null = null;
 let activePort = 0;
+// The port the live listener replaced, or 0 when it has not replaced one.
+// The CORS policy needs it: a page still on the old port asks the new origin
+// whether it is up, and that request is cross-origin — so the new listener
+// has to trust the page it replaced. See `src/config/cors.ts`.
+let replacedPort = 0;
 
 /** Transport backstop (see server.ts): Bun's max is 255; 240 covers stalls. */
 const LISTENER_IDLE_TIMEOUT_S = 240;
@@ -53,6 +58,17 @@ export function getActiveServer(): BunServer | null {
 /** The port the single server is currently listening on (0 before boot). */
 export function getActivePort(): number {
   return activePort;
+}
+
+/**
+ * The port the live listener replaced (0 when it has replaced none).
+ *
+ * Kept for the CORS policy: after a restart the page is still on the old
+ * port for a moment and asks the new origin whether it is up. That request
+ * carries the OLD origin, so the new listener has to trust it.
+ */
+export function getReplacedPort(): number {
+  return replacedPort;
 }
 
 // Per-boot instance identity for the Tauri shell's ownership proof. The
@@ -95,6 +111,8 @@ function setActive(server: BunServer, port: number): void {
  * Tauri shell all agree on where this instance actually lives.
  */
 export function bindBootPort(port: number): { server: BunServer; port: number } {
+  // A fresh boot replaces nothing.
+  replacedPort = 0;
   try {
     const server = bindListener(port);
     setActive(server, port);
@@ -133,6 +151,7 @@ export async function restartListener(port: number): Promise<{ port: number; res
   if (!activeServer) throw new Error("server_not_running");
   if (port === activePort) return { port: activePort, restarted: false };
   const previous = activeServer;
+  const previousPort = activePort;
   let next: BunServer;
   try {
     next = bindListener(port);
@@ -150,6 +169,10 @@ export async function restartListener(port: number): Promise<{ port: number; res
     throw new Error(`port_persist_failed: ${(err as Error)?.message ?? err}`, { cause: err });
   }
   setActive(next, port);
+  // The page that triggered this restart is still on the old port, and it asks
+  // the new origin whether it is up. That request is cross-origin, so the new
+  // listener has to trust the old page's origin (see `src/config/cors.ts`).
+  replacedPort = previousPort;
   logger.info("server", "restarted", { message: `http://localhost:${port}` });
   setTimeout(() => {
     try {

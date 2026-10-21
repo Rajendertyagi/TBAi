@@ -343,6 +343,13 @@ export function setOpenCodeConfigValue(raw: string, key: string, value: unknown)
   return serializeOpenCodeConfig(next);
 }
 
+/** Whether a value is a permission rule with the given action and resource. */
+function isRuleWithIdentity(rule: unknown, action: string, resource: string): boolean {
+  if (rule === null || typeof rule !== "object" || Array.isArray(rule)) return false;
+  const entry = rule as Record<string, unknown>;
+  return entry.action === action && entry.resource === resource;
+}
+
 /**
  * Replaces the `permissions` array with one rule, matched on action+resource.
  *
@@ -352,8 +359,7 @@ export function setOpenCodeConfigValue(raw: string, key: string, value: unknown)
  * "filter out question, push allow" would silently move a rule past every rule
  * written after it and change what those rules decide. This therefore:
  *
- *   - finds the FIRST rule matching the same (action, resource) pair, which is
- *     the one actually in force, and changes only its `effect`;
+ *   - changes ONLY the one rule that carries the pair (action, resource), and
  *   - leaves every other rule at its original index, with its original
  *     action, resource and effect;
  *   - returns the input array UNCHANGED when the rule to edit is absent, so an
@@ -362,10 +368,24 @@ export function setOpenCodeConfigValue(raw: string, key: string, value: unknown)
  * Matching on the pair (not the action alone) is what keeps a `question` edit
  * from touching an `edit` rule that happens to share a resource pattern.
  *
+ * ## An ambiguous pair is REFUSED, never applied to an arbitrary match
+ *
+ * A configuration can carry the SAME pair twice — a hand-edited file or
+ * another tool can produce one, and the append guard only refuses CREATING
+ * one. The two are not interchangeable: OpenCode resolves the array
+ * last-match-wins, so the LAST of them is the one in force, and editing the
+ * first would change a rule that never decides anything while the page
+ * reported success.
+ *
+ * So an ambiguous pair is refused with a reason. To edit one of them, address
+ * it by POSITION — {@link setOpenCodePermissionEffectAt} — which is exact.
+ *
  * @param current - The document's `permissions` value, of unknown shape.
  * @param match - The action and resource identifying the rule to change.
  * @param effect - The effect to write on that rule.
  * @returns The new array, or `current` itself when nothing matched.
+ * @throws {OpenCodeConfigUnreadableError} When the value is not an array, or
+ *   the pair identifies more than one rule.
  */
 export function setOpenCodePermissionEffect(
   current: unknown,
@@ -375,24 +395,66 @@ export function setOpenCodePermissionEffect(
   if (!Array.isArray(current)) {
     throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
-  const index = current.findIndex(
-    (rule) =>
-      rule !== null &&
-      typeof rule === "object" &&
-      !Array.isArray(rule) &&
-      (rule as Record<string, unknown>).action === match.action &&
-      (rule as Record<string, unknown>).resource === match.resource,
-  );
+  const index = current.findIndex((rule) => isRuleWithIdentity(rule, match.action, match.resource));
   if (index === -1) return current;
 
-  const existing = current[index] as Record<string, unknown>;
-  const next = current.map((rule, at) => {
-    if (at !== index) return rule;
-    // Spreading the original keeps any extra field the rule carries, so an
-    // unknown OpenCode field on this rule survives the edit.
-    return { ...existing, effect };
-  });
-  return next;
+  const duplicates = current.filter((rule) =>
+    isRuleWithIdentity(rule, match.action, match.resource),
+  );
+  if (duplicates.length > 1) {
+    throw new OpenCodeConfigUnreadableError(
+      `There is more than one rule for "${match.action}" on "${match.resource}", so the one to change is ambiguous`,
+    );
+  }
+
+  return setOpenCodePermissionEffectAt(current, index, match, effect);
+}
+
+/**
+ * Changes the effect of the rule at `index`, re-checking its identity.
+ *
+ * This is the precise form: a rule is addressed by the POSITION the caller
+ * read it at AND by the identity it had there. Both are re-checked against
+ * the current document immediately before the change, so a rule that moved or
+ * changed on disk is refused rather than edited by position alone.
+ *
+ * Addressing by position is what makes a configuration with two identical
+ * rules editable at all: each of them is a distinct row, and the row the
+ * caller read is the row that changes.
+ *
+ * Every other rule keeps its index, its action, its resource and its effect,
+ * and the edited rule keeps any extra field it carries.
+ *
+ * @param current - The document's `permissions` value, of unknown shape.
+ * @param index - The position the caller read the rule at.
+ * @param expected - The action and resource the rule had at that position.
+ * @param effect - The effect to write on that rule.
+ * @returns The new array.
+ * @throws {OpenCodeConfigUnreadableError} When the value is not an array, the
+ *   index is out of range, or the rule there is no longer the expected one.
+ */
+export function setOpenCodePermissionEffectAt(
+  current: unknown,
+  index: number,
+  expected: { readonly action: string; readonly resource: string },
+  effect: "allow" | "ask" | "deny",
+): unknown {
+  if (!Array.isArray(current)) {
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
+  }
+  const at = current[index];
+  if (at === null || typeof at !== "object" || Array.isArray(at)) {
+    throw new OpenCodeConfigUnreadableError(
+      "That rule is no longer at the position it was read from",
+    );
+  }
+  const rule = at as Record<string, unknown>;
+  if (rule.action !== expected.action || rule.resource !== expected.resource) {
+    throw new OpenCodeConfigUnreadableError(
+      "That rule changed on disk since it was read; reload and try again",
+    );
+  }
+  return current.map((entry, at2) => (at2 === index ? { ...rule, effect } : entry));
 }
 
 /**

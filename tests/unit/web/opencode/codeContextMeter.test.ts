@@ -158,6 +158,7 @@ describe("Code meter: a multi-step turn is occupancy, not traffic", () => {
 describe("Code meter: after a compaction the reading is unknown", () => {
   const base = {
     sessionId: "ses_1",
+    directory: null,
     connection: { type: "connected" as const, serverVersion: "2.0.16" },
     load: { type: "ready" as const },
     execution: { type: "idle" as const },

@@ -395,6 +395,13 @@ sqlite.run(
   "CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)",
 );
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
+// Reverse lookup for the workspace-authorization chain `OpenCode session id ->
+// conversation -> folder -> directory`. The proxy resolves the session id a
+// request names into the one directory that request may address, so this
+// lookup is on the request path, not a reporting query.
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_conversations_opencode_session_id ON conversations(opencode_session_id)",
+);
 sqlite.run(
   "CREATE INDEX IF NOT EXISTS idx_messages_conv_content ON messages(conversation_id, content)",
 );

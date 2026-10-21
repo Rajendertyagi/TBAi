@@ -6,12 +6,23 @@ import {
   terminateOpenCodeSession,
 } from "../services/opencode/sessions";
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
+import { getOpenCodeCommandFeed } from "../services/opencode/commands";
 import {
   OpenCodeBinaryMissingError,
   openCodeServerManager,
   stripOpenCodeProxyPrefix,
 } from "../services/opencode/serverManager";
-import { getOpenCodeAuthHeaders } from "../services/opencode/runtime";
+import {
+  getOpenCodeAuthHeaders,
+  getOpenCodeDirectoryHeaders,
+  OPENCODE_DIRECTORY_HEADER,
+} from "../services/opencode/runtime";
+import { matchOpenCodeProxyRoute } from "../services/opencode/proxyRoutes";
+import {
+  authorizeOpenCodeProxyRequest,
+  OPENCODE_SESSION_HEADER,
+  OpenCodeProxyRefusalError,
+} from "../services/opencode/proxyAuthorization";
 import {
   appendOpenCodePermissionRule,
   OpenCodeConfigNotFoundError,
@@ -20,8 +31,13 @@ import {
   removeOpenCodePermissionRule,
   setOpenCodeConfigValue,
   setOpenCodePermissionEffect,
+  setOpenCodePermissionEffectAt,
   writeOpenCodeConfigDocument,
 } from "../services/opencode/configDocument";
+import {
+  redactOpenCodeConfigDocument,
+  redactOpenCodeConfigText,
+} from "../services/opencode/configRedaction";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
 
@@ -125,11 +141,23 @@ app.post("/session/terminate", async (c) => {
  * existing rule, and every other rule keeps its index by construction.
  */
 
-/** Zod-validated body for a single permission-effect change. */
+/**
+ * Zod-validated body for a single permission-effect change.
+ *
+ * `index` is OPTIONAL, and its presence changes how the rule is addressed:
+ *
+ * - with it, the rule at that position is changed after its identity is
+ *   re-checked, which is exact even when the configuration carries the same
+ *   `(action, resource)` pair twice;
+ * - without it, the rule is addressed by its `(action, resource)` pair, and a
+ *   pair that identifies more than one rule is REFUSED rather than applied to
+ *   an arbitrary match.
+ */
 const permissionEffectSchema = z.object({
   action: z.string().min(1),
   resource: z.string().min(1),
   effect: z.enum(["allow", "ask", "deny"]),
+  index: z.number().int().min(0).optional(),
 });
 
 /** Returns the managed server's base URL plus its auth headers. */
@@ -182,12 +210,17 @@ app.get("/config", async (c) => {
   try {
     const target = await configServerTarget();
     const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
+    // The response is a REDACTED projection. The file on disk keeps its real
+    // values, and the write path below still reads the real text, so the
+    // preservation guarantee is untouched — only what leaves the server is
+    // masked.
+    const redacted = redactOpenCodeConfigDocument(document.doc);
     return c.json({
       path: document.path,
       discoveredPaths: document.discoveredPaths,
-      raw: document.raw,
+      raw: redactOpenCodeConfigText(document.raw),
       malformed: document.malformed,
-      permissions: document.doc.permissions ?? null,
+      permissions: redacted.permissions ?? null,
       editable: !document.malformed,
     });
   } catch (err) {
@@ -288,10 +321,12 @@ app.put("/config/permissions", async (c) => {
   if (!parsed.success) {
     return c.json({ error: "action, resource and effect are required" }, 400);
   }
-  const { action, resource, effect } = parsed.data;
+  const { action, resource, effect, index } = parsed.data;
   try {
     const result = await applyPermissionChange((current) =>
-      setOpenCodePermissionEffect(current, { action, resource }, effect),
+      index === undefined
+        ? setOpenCodePermissionEffect(current, { action, resource }, effect)
+        : setOpenCodePermissionEffectAt(current, index, { action, resource }, effect),
     );
     return c.json(result);
   } catch (err) {
@@ -308,6 +343,24 @@ app.put("/config/permissions", async (c) => {
       return c.json({ error: err.message }, 404);
     }
     const mapped = openCodeError(err, "Failed to write OpenCode configuration");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
+ * The composer's command feed.
+ *
+ * OpenCode's command catalogue is **location-scoped upstream**, and the
+ * proxy's allowlist deliberately carries only the routes the browser's
+ * session client calls — so the catalogue is read here, by the backend, and
+ * served from TBAi's own route. The payload is the server's own, verbatim.
+ */
+app.get("/commands", async (c) => {
+  try {
+    return c.json(await getOpenCodeCommandFeed());
+  } catch (err) {
+    logger.error("opencode", "opencode.commands_error", { ...classifyError(err) });
+    const mapped = openCodeError(err, "Failed to load OpenCode commands");
     return c.json({ error: mapped.message }, mapped.status);
   }
 });
@@ -356,11 +409,57 @@ app.all("*", async (c) => {
   const targetPath = stripOpenCodeProxyPrefix(c.req.path);
   const upstreamPath =
     targetPath === "/api" || targetPath.startsWith("/api/") ? targetPath : `/api${targetPath}`;
-  const url = new URL(upstreamPath, baseUrl);
-  url.search = new URL(c.req.url).search;
 
   const method = c.req.method;
   const reqHeaders = c.req.raw.headers;
+
+  // A1 — THE ALLOWLIST. The proxy forwards only the routes the browser's
+  // client actually calls. Everything else the managed server exposes (shell,
+  // filesystem read/write, credentials, config writes, RPC, MCP, PTY, plugin
+  // updates) is refused here, before any upstream request is made. The list
+  // lives in `services/opencode/proxyRoutes.ts` and is checked against the
+  // real client by two drift tests, so it cannot drift into a blocklist.
+  const match = matchOpenCodeProxyRoute(method, upstreamPath);
+  if (!match) {
+    logger.warn("opencode", "proxy.route_refused", {
+      requestId,
+      method,
+      pathname: upstreamPath,
+    });
+    return c.json({ error: "Unknown OpenCode route" }, 404);
+  }
+
+  // A2 — THE WORKSPACE SCOPE. The caller never chooses the directory. The
+  // proxy resolves the session the request names (path for a session-scoped
+  // route, `x-tbai-session` for the location-scoped event stream) through the
+  // local database and forwards THAT directory.
+  let authorization: Awaited<ReturnType<typeof authorizeOpenCodeProxyRequest>>;
+  try {
+    authorization = await authorizeOpenCodeProxyRequest({
+      route: match.route,
+      parameters: match.parameters,
+      sessionHeader: reqHeaders.get(OPENCODE_SESSION_HEADER),
+    });
+  } catch (err) {
+    if (err instanceof OpenCodeProxyRefusalError) {
+      logger.warn("opencode", "proxy.authorization_refused", {
+        requestId,
+        method,
+        pathname: upstreamPath,
+        status: err.status,
+        reason: err.message,
+      });
+      return c.json({ error: err.message }, err.status);
+    }
+    throw err;
+  }
+
+  const url = new URL(upstreamPath, baseUrl);
+  url.search = new URL(c.req.url).search;
+  // The managed server reads the location from `location[directory]` as well
+  // as from the header, so a caller-supplied value is stripped from BOTH.
+  url.searchParams.delete("location[directory]");
+
   const sessionId = url.searchParams.get("session") ?? undefined;
   const sseOriented = url.pathname.includes("/event");
 
@@ -368,6 +467,7 @@ app.all("*", async (c) => {
   logger.debug("opencode", "proxy.request", {
     requestId,
     sessionId,
+    ocSession: authorization.sessionId ?? undefined,
     method,
     pathname: url.pathname,
     sseOriented,
@@ -393,8 +493,20 @@ app.all("*", async (c) => {
   ]) {
     headers.delete(hop);
   }
+  // The caller's own scope inputs are removed before the server's are set:
+  // the upstream must never see a directory the caller chose, nor the
+  // TBAi-internal session header (which is a selector, not an instruction).
+  headers.delete(OPENCODE_SESSION_HEADER);
+  headers.delete(OPENCODE_DIRECTORY_HEADER);
   for (const [key, value] of Object.entries(getOpenCodeAuthHeaders())) {
     headers.set(key, value);
+  }
+  if (authorization.directory) {
+    for (const [key, value] of Object.entries(
+      getOpenCodeDirectoryHeaders(authorization.directory),
+    )) {
+      headers.set(key, value);
+    }
   }
 
   const init: RequestInit = { method, headers, redirect: "manual" };

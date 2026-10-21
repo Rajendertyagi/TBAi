@@ -196,6 +196,33 @@ export const conversationService = {
     return row ? mapConversation(row) : null;
   },
 
+  /**
+   * Look up the conversation that owns an OpenCode session.
+   *
+   * This is the **missing link** in the workspace-authorization chain
+   * `OpenCode session id → conversation → folder → absolute directory`. The
+   * proxy needs it to resolve the session a browser request names into the
+   * one directory the request is allowed to address; without it the proxy
+   * would have to trust the caller's directory, which is exactly the
+   * disclosure the chain exists to prevent.
+   *
+   * The session id is a **selector**, not an authority: the directory that
+   * comes back is always resolved from the `folders` table through
+   * `resolveConversationWorkspace`, never from the session id itself.
+   *
+   * @param sessionId - The managed OpenCode session id.
+   * @returns The owning conversation, or `null` when no row carries the id.
+   */
+  async findByOpenCodeSessionId(sessionId: string): Promise<Conversation | null> {
+    if (!sessionId) return null;
+    const row = db
+      .query<ConversationRow, SQLQueryBindings[]>(
+        "SELECT * FROM conversations WHERE opencode_session_id = ? LIMIT 1",
+      )
+      .get(sessionId);
+    return row ? mapConversation(row) : null;
+  },
+
   async list(options: ConversationListOptions = {}): Promise<ConversationListResult> {
     const {
       status,

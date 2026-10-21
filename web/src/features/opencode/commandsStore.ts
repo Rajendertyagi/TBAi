@@ -6,11 +6,17 @@ import { parseCommandFeed, type OpenCodeCommand } from "./slashCommands";
 /**
  * OpenCode's command feed, for the composer's `/` palette.
  *
- * The feed is served by OpenCode itself and reaches the browser through the
- * existing `/api/opencode/*` proxy — there is no TBAi-side route and no
- * hardcoded command list, so a new command or skill shows up without a code
- * change. Follows `quickMessagesStore`'s shape (the project's convention for a
- * server-backed list).
+ * The feed is served by OpenCode itself and reaches the browser through
+ * TBAi's own `/api/opencode/commands` route — there is no TBAi-side list and
+ * no hardcoded command list, so a new command or skill shows up without a
+ * code change. Follows `quickMessagesStore`'s shape (the project's convention
+ * for a server-backed list).
+ *
+ * It used to be fetched through the `/api/opencode/*` **proxy** instead. That
+ * put a location-scoped catalogue route on the proxy's reach, and the proxy
+ * now forwards only the routes the browser's session client calls. The
+ * backend reads the catalogue and serves it from its own route, so the
+ * proxy's forwarded surface stays exactly that set.
  *
  * Load discipline, borrowed from a sibling implementation that learned it the
  * hard way:
@@ -23,8 +29,8 @@ import { parseCommandFeed, type OpenCodeCommand } from "./slashCommands";
 /** Re-fetch only after this long; the feed changes on file edits, not per keystroke. */
 const FEED_TTL_MS = 30_000;
 
-/** The proxy path to OpenCode's command endpoint (see routes/opencode.ts). */
-export const OPENCODE_COMMANDS_PATH = "/api/opencode/command";
+/** TBAi's route for the command feed (see routes/opencode.ts). */
+export const OPENCODE_COMMANDS_PATH = "/api/opencode/commands";
 
 interface CommandsState {
   commands: OpenCodeCommand[];

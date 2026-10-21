@@ -43,6 +43,7 @@ import {
   type OpenCodePermissionEffect,
   type OpenCodePermissionRule,
 } from "./openCodeConfig";
+import { findPermissionOverride } from "./permissionOverrides";
 import { cn } from "@/lib/utils";
 
 /**
@@ -114,11 +115,6 @@ interface AddRuleState {
 
 const EMPTY_ADD_RULE: AddRuleState = { action: "", resource: "*", effect: "ask" };
 
-/** The identity of one rule, used to key rows and detect a local change. */
-function ruleKey(rule: OpenCodePermissionRule): string {
-  return `${rule.action}\0${rule.resource}`;
-}
-
 /** One effect selector bound to a single rule. */
 function EffectSelect({
   value,
@@ -152,8 +148,16 @@ function EffectSelect({
   );
 }
 
-/** The native JSON view: the file exactly as it is on disk. */
-function NativeJson({ raw }: { raw: string }) {
+/**
+ * The native JSON view: the file's structure with every credential masked.
+ *
+ * A file that could not be parsed has no structure to redact, so its text is
+ * withheld rather than shown unredacted.
+ */
+function NativeJson({ raw, malformed }: { raw: string; malformed: boolean }) {
+  if (malformed) {
+    return <p className="text-xs text-muted-foreground">{openCodeConfigCopy.json.withheld}</p>;
+  }
   if (raw.trim().length === 0) {
     return <p className="text-xs text-muted-foreground">{openCodeConfigCopy.json.empty}</p>;
   }
@@ -300,23 +304,32 @@ export function OpenCodeConfigPage() {
 
   const rules = useMemo(() => toPermissionRules(snapshot?.permissions ?? null), [snapshot]);
   /**
-   * The single uncommitted edit, held as the FULL target rule rather than a
-   * bare effect.
+   * The single uncommitted edit, held as the rule's POSITION in the file plus
+   * the full target rule.
    *
-   * Holding the whole rule is what makes the dirty check honest: the row can
-   * compare identity and effect against what is on disk without needing to look
-   * the original up, and the save call receives a value that is already the
-   * complete identity the backend matches on. A bare effect would have to be
-   * paired with a rule looked up by index, which breaks the moment a reload
-   * reorders the array.
+   * The position is what makes two identical rules independently editable: with
+   * the `(action, resource)` pair alone, a configuration holding the same pair
+   * twice gives both rows the same identity, and the edit would land on
+   * whichever one the backend happened to find first.
+   *
+   * Holding the whole rule as well is what makes the write safe: the backend
+   * re-checks the identity at that position before writing, so a rule that
+   * moved or changed since the page read it is refused rather than edited.
    */
-  const [pending, setPending] = useState<OpenCodePermissionRule | null>(null);
+  const [pending, setPending] = useState<{
+    readonly index: number;
+    readonly rule: OpenCodePermissionRule;
+  } | null>(null);
 
   const save = useCallback(async () => {
     if (!pending) return;
-    setSaveState({ kind: "saving", rule: pending });
+    setSaveState({ kind: "saving", rule: pending.rule });
     try {
-      const result = await saveOpenCodePermissionEffect(pending, pending.effect);
+      const result = await saveOpenCodePermissionEffect(
+        pending.index,
+        pending.rule,
+        pending.rule.effect,
+      );
       setPending(null);
       setSaveState({
         kind: "saved",
@@ -345,7 +358,7 @@ export function OpenCodeConfigPage() {
    * list honest: it can only ever suggest what the user actually has.
    */
   const existingActions = useMemo(
-    () => [...new Set(rules.rules.map((rule) => rule.action))].sort(),
+    () => [...new Set(rules.rules.map((row) => row.rule.action))].sort(),
     [rules],
   );
 
@@ -478,40 +491,75 @@ export function OpenCodeConfigPage() {
                   <span>{openCodeConfigCopy.labels.resource}</span>
                   <span>{openCodeConfigCopy.permissions.effect}</span>
                 </div>
-                {rules.rules.map((rule, index) => {
-                  // Identity is the (action, resource) pair, never the index:
-                  // the array is authoritative and a reload can reorder it.
-                  const isPending = pending !== null && ruleKey(pending) === ruleKey(rule);
+                {rules.rules.map((row, position) => {
+                  const { rule, index } = row;
+                  // Identity is the rule's POSITION in the file, not its
+                  // (action, resource) pair: OpenCode resolves the array
+                  // last-match-wins, so a configuration holding the same pair
+                  // twice has two distinct rules, and only their positions
+                  // tell them apart. The backend re-checks the identity at
+                  // that position before writing.
+                  const isPending = pending !== null && pending.index === index;
+                  const override = findPermissionOverride(
+                    rules.rules.map((entry) => entry.rule),
+                    index,
+                  );
                   return (
                     <div
-                      key={ruleKey(rule)}
+                      key={index}
                       className={cn(
                         "grid grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 px-3 py-2 text-xs",
-                        index % 2 === 1 && "bg-muted/20",
+                        position % 2 === 1 && "bg-muted/30",
                         isPending && "bg-accent/10",
                       )}
                     >
-                      <span className="tabular-nums text-muted-foreground">{index + 1}</span>
+                      <span className="tabular-nums text-muted-foreground">{position + 1}</span>
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{rule.action}</span>
                         <span className="block truncate text-[11px] text-muted-foreground">
                           {actionDescription(rule.action)}
                         </span>
                       </span>
-                      <span className="truncate font-mono text-[11px]" title={rule.resource}>
-                        {rule.resource}
+                      <span className="min-w-0">
+                        <span
+                          className="block truncate font-mono text-[11px]"
+                          title={rule.resource}
+                        >
+                          {rule.resource}
+                        </span>
+                        {override.kind !== "none" && (
+                          <span
+                            className="block truncate text-[10px] text-amber-600 dark:text-amber-400"
+                            title={openCodeConfigCopy.permissions.overrideTitle(
+                              override.kind,
+                              override.byIndex + 1,
+                            )}
+                          >
+                            {openCodeConfigCopy.permissions.override(
+                              override.kind,
+                              override.byIndex + 1,
+                            )}
+                          </span>
+                        )}
                       </span>
                       <div className="flex items-center justify-end gap-1.5">
                         <EffectSelect
-                          value={isPending && pending ? pending.effect : rule.effect}
+                          value={isPending && pending ? pending.rule.effect : rule.effect}
                           disabled={!editable}
-                          label={`${rule.action} ${rule.resource} effect`}
+                          // The row number is part of the name: a configuration
+                          // may hold the same (action, resource) pair twice, and
+                          // two controls with the same name would be
+                          // indistinguishable to a person using a screen reader
+                          // and to a test.
+                          label={`${rule.action} ${rule.resource} effect (rule ${position + 1})`}
                           onChange={(effect) => {
                             setSaveState({ kind: "idle" });
                             // Selecting the effect already on disk clears the
                             // pending edit rather than staging a no-op, so Save
                             // is never enabled for a change that writes nothing.
-                            setPending(effect === rule.effect ? null : { ...rule, effect });
+                            setPending(
+                              effect === rule.effect ? null : { index, rule: { ...rule, effect } },
+                            );
                           }}
                         />
                         {isPending && (
@@ -525,7 +573,7 @@ export function OpenCodeConfigPage() {
                           variant="ghost"
                           disabled={!editable || removingIndex !== null}
                           title={openCodeConfigCopy.remove.label}
-                          aria-label={`Remove rule ${rule.action} ${rule.resource}`}
+                          aria-label={`Remove rule ${rule.action} ${rule.resource} (row ${position + 1})`}
                           onClick={() => {
                             // A removal is destructive and immediately written,
                             // so it is confirmed. The message names the rule and
@@ -594,7 +642,7 @@ export function OpenCodeConfigPage() {
             icon={FileJson}
             description={openCodeConfigCopy.json.description}
           >
-            <NativeJson raw={snapshot.raw} />
+            <NativeJson raw={snapshot.raw} malformed={snapshot.malformed} />
           </SettingsSection>
 
           {!snapshot.malformed && (
