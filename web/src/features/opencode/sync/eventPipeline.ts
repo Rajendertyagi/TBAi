@@ -52,6 +52,12 @@
  * completion for the live one, so M1 (a stale attempt resetting the counter)
  * is closed by construction rather than by a guard.
  *
+ * At the ceiling the failure is terminal, and terminal means settled: the
+ * attempt is failed (retired first, so nothing it left in flight can commit)
+ * and then dropped as the runtime's current attempt. A "failed" attempt that
+ * still counted as live would keep accepting events from a stream whose
+ * recovery has already been given up on.
+ *
  * ## THE DELAY POLICY
  *
  * The exponential backoff is bounded twice: by the configured ceiling, and — while
@@ -204,6 +210,18 @@ export interface EventPipelineHost {
    */
   isLive(attempt: Attempt): boolean;
   /**
+   * Whether an attempt still owns the runtime, even after it has failed.
+   *
+   * Deliberately weaker than `isLive`. A failed attempt stops being live the
+   * moment it fails, but the runtime is still its responsibility until a
+   * replacement exists, so the retry scheduler must be able to act on it. An
+   * attempt that was superseded has no say at all (M2).
+   *
+   * @param attempt - The attempt a failure came from.
+   * @returns True when it is still the current attempt.
+   */
+  ownsRuntime(attempt: Attempt): boolean;
+  /**
    * Tears an attempt down: abort its signals, drop it as the current attempt,
    * close its stream and clear its load promise.
    *
@@ -334,8 +352,9 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     if (host.isDisposed) return;
     // A failure reported by an attempt that has already been superseded says
     // nothing about the live one: react only to the attempt that still owns
-    // the runtime (M2).
-    if (!host.isLive(failed)) return;
+    // the runtime (M2). Ownership, not liveness, because a failed attempt is
+    // no longer live by definition but has not been replaced yet.
+    if (!host.ownsRuntime(failed)) return;
     if (reconnectTimer !== null) return;
     // Terminal failure: no more auto-retries after exhausting the budget.
     if (reconnectAttempt >= host.config.maxReconnectAttempts) {
@@ -344,7 +363,13 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
         connection: { type: "failed", attempt: reconnectAttempt },
       });
       host.dispatch({ type: "load_failed", error });
+      // Settle it BEFORE anything else can observe it. `failReady` marks the
+      // attempt retired, so a later event from its stream and any continuation
+      // already in flight are refused; `retireAttempt` then drops it as the
+      // current attempt and closes the stream. Without the settle here a
+      // terminal failure left a "failed" attempt that `isLive` still accepted.
       host.failReady(failed, error);
+      host.retireAttempt(failed);
       return;
     }
     host.retireAttempt(failed);

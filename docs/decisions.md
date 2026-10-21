@@ -6262,3 +6262,27 @@ controller method, wire format or persisted field changed.
 run in the ordinary suite; `R-M4` and `R-L4` are new. The baseline pins for M1
 and M2 are deleted with the fix - both failed the moment the defects were gone,
 which is the evidence that they were pins and not coverage.
+**Correction after review (2026-10-21): `fail()` settles the attempt.** The
+ownership rule above was implemented for supersession only: `retire()` set
+`retired`, but `fail()` aborted the connection and rejected readiness while
+leaving the attempt classified as live. With the retry budget exhausted, the
+terminal branch failed the attempt and kept it as the current one, so a stream
+it left behind, or a hydration continuation already in flight, could still
+commit into the transcript and dispatch over the classified failure. That
+contradicted the contract `attempt.ts` already documented, which defines
+`retired` as superseded, failed or disposed.
+
+`fail()` now sets `retired` before it aborts or rejects anything, so a
+terminally failed attempt is settled exactly as synchronously as a superseded
+one, and the terminal branch also drops it as the current attempt and closes
+its stream. Because a failed attempt is no longer live, the retry scheduler
+asks a weaker question - does this attempt still own the runtime? - and reacts
+to a failure only while the attempt has not been replaced. That is still the M2
+guard: a superseded attempt's failure never reaches the scheduler.
+
+`R-M4b` covers it: a stream failure during hydration with a zero budget must
+leave the state completely unchanged when the abandoned history read returns,
+and the attempt's stream must be closed. Before the fix it failed on both
+counts. `R-M4` now covers the other half of M4 - recovery within the budget -
+instead of asserting that a failed attempt still applies events, which was the
+behaviour the review rejected.

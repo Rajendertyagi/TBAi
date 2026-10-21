@@ -3,6 +3,7 @@ import type { SessionMessagesResponse, V2Event } from "@opencode/client";
 import { AttemptSupersededError, createAttempt } from "@web/features/opencode/sync/attempt.ts";
 import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
+  ASSISTANT_TOOL_MESSAGE,
   EVENT_INBOX_ID,
   LIVE_ASSISTANT_MESSAGE_ID,
   LOCAL_MESSAGE_ID,
@@ -40,9 +41,10 @@ import {
  *
  * An entry whose finding has been fixed is promoted: it stops being a
  * demonstration of a defect and becomes a regression test that must keep
- * passing. `R-M1`, `R-M2`, `R-M4` and `R-L4` are in that state; the ones still
- * marked `test.todo` are findings that are still open. The guard distinguishes
- * the two, so a todo that starts passing is reported rather than ignored.
+ * passing. `R-M1`, `R-M2`, `R-M4`, `R-M4b` and `R-L4` are in that state; the
+ * ones still marked `test.todo` are findings that are still open. The guard
+ * distinguishes the two, so a todo that starts passing is reported rather than
+ * ignored.
  *
  * ## HOW THESE LEAVE THE QUARANTINE
  *
@@ -204,41 +206,74 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  test("R-M4: a failed history read leaves a defined state, and later events are applied", async () => {
-    const generation = createGeneration(1, {
+  test("R-M4: a failed history read recovers within the retry budget", async () => {
+    const failing = createGeneration(1, {
       historyList: async () => {
         throw new Error("history read failed");
       },
     });
-    const client = createClient([generation]);
-    // Budget 0: the failure must reach the DEFINED terminal state rather than
-    // a controller that is loaded-but-not-loading forever. A budget of 1 is
-    // covered by R-M1's reconnect path.
+    const recovered = createGeneration(2);
+    const client = createClient([failing, recovered]);
+    const controller = createV2ThreadController(client, {
+      maxReconnectAttempts: 1,
+      initialReconnectDelayMs: 10,
+      maxReconnectDelayMs: 10,
+    });
+    try {
+      void controller.load().catch(() => undefined);
+
+      // CORRECT: a failed history read is a connection failure, so it reaches a
+      // DEFINED state - here, recovery on the next attempt - rather than a
+      // controller that is loaded-but-not-loading behind a hydration flag that
+      // stays set forever.
+      await waitForState(controller, (state) => state.load.type === "ready");
+      expect(client.connectCount).toBe(2);
+      expect(controller.getState().connection.type).toBe("connected");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  test("R-M4b: a terminally failed attempt commits nothing afterwards", async () => {
+    const history = deferred<SessionMessagesResponse>();
+    const failing = createGeneration(1, { historyList: () => history.promise });
+    const recovered = createGeneration(2);
+    const client = createClient([failing, recovered]);
+    // Budget 0: a stream failure during hydration is terminal on the first
+    // attempt.
     const controller = createV2ThreadController(client, {
       maxReconnectAttempts: 0,
       initialReconnectDelayMs: 10,
     });
     try {
       void controller.load().catch(() => undefined);
+      await waitForState(controller, (state) => state.load.type === "loading");
+
+      failing.events.fail(new Error("stream died during hydration"));
       await waitForState(controller, (state) => state.load.type === "error");
 
       // The failure is classified, not half-applied: a controller that reports
       // `load: error` while still claiming `connection: connected` is the
       // half-initialised state this finding is about.
-      expect(controller.getState().connection.type).toBe("failed");
+      expect(controller.getState().connection).toEqual({ type: "failed", attempt: 0 });
+      const settledState = controller.getState();
 
-      // And the transcript is not stranded behind a hydration that will never
-      // happen: a delta arriving now is applied.
-      generation.events.emit(hydrationTimeDelta("evt_m4_delta", "after the failed history read"));
-      await waitForState(
-        controller,
-        (state) => state.messages[LIVE_ASSISTANT_MESSAGE_ID] !== undefined,
-      );
-      const message = controller.getState().messages[LIVE_ASSISTANT_MESSAGE_ID];
-      const text = (message?.parts ?? [])
-        .map((part) => (part.kind === "text" ? part.value : ""))
-        .join("");
-      expect(text).toContain("after the failed history read");
+      // The attempt's stream is torn down with it, so no later event can even
+      // be delivered to a failed attempt.
+      expect(failing.events.closeCount).toBe(1);
+
+      // CORRECT: terminal failure settles the attempt synchronously, so the
+      // hydration continuation it left in flight reaches NO part of the state -
+      // not the classified failure, and not the transcript. A read that ignores
+      // its abort signal is exactly how a continuation outlives its attempt.
+      history.resolve({ data: [ASSISTANT_TOOL_MESSAGE], cursor: {} });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(controller.getState()).toEqual(settledState);
+
+      // Recovery is a NEW attempt, not a resurrection of the dead one.
+      void controller.load().catch(() => undefined);
+      await waitForState(controller, (state) => state.load.type === "ready");
+      expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
     }

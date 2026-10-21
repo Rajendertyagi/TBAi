@@ -250,6 +250,7 @@ export function createV2ThreadController(
     applyEvent,
     startConnection,
     isLive,
+    ownsRuntime,
     retireAttempt,
     failReady: (failed, error) => failed.fail(new V2ControllerError(error)),
     toSafeError: safeError,
@@ -258,19 +259,35 @@ export function createV2ThreadController(
   const history = createSessionMessageLoader({ dispatch });
 
   /**
-   * Whether an attempt still owns the runtime.
+   * Whether an attempt is the runtime's current attempt.
+   *
+   * Ownership only, and deliberately weaker than `isLive`: a just-failed
+   * attempt may no longer commit, but the runtime is still its responsibility
+   * until a replacement is started, so the retry scheduler must still be able
+   * to act on it. A superseded attempt fails this check (M2).
+   *
+   * @param candidate - The attempt in question.
+   * @returns True when it is still the current attempt.
+   */
+  function ownsRuntime(candidate: Attempt): boolean {
+    return !disposed && currentAttempt === candidate;
+  }
+
+  /**
+   * Whether an attempt may still commit anything.
    *
    * This is the single identity check every asynchronous continuation makes.
    * It is deliberately about the ATTEMPT, not the generation: an attempt that
    * was superseded must stop committing even while its own generation object
    * is still around, and a newer attempt that has not connected yet has no
-   * generation at all.
+   * generation at all. A terminally failed attempt is `retired` too, so it
+   * stops committing the moment it fails.
    *
    * @param candidate - The attempt a continuation started for.
    * @returns True when it may still commit.
    */
   function isLive(candidate: Attempt): boolean {
-    return !disposed && currentAttempt === candidate && !candidate.retired;
+    return ownsRuntime(candidate) && !candidate.retired;
   }
 
   /**

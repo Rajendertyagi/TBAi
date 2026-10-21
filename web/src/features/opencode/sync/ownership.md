@@ -41,7 +41,7 @@ The rules that follow from it:
 | `optimistic.ts` | The local identity of a prompt (its message id and how it travels with assistant-ui's append metadata) and the optimistic transcript record shown while the prompt is in flight | `v2MessageProjection`, `v2Types` | anything | `createV2MessageId`, `attachV2PromptMessageId`, `isLocalV2MessageId`, `optimisticMessage` |
 | `promptsInFlight.ts` | The admission state of a prompt: whether the server took it, what it was admitted as, and the waiters blocked on that answer | — | admission verdicts it did not receive | `createPromptsInFlight` → `create` / `settle` / `markAmbiguous` / `awaitAdmission` / `get` / `disposeAll` |
 | `startupGate.ts` | The readiness promise of ONE connection attempt and the handles that settle it | — | the connection, the error classification, whether the attempt is still live | `createStartupGate` → `open` / `resolve` / `reject` / `pending` |
-| `attempt.ts` | One connection attempt: its id, its own readiness gate, its connection signal, the generation it adopted, the load promise in flight, and whether it is still hydrating or has been superseded | `startupGate`, `v2Client` (types) | domain state, the retry budget | `createAttempt(id, lifecycleSignal)` → `gate` / `signals` / `generation` / `hydrating` / `retired` / `adopt` / `beginHydration` / `projectionCommitted` / `endHydration` / `markReady` / `fail` / `retire` / `load` / `setLoad` |
+| `attempt.ts` | One connection attempt: its id, its own readiness gate, its connection signal, the generation it adopted, the load promise in flight, and whether it is still hydrating or has been settled (superseded or terminally failed) | `startupGate`, `v2Client` (types) | domain state, the retry budget | `createAttempt(id, lifecycleSignal)` → `gate` / `signals` / `generation` / `hydrating` / `retired` / `adopt` / `beginHydration` / `projectionCommitted` / `endHydration` / `markReady` / `fail` / `retire` / `load` / `setLoad` |
 | `eventPipeline.ts` | The lifecycle of the event stream: the read loop, the ordinal, the buffer that holds events arriving during a history read, the retry timer and the retry budget | `attempt`, `config` (constants) | domain state; it never settles the readiness gate itself | `createEventPipeline` → `consume` / `scheduleReconnect` / `nextOrdinal` / `currentOrdinal` / `buffer` / `bufferedSince` / `clearBuffer` / `resetAttempt` / `cancelReconnect` |
 | `sessionMessageLoader.ts` | The mechanics of the history read and the commit of its projection | `v2History`, `v2Types` | domain state; it commits through the reducer | `createSessionMessageLoader` → `read` / `commit` |
 
@@ -81,8 +81,9 @@ file today.
    domain state dispatches an action; it does not hold a reference to the
    state and mutate it.
 4. **Dependencies go through narrow interfaces.** The event pipeline takes a
-   host with eight members, not the controller itself. A module that needs
-   the whole controller is a module that has not found its seam yet.
+   narrow host interface of small, named members, not the controller itself. A
+   module that needs the whole controller is a module that has not found its
+   seam yet.
 5. **The tests must not move.** A relocation updates the imports, and it
    updates any source-text guard that named the old path — after reading the
    guard, not by weakening it.

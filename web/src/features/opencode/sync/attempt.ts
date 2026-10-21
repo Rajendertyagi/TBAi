@@ -11,7 +11,8 @@
  * - its connection signal (aborted the moment the attempt stops being live),
  * - the promise of the load in flight,
  * - whether it is still awaiting its first history projection (`hydrating`),
- * - whether it has been superseded (`retired`).
+ * - whether it is settled (`retired`): superseded by a newer attempt,
+ *   terminally failed, or disposed with the controller.
  *
  * ## WHAT THIS DOES NOT OWN
  *
@@ -26,18 +27,24 @@
  * ## THE RULE THAT CLOSES M1, M2 AND L4 AS A CLASS
  *
  * An attempt's readiness, load promise, abort signals and hydration outcome
- * are reachable **only through that attempt's handle**, and `retire()` is the
- * single synchronous act that supersedes it. Every commit is guarded by it:
+ * are reachable **only through that attempt's handle**, and two synchronous
+ * acts settle it: `retire()` when it is superseded, `fail()` when it fails
+ * terminally. Both set `retired` before they do anything else, so no
+ * continuation can observe a settled attempt as live. Every commit is guarded
+ * by it:
  *
  * - `markReady()` refuses to resolve the readiness of a retired attempt, so a
  *   superseded attempt can never settle the readiness of a newer one (L4).
- * - `retire()` aborts only its own connection signal, so a superseded attempt
- *   cannot tear down a newer one (M2).
+ * - `retire()` and `fail()` abort only their own connection signal, so a
+ *   settled attempt cannot tear down a newer one (M2).
  * - `load()` is a per-attempt slot, so clearing a failed attempt's load
  *   promise cannot drop a newer attempt's (M2).
  * - `retire()`, `fail()`, `markReady()` and `endHydration()` all clear
  *   `hydrating`, so a dead attempt can never leave the transcript buffering
  *   behind a hydration that will not happen (M4).
+ * - because `fail()` settles the attempt, a terminally failed attempt cannot
+ *   consume a later event into the transcript or dispatch a state change from
+ *   a continuation that was already in flight.
  *
  * What is deliberately NOT reachable from here is the retry counter: M1 was
  * a counter reset that any stale attempt could reach. The counter lives in
@@ -123,8 +130,14 @@ export interface Attempt {
    */
   markReady(): void;
   /**
-   * Rejects this attempt's readiness with a real failure and aborts its
-   * connection.
+   * Fails this attempt terminally: settles it, aborts its connection and
+   * rejects its readiness with the real failure.
+   *
+   * "Terminally" is the point. The attempt is marked retired **before**
+   * anything else happens, so no continuation, stream reader or hydration
+   * return from it can commit after this returns - the same guarantee
+   * `retire()` gives a superseded attempt, with the failure kept as the reason
+   * readiness rejects.
    *
    * @param error - The failure.
    */
@@ -206,6 +219,10 @@ export function createAttempt(id: number, lifecycleSignal: AbortSignal): Attempt
 
   function fail(error: unknown): void {
     if (retired) return;
+    // Settle FIRST: from this point no continuation of this attempt may commit,
+    // which is the same synchronous guarantee `retire()` gives a superseded
+    // attempt. The failure is kept as readiness's rejection reason.
+    retired = true;
     hydrating = false;
     connection.abort();
     gate.reject(error);
