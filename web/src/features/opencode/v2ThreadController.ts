@@ -33,6 +33,11 @@ import {
   optimisticMessage,
   V2_PROMPT_MESSAGE_ID_KEY,
 } from "./sync/optimistic";
+import {
+  createPromptsInFlight,
+  type V2PromptAdmissionResult,
+  type V2PromptSubmission,
+} from "./sync/promptsInFlight";
 import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
 import type {
   V2DesiredSelection,
@@ -50,14 +55,6 @@ const V2_DEFINITIVE_FAILURE_MESSAGE = "OpenCode V2 prompt was definitively rejec
 const V2_RECOVERY_REQUIRED_MESSAGE = "OpenCode V2 staged recovery must complete before admission";
 const V2_DISPOSED_MESSAGE = "OpenCode V2 runtime was disposed";
 
-type AdmissionRecord = {
-  messageId: string;
-  result: "admitted" | "definitive-failure" | "ambiguous" | "disposed" | null;
-  submission: V2PromptSubmission | null;
-  waiters: Set<(result: V2PromptAdmissionResult) => void>;
-  settle: ((result: V2PromptAdmissionResult) => void) | null;
-};
-
 export type V2PromptOptions = {
   readonly messageId?: string;
   readonly model?: V2ModelSelection;
@@ -65,16 +62,16 @@ export type V2PromptOptions = {
   readonly delivery?: "steer" | "queue";
 };
 
-export type V2PromptAdmissionResult = "admitted" | "definitive-failure" | "ambiguous" | "disposed";
 export type V2PromptSendError =
   | { readonly kind: "definitive-failure"; readonly error: V2SafeError }
   | { readonly kind: "disposed" };
 
-export type V2PromptSubmission = {
-  readonly messageId: string;
-  readonly inboxId: string;
-  readonly delivery: "steer" | "queue";
-};
+/**
+ * The prompt admission registry lives in `sync/promptsInFlight.ts`. Its
+ * vocabulary is re-exported here because the controller's public surface is
+ * where the app has always found it.
+ */
+export type { V2PromptAdmissionResult, V2PromptSubmission };
 
 export interface V2ThreadController {
   getState(): V2ThreadState;
@@ -247,7 +244,7 @@ export function createV2ThreadController(
   let lastHistorySnapshot: V2HistorySnapshot | null = null;
   let eventBuffer: Array<{ readonly ordinal: number; readonly event: V2Event }> = [];
   const listeners = new Set<() => void>();
-  const admissions = new Map<string, AdmissionRecord>();
+  const prompts = createPromptsInFlight();
   const answeredPermissions = new Set<string>();
   const autoApproveAttempted = new Set<string>();
   const formReplies = new Set<string>();
@@ -263,43 +260,6 @@ export function createV2ThreadController(
     if (next === state) return;
     state = next;
     notify();
-  }
-
-  function rejectAdmission(
-    messageId: string,
-    result: V2PromptAdmissionResult,
-    submission: V2PromptSubmission | null = null,
-  ): void {
-    const record = admissions.get(messageId);
-    if (!record || (record.result !== null && record.result !== "ambiguous")) return;
-    record.result = result;
-    record.submission = submission;
-    for (const waiter of record.waiters) waiter(result);
-    record.waiters.clear();
-    record.settle?.(result);
-    record.settle = null;
-  }
-
-  function markAdmissionAmbiguous(messageId: string): void {
-    const record = admissions.get(messageId);
-    if (!record || record.result !== null) return;
-    record.result = "ambiguous";
-    for (const waiter of record.waiters) waiter("ambiguous");
-    record.waiters.clear();
-  }
-
-  function createAdmission(messageId: string): AdmissionRecord {
-    const existing = admissions.get(messageId);
-    if (existing) return existing;
-    const record: AdmissionRecord = {
-      messageId,
-      result: null,
-      submission: null,
-      waiters: new Set(),
-      settle: null,
-    };
-    admissions.set(messageId, record);
-    return record;
   }
 
   function currentPermissions(): readonly V2PermissionView[] {
@@ -363,7 +323,7 @@ export function createV2ThreadController(
     dispatch({ type: "inbox_recorded", record });
     if (typeof activeMessageId === "string") {
       dispatch({ type: "prompt_admitted", userMessageId: activeMessageId, inbox: record });
-      rejectAdmission(activeMessageId, "admitted", {
+      prompts.settle(activeMessageId, "admitted", {
         messageId: activeMessageId,
         inboxId: record.id,
         delivery: record.delivery,
@@ -848,18 +808,16 @@ export function createV2ThreadController(
     if (inbox !== undefined) return "admitted";
     if (state.messages[messageId] !== undefined && !state.optimisticMessageIds.includes(messageId))
       return "admitted";
-    const record = admissions.get(messageId);
+    const record = prompts.get(messageId);
     if (record?.result === "ambiguous") {
-      rejectAdmission(messageId, "definitive-failure");
+      prompts.settle(messageId, "definitive-failure");
       return "absent";
     }
     return "unresolved";
   }
 
   function awaitPromptAdmission(messageId: string): Promise<V2PromptAdmissionResult> {
-    const record = createAdmission(messageId);
-    if (record.result !== null) return Promise.resolve(record.result);
-    return new Promise((resolve) => record.waiters.add(resolve));
+    return prompts.awaitAdmission(messageId);
   }
 
   async function applySelection(): Promise<void> {
@@ -907,10 +865,10 @@ export function createV2ThreadController(
     await applySelection();
     const payload = toV2PromptInput(message);
     const localMessage = optimisticMessage(message, messageId);
-    const record = createAdmission(messageId);
+    const record = prompts.create(messageId);
     dispatch({ type: "prompt_submitting", message: localMessage });
     const admissionPromise = new Promise<V2PromptAdmissionResult>((resolve) => {
-      record.settle = resolve;
+      record.onSettle(resolve);
     });
     const input: SessionPromptInput = {
       sessionID: client.sessionId,
@@ -929,7 +887,7 @@ export function createV2ThreadController(
         const normalized = inboxRecordFromUser(response);
         dispatch({ type: "inbox_recorded", record: normalized });
         dispatch({ type: "prompt_admitted", userMessageId: messageId, inbox: normalized });
-        rejectAdmission(messageId, "admitted", {
+        prompts.settle(messageId, "admitted", {
           messageId,
           inboxId: normalized.id,
           delivery: normalized.delivery,
@@ -937,13 +895,13 @@ export function createV2ThreadController(
       })
       .catch((error: unknown) => {
         if (disposed || record.result === "admitted") {
-          if (disposed) rejectAdmission(messageId, "disposed");
+          if (disposed) prompts.settle(messageId, "disposed");
           return;
         }
         if (isDefinitiveFailure(error)) {
           dispatch({ type: "prompt_removed", messageId });
           definitiveError = safeError(error, V2_DEFINITIVE_FAILURE_MESSAGE);
-          rejectAdmission(messageId, "definitive-failure");
+          prompts.settle(messageId, "definitive-failure");
           return;
         }
         dispatch({
@@ -951,7 +909,7 @@ export function createV2ThreadController(
           userMessageId: messageId,
           cancelRequested: state.execution.type === "cancelling",
         });
-        markAdmissionAmbiguous(messageId);
+        prompts.markAmbiguous(messageId);
       });
     // The request remains owned by this generation after an inbox event admits
     // the prompt. Its eventual response is observed and ignored safely; it is
@@ -1186,7 +1144,7 @@ export function createV2ThreadController(
     const current = generation;
     generation = null;
     if (current) void current.events.close();
-    for (const messageId of admissions.keys()) rejectAdmission(messageId, "disposed");
+    prompts.disposeAll();
     listeners.clear();
   }
 
