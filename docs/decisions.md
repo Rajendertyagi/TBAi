@@ -6137,3 +6137,47 @@ permissions; OpenCode does, and re-implementing that here is forbidden by the
 plan. What the page owns is the display question — *is this row the one that
 wins?* — and the plan's "Must not" is respected: no rule is rejected, no
 wildcard-overlapping ruleset is hidden, and the evaluation itself is untouched.
+
+---
+
+## 2026-10-21 - OpenCode V2 runtime: the lifecycle moves into `features/opencode/sync/`
+
+Phase 2 of `docs/2026-10-20-opencode-runtime-remediation-plan.md` extracts the
+OpenCode V2 frontend runtime's **lifecycle** out of `v2ThreadController.ts` into
+`web/src/features/opencode/sync/`. The controller keeps the domain state and the
+policy; the layer owns the lifecycle around it. The contract is
+`web/src/features/opencode/sync/ownership.md`.
+
+Three decisions follow from that.
+
+- **The extraction is behaviour-preserving, so the layer contains no new
+  mechanism.** The plan's target layout mixes extraction with the fixes
+  (attempt-scoped promises, the snapshot merge, the bounded readiness gate), and
+  a phase that fixes behaviour cannot also claim to preserve it. Each later
+  phase therefore adds its mechanism to a module that already has one owner:
+  the attempt epoch in `attempt.ts` (Phase 3), the commit mode in
+  `sessionMessageLoader.ts` and the recovery overlay in a new
+  `recoverySnapshots.ts` (Phase 4), the idempotent release in
+  `promptsInFlight.ts` and the bounded wait in `startupGate.ts` (Phase 5). A
+  module that would exist only to be filled in later is not created: an empty
+  module has no owner, and the orphan-module gate would report it.
+- **A call site that reads the generation twice reads it live twice.** The
+  closure variable the extraction replaced was read at every use, so a
+  reconnect landing between two awaits was seen by the second read.
+  `requireGeneration()` reads live at every use rather than freezing the
+  generation into a local at the top of a function. The one difference is that
+  a generation that disappears between two awaits now raises the controller's
+  own not-found error instead of a TypeError on a null dereference.
+- **Two defects are reproduced rather than tidied.** The event buffer still
+  filters assistant events out before truncating, which empties it instead of
+  trimming it (M5), and the retry budget is still reset in the shared tail,
+  where a superseded attempt can reach it (M1). Moving the code must not
+  quietly fix them: Phase 4 and Phase 3 are where they are fixed, with their
+  own regression tests.
+
+**Verified on this tree.** `bun run verify` exit 0 - 4433 pass / 43 skip /
+7 todo / 0 fail across 331 files / 4483 tests, plus the lifecycle suites and 529
+DOM tests. The OpenCode-scoped suites report the same numbers as before the
+extraction (173 unit/opencode, 560 unit/web/opencode, 112 integration/opencode),
+which is the phase's acceptance criterion: the characterisation tests produce
+identical results.

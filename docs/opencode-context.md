@@ -44,7 +44,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 | # | Area | Issue | Severity | Evidence |
 |---|------|-------|----------|----------|
 | A1 | Binary resolution | `resolveManagedBinary` only checks `Bun.which`. No fallback paths. App fails when binary isn't on PATH. | **High** | `runtime.ts:resolveManagedBinary` — only env var + `Bun.which`. User hit this error. |
-| F1 | Synchronization | No max reconnect attempt limit. Permanently unreachable server spins at 10s intervals forever. | Medium | `v2ThreadController.ts:scheduleReconnect` — no max attempt check. |
+| F1 | Synchronization | No max reconnect attempt limit. Permanently unreachable server spins at 10s intervals forever. | Medium | `sync/eventPipeline.ts:scheduleReconnect` — no max attempt check. |
 | B1 | Session lifecycle | `invalidateBootstrap` is a no-op. Deleted conversation mid-bootstrap leaves stale session. | Medium | `sessionBootstrap.ts:invalidateBootstrap` — "Conservative by contract" comment, does nothing. |
 
 ### Unverified risks
@@ -52,7 +52,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 | # | Area | Issue | Severity | Evidence |
 |---|------|-------|----------|----------|
 | A2 | Process lifecycle | `onExit` restart race during shutdown. | Low | `serverManager.ts:onExit` checks `this.stopping` but race window exists. |
-| F2 | Synchronization | Event buffer capped at 512. Overflow drops assistant message events. | Medium | `v2ThreadController.ts:445` — `eventBuffer.length > 512` filter. |
+| F2 | Synchronization | Event buffer capped at 512. Overflow drops assistant message events. | Medium | `sync/eventPipeline.ts:288` — `eventBuffer.length > 512` filter. |
 | F3 | History loading | Convergence pass cap at 4. Incomplete history if not converged. | Low | `config.ts:OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP = 4` |
 | F4 | Event handling | Event deduplication uses 256-event window. Could fail with >256 events. | Low | `config.ts:OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256` |
 | H5 | Shutdown | `onExit` restart race during shutdown. | Low | `serverManager.ts:onExit` |
@@ -114,7 +114,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 
 ### F1 — Bounded frontend reconnection
 
-**Root cause:** `scheduleReconnect` in `v2ThreadController.ts` has no max attempt limit. Permanently unreachable server spins at 10s intervals forever.
+**Root cause:** `scheduleReconnect` in `sync/eventPipeline.ts` has no max attempt limit. Permanently unreachable server spins at 10s intervals forever.
 
 **Design:**
 - **Retry limit:** 10 reconnect retries after the initial connection attempt fails. Justification: exponential backoff capped at 10s → ~55.75s cumulative waiting time. Long enough for transient issues, short enough to surface terminal error within ~1 minute. Matches `OPENCODE_INIT_TIMEOUT_MS` (15s) philosophy.
@@ -146,7 +146,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 - Disposal clears the timer and sets `disposed = true`, preventing further resets.
 
 **UI file scope:**
-- `v2ThreadController.ts` — add `connectionFailed` flag, max attempt check in `scheduleReconnect`, terminal state dispatch.
+- `sync/eventPipeline.ts` — add `connectionFailed` flag, max attempt check in `scheduleReconnect`, terminal state dispatch.
 - `v2Types.ts` — add `connection: { type: "failed", attempt: number }` to `V2ConnectionState`.
 - `config.ts` — add `OPENCODE_V2_MAX_RECONNECT_ATTEMPTS = 10`.
 - `OpenCodeStatus.tsx` — already has "Reconnect" button wired via `onReconnect`. May need label change from "Reconnect" to "Retry" on failed state. Minimal change.

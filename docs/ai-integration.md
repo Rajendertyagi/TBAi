@@ -42,9 +42,13 @@ Key points:
 Code mode uses the official `@opencode/client@2.0.16` behind
 `web/src/features/opencode/v2Client.ts`. The client is scoped to the
 backend-minted session and directory, subscribes before hydration, and exposes
-only generation-bound operations. `v2ThreadController.ts` owns the single event
-loop, authoritative paginated history, prompt admission, cancellation, recovery,
-permissions, forms, and compaction. `v2RuntimeStore.ts` projects that state into
+only generation-bound operations. `v2ThreadController.ts` owns the domain state and
+the policy around it — compaction, permissions, forms, cancellation and recovery —
+and delegates the runtime's lifecycle to `features/opencode/sync/`: the event loop
+and its retry budget, the connection attempt, the readiness gate, the prompt
+admission registry, the history read and the optimistic prompt record. The
+ownership contract is `features/opencode/sync/ownership.md`.
+`v2RuntimeStore.ts` projects that state into
 assistant-ui's external-store repository; OpenCode wire formats never cross into
 `ChatWindow` or generic chat state. The managed server compatibility gate is
 `>=2.0.15 <2.1.0`.
