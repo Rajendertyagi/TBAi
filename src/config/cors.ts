@@ -10,7 +10,10 @@
  * 1. the **packaged desktop webview**, whose origin is fixed by the platform
  *    and does not depend on any port TBAi listens on; and
  * 2. a **loopback origin on a port TBAi serves its pages from** — the port the
- *    listener is on, and the port it just replaced.
+ *    listener is on, and the port it just replaced **for as long as the
+ *    restart transition lasts** (the replaced port is trusted for a bounded
+ *    window, not for the life of the process; see
+ *    `services/server-listener.ts`).
  *
  * Everything else — another loopback port, a public origin, an opaque origin,
  * a request with no `Origin` at all — gets no `Access-Control-Allow-Origin`,
@@ -91,7 +94,8 @@ export function loopbackOriginsForPort(port: number): string[] {
  *
  * @param origin - The request's `Origin` header, or `""` when it has none.
  * @param servedPorts - The ports TBAi serves (or just served) its own pages
- *   on: the live listener's port, and the port that listener replaced.
+ *   on: the live listener's port, and the port that listener replaced while
+ *   the restart transition is still open.
  * @returns True only for the packaged webview and for TBAi's own pages.
  */
 export function isAllowedCorsOrigin(origin: string, servedPorts: readonly number[]): boolean {

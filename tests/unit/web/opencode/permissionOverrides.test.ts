@@ -98,4 +98,30 @@ describe("findPermissionOverride", () => {
   it("reports nothing for a rule that does not exist", () => {
     expect(findPermissionOverride([SHELL], 5)).toEqual({ kind: "none" });
   });
+
+  it("indexes by the rule's position in the file, not in a filtered list", () => {
+    // The array is the file's array: a rule the page could not read is a
+    // HOLE at its file position, not a missing entry. The relation must not
+    // be shifted by it, and the rule it names must be the file's rule.
+    const rules: (typeof SHELL | undefined)[] = [];
+    rules[0] = SHELL;
+    rules[2] = SHELL;
+    rules[3] = SHELL;
+    // The rule at file position 2 is shadowed by the one at file position 3.
+    expect(findPermissionOverride(rules, 2)).toEqual({ kind: "full", byIndex: 3 });
+    // The rule at file position 0 is shadowed by the first later rule that
+    // covers it — file position 2, not file position 1 (the hole).
+    expect(findPermissionOverride(rules, 0)).toEqual({ kind: "full", byIndex: 2 });
+    // The last rule is shadowed by nothing.
+    expect(findPermissionOverride(rules, 3)).toEqual({ kind: "none" });
+  });
+
+  it("does not let an unreadable rule claim to override anything", () => {
+    // An unreadable rule cannot be shown to override anything, so it is
+    // skipped rather than guessed at.
+    const rules: (typeof SHELL | undefined)[] = [];
+    rules[0] = SHELL;
+    rules[1] = undefined;
+    expect(findPermissionOverride(rules, 0)).toEqual({ kind: "none" });
+  });
 });

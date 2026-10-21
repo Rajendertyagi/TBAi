@@ -27,6 +27,29 @@ let activePort = 0;
 // whether it is up, and that request is cross-origin — so the new listener
 // has to trust the page it replaced. See `src/config/cors.ts`.
 let replacedPort = 0;
+// When the live listener replaced the port above, so the trust can be given
+// an end. 0 when it has replaced none.
+let replacedAt = 0;
+
+/**
+ * How long the live listener keeps trusting the origin it replaced.
+ *
+ * The window exists for ONE thing: the browser-mode restart probe. The page
+ * is still on the OLD origin when the new listener comes up, and it polls the
+ * new origin for readiness (`web/src/features/desktop/ServerSection.tsx`,
+ * `READY_TIMEOUT_MS` = 15 s). That poll is cross-origin, so the new listener
+ * has to trust the old page's origin while it happens.
+ *
+ * The window is the probe's budget plus a margin: the browser's deadline
+ * starts a few milliseconds after the restart response arrives, so a window of
+ * exactly the probe's timeout would close just as the probe gives up.
+ *
+ * It is a WINDOW, not a grant. The trust ends when the window ends, whether
+ * or not anything asked for it. Without it the replaced origin stayed trusted
+ * for the life of the process, and any other page on that loopback port could
+ * read the API — including the OpenCode proxy's session and event routes.
+ */
+export const REPLACED_PORT_TRUST_WINDOW_MS = 20_000;
 
 /** Transport backstop (see server.ts): Bun's max is 255; 240 covers stalls. */
 const LISTENER_IDLE_TIMEOUT_S = 240;
@@ -66,8 +89,17 @@ export function getActivePort(): number {
  * Kept for the CORS policy: after a restart the page is still on the old
  * port for a moment and asks the new origin whether it is up. That request
  * carries the OLD origin, so the new listener has to trust it.
+ *
+ * The trust is bounded: it lasts `REPLACED_PORT_TRUST_WINDOW_MS` from the
+ * replacement and no longer. A port that has not been trusted for that long
+ * is reported as 0, so the CORS policy never sees it — the replaced origin
+ * does not stay trusted for the life of the process.
+ *
+ * @returns The replaced port while the transition window is open, 0 after it.
  */
 export function getReplacedPort(): number {
+  if (replacedPort === 0) return 0;
+  if (Date.now() - replacedAt >= REPLACED_PORT_TRUST_WINDOW_MS) return 0;
   return replacedPort;
 }
 
@@ -113,6 +145,7 @@ function setActive(server: BunServer, port: number): void {
 export function bindBootPort(port: number): { server: BunServer; port: number } {
   // A fresh boot replaces nothing.
   replacedPort = 0;
+  replacedAt = 0;
   try {
     const server = bindListener(port);
     setActive(server, port);
@@ -171,8 +204,10 @@ export async function restartListener(port: number): Promise<{ port: number; res
   setActive(next, port);
   // The page that triggered this restart is still on the old port, and it asks
   // the new origin whether it is up. That request is cross-origin, so the new
-  // listener has to trust the old page's origin (see `src/config/cors.ts`).
+  // listener has to trust the old page's origin (see `src/config/cors.ts`) —
+  // for the transition window, and no longer.
   replacedPort = previousPort;
+  replacedAt = Date.now();
   logger.info("server", "restarted", { message: `http://localhost:${port}` });
   setTimeout(() => {
     try {

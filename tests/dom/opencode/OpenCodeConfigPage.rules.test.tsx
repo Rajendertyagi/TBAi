@@ -35,9 +35,16 @@ const SNAPSHOT = {
   ],
 } as const;
 
+/**
+ * The permissions the mocked read returns. A test changes it to describe the
+ * configuration it needs; the rules keep their FILE positions, so a rule the
+ * page cannot read is simply one the page cannot show.
+ */
+let permissions: readonly unknown[] = SNAPSHOT.permissions;
+
 mock.module("@web/features/opencode/openCodeConfig.ts", () => ({
   ...realConfig,
-  fetchOpenCodeConfig: async () => ({ ...SNAPSHOT, permissions: [...SNAPSHOT.permissions] }),
+  fetchOpenCodeConfig: async () => ({ ...SNAPSHOT, permissions: [...permissions] }),
 }));
 
 const { OpenCodeConfigPage } = await import("@web/features/opencode/OpenCodeConfigPage.tsx");
@@ -124,6 +131,40 @@ describe("the permission table", () => {
       expect(text).not.toContain("Partly overridden");
     } finally {
       act(() => root.unmount());
+    }
+  });
+
+  it("numbers the rows by their place in the file, and names the overriding rule's file row", async () => {
+    // A configuration whose second rule the page cannot read: the rule is
+    // still in the file, and OpenCode still resolves the file's array.
+    permissions = [
+      { action: "shell", resource: "*", effect: "allow" },
+      { action: "shell", resource: "*", effect: "not-an-effect" },
+      { action: "shell", resource: "*", effect: "deny" },
+      { action: "shell", resource: "*", effect: "allow" },
+    ];
+    const { root, container } = await mount();
+    try {
+      const text = container.textContent ?? "";
+      // The rule in file row 1 is shadowed by the rule in file row 3 — the
+      // unreadable rule in row 2 does not shift the relation.
+      expect(text).toContain("row 3 wins for every request.");
+      // The rule in file row 3 is shadowed by the rule in file row 4.
+      expect(text).toContain("row 4 wins for every request.");
+      // The last rule is shadowed by nothing.
+      expect(text.match(/Never applies/g)).toHaveLength(2);
+
+      // The rows are numbered by their place in the FILE, so the number the
+      // notice names is a number the user can find on the table.
+      const names = selects(container).map((element) => element.getAttribute("aria-label") ?? "");
+      expect(names.filter((name) => name.includes("(rule 1)"))).toHaveLength(1);
+      expect(names.filter((name) => name.includes("(rule 3)"))).toHaveLength(1);
+      expect(names.filter((name) => name.includes("(rule 4)"))).toHaveLength(1);
+      // Nothing is numbered by its place in the RENDERED list.
+      expect(names.filter((name) => name.includes("(rule 2)"))).toHaveLength(0);
+    } finally {
+      act(() => root.unmount());
+      permissions = SNAPSHOT.permissions;
     }
   });
 });

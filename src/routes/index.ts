@@ -45,6 +45,10 @@ const app = new Hono<{ Variables: { requestId: string } }>();
  * still on the old origin when the new one comes up, and it asks the new
  * origin whether it is ready. That request is cross-origin, so the new
  * listener has to trust the page it replaced.
+ *
+ * The trust is BOUNDED: the listener reports the replaced port only while the
+ * restart transition is still open (`REPLACED_PORT_TRUST_WINDOW_MS`), so the
+ * old origin does not stay trusted for the life of the process.
  */
 function servedPagePorts(): number[] {
   return [getActivePort(), getReplacedPort()].filter((port) => port > 0);

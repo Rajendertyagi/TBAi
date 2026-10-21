@@ -205,6 +205,62 @@ describe("redactOpenCodeConfigDocument", () => {
     expect(record(unknown.nested).client_secret).toBe(REDACTED_CONFIG_VALUE);
   });
 
+  it("masks a substitution reference outside every secret location", () => {
+    // The reference shape is self-identifying, so a reference that sits
+    // outside the schema's secret locations names a credential just the same.
+    const redacted = redactOpenCodeConfigDocument({
+      agents: {
+        build: {
+          system: { file: "C:\\Users\\someone\\.opencode\\private\\key.pem" },
+          env: { env: "SOME_SECRET_VAR" },
+        },
+      },
+    });
+    const agent = record(record(redacted.agents).build);
+    expect(agent.system).toBe(REDACTED_CONFIG_VALUE);
+    expect(agent.env).toBe(REDACTED_CONFIG_VALUE);
+    const serialized = JSON.stringify(redacted);
+    expect(serialized).not.toContain("key.pem");
+    expect(serialized).not.toContain("SOME_SECRET_VAR");
+  });
+
+  it("masks the documented string substitution form wherever it appears", () => {
+    // OpenCode's configuration reference documents `{env:NAME}` and
+    // `{file:path}` written inside a string.
+    const redacted = redactOpenCodeConfigDocument({
+      model: "{env:OPENCODE_MODEL}",
+      instructions: ["{file:~/.secrets/openai-key}"],
+      agents: {
+        build: {
+          description: "read the key from {env:ACME_API_KEY} before running",
+          options: [{ apiKey: "{file:/run/secrets/acme.pem}" }],
+        },
+      },
+    });
+    expect(redacted.model).toBe(REDACTED_CONFIG_VALUE);
+    const instructions = redacted.instructions as unknown[];
+    expect(instructions[0]).toBe(REDACTED_CONFIG_VALUE);
+    const agent = record(record(redacted.agents).build);
+    expect(agent.description).toBe(REDACTED_CONFIG_VALUE);
+    const options = agent.options as unknown[];
+    expect(record(options[0]).apiKey).toBe(REDACTED_CONFIG_VALUE);
+    const serialized = JSON.stringify(redacted);
+    expect(serialized).not.toContain("OPENCODE_MODEL");
+    expect(serialized).not.toContain("openai-key");
+    expect(serialized).not.toContain("acme.pem");
+  });
+
+  it("keeps values that are not references", () => {
+    // Masking a reference is not a licence to mask ordinary configuration.
+    const doc = {
+      shell: "powershell",
+      instructions: ["./custom-instructions.md", "CONTRIBUTING.md"],
+      agents: { build: { description: "use env vars from the environment" } },
+      formatter: { prettier: { command: ["prettier", "--write"] } },
+    };
+    expect(redactOpenCodeConfigDocument(doc)).toEqual(doc);
+  });
+
   it("leaves everything that is not a credential untouched", () => {
     const doc = {
       $schema: "https://opencode.ai/config.json",
@@ -248,6 +304,27 @@ describe("redactOpenCodeConfigText", () => {
   it("withholds text it cannot parse, because it cannot redact it", () => {
     expect(redactOpenCodeConfigText("{ this is not json")).toBe("");
     expect(redactOpenCodeConfigText("[1, 2, 3]")).toBe("");
+  });
+
+  it("redacts a substitution reference in the raw text too", () => {
+    // The raw projection is what the native-JSON view renders, so it must
+    // carry the same masking as the structured projection.
+    const raw = JSON.stringify(
+      {
+        model: "{env:OPENCODE_MODEL}",
+        instructions: ["{file:~/.secrets/openai-key}"],
+        shell: "powershell",
+      },
+      null,
+      2,
+    );
+    const text = redactOpenCodeConfigText(raw);
+    expect(text).not.toContain("OPENCODE_MODEL");
+    expect(text).not.toContain("openai-key");
+    expect(text).toContain(REDACTED_CONFIG_VALUE);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(parsed.model).toBe(REDACTED_CONFIG_VALUE);
+    expect(parsed.shell).toBe("powershell");
   });
 
   it("leaves an empty file empty", () => {

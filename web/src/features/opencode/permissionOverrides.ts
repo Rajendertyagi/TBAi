@@ -117,12 +117,22 @@ function isStrictlyBroader(rule: PermissionRuleLike, other: PermissionRuleLike):
 /**
  * The rule that overrides the one at `index`, if any.
  *
- * @param rules - The ruleset, in the order OpenCode reads it.
- * @param index - The position of the rule being asked about.
- * @returns Which later rule overrides it, and how completely.
+ * ## The index space
+ *
+ * `rules` is indexed by the rule's position **in the configuration file**,
+ * not by its position in a filtered list. A rule the page cannot read still
+ * occupies its place in the file, and OpenCode resolves the file's array —
+ * so the relation must be computed over the file's own order. A hole in the
+ * array is a rule the page could not read: it is skipped, because an
+ * unreadable rule cannot be shown to override anything.
+ *
+ * @param rules - The ruleset in the file's order, indexed by file position.
+ * @param index - The file position of the rule being asked about.
+ * @returns Which later rule overrides it, and how completely. `byIndex` is a
+ *   file position, so the row number it names is the file's row number.
  */
 export function findPermissionOverride(
-  rules: readonly PermissionRuleLike[],
+  rules: readonly (PermissionRuleLike | undefined)[],
   index: number,
 ): PermissionOverride {
   const rule = rules[index];

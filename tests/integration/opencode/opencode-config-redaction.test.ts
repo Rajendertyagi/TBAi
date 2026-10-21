@@ -42,6 +42,12 @@ const CONFIG_TEXT = `${JSON.stringify(
       },
     },
     permissions: [{ action: "question", resource: "*", effect: "ask" }],
+    // A substitution reference OUTSIDE every schema-derived secret location:
+    // the documented string form, and the object form.
+    instructions: ["{file:~/.secrets/openai-key}"],
+    agents: {
+      build: { description: "use {env:ACME_API_KEY}", system: { file: "/run/secrets/acme.pem" } },
+    },
   },
   null,
   2,
@@ -108,6 +114,21 @@ describe("GET /api/opencode/config", () => {
     const response = await openCodeApp.request("http://localhost/config");
     const body = (await response.json()) as { permissions: unknown };
     expect(body.permissions).toEqual([{ action: "question", resource: "*", effect: "ask" }]);
+  });
+
+  it("masks a substitution reference outside every secret location", async () => {
+    // The reference shape is self-identifying, so it is masked wherever it
+    // occurs — including outside the schema's secret locations, and in the
+    // documented string form.
+    const response = await openCodeApp.request("http://localhost/config");
+    const body = (await response.json()) as { raw: string };
+
+    expect(body.raw).not.toContain("openai-key");
+    expect(body.raw).not.toContain("ACME_API_KEY");
+    expect(body.raw).not.toContain("/run/secrets/acme.pem");
+    expect(body.raw).toContain("[redacted]");
+    // The structure survives: the reference is masked, not dropped.
+    expect(body.raw).toContain("instructions");
   });
 });
 

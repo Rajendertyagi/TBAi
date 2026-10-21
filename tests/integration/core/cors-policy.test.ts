@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "bun:test";
+import { describe, expect, it, beforeAll, afterAll, jest } from "bun:test";
 import app from "@/routes/index.ts";
 import { isAllowedCorsOrigin } from "@/config/cors.ts";
 import { conversationService } from "@/services/storage/conversations.ts";
@@ -8,6 +8,7 @@ import {
   getActiveServer,
   getReplacedPort,
   initListenerFetch,
+  REPLACED_PORT_TRUST_WINDOW_MS,
   restartListener,
 } from "@/services/server-listener.ts";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
@@ -193,6 +194,46 @@ describe("CORS: across a port change", () => {
     // A port TBAi never served is still refused.
     const stranger = await get("http://localhost:45678");
     expect(stranger.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("stops trusting the replaced origin once the transition window has passed", async () => {
+    // The replaced origin is trusted for the transition — and only for it.
+    // Without a bound, the old origin stayed trusted for the life of the
+    // process, so any other page on that loopback port could read the API,
+    // the OpenCode proxy's session and event routes included.
+    //
+    // The clock is controlled, so the transition's end is deterministic: the
+    // test does not wait for a wall-clock window to elapse.
+    const oldPort = getActivePort();
+    const newPort = TEST_PORT + 92;
+    await restartListener(newPort);
+    expect(getReplacedPort()).toBe(oldPort);
+
+    jest.useFakeTimers();
+    try {
+      // During the transition the old page's origin is trusted: its readiness
+      // probe is cross-origin.
+      const during = await get(`http://localhost:${oldPort}`);
+      expect(during.headers.get("access-control-allow-origin")).toBe(`http://localhost:${oldPort}`);
+
+      // Once the window has passed, the trust ends — for both loopback host
+      // forms, because a page on either of them is not TBAi's page.
+      jest.advanceTimersByTime(REPLACED_PORT_TRUST_WINDOW_MS + 1);
+      expect(getReplacedPort()).toBe(0);
+      for (const origin of [`http://localhost:${oldPort}`, `http://127.0.0.1:${oldPort}`]) {
+        const response = await get(origin);
+        // The request still ran — CORS is not authorization — but the browser
+        // is no longer allowed to read the response.
+        expect(response.status).toBe(200);
+        expect(response.headers.get("access-control-allow-origin")).toBeNull();
+      }
+
+      // The origin the page moved to is trusted, before and after.
+      const now = await get(`http://localhost:${newPort}`);
+      expect(now.headers.get("access-control-allow-origin")).toBe(`http://localhost:${newPort}`);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

@@ -43,11 +43,22 @@
  *
  * ## SUBSTITUTION-AWARE
  *
- * A secret is not always a literal. OpenCode accepts `{"env": "VAR"}` and
- * `{"file": "path"}` references, and both are masked: the first names a
- * secret-bearing variable, the second discloses a path to a secret file.
- * The referenced value is **never** substituted into the response — that
- * would be worse than the original.
+ * A secret is not always a literal. OpenCode accepts substitution references
+ * in two shapes:
+ *
+ * - the **documented string form** — `"{env:NAME}"`, `"{file:path}"`;
+ * - the **object form** — `{"env": "NAME"}`, `{"file": "path"}`.
+ *
+ * Both are masked: the first names a secret-bearing variable, the second
+ * discloses a path to a secret file. The referenced value is **never**
+ * substituted into the response — that would be worse than the original.
+ *
+ * The reference **shape** identifies it, so a reference is masked wherever it
+ * occurs — not only inside a schema-derived secret location. The schema
+ * permits undeclared keys anywhere, so a reference can sit outside every
+ * modelled secret location and still name a credential. Masking it is not
+ * over-redaction: the value is a reference by construction, and there is no
+ * non-credential use of the shape.
  *
  * ## WHAT SURVIVES
  *
@@ -202,6 +213,33 @@ function isSubstitutionReference(value: unknown): boolean {
 }
 
 /**
+ * The **documented** substitution syntax: `{env:NAME}` and `{file:path}`
+ * written inside a string.
+ *
+ * OpenCode's own configuration reference documents this form — for example
+ * `"apiKey": "{env:ANTHROPIC_API_KEY}"` and
+ * `"apiKey": "{file:~/.secrets/openai-key}"` — so a configuration in the
+ * wild uses it, and it names a credential exactly as the object form does.
+ *
+ * The match is deliberately wider than "the whole string is one reference":
+ * a reference embedded in a longer string still discloses the variable name
+ * or the file path, so it is still masked. The whole value is masked rather
+ * than only the reference, because the surrounding text may itself be the
+ * secret (a path with a token in it, a prompt read from a key file).
+ */
+const SUBSTITUTION_REFERENCE_IN_STRING = /\{(?:env|file):[^}]*\}/;
+
+/**
+ * Whether a string carries an OpenCode substitution reference.
+ *
+ * @param value - The string value.
+ * @returns True when the string names an environment variable or a file.
+ */
+function carriesSubstitutionReference(value: string): boolean {
+  return SUBSTITUTION_REFERENCE_IN_STRING.test(value);
+}
+
+/**
  * Redacts one value.
  *
  * @param value - The value at this position.
@@ -214,10 +252,13 @@ function redactValue(
   path: readonly string[],
   inherited: RedactionScope | null,
 ): unknown {
-  // A substitution reference inside a secret location is masked whole: the
-  // reference names the credential, so masking its inner value would still
-  // disclose it.
-  if (inherited !== null && isSubstitutionReference(value)) {
+  // A substitution reference is masked whole, wherever it occurs: the
+  // reference names the credential (the variable or the file that holds one),
+  // so masking only its inner value would still disclose it. The reference
+  // shape is self-identifying, so it does not need a secret location around
+  // it — a reference outside the schema's secret locations discloses the same
+  // thing.
+  if (isSubstitutionReference(value)) {
     return REDACTED_CONFIG_VALUE;
   }
   if (Array.isArray(value)) {
@@ -242,6 +283,9 @@ function redactValue(
   if (inherited !== null) return REDACTED_CONFIG_VALUE;
   const key = path[path.length - 1] ?? "";
   if (isSecretKeyName(key)) return REDACTED_CONFIG_VALUE;
+  if (typeof value === "string" && carriesSubstitutionReference(value)) {
+    return REDACTED_CONFIG_VALUE;
+  }
   return value;
 }
 

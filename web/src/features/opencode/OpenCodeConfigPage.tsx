@@ -43,7 +43,7 @@ import {
   type OpenCodePermissionEffect,
   type OpenCodePermissionRule,
 } from "./openCodeConfig";
-import { findPermissionOverride } from "./permissionOverrides";
+import { findPermissionOverride, type PermissionRuleLike } from "./permissionOverrides";
 import { cn } from "@/lib/utils";
 
 /**
@@ -304,6 +304,22 @@ export function OpenCodeConfigPage() {
 
   const rules = useMemo(() => toPermissionRules(snapshot?.permissions ?? null), [snapshot]);
   /**
+   * The readable rules in the FILE's order, indexed by the file's own
+   * positions.
+   *
+   * The override relation has to be computed over the order OpenCode
+   * resolves — the file's array — because that is the order that decides
+   * which rule wins. A rule the page could not read still occupies its place
+   * there, so it is a hole in this array rather than a missing entry: the
+   * relation is not shifted by it, and the row number an override notice
+   * names is the file's row number.
+   */
+  const fileRules = useMemo(() => {
+    const byFileIndex: (PermissionRuleLike | undefined)[] = [];
+    for (const row of rules.rules) byFileIndex[row.index] = row.rule;
+    return byFileIndex;
+  }, [rules]);
+  /**
    * The single uncommitted edit, held as the rule's POSITION in the file plus
    * the full target rule.
    *
@@ -500,10 +516,13 @@ export function OpenCodeConfigPage() {
                   // tell them apart. The backend re-checks the identity at
                   // that position before writing.
                   const isPending = pending !== null && pending.index === index;
-                  const override = findPermissionOverride(
-                    rules.rules.map((entry) => entry.rule),
-                    index,
-                  );
+                  // The row number the page shows is the rule's position in
+                  // the FILE, so it names the same row the override notice
+                  // names even when a rule the page cannot read sits between
+                  // them. The position in the rendered list is only used for
+                  // the alternating row shading.
+                  const fileRow = index + 1;
+                  const override = findPermissionOverride(fileRules, index);
                   return (
                     <div
                       key={index}
@@ -513,7 +532,7 @@ export function OpenCodeConfigPage() {
                         isPending && "bg-accent/10",
                       )}
                     >
-                      <span className="tabular-nums text-muted-foreground">{position + 1}</span>
+                      <span className="tabular-nums text-muted-foreground">{fileRow}</span>
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{rule.action}</span>
                         <span className="block truncate text-[11px] text-muted-foreground">
@@ -551,7 +570,7 @@ export function OpenCodeConfigPage() {
                           // two controls with the same name would be
                           // indistinguishable to a person using a screen reader
                           // and to a test.
-                          label={`${rule.action} ${rule.resource} effect (rule ${position + 1})`}
+                          label={`${rule.action} ${rule.resource} effect (rule ${fileRow})`}
                           onChange={(effect) => {
                             setSaveState({ kind: "idle" });
                             // Selecting the effect already on disk clears the
@@ -573,7 +592,7 @@ export function OpenCodeConfigPage() {
                           variant="ghost"
                           disabled={!editable || removingIndex !== null}
                           title={openCodeConfigCopy.remove.label}
-                          aria-label={`Remove rule ${rule.action} ${rule.resource} (row ${position + 1})`}
+                          aria-label={`Remove rule ${rule.action} ${rule.resource} (row ${fileRow})`}
                           onClick={() => {
                             // A removal is destructive and immediately written,
                             // so it is confirmed. The message names the rule and
