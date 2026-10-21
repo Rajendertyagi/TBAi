@@ -86,61 +86,65 @@ function bufferedText(entries: readonly BufferedEvent[]): string {
 describe("the hydration event buffer", () => {
   it("keeps every streamed delta of a 600-token response that arrived during the read", () => {
     const pipeline = createEventPipeline(createHost());
-    const boundary = pipeline.beginHistoryRead();
+    pipeline.beginHistoryRead();
 
     const pieces = Array.from({ length: 600 }, (_unused, index) => `t${index} `);
     for (const [index, piece] of pieces.entries())
       pipeline.buffer(textDelta(`evt_delta_${index}`, 0, piece), pipeline.nextOrdinal());
 
-    const buffered = pipeline.bufferedSince(boundary);
+    const buffered = pipeline.bufferedEntries();
     // CORRECT: the text survives. Coalescing is a representation change, so
     // the buffer no longer holds one entry per token - the concatenation does.
     expect(bufferedText(buffered)).toBe(pieces.join(""));
     expect(buffered).toHaveLength(1);
   });
 
-  it("does not fold text from before the read into an entry the snapshot covers", () => {
+  it("keeps a delta that predates the read in its own entry instead of folding later text into it", () => {
     const pipeline = createEventPipeline(createHost());
 
-    // Arrives BEFORE the read starts: the snapshot already carries it, so it
-    // must neither be replayed nor merged with what follows.
+    // Arrives BEFORE the read starts. Whether it is replayed is decided by the
+    // snapshot's own text (see `historyReplay.ts`), but it must not be merged
+    // with what follows: that would raise its ordinal to the later event's and
+    // make a pre-read delta indistinguishable from one that arrived during it.
     pipeline.buffer(textDelta("evt_before", 0, "before "), pipeline.nextOrdinal());
-    const boundary = pipeline.beginHistoryRead();
+    pipeline.beginHistoryRead();
     pipeline.buffer(textDelta("evt_after_a", 0, "after "), pipeline.nextOrdinal());
     pipeline.buffer(textDelta("evt_after_b", 0, "text"), pipeline.nextOrdinal());
 
-    const buffered = pipeline.bufferedSince(boundary);
-    expect(bufferedText(buffered)).toBe("after text");
-    expect(buffered).toHaveLength(1);
+    const buffered = pipeline.bufferedEntries();
+    // The merged entry wears the LATER event's id; what matters is that it did
+    // not swallow the earlier entry's text.
+    expect(buffered.map((entry) => entry.event.id)).toEqual(["evt_before", "evt_after_b"]);
+    expect(bufferedText(buffered.slice(1))).toBe("after text");
   });
 
   it("keeps separate ordinals when two parts stream at once", () => {
     const pipeline = createEventPipeline(createHost());
-    const boundary = pipeline.beginHistoryRead();
+    pipeline.beginHistoryRead();
 
     pipeline.buffer(textDelta("evt_a1", 0, "a1", "assistant-one"), pipeline.nextOrdinal());
     pipeline.buffer(textDelta("evt_b1", 0, "b1", "assistant-two"), pipeline.nextOrdinal());
     pipeline.buffer(textDelta("evt_a2", 0, "a2", "assistant-one"), pipeline.nextOrdinal());
 
-    const buffered = pipeline.bufferedSince(boundary);
+    const buffered = pipeline.bufferedEntries();
     expect(buffered.map((entry) => entry.event.id)).toEqual(["evt_a1", "evt_b1", "evt_a2"]);
   });
 
   it("leaves a non-delta between two deltas in place instead of reordering them", () => {
     const pipeline = createEventPipeline(createHost());
-    const boundary = pipeline.beginHistoryRead();
+    pipeline.beginHistoryRead();
 
     pipeline.buffer(toolInputDelta("evt_d1", "tool-1", "{"), pipeline.nextOrdinal());
     pipeline.buffer(toolInputEnded("evt_end", "tool-1"), pipeline.nextOrdinal());
     pipeline.buffer(toolInputDelta("evt_d2", "tool-1", "}"), pipeline.nextOrdinal());
 
-    const buffered = pipeline.bufferedSince(boundary);
+    const buffered = pipeline.bufferedEntries();
     expect(buffered.map((entry) => entry.event.id)).toEqual(["evt_d1", "evt_end", "evt_d2"]);
   });
 
   it("drops the oldest entries at the limit rather than the stream", () => {
     const pipeline = createEventPipeline(createHost());
-    const boundary = pipeline.beginHistoryRead();
+    pipeline.beginHistoryRead();
 
     // Distinct targets never coalesce, so each one costs a slot.
     const total = 4106;
@@ -150,7 +154,7 @@ describe("the hydration event buffer", () => {
         pipeline.nextOrdinal(),
       );
 
-    const buffered = pipeline.bufferedSince(boundary);
+    const buffered = pipeline.bufferedEntries();
     expect(buffered).toHaveLength(4096);
     expect(buffered[0]?.event.id).toBe(`evt_tool_${total - 4096}`);
     expect(buffered.at(-1)?.event.id).toBe(`evt_tool_${total - 1}`);

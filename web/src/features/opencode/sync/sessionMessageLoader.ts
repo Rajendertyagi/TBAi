@@ -34,7 +34,7 @@
 
 import type { OpenCodeV2Generation } from "../v2Client";
 import { loadV2History, projectV2History } from "../v2History";
-import type { V2HistoryMerge, V2HistorySnapshot, V2ThreadAction } from "../v2Types";
+import type { V2HistoryMerge, V2HistorySnapshot, V2MessageState, V2ThreadAction } from "../v2Types";
 
 /** What the loader needs from the controller. */
 export interface SessionMessageLoaderHost {
@@ -57,8 +57,10 @@ export interface SessionMessageLoader {
    *
    * @param snapshot - The snapshot to commit.
    * @param merge - The ids the commit reconciles against.
+   * @returns The messages the commit installed, which is what the replay of
+   * held events is reconciled against.
    */
-  commit(snapshot: V2HistorySnapshot, merge: V2HistoryMerge): void;
+  commit(snapshot: V2HistorySnapshot, merge: V2HistoryMerge): readonly V2MessageState[];
 }
 
 /**
@@ -75,7 +77,7 @@ export function createSessionMessageLoader(host: SessionMessageLoaderHost): Sess
     return loadV2History(generation.history, signal ? { signal } : {});
   }
 
-  function commit(snapshot: V2HistorySnapshot, merge: V2HistoryMerge): void {
+  function commit(snapshot: V2HistorySnapshot, merge: V2HistoryMerge): readonly V2MessageState[] {
     const projection = projectV2History(snapshot);
     host.dispatch({
       type: "history_loaded",
@@ -84,6 +86,7 @@ export function createSessionMessageLoader(host: SessionMessageLoaderHost): Sess
       pages: projection.pages,
       merge,
     });
+    return projection.messages;
   }
 
   return { read, commit };

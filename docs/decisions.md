@@ -6413,3 +6413,77 @@ status control to it is a UI change and needs its own approval. The
 `OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP` and the `load_reconciling` /
 `load_reconciled` actions have no consumer, and removing them is not this
 phase's work.
+
+## 2026-10-22 - OpenCode Phase 4 correction: what a held event may be replayed onto
+
+**The defect.** An independent review of `7b65219` reproduced a composition
+defect this phase's own mechanism allowed: the commit installed the snapshot's
+copy of a message, and every event the read held was then replayed on top of
+it. A text delta the snapshot already contained was therefore appended a second
+time, and the reader saw the answer twice ("HelloHello"). It was masked in the
+common flow - `session.text.ended` overwrites the part's text when it arrives -
+but it was a new outcome, not a pre-existing one: before this phase the second
+commit rebuilt the transcript from the snapshot alone and wiped the replayed
+delta, so the same scenario ended at "Hello".
+
+**Why the ordinal boundary could not prevent it.** The boundary says which
+events arrived after the read was REQUESTED. The snapshot's content is decided
+by when the read is ANSWERED, and the two are not the same instant on the
+server. OpenCode persists a streamed part in three steps:
+`session.text.started` stores the part empty, the deltas never reach the
+database, and `session.text.ended` stores the finished text. A durable event
+is committed to that store BEFORE it is published to SSE subscribers
+(`packages/core/src/bus.ts`: the projectors run, then `notify`). So a read
+answered after `text.ended` was committed returns the finished text while the
+deltas that produced it are still in flight to this client - and they are held,
+because the read was requested before they arrived. The same reasoning in the
+other direction shows the opposite defect: a snapshot that carries the part
+EMPTY has not seen the deltas at all, so a held delta that predates the
+boundary still has to be replayed, and the ordinal rule dropped it, truncating
+the answer until the next read.
+
+**Decision: the snapshot's own per-part text decides, not the ordinal.**
+`sync/historyReplay.ts` owns the rule:
+
+- a held delta is NOT replayed into a part the snapshot carries text for - the
+  snapshot already holds that text, and the delta is inside it;
+- a held delta IS replayed into a part the snapshot carries empty, including one
+  that predates the read's boundary, because a text or reasoning delta carries
+  everything its part needs (its id and its ordinal);
+- a tool-input delta is the exception: a delta alone cannot rebuild a tool part
+  (its name arrives only in `session.tool.input.started`, and `v2Events.ts`
+  would synthesize `unknown`), so it is replayed only when it arrived after
+  the boundary;
+- every other held event keeps the ordinal rule, because its effect IS
+  persisted before the read can be answered.
+
+`EventPipeline.bufferedSince(ordinal)` is therefore gone: the buffer is no
+longer SELECTED by an ordinal, it is FILTERED by the rule. The pipeline
+exposes `bufferedEntries()` and the controller decides what to replay.
+
+**Two corrections that came with it.** A failed hydration now clears the
+buffer: that attempt never committed a snapshot, so its held events have no
+base to be replayed onto, and the retry reads its own snapshot. And the
+coalescing fold no longer crosses the boundary in the other direction either:
+an entry that predates the read keeps its own ordinal, so a pre-read delta
+cannot be dated later than it arrived and masquerade as one that arrived during
+the read.
+
+**Accepted limit.** The merged entry keeps the later event's id, so the folded
+events' ids never reach the applied-id set. Deltas carry no durable sequence in
+this protocol (only `*.started`/`*.ended` do), the server does not re-send
+them on replay, and nothing else suppresses a re-delivery - so a re-delivered
+delta would be applied twice, folded or not. This is recorded rather than fixed:
+the fix would be to keep every folded id, which buys a guard against a delivery
+the server does not make.
+
+**Verification.** `v2ThreadController.test.ts` gained the two end-to-end cases
+the review asked for - the transcript's text, not the buffer's: "does not append
+the snapshot's own text twice when the stream that produced it was held" (fails
+with "HelloHello" against the old rule) and "replays the deltas the server has
+not persisted yet, even when they predate the read" (fails with "lo" against
+the ordinal rule). `historyReplay.test.ts` (6 cases) pins the rule itself, and
+"does not replay a failed attempt's held deltas onto the next attempt's
+snapshot" pins the buffer clear. `eventPipelineBuffer.test.ts` was re-scoped:
+the buffer is no longer selected by an ordinal, so its cases assert the entries
+and their text.

@@ -160,6 +160,14 @@ export type PermissionReplyHandler = (input: PermissionReplyInput) => Promise<vo
 export type GenerationOptions = {
   readonly session?: SessionInfo;
   /**
+   * Overrides how the session itself is read.
+   *
+   * The session read sits between "the event stream is open" and "the history
+   * read starts", so a deferred override is what creates the window in which
+   * live events are held before the read's boundary exists.
+   */
+  readonly sessionGet?: () => Promise<SessionInfo>;
+  /**
    * The list and history readers receive the CONNECTION signal, exactly as the
    * real client passes it: `v2Client.ts` runs every one of these through
    * `connectionOperation`, so a superseded attempt's pending reads are aborted
@@ -376,7 +384,8 @@ export function createGeneration(
 
   const operations: OpenCodeV2GenerationOperations = {
     serverInfo: async () => SERVER_INFO,
-    sessionGet: async () => options.session ?? SESSION,
+    sessionGet: async () =>
+      options.sessionGet ? options.sessionGet() : (options.session ?? SESSION),
     switchAgent: async () => undefined,
     switchModel: async () => undefined,
     prompt: async (input) => {

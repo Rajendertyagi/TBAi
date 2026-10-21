@@ -7,6 +7,9 @@ import type {
   PermissionReplyInput,
   PermissionRequest,
   SessionInboxUser,
+  SessionInfo,
+  SessionMessageInfo,
+  SessionMessagesResponse,
   V2Event,
 } from "@opencode/client";
 import { OpenCodeBashToolUI } from "@web/tools/opencode/ui";
@@ -40,6 +43,7 @@ import {
   PERMISSION,
   PERMISSION_ID,
   SERVER_VERSION,
+  SESSION,
   SESSION_ID,
   STALE_ASSISTANT_MESSAGE_ID,
   USER_MESSAGE,
@@ -55,6 +59,57 @@ import {
   waitForState,
   type FakeGeneration,
 } from "@web/testing/opencode/v2ThreadControllerHarness";
+
+/**
+ * The message a hydration read races against: text arrives on the stream while
+ * the history request is in flight.
+ */
+const STREAMED_MESSAGE_ID = "assistant_streamed";
+
+/**
+ * A response whose only part is text, in the shape the server persists it.
+ *
+ * `text` is the whole part as the server stored it: a streaming part is stored
+ * empty (`session.text.started` pushes `""` and the deltas never reach the
+ * database), and only `session.text.ended` writes the finished text.
+ */
+function streamedMessage(text: string): SessionMessageInfo {
+  return {
+    id: STREAMED_MESSAGE_ID,
+    type: "assistant",
+    agent: "build",
+    model: { id: "test-model", providerID: "test-provider" },
+    time: { created: 30 },
+    content: [{ type: "text", text }],
+  };
+}
+
+function streamedTextStarted(): V2Event {
+  return {
+    id: "evt_streamed_started",
+    created: 30,
+    type: "session.text.started",
+    durable: { aggregateID: SESSION_ID, seq: 1, version: 1 },
+    data: { sessionID: SESSION_ID, assistantMessageID: STREAMED_MESSAGE_ID, ordinal: 0 },
+  };
+}
+
+function streamedTextDelta(id: string, delta: string): V2Event {
+  return {
+    id,
+    created: 31,
+    type: "session.text.delta",
+    data: { sessionID: SESSION_ID, assistantMessageID: STREAMED_MESSAGE_ID, ordinal: 0, delta },
+  };
+}
+
+/** The text the transcript shows for `STREAMED_MESSAGE_ID`, or null when absent. */
+function transcriptText(controller: V2ThreadController): string | null {
+  const part = controller
+    .getState()
+    .messages[STREAMED_MESSAGE_ID]?.parts.find((candidate) => candidate.kind === "text");
+  return part?.kind === "text" ? part.value : null;
+}
 
 describe("native V2 thread controller lifecycle", () => {
   it("hydrates authoritative state and resolves readiness once", async () => {
@@ -110,6 +165,118 @@ describe("native V2 thread controller lifecycle", () => {
         },
       ]);
       expect(controller.getState().execution.type).toBe("idle");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("does not append the snapshot's own text twice when the stream that produced it was held", async () => {
+    // The race: the server commits `session.text.ended` to its store BEFORE it
+    // publishes the event (bus.ts runs the projectors, then notifies). A history
+    // read answered in that window therefore returns the finished text while the
+    // deltas that produced it are still in flight to this client - and the read
+    // started before them, so they are buffered. The snapshot wins for an
+    // untouched message, so replaying the deltas on top of it would show the
+    // text twice ("HelloHello") until `text.ended` arrives to overwrite it.
+    const session = deferred<SessionInfo>();
+    const readStarted = deferred<void>();
+    const read = deferred<SessionMessagesResponse>();
+    const generation = createGeneration(1, {
+      sessionGet: () => session.promise,
+      historyList: () => {
+        readStarted.resolve(undefined);
+        return read.promise;
+      },
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+
+    try {
+      const ready = controller.awaitReady();
+      await generation.events.waitForCalls(1);
+      generation.events.emit(streamedTextStarted());
+      await generation.events.waitForCalls(2);
+      session.resolve(SESSION);
+      await readStarted.promise;
+      generation.events.emit(streamedTextDelta("evt_streamed_delta_1", "Hello"));
+      await generation.events.waitForCalls(3);
+      read.resolve({ data: [streamedMessage("Hello")], cursor: {} });
+      await ready;
+
+      expect(transcriptText(controller)).toBe("Hello");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("replays the deltas the server has not persisted yet, even when they predate the read", async () => {
+    // A streaming part is stored EMPTY: the deltas never reach the database.
+    // The snapshot can therefore only speak for a part whose text it carries,
+    // and everything else streamed while the read was being prepared must still
+    // arrive. Dropping the pre-read deltas as "already in the snapshot" loses
+    // the beginning of the answer until `text.ended` lands.
+    const session = deferred<SessionInfo>();
+    const readStarted = deferred<void>();
+    const read = deferred<SessionMessagesResponse>();
+    const generation = createGeneration(1, {
+      sessionGet: () => session.promise,
+      historyList: () => {
+        readStarted.resolve(undefined);
+        return read.promise;
+      },
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+
+    try {
+      const ready = controller.awaitReady();
+      await generation.events.waitForCalls(1);
+      generation.events.emit(streamedTextStarted());
+      generation.events.emit(streamedTextDelta("evt_streamed_delta_1", "Hel"));
+      await generation.events.waitForCalls(3);
+      session.resolve(SESSION);
+      await readStarted.promise;
+      generation.events.emit(streamedTextDelta("evt_streamed_delta_2", "lo"));
+      await generation.events.waitForCalls(4);
+      read.resolve({ data: [streamedMessage("")], cursor: {} });
+      await ready;
+
+      expect(transcriptText(controller)).toBe("Hello");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("does not replay a failed attempt's held deltas onto the next attempt's snapshot", async () => {
+    // A failed hydration never committed its snapshot, so its held events have
+    // no base to be replayed onto. The retry reads its own snapshot, and the
+    // delta from the attempt that died must not be appended to it.
+    const readStarted = deferred<void>();
+    const read = deferred<SessionMessagesResponse>();
+    const first = createGeneration(1, {
+      historyList: () => {
+        readStarted.resolve(undefined);
+        return read.promise;
+      },
+    });
+    const second = createGeneration(2);
+    const client = createClient([first, second]);
+    const controller = createV2ThreadController(client);
+
+    try {
+      const ready = controller.awaitReady().catch(() => undefined);
+      await readStarted.promise;
+      first.events.emit(streamedTextStarted());
+      first.events.emit(streamedTextDelta("evt_streamed_delta_1", "Hello"));
+      await first.events.waitForCalls(3);
+      read.reject(new Error("history read failed"));
+
+      await client.waitForConnect(2);
+      await waitForState(controller, (state) => state.load.type === "ready");
+      await ready;
+
+      // The retry's own snapshot has no such message - the server never
+      // committed it. The dead attempt's delta must not resurrect it: the
+      // reader would see an answer the server does not have.
+      expect(transcriptText(controller)).toBeNull();
     } finally {
       controller.dispose();
     }

@@ -22,6 +22,7 @@ import {
 } from "@/features/permissions/permissionPolicy";
 import { getAutoPolicy } from "./sessionAutoPolicy";
 import { createSessionMessageLoader } from "./sync/sessionMessageLoader";
+import { coveredTextPartIds, shouldReplayBuffered } from "./sync/historyReplay";
 import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
 import { toV2PromptInput } from "./v2MessageProjection";
 import { projectV2Permission } from "./v2Permissions";
@@ -334,6 +335,11 @@ export function createV2ThreadController(
    */
   function beginAttempt(): Attempt {
     retireAttempt(currentAttempt);
+    // The previous attempt's held events belong to ITS read: it never committed
+    // a snapshot, and this attempt reads its own. Replaying them onto this
+    // attempt's snapshot would show text the server may have discarded with the
+    // attempt that died.
+    pipeline.clearBuffer();
     nextAttemptId += 1;
     const started = createAttempt(nextAttemptId, lifecycle.signal);
     currentAttempt = started;
@@ -420,9 +426,11 @@ export function createV2ThreadController(
   /**
    * Notes that a live event changed this message while a history read was open.
    *
-   * Only APPLIED events count. A buffered delta has not reached the transcript
-   * yet: the commit takes the snapshot's copy and the replay appends the delta
-   * to it, which is the same text by a different route.
+   * Only APPLIED events count. A held event has not reached the transcript yet:
+   * the commit takes the snapshot's copy and the replay re-applies the event to
+   * it, but only where the snapshot does not already speak for that part - so
+   * `touched` must mean "the client's own copy is the newer one", which a held
+   * delta does not establish.
    *
    * @param event - The event being applied.
    */
@@ -710,6 +718,14 @@ export function createV2ThreadController(
     const session = await currentGeneration.operations.sessionGet({ sessionID: client.sessionId });
     if (!isLive(live)) return;
     dispatch({ type: "session_hydrated", session });
+    // The read's boundary is sampled HERE, before the history request goes out,
+    // and it covers the session read too. An event that arrived while the
+    // session was being read is held, and it is replayed only where the
+    // snapshot does not already carry its part - so a delta that predates the
+    // request is treated exactly like one that arrived during it, rather than
+    // being dated later than it arrived.
+    const held = beginHistoryReadScope();
+    const historyBoundary = pipeline.beginHistoryRead();
     if (session.revert !== undefined) {
       dispatch({ type: "revert_recovery_clearing", userMessageId: session.revert.messageID });
       await currentGeneration.operations.revertClear({ sessionID: client.sessionId });
@@ -723,18 +739,28 @@ export function createV2ThreadController(
         });
       dispatch({ type: "revert_recovery_cleared" });
     }
-    const held = beginHistoryReadScope();
-    const historyRequestOrdinal = pipeline.beginHistoryRead();
     const snapshot = await history.read(currentGeneration, live.signals.connectionSignal);
     if (!isLive(live)) return;
-    history.commit(snapshot, historyMerge(held));
-    const buffered = pipeline.bufferedSince(historyRequestOrdinal);
-    for (const entry of buffered)
+    const committed = history.commit(snapshot, historyMerge(held));
+    // The commit took the snapshot's copy of every message no live event
+    // touched, so an event held during the read is replayed only where the
+    // snapshot does not already carry its part. Replaying a delta into a part
+    // the snapshot finished would double its text, and dropping a delta the
+    // server never persisted would lose it: `historyReplay.ts` owns the rule.
+    //
+    // The snapshot is the only copy that can speak for a part here: while the
+    // attempt hydrates, EVERY assistant event is held rather than applied, so
+    // no message can have been touched by a live event, and the commit kept
+    // the snapshot's copy of all of them.
+    const covered = coveredTextPartIds(committed);
+    for (const entry of pipeline.bufferedEntries()) {
+      if (!shouldReplayBuffered(entry, historyBoundary, covered)) continue;
       dispatch({
         type: "v2_event",
         event: entry.event,
         mode: "observe-and-apply",
       });
+    }
     pipeline.clearBuffer();
     // The transcript is projected: stop buffering live deltas even though the
     // auxiliary read is still running. This is the attempt's own transition,
@@ -749,7 +775,7 @@ export function createV2ThreadController(
   /**
    * Re-fetches the pending sets so a dropped event is repaired without a reload.
    *
-   * `ordinal` is a LOCAL counter, so a lost `form.created` or
+   * The pending sets have no counter of their own, so a lost `form.created` or
    * `permission.asked` leaves no trace at all: nothing can detect the gap, and
    * the reader waits for a restart. This is the backstop for precisely that
    * failure, and the reason it is a poll rather than a fix to the stream.
@@ -857,6 +883,11 @@ export function createV2ThreadController(
       const safe = safeError(error, "OpenCode V2 runtime failed to load");
       live.fail(new V2ControllerError(safe));
       dispatch({ type: "load_failed", error: safe });
+      // This attempt never committed a snapshot, so the events it held have no
+      // base to be replayed onto. The retry reads its own snapshot, and appending
+      // a failed attempt's deltas to it would show text the server may have
+      // discarded with the attempt.
+      pipeline.clearBuffer();
       pipeline.scheduleReconnect(live, safe);
       throw new V2ControllerError(safe);
     } finally {

@@ -197,6 +197,12 @@ export interface BufferedEvent {
  * change of meaning. Two events with different targets, or a non-delta between
  * them, are left alone: the buffer must stay in ordinal order.
  *
+ * The merged event keeps `next`'s id, so the folded events' ids never reach the
+ * applied-id set. That is a known, accepted limit: deltas carry no durable
+ * sequence in this protocol (only `*.started`/`*.ended` do), the server does not
+ * re-send them on replay, and nothing else suppresses a re-delivery. Should a
+ * delta ever be redelivered, it would be applied twice — folded or not.
+ *
  * @param previous - The buffered event immediately before `next`.
  * @param next - The arriving event.
  * @returns The merged event, or null when the two are not one target's deltas.
@@ -324,12 +330,13 @@ export interface EventPipeline {
    */
   nextOrdinal(): number;
   /**
-   * Samples the ordinal a history read starts at, and marks it the boundary the
-   * buffer coalesces against.
+   * Samples the ordinal a history read starts at.
    *
-   * One call answers both questions, so the events that count as "arrived
-   * during this read" and the deltas that may be folded together can never
-   * disagree.
+   * Every event dated after it arrived while the snapshot was being read, which
+   * is what decides whether a non-delta event has to be replayed on top of the
+   * commit. It is ALSO the fold guard: a held delta that predates the read keeps
+   * its own ordinal rather than being merged into a later entry, so it cannot
+   * masquerade as one that arrived during the read.
    *
    * @returns The ordinal the read starts at.
    */
@@ -342,12 +349,14 @@ export interface EventPipeline {
    */
   buffer(event: V2Event, ordinal: number): void;
   /**
-   * The buffered events that arrived after an ordinal.
+   * The buffered events, oldest first.
    *
-   * @param ordinal - The ordinal to compare against.
-   * @returns The matching events, in order.
+   * The pipeline does not decide what may be replayed: the caller compares the
+   * buffer against the snapshot it committed (see `sync/historyReplay.ts`).
+   *
+   * @returns The held events.
    */
-  bufferedSince(ordinal: number): BufferedEvent[];
+  bufferedEntries(): readonly BufferedEvent[];
   /** Empties the buffer. */
   clearBuffer(): void;
   /**
@@ -398,8 +407,10 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   let ordinal = 0;
   let eventBuffer: BufferedEvent[] = [];
   /**
-   * The ordinal of the newest history read; deltas that date at or before it
-   * are never coalesced, because the snapshot already carries their text.
+   * The ordinal of the newest history read. A delta dated at or before it keeps
+   * its own entry instead of being folded into a later one, so a held event can
+   * never be dated later than it arrived. (Whether it is replayed is decided by
+   * the snapshot's own text, not by this boundary - see `historyReplay.ts`.)
    */
   let coalesceFromOrdinal = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -480,10 +491,9 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     // Adjacent deltas for one part collapse into the entry they follow, so a
     // fast stream costs one entry per part rather than one per token. Only an
     // entry that arrived AFTER the read started is a coalescing target: an
-    // earlier one is dated before the boundary, its text is already in the
-    // snapshot, and folding later text into it would replay that text twice.
-    // The merged entry keeps the LATER ordinal for the same reason —
-    // `bufferedSince` selects by ordinal, and the newest text must survive.
+    // earlier entry keeps its own ordinal, so a delta held before the boundary
+    // stays distinguishable from one that arrived during the read. The merged
+    // entry keeps the LATER ordinal, because the fold target is the later entry.
     const last = eventBuffer[eventBuffer.length - 1];
     if (last !== undefined && last.ordinal > coalesceFromOrdinal) {
       const merged = coalescedDelta(last.event, event);
@@ -502,8 +512,8 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     }
   }
 
-  function bufferedSince(eventOrdinal: number): BufferedEvent[] {
-    return eventBuffer.filter((entry) => entry.ordinal > eventOrdinal);
+  function bufferedEntries(): readonly BufferedEvent[] {
+    return eventBuffer;
   }
 
   function clearBuffer(): void {
@@ -538,7 +548,7 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     nextOrdinal,
     beginHistoryRead,
     buffer,
-    bufferedSince,
+    bufferedEntries,
     clearBuffer,
     get attemptCount(): number {
       return reconnectAttempt;
