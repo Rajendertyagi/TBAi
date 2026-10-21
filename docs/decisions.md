@@ -6286,3 +6286,32 @@ and the attempt's stream must be closed. Before the fix it failed on both
 counts. `R-M4` now covers the other half of M4 - recovery within the budget -
 instead of asserting that a failed attempt still applies events, which was the
 behaviour the review rejected.
+**Decision after review (2026-10-21): the budget limits automatic retries, not
+explicit recovery.** The retry budget bounds what the runtime does on its own
+initiative. It does not bind the person asking again, so recovery after
+exhaustion is a deliberate act with its own entry point:
+
+- a terminal failure settles the attempt and leaves the budget spent
+  (`eventPipeline.isExhausted()`), and no later readiness wait clears it;
+- `load()` and `awaitReady()` are incidental - the mount effect, the
+  runtime's own wiring, another feature asking for readiness - so while the
+  budget is spent they report the failure that ended the retries instead of
+  opening a connection. Before this, any incidental `awaitReady()` quietly
+  reconnected, which made the ceiling advisory;
+- `retry()` is the explicit manual entry point (`v2ThreadController.retry`).
+  It cancels a pending timer, starts a fresh attempt and replaces the failed
+  one, which is never revived. The counter is deliberately NOT reset: an
+  attempt it starts that fails again is terminal, not a fresh round of
+  automatic retries;
+- a completed hydration clears both the counter and the spent flag.
+
+The Code surface's visible Reconnect control already rebuilds the client and
+the controller outright (`useOpenCodeRuntime.reconnect`), which is a stricter
+form of the same act: the new controller starts with a full budget. `retry()`
+exists for callers that hold the controller, and it is the path the regression
+tests exercise.
+
+`R-M4b` and `R-M4c` cover the pair: an incidental wait after exhaustion
+rejects and opens no connection, no timer fires either, an explicit `retry()`
+reaches `ready`, and the abandoned hydration read that outlives the failed
+attempt cannot touch the state of the attempt that replaced it.

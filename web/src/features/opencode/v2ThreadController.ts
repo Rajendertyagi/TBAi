@@ -60,6 +60,7 @@ const V2_ABORTED_MESSAGE = "OpenCode V2 request was aborted";
 const V2_DEFINITIVE_FAILURE_MESSAGE = "OpenCode V2 prompt was definitively rejected";
 const V2_RECOVERY_REQUIRED_MESSAGE = "OpenCode V2 staged recovery must complete before admission";
 const V2_DISPOSED_MESSAGE = "OpenCode V2 runtime was disposed";
+const V2_EXHAUSTED_MESSAGE = "OpenCode V2 runtime stopped reconnecting";
 
 export type V2PromptOptions = {
   readonly messageId?: string;
@@ -84,6 +85,16 @@ export interface V2ThreadController {
   subscribe(listener: () => void): () => void;
   setDesiredSelection(selection: V2DesiredSelection): void;
   load(): Promise<void>;
+  /**
+   * Explicit manual recovery: starts a fresh attempt even after the automatic
+   * retry budget is spent.
+   *
+   * The automatic budget limits retries the runtime schedules by itself, not a
+   * person asking again. The failed attempt is replaced, never revived.
+   * `load()` and `awaitReady()` are incidental and refuse to connect once the
+   * budget is exhausted, so neither can spend an attempt on a caller's behalf.
+   */
+  retry(): Promise<void>;
   awaitReady(): Promise<void>;
   refresh(): Promise<void>;
   resyncAuxiliary(): Promise<void>;
@@ -787,7 +798,39 @@ export function createV2ThreadController(
   async function ensureLoaded(): Promise<void> {
     const existing = currentAttempt?.load() ?? null;
     if (existing) return existing;
+    // The automatic budget is spent. Waiting for readiness is not a user
+    // asking to reconnect, so it reports the failure that ended the retries
+    // instead of quietly spending an attempt the budget does not have (D2).
+    if (pipeline.isExhausted()) throw new V2ControllerError(terminalFailure());
     // D2: manual load during a pending timer cancels the timer and takes over.
+    pipeline.cancelReconnect();
+    return startConnection();
+  }
+
+  /**
+   * The failure the runtime stopped reconnecting on.
+   *
+   * A terminal failure always leaves `load: error`, so the state carries the
+   * cause. The fallback exists only so a latched runtime can never be mistaken
+   * for a healthy one.
+   */
+  function terminalFailure(): V2SafeError {
+    return state.load.type === "error"
+      ? state.load.error
+      : { kind: "network", message: V2_EXHAUSTED_MESSAGE };
+  }
+
+  /**
+   * Explicit manual recovery.
+   *
+   * Starts a fresh attempt even after the automatic budget is spent, because
+   * the budget limits retries the runtime schedules by itself, not a person
+   * asking again. The exhausted attempt stays retired and is replaced. The
+   * retry counter is deliberately NOT reset: an attempt this call starts that
+   * fails again is terminal, rather than earning a fresh round of automatic
+   * retries.
+   */
+  async function retry(): Promise<void> {
     pipeline.cancelReconnect();
     return startConnection();
   }
@@ -1212,6 +1255,7 @@ export function createV2ThreadController(
       dispatch({ type: "desired_selection_changed", selection, generation: selectionGeneration });
     },
     load: ensureLoaded,
+    retry,
     awaitReady,
     refresh,
     resyncAuxiliary,

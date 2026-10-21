@@ -306,6 +306,17 @@ export interface EventPipeline {
    */
   resetAttempt(): void;
   /**
+   * Whether the automatic retry budget is spent.
+   *
+   * Set when a failure arrives with no retries left and cleared when an
+   * attempt completes its hydration. While it is set, the runtime must not
+   * open a connection on its own initiative: a caller that merely waits for
+   * readiness is not a user deciding to retry.
+   *
+   * @returns True when the last failure was terminal.
+   */
+  isExhausted(): boolean;
+  /**
    * Cancels a pending retry.
    *
    * @returns True when a retry was pending and has been cancelled.
@@ -330,6 +341,8 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   let eventBuffer: BufferedEvent[] = [];
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
+  /** True once a failure has arrived with no automatic retries left. */
+  let exhausted = false;
 
   async function consume(attempt: Attempt): Promise<void> {
     const generation = attempt.generation;
@@ -358,6 +371,7 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     if (reconnectTimer !== null) return;
     // Terminal failure: no more auto-retries after exhausting the budget.
     if (reconnectAttempt >= host.config.maxReconnectAttempts) {
+      exhausted = true;
       host.dispatch({
         type: "connection_changed",
         connection: { type: "failed", attempt: reconnectAttempt },
@@ -418,6 +432,13 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
 
   function resetAttempt(): void {
     reconnectAttempt = 0;
+    // A completed hydration is the runtime proving it recovered: the next
+    // failure gets a full budget again.
+    exhausted = false;
+  }
+
+  function isExhausted(): boolean {
+    return exhausted;
   }
 
   function cancelReconnect(): boolean {
@@ -443,6 +464,7 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
       return reconnectAttempt;
     },
     resetAttempt,
+    isExhausted,
     cancelReconnect,
     hasPendingReconnect,
   };
