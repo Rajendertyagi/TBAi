@@ -38,6 +38,7 @@ import {
   type V2PromptAdmissionResult,
   type V2PromptSubmission,
 } from "./sync/promptsInFlight";
+import { createStartupGate } from "./sync/startupGate";
 import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
 import type {
   V2DesiredSelection,
@@ -233,9 +234,7 @@ export function createV2ThreadController(
   let ordinal = 0;
   let selectionGeneration = 0;
   let loadPromise: Promise<void> | null = null;
-  let readyPromise: Promise<void> | null = null;
-  let resolveReady: (() => void) | null = null;
-  let rejectReady: ((error: unknown) => void) | null = null;
+  const gate = createStartupGate();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let isHydrating = false;
@@ -428,8 +427,7 @@ export function createV2ThreadController(
         connection: { type: "failed", attempt: reconnectAttempt },
       });
       dispatch({ type: "load_failed", error });
-      rejectReady?.(new V2ControllerError(error));
-      rejectReady = null;
+      gate.reject(new V2ControllerError(error));
       return;
     }
     const failedGeneration = generation;
@@ -442,8 +440,7 @@ export function createV2ThreadController(
       connection: { type: "reconnecting", attempt: reconnectAttempt + 1 },
     });
     dispatch({ type: "load_failed", error });
-    rejectReady?.(new V2ControllerError(error));
-    rejectReady = null;
+    gate.reject(new V2ControllerError(error));
     const delay = computeReconnectDelay(reconnectAttempt, cfg);
     reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
@@ -672,23 +669,14 @@ export function createV2ThreadController(
       connectionSignal: connectionController.signal,
       lifecycleSignal: lifecycleController.signal,
     };
-    readyPromise = new Promise<void>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-    // `load()` and `awaitReady()` are intentionally separate entry points. Mark
-    // the internal promise handled even when a caller only awaits `load()`;
-    // callers that do await `readyPromise` still receive the same rejection.
-    void readyPromise.catch(() => undefined);
+    gate.open();
     let currentGeneration: OpenCodeV2Generation;
     try {
       currentGeneration = await client.connect(signals);
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 connection failed");
       dispatch({ type: "load_failed", error: safe });
-      rejectReady?.(new V2ControllerError(safe));
-      rejectReady = null;
-      resolveReady = null;
+      gate.reject(new V2ControllerError(safe));
       if (!disposed) scheduleReconnect(safe);
       throw new V2ControllerError(safe);
     }
@@ -700,16 +688,12 @@ export function createV2ThreadController(
     void consumeEvents(currentGeneration);
     try {
       await hydrate(currentGeneration, signals);
-      resolveReady?.();
-      resolveReady = null;
-      rejectReady = null;
+      gate.resolve();
       reconnectAttempt = 0;
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 runtime failed to load");
       dispatch({ type: "load_failed", error: safe });
-      rejectReady?.(error);
-      rejectReady = null;
-      resolveReady = null;
+      gate.reject(error);
       throw error;
     }
   }
@@ -758,7 +742,8 @@ export function createV2ThreadController(
 
   async function awaitReady(): Promise<void> {
     await ensureLoaded();
-    if (readyPromise) await readyPromise;
+    const pending = gate.pending();
+    if (pending) await pending;
   }
 
   async function reconcileStagedRevert(): Promise<void> {
@@ -1138,9 +1123,7 @@ export function createV2ThreadController(
     reconnectTimer = null;
     connectionController?.abort();
     lifecycleController?.abort();
-    rejectReady?.(new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }));
-    rejectReady = null;
-    resolveReady = null;
+    gate.reject(new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }));
     const current = generation;
     generation = null;
     if (current) void current.events.close();

@@ -1,0 +1,109 @@
+/**
+ * The readiness gate: the promise that says the runtime has come up.
+ *
+ * ## WHAT THIS OWNS
+ *
+ * The **readiness promise** of the current connection attempt, and the two
+ * handles that settle it. One promise, one owner: whoever holds the gate is
+ * the only thing that can resolve or reject it.
+ *
+ * ## WHAT THIS DOES NOT OWN
+ *
+ * - **The attempt.** The gate does not create a connection, and it does not
+ *   know which attempt it belongs to. Phase 3 of the remediation plan gives
+ *   the attempt its own gate; until then the controller opens this one.
+ * - **The failure.** The gate is told what went wrong; it does not classify
+ *   the error, and it does not decide whether the runtime should retry.
+ * - **The waiter's deadline.** A caller that waits forever is a Phase 5
+ *   problem (the bounded wait), not this module's.
+ *
+ * ## WHY A GATE AND NOT A BARE PROMISE
+ *
+ * The promise has to be created, settled and awaited from three different
+ * places: the connection attempt that opens it, the failure paths that reject
+ * it, and `awaitReady`, which waits on it. A bare promise needs three
+ * variables to stay in step; the gate keeps them together and makes the
+ * pairing impossible to get wrong.
+ *
+ * ## THE HANDLED REJECTION
+ *
+ * `open()` marks the promise as handled immediately. `load()` and
+ * `awaitReady()` are deliberately separate entry points, so a caller may only
+ * ever await `load()` - and the promise must not surface as an unhandled
+ * rejection in that case. Callers that DO await the promise still receive the
+ * same rejection.
+ *
+ * This module was extracted from `v2ThreadController.ts` as part of Phase 2 of
+ * the OpenCode runtime remediation plan. The extraction is behaviour
+ * preserving: the same promise, settled at the same moments, with the same
+ * rejection.
+ */
+
+/** The gate's surface. */
+export interface StartupGate {
+  /**
+   * Opens the gate for a new connection attempt.
+   *
+   * The returned promise is already marked as handled, so a caller that never
+   * awaits it does not produce an unhandled rejection.
+   *
+   * @returns The readiness promise.
+   */
+  open(): Promise<void>;
+  /** Resolves the gate: the runtime is up. */
+  resolve(): void;
+  /**
+   * Rejects the gate: the runtime did not come up.
+   *
+   * @param error - The reason.
+   */
+  reject(error: unknown): void;
+  /**
+   * The promise the gate is currently waiting on, if it has one.
+   *
+   * @returns The promise, or `null` when no attempt has opened the gate.
+   */
+  pending(): Promise<void> | null;
+}
+
+/**
+ * Creates the readiness gate.
+ *
+ * @returns The gate.
+ */
+export function createStartupGate(): StartupGate {
+  let promise: Promise<void> | null = null;
+  let resolveGate: (() => void) | null = null;
+  let rejectGate: ((error: unknown) => void) | null = null;
+
+  function open(): Promise<void> {
+    const opened = new Promise<void>((resolve, reject) => {
+      resolveGate = resolve;
+      rejectGate = reject;
+    });
+    // `load()` and `awaitReady()` are intentionally separate entry points.
+    // Mark the internal promise handled even when a caller only awaits
+    // `load()`; callers that do await it still receive the same rejection.
+    void opened.catch(() => undefined);
+    promise = opened;
+    return opened;
+  }
+
+  function resolve(): void {
+    resolveGate?.();
+    resolveGate = null;
+    rejectGate = null;
+  }
+
+  function reject(error: unknown): void {
+    rejectGate?.(error);
+    resolveGate = null;
+    rejectGate = null;
+  }
+
+  function pending(): Promise<void> | null {
+    return promise;
+  }
+
+  return { open, resolve, reject, pending };
+}
