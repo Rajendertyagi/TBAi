@@ -144,17 +144,34 @@ describe("native V2 thread controller lifecycle", () => {
     }
   });
 
-  it("reprojects hydrated tool history after permission hydration", async () => {
+  it("keeps permission state separate from the transcript hydrated beside it", async () => {
+    let call = 0;
     const generation = createGeneration(1, {
       historyList: async () => ({ data: [ASSISTANT_TOOL_MESSAGE], cursor: {} }),
-      permissionList: async () => [PERMISSION],
+      permissionList: async () => {
+        call += 1;
+        return call === 1 ? [PERMISSION] : [PERMISSION, { ...PERMISSION, id: "permission-late" }];
+      },
     });
     const controller = createV2ThreadController(createClient([generation]));
 
     try {
       await controller.awaitReady();
-      const part = controller.getState().messages[ASSISTANT_TOOL_MESSAGE.id]?.parts[0];
-      expect(part).toMatchObject({ kind: "tool", permissionId: PERMISSION_ID });
+      const before = controller.getState();
+      expect(before.permissions).toEqual([PERMISSION]);
+      expect(before.messages[ASSISTANT_TOOL_MESSAGE.id]?.parts[0]).toMatchObject({
+        kind: "tool",
+        name: "shell",
+      });
+
+      // A later pending set arrives. Permissions are their OWN state: nothing
+      // links a permission to a tool PART, so the transcript must not be
+      // rebuilt for it. Rebuilding every message on every re-sync is what the
+      // deleted reprojection did.
+      await controller.resyncAuxiliary();
+      const after = controller.getState();
+      expect(after.permissions).toHaveLength(2);
+      expect(after.messages).toBe(before.messages);
     } finally {
       controller.dispose();
     }
@@ -1397,7 +1414,6 @@ describe("native V2 auto-approve — the reducer stays pure", () => {
       const next = reduceV2ThreadState(state, {
         type: "v2_event",
         event,
-        ordinal: 1,
         mode: "observe-and-apply",
       });
 

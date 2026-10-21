@@ -86,7 +86,7 @@ function hydrationTimeDelta(id: string, delta: string): V2Event {
 }
 
 describe("OpenCode V2 defect regression (quarantined)", () => {
-  test.todo("R-H2: an assistant delta received during hydration survives the hydration", async () => {
+  test("R-H2: an assistant delta received during hydration survives the hydration", async () => {
     const history = deferred<SessionMessagesResponse>();
     const generation = createGeneration(1, { historyList: () => history.promise });
     const client = createClient([generation]);
@@ -434,13 +434,14 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  test.todo("R-M10: a failed auxiliary read leaves the live permission untouched", async () => {
+  test("R-M10: a failed auxiliary read leaves the live permission untouched", async () => {
     let call = 0;
     const generation = createGeneration(1, {
       permissionList: async () => {
         call += 1;
         if (call === 1) return [PERMISSION];
-        throw new Error("permission list unavailable (503)");
+        if (call === 2) throw new Error("permission list unavailable (503)");
+        return [];
       },
     });
     const client = createClient([generation]);
@@ -448,12 +449,21 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     try {
       await controller.awaitReady();
       expect(controller.getState().permissions).toEqual([PERMISSION]);
+      expect(controller.getState().auxiliary.permissions).toBe("current");
 
       await controller.resyncAuxiliary();
-      await new Promise((r) => setTimeout(r, 10));
 
-      // CORRECT: an unavailable read is not an authoritative empty list.
+      // CORRECT: an unavailable read is not an authoritative empty list. The
+      // card stays, and the state says the shown set is not confirmed.
       expect(controller.getState().permissions).toEqual([PERMISSION]);
+      expect(controller.getState().auxiliary.permissions).toBe("unavailable");
+
+      // The distinction only matters because a read that SUCCEEDS and returns
+      // nothing IS authoritative - otherwise "keep it on failure" would just be
+      // "never remove anything".
+      await controller.resyncAuxiliary();
+      expect(controller.getState().permissions).toEqual([]);
+      expect(controller.getState().auxiliary.permissions).toBe("current");
     } finally {
       controller.dispose();
     }

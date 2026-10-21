@@ -80,7 +80,6 @@ function stateWithTool(
             output: [{ type: "text", text: "done" }],
             ...(metadata === undefined ? {} : { metadata }),
             status,
-            permissionId: null,
           },
         ],
         source: null,

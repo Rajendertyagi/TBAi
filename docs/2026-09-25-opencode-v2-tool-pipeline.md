@@ -159,6 +159,11 @@ with no row minted — so only the duplicate INSERT is prevented, never an error
 **Interfaces:**
 - Consumes official `V2Event` variants for `session.tool.input.delta`, `session.tool.input.ended`, `session.tool.called`, `session.tool.progress`, `session.tool.success`, and `session.tool.failed`.
 - Produces the existing `V2MessagePartState` tool shape with terminal `output`, `status`, and preserved `permissionId`.
+  - **Superseded 2026-10-21.** `permissionId` is no longer part of the tool shape:
+    the linkage the tool card uses is `deriveV2ToolCallId(message.id, toolId)`,
+    computed where the card is rendered, and the second history commit that
+    existed only to stamp the field was deleted. See `docs/decisions.md`,
+    "OpenCode Phase 4".
 
 - [x] Add failing reducer tests that start a tool, apply input/call/progress/success, and assert input/output/status convergence; add a failure case asserting error output/status.
 - [x] Run the reducer tests and confirm the new cases fail because only `input.started` is currently handled.

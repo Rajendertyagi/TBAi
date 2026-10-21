@@ -6155,9 +6155,9 @@ Three decisions follow from that.
   (attempt-scoped promises, the snapshot merge, the bounded readiness gate), and
   a phase that fixes behaviour cannot also claim to preserve it. Each later
   phase therefore adds its mechanism to a module that already has one owner:
-  the attempt epoch in `attempt.ts` (Phase 3), the commit mode in
-  `sessionMessageLoader.ts` and the recovery overlay in a new
-  `recoverySnapshots.ts` (Phase 4), the idempotent release in
+  the attempt epoch in `attempt.ts` (Phase 3), the reconciling commit in
+  `sessionMessageLoader.ts` and the per-kind auxiliary availability in
+  `auxiliaryNotice.ts` (Phase 4), the idempotent release in
   `promptsInFlight.ts` and the bounded wait in `startupGate.ts` (Phase 5). A
   module that would exist only to be filled in later is not created: an empty
   module has no owner, and the orphan-module gate would report it.
@@ -6315,3 +6315,101 @@ tests exercise.
 rejects and opens no connection, no timer fires either, an explicit `retry()`
 reaches `ready`, and the abandoned hydration read that outlives the failed
 attempt cannot touch the state of the attempt that replaced it.
+
+## 2026-10-21 - OpenCode Phase 4: the history commit reconciles, and an unavailable read is not an empty answer
+
+**Findings.** A history snapshot replaced live transcript state that had arrived
+while the read was in flight (H2); the hydration buffer discarded everything it
+held, and a long stream filled it (M5); a failed auxiliary read was
+indistinguishable from an authoritative empty list (M10); and a failed
+capabilities fetch was read as an empty catalogue (M12).
+
+**The buffer's acceptance is the streamed text, not every event.** The
+maintainer's decision: coalescing adjacent deltas plus a bounded backstop is the
+mechanism, and what must be proved is that text streamed during a read survives
+it - not that every original delta event is still in the buffer. So
+`beginHistoryRead()` samples the ordinal a read starts at AND marks it the
+boundary coalescing is gated on (one call, so the two can never disagree), and
+`buffer()` folds a delta into the TAIL entry only when that entry's ordinal is
+after the boundary - folding across the boundary would replay snapshot text
+twice - with the merged entry taking the later ordinal so `bufferedSince` still
+selects it. `OPENCODE_V2_EVENT_BUFFER_LIMIT` is the backstop, raised to 4096:
+reaching it means that many distinct events arrived during one read, and the
+oldest are dropped rather than the read being abandoned.
+
+**Decision: the commit reconciles by id, and there is no "replace" mode.** The
+plan proposed a `recoverySnapshots.ts` module holding an observer registered for
+the duration of a read. It was not built, because the event buffer already is
+that observer - and it is drained after the commit, so a second mechanism
+registered over the same window could disagree with the first about an event
+that arrived between them. What the commit carries instead is
+`V2HistoryMerge { held, touched }`, non-nullable:
+
+- `held` is the message ids the transcript held when the read started, minus the
+  optimistic ids (the server has not admitted those, so their absence from the
+  snapshot says nothing);
+- `touched` is the assistant message ids that events APPLIED during the read
+  wrote to. Buffered events are replayed after the commit, so they do not mark
+  an id touched, and the snapshot correctly wins for them.
+
+The precedence: id in the snapshot and touched - live wins; id in the snapshot
+and untouched - the snapshot wins; id absent from the snapshot, held and
+untouched - dropped, which is the snapshot-confirmed deletion H2 is about; id
+absent, not held (or touched) - kept. The `"replace"` mode was dropped as dead
+rather than kept as a second path: no caller needs it, because an empty `held`
+on a first load IS replace, and the optimistic filtering it carried is preserved
+by the reducer.
+
+**Decision: the permission-linkage second commit is deleted.** `hydrate()`
+committed the history twice, so that projection time could stamp
+`part.permissionId` onto tool parts. An independent code search found no
+production reader of that field: the linkage the tool card uses is
+`deriveV2ToolCallId(message.id, toolId)`, computed where the card is rendered,
+and `currentPermissions()` fed nothing but that commit. The second commit,
+`lastHistorySnapshot`, `currentPermissions()`, `attachPermissions`,
+`projectV2History`'s permissions parameter and `part.permissionId` itself are
+gone. Re-expressing that commit as a merge, as the plan proposed, would have
+preserved a field nothing consumed. Permissions remain their own state.
+
+**Decision: M10's two states are per kind, and the surface is one line.** The
+plan said "a third state alongside stale and current"; stale was the wrong axis,
+because the ordinal-based staleness it named is what this phase removed.
+`state.auxiliary` holds `"current" | "unavailable"` per kind (inbox,
+permissions, forms), and the two behaviours the reader depends on are the ones
+pinned by tests: a failed read leaves the last known list exactly as it was and
+moves only availability, and a successful read that returns nothing clears it.
+Each kind degrades independently, so one endpoint being briefly unavailable
+cannot also cost the reader their forms - and cannot be reported as "no pending
+permissions". `auxiliaryNotice.ts` turns those states into one line in the
+status popover, naming the kinds that are stale. It is shown only once the load
+is ready: before the first read finishes, "unavailable" means "not read yet",
+which is the loading state and not news.
+
+**M12.** `readOpenCodeCapabilities` checks the response before parsing, so a 503
+is an error carrying the server's message rather than an empty catalogue.
+
+**Dead code this phase created or exposed.** `isStaleSnapshot` (nothing is dated
+by an ordinal any more), `V2EventIdentityState.nextOrdinal` (write-only once the
+stale-guard went), the `v2_event` action's `ordinal` field, and
+`EventPipeline.currentOrdinal` (both its callers were removed here - the
+auxiliary ordinal stamp and this phase's own boundary sample). `consume` now
+allocates through `nextOrdinal()`, so the pipeline's own method is no longer
+test-only. `hasPendingReconnect` already had no caller at this phase's base
+commit and is left alone: a pre-existing finding is named in the report, not
+absorbed into an unrelated diff.
+
+**Verification.** `v2HistoryMerge.test.ts` (5 cases) fails against the old
+replace semantics; `eventPipelineBuffer.test.ts` (5 cases) fails with coalescing
+disabled (600 entries, 2 failures); `R-M10` fails against the old
+drop-on-failure behaviour; `capabilitiesResponse.test.ts` (3 cases) and
+`auxiliaryNotice.test.ts` (4 cases) each fail against their defect. `R-H2` was
+promoted from `test.todo` to a real test, and the baseline pin that held the
+defect was deleted in this change - as was M10's. M3's pin stays, because M3 is
+open.
+
+**Left alone deliberately.** `retry()` still has no product caller: wiring the
+status control to it is a UI change and needs its own approval. The
+`materialization.ts` prior art for M3/M13 is Phase 5.
+`OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP` and the `load_reconciling` /
+`load_reconciled` actions have no consumer, and removing them is not this
+phase's work.

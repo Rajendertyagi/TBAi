@@ -91,7 +91,6 @@ export type V2MessagePartState =
       readonly output: unknown;
       readonly metadata?: Readonly<Record<string, unknown>>;
       readonly status: V2ToolStatus;
-      readonly permissionId: string | null;
       /**
        * Absent when the server never reported a time for this part. The
        * duration badge renders nothing in that case rather than showing a
@@ -133,8 +132,47 @@ export interface V2HistorySnapshot {
   readonly pages: number;
 }
 
+/**
+ * The ids a history commit reconciles against.
+ *
+ * A snapshot is read page by page, so the transcript keeps moving while it is
+ * being read: a message may be created, and an assistant message already in the
+ * snapshot may keep streaming. The two facts are different and are tracked
+ * separately:
+ *
+ * - `held` is the transcript at the instant the read STARTED. A held message the
+ *   snapshot no longer contains was deleted server-side, so it is removed — the
+ *   one deletion this merge is allowed to perform.
+ * - `touched` is the messages a live event CHANGED while the read was in
+ *   flight. Those keep their live version, because the snapshot's copy of them
+ *   was taken before the change.
+ *
+ * A message in neither is taken from the snapshot, which is what makes a
+ * refresh repair a transcript that drifted. A first load passes an empty
+ * `held`, which is exactly a replace.
+ */
+export interface V2HistoryMerge {
+  readonly held: readonly string[];
+  readonly touched: readonly string[];
+}
+
+/**
+ * Whether a pending set reflects the server's current answer.
+ *
+ * `unavailable` means the last read FAILED. The entries already held stay as
+ * they are, because a failed read says nothing about them — it is not a
+ * successful empty list.
+ */
+export type V2AuxiliaryAvailability = "current" | "unavailable";
+
+/** The availability of each pending set, tracked per kind. */
+export interface V2AuxiliaryState {
+  readonly inbox: V2AuxiliaryAvailability;
+  readonly permissions: V2AuxiliaryAvailability;
+  readonly forms: V2AuxiliaryAvailability;
+}
+
 export interface V2EventIdentityState {
-  readonly nextOrdinal: number;
   readonly recentObservedEventIds: readonly string[];
   readonly recentAppliedEventIds: readonly string[];
   readonly durableSequenceByAggregate: Readonly<Record<string, number>>;
@@ -242,6 +280,14 @@ export interface V2ThreadState {
   readonly permissions: readonly PermissionRequest[];
   readonly forms: readonly FormInfo[];
   readonly inboxById: Readonly<Record<string, V2InboxRecord>>;
+  /**
+   * Whether each pending set is the server's current answer.
+   *
+   * A failed read is NOT an authoritative empty list: it leaves the last known
+   * entries in place and marks that kind unavailable, so a surface can say the
+   * shown set is stale instead of quietly emptying it.
+   */
+  readonly auxiliary: V2AuxiliaryState;
   readonly usage: V2UsageSnapshot | null;
   /**
    * Tokens of the NEWEST assistant response - the current model-visible context.
@@ -281,7 +327,6 @@ export type V2ThreadAction =
   | {
       readonly type: "v2_event";
       readonly event: V2Event;
-      readonly ordinal: number;
       readonly mode: "observe-only" | "observe-and-apply";
     }
   | { readonly type: "connection_changed"; readonly connection: V2ConnectionState }
@@ -301,22 +346,30 @@ export type V2ThreadAction =
       readonly messages: readonly V2MessageState[];
       readonly messageOrder: readonly string[];
       readonly pages: number;
+      /** The ids the snapshot reconciles against. */
+      readonly merge: V2HistoryMerge;
     }
   | {
       readonly type: "inbox_hydrated";
-      readonly records: readonly V2InboxRecord[];
-      readonly requestOrdinal: number;
+      /** The server's answer, or null when the read failed. */
+      readonly records: readonly V2InboxRecord[] | null;
+      /** The inbox ids the client held when the read started. */
+      readonly held: readonly string[];
     }
   | { readonly type: "inbox_recorded"; readonly record: V2InboxRecord }
   | {
       readonly type: "permissions_hydrated";
-      readonly requests: readonly PermissionRequest[];
-      readonly requestOrdinal: number;
+      /** The server's answer, or null when the read failed. */
+      readonly requests: readonly PermissionRequest[] | null;
+      /** The permission ids the client held when the read started. */
+      readonly held: readonly string[];
     }
   | {
       readonly type: "forms_hydrated";
-      readonly forms: readonly FormInfo[];
-      readonly requestOrdinal: number;
+      /** The server's answer, or null when the read failed. */
+      readonly forms: readonly FormInfo[] | null;
+      /** The form ids the client held when the read started. */
+      readonly held: readonly string[];
     }
   | { readonly type: "prompt_submitting"; readonly message: V2MessageState }
   | {

@@ -6,6 +6,7 @@ import {
 import { resolveCodeOccupancy } from "./codeOccupancy";
 import {
   modelRefToV2Selection,
+  type V2AuxiliaryAvailability,
   type V2EventIdentityState,
   type V2ExecutionState,
   type V2InboxRecord,
@@ -82,7 +83,6 @@ const PUBLIC_EVENT_TYPES = new Set([
 ]);
 
 const EMPTY_EVENT_IDENTITY: V2EventIdentityState = {
-  nextOrdinal: 0,
   recentObservedEventIds: [],
   recentAppliedEventIds: [],
   durableSequenceByAggregate: {},
@@ -98,24 +98,6 @@ function incrementDiagnostic(state: V2ThreadState): V2ThreadState {
     ...state,
     diagnosticCount: Math.min(state.diagnosticCount + 1, OPENCODE_V2_DIAGNOSTIC_COUNT_CAP),
   };
-}
-
-/**
- * True when a snapshot dated `requestOrdinal` predates the newest applied event.
- *
- * `requestOrdinal` is the event counter sampled BEFORE the fetch, so an event
- * that arrived mid-flight carries a strictly higher ordinal and must win.
- *
- * The `+ 1` is load-bearing. `nextOrdinal` stores `appliedOrdinal + 1`, NOT a
- * count of events, so comparing the raw counter against it would classify
- * every snapshot as stale the instant a single event had ever been applied —
- * including one taken strictly after that event. That silently turns a re-sync
- * into a permanent no-op, and a reconnect-time hydration into a dropped
- * permission snapshot. `nextOrdinal - 1` is the newest ordinal actually
- * applied, which is what "newer than my snapshot" has to be measured against.
- */
-function isStaleSnapshot(requestOrdinal: number, identity: V2EventIdentityState): boolean {
-  return requestOrdinal + 1 < identity.nextOrdinal;
 }
 
 /**
@@ -137,6 +119,54 @@ function sameIdentitySequence(
 ): boolean {
   if (current.length !== incoming.length) return false;
   return current.every((item, index) => item.id === incoming[index]?.id);
+}
+
+/**
+ * Reconciles one pending set with the server's answer.
+ *
+ * The three pending sets are read over a live stream, so the same race applies
+ * to them as to the transcript: an entry can be created while the read is in
+ * flight, and an entry can leave by being answered. What must NOT happen is a
+ * stale answer overwriting either.
+ *
+ * - An entry the read returned is taken from the snapshot: the server owns its
+ *   content.
+ * - An entry the client held, that the snapshot omits, is gone: answering or
+ *   cancelling it removed it server-side.
+ * - An entry the client did NOT hold is one created during the read, so it is
+ *   kept and appended. `permission.asked` and `form.created` arrive as events,
+ *   and dropping them here would make a prompt disappear mid-flight.
+ *
+ * A failed read never reaches this function: `null` means the list could not be
+ * read, which says nothing about its contents.
+ *
+ * @param current - The entries held before the read.
+ * @param held - The ids of `current` when the read started.
+ * @param incoming - The server's answer.
+ * @returns The reconciled list, or `current` itself when nothing changed.
+ */
+function reconcilePending<T extends { readonly id: string }>(
+  current: readonly T[],
+  held: readonly string[],
+  incoming: readonly T[],
+): readonly T[] {
+  const answeredOrCancelled = new Set(incoming.map((item) => item.id));
+  const heldIds = new Set(held);
+  const createdDuringRead = current.filter(
+    (item) => !answeredOrCancelled.has(item.id) && !heldIds.has(item.id),
+  );
+  const merged = createdDuringRead.length === 0 ? incoming : [...incoming, ...createdDuringRead];
+  return sameIdentitySequence(current, merged) ? current : merged;
+}
+
+/**
+ * The availability a hydration action leaves its kind in.
+ *
+ * @param incoming - The server's answer, or null when the read failed.
+ * @returns `current` for an answer, `unavailable` for a failed read.
+ */
+function availabilityFor(incoming: readonly unknown[] | null): V2AuxiliaryAvailability {
+  return incoming === null ? "unavailable" : "current";
 }
 
 function getEventSessionId(event: V2Event): string | null {
@@ -428,7 +458,6 @@ function assistantToolPart(
         input: {},
         output: undefined,
         status: "running",
-        permissionId: null,
       };
 }
 
@@ -704,7 +733,6 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         input: {},
         output: undefined,
         status: "running",
-        permissionId: null,
         // The call has begun, so this is the start. `input.started` is the FIRST
         // event OpenCode emits for a tool part, which makes it the only
         // defensible live start marker: `session.tool.called` arrives after the
@@ -784,7 +812,7 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
 function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadState {
   switch (action.type) {
     case "v2_event":
-      return reduceV2Event(state, action.event, action.ordinal, action.mode);
+      return reduceV2Event(state, action.event, action.mode);
     case "connection_changed":
       return { ...state, connection: action.connection };
     case "load_started":
@@ -824,63 +852,93 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
             selectionGeneration: action.generation,
           };
     case "history_loaded": {
-      const messages = Object.fromEntries(action.messages.map((message) => [message.id, message]));
-      const optimistic = state.optimisticMessageIds
-        .filter((messageId) => !(messageId in messages))
+      const inSnapshot = new Set(action.messages.map((message) => message.id));
+      const snapshotSources = new Map(
+        action.messages.map((message) => [message.id, message.source] as const),
+      );
+      const held = new Set(action.merge.held);
+      const touched = new Set(action.merge.touched);
+      // What the snapshot cannot speak for: a message created after the read
+      // started, one a live event changed while it was in flight, and — always —
+      // an optimistic prompt the server has not admitted yet. Everything else
+      // the client holds and the snapshot omits was deleted server-side, which
+      // is the only deletion this merge performs.
+      const keptOrder = state.messageOrder.filter((messageId) => {
+        if (inSnapshot.has(messageId)) return false;
+        if (state.optimisticMessageIds.includes(messageId)) return true;
+        return !held.has(messageId) || touched.has(messageId);
+      });
+      const kept = keptOrder
         .map((messageId) => state.messages[messageId])
         .filter((message): message is V2MessageState => message !== undefined);
-      const merged = [...action.messages, ...optimistic];
+      // A message the snapshot carries normally takes the SNAPSHOT's version —
+      // that is what lets a refresh repair a transcript that drifted — except
+      // when a live event changed it while this read was in flight, where the
+      // live copy is strictly newer.
+      const resolved = action.messages.map((message) =>
+        touched.has(message.id) ? (state.messages[message.id] ?? message) : message,
+      );
+      const merged = [...resolved, ...kept];
       // Occupancy is re-derived from the PERSISTED messages, not from the live
       // event stream and not from the session ledger. This is what makes reload
       // and resume correct after a compaction: a session whose last message is a
       // finished compaction comes back `unknown` instead of resurrecting the
       // pre-compaction figure the ledger still remembers.
       const ordered = action.messageOrder
-        .map((messageId) => state.messages[messageId]?.source ?? messages[messageId]?.source)
+        .map((messageId) => state.messages[messageId]?.source ?? snapshotSources.get(messageId))
         .filter((source): source is SessionMessageInfo => source !== undefined && source !== null);
       const occupancy = resolveCodeOccupancy(ordered);
       return {
         ...state,
         messages: Object.fromEntries(merged.map((message) => [message.id, message])),
-        messageOrder: [
-          ...action.messageOrder,
-          ...optimistic
-            .map((message) => message.id)
-            .filter((id) => !action.messageOrder.includes(id)),
-        ],
+        messageOrder: [...action.messageOrder, ...keptOrder],
         occupancyTokens: occupancy?.state === "measured" ? occupancy.tokens : state.occupancyTokens,
         occupancyStale:
           occupancy?.state === "unknown" ? true : occupancy === null ? state.occupancyStale : false,
       };
     }
-    case "inbox_hydrated":
-      // Stale-guard: a snapshot taken before an event arrived must not
-      // overwrite what that event already established.
-      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+    case "inbox_hydrated": {
+      const availability = availabilityFor(action.records);
+      const current = Object.values(state.inboxById);
+      const merged =
+        action.records === null ? current : reconcilePending(current, action.held, action.records);
+      const next =
+        merged === current
+          ? state.inboxById
+          : Object.fromEntries(merged.map((record) => [record.id, record]));
+      // A failed read leaves the last known list in place and only moves the
+      // availability, so a surface can say the shown set is stale rather than
+      // showing an empty inbox that is not the server's answer.
+      return next === state.inboxById && state.auxiliary.inbox === availability
         ? state
-        : sameIdentitySequence(Object.values(state.inboxById), action.records)
-          ? state
-          : {
-              ...state,
-              inboxById: Object.fromEntries(action.records.map((record) => [record.id, record])),
-            };
+        : { ...state, inboxById: next, auxiliary: { ...state.auxiliary, inbox: availability } };
+    }
     case "inbox_recorded":
       return recordInbox(state, action.record);
-    case "permissions_hydrated":
-      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+    case "permissions_hydrated": {
+      const availability = availabilityFor(action.requests);
+      const next =
+        action.requests === null
+          ? state.permissions
+          : reconcilePending(state.permissions, action.held, action.requests);
+      return next === state.permissions && state.auxiliary.permissions === availability
         ? state
-        : sameIdentitySequence(state.permissions, action.requests)
-          ? state
-          : { ...state, permissions: [...action.requests] };
-    case "forms_hydrated":
-      // Same stale-guard as `permissions_hydrated`. This case previously had
-      // none, which meant a slow snapshot could silently undo a `form.created`
-      // — the exact regression a periodic re-sync would otherwise introduce.
-      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+        : {
+            ...state,
+            permissions: next,
+            auxiliary: { ...state.auxiliary, permissions: availability },
+          };
+    }
+    case "forms_hydrated": {
+      const availability = availabilityFor(action.forms);
+      const next =
+        action.forms === null
+          ? state.forms
+          : reconcilePending(state.forms, action.held, action.forms);
+      return next === state.forms && state.auxiliary.forms === availability
         ? state
-        : sameIdentitySequence(state.forms, action.forms)
-          ? state
-          : { ...state, forms: [...action.forms] };
+        : { ...state, forms: next, auxiliary: { ...state.auxiliary, forms: availability } };
+    }
     case "prompt_submitting": {
       const alreadySubmitted = state.optimisticMessageIds.includes(action.message.id);
       const next: V2ThreadState = {
@@ -1054,7 +1112,6 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
 export function reduceV2Event(
   state: V2ThreadState,
   event: V2Event,
-  ordinal: number,
   mode: "observe-only" | "observe-and-apply" = "observe-and-apply",
 ): V2ThreadState {
   if (REPLAY_ONLY_EVENT_TYPES.has(event.type) || !PUBLIC_EVENT_TYPES.has(event.type)) {
@@ -1076,7 +1133,6 @@ export function reduceV2Event(
     ...state,
     eventIdentity: {
       ...state.eventIdentity,
-      nextOrdinal: Math.max(state.eventIdentity.nextOrdinal, ordinal + 1),
       recentObservedEventIds: appendId(state.eventIdentity.recentObservedEventIds, event.id),
     },
   };
@@ -1131,6 +1187,10 @@ export function createInitialV2ThreadState(
     permissions: [],
     forms: [],
     inboxById: {},
+    // Nothing has been read yet, so no pending set is known to be current. A
+    // successful read moves its kind to "current"; a failed one leaves it here
+    // rather than pretending the empty list is the server's answer.
+    auxiliary: { inbox: "unavailable", permissions: "unavailable", forms: "unavailable" },
     usage: null,
     occupancyTokens: null,
     occupancyStale: false,

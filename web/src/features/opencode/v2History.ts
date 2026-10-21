@@ -6,7 +6,6 @@ import type {
 import { OPENCODE_V2_HISTORY_PAGE_SIZE } from "@/features/opencode/config";
 import type { V2HistoryReader } from "./v2Client";
 import type { V2HistorySnapshot, V2MessagePartState, V2MessageState } from "./v2Types";
-import { deriveV2ToolCallId, type V2PermissionView } from "./v2Permissions";
 import type { V2HistoryProjection } from "./v2MessageProjection";
 
 /** Loads every history page through the generation-bound reader. */
@@ -156,7 +155,6 @@ function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartSta
               : undefined,
         ...(metadata === undefined ? {} : { metadata }),
         status,
-        permissionId: null,
         // The tool part carries its OWN clock: `time.created` is when the call
         // began, `time.completed` when it finished. This is the server's record
         // rather than anything TBAi derived, so a reloaded card shows the same
@@ -192,33 +190,13 @@ function partsForMessage(message: SessionMessageInfo): readonly V2MessagePartSta
   return parts;
 }
 
-function attachPermissions(
-  message: V2MessageState,
-  permissions: readonly V2PermissionView[],
-): V2MessageState {
-  if (message.role !== "assistant") return message;
-  return {
-    ...message,
-    parts: message.parts.map((part) => {
-      if (part.kind !== "tool" || part.id === null) return part;
-      const permission = permissions.find((candidate) => {
-        if (candidate.sourceMessageID !== message.id || candidate.sourceToolId === null)
-          return false;
-        return (
-          deriveV2ToolCallId(message.id, candidate.sourceToolId) ===
-          deriveV2ToolCallId(message.id, part.id.replace(`tool:${message.id}:`, ""))
-        );
-      });
-      return permission ? { ...part, permissionId: permission.id } : part;
-    }),
-  };
-}
-
-/** Projects one official history snapshot into normalized chronological state. */
-export function projectV2History(
-  snapshot: V2HistorySnapshot,
-  permissions: readonly V2PermissionView[],
-): V2HistoryProjection {
+/**
+ * Projects one official history snapshot into normalized chronological state.
+ *
+ * @param snapshot - The history snapshot.
+ * @returns The projected messages, their order, and the page count.
+ */
+export function projectV2History(snapshot: V2HistorySnapshot): V2HistoryProjection {
   let parentId: string | null = null;
   const messages = snapshot.messages.map((source) => {
     const message: V2MessageState = {
@@ -230,7 +208,7 @@ export function projectV2History(
       source,
     };
     parentId = source.id;
-    return attachPermissions(message, permissions);
+    return message;
   });
   return {
     messages,

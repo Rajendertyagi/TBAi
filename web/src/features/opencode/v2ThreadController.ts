@@ -3,7 +3,6 @@ import type {
   FormInfo,
   PermissionRequest,
   SessionFormReplyInput,
-  SessionInboxInfo,
   SessionInboxUser,
   SessionPromptInput,
   V2Event,
@@ -25,7 +24,7 @@ import { getAutoPolicy } from "./sessionAutoPolicy";
 import { createSessionMessageLoader } from "./sync/sessionMessageLoader";
 import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
 import { toV2PromptInput } from "./v2MessageProjection";
-import { projectV2Permission, type V2PermissionView } from "./v2Permissions";
+import { projectV2Permission } from "./v2Permissions";
 import {
   attachV2PromptMessageId,
   createV2MessageId,
@@ -47,7 +46,7 @@ import {
 import type { OpenCodeV2Client, OpenCodeV2Generation } from "./v2Client";
 import type {
   V2DesiredSelection,
-  V2HistorySnapshot,
+  V2HistoryMerge,
   V2InboxRecord,
   V2MessageState,
   V2ModelSelection,
@@ -180,6 +179,23 @@ function agentChanged(current: string | null, desired: string | null): boolean {
   return current !== desired;
 }
 
+/**
+ * The assistant message an event mutates, or null when it mutates none.
+ *
+ * Every event that changes the transcript carries the message it belongs to;
+ * the event stream has no user-message mutation at all, because a user turn is
+ * immutable once admitted.
+ *
+ * @param event - The event.
+ * @returns The assistant message id, or null.
+ */
+function assistantMessageIdOf(event: V2Event): string | null {
+  const data: unknown = event.data;
+  if (data === null || typeof data !== "object" || !("assistantMessageID" in data)) return null;
+  const messageId = data.assistantMessageID;
+  return typeof messageId === "string" ? messageId : null;
+}
+
 function inboxRecordFromUser(item: SessionInboxUser): V2InboxRecord {
   return {
     id: item.id,
@@ -237,8 +253,14 @@ export function createV2ThreadController(
   let disposed = false;
   let selectionGeneration = 0;
   let resyncInFlight = false;
-  /** Latest full history projection, kept so a re-sync can reproject without re-paging. */
-  let lastHistorySnapshot: V2HistorySnapshot | null = null;
+  /**
+   * Message ids a live event has changed since the current history read began.
+   *
+   * A history read pages over time, so the transcript moves while it runs. The
+   * ids here tell the commit which of the snapshot's own messages a live event
+   * has already superseded.
+   */
+  const liveTouchedMessageIds = new Set<string>();
   const listeners = new Set<() => void>();
   const prompts = createPromptsInFlight();
   const answeredPermissions = new Set<string>();
@@ -368,10 +390,45 @@ export function createV2ThreadController(
     notify();
   }
 
-  function currentPermissions(): readonly V2PermissionView[] {
-    return state.permissions
-      .map(projectV2Permission)
-      .filter((permission): permission is V2PermissionView => permission !== null);
+  /**
+   * Opens a history-read scope and records the transcript as it stands.
+   *
+   * The returned ids are the merge's `held` set: a held message the snapshot no
+   * longer contains was deleted server-side. An optimistic prompt is excluded —
+   * the server has not admitted it yet, so its absence from the snapshot says
+   * nothing.
+   *
+   * @returns The message ids the client holds at the start of the read.
+   */
+  function beginHistoryReadScope(): readonly string[] {
+    liveTouchedMessageIds.clear();
+    return state.messageOrder.filter(
+      (messageId) => !state.optimisticMessageIds.includes(messageId),
+    );
+  }
+
+  /**
+   * Closes a history-read scope into the merge the commit reconciles against.
+   *
+   * @param held - The ids `beginHistoryReadScope` returned.
+   * @returns The merge.
+   */
+  function historyMerge(held: readonly string[]): V2HistoryMerge {
+    return { held, touched: [...liveTouchedMessageIds] };
+  }
+
+  /**
+   * Notes that a live event changed this message while a history read was open.
+   *
+   * Only APPLIED events count. A buffered delta has not reached the transcript
+   * yet: the commit takes the snapshot's copy and the replay appends the delta
+   * to it, which is the same text by a different route.
+   *
+   * @param event - The event being applied.
+   */
+  function noteLiveMutation(event: V2Event): void {
+    const assistantMessageId = assistantMessageIdOf(event);
+    if (assistantMessageId !== null) liveTouchedMessageIds.add(assistantMessageId);
   }
 
   /**
@@ -490,7 +547,7 @@ export function createV2ThreadController(
   }
 
   function applyEvent(event: V2Event, eventOrdinal: number): void {
-    dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-only" });
+    dispatch({ type: "v2_event", event, mode: "observe-only" });
     if (isAssistantMessageEvent(event)) {
       // Buffering is a property of the LIVE attempt's hydration. A failed or
       // superseded attempt no longer reports `hydrating`, so a dead hydration
@@ -499,42 +556,54 @@ export function createV2ThreadController(
         pipeline.buffer(event, eventOrdinal);
         return;
       }
-      dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-and-apply" });
+      noteLiveMutation(event);
+      dispatch({ type: "v2_event", event, mode: "observe-and-apply" });
       return;
     }
-    dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-and-apply" });
+    dispatch({ type: "v2_event", event, mode: "observe-and-apply" });
     applyAdmissionEvent(event);
     applyAutoApproveEvent(event);
     applyCompactionLifecycleEvent(event);
   }
 
   /**
-   * The three append-only pending sets, stamped with the ordinal that dates
-   * the fetch that produced them.
+   * The three append-only pending sets, with the ids the client held when each
+   * read started.
    */
   type V2AuxiliarySnapshot = {
-    readonly requestOrdinal: number;
-    readonly inbox: readonly V2InboxRecord[];
-    readonly permissions: readonly PermissionRequest[];
-    readonly forms: readonly FormInfo[];
+    readonly held: {
+      readonly inbox: readonly string[];
+      readonly permissions: readonly string[];
+      readonly forms: readonly string[];
+    };
+    /** The server's answer per kind. `null` means that read FAILED. */
+    readonly inbox: readonly V2InboxRecord[] | null;
+    readonly permissions: readonly PermissionRequest[] | null;
+    readonly forms: readonly FormInfo[] | null;
   };
 
   /**
    * Fetches the pending sets that only the load-time snapshot and the live
    * events otherwise know about: inbox records, permission requests, forms.
    *
-   * `requestOrdinal` is captured BEFORE the fetches on purpose. The reducer
-   * discards a snapshot older than the newest applied event, so a slow response
-   * can never overwrite fresher event-derived state.
+   * The ids each list held are captured BEFORE the fetches. An entry created
+   * while a read is in flight is therefore absent from `held`, and a snapshot
+   * that has not caught up with it cannot delete it.
    *
-   * Each list degrades to empty independently rather than failing the batch: a
+   * Each list degrades INDEPENDENTLY to `null` rather than failing the batch: a
    * permissions endpoint that is briefly unavailable must not also cost the
-   * reader their forms.
+   * reader their forms, and must not be reported as "no pending permissions".
+   * A failed read leaves the entries already held in place; only availability
+   * moves.
    */
   async function loadAuxiliary(
     currentGeneration: OpenCodeV2Generation,
   ): Promise<V2AuxiliarySnapshot> {
-    const requestOrdinal = pipeline.currentOrdinal();
+    const held: V2AuxiliarySnapshot["held"] = {
+      inbox: Object.keys(state.inboxById),
+      permissions: state.permissions.map((request) => request.id),
+      forms: state.forms.map((form) => form.id),
+    };
     const [inbox, permissions, forms] = await Promise.all([
       currentGeneration.operations
         .inboxList({ sessionID: client.sessionId })
@@ -543,7 +612,7 @@ export function createV2ThreadController(
             kind: "inbox",
             errorType: cause instanceof Error ? cause.name : typeof cause,
           });
-          return [] as SessionInboxInfo[];
+          return null;
         }),
       currentGeneration.operations
         .permissionList({ sessionID: client.sessionId })
@@ -552,7 +621,7 @@ export function createV2ThreadController(
             kind: "permission",
             errorType: cause instanceof Error ? cause.name : typeof cause,
           });
-          return [] as PermissionRequest[];
+          return null;
         }),
       currentGeneration.operations
         .formList({ sessionID: client.sessionId })
@@ -561,16 +630,24 @@ export function createV2ThreadController(
             kind: "form",
             errorType: cause instanceof Error ? cause.name : typeof cause,
           });
-          return [] as FormInfo[];
+          return null;
         }),
     ]);
     return {
-      requestOrdinal,
-      inbox: inbox.map((item) =>
-        item.type === "user"
-          ? inboxRecordFromUser(item)
-          : { id: item.id, sessionId: item.sessionID, type: item.type, delivery: item.delivery },
-      ),
+      held,
+      inbox:
+        inbox === null
+          ? null
+          : inbox.map((item) =>
+              item.type === "user"
+                ? inboxRecordFromUser(item)
+                : {
+                    id: item.id,
+                    sessionId: item.sessionID,
+                    type: item.type,
+                    delivery: item.delivery,
+                  },
+            ),
       permissions,
       forms,
     };
@@ -589,17 +666,21 @@ export function createV2ThreadController(
     dispatch({
       type: "inbox_hydrated",
       records: snapshot.inbox,
-      requestOrdinal: snapshot.requestOrdinal,
+      held: snapshot.held.inbox,
     });
     dispatch({
       type: "permissions_hydrated",
-      requests: snapshot.permissions.filter((request) => !answeredPermissions.has(request.id)),
-      requestOrdinal: snapshot.requestOrdinal,
+      requests:
+        snapshot.permissions === null
+          ? null
+          : snapshot.permissions.filter((request) => !answeredPermissions.has(request.id)),
+      held: snapshot.held.permissions,
     });
     dispatch({
       type: "forms_hydrated",
-      forms: snapshot.forms.filter((form) => !formReplies.has(form.id)),
-      requestOrdinal: snapshot.requestOrdinal,
+      forms:
+        snapshot.forms === null ? null : snapshot.forms.filter((form) => !formReplies.has(form.id)),
+      held: snapshot.held.forms,
     });
   }
 
@@ -642,17 +723,16 @@ export function createV2ThreadController(
         });
       dispatch({ type: "revert_recovery_cleared" });
     }
-    const historyRequestOrdinal = pipeline.currentOrdinal();
+    const held = beginHistoryReadScope();
+    const historyRequestOrdinal = pipeline.beginHistoryRead();
     const snapshot = await history.read(currentGeneration, live.signals.connectionSignal);
     if (!isLive(live)) return;
-    lastHistorySnapshot = snapshot;
-    history.commit(snapshot, currentPermissions());
+    history.commit(snapshot, historyMerge(held));
     const buffered = pipeline.bufferedSince(historyRequestOrdinal);
     for (const entry of buffered)
       dispatch({
         type: "v2_event",
         event: entry.event,
-        ordinal: entry.ordinal,
         mode: "observe-and-apply",
       });
     pipeline.clearBuffer();
@@ -663,10 +743,6 @@ export function createV2ThreadController(
     const auxiliary = await loadAuxiliary(currentGeneration);
     if (!isLive(live)) return;
     applyAuxiliary(auxiliary);
-    // History was projected before the auxiliary permission snapshot arrived.
-    // Reproject once so tool calls restored from history carry their approval
-    // gate instead of appearing permanently stuck.
-    history.commit(snapshot, currentPermissions());
     dispatch({ type: "load_completed" });
   }
 
@@ -692,15 +768,10 @@ export function createV2ThreadController(
     try {
       const snapshot = await loadAuxiliary(currentGeneration);
       if (!isLive(live)) return;
-      const previous = state;
+      // The pending sets are their own state. Nothing links a permission to a
+      // tool PART, so a re-sync does not touch the transcript: reprojecting it
+      // here used to rebuild every message on every poll.
       applyAuxiliary(snapshot);
-      // The reducer hands back the SAME array when nothing changed, so identity
-      // comparison is the honest "did anything actually move" test. Reprojecting
-      // the transcript rebuilds every message, so it must run only when a
-      // permission really appeared or vanished — otherwise a permission-gated
-      // tool card would keep reading as permanently stuck.
-      if (state.permissions === previous.permissions || lastHistorySnapshot === null) return;
-      history.commit(lastHistorySnapshot, currentPermissions());
     } catch (error) {
       logger.warn("opencode", "runtime.auxiliary_resync_failed", {
         errorType: error instanceof Error ? error.name : typeof error,
@@ -844,9 +915,9 @@ export function createV2ThreadController(
         sessionID: client.sessionId,
       });
       dispatch({ type: "session_hydrated", session });
+      const held = beginHistoryReadScope();
       const snapshot = await history.read(requireGeneration());
-      lastHistorySnapshot = snapshot;
-      history.commit(snapshot, currentPermissions());
+      history.commit(snapshot, historyMerge(held));
       dispatch({ type: "load_completed" });
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 refresh failed");
@@ -900,9 +971,9 @@ export function createV2ThreadController(
       const verified = await requireGeneration().operations.sessionGet({
         sessionID: client.sessionId,
       });
+      const held = beginHistoryReadScope();
       const snapshot = await history.read(requireGeneration());
-      lastHistorySnapshot = snapshot;
-      history.commit(snapshot, currentPermissions());
+      history.commit(snapshot, historyMerge(held));
       if (verified.revert !== undefined) throw new Error("staged revert remains");
       dispatch({ type: "revert_recovery_cleared" });
     } catch (error) {

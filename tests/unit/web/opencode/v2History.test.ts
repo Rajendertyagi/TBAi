@@ -30,7 +30,6 @@ function repositoryState(projection: ReturnType<typeof projectV2History>): V2Thr
     occupancyTokens: null,
     revertRecovery: { type: "none" },
     eventIdentity: {
-      nextOrdinal: 0,
       recentObservedEventIds: [],
       recentAppliedEventIds: [],
       durableSequenceByAggregate: {},
@@ -46,6 +45,7 @@ function repositoryState(projection: ReturnType<typeof projectV2History>): V2Thr
     permissions: [],
     forms: [],
     inboxById: {},
+    auxiliary: { inbox: "current", permissions: "current", forms: "current" },
     usage: null,
     optimisticMessageIds: [],
     answeredPermissionIds: [],
@@ -79,7 +79,7 @@ describe("native V2 history projection", () => {
     );
     expect(snapshot.messages.map((item) => item.id)).toEqual(["m1", "m2", "m3"]);
     expect(snapshot.pages).toBe(2);
-    const projection = projectV2History(snapshot, []);
+    const projection = projectV2History(snapshot);
     expect(projection.messageOrder).toEqual(["m1", "m2", "m3"]);
     expect(projection.messages[0]?.parts[0]).toMatchObject({ kind: "text", value: "first" });
   });
@@ -106,7 +106,7 @@ describe("native V2 history projection", () => {
         },
       ],
     };
-    const projection = projectV2History({ messages: [assistantMessage], pages: 1 }, []);
+    const projection = projectV2History({ messages: [assistantMessage], pages: 1 });
     expect(projection.messages[0]?.parts[0]).toMatchObject({
       kind: "tool",
       output: [{ type: "text", text: "Edit applied successfully." }],
@@ -132,7 +132,7 @@ describe("native V2 history projection", () => {
         },
       ],
     };
-    const projection = projectV2History({ messages: [assistantMessage], pages: 1 }, []);
+    const projection = projectV2History({ messages: [assistantMessage], pages: 1 });
     expect(projection.messages[0]?.parts[0]).toMatchObject({
       input: { text: '{"filePath":"a.txt"}' },
       output: undefined,
@@ -162,7 +162,7 @@ describe("native V2 history projection", () => {
         },
       ],
     };
-    const projection = projectV2History({ messages: [assistantMessage], pages: 1 }, []);
+    const projection = projectV2History({ messages: [assistantMessage], pages: 1 });
     expect(projection.messages[0]?.parts[0]).toMatchObject({
       output: {
         error: "File not found",
@@ -179,7 +179,7 @@ describe("native V2 history projection", () => {
       text: "System history text",
       time: { created: 1 },
     };
-    const projection = projectV2History({ messages: [systemMessage], pages: 1 }, []);
+    const projection = projectV2History({ messages: [systemMessage], pages: 1 });
     expect(projection.messages[0]).toMatchObject({
       role: "system",
       parts: [{ kind: "text", value: "System history text" }],
@@ -203,7 +203,7 @@ describe("native V2 history projection", () => {
       },
       time: { created: 2, completed: 3 },
     };
-    const projection = projectV2History({ messages: [shellMessage], pages: 1 }, []);
+    const projection = projectV2History({ messages: [shellMessage], pages: 1 });
     expect(projection.messages[0]).toMatchObject({
       role: "system",
       // Native text projection preserves the command and output in source order.
@@ -219,7 +219,7 @@ describe("native V2 history projection", () => {
       text: "System history text",
       time: { created: 1 },
     };
-    const projection = projectV2History({ messages: [systemMessage], pages: 1 }, []);
+    const projection = projectV2History({ messages: [systemMessage], pages: 1 });
     const repositoryItems = projectV2RepositoryItems(repositoryState(projection));
     const projectedMessage = repositoryItems[0]?.message;
     expect(projectedMessage).toMatchObject({
@@ -281,25 +281,25 @@ describe("tool timing from refreshed history", () => {
   }
 
   it("maps the tool part's own clock onto the projected timing", () => {
-    const projection = projectV2History(
-      { messages: [assistantWithTool({ created: 1000, ran: 1500, completed: 2600 })], pages: 1 },
-      [],
-    );
+    const projection = projectV2History({
+      messages: [assistantWithTool({ created: 1000, ran: 1500, completed: 2600 })],
+      pages: 1,
+    });
     // created, NOT ran: a gated tool's approval wait is part of what the reader saw.
     expect(firstPart(projection)?.timing).toEqual({ startedAt: 1000, completedAt: 2600 });
   });
 
   it("leaves completedAt off while the call is still running", () => {
     // An absent completion is what makes the library tick rather than freeze.
-    const projection = projectV2History(
-      { messages: [assistantWithTool({ created: 1000 })], pages: 1 },
-      [],
-    );
+    const projection = projectV2History({
+      messages: [assistantWithTool({ created: 1000 })],
+      pages: 1,
+    });
     expect(firstPart(projection)?.timing).toEqual({ startedAt: 1000 });
   });
 
   it("records no timing when the server reported no time at all", () => {
-    const projection = projectV2History({ messages: [assistantWithTool(undefined)], pages: 1 }, []);
+    const projection = projectV2History({ messages: [assistantWithTool(undefined)], pages: 1 });
     expect(firstPart(projection)?.timing).toBeUndefined();
   });
 });

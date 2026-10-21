@@ -5,6 +5,7 @@ import { HeartCrack, HeartHandshake, HeartOff, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { pendingSetNotice } from "./auxiliaryNotice";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 
 type HeartState = "error" | "off" | "working" | "idle";
@@ -69,6 +70,9 @@ export function OpenCodeStatus({
       setArmed(true);
     }
   };
+  // Only once the load is ready: before the first read finishes, "unavailable"
+  // means "not read yet", which is the loading state and not news.
+  const pendingNotice = loadState === "ready" ? pendingSetNotice(state.auxiliary) : null;
   const heartNode = (
     <Popover>
       <PopoverTrigger asChild>
@@ -97,6 +101,7 @@ export function OpenCodeStatus({
             <dd className="break-all font-mono text-xs">{state.session?.id ?? extras.sessionId}</dd>
           </div>
         </dl>
+        {pendingNotice && <p className="mt-2 text-xs text-muted-foreground">{pendingNotice}</p>}
         {errorDetail && (
           <p role="alert" className="mt-2 text-xs text-destructive">
             {errorDetail}

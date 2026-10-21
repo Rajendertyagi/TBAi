@@ -1,20 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import type { SessionMessagesResponse, V2Event } from "@opencode/client";
 import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
   ASSISTANT_TOOL_MESSAGE,
   EVENT_INBOX_ID,
   HTTP_INBOX_ID,
-  LIVE_ASSISTANT_MESSAGE_ID,
   LOCAL_MESSAGE_ID,
-  PERMISSION,
   SERVER_VERSION,
   SESSION_ID,
   USER_MESSAGE,
   createClient,
   createGeneration,
   createRejectingAfterFirstClient,
-  deferred,
   inboxEvent,
   waitForState,
 } from "@web/testing/opencode/v2ThreadControllerHarness";
@@ -41,6 +37,9 @@ import {
  * `test`) takes over. A baseline test that survives its own fix is a finding
  * that was not really fixed.
  *
+ * H2's pin and its helper were deleted in Phase 4, with the finding, and M10's
+ * went with its fix. M3's remains: the finding is still open.
+ *
  * ## WHAT "PASSES TODAY" MEANS HERE
  *
  * These are not endorsements. A test that says "the assistant's text is
@@ -58,69 +57,7 @@ import {
  * the stream is guaranteed to have a waiter by the time the test fails it.
  */
 
-/** The empty page the harness serves when a test does not supply one. */
-const EMPTY_PAGE: SessionMessagesResponse = { data: [], cursor: {} };
-
-/**
- * A delta the assistant streamed while the runtime was still hydrating.
- *
- * `sessionID` is present because the real V2 event carries it, and the
- * reducer's session filter reads it: an event without one BYPASSES the filter
- * instead of passing it, so omitting it would make the test exercise a shape
- * the server never sends.
- */
-function hydrationTimeDelta(id: string, delta: string): V2Event {
-  return {
-    id,
-    created: 10,
-    type: "session.text.delta",
-    data: {
-      sessionID: SESSION_ID,
-      assistantMessageID: LIVE_ASSISTANT_MESSAGE_ID,
-      ordinal: 0,
-      delta,
-    },
-  };
-}
-
-/** Waits until the controller reports it is hydrating. */
-async function waitForHydration(controller: ReturnType<typeof createV2ThreadController>) {
-  await waitForState(controller, (state) => state.load.type === "loading");
-}
-
 describe("baseline: OpenCode V2 controller behaviour today", () => {
-  describe("H2 — an event received during hydration is erased", () => {
-    it("applies the delta during hydration and then loses it to the reprojection", async () => {
-      // The history read is held open, so the delta arrives while the runtime is
-      // still hydrating and is buffered rather than applied.
-      const history = deferred<SessionMessagesResponse>();
-      const generation = createGeneration(1, {
-        historyList: () => history.promise,
-      });
-      const client = createClient([generation]);
-      const controller = createV2ThreadController(client);
-
-      try {
-        void controller.load().catch(() => undefined);
-        await waitForHydration(controller);
-
-        generation.events.emit(hydrationTimeDelta("evt_h2_delta", "streamed during hydration"));
-        await new Promise((resolve) => setTimeout(resolve, 0));
-
-        history.resolve(EMPTY_PAGE);
-        await waitForState(controller, (state) => state.load.type === "ready");
-        await new Promise((resolve) => setTimeout(resolve, 0));
-
-        // PINNED DEFECT (H2): the delta was applied and then discarded by the
-        // second history projection, so the transcript has no trace of it.
-        expect(controller.getState().messages[LIVE_ASSISTANT_MESSAGE_ID]).toBeUndefined();
-        expect(controller.getState().messageOrder).not.toContain(LIVE_ASSISTANT_MESSAGE_ID);
-      } finally {
-        controller.dispose();
-      }
-    });
-  });
-
   /**
    * The control that proves the ceiling was never the broken part.
    *
@@ -191,59 +128,6 @@ describe("baseline: OpenCode V2 controller behaviour today", () => {
         await controller.reconcilePendingPrompt(LOCAL_MESSAGE_ID);
         await sending;
         expect(settled).toBe(true);
-      } finally {
-        controller.dispose();
-      }
-    });
-  });
-
-  describe("M10 — a failed auxiliary read clears the live permission", () => {
-    it("removes the pending permission when the permission list read fails", async () => {
-      let call = 0;
-      const generation = createGeneration(1, {
-        permissionList: async () => {
-          call += 1;
-          if (call === 1) return [PERMISSION];
-          throw new Error("permission list unavailable (503)");
-        },
-      });
-      const client = createClient([generation]);
-      const controller = createV2ThreadController(client);
-
-      try {
-        await controller.awaitReady();
-        expect(controller.getState().permissions).toEqual([PERMISSION]);
-
-        await controller.resyncAuxiliary();
-        await new Promise((r) => setTimeout(r, 10));
-
-        // PINNED DEFECT (M10): a failed read is indistinguishable from an
-        // authoritative empty list, so the pending permission disappears.
-        expect(controller.getState().permissions).toEqual([]);
-      } finally {
-        controller.dispose();
-      }
-    });
-
-    it("CONTROL: an authoritative empty list clears it too, so the two must be told apart", async () => {
-      let call = 0;
-      const generation = createGeneration(1, {
-        permissionList: async () => {
-          call += 1;
-          return call === 1 ? [PERMISSION] : [];
-        },
-      });
-      const client = createClient([generation]);
-      const controller = createV2ThreadController(client);
-
-      try {
-        await controller.awaitReady();
-        expect(controller.getState().permissions).toEqual([PERMISSION]);
-
-        await controller.resyncAuxiliary();
-        await new Promise((r) => setTimeout(r, 10));
-
-        expect(controller.getState().permissions).toEqual([]);
       } finally {
         controller.dispose();
       }

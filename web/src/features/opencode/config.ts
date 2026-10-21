@@ -13,7 +13,15 @@ export const OPENCODE_SESSION_HEADER = "x-tbai-session";
 /** Bounded wait for session init before surfacing a retry affordance. */
 export const OPENCODE_INIT_TIMEOUT_MS = 15_000;
 export const OPENCODE_V2_HISTORY_PAGE_SIZE = 100;
-export const OPENCODE_V2_EVENT_BUFFER_LIMIT = 512;
+/**
+ * The number of DISTINCT events the hydration buffer will hold.
+ *
+ * Streamed deltas are coalesced per streaming target on arrival, so this bounds
+ * "how many separate things happened during one read", not "how many tokens
+ * arrived". It is a backstop: reaching it drops the oldest entries rather than
+ * abandoning the read.
+ */
+export const OPENCODE_V2_EVENT_BUFFER_LIMIT = 4096;
 export const OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256;
 export const OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS = 250;
 export const OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000;

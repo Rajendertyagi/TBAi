@@ -18,7 +18,6 @@ const state: V2ThreadState = {
   occupancyTokens: null,
   revertRecovery: { type: "none" },
   eventIdentity: {
-    nextOrdinal: 0,
     recentObservedEventIds: [],
     recentAppliedEventIds: [],
     durableSequenceByAggregate: {},
@@ -34,6 +33,7 @@ const state: V2ThreadState = {
   permissions: [],
   forms: [],
   inboxById: {},
+  auxiliary: { inbox: "current", permissions: "current", forms: "current" },
   usage: null,
   optimisticMessageIds: [],
   answeredPermissionIds: [],

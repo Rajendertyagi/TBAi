@@ -68,6 +68,34 @@ export function buildOpenCodeThinkingOptions(
 }
 
 /**
+ * Reads the capabilities payload, turning a non-2xx response into an error.
+ *
+ * A failed fetch must never be read as "this install has no models": the body of
+ * a 5xx proxied response is an `{ error }` object, and parsing it as a catalogue
+ * would populate the picker with an authoritative-looking empty list. The
+ * caller's catch keeps the previous lists, which is the honest outcome.
+ *
+ * @param response - The capabilities response.
+ * @returns The parsed capabilities.
+ * @throws Error carrying the server's message, or `HTTP <status>` when the body
+ *   is not JSON.
+ */
+export async function readOpenCodeCapabilities(response: Response): Promise<OpenCodeCapabilities> {
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const body: unknown = await response.json();
+      if (body && typeof body === "object" && "error" in body && typeof body.error === "string")
+        detail = body.error;
+    } catch {
+      // Not a JSON error envelope; the status is all we have.
+    }
+    throw new Error(detail ?? `HTTP ${response.status}`);
+  }
+  return (await response.json()) as OpenCodeCapabilities;
+}
+
+/**
  * Live-queries the managed OpenCode server for its available agents and models.
  * Pass `enabled = false` (e.g. when the Direct engine is selected) to skip the
  * request entirely so the server is not started unnecessarily. Every value comes
@@ -102,7 +130,7 @@ export function useOpenCodeCapabilities(enabled = true) {
     setIsLoading(true);
     setError(null);
     apiFetch("/api/opencode/capabilities", { signal: controller.signal })
-      .then((r) => r.json())
+      .then(readOpenCodeCapabilities)
       .then((data: OpenCodeCapabilities) => {
         if (cancelled) return;
         setAgents(data.agents ?? []);

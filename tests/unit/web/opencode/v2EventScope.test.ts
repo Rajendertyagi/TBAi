@@ -42,7 +42,7 @@ function textDelta(directory?: string): V2Event {
 describe("V2 event scope", () => {
   it("does not apply an event that names another workspace", () => {
     const state = createInitialV2ThreadState(SESSION_ID, SUBSCRIBED);
-    const next = reduceV2Event(state, textDelta("D:\\workspace\\somebody-elses"), 1);
+    const next = reduceV2Event(state, textDelta("D:\\workspace\\somebody-elses"));
 
     expect(next.messages).toEqual({});
     expect(next.messageOrder).toEqual([]);
@@ -52,7 +52,7 @@ describe("V2 event scope", () => {
 
   it("applies an event that names the subscribed workspace", () => {
     const state = createInitialV2ThreadState(SESSION_ID, SUBSCRIBED);
-    const next = reduceV2Event(state, textDelta(SUBSCRIBED), 1);
+    const next = reduceV2Event(state, textDelta(SUBSCRIBED));
 
     expect(next.messages[ASSISTANT_MESSAGE_ID]).toBeDefined();
     expect(next.diagnosticCount).toBe(0);
@@ -60,7 +60,7 @@ describe("V2 event scope", () => {
 
   it("keeps an event that does not say where it happened", () => {
     const state = createInitialV2ThreadState(SESSION_ID, SUBSCRIBED);
-    const next = reduceV2Event(state, textDelta(), 1);
+    const next = reduceV2Event(state, textDelta());
 
     expect(next.messages[ASSISTANT_MESSAGE_ID]).toBeDefined();
     expect(next.diagnosticCount).toBe(0);
@@ -68,7 +68,7 @@ describe("V2 event scope", () => {
 
   it("keeps every event when no scope is known, because nothing can be compared", () => {
     const state = createInitialV2ThreadState(SESSION_ID);
-    const next = reduceV2Event(state, textDelta("D:\\workspace\\somebody-elses"), 1);
+    const next = reduceV2Event(state, textDelta("D:\\workspace\\somebody-elses"));
 
     expect(next.messages[ASSISTANT_MESSAGE_ID]).toBeDefined();
     expect(next.diagnosticCount).toBe(0);
@@ -77,7 +77,7 @@ describe("V2 event scope", () => {
   it("treats one directory spelled two ways as the same directory", () => {
     const state = createInitialV2ThreadState(SESSION_ID, "D:\\workspace\\subscribed");
     // A trailing separator and a different case are the same Windows path.
-    const next = reduceV2Event(state, textDelta("d:/workspace/subscribed/"), 1);
+    const next = reduceV2Event(state, textDelta("d:/workspace/subscribed/"));
 
     expect(next.messages[ASSISTANT_MESSAGE_ID]).toBeDefined();
     expect(next.diagnosticCount).toBe(0);
@@ -99,7 +99,7 @@ describe("V2 event scope", () => {
       },
     });
 
-    const next = reduceV2Event(hydrated, textDelta("/workspace/from-the-server"), 1);
+    const next = reduceV2Event(hydrated, textDelta("/workspace/from-the-server"));
     expect(next.messages[ASSISTANT_MESSAGE_ID]).toBeDefined();
     expect(next.diagnosticCount).toBe(0);
   });

@@ -14,28 +14,27 @@
  * - **The event buffer.** Events that arrive while a read is in flight are
  *   held by the event pipeline, and the controller decides when they are
  *   replayed.
- * - **The current permissions.** The projection needs them - a tool call
- *   restored from history carries its approval gate - and they are read from
- *   the domain state by the caller, not by the loader.
+ * - **The merge rule.** The loader transports the ids the commit reconciles
+ *   against - which messages the client held, and which a live event touched -
+ *   and the reducer decides what those ids mean.
  *
  * ## WHY THE COMMIT IS HERE AND NOT IN THE CALLER
  *
- * Committing a history projection is three things that always happen
- * together: project the snapshot, and dispatch it as one `history_loaded`
- * action. Doing that in one place is what makes the commit mode - replace or
- * merge - a property of the commit rather than of each call site. Phase 4 of
- * the remediation plan adds the merge mode, and it is a change to this
- * module alone.
+ * Committing a history projection is two things that always happen together:
+ * project the snapshot, and dispatch it as one `history_loaded` action. Doing
+ * that in one place is what makes the merge inputs a property of the commit
+ * rather than of each call site.
  *
  * This module was extracted from `v2ThreadController.ts` as part of Phase 2 of
  * the OpenCode runtime remediation plan. The extraction is behaviour
- * preserving: the same read, the same projection, the same dispatch.
+ * preserving: the same read, the same projection, the same dispatch. Phase 4
+ * replaced the outright-replace commit with the reconciling one, which is why
+ * a permission list no longer triggers a reprojection of the transcript.
  */
 
 import type { OpenCodeV2Generation } from "../v2Client";
 import { loadV2History, projectV2History } from "../v2History";
-import type { V2PermissionView } from "../v2Permissions";
-import type { V2HistorySnapshot, V2ThreadAction } from "../v2Types";
+import type { V2HistoryMerge, V2HistorySnapshot, V2ThreadAction } from "../v2Types";
 
 /** What the loader needs from the controller. */
 export interface SessionMessageLoaderHost {
@@ -54,12 +53,12 @@ export interface SessionMessageLoader {
    */
   read(generation: OpenCodeV2Generation, signal?: AbortSignal): Promise<V2HistorySnapshot>;
   /**
-   * Projects a snapshot against the current permissions and commits it.
+   * Projects a snapshot and commits it.
    *
    * @param snapshot - The snapshot to commit.
-   * @param permissions - The permissions the projection links tool calls to.
+   * @param merge - The ids the commit reconciles against.
    */
-  commit(snapshot: V2HistorySnapshot, permissions: readonly V2PermissionView[]): void;
+  commit(snapshot: V2HistorySnapshot, merge: V2HistoryMerge): void;
 }
 
 /**
@@ -76,13 +75,14 @@ export function createSessionMessageLoader(host: SessionMessageLoaderHost): Sess
     return loadV2History(generation.history, signal ? { signal } : {});
   }
 
-  function commit(snapshot: V2HistorySnapshot, permissions: readonly V2PermissionView[]): void {
-    const projection = projectV2History(snapshot, permissions);
+  function commit(snapshot: V2HistorySnapshot, merge: V2HistoryMerge): void {
+    const projection = projectV2History(snapshot);
     host.dispatch({
       type: "history_loaded",
       messages: projection.messages,
       messageOrder: projection.messageOrder,
       pages: projection.pages,
+      merge,
     });
   }
 

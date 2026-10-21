@@ -24,22 +24,27 @@
  *
  * ## THE ORDINAL
  *
- * Every event carries an ordinal, and the ordinal is what makes an ordering
- * decision possible at all: the reducer discards a snapshot older than the
- * newest applied event, and the history loader uses the ordinal to tell which
- * buffered events arrived after the read it started. It is a local counter -
- * it says nothing about the server's clock.
+ * Every event carries an ordinal: a local counter over the events this client
+ * has applied, which says nothing about the server's clock. It answers exactly
+ * one question — which of the buffered events arrived after the history read
+ * that is in flight. Ordering a *snapshot* against live events is done on
+ * identity, never on an ordinal: the snapshot and the events are reconciled by
+ * the ids the client held and the ids the events touched, because a snapshot
+ * has no ordinal of its own and two reads can be in flight at once.
  *
  * ## THE BUFFER
  *
  * Events that arrive while the history is loading are held, because a
  * projection that replaces the transcript would otherwise erase them. The
- * buffer is drained by the loader, in ordinal order.
+ * controller drains the buffer, in ordinal order, after it commits the
+ * snapshot.
  *
- * Its overflow handling is reproduced here exactly as it was: the filter
- * that drops assistant events is vestigial, and Phase 4 of the remediation
- * plan is where it is replaced with a plain truncation. Moving the code must
- * not quietly fix it.
+ * Adjacent deltas for one streaming target are coalesced on arrival, so a fast
+ * stream costs one entry per part rather than one per token. Only deltas that
+ * arrived after the read started may be folded together: everything before the
+ * boundary is already in the snapshot, and merging across it would replay that
+ * text twice. `OPENCODE_V2_EVENT_BUFFER_LIMIT` is the backstop for that many
+ * *distinct* events arriving during a single read, not the mechanism.
  *
  * ## THE RETRY BUDGET
  *
@@ -78,7 +83,8 @@
  * This module was extracted from `v2ThreadController.ts` as part of Phase 2 of
  * the OpenCode runtime remediation plan; Phase 3 made its retry scheduling
  * attempt-scoped (it is told which attempt failed, and refuses to act on one
- * that has been superseded).
+ * that has been superseded); Phase 4 gave the buffer its read boundary and its
+ * coalescing (M5).
  */
 
 import {
@@ -183,6 +189,53 @@ export interface BufferedEvent {
 }
 
 /**
+ * Coalesces `next` into the delta it directly follows, when both append to the
+ * same streaming target.
+ *
+ * Concatenating two adjacent delta texts is indistinguishable from applying
+ * them in turn, which is what makes this a representation change and not a
+ * change of meaning. Two events with different targets, or a non-delta between
+ * them, are left alone: the buffer must stay in ordinal order.
+ *
+ * @param previous - The buffered event immediately before `next`.
+ * @param next - The arriving event.
+ * @returns The merged event, or null when the two are not one target's deltas.
+ */
+function coalescedDelta(previous: V2Event, next: V2Event): V2Event | null {
+  switch (previous.type) {
+    case "session.text.delta": {
+      if (next.type !== "session.text.delta") return null;
+      if (
+        next.data.assistantMessageID !== previous.data.assistantMessageID ||
+        next.data.ordinal !== previous.data.ordinal
+      )
+        return null;
+      return { ...next, data: { ...next.data, delta: previous.data.delta + next.data.delta } };
+    }
+    case "session.reasoning.delta": {
+      if (next.type !== "session.reasoning.delta") return null;
+      if (
+        next.data.assistantMessageID !== previous.data.assistantMessageID ||
+        next.data.ordinal !== previous.data.ordinal
+      )
+        return null;
+      return { ...next, data: { ...next.data, delta: previous.data.delta + next.data.delta } };
+    }
+    case "session.tool.input.delta": {
+      if (next.type !== "session.tool.input.delta") return null;
+      if (
+        next.data.assistantMessageID !== previous.data.assistantMessageID ||
+        next.data.id !== previous.data.id
+      )
+        return null;
+      return { ...next, data: { ...next.data, delta: previous.data.delta + next.data.delta } };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
  * What the pipeline needs from the controller.
  *
  * The pipeline owns the stream's lifecycle and nothing else, so everything it
@@ -265,17 +318,22 @@ export interface EventPipeline {
    */
   scheduleReconnect(attempt: Attempt, error: V2SafeError): void;
   /**
-   * The next ordinal.
+   * The next ordinal, allocated as the stream is consumed.
    *
    * @returns The ordinal of the event that is about to be applied.
    */
   nextOrdinal(): number;
   /**
-   * The ordinal of the most recently applied event.
+   * Samples the ordinal a history read starts at, and marks it the boundary the
+   * buffer coalesces against.
    *
-   * @returns The current ordinal.
+   * One call answers both questions, so the events that count as "arrived
+   * during this read" and the deltas that may be folded together can never
+   * disagree.
+   *
+   * @returns The ordinal the read starts at.
    */
-  currentOrdinal(): number;
+  beginHistoryRead(): number;
   /**
    * Holds an event that arrived while the history was loading.
    *
@@ -339,6 +397,11 @@ export interface EventPipeline {
 export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   let ordinal = 0;
   let eventBuffer: BufferedEvent[] = [];
+  /**
+   * The ordinal of the newest history read; deltas that date at or before it
+   * are never coalesced, because the snapshot already carries their text.
+   */
+  let coalesceFromOrdinal = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   /** True once a failure has arrived with no automatic retries left. */
@@ -352,8 +415,7 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
         const result = await generation.events.next();
         if (result.done) throw new Error("OpenCode V2 event stream closed");
         if (host.isDisposed || !host.isLive(attempt)) return;
-        const eventOrdinal = ++ordinal;
-        host.applyEvent(result.value, eventOrdinal);
+        host.applyEvent(result.value, nextOrdinal());
       }
     } catch (error) {
       if (host.isDisposed || !host.isLive(attempt)) return;
@@ -409,16 +471,34 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     return ordinal;
   }
 
-  function currentOrdinal(): number {
+  function beginHistoryRead(): number {
+    coalesceFromOrdinal = ordinal;
     return ordinal;
   }
 
   function buffer(event: V2Event, eventOrdinal: number): void {
+    // Adjacent deltas for one part collapse into the entry they follow, so a
+    // fast stream costs one entry per part rather than one per token. Only an
+    // entry that arrived AFTER the read started is a coalescing target: an
+    // earlier one is dated before the boundary, its text is already in the
+    // snapshot, and folding later text into it would replay that text twice.
+    // The merged entry keeps the LATER ordinal for the same reason —
+    // `bufferedSince` selects by ordinal, and the newest text must survive.
+    const last = eventBuffer[eventBuffer.length - 1];
+    if (last !== undefined && last.ordinal > coalesceFromOrdinal) {
+      const merged = coalescedDelta(last.event, event);
+      if (merged !== null) {
+        eventBuffer[eventBuffer.length - 1] = { ordinal: eventOrdinal, event: merged };
+        return;
+      }
+    }
     eventBuffer.push({ ordinal: eventOrdinal, event });
+    // The backstop, not the mechanism: coalescing is what keeps a long stream
+    // from filling this. Reaching the limit means that many DISTINCT events
+    // arrived during one read, and the oldest are dropped rather than the read
+    // being abandoned.
     if (eventBuffer.length > OPENCODE_V2_EVENT_BUFFER_LIMIT) {
-      eventBuffer = eventBuffer
-        .filter((entry) => !isAssistantMessageEvent(entry.event))
-        .slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);
+      eventBuffer = eventBuffer.slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);
     }
   }
 
@@ -456,7 +536,7 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     consume,
     scheduleReconnect,
     nextOrdinal,
-    currentOrdinal,
+    beginHistoryRead,
     buffer,
     bufferedSince,
     clearBuffer,

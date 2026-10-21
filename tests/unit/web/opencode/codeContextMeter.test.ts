@@ -166,7 +166,6 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     occupancyStale: false,
     revertRecovery: { type: "none" as const },
     eventIdentity: {
-      nextOrdinal: 0,
       recentObservedEventIds: [],
       recentAppliedEventIds: [],
       durableSequenceByAggregate: {},
@@ -182,6 +181,7 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     permissions: [],
     forms: [],
     inboxById: {},
+    auxiliary: { inbox: "current", permissions: "current", forms: "current" } as const,
     usage: { cost: 1.5, tokens: usage({ total: 900_000, input: 900_000, output: 1_000 }) },
     occupancyTokens: usage({ total: 900_000, input: 900_000, output: 1_000 }),
     optimisticMessageIds: [],
@@ -212,14 +212,10 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     // owns the translation, so a raw event passing through `reduceV2Event`
     // changes nothing. These cases document that split rather than asserting a
     // single-hop reaction that was never the design.
-    const raw = reduceV2Event(
-      base,
-      {
-        type: "session.compaction.ended",
-        data: { sessionID: "ses_1" },
-      } as never,
-      3,
-    );
+    const raw = reduceV2Event(base, {
+      type: "session.compaction.ended",
+      data: { sessionID: "ses_1" },
+    } as never);
     expect(raw.occupancyStale).toBe(false);
 
     // The action the controller dispatches for that same event does invalidate.
@@ -248,7 +244,7 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     // cumulative ledger, which still counts every pre-compaction round trip.
     // Clearing here repopulated the meter with exactly the traffic the
     // compaction was meant to remove. Only a per-response measurement clears it.
-    const after = reduceV2Event(reduceV2ThreadState(base, settle), usageEvent, 1);
+    const after = reduceV2Event(reduceV2ThreadState(base, settle), usageEvent);
     expect(after.occupancyStale).toBe(true);
     // The spend is still recorded - that part of the event is correct.
     expect(after.usage?.tokens.input).toBe(75_000);
@@ -264,7 +260,7 @@ describe("Code meter: after a compaction the reading is unknown", () => {
         tokens: usage({ total: 12_000, input: 11_500, output: 500 }),
       },
     } as never;
-    const after = reduceV2Event(reduceV2ThreadState(base, settle), response, 1);
+    const after = reduceV2Event(reduceV2ThreadState(base, settle), response);
     expect(after.occupancyStale).toBe(false);
     // And the numerator becomes the RESPONSE, not the ledger.
     expect(after.occupancyTokens?.input).toBe(11_500);

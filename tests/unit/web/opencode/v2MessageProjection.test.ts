@@ -34,7 +34,6 @@ describe("native V2 live tool projection", () => {
               input: { command: "bun --version" },
               output: null,
               status: "running" as const,
-              permissionId: null,
             },
           ],
           source: null,
@@ -101,7 +100,6 @@ describe("native V2 live tool projection", () => {
               input: { filePath: "a.ts" },
               output: [{ type: "text", text: "done" }],
               status: "complete" as const,
-              permissionId: null,
             },
           ],
           source,
@@ -136,7 +134,6 @@ describe("native V2 live tool projection", () => {
               output: [{ type: "text", text: "done" }],
               metadata: { files: [{ file: "a.ts", patch: "PATCH" }] },
               status: "complete" as const,
-              permissionId: null,
             },
           ],
           source: null,
@@ -184,7 +181,6 @@ describe("native V2 live tool projection", () => {
               input: { command: "bun --version" },
               output: null,
               status: "running" as const,
-              permissionId: null,
             },
           ],
           source: null,
@@ -257,7 +253,7 @@ describe("native V2 edit metadata through a reload", () => {
     };
 
     // Reload: snapshot -> normalized state -> assistant-ui repository item.
-    const history = projectV2History({ messages: [reloaded], pages: 1 }, []);
+    const history = projectV2History({ messages: [reloaded], pages: 1 });
     const state = {
       ...createInitialV2ThreadState(SESSION_ID),
       messages: Object.fromEntries(history.messages.map((message) => [message.id, message])),
@@ -327,7 +323,6 @@ describe("tool timing reaches the assistant-ui part", () => {
               input: { command: "bun --version" },
               output: "ok",
               status: "complete" as const,
-              permissionId: null,
               ...(timing === undefined ? {} : { timing }),
             },
           ],
@@ -390,7 +385,6 @@ describe("pending-change preview in the projected message metadata", () => {
             input: { filePath: "a.ts" },
             output: undefined,
             status: "running" as const,
-            permissionId: null,
           },
         ],
         source: null,
@@ -507,7 +501,6 @@ describe("the gate reads what the projection wrote", () => {
             input: { filePath: "a.ts" },
             output: undefined,
             status: "running" as const,
-            permissionId: null,
           },
         ],
         source: null,

@@ -11,7 +11,6 @@ const SESSION_ID = "ses_v2_events_test";
 const ASSISTANT_MESSAGE_ID = "msg_assistant_v2_events_test";
 const OPTIMISTIC_MESSAGE_ID = "msg_optimistic_v2_events_test";
 const INBOX_ID = "inbox_v2_events_test";
-const FIRST_ORDINAL = 1;
 
 const TOKEN_USAGE = {
   input: 10,
@@ -119,6 +118,7 @@ function initialReadyState() {
     messages: [],
     messageOrder: [],
     pages: 1,
+    merge: { held: [], touched: [] },
   });
   state = reduceV2ThreadState(state, { type: "load_completed" });
   state = reduceV2ThreadState(state, { type: "session_hydrated", session: SESSION });
@@ -228,8 +228,8 @@ describe("V2 tool lifecycle events", () => {
         },
       }),
     ];
-    for (const [index, event] of events.entries()) {
-      state = reduceV2Event(state, event, index + 1, "observe-and-apply");
+    for (const event of events) {
+      state = reduceV2Event(state, event, "observe-and-apply");
     }
 
     expect(state.messages[messageId]?.parts[0]).toMatchObject({
@@ -265,8 +265,8 @@ describe("V2 tool lifecycle events", () => {
       },
     });
 
-    state = reduceV2Event(state, started, 1, "observe-and-apply");
-    state = reduceV2Event(state, failed, 2, "observe-and-apply");
+    state = reduceV2Event(state, started, "observe-and-apply");
+    state = reduceV2Event(state, failed, "observe-and-apply");
 
     expect(state.messages[messageId]?.parts[0]).toMatchObject({
       kind: "tool",
@@ -344,8 +344,8 @@ describe("V2 tool lifecycle events", () => {
         },
       }),
     ];
-    for (const [index, event] of events.entries()) {
-      state = reduceV2Event(state, event, index + 1, "observe-and-apply");
+    for (const event of events) {
+      state = reduceV2Event(state, event, "observe-and-apply");
     }
 
     expect(state.messages[messageId]?.parts).toEqual(
@@ -389,8 +389,8 @@ describe("V2 tool lifecycle events", () => {
         error: { type: "provider.error", message: "Step failed" },
       },
     });
-    state = reduceV2Event(state, started, 1, "observe-and-apply");
-    state = reduceV2Event(state, failed, 2, "observe-and-apply");
+    state = reduceV2Event(state, started, "observe-and-apply");
+    state = reduceV2Event(state, failed, "observe-and-apply");
     expect(state.messages[messageId]?.parts[0]).toMatchObject({ kind: "step", status: "error" });
   });
 });
@@ -406,17 +406,17 @@ describe("V2 public event identity", () => {
       data: { sessionID: SESSION_ID, model: { id: "next-model", providerID: "test-provider" } },
     });
 
-    const observed = reduceV2Event(initial, event, FIRST_ORDINAL, "observe-only");
+    const observed = reduceV2Event(initial, event, "observe-only");
     expect(observed.model).toEqual(MODEL);
     expect(observed.eventIdentity.recentObservedEventIds).toEqual(["evt_model_selected"]);
     expect(observed.eventIdentity.recentAppliedEventIds).toEqual([]);
 
-    const applied = reduceV2Event(observed, event, FIRST_ORDINAL, "observe-and-apply");
+    const applied = reduceV2Event(observed, event, "observe-and-apply");
     expect(applied.model).toEqual(NEXT_MODEL);
     expect(applied.eventIdentity.recentAppliedEventIds).toEqual(["evt_model_selected"]);
     expect(applied.eventIdentity.durableSequenceByAggregate[SESSION_ID]).toBe(8);
 
-    const duplicate = reduceV2Event(applied, event, 2, "observe-and-apply");
+    const duplicate = reduceV2Event(applied, event, "observe-and-apply");
     expect(duplicate.eventIdentity.recentObservedEventIds).toEqual(["evt_model_selected"]);
     expect(duplicate.eventIdentity.recentAppliedEventIds).toEqual(["evt_model_selected"]);
   });
@@ -437,8 +437,8 @@ describe("V2 public event identity", () => {
       data: { sessionID: SESSION_ID, agent: "stale-agent" },
     });
     const initial = initialReadyState();
-    const afterFirst = reduceV2Event(initial, first, 1, "observe-and-apply");
-    const afterStale = reduceV2Event(afterFirst, stale, 2, "observe-and-apply");
+    const afterFirst = reduceV2Event(initial, first, "observe-and-apply");
+    const afterStale = reduceV2Event(afterFirst, stale, "observe-and-apply");
 
     expect(afterStale.agent).toBe("first-agent");
     expect(afterStale.eventIdentity.durableSequenceByAggregate[SESSION_ID]).toBe(4);
@@ -465,8 +465,8 @@ describe("V2 replay-only event exclusion", () => {
       data: { sessionID: SESSION_ID, messageID: ASSISTANT_MESSAGE_ID, content: [] },
     });
 
-    const afterUsage = reduceV2Event(initial, usageRecorded, 1, "observe-and-apply");
-    const afterContent = reduceV2Event(afterUsage, contentUpdated, 2, "observe-and-apply");
+    const afterUsage = reduceV2Event(initial, usageRecorded, "observe-and-apply");
+    const afterContent = reduceV2Event(afterUsage, contentUpdated, "observe-and-apply");
 
     expect(afterContent.usage).toEqual({ cost: SESSION.cost, tokens: SESSION.tokens });
     expect(afterContent.messages).toEqual({});
@@ -518,7 +518,6 @@ describe("V2 revert recovery transitions", () => {
     const staged = reduceV2Event(
       createInitialV2ThreadState(SESSION_ID),
       stagedEvent,
-      FIRST_ORDINAL,
       "observe-and-apply",
     );
     const clearing = reduceV2ThreadState(staged, {
@@ -621,8 +620,8 @@ describe("V2 prompt admission and idempotence", () => {
       data: { sessionID: SESSION_ID },
     });
 
-    const enqueued = reduceV2Event(submitting, enqueuedEvent, 1, "observe-and-apply");
-    const terminal = reduceV2Event(enqueued, terminalEvent, 2, "observe-and-apply");
+    const enqueued = reduceV2Event(submitting, enqueuedEvent, "observe-and-apply");
+    const terminal = reduceV2Event(enqueued, terminalEvent, "observe-and-apply");
     const httpResponse = reduceV2ThreadState(terminal, {
       type: "prompt_admitted",
       userMessageId: OPTIMISTIC_MESSAGE_ID,
@@ -637,28 +636,101 @@ describe("V2 prompt admission and idempotence", () => {
   });
 });
 
-describe("V2 permission snapshot ordinal behavior", () => {
-  it("does not let an older list snapshot erase a newer permission event", () => {
-    const initial = initialReadyState();
-    const newer = reduceV2Event(
-      initial,
+describe("V2 pending-set reconciliation", () => {
+  /** A state holding one pending permission, as a live event would leave it. */
+  function withPermission() {
+    return reduceV2Event(
+      initialReadyState(),
       {
         id: "evt_permission_asked",
         created: 30,
         type: "permission.asked",
         data: PERMISSION,
       } as V2Event,
-      5,
       "observe-and-apply",
     );
-    const staleSnapshot = reduceV2ThreadState(newer, {
+  }
+
+  it("keeps a permission that was asked after the read started", () => {
+    const state = withPermission();
+    // `held` is empty because the permission did not exist when the read
+    // started. The server's answer cannot speak for it, so it is kept.
+    const next = reduceV2ThreadState(state, {
       type: "permissions_hydrated",
       requests: [],
-      requestOrdinal: 4,
+      held: [],
     });
 
-    expect(staleSnapshot.permissions).toEqual([PERMISSION]);
-    expect(staleSnapshot.eventIdentity.recentAppliedEventIds).toEqual(["evt_permission_asked"]);
+    expect(next.permissions).toEqual([PERMISSION]);
+    expect(next.auxiliary.permissions).toBe("current");
+    expect(next.eventIdentity.recentAppliedEventIds).toEqual(["evt_permission_asked"]);
+  });
+
+  it("removes a permission a successful read no longer lists", () => {
+    const state = withPermission();
+    // Held, absent from the answer: answering or cancelling it settled it.
+    const next = reduceV2ThreadState(state, {
+      type: "permissions_hydrated",
+      requests: [],
+      held: [PERMISSION.id],
+    });
+
+    expect(next.permissions).toEqual([]);
+    expect(next.auxiliary.permissions).toBe("current");
+  });
+
+  it("preserves the last known permissions when the read fails", () => {
+    const state = withPermission();
+    // PASSING `null`, not `[]`: a failed read is not an empty answer.
+    const next = reduceV2ThreadState(state, {
+      type: "permissions_hydrated",
+      requests: null,
+      held: [PERMISSION.id],
+    });
+
+    expect(next.permissions).toEqual([PERMISSION]);
+    expect(next.auxiliary.permissions).toBe("unavailable");
+  });
+
+  it("tracks availability per kind", () => {
+    const failedInboxAndForms = reduceV2ThreadState(
+      reduceV2ThreadState(withPermission(), {
+        type: "inbox_hydrated",
+        records: null,
+        held: [],
+      }),
+      { type: "forms_hydrated", forms: null, held: [] },
+    );
+    const formsRead = reduceV2ThreadState(failedInboxAndForms, {
+      type: "forms_hydrated",
+      forms: [],
+      held: [],
+    });
+
+    expect(formsRead.auxiliary).toEqual({
+      inbox: "unavailable",
+      permissions: "unavailable",
+      forms: "current",
+    });
+  });
+
+  it("keeps the same state when a successful read changes nothing", () => {
+    // A first successful read establishes availability...
+    const primed = reduceV2ThreadState(withPermission(), {
+      type: "permissions_hydrated",
+      requests: [PERMISSION],
+      held: [],
+    });
+    // ...so the next identical read is a true no-op.
+    const next = reduceV2ThreadState(primed, {
+      type: "permissions_hydrated",
+      requests: [PERMISSION],
+      held: [PERMISSION.id],
+    });
+
+    // Identity, not equality: a re-sync that finds nothing new must not hand
+    // the runtime a new state object, or every poll re-renders the transcript.
+    expect(next).toBe(primed);
   });
 });
 
@@ -672,7 +744,7 @@ describe("V2 unknown events", () => {
       data: { sessionID: SESSION_ID, assistantMessageID: ASSISTANT_MESSAGE_ID },
     });
 
-    const reduced = reduceV2Event(initial, unknown, FIRST_ORDINAL, "observe-and-apply");
+    const reduced = reduceV2Event(initial, unknown, "observe-and-apply");
 
     expect(reduced.messages).toEqual(initial.messages);
     expect(reduced.messageOrder).toEqual(initial.messageOrder);
@@ -715,7 +787,6 @@ describe("V2 tool timing", () => {
         seq: 1,
         data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
       }),
-      1,
       "observe-and-apply",
     );
     // seq 1 -> created 101.
@@ -733,7 +804,6 @@ describe("V2 tool timing", () => {
         seq: 1,
         data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
       }),
-      1,
       "observe-and-apply",
     );
     state = reduceV2Event(
@@ -751,7 +821,6 @@ describe("V2 tool timing", () => {
           executed: true,
         },
       }),
-      4,
       "observe-and-apply",
     );
     // seq 4 -> created 104, and the start is untouched: the number a reader
@@ -770,7 +839,6 @@ describe("V2 tool timing", () => {
         seq: 1,
         data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
       }),
-      1,
       "observe-and-apply",
     );
     state = reduceV2Event(
@@ -788,7 +856,6 @@ describe("V2 tool timing", () => {
           executed: true,
         },
       }),
-      2,
       "observe-and-apply",
     );
     expect(toolPart(state)?.timing).toEqual({ startedAt: 101, completedAt: 102 });
@@ -813,7 +880,6 @@ describe("V2 tool timing", () => {
           executed: true,
         },
       }),
-      9,
       "observe-and-apply",
     );
     expect(toolPart(state)?.timing).toBeUndefined();
@@ -832,38 +898,31 @@ describe("V2 tool timing", () => {
         seq: 1,
         data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, name: "shell" },
       }),
-      1,
       "observe-and-apply",
     );
-    for (const [seq, event] of [
-      [
-        2,
-        durableEvent({
-          id: "evt_timing_d",
-          type: "session.tool.input.delta",
-          aggregateID: SESSION_ID,
-          seq: 2,
-          data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, delta: "{" },
-        }),
-      ],
-      [
-        3,
-        durableEvent({
-          id: "evt_timing_c",
-          type: "session.tool.called",
-          aggregateID: SESSION_ID,
-          seq: 3,
-          data: {
-            sessionID: SESSION_ID,
-            assistantMessageID: MESSAGE,
-            id: TOOL,
-            input: { command: "bun" },
-            executed: false,
-          },
-        }),
-      ],
-    ] as const) {
-      state = reduceV2Event(state, event, seq, "observe-and-apply");
+    for (const event of [
+      durableEvent({
+        id: "evt_timing_d",
+        type: "session.tool.input.delta",
+        aggregateID: SESSION_ID,
+        seq: 2,
+        data: { sessionID: SESSION_ID, assistantMessageID: MESSAGE, id: TOOL, delta: "{" },
+      }),
+      durableEvent({
+        id: "evt_timing_c",
+        type: "session.tool.called",
+        aggregateID: SESSION_ID,
+        seq: 3,
+        data: {
+          sessionID: SESSION_ID,
+          assistantMessageID: MESSAGE,
+          id: TOOL,
+          input: { command: "bun" },
+          executed: false,
+        },
+      }),
+    ]) {
+      state = reduceV2Event(state, event, "observe-and-apply");
       expect(toolPart(state)?.timing).toEqual({ startedAt: 101 });
     }
   });

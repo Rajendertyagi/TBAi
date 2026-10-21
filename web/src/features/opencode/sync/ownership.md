@@ -42,7 +42,7 @@ The rules that follow from it:
 | `promptsInFlight.ts` | The admission state of a prompt: whether the server took it, what it was admitted as, and the waiters blocked on that answer | — | admission verdicts it did not receive | `createPromptsInFlight` → `create` / `settle` / `markAmbiguous` / `awaitAdmission` / `get` / `disposeAll` |
 | `startupGate.ts` | The readiness promise of ONE connection attempt and the handles that settle it | — | the connection, the error classification, whether the attempt is still live | `createStartupGate` → `open` / `resolve` / `reject` / `pending` |
 | `attempt.ts` | One connection attempt: its id, its own readiness gate, its connection signal, the generation it adopted, the load promise in flight, and whether it is still hydrating or has been settled (superseded or terminally failed) | `startupGate`, `v2Client` (types) | domain state, the retry budget | `createAttempt(id, lifecycleSignal)` → `gate` / `signals` / `generation` / `hydrating` / `retired` / `adopt` / `beginHydration` / `projectionCommitted` / `endHydration` / `markReady` / `fail` / `retire` / `load` / `setLoad` |
-| `eventPipeline.ts` | The lifecycle of the event stream: the read loop, the ordinal, the buffer that holds events arriving during a history read, the retry timer, the retry budget and whether that budget is spent | `attempt`, `config` (constants) | domain state; it never settles the readiness gate itself | `createEventPipeline` → `consume` / `scheduleReconnect` / `nextOrdinal` / `currentOrdinal` / `buffer` / `bufferedSince` / `clearBuffer` / `resetAttempt` / `isExhausted` / `cancelReconnect` |
+| `eventPipeline.ts` | The lifecycle of the event stream: the read loop, the ordinal, the buffer that holds events arriving during a history read and the read boundary its coalescing is gated on, the retry timer, the retry budget and whether that budget is spent | `attempt`, `config` (constants) | domain state; it never settles the readiness gate itself | `createEventPipeline` → `consume` / `scheduleReconnect` / `nextOrdinal` / `beginHistoryRead` / `buffer` / `bufferedSince` / `clearBuffer` / `resetAttempt` / `isExhausted` / `cancelReconnect` |
 | `sessionMessageLoader.ts` | The mechanics of the history read and the commit of its projection | `v2History`, `v2Types` | domain state; it commits through the reducer | `createSessionMessageLoader` → `read` / `commit` |
 
 The controller (`v2ThreadController.ts`) owns **domain state, dispatch and
@@ -62,15 +62,18 @@ gets it here, in the module that owns it:
 | The delay policy: foreground cap, configured ceiling | `eventPipeline.ts` | D2 | 3 | **delivered** (see `docs/decisions.md`) |
 | The spent budget refusing incidental reconnects; explicit recovery via `retry()` | `eventPipeline.ts` (`isExhausted`) + `v2ThreadController.ts` | D2 | 3 | **delivered** (see `docs/decisions.md`) |
 | The permanent-4xx shortcut | — | D2 | 3 | **not implemented**: the official client discards the status for every declared one (`docs/decisions.md`, 2026-10-21) |
-| Snapshot ↔ live-event precedence, and the overlay of events observed during a read | a new `recoverySnapshots.ts` | H2, M5 | 4 | pending |
+| The buffer's read boundary, and the coalescing gated on it | `eventPipeline.ts` (`beginHistoryRead` / `buffer`) | M5 | 4 | **delivered** |
+| Snapshot ↔ live-event precedence, and the overlay of events observed during a read | `v2Events.ts` (the `history_loaded` reducer) + `v2ThreadController.ts` (`beginHistoryReadScope` / `historyMerge` / `noteLiveMutation`) | H2 | 4 | **delivered** (see `docs/decisions.md`) |
+| The reconciling commit (held ids + touched ids; there is no replace mode) | `sessionMessageLoader.ts` | H2 | 4 | **delivered** |
+| Per-kind availability of the auxiliary reads, and the one line that names the sets whose read failed | `v2Events.ts` (the three `*_hydrated` reducers) + `auxiliaryNotice.ts` | M10 | 4 | **delivered** |
 | The unadmitted-prompt registry's idempotent release | `promptsInFlight.ts` | M3 | 5 | pending |
 | A bounded readiness gate with a typed failure | `startupGate.ts` | M3, M4 | 5 | pending |
-| The commit mode (replace or merge) | `sessionMessageLoader.ts` | H2 | 4 | pending |
 
 A module that exists only to be filled in later is not created: an empty
-module has no owner, and the orphan-module gate would report it. The
-`recoverySnapshots.ts` row above is therefore a promise for Phase 4, not a
-file today.
+module has no owner, and the orphan-module gate would report it. Phase 4 is why
+there is no `recoverySnapshots.ts` in the tree: the snapshot/live reconciliation
+turned out to be a property of the commit's inputs, so it lives where the
+reducer and the controller already were rather than in a module of its own.
 
 ## Adding to this layer
 
