@@ -31,6 +31,24 @@
  * `v2Events.ts` would synthesize `unknown`), so a held tool-input delta is
  * replayed only when it arrived after the boundary.
  *
+ * ## THE INVARIANT THIS RULE RESTS ON
+ *
+ * "The snapshot carries text for a part" is read as "the snapshot carries that
+ * part COMPLETE". That is true of the server TBAi pins (OpenCode 2.0.22, and
+ * the same shape at 2.0.32): `session.text.started` stores the part empty and
+ * `session.text.ended` stores the finished text, and the updater has no delta
+ * handler at all, so a persisted text part is either `""` or the whole text.
+ * The durable `session.message.content.updated` event replaces an assistant's
+ * whole content array and IS projected into the database, so it could in
+ * principle persist a PARTIAL part - but nothing in the upstream tree
+ * publishes it, and TBAi ignores it as replay-only.
+ *
+ * So the failure mode of that assumption is **truncation, not doubling**: a
+ * partial part in a snapshot would make the rule drop the delta that completes
+ * it, and the answer would end short. Doubling - the defect this rule exists to
+ * prevent - cannot come back through that path, because the delta is dropped
+ * only when the snapshot already carries text for that exact part.
+ *
  * What this module does NOT own: the commit's own precedence over message ids
  * (the `history_loaded` reducer owns that), and the buffer's shape (the event
  * pipeline owns that). This module answers one question - may this held event

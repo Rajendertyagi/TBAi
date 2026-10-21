@@ -6333,7 +6333,7 @@ boundary coalescing is gated on (one call, so the two can never disagree), and
 `buffer()` folds a delta into the TAIL entry only when that entry's ordinal is
 after the boundary - folding across the boundary would replay snapshot text
 twice - with the merged entry taking the later ordinal so `bufferedSince` still
-selects it. `OPENCODE_V2_EVENT_BUFFER_LIMIT` is the backstop, raised to 4096:
+selects it. (`bufferedSince` was removed on 2026-10-22 - see the correction below.) `OPENCODE_V2_EVENT_BUFFER_LIMIT` is the backstop, raised to 4096:
 reaching it means that many distinct events arrived during one read, and the
 oldest are dropped rather than the read being abandoned.
 
@@ -6487,3 +6487,44 @@ the ordinal rule). `historyReplay.test.ts` (6 cases) pins the rule itself, and
 snapshot" pins the buffer clear. `eventPipelineBuffer.test.ts` was re-scoped:
 the buffer is no longer selected by an ordinal, so its cases assert the entries
 and their text.
+
+## 2026-10-22 - OpenCode Phase 4 correction, re-reviewed: one buffer clear, one rule, honest counts
+
+**What the re-review found.** An independent review of the correction (
+`e897212`) accepted the fix of the text-doubling defect and confirmed the
+upstream premise at the PINNED server version (OpenCode 2.0.22: the projectors
+run inside the commit, and `notify` follows; the updater stores a text part
+empty at `text.started` and complete at `text.ended`, with no delta
+handler at all). It raised four further points, all of which were accepted and
+acted on in the same change:
+
+- **The rule reads "non-empty" as "complete".** That is true of the pinned
+  server, and the durable `session.message.content.updated` event - which
+  replaces an assistant's whole content and IS projected into the database -
+  has no publisher anywhere in the upstream tree. So the assumption holds
+  today, and its failure mode is TRUNCATION rather than doubling: a partial
+  part in a snapshot would drop the delta that completes it. The module header
+  now states the invariant and that failure mode explicitly.
+- **Two buffer clears, neither of them a guard.** The attempt boundary and the
+  failed-hydration catch both cleared the buffer, and removing EITHER one
+  alone left the suite green. Two sites for one mechanism, where no test can
+  tell them apart, is one mechanism too many: there is now ONE site, the
+  attempt boundary, and the guard on it fails when that one site is removed.
+- **The fail-before counts in the ledger did not match the code.** They are now
+  the counts the code produces, measured over `tests/unit/web/opencode`.
+- **The coalescing fold was described as a behaviour change when it was not.**
+  The fold code is identical to `7b65219`; what the correction added is a
+  TEST pinning it. The plan now says that.
+
+**Two smaller corrections, from the same review.** `bufferedEntries()`
+returns a copy, so the pipeline's own array is not reachable from the caller
+that iterates it while dispatching; and `sync/ownership.md` records the new
+module's type-only dependency on `eventPipeline`.
+
+**Left alone deliberately.** The precedence is still message-granular while the
+plan's D1 wording is part-granular: that is a documented decision, and the
+re-review accepted it as such. `bufferedSince` is still named in the
+2026-10-21 section above, which is what an append-only log looks like; the
+2026-10-22 section says it is gone. The dead exports (`hasPendingReconnect`,
+`OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP`) and the Phase 5 findings are
+untouched.

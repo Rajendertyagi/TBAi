@@ -513,7 +513,9 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   }
 
   function bufferedEntries(): readonly BufferedEvent[] {
-    return eventBuffer;
+    // A copy, because the caller iterates this while it dispatches the events
+    // it holds, and the pipeline's own array must not be reachable from there.
+    return [...eventBuffer];
   }
 
   function clearBuffer(): void {

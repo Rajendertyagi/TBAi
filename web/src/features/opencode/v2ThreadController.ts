@@ -335,10 +335,16 @@ export function createV2ThreadController(
    */
   function beginAttempt(): Attempt {
     retireAttempt(currentAttempt);
-    // The previous attempt's held events belong to ITS read: it never committed
-    // a snapshot, and this attempt reads its own. Replaying them onto this
-    // attempt's snapshot would show text the server may have discarded with the
-    // attempt that died.
+    // The attempt boundary drops the previous attempt's held events. They
+    // belong to ITS read: it never committed a snapshot, and this attempt
+    // reads its own. Replaying them onto this attempt's snapshot would show
+    // text the server may have discarded with the attempt that died - or, for
+    // an attempt that failed after a read had started, double the text this
+    // attempt's own snapshot carries.
+    //
+    // This is the ONE place the buffer is cleared for a dead attempt, so the
+    // guard on it is a single site rather than two that no test can tell
+    // apart.
     pipeline.clearBuffer();
     nextAttemptId += 1;
     const started = createAttempt(nextAttemptId, lifecycle.signal);
@@ -883,11 +889,11 @@ export function createV2ThreadController(
       const safe = safeError(error, "OpenCode V2 runtime failed to load");
       live.fail(new V2ControllerError(safe));
       dispatch({ type: "load_failed", error: safe });
-      // This attempt never committed a snapshot, so the events it held have no
-      // base to be replayed onto. The retry reads its own snapshot, and appending
-      // a failed attempt's deltas to it would show text the server may have
-      // discarded with the attempt.
-      pipeline.clearBuffer();
+      // The held events of a failed attempt are dropped by the ATTEMPT boundary
+      // (`beginAttempt`), which every retry goes through. Clearing them here as
+      // well would be a second site for one mechanism, and a second site that
+      // no guard can distinguish from the first: removing either alone changes
+      // nothing observable.
       pipeline.scheduleReconnect(live, safe);
       throw new V2ControllerError(safe);
     } finally {
