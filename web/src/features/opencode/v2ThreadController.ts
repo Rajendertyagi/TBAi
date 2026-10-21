@@ -10,7 +10,6 @@ import type {
 } from "@opencode/client";
 import { logger } from "@/lib/logger";
 import {
-  OPENCODE_V2_EVENT_BUFFER_LIMIT,
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
@@ -40,6 +39,11 @@ import {
 } from "./sync/promptsInFlight";
 import { createStartupGate } from "./sync/startupGate";
 import { createAttempt } from "./sync/attempt";
+import {
+  createEventPipeline,
+  isAssistantMessageEvent,
+  type EventPipelineHost,
+} from "./sync/eventPipeline";
 import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
 import type {
   V2DesiredSelection,
@@ -168,16 +172,6 @@ function agentChanged(current: string | null, desired: string | null): boolean {
   return current !== desired;
 }
 
-function isAssistantMessageEvent(event: V2Event): boolean {
-  return (
-    event.type.startsWith("session.text.") ||
-    event.type.startsWith("session.reasoning.") ||
-    event.type.startsWith("session.tool.") ||
-    event.type.startsWith("session.step.") ||
-    event.type === "session.retry.scheduled"
-  );
-}
-
 function inboxRecordFromUser(item: SessionInboxUser): V2InboxRecord {
   return {
     id: item.id,
@@ -197,16 +191,6 @@ function modelInput(model: V2ModelSelection): {
     providerID: model.providerID,
     ...(model.variant ? { variant: model.variant } : {}),
   };
-}
-
-export function computeReconnectDelay(
-  attempt: number,
-  delays: Pick<
-    V2ThreadControllerConfig,
-    "initialReconnectDelayMs" | "maxReconnectDelayMs"
-  > = DEFAULT_V2_CONTROLLER_CONFIG,
-): number {
-  return Math.min(delays.maxReconnectDelayMs, delays.initialReconnectDelayMs * 2 ** attempt);
 }
 
 export type V2ThreadControllerConfig = {
@@ -230,21 +214,38 @@ export function createV2ThreadController(
   let state = createInitialV2ThreadState(client.sessionId, client.directory);
   const attempt = createAttempt();
   let disposed = false;
-  let ordinal = 0;
   let selectionGeneration = 0;
   const gate = createStartupGate();
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let reconnectAttempt = 0;
   let isHydrating = false;
   let resyncInFlight = false;
   /** Latest full history projection, kept so a re-sync can reproject without re-paging. */
   let lastHistorySnapshot: V2HistorySnapshot | null = null;
-  let eventBuffer: Array<{ readonly ordinal: number; readonly event: V2Event }> = [];
   const listeners = new Set<() => void>();
   const prompts = createPromptsInFlight();
   const answeredPermissions = new Set<string>();
   const autoApproveAttempted = new Set<string>();
   const formReplies = new Set<string>();
+
+  /**
+   * What the event pipeline needs from this controller.
+   *
+   * The pipeline owns the stream's lifecycle and nothing else, so the domain
+   * actions it reports, the reducer it feeds and the connection it asks for
+   * all arrive through here.
+   */
+  const pipelineHost: EventPipelineHost = {
+    get isDisposed(): boolean {
+      return disposed;
+    },
+    attempt,
+    config: cfg,
+    dispatch,
+    applyEvent,
+    startConnection,
+    failReady: (error) => gate.reject(new V2ControllerError(error)),
+    toSafeError: safeError,
+  };
+  const pipeline = createEventPipeline(pipelineHost);
 
   function notify(): void {
     if (disposed) return;
@@ -401,12 +402,7 @@ export function createV2ThreadController(
     dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-only" });
     if (isAssistantMessageEvent(event)) {
       if (isHydrating) {
-        eventBuffer.push({ ordinal: eventOrdinal, event });
-        if (eventBuffer.length > OPENCODE_V2_EVENT_BUFFER_LIMIT) {
-          eventBuffer = eventBuffer
-            .filter((entry) => !isAssistantMessageEvent(entry.event))
-            .slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);
-        }
+        pipeline.buffer(event, eventOrdinal);
         return;
       }
       dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-and-apply" });
@@ -416,57 +412,6 @@ export function createV2ThreadController(
     applyAdmissionEvent(event);
     applyAutoApproveEvent(event);
     applyCompactionLifecycleEvent(event);
-  }
-
-  async function consumeEvents(currentGeneration: OpenCodeV2Generation): Promise<void> {
-    try {
-      while (!disposed && attempt.isCurrent(currentGeneration)) {
-        const result = await currentGeneration.events.next();
-        if (result.done) throw new Error("OpenCode V2 event stream closed");
-        if (disposed || !attempt.isCurrent(currentGeneration)) return;
-        const eventOrdinal = ++ordinal;
-        applyEvent(result.value, eventOrdinal);
-      }
-    } catch (error) {
-      if (disposed || !attempt.isCurrent(currentGeneration)) return;
-      scheduleReconnect(safeError(error, "OpenCode V2 event stream failed"));
-    }
-  }
-
-  function scheduleReconnect(error: V2SafeError): void {
-    if (disposed || reconnectTimer !== null) return;
-    // Terminal failure: no more auto-retries after exhausting the budget.
-    if (reconnectAttempt >= cfg.maxReconnectAttempts) {
-      dispatch({
-        type: "connection_changed",
-        connection: { type: "failed", attempt: reconnectAttempt },
-      });
-      dispatch({ type: "load_failed", error });
-      gate.reject(new V2ControllerError(error));
-      return;
-    }
-    const failedGeneration = attempt.current;
-    attempt.setCurrent(null);
-    attempt.abortConnection();
-    if (failedGeneration) void failedGeneration.events.close();
-    attempt.setLoad(null);
-    dispatch({
-      type: "connection_changed",
-      connection: { type: "reconnecting", attempt: reconnectAttempt + 1 },
-    });
-    dispatch({ type: "load_failed", error });
-    gate.reject(new V2ControllerError(error));
-    const delay = computeReconnectDelay(reconnectAttempt, cfg);
-    reconnectAttempt += 1;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      const started = startConnection().catch((error) => {
-        attempt.setLoad(null);
-        throw error;
-      });
-      attempt.setLoad(started);
-      void started.catch(() => undefined);
-    }, delay);
   }
 
   /**
@@ -495,7 +440,7 @@ export function createV2ThreadController(
   async function loadAuxiliary(
     currentGeneration: OpenCodeV2Generation,
   ): Promise<V2AuxiliarySnapshot> {
-    const requestOrdinal = ordinal;
+    const requestOrdinal = pipeline.currentOrdinal();
     const [inbox, permissions, forms] = await Promise.all([
       currentGeneration.operations
         .inboxList({ sessionID: client.sessionId })
@@ -591,7 +536,7 @@ export function createV2ThreadController(
         });
       dispatch({ type: "revert_recovery_cleared" });
     }
-    const historyRequestOrdinal = ordinal;
+    const historyRequestOrdinal = pipeline.currentOrdinal();
     const snapshot = await loadV2History(currentGeneration.history, {
       signal: signals.connectionSignal,
     });
@@ -604,7 +549,7 @@ export function createV2ThreadController(
       messageOrder: projection.messageOrder,
       pages: projection.pages,
     });
-    const buffered = eventBuffer.filter((entry) => entry.ordinal > historyRequestOrdinal);
+    const buffered = pipeline.bufferedSince(historyRequestOrdinal);
     for (const entry of buffered)
       dispatch({
         type: "v2_event",
@@ -612,7 +557,7 @@ export function createV2ThreadController(
         ordinal: entry.ordinal,
         mode: "observe-and-apply",
       });
-    eventBuffer = [];
+    pipeline.clearBuffer();
     isHydrating = false;
     const auxiliary = await loadAuxiliary(currentGeneration);
     if (disposed || !attempt.isCurrent(currentGeneration)) return;
@@ -687,7 +632,7 @@ export function createV2ThreadController(
       const safe = safeError(error, "OpenCode V2 connection failed");
       dispatch({ type: "load_failed", error: safe });
       gate.reject(new V2ControllerError(safe));
-      if (!disposed) scheduleReconnect(safe);
+      if (!disposed) pipeline.scheduleReconnect(safe);
       throw new V2ControllerError(safe);
     }
     if (disposed || signals.connectionSignal.aborted) {
@@ -695,11 +640,11 @@ export function createV2ThreadController(
       throw new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE });
     }
     attempt.setCurrent(currentGeneration);
-    void consumeEvents(currentGeneration);
+    void pipeline.consume(currentGeneration);
     try {
       await hydrate(currentGeneration, signals);
       gate.resolve();
-      reconnectAttempt = 0;
+      pipeline.resetAttempt();
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 runtime failed to load");
       dispatch({ type: "load_failed", error: safe });
@@ -712,10 +657,7 @@ export function createV2ThreadController(
     const existing = attempt.load();
     if (existing) return existing;
     // D2: manual load during a pending timer cancels the timer and takes over.
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
+    pipeline.cancelReconnect();
     const started = startConnection().catch((error) => {
       attempt.setLoad(null);
       throw error;
@@ -1144,8 +1086,7 @@ export function createV2ThreadController(
   function dispose(): void {
     if (disposed) return;
     disposed = true;
-    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-    reconnectTimer = null;
+    pipeline.cancelReconnect();
     attempt.abortConnection();
     attempt.abortLifecycle();
     gate.reject(new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }));

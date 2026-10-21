@@ -12,10 +12,10 @@ import type {
 import { OpenCodeBashToolUI } from "@web/tools/opencode/ui";
 import { projectV2RepositoryItems } from "@web/features/opencode/v2MessageProjection.ts";
 import {
-  computeReconnectDelay,
   createV2ThreadController,
   type V2ThreadController,
 } from "@web/features/opencode/v2ThreadController.ts";
+import { computeReconnectDelay } from "@web/features/opencode/sync/eventPipeline.ts";
 import { clearAllAutoPolicies, setAutoPolicy } from "@web/features/opencode/sessionAutoPolicy.ts";
 import {
   createInitialV2ThreadState,
