@@ -39,6 +39,7 @@ import {
   type V2PromptSubmission,
 } from "./sync/promptsInFlight";
 import { createStartupGate } from "./sync/startupGate";
+import { createAttempt } from "./sync/attempt";
 import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
 import type {
   V2DesiredSelection,
@@ -227,13 +228,10 @@ export function createV2ThreadController(
 ): V2ThreadController {
   const cfg: V2ThreadControllerConfig = { ...DEFAULT_V2_CONTROLLER_CONFIG, ...config };
   let state = createInitialV2ThreadState(client.sessionId, client.directory);
-  let generation: OpenCodeV2Generation | null = null;
-  let connectionController: AbortController | null = null;
-  let lifecycleController: AbortController | null = null;
+  const attempt = createAttempt();
   let disposed = false;
   let ordinal = 0;
   let selectionGeneration = 0;
-  let loadPromise: Promise<void> | null = null;
   const gate = createStartupGate();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
@@ -251,6 +249,23 @@ export function createV2ThreadController(
   function notify(): void {
     if (disposed) return;
     for (const listener of listeners) listener();
+  }
+
+  /**
+   * The generation the runtime is talking to right now.
+   *
+   * Every use reads the LIVE generation, exactly as the closure variable it
+   * replaced did: a reconnect that lands between two awaits is seen by the
+   * second read, not frozen out by the first.
+   */
+  function requireGeneration(): OpenCodeV2Generation {
+    const generation = attempt.current;
+    if (!generation)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
+    return generation;
   }
 
   function dispatch(action: V2ThreadAction): void {
@@ -405,15 +420,15 @@ export function createV2ThreadController(
 
   async function consumeEvents(currentGeneration: OpenCodeV2Generation): Promise<void> {
     try {
-      while (!disposed && generation === currentGeneration) {
+      while (!disposed && attempt.isCurrent(currentGeneration)) {
         const result = await currentGeneration.events.next();
         if (result.done) throw new Error("OpenCode V2 event stream closed");
-        if (disposed || generation !== currentGeneration) return;
+        if (disposed || !attempt.isCurrent(currentGeneration)) return;
         const eventOrdinal = ++ordinal;
         applyEvent(result.value, eventOrdinal);
       }
     } catch (error) {
-      if (disposed || generation !== currentGeneration) return;
+      if (disposed || !attempt.isCurrent(currentGeneration)) return;
       scheduleReconnect(safeError(error, "OpenCode V2 event stream failed"));
     }
   }
@@ -430,11 +445,11 @@ export function createV2ThreadController(
       gate.reject(new V2ControllerError(error));
       return;
     }
-    const failedGeneration = generation;
-    generation = null;
-    connectionController?.abort();
+    const failedGeneration = attempt.current;
+    attempt.setCurrent(null);
+    attempt.abortConnection();
     if (failedGeneration) void failedGeneration.events.close();
-    loadPromise = null;
+    attempt.setLoad(null);
     dispatch({
       type: "connection_changed",
       connection: { type: "reconnecting", attempt: reconnectAttempt + 1 },
@@ -445,11 +460,12 @@ export function createV2ThreadController(
     reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      loadPromise = startConnection().catch((error) => {
-        loadPromise = null;
+      const started = startConnection().catch((error) => {
+        attempt.setLoad(null);
         throw error;
       });
-      void loadPromise.catch(() => undefined);
+      attempt.setLoad(started);
+      void started.catch(() => undefined);
     }, delay);
   }
 
@@ -553,14 +569,14 @@ export function createV2ThreadController(
     signals: V2ConnectionSignals,
   ): Promise<void> {
     const serverInfo = await currentGeneration.operations.serverInfo();
-    if (disposed || generation !== currentGeneration) return;
+    if (disposed || !attempt.isCurrent(currentGeneration)) return;
     dispatch({
       type: "connection_changed",
       connection: { type: "connected", serverVersion: serverInfo.version },
     });
     dispatch({ type: "load_started" });
     const session = await currentGeneration.operations.sessionGet({ sessionID: client.sessionId });
-    if (disposed || generation !== currentGeneration) return;
+    if (disposed || !attempt.isCurrent(currentGeneration)) return;
     dispatch({ type: "session_hydrated", session });
     if (session.revert !== undefined) {
       dispatch({ type: "revert_recovery_clearing", userMessageId: session.revert.messageID });
@@ -579,7 +595,7 @@ export function createV2ThreadController(
     const snapshot = await loadV2History(currentGeneration.history, {
       signal: signals.connectionSignal,
     });
-    if (disposed || generation !== currentGeneration) return;
+    if (disposed || !attempt.isCurrent(currentGeneration)) return;
     lastHistorySnapshot = snapshot;
     const projection = projectV2History(snapshot, currentPermissions());
     dispatch({
@@ -599,7 +615,7 @@ export function createV2ThreadController(
     eventBuffer = [];
     isHydrating = false;
     const auxiliary = await loadAuxiliary(currentGeneration);
-    if (disposed || generation !== currentGeneration) return;
+    if (disposed || !attempt.isCurrent(currentGeneration)) return;
     applyAuxiliary(auxiliary);
     // History was projected before the auxiliary permission snapshot arrived.
     // Reproject once so tool calls restored from history carry their approval
@@ -629,12 +645,12 @@ export function createV2ThreadController(
    */
   async function resyncAuxiliary(): Promise<void> {
     if (disposed) return;
-    const currentGeneration = generation;
+    const currentGeneration = attempt.current;
     if (currentGeneration === null || resyncInFlight) return;
     resyncInFlight = true;
     try {
       const snapshot = await loadAuxiliary(currentGeneration);
-      if (disposed || generation !== currentGeneration) return;
+      if (disposed || !attempt.isCurrent(currentGeneration)) return;
       const previous = state;
       applyAuxiliary(snapshot);
       // The reducer hands back the SAME array when nothing changed, so identity
@@ -662,13 +678,7 @@ export function createV2ThreadController(
   async function startConnection(): Promise<void> {
     if (disposed) throw new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE });
     isHydrating = true;
-    connectionController?.abort();
-    connectionController = new AbortController();
-    lifecycleController ??= new AbortController();
-    const signals: V2ConnectionSignals = {
-      connectionSignal: connectionController.signal,
-      lifecycleSignal: lifecycleController.signal,
-    };
+    const signals: V2ConnectionSignals = attempt.beginConnection();
     gate.open();
     let currentGeneration: OpenCodeV2Generation;
     try {
@@ -680,11 +690,11 @@ export function createV2ThreadController(
       if (!disposed) scheduleReconnect(safe);
       throw new V2ControllerError(safe);
     }
-    if (disposed || connectionController.signal.aborted) {
+    if (disposed || signals.connectionSignal.aborted) {
       await currentGeneration.events.close();
       throw new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE });
     }
-    generation = currentGeneration;
+    attempt.setCurrent(currentGeneration);
     void consumeEvents(currentGeneration);
     try {
       await hydrate(currentGeneration, signals);
@@ -699,31 +709,35 @@ export function createV2ThreadController(
   }
 
   async function ensureLoaded(): Promise<void> {
-    if (loadPromise) return loadPromise;
+    const existing = attempt.load();
+    if (existing) return existing;
     // D2: manual load during a pending timer cancels the timer and takes over.
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    loadPromise = startConnection().catch((error) => {
-      loadPromise = null;
+    const started = startConnection().catch((error) => {
+      attempt.setLoad(null);
       throw error;
     });
-    return loadPromise;
+    attempt.setLoad(started);
+    return started;
   }
 
   async function refresh(): Promise<void> {
     await ensureLoaded();
-    if (!generation)
+    if (!attempt.current)
       throw new V2ControllerError({
         kind: "not-found",
         message: "OpenCode V2 generation is unavailable",
       });
     dispatch({ type: "load_started" });
     try {
-      const session = await generation.operations.sessionGet({ sessionID: client.sessionId });
+      const session = await requireGeneration().operations.sessionGet({
+        sessionID: client.sessionId,
+      });
       dispatch({ type: "session_hydrated", session });
-      const snapshot = await loadV2History(generation.history);
+      const snapshot = await loadV2History(requireGeneration().history);
       lastHistorySnapshot = snapshot;
       const projection = projectV2History(snapshot, currentPermissions());
       dispatch({
@@ -748,20 +762,24 @@ export function createV2ThreadController(
 
   async function reconcileStagedRevert(): Promise<void> {
     await awaitReady();
-    if (!generation)
+    if (!attempt.current)
       throw new V2ControllerError({
         kind: "not-found",
         message: "OpenCode V2 generation is unavailable",
       });
     try {
-      const session = await generation.operations.sessionGet({ sessionID: client.sessionId });
+      const session = await requireGeneration().operations.sessionGet({
+        sessionID: client.sessionId,
+      });
       dispatch({ type: "session_hydrated", session });
       if (session.revert !== undefined) {
         dispatch({ type: "revert_recovery_clearing", userMessageId: session.revert.messageID });
-        await generation.operations.revertClear({ sessionID: client.sessionId });
+        await requireGeneration().operations.revertClear({ sessionID: client.sessionId });
       }
-      const verified = await generation.operations.sessionGet({ sessionID: client.sessionId });
-      const snapshot = await loadV2History(generation.history);
+      const verified = await requireGeneration().operations.sessionGet({
+        sessionID: client.sessionId,
+      });
+      const snapshot = await loadV2History(requireGeneration().history);
       lastHistorySnapshot = snapshot;
       const projection = projectV2History(snapshot, currentPermissions());
       dispatch({
@@ -806,20 +824,20 @@ export function createV2ThreadController(
   }
 
   async function applySelection(): Promise<void> {
-    if (!generation)
+    if (!attempt.current)
       throw new V2ControllerError({
         kind: "not-found",
         message: "OpenCode V2 generation is unavailable",
       });
     if (state.execution.type !== "idle" && state.execution.type !== "error") return;
     if (modelChanged(state.model, state.desiredModel) && state.desiredModel !== null) {
-      await generation.operations.switchModel({
+      await requireGeneration().operations.switchModel({
         sessionID: client.sessionId,
         model: modelInput(state.desiredModel),
       });
     }
     if (agentChanged(state.agent, state.desiredAgent) && state.desiredAgent !== null) {
-      await generation.operations.switchAgent({
+      await requireGeneration().operations.switchAgent({
         sessionID: client.sessionId,
         agent: state.desiredAgent,
       });
@@ -836,6 +854,7 @@ export function createV2ThreadController(
         kind: "recovery-required",
         message: V2_RECOVERY_REQUIRED_MESSAGE,
       });
+    const generation = attempt.current;
     if (!generation)
       throw new V2ControllerError({
         kind: "not-found",
@@ -913,6 +932,7 @@ export function createV2ThreadController(
   }
 
   async function cancel(): Promise<void> {
+    const generation = attempt.current;
     if (disposed || !generation || state.execution.type === "reverting") return;
     if (state.execution.type === "idle" || state.execution.type === "error") return;
     const current = state.execution;
@@ -972,6 +992,7 @@ export function createV2ThreadController(
         kind: "recovery-required",
         message: V2_RECOVERY_REQUIRED_MESSAGE,
       });
+    const generation = attempt.current;
     if (!generation)
       throw new V2ControllerError({
         kind: "not-found",
@@ -999,6 +1020,7 @@ export function createV2ThreadController(
     decision: "once" | "always" | "reject",
   ): Promise<void> {
     if (answeredPermissions.has(requestId)) return;
+    const generation = attempt.current;
     if (!generation)
       throw new V2ControllerError({
         kind: "not-found",
@@ -1055,6 +1077,7 @@ export function createV2ThreadController(
     formId: string,
     answer: SessionFormReplyInput["answer"],
   ): Promise<void> {
+    const generation = attempt.current;
     if (!generation)
       throw new V2ControllerError({
         kind: "not-found",
@@ -1067,6 +1090,7 @@ export function createV2ThreadController(
   }
 
   async function rejectForm(formId: string): Promise<void> {
+    const generation = attempt.current;
     if (!generation)
       throw new V2ControllerError({
         kind: "not-found",
@@ -1085,6 +1109,7 @@ export function createV2ThreadController(
         kind: "recovery-required",
         message: V2_RECOVERY_REQUIRED_MESSAGE,
       });
+    const generation = attempt.current;
     const candidateId = selectedAssistantParentId ?? state.messageOrder.at(-1) ?? null;
     if (!candidateId || !generation)
       throw new V2ControllerError({
@@ -1102,12 +1127,12 @@ export function createV2ThreadController(
       });
     dispatch({ type: "revert_recovery_staging", userMessageId: user.id });
     try {
-      await generation.operations.revertStage({
+      await requireGeneration().operations.revertStage({
         sessionID: client.sessionId,
         messageID: user.id,
         files: true,
       });
-      await generation.operations.revertCommit({ sessionID: client.sessionId });
+      await requireGeneration().operations.revertCommit({ sessionID: client.sessionId });
       await refresh();
       dispatch({ type: "revert_recovery_cleared" });
     } catch (error) {
@@ -1121,11 +1146,11 @@ export function createV2ThreadController(
     disposed = true;
     if (reconnectTimer !== null) clearTimeout(reconnectTimer);
     reconnectTimer = null;
-    connectionController?.abort();
-    lifecycleController?.abort();
+    attempt.abortConnection();
+    attempt.abortLifecycle();
     gate.reject(new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }));
-    const current = generation;
-    generation = null;
+    const current = attempt.current;
+    attempt.setCurrent(null);
     if (current) void current.events.close();
     prompts.disposeAll();
     listeners.clear();
