@@ -121,53 +121,15 @@ describe("baseline: OpenCode V2 controller behaviour today", () => {
     });
   });
 
-  describe("M1 — a stream failure during hydration resets the retry budget", () => {
-    it("never reaches the terminal gate, because the superseded attempt resets the counter", async () => {
-      // The auxiliary read hangs until the connection is aborted, which is the
-      // window where the superseded attempt returns EARLY (rather than
-      // throwing) and therefore reaches the `reconnectAttempt = 0` reset.
-      //
-      // Every attempt gets its own generation, because each connect consumes
-      // the next one — and each hangs the same way.
-      const generations = Array.from({ length: 8 }, (_unused, index) =>
-        createGeneration(index + 1, {
-          inboxList: (_input, signal) =>
-            new Promise((_resolve, reject) => {
-              signal.addEventListener(
-                "abort",
-                () => reject(new DOMException("aborted", "AbortError")),
-                { once: true },
-              );
-            }),
-        }),
-      );
-      const client = createClient(generations);
-      const controller = createV2ThreadController(client, {
-        maxReconnectAttempts: 3,
-        initialReconnectDelayMs: 10,
-        maxReconnectDelayMs: 10,
-      });
-
-      try {
-        void controller.load().catch(() => undefined);
-
-        for (let cycle = 0; cycle < 6; cycle += 1) {
-          await waitForHydration(controller);
-          const live = generations[(client.connectCount - 1) % generations.length];
-          live?.events.fail(new Error("stream died during hydration"));
-          await waitForState(controller, (state) => state.connection.type === "reconnecting");
-          await new Promise((r) => setTimeout(r, 60));
-        }
-
-        // PINNED DEFECT (M1): a budget of 3 is never exhausted, because every
-        // superseded attempt resets the counter on its way out.
-        expect(controller.getState().connection).not.toEqual({ type: "failed", attempt: 3 });
-        expect(client.connectCount).toBeGreaterThan(4);
-      } finally {
-        controller.dispose();
-      }
-    });
-
+  /**
+   * The control that proves the ceiling was never the broken part.
+   *
+   * M1 was an accounting defect on the *stream-failure* path: a superseded
+   * attempt reached the shared reset on its way out. The pin that asserted
+   * that behaviour is deleted with the fix. This case stays because the
+   * connect-failure path was already correct and must not regress.
+   */
+  describe("the retry ceiling on the connect-failure path", () => {
     it("CONTROL: the ceiling IS reached when the retries fail to connect", async () => {
       // The same controller, with the failure moved to the connect step. This
       // is the path the existing suite already covers, and it is here so the
@@ -191,57 +153,7 @@ describe("baseline: OpenCode V2 controller behaviour today", () => {
     });
   });
 
-  describe("M2 — a superseded attempt's late failure overwrites the live state", () => {
-    it("sets load to error over a healthy connection and forces another connect", async () => {
-      const history = deferred<SessionMessagesResponse>();
-      // Attempt 0 blocks on the history read; attempts 1 and 2 are ordinary.
-      const generations = [
-        createGeneration(1, { historyList: () => history.promise }),
-        createGeneration(2),
-        createGeneration(3),
-      ];
-      const client = createClient(generations);
-      const controller = createV2ThreadController(client, {
-        maxReconnectAttempts: 10,
-        initialReconnectDelayMs: 50,
-      });
-
-      try {
-        void controller.load().catch(() => undefined);
-        await waitForHydration(controller);
-
-        // The first attempt's stream dies while it is still hydrating.
-        generations[0]?.events.fail(new Error("stream died during hydration"));
-        await waitForState(controller, (state) => state.connection.type === "reconnecting");
-
-        // A manual takeover: the second attempt connects and hydrates cleanly.
-        void controller.load().catch(() => undefined);
-        await waitForState(controller, (state) => state.load.type === "ready");
-        expect(client.connectCount).toBe(2);
-        expect(controller.getState().connection.type).toBe("connected");
-
-        // The superseded attempt's history read now completes. The attempt was
-        // aborted, so the read reports the abort rather than a page — and the
-        // failure lands on the LIVE state, which is healthy.
-        history.resolve(EMPTY_PAGE);
-        await new Promise((r) => setTimeout(r, 50));
-
-        // PINNED DEFECT (M2): the dead attempt's failure lands on the LIVE
-        // state, which is healthy.
-        expect(controller.getState().load.type).toBe("error");
-        expect(controller.getState().connection.type).toBe("connected");
-
-        // And the healthy attempt's in-flight load promise was dropped, so the
-        // next readiness wait starts a THIRD connection.
-        await controller.awaitReady();
-        expect(client.connectCount).toBe(3);
-      } finally {
-        controller.dispose();
-      }
-    });
-  });
-
-  describe("M3 — an ambiguous prompt never settles", () => {
+  describe("M3 - an ambiguous prompt never settles", () => {
     it("leaves sendMessage pending when the request fails non-definitively", async () => {
       const generation = createGeneration(1);
       const client = createClient([generation]);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessagesResponse, V2Event } from "@opencode/client";
+import { AttemptSupersededError, createAttempt } from "@web/features/opencode/sync/attempt.ts";
 import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
   EVENT_INBOX_ID,
@@ -16,17 +17,17 @@ import {
 } from "@web/testing/opencode/v2ThreadControllerHarness";
 
 /**
- * DEFECT REGRESSION — quarantined.
+ * DEFECT REGRESSION — quarantined, and promoted as findings are fixed.
  *
- * ## WHY EVERY TEST HERE IS `test.todo`
+ * ## WHY A TEST HERE IS USUALLY `test.todo`
  *
  * Each one asserts the behaviour a finding says the product **should** have.
- * Against today's code they fail — that failure is the point. They are
- * committed as `test.todo`, which means:
+ * Against the code of the day they fail — that failure is the point — so an
+ * unresolved finding's entry is committed as `test.todo`, which means:
  *
- * - an ordinary `bun run test` **executes no todo body**, so the quarantine
- *   can never break the build;
- * - `bun test --todo` **executes** them, which is how the defect is
+ * - an ordinary `bun run test` **executes no todo body**, so an unresolved
+ *   finding can never break the build;
+ * - `bun test --todo` **executes** it, which is how the defect is
  *   demonstrated and how the failure is captured.
  *
  * The plan's rule is that the evidence for a finding is the **printed
@@ -34,6 +35,14 @@ import {
  * `Received:` — and never an exit code. A quarantine of only failing todos
  * exits `0` in both modes, so an exit code could never show that a defect
  * was demonstrated.
+ *
+ * ## WHY SOME ENTRIES ARE PLAIN `test`
+ *
+ * An entry whose finding has been fixed is promoted: it stops being a
+ * demonstration of a defect and becomes a regression test that must keep
+ * passing. `R-M1`, `R-M2`, `R-M4` and `R-L4` are in that state; the ones still
+ * marked `test.todo` are findings that are still open. The guard distinguishes
+ * the two, so a todo that starts passing is reported rather than ignored.
  *
  * ## HOW THESE LEAVE THE QUARANTINE
  *
@@ -103,7 +112,7 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  test.todo("R-M1: the reconnect ceiling is reached when the stream dies during hydration", async () => {
+  test("R-M1: the reconnect ceiling is reached when the stream dies during hydration", async () => {
     const generations = Array.from({ length: 8 }, (_unused, index) =>
       createGeneration(index + 1, {
         inboxList: (_input, signal) =>
@@ -126,10 +135,14 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
       void controller.load().catch(() => undefined);
 
       for (let cycle = 0; cycle < 6; cycle += 1) {
+        if (controller.getState().connection.type === "failed") break;
         await waitForState(controller, (state) => state.load.type === "loading");
         const live = generations[(client.connectCount - 1) % generations.length];
         live?.events.fail(new Error("stream died during hydration"));
-        await waitForState(controller, (state) => state.connection.type === "reconnecting");
+        await waitForState(
+          controller,
+          (state) => state.connection.type === "reconnecting" || state.connection.type === "failed",
+        );
         await new Promise((r) => setTimeout(r, 60));
       }
 
@@ -141,11 +154,12 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  test.todo("R-M2: a superseded attempt's late failure does not touch the live state", async () => {
+  test("R-M2: a superseded attempt's late failure does not touch the live state", async () => {
     const history = deferred<SessionMessagesResponse>();
+    const liveHistory = deferred<SessionMessagesResponse>();
     const generations = [
       createGeneration(1, { historyList: () => history.promise }),
-      createGeneration(2),
+      createGeneration(2, { historyList: () => liveHistory.promise }),
       createGeneration(3),
     ];
     const client = createClient(generations);
@@ -160,9 +174,20 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
       generations[0]?.events.fail(new Error("stream died during hydration"));
       await waitForState(controller, (state) => state.connection.type === "reconnecting");
 
+      // A manual takeover: the second attempt connects and starts hydrating.
       void controller.load().catch(() => undefined);
-      await waitForState(controller, (state) => state.load.type === "ready");
+      await waitForState(controller, (state) => state.load.type === "loading");
       expect(client.connectCount).toBe(2);
+
+      // A second manual load while that attempt is in flight must JOIN it, not
+      // start a third connection: the attempt owns the load slot, so the
+      // promise a retry or a manual call started is not invisible to the next
+      // caller.
+      void controller.load().catch(() => undefined);
+      expect(client.connectCount).toBe(2);
+
+      liveHistory.resolve(EMPTY_PAGE);
+      await waitForState(controller, (state) => state.load.type === "ready");
 
       history.resolve(EMPTY_PAGE);
       await new Promise((r) => setTimeout(r, 50));
@@ -177,6 +202,66 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     } finally {
       controller.dispose();
     }
+  });
+
+  test("R-M4: a failed history read leaves a defined state, and later events are applied", async () => {
+    const generation = createGeneration(1, {
+      historyList: async () => {
+        throw new Error("history read failed");
+      },
+    });
+    const client = createClient([generation]);
+    // Budget 0: the failure must reach the DEFINED terminal state rather than
+    // a controller that is loaded-but-not-loading forever. A budget of 1 is
+    // covered by R-M1's reconnect path.
+    const controller = createV2ThreadController(client, {
+      maxReconnectAttempts: 0,
+      initialReconnectDelayMs: 10,
+    });
+    try {
+      void controller.load().catch(() => undefined);
+      await waitForState(controller, (state) => state.load.type === "error");
+
+      // The failure is classified, not half-applied: a controller that reports
+      // `load: error` while still claiming `connection: connected` is the
+      // half-initialised state this finding is about.
+      expect(controller.getState().connection.type).toBe("failed");
+
+      // And the transcript is not stranded behind a hydration that will never
+      // happen: a delta arriving now is applied.
+      generation.events.emit(hydrationTimeDelta("evt_m4_delta", "after the failed history read"));
+      await waitForState(
+        controller,
+        (state) => state.messages[LIVE_ASSISTANT_MESSAGE_ID] !== undefined,
+      );
+      const message = controller.getState().messages[LIVE_ASSISTANT_MESSAGE_ID];
+      const text = (message?.parts ?? [])
+        .map((part) => (part.kind === "text" ? part.value : ""))
+        .join("");
+      expect(text).toContain("after the failed history read");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  test("R-L4: a superseded attempt cannot resolve a readiness promise", async () => {
+    const lifecycle = new AbortController();
+    const stale = createAttempt(1, lifecycle.signal);
+    const live = createAttempt(2, lifecycle.signal);
+
+    stale.beginHydration();
+    stale.retire();
+    // A late hydration return is the case the defect is about: it used to
+    // resolve whichever gate was current, which was the NEWER attempt's.
+    stale.markReady();
+
+    await expect(stale.gate.pending()).rejects.toBeInstanceOf(AttemptSupersededError);
+    // The dead attempt cannot leave the transcript buffering either.
+    expect(stale.hydrating).toBe(false);
+
+    // The live attempt's own outcome is the only thing that settles readiness.
+    live.markReady();
+    await expect(live.gate.pending()).resolves.toBeUndefined();
   });
 
   test.todo("R-M3: an ambiguous prompt reaches a typed, bounded outcome", async () => {

@@ -13,6 +13,7 @@ import {
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
+  OPENCODE_V2_RETRYABLE_HTTP_STATUSES,
 } from "@/features/opencode/config";
 import {
   AUTO,
@@ -37,14 +38,13 @@ import {
   type V2PromptAdmissionResult,
   type V2PromptSubmission,
 } from "./sync/promptsInFlight";
-import { createStartupGate } from "./sync/startupGate";
-import { createAttempt } from "./sync/attempt";
+import { AttemptSupersededError, createAttempt, type Attempt } from "./sync/attempt";
 import {
   createEventPipeline,
   isAssistantMessageEvent,
   type EventPipelineHost,
 } from "./sync/eventPipeline";
-import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
+import type { OpenCodeV2Client, OpenCodeV2Generation } from "./v2Client";
 import type {
   V2DesiredSelection,
   V2HistorySnapshot,
@@ -153,10 +153,7 @@ function isDefinitiveFailure(error: unknown): boolean {
     status !== undefined &&
     status >= 400 &&
     status < 500 &&
-    status !== 408 &&
-    status !== 409 &&
-    status !== 425 &&
-    status !== 429
+    !OPENCODE_V2_RETRYABLE_HTTP_STATUSES.includes(status)
   );
 }
 
@@ -212,11 +209,22 @@ export function createV2ThreadController(
 ): V2ThreadController {
   const cfg: V2ThreadControllerConfig = { ...DEFAULT_V2_CONTROLLER_CONFIG, ...config };
   let state = createInitialV2ThreadState(client.sessionId, client.directory);
-  const attempt = createAttempt();
+  /**
+   * The attempt that may currently commit, and the only one whose readiness
+   * anyone waits on.
+   *
+   * `null` means there is no live attempt: it was superseded, retired for a
+   * reconnect, or disposed. Every continuation captures the attempt it started
+   * for and calls `isLive` before it commits anything — state, readiness, a
+   * load slot or the retry budget.
+   */
+  let currentAttempt: Attempt | null = null;
+  /** Monotonic, so two attempts are never confused even after a retire. */
+  let nextAttemptId = 0;
+  /** Outlives every attempt; aborted only by `dispose`. */
+  const lifecycle = new AbortController();
   let disposed = false;
   let selectionGeneration = 0;
-  const gate = createStartupGate();
-  let isHydrating = false;
   let resyncInFlight = false;
   /** Latest full history projection, kept so a re-sync can reproject without re-paging. */
   let lastHistorySnapshot: V2HistorySnapshot | null = null;
@@ -237,16 +245,70 @@ export function createV2ThreadController(
     get isDisposed(): boolean {
       return disposed;
     },
-    attempt,
     config: cfg,
     dispatch,
     applyEvent,
     startConnection,
-    failReady: (error) => gate.reject(new V2ControllerError(error)),
+    isLive,
+    retireAttempt,
+    failReady: (failed, error) => failed.fail(new V2ControllerError(error)),
     toSafeError: safeError,
   };
   const pipeline = createEventPipeline(pipelineHost);
   const history = createSessionMessageLoader({ dispatch });
+
+  /**
+   * Whether an attempt still owns the runtime.
+   *
+   * This is the single identity check every asynchronous continuation makes.
+   * It is deliberately about the ATTEMPT, not the generation: an attempt that
+   * was superseded must stop committing even while its own generation object
+   * is still around, and a newer attempt that has not connected yet has no
+   * generation at all.
+   *
+   * @param candidate - The attempt a continuation started for.
+   * @returns True when it may still commit.
+   */
+  function isLive(candidate: Attempt): boolean {
+    return !disposed && currentAttempt === candidate && !candidate.retired;
+  }
+
+  /**
+   * Mints the next attempt and supersedes the previous one.
+   *
+   * Supersession happens here, synchronously, before anything else in the new
+   * attempt runs: from the moment this returns, the old attempt's loops,
+   * hydration and failure handlers all observe `retired` and stop.
+   *
+   * @returns The new attempt.
+   */
+  function beginAttempt(): Attempt {
+    retireAttempt(currentAttempt);
+    nextAttemptId += 1;
+    const started = createAttempt(nextAttemptId, lifecycle.signal);
+    currentAttempt = started;
+    return started;
+  }
+
+  /**
+   * Tears one attempt down without touching any other.
+   *
+   * Closes that attempt's stream, aborts its signals, drops its readiness and
+   * clears its own load slot. A newer attempt's promise and stream are not
+   * reachable from here (M2).
+   *
+   * @param candidate - The attempt to retire, or `null`.
+   */
+  function retireAttempt(candidate: Attempt | null): void {
+    if (!candidate) return;
+    if (currentAttempt === candidate) currentAttempt = null;
+    const generation = candidate.generation;
+    candidate.retire();
+    candidate.setLoad(null);
+    // The attempt is already being abandoned, so a cancellation failure has no
+    // recoverable outcome; it must not surface as an unhandled rejection.
+    if (generation) void generation.events.close().catch(() => undefined);
+  }
 
   function notify(): void {
     if (disposed) return;
@@ -261,7 +323,7 @@ export function createV2ThreadController(
    * second read, not frozen out by the first.
    */
   function requireGeneration(): OpenCodeV2Generation {
-    const generation = attempt.current;
+    const generation = currentAttempt?.generation ?? null;
     if (!generation)
       throw new V2ControllerError({
         kind: "not-found",
@@ -402,7 +464,10 @@ export function createV2ThreadController(
   function applyEvent(event: V2Event, eventOrdinal: number): void {
     dispatch({ type: "v2_event", event, ordinal: eventOrdinal, mode: "observe-only" });
     if (isAssistantMessageEvent(event)) {
-      if (isHydrating) {
+      // Buffering is a property of the LIVE attempt's hydration. A failed or
+      // superseded attempt no longer reports `hydrating`, so a dead hydration
+      // cannot strand the transcript by buffering every later delta (M4).
+      if (currentAttempt?.hydrating ?? false) {
         pipeline.buffer(event, eventOrdinal);
         return;
       }
@@ -510,19 +575,31 @@ export function createV2ThreadController(
     });
   }
 
-  async function hydrate(
-    currentGeneration: OpenCodeV2Generation,
-    signals: V2ConnectionSignals,
-  ): Promise<void> {
+  /**
+   * Projects the attempt's first history into the transcript.
+   *
+   * Returns early — never resolving readiness — as soon as the attempt it was
+   * started for stops owning the runtime. The caller decides whether the
+   * attempt completed; an early return is not a completion.
+   *
+   * @param live - The attempt this hydration belongs to.
+   */
+  async function hydrate(live: Attempt): Promise<void> {
+    const currentGeneration = live.generation;
+    if (currentGeneration === null)
+      throw new V2ControllerError({
+        kind: "not-found",
+        message: "OpenCode V2 generation is unavailable",
+      });
     const serverInfo = await currentGeneration.operations.serverInfo();
-    if (disposed || !attempt.isCurrent(currentGeneration)) return;
+    if (!isLive(live)) return;
     dispatch({
       type: "connection_changed",
       connection: { type: "connected", serverVersion: serverInfo.version },
     });
     dispatch({ type: "load_started" });
     const session = await currentGeneration.operations.sessionGet({ sessionID: client.sessionId });
-    if (disposed || !attempt.isCurrent(currentGeneration)) return;
+    if (!isLive(live)) return;
     dispatch({ type: "session_hydrated", session });
     if (session.revert !== undefined) {
       dispatch({ type: "revert_recovery_clearing", userMessageId: session.revert.messageID });
@@ -538,8 +615,8 @@ export function createV2ThreadController(
       dispatch({ type: "revert_recovery_cleared" });
     }
     const historyRequestOrdinal = pipeline.currentOrdinal();
-    const snapshot = await history.read(currentGeneration, signals.connectionSignal);
-    if (disposed || !attempt.isCurrent(currentGeneration)) return;
+    const snapshot = await history.read(currentGeneration, live.signals.connectionSignal);
+    if (!isLive(live)) return;
     lastHistorySnapshot = snapshot;
     history.commit(snapshot, currentPermissions());
     const buffered = pipeline.bufferedSince(historyRequestOrdinal);
@@ -551,9 +628,12 @@ export function createV2ThreadController(
         mode: "observe-and-apply",
       });
     pipeline.clearBuffer();
-    isHydrating = false;
+    // The transcript is projected: stop buffering live deltas even though the
+    // auxiliary read is still running. This is the attempt's own transition,
+    // not a claim that the runtime is ready.
+    live.projectionCommitted();
     const auxiliary = await loadAuxiliary(currentGeneration);
-    if (disposed || !attempt.isCurrent(currentGeneration)) return;
+    if (!isLive(live)) return;
     applyAuxiliary(auxiliary);
     // History was projected before the auxiliary permission snapshot arrived.
     // Reproject once so tool calls restored from history carry their approval
@@ -577,12 +657,13 @@ export function createV2ThreadController(
    */
   async function resyncAuxiliary(): Promise<void> {
     if (disposed) return;
-    const currentGeneration = attempt.current;
-    if (currentGeneration === null || resyncInFlight) return;
+    const live = currentAttempt;
+    const currentGeneration = live?.generation ?? null;
+    if (!live || currentGeneration === null || resyncInFlight) return;
     resyncInFlight = true;
     try {
       const snapshot = await loadAuxiliary(currentGeneration);
-      if (disposed || !attempt.isCurrent(currentGeneration)) return;
+      if (!isLive(live)) return;
       const previous = state;
       applyAuxiliary(snapshot);
       // The reducer hands back the SAME array when nothing changed, so identity
@@ -601,59 +682,102 @@ export function createV2ThreadController(
     }
   }
 
-  async function startConnection(): Promise<void> {
-    if (disposed) throw new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE });
-    isHydrating = true;
-    const signals: V2ConnectionSignals = attempt.beginConnection();
-    gate.open();
+  /**
+   * Establishes one connection attempt and hydrates it.
+   *
+   * The attempt is minted synchronously and the returned promise is recorded as
+   * THAT attempt's load, so every caller — the retry timer, `ensureLoaded`, a
+   * manual `load()` — either joins the attempt in flight or starts one only
+   * after it has failed. Recording the load here rather than at each call site
+   * is what keeps a retry-started attempt from being duplicated by a concurrent
+   * `load()`.
+   */
+  function startConnection(): Promise<void> {
+    if (disposed)
+      return Promise.reject(
+        new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }),
+      );
+    const live = beginAttempt();
+    const started = runAttempt(live).catch((error: unknown) => {
+      // This attempt's own slot, so a newer attempt's promise cannot be
+      // dropped from here (M2).
+      live.setLoad(null);
+      throw error;
+    });
+    live.setLoad(started);
+    return started;
+  }
+
+  /**
+   * Connects and hydrates one attempt.
+   *
+   * Every branch checks the attempt's liveness before it dispatches, settles
+   * readiness, or lets a failure reach the retry scheduler, so a superseded
+   * attempt cannot mutate, settle or tear down the attempt that replaced it
+   * (M2, L4).
+   *
+   * A hydration that fails is routed to the same retry path as a connection
+   * that fails, so a failed history read reaches a defined state — reconnect
+   * within the budget, or terminal failure — instead of freezing (M4).
+   *
+   * @param live - The attempt this call owns.
+   */
+  async function runAttempt(live: Attempt): Promise<void> {
     let currentGeneration: OpenCodeV2Generation;
     try {
-      currentGeneration = await client.connect(signals);
+      currentGeneration = await client.connect(live.signals);
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 connection failed");
-      dispatch({ type: "load_failed", error: safe });
-      gate.reject(new V2ControllerError(safe));
-      if (!disposed) pipeline.scheduleReconnect(safe);
+      if (isLive(live)) {
+        live.fail(new V2ControllerError(safe));
+        dispatch({ type: "load_failed", error: safe });
+        pipeline.scheduleReconnect(live, safe);
+      }
       throw new V2ControllerError(safe);
     }
-    if (disposed || signals.connectionSignal.aborted) {
+    if (!isLive(live)) {
+      // Superseded between the connect and here. Close only this attempt's
+      // stream, and report supersession rather than a runtime failure.
       await currentGeneration.events.close();
-      throw new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE });
+      throw new AttemptSupersededError(live.id);
     }
-    attempt.setCurrent(currentGeneration);
-    void pipeline.consume(currentGeneration);
+    live.adopt(currentGeneration);
+    live.beginHydration();
+    void pipeline.consume(live);
     try {
-      await hydrate(currentGeneration, signals);
-      gate.resolve();
+      await hydrate(live);
+      if (!isLive(live)) throw new AttemptSupersededError(live.id);
+      // The attempt completed its hydration while it still owned the runtime:
+      // only this outcome may settle readiness and reset the retry budget
+      // (M1, L4).
+      live.markReady();
       pipeline.resetAttempt();
     } catch (error) {
+      if (disposed) return;
+      if (live.retired) throw new AttemptSupersededError(live.id);
       const safe = safeError(error, "OpenCode V2 runtime failed to load");
+      live.fail(new V2ControllerError(safe));
       dispatch({ type: "load_failed", error: safe });
-      gate.reject(error);
-      throw error;
+      pipeline.scheduleReconnect(live, safe);
+      throw new V2ControllerError(safe);
+    } finally {
+      // Structural, so no exit path can leave the transcript buffering
+      // behind a hydration that is not happening (M4).
+      live.endHydration();
     }
   }
 
   async function ensureLoaded(): Promise<void> {
-    const existing = attempt.load();
+    const existing = currentAttempt?.load() ?? null;
     if (existing) return existing;
     // D2: manual load during a pending timer cancels the timer and takes over.
     pipeline.cancelReconnect();
-    const started = startConnection().catch((error) => {
-      attempt.setLoad(null);
-      throw error;
-    });
-    attempt.setLoad(started);
-    return started;
+    return startConnection();
   }
 
   async function refresh(): Promise<void> {
-    await ensureLoaded();
-    if (!attempt.current)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    await awaitReady();
+    requireGeneration();
     dispatch({ type: "load_started" });
     try {
       const session = await requireGeneration().operations.sessionGet({
@@ -671,19 +795,39 @@ export function createV2ThreadController(
     }
   }
 
+  /**
+   * Waits until the runtime is ready, following a takeover if one happens.
+   *
+   * A wait is about the RUNTIME, not about one attempt: if the attempt it was
+   * waiting on is superseded, it waits for the attempt that replaced it rather
+   * than reporting the replacement as a failure. Only a real failure — a
+   * terminal one, or a disposed runtime — is thrown.
+   */
   async function awaitReady(): Promise<void> {
-    await ensureLoaded();
-    const pending = gate.pending();
-    if (pending) await pending;
+    for (;;) {
+      try {
+        await ensureLoaded();
+      } catch (error) {
+        if (error instanceof AttemptSupersededError) continue;
+        throw error;
+      }
+      const live = currentAttempt;
+      if (live === null) continue;
+      const pending = live.gate.pending();
+      if (pending === null) return;
+      try {
+        await pending;
+      } catch (error) {
+        if (error instanceof AttemptSupersededError) continue;
+        throw error;
+      }
+      return;
+    }
   }
 
   async function reconcileStagedRevert(): Promise<void> {
     await awaitReady();
-    if (!attempt.current)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    requireGeneration();
     try {
       const session = await requireGeneration().operations.sessionGet({
         sessionID: client.sessionId,
@@ -735,7 +879,7 @@ export function createV2ThreadController(
   }
 
   async function applySelection(): Promise<void> {
-    if (!attempt.current)
+    if (!currentAttempt?.generation)
       throw new V2ControllerError({
         kind: "not-found",
         message: "OpenCode V2 generation is unavailable",
@@ -765,12 +909,7 @@ export function createV2ThreadController(
         kind: "recovery-required",
         message: V2_RECOVERY_REQUIRED_MESSAGE,
       });
-    const generation = attempt.current;
-    if (!generation)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    const generation = requireGeneration();
     const activeGeneration = generation;
     const customId = message.metadata?.custom?.[V2_PROMPT_MESSAGE_ID_KEY];
     const messageId =
@@ -843,7 +982,7 @@ export function createV2ThreadController(
   }
 
   async function cancel(): Promise<void> {
-    const generation = attempt.current;
+    const generation = currentAttempt?.generation ?? null;
     if (disposed || !generation || state.execution.type === "reverting") return;
     if (state.execution.type === "idle" || state.execution.type === "error") return;
     const current = state.execution;
@@ -903,12 +1042,7 @@ export function createV2ThreadController(
         kind: "recovery-required",
         message: V2_RECOVERY_REQUIRED_MESSAGE,
       });
-    const generation = attempt.current;
-    if (!generation)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    const generation = requireGeneration();
     const id = createV2MessageId();
     const result = await generation.operations.compact({
       sessionID: client.sessionId,
@@ -931,12 +1065,7 @@ export function createV2ThreadController(
     decision: "once" | "always" | "reject",
   ): Promise<void> {
     if (answeredPermissions.has(requestId)) return;
-    const generation = attempt.current;
-    if (!generation)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    const generation = requireGeneration();
     const request = state.permissions.find((candidate) => candidate.id === requestId);
     if (!request)
       throw new V2ControllerError({
@@ -988,12 +1117,7 @@ export function createV2ThreadController(
     formId: string,
     answer: SessionFormReplyInput["answer"],
   ): Promise<void> {
-    const generation = attempt.current;
-    if (!generation)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    const generation = requireGeneration();
     if (formReplies.has(formId)) return;
     await generation.operations.formReply({ sessionID: client.sessionId, formID: formId, answer });
     formReplies.add(formId);
@@ -1001,12 +1125,7 @@ export function createV2ThreadController(
   }
 
   async function rejectForm(formId: string): Promise<void> {
-    const generation = attempt.current;
-    if (!generation)
-      throw new V2ControllerError({
-        kind: "not-found",
-        message: "OpenCode V2 generation is unavailable",
-      });
+    const generation = requireGeneration();
     if (formReplies.has(formId)) return;
     await generation.operations.formCancel({ sessionID: client.sessionId, formID: formId });
     formReplies.add(formId);
@@ -1020,7 +1139,7 @@ export function createV2ThreadController(
         kind: "recovery-required",
         message: V2_RECOVERY_REQUIRED_MESSAGE,
       });
-    const generation = attempt.current;
+    const generation = currentAttempt?.generation ?? null;
     const candidateId = selectedAssistantParentId ?? state.messageOrder.at(-1) ?? null;
     if (!candidateId || !generation)
       throw new V2ControllerError({
@@ -1056,12 +1175,11 @@ export function createV2ThreadController(
     if (disposed) return;
     disposed = true;
     pipeline.cancelReconnect();
-    attempt.abortConnection();
-    attempt.abortLifecycle();
-    gate.reject(new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }));
-    const current = attempt.current;
-    attempt.setCurrent(null);
-    if (current) void current.events.close();
+    // Retiring the current attempt rejects its readiness with the superseded
+    // sentinel; `awaitReady` then finds a disposed runtime and reports it.
+    retireAttempt(currentAttempt);
+    currentAttempt = null;
+    lifecycle.abort();
     prompts.disposeAll();
     listeners.clear();
   }

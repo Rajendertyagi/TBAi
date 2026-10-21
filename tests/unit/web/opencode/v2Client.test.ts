@@ -47,6 +47,10 @@ type RestBehavior = "immediate" | "deferred";
 type FixtureOptions = {
   readonly event?: EventBehavior;
   readonly rest?: RestBehavior;
+  /** Status the history (`/message`) route answers with, for error-path tests. */
+  readonly historyStatus?: number;
+  /** Body the history route answers with when `historyStatus` is set. */
+  readonly historyBody?: unknown;
 };
 
 type Fixture = {
@@ -119,6 +123,9 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
         return Response.json(SERVER_INFO);
       }
       if (url.pathname.endsWith("/message")) {
+        if (options.historyStatus !== undefined) {
+          return Response.json(options.historyBody ?? {}, { status: options.historyStatus });
+        }
         return Response.json(EMPTY_HISTORY);
       }
       if (url.pathname.includes("/session/")) {
@@ -386,6 +393,44 @@ describe("createOpenCodeV2Client", () => {
       expect(generation.operations).not.toHaveProperty("client");
       expect(generation.history).not.toHaveProperty("client");
       expect(generation.events).not.toHaveProperty("client");
+    } finally {
+      await generation.events.close();
+    }
+  });
+
+  it("loses the transport status when the client declares it", async () => {
+    // PINNED AGAINST THE INSTALLED @opencode/client, not against TBAi code.
+    //
+    // `message.list` declares 400/401/404/500, so the client answers any of
+    // them with `declared(body)` - a plain `Error` carrying the parsed body -
+    // and the transport status is gone. `docs/decisions.md` (2026-10-21) uses
+    // exactly this to justify why the reconnect policy has no permanent-4xx
+    // shortcut: a deleted session and a transient 500 arrive indistinguishable.
+    //
+    // This is the drift guard for that claim. If a future client version starts
+    // exposing the status, it fails, and the shortcut can be reinstated with
+    // evidence instead of a guess.
+    const fixture = makeFixture({
+      historyStatus: 404,
+      historyBody: { message: "session not found" },
+    });
+    const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, {
+      fetch: fixture.fetch,
+    });
+    const generation = await connectAfterMarker(client, fixture);
+
+    try {
+      let thrown: unknown;
+      try {
+        await generation.history.list({ sessionID: SESSION_ID });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      const failure = thrown as { message?: unknown; status?: unknown };
+      expect(failure.message).toBe("session not found");
+      expect(failure.status).toBeUndefined();
     } finally {
       await generation.events.close();
     }

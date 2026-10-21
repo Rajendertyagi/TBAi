@@ -17,7 +17,22 @@ export const OPENCODE_V2_EVENT_BUFFER_LIMIT = 512;
 export const OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256;
 export const OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS = 250;
 export const OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000;
+/**
+ * The backoff ceiling while the document is visible and the browser is online.
+ *
+ * A reader who is looking at the window is waiting, so the last retries are
+ * kept short. The configured `OPENCODE_V2_MAX_RECONNECT_DELAY_MS` remains an
+ * upper bound on top of this — the effective ceiling is the smaller of the two.
+ */
+export const OPENCODE_V2_FOREGROUND_RECONNECT_CAP_MS = 5_000;
 export const OPENCODE_V2_MAX_RECONNECT_ATTEMPTS = 10;
+/**
+ * The 4xx statuses that are NOT permanent: a retry can legitimately succeed.
+ *
+ * Used by the prompt path to decide whether a failure may be reported as a
+ * definitive rejection instead of a transient one.
+ */
+export const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409, 425, 429];
 /**
  * Idle re-sync cadence for the auxiliary snapshot (inbox, permissions, forms).
  *

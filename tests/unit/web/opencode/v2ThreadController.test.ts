@@ -15,7 +15,10 @@ import {
   createV2ThreadController,
   type V2ThreadController,
 } from "@web/features/opencode/v2ThreadController.ts";
-import { computeReconnectDelay } from "@web/features/opencode/sync/eventPipeline.ts";
+import {
+  computeReconnectDelay,
+  readReconnectConditions,
+} from "@web/features/opencode/sync/eventPipeline.ts";
 import { clearAllAutoPolicies, setAutoPolicy } from "@web/features/opencode/sessionAutoPolicy.ts";
 import {
   createInitialV2ThreadState,
@@ -181,9 +184,27 @@ describe("native V2 thread controller lifecycle", () => {
 });
 
 describe("native V2 reconnect delay", () => {
-  it("doubles from the initial delay and saturates at the cap", () => {
+  it("doubles from the initial delay and saturates at the foreground cap", () => {
+    // Visible and online is the case a reader is waiting through, so the last
+    // retries are held at the shorter foreground cap rather than the 10s
+    // ceiling (Phase 3, decision D2).
     const delays = [0, 1, 2, 3, 4, 5, 6, 7, 20].map((attempt) => computeReconnectDelay(attempt));
-    expect(delays).toEqual([250, 500, 1000, 2000, 4000, 8000, 10_000, 10_000, 10_000]);
+    expect(delays).toEqual([250, 500, 1000, 2000, 4000, 5_000, 5_000, 5_000, 5_000]);
+  });
+
+  it("uses the configured ceiling when the document is hidden", () => {
+    const hidden = { visible: false, online: true };
+    const delays = [3, 5, 9].map((attempt) => computeReconnectDelay(attempt, undefined, hidden));
+    expect(delays).toEqual([2000, 8000, 10_000]);
+  });
+
+  it("treats a missing visibility/online signal as the shorter ceiling", () => {
+    // The test environment has no `document` and may not report `onLine`; the
+    // safe assumption is the one that retries sooner.
+    expect(readReconnectConditions()).toEqual({
+      visible: true,
+      online: true,
+    });
   });
 
   it("honours an injected delay budget", () => {

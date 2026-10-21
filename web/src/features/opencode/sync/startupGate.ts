@@ -10,8 +10,10 @@
  * ## WHAT THIS DOES NOT OWN
  *
  * - **The attempt.** The gate does not create a connection, and it does not
- *   know which attempt it belongs to. Phase 3 of the remediation plan gives
- *   the attempt its own gate; until then the controller opens this one.
+ *   decide which attempt it belongs to. Since Phase 3 of the remediation plan
+ *   each attempt creates its own gate (`sync/attempt.ts`), so "which attempt
+ *   opened this promise" is answered by ownership: the attempt holds the only
+ *   handle that can settle it, and a superseded attempt refuses to resolve it.
  * - **The failure.** The gate is told what went wrong; it does not classify
  *   the error, and it does not decide whether the runtime should retry.
  * - **The waiter's deadline.** A caller that waits forever is a Phase 5

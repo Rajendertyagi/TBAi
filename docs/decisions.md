@@ -6181,3 +6181,84 @@ DOM tests. The OpenCode-scoped suites report the same numbers as before the
 extraction (173 unit/opencode, 560 unit/web/opencode, 112 integration/opencode),
 which is the phase's acceptance criterion: the characterisation tests produce
 identical results.
+## 2026-10-21 - OpenCode Phase 3: an attempt owns its readiness, its signals and its load
+
+**Findings.** The retry budget could be reset by an attempt that no longer owned
+the runtime (M1); a superseded attempt's late failure could dispatch over the
+live state and drop the newer attempt's load promise (M2); a superseded
+attempt's late return could settle the newer attempt's readiness (L4); and a
+failed history read left the hydration flag set forever, so every later
+assistant delta was buffered and the transcript froze (M4).
+
+**Decision: ownership, not more guards.** The connection attempt is now a value
+owned by the controller (`currentAttempt`), and it owns the four things whose
+ambiguous ownership was the defect:
+
+- its own readiness gate, minted with the attempt. The only handle that can
+  resolve it belongs to the attempt that earned it, and `markReady()` is inert
+  once the attempt is retired, which closes L4 by construction;
+- its own connection signal, so aborting one attempt cannot tear down another;
+- its own load slot, so a failed attempt clears only its own promise;
+- its own hydration flags, cleared by `projectionCommitted()`, `markReady()`,
+  `fail()`, `retire()` and a `finally`, so a dead attempt cannot leave the
+  transcript buffering behind a hydration that will not happen.
+
+`retire()` is the single synchronous act of supersession. Because the runtime is
+single-threaded, no continuation of a retired attempt can observe itself as live
+after `retire()` returns, which is why an identity check against the attempt is
+sufficient and a generation token would be the weaker guard: a generation is
+assigned only after `connect` resolves, so it cannot answer "has a newer attempt
+already started?" during the connect itself.
+
+The retry counter stays with the scheduler and stays runtime-scoped - a ceiling
+is a property of the runtime, not of one attempt - but the reset moved out of the
+shared tail into the attempt that completed: the controller resets it only after
+`markReady()` and a liveness check, so a superseded attempt cannot reach it.
+
+**A failed hydration now recovers.** A history-read failure is routed through the
+same reconnect path as a connection failure, so it ends in `reconnecting(n)` and
+then either recovers within the budget or reaches `failed(n)`. That is the M4
+"defined state" requirement. The previous state was `load: error` beside
+`connection: connected` - a controller claiming a connection whose transcript
+had never been projected, with every later delta buffered.
+
+**The delay policy (decision D2), with two deliberate deviations.** The
+foreground cap is adopted: while the document is visible and the browser is
+online, the backoff ceiling is 5 s instead of the configured 10 s, because that
+is the case a reader is actually waiting through. When the environment cannot
+report visibility or connectivity, the shorter ceiling is assumed.
+
+D2 also asks for a permanent 4xx to jump straight to the configured ceiling.
+That part is **not implemented, because the signal does not survive the official
+client**. `@opencode/client` 2.0.32 declares the statuses each operation accepts
+and throws `declared(body)` - an `Error` carrying the response body - for any of
+them, so the transport status is discarded before the controller sees it.
+`message.list`, the call hydration uses, declares `[400, 401, 404, 500]`; a
+deleted session and a transient 500 therefore arrive indistinguishable, and a
+status shortcut would be unreachable for the one case it exists for. Reading the
+status back out of the error message or its untyped `cause` would be guessing at
+an implementation detail, so the shortcut was removed rather than shipped
+unreachable. If the client later exposes the status, or the TBAi proxy maps
+declared errors to a typed failure, the shortcut returns with a test that proves
+it fires.
+
+D2 also asks for a 60 s ceiling while the document is hidden or offline. That
+part is **not adopted**. The reason is not that the signal is unavailable -
+`document.visibilityState` and `navigator.onLine` are both readable and the code
+reads them - but that a longer hidden-tab delay is safe only if returning to the
+tab re-arms the pending timer, and nothing does that today. A reader who returns
+during a 60 s backoff would watch "reconnecting" for up to a minute before
+anything happened, which is worse than the background work the longer delay
+saves. The `maxReconnectDelayMs` ceiling therefore stays at 10 s, and the
+foreground cap is the operative refinement. Recorded as a deviation so a later
+phase can adopt the 60 s figure together with a visibility-triggered re-arm
+rather than on its own.
+
+**Compatibility.** `computeReconnectDelay(attempt, delays)` keeps its behaviour
+except for the foreground cap; the conditions are an optional third argument. No
+controller method, wire format or persisted field changed.
+
+**Regression coverage.** `R-M1` and `R-M2` are promoted out of the quarantine and
+run in the ordinary suite; `R-M4` and `R-L4` are new. The baseline pins for M1
+and M2 are deleted with the fix - both failed the moment the defects were gone,
+which is the evidence that they were pins and not coverage.

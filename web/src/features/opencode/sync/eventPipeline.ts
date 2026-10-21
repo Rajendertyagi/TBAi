@@ -43,23 +43,45 @@
  *
  * ## THE RETRY BUDGET
  *
- * `reconnectAttempt` counts the retries the current attempt has spent. The
- * budget is charged when a retry is scheduled and reset when a hydration
- * COMPLETES. Phase 3 of the remediation plan moves that reset into the
- * attempt that earned it; until then the reset stays where it is.
+ * `reconnectAttempt` counts the retries this controller has spent. The budget
+ * is charged when a retry is scheduled and reset **only** by the controller,
+ * after an attempt reports a completed hydration and passes its identity
+ * check. The counter is not attempt-scoped, and that is deliberate: the
+ * ceiling is a property of the runtime, not of one attempt. What changed in
+ * Phase 3 is *who may reset it* — a superseded attempt can no longer report
+ * completion for the live one, so M1 (a stale attempt resetting the counter)
+ * is closed by construction rather than by a guard.
+ *
+ * ## THE DELAY POLICY
+ *
+ * The exponential backoff is bounded twice: by the configured ceiling, and — while
+ * the document is visible and online, the case a reader is actually waiting
+ * through — by the shorter foreground cap. When the environment cannot report
+ * visibility or connectivity, the controller is assumed to be visible and
+ * online, which is the *shorter* ceiling and therefore the safe assumption.
+ *
+ * A permanent 4xx deliberately does NOT skip ahead to the ceiling. The
+ * installed `@opencode/client` throws `declared(body)` for every status an
+ * operation declares, and `message.list` declares 400, 401, 404 and 500: the
+ * transport status is discarded, so a deleted session and a transient failure
+ * are indistinguishable by the time the controller sees the error. A
+ * status-based shortcut would therefore be unreachable for the one case it
+ * exists for. The limitation is recorded in `docs/decisions.md`; it belongs to
+ * the client's contract, not to this module.
  *
  * This module was extracted from `v2ThreadController.ts` as part of Phase 2 of
- * the OpenCode runtime remediation plan. The extraction is behaviour
- * preserving.
+ * the OpenCode runtime remediation plan; Phase 3 made its retry scheduling
+ * attempt-scoped (it is told which attempt failed, and refuses to act on one
+ * that has been superseded).
  */
 
 import {
   OPENCODE_V2_EVENT_BUFFER_LIMIT,
+  OPENCODE_V2_FOREGROUND_RECONNECT_CAP_MS,
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
 } from "@/features/opencode/config";
 import type { V2Event } from "@opencode/client";
-import type { OpenCodeV2Generation } from "../v2Client";
 import type { V2SafeError, V2ThreadAction } from "../v2Types";
 import type { Attempt } from "./attempt";
 
@@ -76,17 +98,60 @@ export const DEFAULT_RECONNECT_DELAYS: ReconnectDelays = {
 };
 
 /**
+ * The conditions the delay policy reads.
+ *
+ * Passed in rather than read inside `computeReconnectDelay` so the policy stays
+ * a pure function: the caller observes the environment once, at the moment the
+ * retry is scheduled.
+ */
+export interface ReconnectConditions {
+  /** Whether the document is visible (a hidden tab is not waiting). */
+  readonly visible: boolean;
+  /** Whether the browser reports a network connection. */
+  readonly online: boolean;
+}
+
+/** The conditions assumed when the environment cannot report them. */
+export const DEFAULT_RECONNECT_CONDITIONS: ReconnectConditions = {
+  visible: true,
+  online: true,
+};
+
+/**
  * The delay before the next retry.
  *
  * @param attempt - The number of retries already spent.
  * @param delays - The backoff parameters.
+ * @param conditions - The environment the retry is scheduled in.
  * @returns The delay in milliseconds.
  */
 export function computeReconnectDelay(
   attempt: number,
   delays: ReconnectDelays = DEFAULT_RECONNECT_DELAYS,
+  conditions: ReconnectConditions = DEFAULT_RECONNECT_CONDITIONS,
 ): number {
-  return Math.min(delays.maxReconnectDelayMs, delays.initialReconnectDelayMs * 2 ** attempt);
+  const ceiling =
+    conditions.visible && conditions.online
+      ? Math.min(delays.maxReconnectDelayMs, OPENCODE_V2_FOREGROUND_RECONNECT_CAP_MS)
+      : delays.maxReconnectDelayMs;
+  return Math.min(ceiling, delays.initialReconnectDelayMs * 2 ** attempt);
+}
+
+/**
+ * Reads the environment the retry is scheduled in.
+ *
+ * Absent signals are treated as the *shorter* ceiling: an environment that
+ * cannot say it is hidden or offline must not be given the longer delay.
+ *
+ * @returns The conditions.
+ */
+export function readReconnectConditions(): ReconnectConditions {
+  const visible = typeof document === "undefined" ? true : document.visibilityState !== "hidden";
+  const online =
+    typeof navigator === "undefined" || typeof navigator.onLine !== "boolean"
+      ? true
+      : navigator.onLine;
+  return { visible, online };
 }
 
 /**
@@ -122,22 +187,45 @@ export interface BufferedEvent {
 export interface EventPipelineHost {
   /** Whether the runtime has been disposed. */
   readonly isDisposed: boolean;
-  /** The attempt the pipeline drives. */
-  readonly attempt: Attempt;
   /** The retry budget and the backoff parameters. */
   readonly config: {
     readonly maxReconnectAttempts: number;
     readonly initialReconnectDelayMs: number;
     readonly maxReconnectDelayMs: number;
   };
+  /**
+   * Whether an attempt is still the one that may commit.
+   *
+   * The pipeline asks before it reacts to a failure: a stream that died on a
+   * superseded attempt says nothing about the live one.
+   *
+   * @param attempt - The attempt a failure came from.
+   * @returns True when it is still live.
+   */
+  isLive(attempt: Attempt): boolean;
+  /**
+   * Tears an attempt down: abort its signals, drop it as the current attempt,
+   * close its stream and clear its load promise.
+   *
+   * Only that attempt is touched, which is what stops a superseded attempt
+   * from tearing down a newer one.
+   *
+   * @param attempt - The attempt to retire.
+   */
+  retireAttempt(attempt: Attempt): void;
   /** Dispatches a domain action. */
   dispatch(action: V2ThreadAction): void;
   /** Applies one event to the domain state. */
   applyEvent(event: V2Event, ordinal: number): void;
   /** Establishes a new connection. */
   startConnection(): Promise<void>;
-  /** Reports that the runtime did not come up. */
-  failReady(error: V2SafeError): void;
+  /**
+   * Rejects an attempt's readiness with a real failure.
+   *
+   * @param attempt - The attempt that failed.
+   * @param error - The failure, in the runtime's safe vocabulary.
+   */
+  failReady(attempt: Attempt, error: V2SafeError): void;
   /** Normalises an unknown error into the runtime's safe vocabulary. */
   toSafeError(error: unknown, fallback: string): V2SafeError;
 }
@@ -145,17 +233,19 @@ export interface EventPipelineHost {
 /** The pipeline's surface. */
 export interface EventPipeline {
   /**
-   * Consumes the event stream of a generation until it ends or fails.
+   * Consumes the event stream of an attempt until it ends or fails.
    *
-   * @param generation - The generation whose events to consume.
+   * @param attempt - The attempt whose stream to consume.
    */
-  consume(generation: OpenCodeV2Generation): Promise<void>;
+  consume(attempt: Attempt): Promise<void>;
   /**
-   * Schedules a retry, if the budget allows one.
+   * Schedules a retry, if the budget allows one and the attempt still owns the
+   * runtime.
    *
+   * @param attempt - The attempt whose stream failed.
    * @param error - Why the stream failed.
    */
-  scheduleReconnect(error: V2SafeError): void;
+  scheduleReconnect(attempt: Attempt, error: V2SafeError): void;
   /**
    * The next ordinal.
    *
@@ -193,8 +283,8 @@ export interface EventPipeline {
   /**
    * Resets the retry budget.
    *
-   * Called when a hydration COMPLETES. Phase 3 moves this into the attempt
-   * that earned it.
+   * Called by the controller — never by a superseded attempt — after an
+   * attempt reports a completed hydration.
    */
   resetAttempt(): void;
   /**
@@ -223,23 +313,30 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
 
-  async function consume(generation: OpenCodeV2Generation): Promise<void> {
+  async function consume(attempt: Attempt): Promise<void> {
+    const generation = attempt.generation;
+    if (generation === null) return;
     try {
-      while (!host.isDisposed && host.attempt.isCurrent(generation)) {
+      while (!host.isDisposed && host.isLive(attempt)) {
         const result = await generation.events.next();
         if (result.done) throw new Error("OpenCode V2 event stream closed");
-        if (host.isDisposed || !host.attempt.isCurrent(generation)) return;
+        if (host.isDisposed || !host.isLive(attempt)) return;
         const eventOrdinal = ++ordinal;
         host.applyEvent(result.value, eventOrdinal);
       }
     } catch (error) {
-      if (host.isDisposed || !host.attempt.isCurrent(generation)) return;
-      scheduleReconnect(host.toSafeError(error, "OpenCode V2 event stream failed"));
+      if (host.isDisposed || !host.isLive(attempt)) return;
+      scheduleReconnect(attempt, host.toSafeError(error, "OpenCode V2 event stream failed"));
     }
   }
 
-  function scheduleReconnect(error: V2SafeError): void {
-    if (host.isDisposed || reconnectTimer !== null) return;
+  function scheduleReconnect(failed: Attempt, error: V2SafeError): void {
+    if (host.isDisposed) return;
+    // A failure reported by an attempt that has already been superseded says
+    // nothing about the live one: react only to the attempt that still owns
+    // the runtime (M2).
+    if (!host.isLive(failed)) return;
+    if (reconnectTimer !== null) return;
     // Terminal failure: no more auto-retries after exhausting the budget.
     if (reconnectAttempt >= host.config.maxReconnectAttempts) {
       host.dispatch({
@@ -247,30 +344,24 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
         connection: { type: "failed", attempt: reconnectAttempt },
       });
       host.dispatch({ type: "load_failed", error });
-      host.failReady(error);
+      host.failReady(failed, error);
       return;
     }
-    const failedGeneration = host.attempt.current;
-    host.attempt.setCurrent(null);
-    host.attempt.abortConnection();
-    if (failedGeneration) void failedGeneration.events.close();
-    host.attempt.setLoad(null);
+    host.retireAttempt(failed);
     host.dispatch({
       type: "connection_changed",
       connection: { type: "reconnecting", attempt: reconnectAttempt + 1 },
     });
     host.dispatch({ type: "load_failed", error });
-    host.failReady(error);
-    const delay = computeReconnectDelay(reconnectAttempt, host.config);
+    host.failReady(failed, error);
+    const delay = computeReconnectDelay(reconnectAttempt, host.config, readReconnectConditions());
     reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      const started = host.startConnection().catch((cause: unknown) => {
-        host.attempt.setLoad(null);
-        throw cause;
-      });
-      host.attempt.setLoad(started);
-      void started.catch(() => undefined);
+      // `startConnection` records the new attempt's load promise itself, so a
+      // concurrent `load()` joins this attempt instead of starting a second
+      // connection.
+      void host.startConnection().catch(() => undefined);
     }, delay);
   }
 
