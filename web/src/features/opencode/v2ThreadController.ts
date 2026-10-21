@@ -21,7 +21,7 @@ import {
   shouldAutoApprove,
 } from "@/features/permissions/permissionPolicy";
 import { getAutoPolicy } from "./sessionAutoPolicy";
-import { loadV2History, projectV2History } from "./v2History";
+import { createSessionMessageLoader } from "./sync/sessionMessageLoader";
 import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
 import { toV2PromptInput } from "./v2MessageProjection";
 import { projectV2Permission, type V2PermissionView } from "./v2Permissions";
@@ -246,6 +246,7 @@ export function createV2ThreadController(
     toSafeError: safeError,
   };
   const pipeline = createEventPipeline(pipelineHost);
+  const history = createSessionMessageLoader({ dispatch });
 
   function notify(): void {
     if (disposed) return;
@@ -537,18 +538,10 @@ export function createV2ThreadController(
       dispatch({ type: "revert_recovery_cleared" });
     }
     const historyRequestOrdinal = pipeline.currentOrdinal();
-    const snapshot = await loadV2History(currentGeneration.history, {
-      signal: signals.connectionSignal,
-    });
+    const snapshot = await history.read(currentGeneration, signals.connectionSignal);
     if (disposed || !attempt.isCurrent(currentGeneration)) return;
     lastHistorySnapshot = snapshot;
-    const projection = projectV2History(snapshot, currentPermissions());
-    dispatch({
-      type: "history_loaded",
-      messages: projection.messages,
-      messageOrder: projection.messageOrder,
-      pages: projection.pages,
-    });
+    history.commit(snapshot, currentPermissions());
     const buffered = pipeline.bufferedSince(historyRequestOrdinal);
     for (const entry of buffered)
       dispatch({
@@ -565,13 +558,7 @@ export function createV2ThreadController(
     // History was projected before the auxiliary permission snapshot arrived.
     // Reproject once so tool calls restored from history carry their approval
     // gate instead of appearing permanently stuck.
-    const permissionProjection = projectV2History(snapshot, currentPermissions());
-    dispatch({
-      type: "history_loaded",
-      messages: permissionProjection.messages,
-      messageOrder: permissionProjection.messageOrder,
-      pages: permissionProjection.pages,
-    });
+    history.commit(snapshot, currentPermissions());
     dispatch({ type: "load_completed" });
   }
 
@@ -604,13 +591,7 @@ export function createV2ThreadController(
       // permission really appeared or vanished — otherwise a permission-gated
       // tool card would keep reading as permanently stuck.
       if (state.permissions === previous.permissions || lastHistorySnapshot === null) return;
-      const projection = projectV2History(lastHistorySnapshot, currentPermissions());
-      dispatch({
-        type: "history_loaded",
-        messages: projection.messages,
-        messageOrder: projection.messageOrder,
-        pages: projection.pages,
-      });
+      history.commit(lastHistorySnapshot, currentPermissions());
     } catch (error) {
       logger.warn("opencode", "runtime.auxiliary_resync_failed", {
         errorType: error instanceof Error ? error.name : typeof error,
@@ -679,15 +660,9 @@ export function createV2ThreadController(
         sessionID: client.sessionId,
       });
       dispatch({ type: "session_hydrated", session });
-      const snapshot = await loadV2History(requireGeneration().history);
+      const snapshot = await history.read(requireGeneration());
       lastHistorySnapshot = snapshot;
-      const projection = projectV2History(snapshot, currentPermissions());
-      dispatch({
-        type: "history_loaded",
-        messages: projection.messages,
-        messageOrder: projection.messageOrder,
-        pages: projection.pages,
-      });
+      history.commit(snapshot, currentPermissions());
       dispatch({ type: "load_completed" });
     } catch (error) {
       const safe = safeError(error, "OpenCode V2 refresh failed");
@@ -721,15 +696,9 @@ export function createV2ThreadController(
       const verified = await requireGeneration().operations.sessionGet({
         sessionID: client.sessionId,
       });
-      const snapshot = await loadV2History(requireGeneration().history);
+      const snapshot = await history.read(requireGeneration());
       lastHistorySnapshot = snapshot;
-      const projection = projectV2History(snapshot, currentPermissions());
-      dispatch({
-        type: "history_loaded",
-        messages: projection.messages,
-        messageOrder: projection.messageOrder,
-        pages: projection.pages,
-      });
+      history.commit(snapshot, currentPermissions());
       if (verified.revert !== undefined) throw new Error("staged revert remains");
       dispatch({ type: "revert_recovery_cleared" });
     } catch (error) {
