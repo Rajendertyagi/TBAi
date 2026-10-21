@@ -1,4 +1,4 @@
-import type { AppendMessage, CreateAppendMessage } from "@assistant-ui/react";
+import type { AppendMessage } from "@assistant-ui/react";
 import type {
   FormInfo,
   PermissionRequest,
@@ -26,6 +26,13 @@ import { loadV2History, projectV2History } from "./v2History";
 import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
 import { toV2PromptInput } from "./v2MessageProjection";
 import { projectV2Permission, type V2PermissionView } from "./v2Permissions";
+import {
+  attachV2PromptMessageId,
+  createV2MessageId,
+  isLocalV2MessageId,
+  optimisticMessage,
+  V2_PROMPT_MESSAGE_ID_KEY,
+} from "./sync/optimistic";
 import type { OpenCodeV2Client, OpenCodeV2Generation, V2ConnectionSignals } from "./v2Client";
 import type {
   V2DesiredSelection,
@@ -38,8 +45,6 @@ import type {
   V2ThreadState,
 } from "./v2Types";
 
-export const V2_PROMPT_MESSAGE_ID_KEY = "opencodeV2MessageId";
-const V2_MESSAGE_ID_PREFIX = "msg_";
 const V2_ABORTED_MESSAGE = "OpenCode V2 request was aborted";
 const V2_DEFINITIVE_FAILURE_MESSAGE = "OpenCode V2 prompt was definitively rejected";
 const V2_RECOVERY_REQUIRED_MESSAGE = "OpenCode V2 staged recovery must complete before admission";
@@ -94,33 +99,13 @@ export interface V2ThreadController {
   dispose(): void;
 }
 
-/** Allocates the stable local identity used for prompt admission. */
-export function createV2MessageId(): string {
-  return `${V2_MESSAGE_ID_PREFIX}${crypto.randomUUID()}`;
-}
-
-/** Copies a preallocated message id into assistant-ui's append metadata. */
-export function attachV2PromptMessageId(message: string, messageId: string): string;
-export function attachV2PromptMessageId<T extends CreateAppendMessage>(
-  message: T,
-  messageId: string,
-): T;
-export function attachV2PromptMessageId(
-  message: CreateAppendMessage,
-  messageId: string,
-): CreateAppendMessage {
-  if (typeof message === "string") return message;
-  return {
-    ...message,
-    metadata: {
-      ...message.metadata,
-      custom: {
-        ...message.metadata?.custom,
-        [V2_PROMPT_MESSAGE_ID_KEY]: messageId,
-      },
-    },
-  };
-}
+/**
+ * The local prompt identity and the optimistic record live in
+ * `sync/optimistic.ts`. They are re-exported here because the controller's
+ * public surface is where the app has always found them, and moving a symbol
+ * must not move its import path.
+ */
+export { attachV2PromptMessageId, createV2MessageId, V2_PROMPT_MESSAGE_ID_KEY };
 
 class V2ControllerError extends Error {
   public readonly safe: V2SafeError;
@@ -200,32 +185,6 @@ function inboxRecordFromUser(item: SessionInboxUser): V2InboxRecord {
     sessionId: item.sessionID,
     type: "user",
     delivery: item.delivery,
-  };
-}
-
-function optimisticMessage(
-  message: AppendMessage,
-  messageId: string,
-): V2ThreadState["messages"][string] {
-  const payload = toV2PromptInput(message);
-  return {
-    id: messageId,
-    parentId: message.parentId,
-    role: "user",
-    createdAt: Date.now(),
-    parts:
-      payload.text.length > 0
-        ? [
-            {
-              kind: "text",
-              id: `text:${messageId}:0`,
-              order: 0,
-              value: payload.text,
-              status: "complete",
-            },
-          ]
-        : [],
-    source: null,
   };
 }
 
@@ -943,7 +902,7 @@ export function createV2ThreadController(
     const customId = message.metadata?.custom?.[V2_PROMPT_MESSAGE_ID_KEY];
     const messageId =
       options.messageId ?? (typeof customId === "string" ? customId : createV2MessageId());
-    if (!messageId.startsWith(V2_MESSAGE_ID_PREFIX))
+    if (!isLocalV2MessageId(messageId))
       throw new TypeError("OpenCode V2 prompt message id must start with msg_");
     await applySelection();
     const payload = toV2PromptInput(message);
