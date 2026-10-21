@@ -126,16 +126,24 @@ the kind of check that passes while the thing it names has drifted.
 The E2E job is separate and deliberately has no `needs:` on it, so an E2E failure
 cannot be misread as a backend or typecheck failure. Because jobs do not share a
 filesystem, that job builds for itself rather than relying on the `verify` job's
-artifact. **The `e2e` job is scoped to six specs**, listed explicitly in
+artifact. **The `e2e` job is scoped to seven specs**, listed explicitly in
 `.github/workflows/tests.yml` (the file that owns the list):
 `p2-history-load-recovery.spec.ts`, `p2-direct-history-window.spec.ts`,
 `p2-paging.spec.ts`, `p2-live-runtime.spec.ts`, `p2-tool-result-persistence.spec.ts`,
-and `phase-8-tabs-navigation.spec.ts`. These are the conversation-history and
-tool-persistence specs, where a silent stale-bundle run does the most damage.
+`phase-8-tabs-navigation.spec.ts` and `opencode/opencode-v2-code-route.spec.ts`.
+The first six are the conversation-history and tool-persistence specs, where a
+silent stale-bundle run does the most damage. The Code-mode spec is the only
+browser-level coverage of the OpenCode runtime: it drives the real managed
+server and the real V2 runtime and asserts that a reload reaches READY from a
+real hydration. It needs the pinned CLI, so the job installs it with the same
+`./.github/actions/install-opencode` composite action `verify` uses; the version
+and its integrity hash live once, in the workflow's `env`. The spec needs no
+model credentials - a runner without them exercises the refusal surface instead
+of the model.
 The remaining specs on disk are pre-existing work in progress and are not gated
 here; widening this list is a deliberate decision, not an oversight. The
 scoped list is **not** the full E2E suite: 45 specs live on disk
-(39 non-live + 6 `*-live`), and the `e2e` job runs only the six above.
+(39 non-live + 6 `*-live`), and the `e2e` job runs only the seven above.
 
 A fourth CI job, **`e2e-big-pickle`**, is dispatch-only: it runs only when
 triggered via `workflow_dispatch` with the `live_opencode` boolean input set to

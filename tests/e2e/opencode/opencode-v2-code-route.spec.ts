@@ -134,6 +134,15 @@ test("Code route admits a first prompt and restores its session history", async 
     });
     await expect(composer).toBeVisible({ timeout: SERVER_TIMEOUT_MS });
     await expect(page.getByRole("button", { name: "Agent" })).toBeVisible();
+    // Phase 3 / L4, live and unmocked: after a reload the runtime must reach
+    // READY from a real hydration of the real managed server. A hydration that
+    // never settles renders as "Disconnected" or a stuck "Working", so this is
+    // the observable end of the attempt-ownership path rather than an internal
+    // flag. It runs with or without model credentials: the session exists and
+    // its history is readable either way.
+    await expect(page.getByRole("button", { name: "OpenCode status: Connected" })).toBeVisible({
+      timeout: SERVER_TIMEOUT_MS,
+    });
     if (admitted) {
       await expect(page.getByText(LIVE_PROMPT, { exact: true })).toBeVisible({
         timeout: SERVER_TIMEOUT_MS,

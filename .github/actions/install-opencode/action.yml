@@ -1,0 +1,64 @@
+name: Install OpenCode CLI
+description: >-
+  Downloads the pinned OpenCode CLI tarball, verifies its npm dist.integrity,
+  and puts the binary on PATH for later steps.
+
+# CI-only. Nothing about the application's own dependencies changes: the binary
+# is unpacked into the runner's temp dir and is never vendored into the
+# repository. Both jobs that need a real managed server use this action, so the
+# pinned version and its integrity hash cannot drift between them.
+#
+# The npm package ships the prebuilt Windows binary; there are no GitHub release
+# assets for the 2.x tags, and `opencode-ai` on npm is the unrelated 1.x line.
+# `@opencode/cli-windows-x64` declares os=win32 cpu=x64, which is exactly this
+# runner.
+
+inputs:
+  version:
+    description: The @opencode/cli-windows-x64 version to install.
+    required: true
+  sha512:
+    description: The expected npm dist.integrity for that tarball.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download and verify
+      shell: pwsh
+      env:
+        OPENCODE_VERSION: ${{ inputs.version }}
+        OPENCODE_CLI_SHA512: ${{ inputs.sha512 }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $version = $env:OPENCODE_VERSION
+        $url = "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-$version.tgz"
+        $tgz = Join-Path $env:RUNNER_TEMP 'opencode-cli.tgz'
+        Invoke-WebRequest -Uri $url -OutFile $tgz
+        $sha = [System.Security.Cryptography.SHA512]::Create()
+        $actual = 'sha512-' + [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($tgz)))
+        if ($actual -ne $env:OPENCODE_CLI_SHA512) {
+          throw "opencode tarball integrity mismatch: expected $env:OPENCODE_CLI_SHA512 but downloaded $actual"
+        }
+        $unpack = Join-Path $env:RUNNER_TEMP 'opencode-cli'
+        Remove-Item $unpack -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $unpack | Out-Null
+        tar -xzf $tgz -C $unpack
+        $exe = Join-Path $unpack 'package/bin/opencode.exe'
+        if (-not (Test-Path $exe)) { throw "opencode.exe was not present in the $version tarball" }
+        (Join-Path $unpack 'package/bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+        Write-Output "Unpacked opencode $version from the npm registry (sha512 verified)."
+
+    - name: Verify OpenCode is available
+      shell: pwsh
+      env:
+        OPENCODE_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $resolved = (Get-Command opencode -ErrorAction Stop).Source
+        $reported = (& opencode --version | Out-String).Trim()
+        Write-Output "opencode resolved to: $resolved"
+        Write-Output "opencode --version:   $reported"
+        if ($reported -notmatch [regex]::Escape($env:OPENCODE_VERSION)) {
+          throw "expected opencode $($env:OPENCODE_VERSION) but the binary reported '$reported'"
+        }

@@ -75,40 +75,14 @@ jobs:
 
       # CI-only. Nothing about the application's own dependencies changes: the
       # binary is unpacked into the runner's temp dir and put on PATH for later
-      # steps, and it is never vendored into the repository.
+      # steps, and it is never vendored into the repository. Shared with the
+      # `e2e` job as a composite action so the pinned version, its integrity
+      # hash and the verification cannot drift between the two.
       - name: Install OpenCode CLI (pinned, integrity-checked)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:OPENCODE_VERSION
-          $url = "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-$version.tgz"
-          $tgz = Join-Path $env:RUNNER_TEMP 'opencode-cli.tgz'
-          Invoke-WebRequest -Uri $url -OutFile $tgz
-          $sha = [System.Security.Cryptography.SHA512]::Create()
-          $actual = 'sha512-' + [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($tgz)))
-          if ($actual -ne $env:OPENCODE_CLI_SHA512) {
-            throw "opencode tarball integrity mismatch: expected $env:OPENCODE_CLI_SHA512 but downloaded $actual"
-          }
-          $unpack = Join-Path $env:RUNNER_TEMP 'opencode-cli'
-          Remove-Item $unpack -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $unpack | Out-Null
-          tar -xzf $tgz -C $unpack
-          $exe = Join-Path $unpack 'package/bin/opencode.exe'
-          if (-not (Test-Path $exe)) { throw "opencode.exe was not present in the $version tarball" }
-          (Join-Path $unpack 'package/bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          Write-Output "Unpacked opencode $version from the npm registry (sha512 verified)."
-
-      - name: Verify OpenCode is available
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $resolved = (Get-Command opencode -ErrorAction Stop).Source
-          $reported = (& opencode --version | Out-String).Trim()
-          Write-Output "opencode resolved to: $resolved"
-          Write-Output "opencode --version:   $reported"
-          if ($reported -notmatch [regex]::Escape($env:OPENCODE_VERSION)) {
-            throw "expected opencode $($env:OPENCODE_VERSION) but the binary reported '$reported'"
-          }
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
 
       - name: Typecheck
         run: bun run typecheck
@@ -312,6 +286,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The Code-mode spec below drives the REAL managed OpenCode server, so
+      # this job needs the same pinned CLI `verify` installs. Without it the
+      # runtime reports "OpenCode CLI not found", and the spec would assert that
+      # error surface instead of the runtime it exists to cover - a green result
+      # for the wrong behaviour.
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
       # The one CI-only dependency here, and the reason this suite could not
       # simply be appended to `verify`. Downloaded explicitly rather than assumed,
       # because a missing browser surfaces as a confusing per-test timeout rather
@@ -327,16 +312,22 @@ jobs:
         # this check the job would pass having run fewer specs than exist.
         run: bun run test:locations
 
-        # SCOPED, deliberately. These are the conversation-history and
-        # tool-persistence specs, which is where a silent stale-bundle run does the
-      # most damage: a recovery test that passes against last week's bundle
-      # reports the defect as fixed. The remaining specs are pre-existing work in
-      # progress and are not gated on here; widening this list is a deliberate
-      # decision, not an oversight.
+      # SCOPED, deliberately. These are the conversation-history and
+      # tool-persistence specs, which is where a silent stale-bundle run does
+      # the most damage: a recovery test that passes against last week's
+      # bundle reports the defect as fixed. The remaining specs are
+      # pre-existing work in progress and are not gated on here; widening
+      # this list is a deliberate decision, not an oversight.
+      #
+      # `opencode-v2-code-route.spec.ts` is the Code-mode entry. It drives the
+      # real managed server and the real V2 runtime, and it now asserts that
+      # the runtime reaches READY from a real hydration after a reload. It
+      # needs no model credentials: the prompt is expected to be refused on a
+      # runner that has none, and the spec asserts that refusal surface.
       #
       # Every spec file gets its own server and its own database (scripts/run-e2e.ts),
       # so adding files costs wall-clock time but never cross-test interference.
-      - name: E2E (conversation history and tool persistence)
+      - name: E2E (conversation history, tool persistence and Code mode)
         run: >
           bun run test:e2e
           p2-history-load-recovery.spec.ts
@@ -345,6 +336,7 @@ jobs:
           p2-live-runtime.spec.ts
           p2-tool-result-persistence.spec.ts
           phase-8-tabs-navigation.spec.ts
+          opencode-v2-code-route.spec.ts
 
   # LIVE, opt-in acceptance for Code mode against the OpenCode free tier.
   #
