@@ -927,8 +927,7 @@ export function createV2ThreadController(
     const now = Date.now();
     const collections: readonly (readonly [string, RetentionSet<string>])[] = [
       ["answeredPermissions", answeredPermissions],
-      // autoApproveAttempted is swept separately (TTL-only, no cap) so that
-      // settled duplicate-suppression records survive cap pressure.
+      ["autoApproveAttempted", autoApproveAttempted],
       ["formReplies", formReplies],
       ["pendingPermissionReplies", pendingPermissionReplies],
       ["pendingFormReplies", pendingFormReplies],
@@ -970,19 +969,10 @@ export function createV2ThreadController(
     // event leaves the entry protected forever.
     const pendingIds = new Set((snapshot.permissions ?? []).map((request) => request.id));
     for (const id of autoApproveAttempted.ids()) {
-      // Only release protection when the permission is definitively settled
-      // (recorded in answeredPermissions) AND no longer pending. This avoids
-      // releasing protection for ambiguous (network) outcomes, which would
-      // re-open the one-shot window.
-      if (!answeredPermissions.has(id)) continue;
       if (pendingPermissionReplies.has(id)) continue;
       if (pendingIds.has(id)) continue;
       autoApproveAttempted.release(id);
     }
-    // TTL-only sweep for autoApproveAttempted (duplicate suppression): evict
-    // expired unprotected entries, but never by cap, so settled records survive
-    // cap pressure long enough to suppress redeliveries.
-    autoApproveAttempted.sweepTtlOnly(Date.now());
     dispatch({
       type: "inbox_hydrated",
       records: snapshot.inbox,

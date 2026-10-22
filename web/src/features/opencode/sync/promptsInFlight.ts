@@ -218,24 +218,29 @@ export function createPromptsInFlight(): PromptsInFlight {
       admissions.delete(messageId);
       touchedAt.delete(messageId);
     }
-    // Then the cap: the oldest by LAST TOUCH go (not creation order).
-    // Build the eviction order once, sorted by touchedAt ascending.
-    while (admissions.size > OPENCODE_V2_RETENTION_CAP) {
-      let oldest: string | undefined;
-      let oldestTouched = Infinity;
-      for (const [messageId, touched] of touchedAt) {
-        if (protectedIds.has(messageId)) continue;
-        if (touched < oldestTouched) {
-          oldestTouched = touched;
-          oldest = messageId;
-        }
-      }
-      // Every remaining record has a waiter on it. The protection is absolute,
-      // so the cap is not honoured.
-      if (oldest === undefined) return "protected";
-      admissions.delete(oldest);
-      touchedAt.delete(oldest);
+    if (admissions.size <= OPENCODE_V2_RETENTION_CAP) return "none";
+    // Then the cap: collect unprotected entries sorted by last-touch once,
+    // then evict the oldest (size - cap) of them. O(N log N) total, not O(N^2).
+    const unprotected: Array<[string, number]> = [];
+    for (const [messageId, touched] of touchedAt) {
+      if (!protectedIds.has(messageId)) unprotected.push([messageId, touched]);
     }
+    unprotected.sort((a, b) => a[1] - b[1]);
+    const toEvict = admissions.size - OPENCODE_V2_RETENTION_CAP;
+    if (unprotected.length < toEvict) {
+      // Not enough evictable entries; evict all unprotected, still over cap.
+      for (const [id] of unprotected) {
+        admissions.delete(id);
+        touchedAt.delete(id);
+      }
+      return "protected";
+    }
+    for (let i = 0; i < toEvict; i++) {
+      const id = unprotected[i][0];
+      admissions.delete(id);
+      touchedAt.delete(id);
+    }
+    if (admissions.size > OPENCODE_V2_RETENTION_CAP) return "protected";
     return "none";
   }
 

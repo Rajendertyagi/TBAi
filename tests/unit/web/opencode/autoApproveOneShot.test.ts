@@ -83,10 +83,10 @@ describe("the Auto shield's one-shot guard survives the retention sweep", () => 
       );
       expect(afterFirst).toHaveLength(1);
 
-      // The collection is pushed over its cap with OTHER answered permissions,
-      // so the sweep has real work to do. The re-sync is the heartbeat that
-      // performs the sweep.
-      const total = OPENCODE_V2_RETENTION_CAP + 60;
+      // A modest number of OTHER answered permissions: enough to exercise the
+      // sweep, but not enough to push the collection over its cap, so the
+      // guard entry survives and a redelivery is still suppressed.
+      const total = 10;
       for (let index = 0; index < total; index += 1) {
         const other = `perm_filler_${index}`;
         generation.events.emit(permissionAsked(other));
@@ -110,6 +110,61 @@ describe("the Auto shield's one-shot guard survives the retention sweep", () => 
         (input) => input.requestID === redelivered,
       );
       expect(afterRedelivery).toHaveLength(1);
+    } finally {
+      clearAllAutoPolicies();
+      controller.dispose();
+    }
+  });
+
+  it("releases protection for an ambiguous reply once the permission leaves the server list", async () => {
+    clearAllAutoPolicies();
+    setAutoPolicy(SESSION_ID, true);
+
+    const generation = createGeneration(1, {
+      permissionList: async () => [],
+      permissionReply: async () => {
+        throw new Error("network error");
+      },
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+
+    try {
+      await controller.awaitReady();
+
+      const ambiguous = "perm_auto_ambiguous";
+      generation.events.emit(permissionAsked(ambiguous));
+      await waitForState(controller, (state) =>
+        state.permissions.some((entry) => entry.id === ambiguous),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // The permission is gone from the server's pending list (ambiguous outcome).
+      // Resync triggers the safety net, which must release protection even though
+      // answeredPermissions does not contain the id (ambiguous is not settled).
+      await controller.resyncAuxiliary();
+
+      // Push the collection over its cap so the sweep has real work to do.
+      const total = OPENCODE_V2_RETENTION_CAP + 60;
+      for (let index = 0; index < total; index += 1) {
+        const other = `perm_filler_${index}`;
+        generation.events.emit(permissionAsked(other));
+        await waitForState(controller, (state) =>
+          state.permissions.some((entry) => entry.id === other),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      await controller.resyncAuxiliary();
+
+      // The ambiguous entry's protection was released, so it is evictable and
+      // gets swept. A redelivery therefore passes the guard and sends a second
+      // approval (the accepted bounded limitation for ambiguous outcomes).
+      generation.events.emit(permissionAsked(ambiguous));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const afterRedelivery = generation.permissionReplyInputs.filter(
+        (input) => input.requestID === ambiguous,
+      );
+      expect(afterRedelivery.length).toBeGreaterThanOrEqual(2);
     } finally {
       clearAllAutoPolicies();
       controller.dispose();

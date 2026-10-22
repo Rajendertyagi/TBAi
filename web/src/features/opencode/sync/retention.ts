@@ -178,11 +178,22 @@ export class RetentionSet<T extends string> {
       if (now - touchedAt < this.ttlMs) continue;
       this.entries.delete(id);
     }
-    while (this.entries.size > this.cap) {
-      const oldest = this.firstUnprotected();
-      if (oldest === null) return "protected";
-      this.entries.delete(oldest);
+    if (this.entries.size <= this.cap) return "none";
+    // Collect unprotected entries in insertion order (oldest first), then evict
+    // the first (size - cap) of them in one pass. O(N) instead of O(N^2).
+    const unprotected: T[] = [];
+    for (const id of this.entries.keys()) {
+      if (!this.protectedIds.has(id)) unprotected.push(id);
     }
+    const toEvict = this.entries.size - this.cap;
+    if (unprotected.length < toEvict) {
+      for (const id of unprotected) this.entries.delete(id);
+      return "protected";
+    }
+    for (let i = 0; i < toEvict; i++) {
+      this.entries.delete(unprotected[i]);
+    }
+    if (this.entries.size > this.cap) return "protected";
     return "none";
   }
 
@@ -199,18 +210,6 @@ export class RetentionSet<T extends string> {
       if (now - touchedAt < this.ttlMs) continue;
       this.entries.delete(id);
     }
-  }
-
-  /**
-   * The oldest entry that may be evicted.
-   *
-   * @returns The id, or `null` when every entry is protected.
-   */
-  private firstUnprotected(): T | null {
-    for (const id of this.entries.keys()) {
-      if (!this.protectedIds.has(id)) return id;
-    }
-    return null;
   }
 
   /** Every id held, in least-recently-touched order. */
