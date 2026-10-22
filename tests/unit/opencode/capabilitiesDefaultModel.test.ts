@@ -22,7 +22,10 @@ let listModels: unknown[] = [];
 let defaultModel: unknown = null;
 let defaultShouldThrow = false;
 
+import * as realOpenCodeClient from "@/services/opencode/client.ts";
+
 mock.module("@/services/opencode/client", () => ({
+  ...realOpenCodeClient,
   createOpenCodeClient: () => ({
     agent: { list: async () => ({ data: [{ id: "build", name: "Build" }] }) },
     model: {

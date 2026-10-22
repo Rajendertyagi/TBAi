@@ -32,6 +32,7 @@ import { readFileSync } from "node:fs";
 import { conversationService } from "@/services/storage";
 import { OpenCodeError } from "@/services/opencode/errors.ts";
 import { REPO_ROOT } from "../../helpers/repo-root";
+import * as realOpenCodeClient from "@/services/opencode/client.ts";
 
 /** The server's advertised default in every case that needs one. */
 const SERVER_DEFAULT = {
@@ -69,6 +70,7 @@ beforeEach(() => {
   // a partial fake would break any other file that reached the seam, and a
   // shared-global patch (e.g. `ensureBaseUrl`) would be order-dependent.
   mock.module("@/services/opencode/client", () => ({
+    ...realOpenCodeClient,
     // Mirrors the real module's shape: the seam decides liveness on the status
     // the transport observed, because the real client throws away the status of
     // the bare 404 the server sends for a missing session.

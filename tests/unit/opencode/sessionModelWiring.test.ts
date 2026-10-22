@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import * as realOpenCodeClient from "@/services/opencode/client.ts";
 
 /**
  * Both session-model call sites, exercised through `ensureOpenCodeSession`.
@@ -57,6 +58,7 @@ function install() {
         : null,
   }));
   mock.module("@/services/opencode/client", () => ({
+    ...realOpenCodeClient,
     createOpenCodeClient: () => ({
       session: {
         get: async () => ({
@@ -134,6 +136,7 @@ describe("the adopt seam — a bound session with no model", () => {
   it("still hands the live session back when the assignment fails", async () => {
     // Adopting a live session must never be blocked by a model repair.
     mock.module("@/services/opencode/client", () => ({
+      ...realOpenCodeClient,
       createOpenCodeClient: () => ({
         session: {
           get: async () => ({ id: "ses_bound", location: { directory: "D:/tmp/x" }, model: null }),

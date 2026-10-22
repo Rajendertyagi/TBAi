@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import * as realOpenCodeClient from "@/services/opencode/client.ts";
 
 /**
  * The startup capabilities race.
@@ -39,6 +40,7 @@ const REAL_AGENT = { id: "build", name: "Build" };
 
 function install() {
   mock.module("@/services/opencode/client", () => ({
+    ...realOpenCodeClient,
     createOpenCodeClient: () => {
       // One capabilities READ is `agent.list()` + `model.list()` together, so the
       // counter advances once per read — on the agent call, which the caller

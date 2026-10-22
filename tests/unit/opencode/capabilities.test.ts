@@ -13,9 +13,11 @@ import { ClientError } from "@opencode/client";
  * `@opencode/client` error classes.
  */
 
+import * as realOpenCodeClient from "@/services/opencode/client.ts";
+
 interface FakeClient {
   agent: { list: () => Promise<{ data: unknown }> };
-  model: { list: () => Promise<{ data: unknown }> };
+  model: { list: () => Promise<{ data: unknown }>; default: () => Promise<{ data: unknown }> };
 }
 
 let serverPayload: { agents: unknown; models: unknown } = { agents: [], models: [] };
@@ -33,12 +35,17 @@ function makeStubClient(): FakeClient {
     },
     model: {
       list: () => guard() ?? Promise.resolve({ data: serverPayload.models }),
+      // No default is advertised in this test: the descriptor stays `null`.
+      default: () => guard() ?? Promise.resolve({ data: null }),
     },
   };
 }
 
 // Patch the client factory BEFORE capabilities.ts binds to it.
+// Spread the real module so all exports (e.g. `lastStatusForSessionLookup`)
+// remain genuinely available; only `createOpenCodeClient` is stubbed.
 mock.module("@/services/opencode/client", () => ({
+  ...realOpenCodeClient,
   createOpenCodeClient: () => makeStubClient(),
 }));
 
