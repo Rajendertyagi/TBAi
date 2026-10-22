@@ -34,18 +34,19 @@ env:
 
   # OpenCode CLI, for the integration tests that drive the managed server.
   #
-  # 2.0.22 sits inside the range src/config/opencode.ts enforces for the managed
-  # server (>=2.0.15 <2.1.0) and is the version this codebase's behaviour
-  # comments were measured against, so CI matches the developer environment
-  # where these suites were last seen passing.
+  # 2.1.2 is the newest published 2.x, it sits inside the range
+  # src/config/opencode.ts enforces for the managed server (>=2.0.15 <2.2.0),
+  # and every surface TBAi uses was checked against the upstream source at
+  # v2.1.0, v2.1.1 and v2.1.2 - no route removed, no event type removed, and
+  # the imported types are unchanged apart from branded string aliases.
   #
   # The npm package ships the prebuilt Windows binary; there are no GitHub
   # release assets for the 2.x tags, and `opencode-ai` on npm is the unrelated
   # 1.x line. `@opencode/cli-windows-x64` declares os=win32 cpu=x64, which is
   # exactly this runner, and npm's dist.integrity is verified below before the
   # binary is trusted.
-  OPENCODE_VERSION: "2.0.22"
-  OPENCODE_CLI_SHA512: "sha512-n7eg3FwlHtRSZY5SV00XYh5c/TV7V0GIDqgygv9c5UEzPfbBfdk6d9mvGbZqn/Po/gmOPFyxU6SjmjWdGDF3ag=="
+  OPENCODE_VERSION: "2.1.2"
+  OPENCODE_CLI_SHA512: "sha512-r2DUwYbPe++6y4vWRuHX7slVCMIHyLyC8YAgJO7YAKX7dMgfXe4RDlJK7eZ6KHNBdpIY62Nxd6DPzKiCOP8uMg=="
 
 jobs:
   verify:

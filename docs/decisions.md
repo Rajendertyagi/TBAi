@@ -6709,3 +6709,60 @@ local server and pins the shape; `clientErrors.test.ts` pins the
 classification; `v2InboxCancellation.test.ts` pins the cancelled entry's
 removal; and the controller tests cover the retired permission and the settled
 form. Every guard was proved able to fail and reverted.
+
+## 2026-10-22 - OpenCode 2.1.x is supported: the version gate moves to `>=2.0.15 <2.2.0`
+
+**Why.** The 2.1 line shipped on 2026-10-20 and the newest published 2.x is
+2.1.2. The managed server on a developer's machine is routinely newer than the
+range TBAi enforces, and the preflight then refuses it - which is correct
+behaviour for an unsupported version, but it means the product cannot use the
+server the user actually has. The range is a SUPPORT PROMISE, so widening it is
+a decision that needs evidence, not a side effect of a red test.
+
+**The evidence.** Every surface TBAi uses was checked against the upstream
+source at `v2.1.0`, `v2.1.1` and `v2.1.2` - all three are identical on every
+point below, and all three are inside the new range:
+
+- **No route was removed.** The client gained three (the experimental voice
+  session, the external integration connect, and `vcs/init`), none of which
+  TBAi calls. All 18 client methods TBAi calls exist on the same routes with
+  the same success statuses.
+- **No event type was removed.** The 2.1 line added `session.archived` and
+  `session.unarchived`.
+- **The imported types are compatible.** The ids became branded aliases
+  (`PermissionID`, `SessionID`, `SessionMessageID`, `FormID`, `EventID`), and
+  every one of them is `= string`, so there is no runtime change and no
+  narrowing. The only shape change is an OPTIONAL `ServerInfo.capabilities`.
+- **The auth contract is unchanged.** The server still reads
+  `OPENCODE_PASSWORD` first and only falls back to `OPENCODE_SERVER_PASSWORD`;
+  the only difference in the source is `Config.redacted` becoming
+  `Config.Redacted`.
+- **The upstream premises Phase 4 and Phase 5 rest on still hold at 2.1.2**:
+  `Session.prompt` reconciles by message id before it admits, `inbox.cancel`
+  deletes the pending row, and `session.message.content.updated` still has a
+  projector but no publisher.
+
+**The one observable difference.** `GET /api/permission/request` now DECLARES
+a 404, so the client throws a tagged error for a location that does not exist
+instead of an undeclared status. That is the same class of failure the
+classification in `clientErrors.ts` already handles by tag.
+
+**The change.** `maximumVersionExclusive` moves from `2.1.0` to `2.2.0` in
+`src/config/opencode.ts`; `@opencode/client` moves from 2.0.32 to 2.1.2 in
+both manifests and the lockfile; and CI's pinned binary moves from 2.0.22 to
+2.1.2, with npm's `dist.integrity` re-verified for the new tarball. The
+installed client needed no code change: the typecheck is clean against 2.1.2.
+
+**Verified against the real 2.1.2 server.** The binary on this machine
+(`D:\Coding\OpenCode\opencode.exe`, resolved through `Bun.which`) is 2.1.2.
+With the gate raised, the real-server suites are green against it: the Code
+view's session boundary (11 cases, previously 4 pass / 7 fail against the
+refused 2.1.2), the session and session-list suites, the capabilities
+catalogue, the client and client-status observations, the auth proxy, the
+runtime authentication, and the first-send draft handoff.
+
+**What was NOT checked.** The claim is about TBAi's usage, not about the whole
+2.1 API: the experimental voice, external-integration and `vcs/init` routes
+are new and were not exercised, because TBAi does not call them. And 2.1.0 and
+2.1.1 were checked by reading the upstream source, not by running the suites
+against those exact tarballs.

@@ -462,7 +462,7 @@ Durable product/architecture questions the repository evidence cannot settle:
    durable design boundary of unattended execution, or a V1 limit expected to
    be lifted later?
 4. **Coding-agent platform:** Code mode is bound to OpenCode v2 (official
-   client, managed-server compatibility gate `>=2.0.15 <2.1.0`). Confirm
+   client, managed-server compatibility gate `>=2.0.15 <2.2.0`). Confirm
    OpenCode 2.x as the durable coding-agent runtime and how major-version
    upgrades will be governed.
 5. **Desktop buildability:** the Tauri 2 shell is built exclusively in CI

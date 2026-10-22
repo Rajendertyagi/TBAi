@@ -19,9 +19,31 @@ export const OPENCODE_CONFIG = {
   readyPollMs: 250,
   /** OpenCode V2 authenticated readiness endpoint. */
   readinessProbePath: "/api/info",
-  /** Inclusive managed OpenCode version range. */
+  /**
+   * Inclusive managed OpenCode version range.
+   *
+   * The 2.1 line was adopted on 2026-10-22 after checking every surface TBAi
+   * uses against the upstream source at `v2.1.0`, `v2.1.1` and `v2.1.2`:
+   *
+   * - **No route was removed.** The client gained three (the experimental
+   *   voice session, the external integration connect and `vcs/init`), none of
+   *   which TBAi calls. All 18 client methods TBAi calls exist on the same
+   *   routes with the same success statuses.
+   * - **No event type was removed.** The 2.1 line added `session.archived`
+   *   and `session.unarchived`.
+   * - **The types TBAi imports are compatible.** The ids became branded
+   *   aliases (`PermissionID`, `SessionID`, `SessionMessageID`, `FormID`),
+   *   and every one of them is `= string`, so there is no runtime change; the
+   *   only shape change is an OPTIONAL `ServerInfo.capabilities`.
+   * - **The auth contract is unchanged.** The server still reads
+   *   `OPENCODE_PASSWORD` first and falls back to `OPENCODE_SERVER_PASSWORD`.
+   *
+   * The one difference TBAi can observe: `GET /api/permission/request` now
+   * DECLARES a 404, so the client throws a tagged error for a location that
+   * does not exist instead of an undeclared status.
+   */
   minimumVersion: "2.0.15",
-  maximumVersionExclusive: "2.1.0",
+  maximumVersionExclusive: "2.2.0",
   /** Default HTTP Basic username expected by OpenCode V2. */
   authUsername: "opencode",
   /**

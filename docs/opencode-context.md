@@ -23,7 +23,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 - **HEAD:** `b1c48a483b2455687d8de9735068d296ebc96d8d`
 - **Working tree:** Clean (as of 2026-10-19)
 - **Verification:** `bun run verify` exit 0 (4309 pass / 43 skip / 0 fail, 319 files, 4352 tests, 333.04s); `bun run typecheck` exit 0; lint + format:check clean.
-- **OpenCode CLI version:** 2.0.32 (supported range: 2.0.15–2.1.0)
+- **OpenCode CLI version:** 2.1.2 (supported range: 2.0.15–2.2.0)
 - **Client:** `@opencode/client` (official V2 client)
 - **GitHub Actions:** Run 39160063675 completed with success (all 3 jobs: verify, e2e, tauri).
 
@@ -78,7 +78,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 
 1. If `OPENCODE_BINARY` is explicitly configured, resolve and validate that command. If it is invalid or unsupported, fail clearly; do not silently fall back.
 2. Otherwise, resolve `opencode` through the current process `PATH`, using Bun's built-in lookup (`Bun.which`). Avoid scanning hardcoded installation directories or detecting individual package managers.
-3. Validate the resolved command with a bounded version probe (`--version`, 2s timeout) and the existing supported-version rules (2.0.15–2.1.0).
+3. Validate the resolved command with a bounded version probe (`--version`, 2s timeout) and the existing supported-version rules (2.0.15–2.2.0).
 4. Use the same launch semantics for probing and starting the managed process.
 5. Handle a resolved Windows `.cmd` launcher through a safe, tested Windows-specific launch mechanism (`cmd /c`). Do not search guessed npm package-internal executable paths.
 6. If no valid command is found, return an actionable error explaining installation, PATH, and `OPENCODE_BINARY` options.

@@ -35,10 +35,11 @@ const AUTH_FIXTURE_PASSWORD = "opencode-runtime-auth-fixture-password";
 const AUTH_REPLACEMENT_PASSWORD = "opencode-runtime-replacement-password";
 const AUTH_REPLACEMENT_ENV_VAR = "TBai_OPENCODE_TEST_REPLACEMENT_PASSWORD";
 const SUPPORTED_LOWER_BOUND_VERSION = "2.0.15";
-const SUPPORTED_CLIENT_VERSION = "2.0.16";
+/** The newest published 2.x, and the version CI pins. */
+const SUPPORTED_CLIENT_VERSION = "2.1.2";
 const BELOW_LOWER_BOUND_VERSION = "2.0.14";
 const UNSUPPORTED_VERSION = "2.0.14";
-const UPPER_BOUND_VERSION = "2.1.0";
+const UPPER_BOUND_VERSION = "2.2.0";
 
 type AuthInvariantResult = {
   readonly basicHeaderMatches: boolean;
@@ -238,7 +239,15 @@ describe("OpenCode managed version range", () => {
     expect(isSupportedOpenCodeVersion(SUPPORTED_CLIENT_VERSION)).toBe(true);
   });
 
-  it("rejects the below-range fixture and the 2.1.0 upper bound", () => {
+  it("accepts the whole 2.1 line, which was checked against the upstream source", () => {
+    // The 2.1 line was adopted on 2026-10-22: no route removed, no event type
+    // removed, and the imported types unchanged apart from branded string
+    // aliases. Every 2.1.x is inside the range.
+    for (const version of ["2.1.0", "2.1.1", "2.1.2"])
+      expect(isSupportedOpenCodeVersion(version)).toBe(true);
+  });
+
+  it("rejects the below-range fixture and the 2.2.0 upper bound", () => {
     expect(isSupportedOpenCodeVersion(BELOW_LOWER_BOUND_VERSION)).toBe(false);
     expect(isSupportedOpenCodeVersion(UNSUPPORTED_VERSION)).toBe(false);
     expect(isSupportedOpenCodeVersion(UPPER_BOUND_VERSION)).toBe(false);
