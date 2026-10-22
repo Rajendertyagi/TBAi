@@ -128,6 +128,63 @@ Run them all with `bun run verify`.
   connect resurrects a connection that `disconnectAll` just closed. **Verify a
   suspected regression by running the single file in isolation** before believing
   or dismissing it.
+- **A second MCP timing failure, measured on 2026-10-22, and NOT a
+  regression.** The cases in `tests/integration/mcp/connection-lifecycle-race.test.ts`
+  that interrupt a connect mid-handshake — *a connect interrupted by disconnect
+  stays disconnected*, *an interrupted connect schedules no reconnect*, *a
+  connect interrupted during the SSE probe does not reach connected*, and *a
+  superseded attempt is abandoned and does not overwrite the newer one* — time
+  out at **exactly 5000 ms** when the MCP integration directory is run
+  **without the repository's `--timeout=30000`**. The cause is measured, not
+  guessed:
+  - The MCP SDK leaves `client.connect()` **pending** after `close()` (the
+    test's own comment at `connection-lifecycle-race.test.ts:223` says so), so
+    the interrupted attempt never settles.
+  - `disconnectAll` therefore waits its full bound,
+    `INFLIGHT_SETTLE_TIMEOUT_MS = 5000` (`src/services/mcp/manager.ts:85`).
+  - Only one case in that file declares a timeout (`30000`). The rest inherit
+    bun's **5000 ms default**, which is exactly that bound — so a
+    `disconnectAll` that is *supposed* to take its whole bound is killed by the
+    harness one millisecond before it finishes. Declaring `30000` on the
+    affected case makes it pass (verified).
+  - The child fixture is **not** the problem: its `requested` marker appears in
+    **113 ms** (measured), so the handshake boundary is reached well inside the
+    budget.
+  - The fix is the **timeout declaration**, not the production bound: the
+    production constant is load-bearing — it is what bounds a shutdown — and
+    lowering it to fit a test would weaken the guarantee it exists to provide.
+  - **It is pre-existing.** The same failures reproduce at commit `7de8555`
+    (before the OpenCode runtime-remediation work), in a clean worktree, with
+    the same 5000 ms signature: 3 fail at the base commit, 2-3 fail with the
+    remediation applied.
+  - **The repository's own gate does not hit it**: `bun run test` carries
+    `--timeout=30000`, and with it the MCP integration directory is **49 pass /
+    0 fail**. The failure appears only when the directory is run bare, which is
+    why a single-file run under the default timeout is a misleading signal
+    about this file.
+- **A CI failure in the MCP area is not evidence of a regression in the change
+  on the branch.** The CI run of `75ec732` failed with **1** failure — `F3 -
+  unexpected session/transport loss > transitions to error and reconnects when
+  transport closes unexpectedly` (**5790.68 ms**) — in a file that none of that
+  commit's 14 changed files touch. The same case **passes** in isolation, under
+  the whole-directory load, and on the next commit's CI run, which was green.
+  The arithmetic points at one assertion. The case's first poll waits for the
+  `connect outcome=error` log entry on a budget of **50 × 100 ms = 5000 ms**
+  (`mcp-v2.test.ts:200`), and that entry is only emitted when the child's
+  `close` event arrives — SIGTERM, to the child's death, to the transport's
+  close. A **5790 ms** total is that budget **exhausted**: ≈790 ms of setup,
+  then the full 5000 ms of polling, and the assertion at
+  `mcp-v2.test.ts:213` (`expect(errorLogs.length).toBeGreaterThanOrEqual(1)`)
+  failed. The number is also exactly where the *reconnect* would fire — the
+  manager arms it 5000 ms after the kill — so on the CI runner the child's
+  teardown was delivered **later than the reconnect delay**, and the poll gave
+  up at the same instant the retry landed. Locally the same case delivers the
+  error log immediately and the reconnect 5000 ms later, which is the
+  timeline the test was written against. **The delivery delay itself has not
+  been reproduced on a loaded runner here**, so this is recorded as a known
+  flake with its arithmetic, not as a diagnosis. Verify a suspected MCP
+  regression by running the single file under `bun run test`'s own timeout,
+  not bare.
 - Because the gate can currently fail for the wrong reason (above), do not add a CI
   performance or size gate until that is fixed — it inherits the same noise, and a
   gate that cries wolf gets disabled. See `performance.md`.
