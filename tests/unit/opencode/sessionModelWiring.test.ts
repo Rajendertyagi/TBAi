@@ -209,4 +209,29 @@ describe("the create seam — a conversation with no stored choice", () => {
     expect(switches).toHaveLength(0);
     expect(creates[0].model).toEqual({ id: "agnes-3.0-flash", providerID: "agnes" });
   });
+
+  it("M11: is CREATED when the catalogue cannot be read", async () => {
+    // A catalogue read that fails must DEGRADE, not abort. The session is
+    // still created - unbound, with no model - because an unbound session is
+    // repaired on the next turn, while a session that was never created is
+    // not, and the reader would be told their Code session could not start
+    // because a model CATALOGUE could not be read.
+    mock.module("@/services/opencode/capabilities", () => ({
+      getOpenCodeCapabilities: async () => {
+        throw new Error("catalogue unavailable (503)");
+      },
+      resolveOpenCodeModelRef: async () => {
+        throw new Error("catalogue unavailable (503)");
+      },
+    }));
+    storedConversation = { ...storedConversation, opencodeSessionId: null };
+
+    const binding = await ensureOpenCodeSession("conv-1");
+
+    // The session EXISTS.
+    expect(binding.sessionId).toBe("ses_new");
+    expect(creates).toHaveLength(1);
+    // And it is honestly unbound, with no model invented.
+    expect(creates[0].model).toBeUndefined();
+  });
 });

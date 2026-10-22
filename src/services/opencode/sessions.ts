@@ -303,11 +303,28 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
   // into being — and it only runs when the stored branch above did not, so a
   // reader's explicit choice can never be overridden here.
   if (!params.model) {
-    const target = pickSessionModel({
-      storedModel: await resolveStoredModel(conversation.opencodeModel),
-      serverDefault: await fetchServerDefaultModel(),
-    });
-    if (target) params.model = { id: target.id, providerID: target.providerID };
+    // M11: a catalogue-read failure DEGRADES, it does not abort. The session
+    // is still created - unbound, with no model, and with the reason logged.
+    //
+    // The alternative was strictly worse: `session.create` never ran, so the
+    // conversation had no session at all, and the reader was told the session
+    // could not start because a model CATALOGUE could not be read. The
+    // invariant this module documents - "tolerant by construction" - was not
+    // true of the code, and the creation path is where it mattered most: an
+    // unbound session is repaired on the next turn, while a session that was
+    // never created is not.
+    try {
+      const target = pickSessionModel({
+        storedModel: await resolveStoredModel(conversation.opencodeModel),
+        serverDefault: await fetchServerDefaultModel(),
+      });
+      if (target) params.model = { id: target.id, providerID: target.providerID };
+    } catch (error) {
+      logger.warn("opencode", "opencode.session_model_unresolved", {
+        conversationId,
+        ...classifyError(error),
+      });
+    }
   }
 
   let sessionId: string | undefined;
@@ -338,12 +355,16 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
  *
  * Uses the official V2 `session.interrupt` then `session.remove` contract.
  *
+ * The pointer is cleared ONLY when the remote session is gone. A failed
+ * removal keeps it and reports why (L2): a cleared pointer orphans a session
+ * the server still has, and nothing holds the handle that could remove it.
+ *
  * @param conversationId - TBAi conversation whose session should end.
- * @returns Whether a live session was terminated (false = nothing to do).
+ * @returns Whether a live session was terminated, and why not when it was not.
  */
 export async function terminateOpenCodeSession(
   conversationId: string,
-): Promise<{ terminated: boolean }> {
+): Promise<{ terminated: boolean; reason?: "remote-removal-failed" | "unreachable" }> {
   const conversation = await conversationService.get(conversationId);
   const sessionId = conversation?.opencodeSessionId;
   if (!conversation || !sessionId) {
@@ -369,17 +390,27 @@ export async function terminateOpenCodeSession(
     try {
       await client.session.remove({ sessionID: sessionId });
     } catch (err) {
-      logger.debug("opencode", "opencode.session_remove_skipped", {
+      // L2: the remote removal FAILED. The pointer is KEPT.
+      //
+      // A cleared pointer orphans the session: the server still has it, and
+      // nothing holds the handle that could remove it. A kept pointer is
+      // recoverable - the next termination attempt tries again, and the reader
+      // can still see which session the conversation is bound to. The plan's
+      // decision (D17) is exactly this: "a pointer to a possibly-live session
+      // is recoverable, a cleared pointer orphans it".
+      logger.warn("opencode", "opencode.session_remove_failed", {
         conversationId,
+        sessionId,
         ...classifyError(toOpenCodeError(err)),
       });
+      return { terminated: false, reason: "remote-removal-failed" };
     }
   } catch (err) {
     logger.warn("opencode", "opencode.session_terminate_failed", {
       conversationId,
       ...classifyError(toOpenCodeError(err)),
     });
-    return { terminated: false };
+    return { terminated: false, reason: "unreachable" };
   }
   await conversationService.update(conversationId, { opencodeSessionId: null });
   logger.info("opencode", "opencode.session_terminate", {

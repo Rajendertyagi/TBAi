@@ -6850,3 +6850,56 @@ client - the union is closed - so the cast in it is deliberate and documented:
 the branch exists for the server's NEXT type, not for one the client can
 deliver today. TypeScript's `never` in that position is the exhaustiveness
 working, not an error to silence.
+
+## 2026-10-22 - Phase 6, part two: a dead function, a no-op promise, and a session that is not orphaned
+
+**L7 - `bindV2PermissionOptions` is DELETED.** It had zero consumers, and its
+inner loop discarded the return value of the validation it appeared to perform:
+it built a binding, asked `hostResponseFor` to resolve each presentation, and
+threw the results away. So it bound and validated nothing, while reading like
+the place where binding and validation happened. The shared approval gate works
+because it renders the declared options itself, so nothing was lost.
+
+**L3 - `invalidateBootstrap` is DELETED, and so is its call.** It was an empty
+function whose caller read it as a guarantee it did not have. What it PROMISED
+- "do not spawn a concurrent request while one is in flight" - is already
+guaranteed by the bootstrap map: it self-cleans in its own `finally`, so a
+failed attempt is gone by the time the reader presses Retry, and an attempt
+still in flight is SHARED rather than duplicated. The retry is the `attempt`
+lever, which re-runs the effect.
+
+The test that used to call the empty function now asserts the GUARANTEE
+directly - a concurrent caller attaches to the in-flight bootstrap, and a
+failed bootstrap is not cached, so a retry really retries.
+
+**L2 - a failed remote removal KEEPS the pointer (D17).** The termination
+path cleared `opencodeSessionId` even when the server-side removal failed,
+which ORPHANED the session: the server still had it, and nothing held the
+handle that could remove it. A pointer to a possibly-live session is
+recoverable - the next termination attempt tries again, and the reader can
+still see which session the conversation is bound to. A cleared pointer is not.
+
+So the pointer is cleared only when the remote session is gone, and a failure
+reports `{ terminated: false, reason }` - `remote-removal-failed` when the
+removal itself failed, `unreachable` when the server could not be reached.
+The route returns the reason as JSON, so the caller can tell "nothing to do"
+from "it is still there".
+
+**M11 - a catalogue read that fails DEGRADES, it does not abort.** The
+creation path resolved the stored choice and the server's default, and a
+failure in either aborted the whole creation: `session.create` never ran, the
+conversation had no session at all, and the reader was told their Code session
+could not start because a model CATALOGUE could not be read. The invariant
+`sessionModel.ts` documents - "tolerant by construction" - was not true of the
+code.
+
+Now the resolution degrades. `resolveStoredModel` and `fetchServerDefaultModel`
+catch and answer `null` - "no usable choice" and "no default" - which is what
+their own doc comments already claimed, and the creation path catches too, so
+the session is still CREATED, unbound, with the reason logged. The distinction
+that matters: an unbound session is repaired on the next turn, while a session
+that was never created is not.
+
+**The adopt path was already tolerant**, and it is unchanged: it caught the
+failure and still handed the live session back. M11 was only ever about the
+creation path, and about the two helpers whose contract said otherwise.

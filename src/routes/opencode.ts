@@ -103,7 +103,9 @@ app.post("/session", async (c) => {
  * `terminateOpenCodeSession`): aborts live work, deletes the server-side
  * session, clears the persisted pointer. Missing conversation/session/server
  * surfaces as `{ terminated: false }`, never an error, so the deletion
- * coordinator can call it unconditionally. Registered before the proxy
+ * coordinator can call it unconditionally. A failed REMOVAL also reports
+ * `{ terminated: false, reason }` and keeps the pointer, because a cleared
+ * pointer orphans a session the server still has. Registered before the proxy
  * catch-all below.
  */
 app.post("/session/terminate", async (c) => {

@@ -123,16 +123,6 @@ export async function bootstrapOpenCodeSession(
 }
 
 /**
- * Conservative invalidation: if an in-flight operation is active, leave it alone
- * so manual Retry does not spawn concurrent requests. Genuine failures already
- * self-clean upon rejection.
- */
-export function invalidateBootstrap(_conversationId: string): void {
-  // Conservative by contract: an active in-flight bootstrap is NOT cancelled or dropped.
-  // When a bootstrap settles or fails, the map entry is automatically cleaned up.
-}
-
-/**
  * Reset all bootstrap entries. Strictly for test fixtures.
  */
 export function clearAllBootstraps(): void {

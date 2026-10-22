@@ -790,8 +790,7 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     await conversationService.update(conv2.id, { opencodeSessionId: "sess-seam" });
     // For the service-seam half: make the transport calls themselves fail
     // (a server that refuses the interrupt/remove) so terminateOpenCodeSession
-    // returns terminated:true after the best-effort skip path, proving the
-    // per-call catch swallows transport failures without blocking.
+    // reports the failure without throwing.
     const { openCodeServerManager: smMod2 } = await import("@/services/opencode/serverManager.ts");
     const managerLike = smMod2 as unknown as ServerManagerLike;
     const real2 = managerLike.ensureBaseUrl;
@@ -806,11 +805,14 @@ describe("DELETE /api/conversations/:id — OpenCode session termination (Phase 
     managerLike.ensureBaseUrl = () => Promise.resolve(`http://127.0.0.1:${refuse.port}`);
     try {
       const result = await terminateOpenCodeSession(conv2.id);
-      // Per-call transport failures are swallowed (logged at debug), so the
-      // service completes: terminated:true and the pointer is cleared.
-      expect(result.terminated).toBe(true);
+      // L2 CHANGED THIS. The per-call transport failures are still swallowed
+      // (the delete is never blocked), but the pointer is now KEPT: the remote
+      // session may still be there, and a cleared pointer orphans it with
+      // nothing holding the handle that could remove it.
+      expect(result.terminated).toBe(false);
+      expect(result.reason).toBe("remote-removal-failed");
       const reloaded = await conversationService.get(conv2.id);
-      expect(reloaded?.opencodeSessionId).toBeNull();
+      expect(reloaded?.opencodeSessionId).toBe("sess-seam");
     } finally {
       managerLike.ensureBaseUrl = real2;
       refuse.stop(true);

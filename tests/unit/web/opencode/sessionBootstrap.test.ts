@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import {
   bootstrapOpenCodeSession,
   hasInFlightBootstrap,
-  invalidateBootstrap,
   clearAllBootstraps,
   OPENCODE_BOOTSTRAP_PATH,
 } from "@web/features/opencode/sessionBootstrap";
@@ -254,7 +253,13 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
     expect(stub.attempts()).toBe(2);
   });
 
-  it("conservative invalidation does not delete in-flight promise to prevent concurrent duplicate calls", async () => {
+  it("a concurrent caller attaches to the in-flight bootstrap instead of spawning a duplicate", async () => {
+    // L3 CHANGED THIS. The test used to call `invalidateBootstrap` - an empty
+    // function - and assert that it did not delete the in-flight promise. The
+    // GUARANTEE is what matters, and it is now asserted directly: the
+    // bootstrap map self-cleans in its own `finally`, so a failed attempt is
+    // gone by the time the reader presses Retry, and an attempt still in
+    // flight is SHARED rather than duplicated.
     const stub = stubBootstrapFetch(async (attempt) => {
       await new Promise((r) => setTimeout(r, 20));
       return {
@@ -271,15 +276,35 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
     const p1 = bootstrapOpenCodeSession("conv_conserv");
     expect(hasInFlightBootstrap("conv_conserv")).toBe(true);
 
-    // Call invalidateBootstrap while P1 is in flight
-    invalidateBootstrap("conv_conserv");
-
     // Start P2 while P1 is still in flight -> MUST attach to P1, not spawn duplicate fetch!
     const p2 = bootstrapOpenCodeSession("conv_conserv");
 
     const [res1, res2] = await Promise.all([p1, p2]);
     expect(stub.attempts()).toBe(1); // exactly 1 network call
     expect(res1.sessionId).toBe(res2.sessionId);
+  });
+
+  it("a failed bootstrap is not cached, so a retry really retries", async () => {
+    // The other half of the guarantee the removed function used to promise:
+    // a FAILED attempt leaves no entry behind, so the reader's Retry starts a
+    // new request rather than receiving the same rejection again.
+    let attempt = 0;
+    const stub = stubBootstrapFetch(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("OpenCode binary missing");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ sessionId: "ses_recovered", directory: null }),
+      };
+    });
+
+    await expect(bootstrapOpenCodeSession("conv_retry")).rejects.toThrow("OpenCode binary missing");
+    expect(hasInFlightBootstrap("conv_retry")).toBe(false);
+
+    const recovered = await bootstrapOpenCodeSession("conv_retry");
+    expect(recovered.sessionId).toBe("ses_recovered");
+    expect(stub.attempts()).toBe(2);
   });
 
   it("cleanup only removes the exact promise that owns the map entry (no stale race delete)", async () => {

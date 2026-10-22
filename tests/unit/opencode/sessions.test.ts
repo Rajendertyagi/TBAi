@@ -142,16 +142,36 @@ describe("terminateOpenCodeSession — V2 call mapping", () => {
     expect(result).toEqual({ terminated: true });
   });
 
-  it("D. stays best-effort: a failing remove still clears the pointer", async () => {
+  it("L2: a failing remove KEEPS the pointer, so the session is not orphaned", async () => {
+    // L2 CHANGED THIS. The old behaviour cleared the pointer even when the
+    // remote removal failed, which ORPHANED the session: the server still had
+    // it, and nothing held the handle that could remove it. A kept pointer is
+    // recoverable - the next attempt tries again.
     removeImpl = async () => {
       throw sessionNotFound(LIVE_ID);
     };
     const result = await terminateOpenCodeSession("conv-1");
-    expect(result).toEqual({ terminated: true });
+    expect(result.terminated).toBe(false);
+    expect(result.reason).toBe("remote-removal-failed");
+    // The pointer is NOT cleared.
+    expect(updates).toEqual([]);
+  });
+
+  it("L2: a failing remove keeps the pointer, but a SUCCESSFUL one clears it", async () => {
+    removeImpl = async () => {
+      throw sessionNotFound(LIVE_ID);
+    };
+    await terminateOpenCodeSession("conv-1");
+    expect(updates).toEqual([]);
+
+    // The next attempt succeeds, and only then is the pointer cleared.
+    removeImpl = async () => undefined;
+    const result = await terminateOpenCodeSession("conv-1");
+    expect(result.terminated).toBe(true);
     expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: null } }]);
   });
 
-  it("D. stays best-effort when BOTH calls fail", async () => {
+  it("stays best-effort when BOTH calls fail", async () => {
     interruptImpl = async () => {
       throw new ClientError("Transport", { cause: new Error("boom") });
     };
@@ -160,7 +180,10 @@ describe("terminateOpenCodeSession — V2 call mapping", () => {
     };
     const result = await terminateOpenCodeSession("conv-1");
     expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
-    expect(result).toEqual({ terminated: true });
+    // The removal failed, so the pointer is kept and the reason is reported.
+    expect(result.terminated).toBe(false);
+    expect(result.reason).toBe("remote-removal-failed");
+    expect(updates).toEqual([]);
   });
 
   it("does nothing when the conversation has no session pointer", async () => {

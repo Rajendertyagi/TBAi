@@ -18,7 +18,13 @@
  * NOTE ON THE BUTTONS — this is the mechanism TBAi's adapter relies on: each
  * button renders **only when its callback is supplied**. So "hide the option the
  * host did not offer" is expressed by *not passing* that callback, with no fork
- * and no prop added. See `features/permissions/approvalOptionMapping.ts`.
+ * and no prop added.
+ *
+ * (The id-mapping adapter that once bridged these ids,
+ * `features/permissions/approvalOptionMapping.ts`, was DELETED on 2026-10-22
+ * with `bindV2PermissionOptions`: it had no consumer, and its inner loop
+ * discarded the return value of the validation it appeared to perform. The
+ * app-owned card below does the mapping itself.)
  *
  * ## THIS FILE IS CURRENTLY UNUSED — the app-owned card is canonical
  *

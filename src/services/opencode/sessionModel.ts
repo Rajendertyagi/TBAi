@@ -92,8 +92,16 @@ export async function resolveStoredModel(
   storedModelId: string | null | undefined,
 ): Promise<StoredModelRef | null> {
   if (!storedModelId) return null;
-  const { resolveOpenCodeModelRef } = await import("./capabilities");
-  return await resolveOpenCodeModelRef(storedModelId);
+  try {
+    const { resolveOpenCodeModelRef } = await import("./capabilities");
+    return await resolveOpenCodeModelRef(storedModelId);
+  } catch {
+    // M11: a catalogue that cannot be read means "no usable choice", not a
+    // failure. The reader's stored value is still their choice; it simply
+    // cannot be resolved right now, and the server's default - if it has one -
+    // is the honest answer until it can.
+    return null;
+  }
 }
 
 /**
@@ -105,7 +113,14 @@ export async function resolveStoredModel(
  * @returns The default model descriptor, or null.
  */
 export async function fetchServerDefaultModel(): Promise<OpenCodeDefaultModel | null> {
-  const { getOpenCodeCapabilities } = await import("./capabilities");
-  const capabilities = await getOpenCodeCapabilities();
-  return capabilities.defaultModel ?? null;
+  try {
+    const { getOpenCodeCapabilities } = await import("./capabilities");
+    const capabilities = await getOpenCodeCapabilities();
+    return capabilities.defaultModel ?? null;
+  } catch {
+    // M11: a server that cannot be asked yields `null`, which is the honest
+    // "there is no default" answer and leaves the session unbound. The CATCH
+    // the doc comment already claimed belongs here.
+    return null;
+  }
 }

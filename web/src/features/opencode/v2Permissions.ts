@@ -4,7 +4,6 @@ import type {
   ToolApprovalOption,
   ToolCallMessagePart,
 } from "@assistant-ui/react";
-import { bindApprovalOptions, hostResponseFor } from "@/features/permissions/approvalOptionMapping";
 
 /** The stable host option ids used by the native V2 permission bridge. */
 export const V2_PERMISSION_OPTION_IDS = {
@@ -237,14 +236,10 @@ export function toV2PermissionReply(
   );
 }
 
-/** Returns the assistant-ui option mapping used by the native approval renderer. */
-export function bindV2PermissionOptions(
-  request: V2PermissionView,
-): ReturnType<typeof bindApprovalOptions> {
-  const approval = projectV2PermissionApproval(request);
-  const binding = bindApprovalOptions(approval?.options);
-  for (const presentation of binding.presentation) {
-    hostResponseFor(binding, presentation);
-  }
-  return binding;
-}
+// L7: `bindV2PermissionOptions` was DELETED on 2026-10-22.
+//
+// It had zero consumers, and its inner loop discarded the return value of the
+// validation it appeared to perform, so it bound and validated nothing: it
+// built a binding, asked `hostResponseFor` to resolve each presentation, and
+// threw the results away. The shared approval gate works because it renders
+// the declared options itself, so nothing was lost by removing it.

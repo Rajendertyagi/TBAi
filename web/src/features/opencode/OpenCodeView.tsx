@@ -20,7 +20,7 @@ import { hydrateAutoPolicy } from "./sessionAutoPolicy";
 import { shouldReconnectForEpoch } from "./recoveryEpoch";
 import { OpenCodeRuntimeContext } from "./opencodeRuntimeContext";
 import { FirstPromptHandoff } from "./FirstPromptHandoff";
-import { bootstrapOpenCodeSession, invalidateBootstrap } from "./sessionBootstrap";
+import { bootstrapOpenCodeSession } from "./sessionBootstrap";
 import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
@@ -81,11 +81,20 @@ export function OpenCodeView() {
   const retry = useCallback(() => {
     setError(null);
     setTimedOut(false);
-    if (agentId) {
-      invalidateBootstrap(agentId);
-    }
+    // L3: the `invalidateBootstrap(agentId)` call was DELETED on 2026-10-22.
+    //
+    // It was an empty function, and what it PROMISED - "do not spawn a
+    // concurrent request while one is in flight" - is already guaranteed: the
+    // bootstrap map self-cleans in its own `finally`, so a failed attempt is
+    // gone by the time the reader presses Retry, and an attempt still in
+    // flight is shared rather than duplicated. A function that promises a reset
+    // and does nothing is worse than its absence, because the caller reads it
+    // as a guarantee it does not have.
+    //
+    // The retry itself is the `attempt` lever: it re-runs the effect, which
+    // calls `bootstrapOpenCodeSession` again.
     setAttempt((n) => n + 1);
-  }, [agentId]);
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `sessionId` is SET by this effect (line below), so depending on it would re-run the whole session bootstrap as soon as the id arrives - bootstrapping a second session for the one it just created. The bootstrap is keyed on `agentId` and on `attempt` (the retry lever) by design.
   useEffect(() => {
