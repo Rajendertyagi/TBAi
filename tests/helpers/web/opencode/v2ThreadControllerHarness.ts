@@ -194,6 +194,12 @@ export type GenerationOptions = {
    * prove the auto-arm path cannot leak an unhandled rejection.
    */
   readonly permissionReply?: PermissionReplyHandler;
+  /**
+   * Overrides how `form.reply` behaves. The default records the input and
+   * resolves; the idempotency case needs it to be SLOW, so a second reply
+   * overlaps the first.
+   */
+  readonly formReply?: (input: SessionFormReplyInput) => Promise<void>;
 };
 
 export type FakeGeneration = OpenCodeV2Generation & {
@@ -413,6 +419,7 @@ export function createGeneration(
     formList: async () => options.formList?.(connectionSignal) ?? [],
     formReply: async (input) => {
       formReplyInputs.push(input);
+      await options.formReply?.(input);
     },
     formCancel: async (input) => {
       formCancelInputs.push(input);

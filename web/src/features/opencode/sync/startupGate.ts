@@ -41,6 +41,25 @@
  * rejection.
  */
 
+/**
+ * The error a bounded readiness wait rejects with.
+ *
+ * It is its own type because "the runtime did not come up in time" is neither
+ * a failure of the runtime nor a supersession: the attempt may still come up,
+ * and the waiter simply stopped watching. A caller that treats it as a
+ * terminal failure would report a dead runtime for a slow one.
+ */
+export class StartupTimeoutError extends Error {
+  /** The deadline that elapsed, in milliseconds. */
+  public readonly timeoutMs: number;
+
+  public constructor(timeoutMs: number) {
+    super(`OpenCode V2 runtime was not ready within ${timeoutMs}ms`);
+    this.name = "StartupTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 /** The gate's surface. */
 export interface StartupGate {
   /**
@@ -66,6 +85,19 @@ export interface StartupGate {
    * @returns The promise, or `null` when no attempt has opened the gate.
    */
   pending(): Promise<void> | null;
+  /**
+   * Waits for readiness, but not forever.
+   *
+   * A caller that waits forever is a caller with no answer: the composer
+   * holds the reader's text with no way to release it and no way to say why.
+   * The deadline is the gate's own, because the gate is the thing that
+   * settles readiness - a waiter that gives up first must not settle the
+   * gate, it must only stop waiting.
+   *
+   * @param timeoutMs - How long to wait before giving up.
+   * @returns The readiness promise, or a rejection carrying the timeout.
+   */
+  waitWithDeadline(timeoutMs: number): Promise<void>;
 }
 
 /**
@@ -107,5 +139,26 @@ export function createStartupGate(): StartupGate {
     return promise;
   }
 
-  return { open, resolve, reject, pending };
+  function waitWithDeadline(timeoutMs: number): Promise<void> {
+    const opened = promise;
+    if (opened === null) return Promise.reject(new StartupTimeoutError(timeoutMs));
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new StartupTimeoutError(timeoutMs)), timeoutMs);
+      // The deadline only stops THIS waiter. The gate keeps its own promise:
+      // a late resolve must not be reported as a timeout, and a timeout must
+      // not settle the gate for anybody else.
+      void opened.then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  return { open, resolve, reject, pending, waitWithDeadline };
 }

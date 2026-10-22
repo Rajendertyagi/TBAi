@@ -12,6 +12,8 @@ import {
   OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
+  OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
+  OPENCODE_V2_READY_TIMEOUT_MS,
   OPENCODE_V2_RETRYABLE_HTTP_STATUSES,
 } from "@/features/opencode/config";
 import {
@@ -47,6 +49,7 @@ import {
 import type { OpenCodeV2Client, OpenCodeV2Generation } from "./v2Client";
 import type {
   V2DesiredSelection,
+  V2ExecutionState,
   V2HistoryMerge,
   V2InboxRecord,
   V2MessageState,
@@ -71,6 +74,18 @@ export type V2PromptOptions = {
 
 export type V2PromptSendError =
   | { readonly kind: "definitive-failure"; readonly error: V2SafeError }
+  | {
+      /**
+       * The server may have taken the prompt, and the wire cannot say which.
+       *
+       * This is NOT a rejection: a retry would deliver the prompt twice, and
+       * the server admits a repeated message id as the SAME prompt (upstream
+       * `SessionInbox.admit` reconciles by id), so the honest answer is "it is
+       * still in flight" rather than "it failed".
+       */
+      readonly kind: "ambiguous";
+      readonly error: V2SafeError;
+    }
   | { readonly kind: "disposed" };
 
 /**
@@ -222,12 +237,28 @@ export type V2ThreadControllerConfig = {
   readonly maxReconnectAttempts: number;
   readonly initialReconnectDelayMs: number;
   readonly maxReconnectDelayMs: number;
+  /**
+   * How long a send waits for the server to admit the prompt.
+   *
+   * Injectable so a test can prove the DEADLINE without waiting the product's
+   * timeout, and so the product's value is one number in one place.
+   */
+  readonly promptAdmissionTimeoutMs: number;
+  /**
+   * How long a caller waits for the runtime to become ready.
+   *
+   * Injectable for the same reason: a bounded wait that can only be observed
+   * by waiting it out is a wait nobody will test.
+   */
+  readonly readyTimeoutMs: number;
 };
 
 const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
   maxReconnectAttempts: OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   initialReconnectDelayMs: OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS,
   maxReconnectDelayMs: OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
+  promptAdmissionTimeoutMs: OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
+  readyTimeoutMs: OPENCODE_V2_READY_TIMEOUT_MS,
 };
 
 /** Creates the single native OpenCode V2 session controller. */
@@ -267,6 +298,43 @@ export function createV2ThreadController(
   const answeredPermissions = new Set<string>();
   const autoApproveAttempted = new Set<string>();
   const formReplies = new Set<string>();
+  /**
+   * The permission request ids with an answer in flight.
+   *
+   * A CLAIM, not a record of success: the id is in this set from the moment
+   * the transport call starts until it succeeds or fails definitively. A
+   * second answer to the same request while this one is in flight is
+   * suppressed (M6).
+   */
+  const pendingPermissionReplies = new Set<string>();
+  /**
+   * The form ids with an answer in flight. The same claim as
+   * `pendingPermissionReplies`.
+   */
+  const pendingFormReplies = new Set<string>();
+  /**
+   * The inbox ids a pending cancel has already been issued against.
+   *
+   * A cancel requested before the prompt was admitted is honoured once the
+   * admission arrives, and the inbox id is what makes that cancel unique: the
+   * server identifies the queued prompt by it. This set is what makes "exactly
+   * once" true - the admission can arrive through two paths (the HTTP
+   * response and the inbox event), and both must not issue the cancel.
+   */
+  const cancelledInboxIds = new Set<string>();
+
+  /**
+   * Whether a cancel is still owed for the current run.
+   *
+   * The `idle`, `error` and `reverting` states have no run to cancel, so they
+   * carry no flag; every other state does.
+   *
+   * @param execution - The execution state to read.
+   * @returns True when a cancel was requested and has not been honoured.
+   */
+  function cancelPending(execution: V2ExecutionState): boolean {
+    return "cancelRequested" in execution ? execution.cancelRequested : false;
+  }
 
   /**
    * What the event pipeline needs from this controller.
@@ -499,12 +567,25 @@ export function createV2ThreadController(
             : undefined;
     dispatch({ type: "inbox_recorded", record });
     if (typeof activeMessageId === "string") {
+      // Read the pending cancel BEFORE the admission moves the state: the
+      // `admitted` state carries the flag forward, but the check is about what
+      // was true when the prompt was admitted.
+      const cancelOwed = cancelPending(state.execution);
       dispatch({ type: "prompt_admitted", userMessageId: activeMessageId, inbox: record });
       prompts.settle(activeMessageId, "admitted", {
         messageId: activeMessageId,
         inboxId: record.id,
         delivery: record.delivery,
       });
+      // A cancel requested BEFORE the admission is honoured now, against the
+      // inbox id the server gave the prompt. Until this existed the flag was
+      // carried into the `admitted` state and nothing read it, so the queued
+      // prompt executed while the reader was told it was cancelled (M7).
+      //
+      // Exactly once: the cancel is issued against the admitted inbox id, and
+      // the inbox id is what makes it unique. A second admission event for the
+      // same inbox id is refused by the set below.
+      if (cancelOwed) void cancelAdmittedPrompt(record.id);
     }
   }
 
@@ -578,6 +659,32 @@ export function createV2ThreadController(
     applyAdmissionEvent(event);
     applyAutoApproveEvent(event);
     applyCompactionLifecycleEvent(event);
+    applySettlementEvent(event);
+  }
+
+  /**
+   * Invalidates an in-flight answer when the server settles the request itself.
+   *
+   * A `permission.replied` or a `form.replied`/`form.cancelled` event means the
+   * server has already answered. An answer this client is still awaiting is
+   * then a SECOND answer to a settled request - and the server refuses it with
+   * an error that looks like a failure of the reader's action. The claim is
+   * dropped, so the in-flight call settles as "already answered" rather than
+   * as a failure (M6).
+   */
+  function applySettlementEvent(event: V2Event): void {
+    switch (event.type) {
+      case "permission.replied":
+        pendingPermissionReplies.delete(event.data.requestID);
+        answeredPermissions.add(event.data.requestID);
+        return;
+      case "form.replied":
+      case "form.cancelled":
+        pendingFormReplies.delete(event.data.id);
+        formReplies.add(event.data.id);
+        return;
+      default:
+    }
   }
 
   /**
@@ -970,8 +1077,13 @@ export function createV2ThreadController(
    * waiting on is superseded, it waits for the attempt that replaced it rather
    * than reporting the replacement as a failure. Only a real failure — a
    * terminal one, or a disposed runtime — is thrown.
+   *
+   * The wait is BOUNDED. A caller that waits forever holds the reader's text
+   * with no way to release it and no way to say why, so a runtime that never
+   * comes up ends the wait with a typed error instead of a hang.
    */
   async function awaitReady(): Promise<void> {
+    const deadline = Date.now() + cfg.readyTimeoutMs;
     for (;;) {
       try {
         await ensureLoaded();
@@ -981,10 +1093,14 @@ export function createV2ThreadController(
       }
       const live = currentAttempt;
       if (live === null) continue;
-      const pending = live.gate.pending();
-      if (pending === null) return;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0)
+        throw new V2ControllerError({
+          kind: "network",
+          message: `OpenCode V2 runtime was not ready within ${cfg.readyTimeoutMs}ms`,
+        });
       try {
-        await pending;
+        await live.gate.waitWithDeadline(remaining);
       } catch (error) {
         if (error instanceof AttemptSupersededError) continue;
         throw error;
@@ -1089,9 +1205,14 @@ export function createV2ThreadController(
     const localMessage = optimisticMessage(message, messageId);
     const record = prompts.create(messageId);
     dispatch({ type: "prompt_submitting", message: localMessage });
-    const admissionPromise = new Promise<V2PromptAdmissionResult>((resolve) => {
-      record.onSettle(resolve);
-    });
+    // The wait is BOUNDED. A prompt whose admission cannot be decided leaves
+    // the server running it, and the client cannot say whether it arrived -
+    // but the reader must not be left with a send that never returns. The
+    // deadline turns that silence into a reported, recoverable outcome.
+    const admissionPromise = prompts.awaitAdmissionWithDeadline(
+      messageId,
+      cfg.promptAdmissionTimeoutMs,
+    );
     const input: SessionPromptInput = {
       sessionID: client.sessionId,
       id: messageId,
@@ -1114,6 +1235,10 @@ export function createV2ThreadController(
           inboxId: normalized.id,
           delivery: normalized.delivery,
         });
+        // The other admission path. A cancel requested before the admission is
+        // honoured here too, and the inbox id makes it exactly once: the set
+        // is shared with the inbox-event path.
+        if (cancelPending(state.execution)) cancelAdmittedPrompt(normalized.id);
       })
       .catch((error: unknown) => {
         if (disposed || record.result === "admitted") {
@@ -1140,6 +1265,19 @@ export function createV2ThreadController(
     const result = await admissionPromise;
     if (result === "admitted" && record.submission !== null) return record.submission;
     if (result === "disposed") throw { kind: "disposed" } satisfies V2PromptSendError;
+    if (result === "ambiguous") {
+      // The request failed in a way that cannot prove the server refused it.
+      // The prompt may still be running there, so this is NOT a rejection and
+      // must not be reported as one: the reader's message stays in the thread
+      // and the run continues server-side.
+      throw {
+        kind: "ambiguous",
+        error: definitiveError ?? {
+          kind: "network",
+          message: "OpenCode V2 prompt admission could not be proven",
+        },
+      } satisfies V2PromptSendError;
+    }
     throw {
       kind: "definitive-failure",
       error: definitiveError ?? {
@@ -1147,6 +1285,35 @@ export function createV2ThreadController(
         message: "OpenCode V2 prompt admission could not be proven",
       },
     } satisfies V2PromptSendError;
+  }
+
+  /**
+   * Issues the cancel for a prompt that was admitted after the reader asked
+   * for it.
+   *
+   * The in-flight request is NOT aborted - its outcome is genuinely unknown,
+   * and aborting it would not stop the server from having taken the prompt.
+   * What the cancel does is remove the QUEUED prompt, once the server tells
+   * us its inbox id, and that is the only handle that identifies it.
+   *
+   * Exactly once per inbox id: the admission arrives through two paths (the
+   * HTTP response and the inbox event) and both must not cancel.
+   *
+   * @param inboxId - The inbox id the server admitted the prompt as.
+   */
+  function cancelAdmittedPrompt(inboxId: string): void {
+    if (cancelledInboxIds.has(inboxId)) return;
+    cancelledInboxIds.add(inboxId);
+    const generation = currentAttempt?.generation ?? null;
+    if (!generation) return;
+    void generation.operations
+      .inboxCancel({ sessionID: client.sessionId, inboxID: inboxId })
+      .catch((error: unknown) => {
+        logger.warn("opencode", "runtime.prompt_cancel_failed", {
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+      });
+    dispatch({ type: "execution_settled" });
   }
 
   async function cancel(): Promise<void> {
@@ -1232,26 +1399,67 @@ export function createV2ThreadController(
     requestId: string,
     decision: "once" | "always" | "reject",
   ): Promise<void> {
-    if (answeredPermissions.has(requestId)) return;
+    // The id is CLAIMED before the transport call, not after it. Two clicks on
+    // Approve, or a click that races the Auto shield, both reach this function
+    // while the first is still awaiting the server: a check that only adds to
+    // the set AFTER the await lets both through, and the server answers a
+    // second reply to a settled request with an error (M6).
+    if (!claimPermission(requestId)) return;
     const generation = requireGeneration();
     const request = state.permissions.find((candidate) => candidate.id === requestId);
-    if (!request)
+    if (!request) {
+      releasePermission(requestId);
       throw new V2ControllerError({
         kind: "not-found",
         message: "OpenCode V2 permission was not found",
       });
+    }
     try {
       await generation.operations.permissionReply({
         sessionID: client.sessionId,
         requestID: requestId,
         decision,
       });
+      // Settled: the claim becomes a record of success, so a later re-hydration
+      // does not resurrect the request.
+      pendingPermissionReplies.delete(requestId);
       answeredPermissions.add(requestId);
       dispatch({ type: "permission_answered", requestId });
     } catch (error) {
-      if (safeError(error, "").status === 404) dispatch({ type: "permission_retired", requestId });
-      else throw error;
+      // Only a DEFINITIVE failure releases the claim. A network error may mean
+      // the server took the reply, and re-sending it would be a second answer
+      // to the same request. The claim stays, and the request stays visible so
+      // the reader can act on it.
+      if (safeError(error, "").status === 404) {
+        dispatch({ type: "permission_retired", requestId });
+        pendingPermissionReplies.delete(requestId);
+        answeredPermissions.add(requestId);
+      } else releasePermission(requestId);
+      throw error;
     }
+  }
+
+  /**
+   * Claims a permission request id for an answer.
+   *
+   * @param requestId - The permission request id.
+   * @returns True when this call owns the answer, false when it was already
+   * claimed or answered.
+   */
+  function claimPermission(requestId: string): boolean {
+    if (answeredPermissions.has(requestId)) return false;
+    if (pendingPermissionReplies.has(requestId)) return false;
+    pendingPermissionReplies.add(requestId);
+    return true;
+  }
+
+  /**
+   * Releases a permission claim that failed definitively.
+   *
+   * @param requestId - The permission request id.
+   */
+  function releasePermission(requestId: string): void {
+    pendingPermissionReplies.delete(requestId);
   }
 
   /**
@@ -1285,19 +1493,64 @@ export function createV2ThreadController(
     formId: string,
     answer: SessionFormReplyInput["answer"],
   ): Promise<void> {
+    // Claimed BEFORE the transport call, for the same reason a permission is:
+    // two clicks on Submit both reach this function while the first is still
+    // awaiting the server, and the server answers a second reply to a settled
+    // form with an error (M6).
+    if (!claimForm(formId)) return;
     const generation = requireGeneration();
-    if (formReplies.has(formId)) return;
-    await generation.operations.formReply({ sessionID: client.sessionId, formID: formId, answer });
-    formReplies.add(formId);
-    dispatch({ type: "form_retired", formId });
+    try {
+      await generation.operations.formReply({
+        sessionID: client.sessionId,
+        formID: formId,
+        answer,
+      });
+      pendingFormReplies.delete(formId);
+      formReplies.add(formId);
+      dispatch({ type: "form_retired", formId });
+    } catch (error) {
+      // Only a definitive failure releases the claim; a network error may mean
+      // the server took the answer.
+      releaseForm(formId);
+      throw error;
+    }
   }
 
   async function rejectForm(formId: string): Promise<void> {
+    if (!claimForm(formId)) return;
     const generation = requireGeneration();
-    if (formReplies.has(formId)) return;
-    await generation.operations.formCancel({ sessionID: client.sessionId, formID: formId });
-    formReplies.add(formId);
-    dispatch({ type: "form_retired", formId });
+    try {
+      await generation.operations.formCancel({ sessionID: client.sessionId, formID: formId });
+      pendingFormReplies.delete(formId);
+      formReplies.add(formId);
+      dispatch({ type: "form_retired", formId });
+    } catch (error) {
+      releaseForm(formId);
+      throw error;
+    }
+  }
+
+  /**
+   * Claims a form id for an answer.
+   *
+   * @param formId - The form id.
+   * @returns True when this call owns the answer, false when it was already
+   * claimed or answered.
+   */
+  function claimForm(formId: string): boolean {
+    if (formReplies.has(formId)) return false;
+    if (pendingFormReplies.has(formId)) return false;
+    pendingFormReplies.add(formId);
+    return true;
+  }
+
+  /**
+   * Releases a form claim that failed definitively.
+   *
+   * @param formId - The form id.
+   */
+  function releaseForm(formId: string): void {
+    pendingFormReplies.delete(formId);
   }
 
   async function regenerate(selectedAssistantParentId: string | null): Promise<void> {

@@ -817,10 +817,6 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       return { ...state, connection: action.connection };
     case "load_started":
       return { ...state, load: { type: "loading" } };
-    case "load_reconciling":
-      return { ...state, load: { type: "reconciling" } };
-    case "load_reconciled":
-      return state.load.type === "reconciling" ? { ...state, load: { type: "loading" } } : state;
     case "load_completed":
       return { ...state, load: { type: "ready" } };
     case "load_failed":
@@ -1006,6 +1002,11 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
               userMessageId: action.userMessageId,
               inboxId: action.inboxId,
               assistantMessageId: action.assistantMessageId,
+              // A cancel requested before the prompt was admitted is still OWED:
+              // the prompt is queued on the server and nothing has removed it
+              // yet. The flag is what the admission path reads to issue that
+              // cancel once the inbox id exists (M7).
+              cancelRequested: action.phase !== "execution",
             },
           };
     case "execution_started":

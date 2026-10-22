@@ -567,7 +567,10 @@ describe("native V2 prompt admission", () => {
       return await prompt.promise;
     });
     const client = createClient([generation]);
-    const controller = createV2ThreadController(client);
+    // The admission arrives through the inbox event, well after the request
+    // failed. The deadline is long enough that the RECOVERY is what the test
+    // observes, not the timeout.
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
     await controller.awaitReady();
 
     try {
@@ -583,11 +586,14 @@ describe("native V2 prompt admission", () => {
         userMessageId: LOCAL_MESSAGE_ID,
         inboxId: null,
         assistantMessageId: null,
+        cancelRequested: true,
       });
 
       prompt.reject(new TypeError("prompt response was lost"));
       await waitForState(controller, (state) => state.execution.type === "reconciling");
       expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
+      // The in-flight request is NOT aborted: its outcome is genuinely
+      // unknown, and aborting it would not stop the server having taken it.
       expect(generation.inboxCancelInputs).toHaveLength(0);
       expect(generation.interruptInputs).toHaveLength(0);
 
@@ -599,15 +605,17 @@ describe("native V2 prompt admission", () => {
         inboxId: EVENT_INBOX_ID,
         delivery: "queue",
       });
-      expect(generation.inboxCancelInputs).toHaveLength(0);
+      // M7 CHANGED THIS. The cancel requested BEFORE the admission is now
+      // honoured against the admitted inbox id, exactly once - previously the
+      // flag was carried into the `admitted` state and nothing read it, so the
+      // queued prompt executed while the reader was told it was cancelled.
+      expect(generation.inboxCancelInputs).toHaveLength(1);
+      expect(generation.inboxCancelInputs[0]?.inboxID).toBe(EVENT_INBOX_ID);
+      // The run is over: the prompt was admitted and then removed from the
+      // queue, so the execution settles exactly as an admitted-prompt cancel
+      // does.
       expect(generation.interruptInputs).toHaveLength(0);
-      expect(admittedState).toEqual({
-        type: "admitted",
-        userMessageId: LOCAL_MESSAGE_ID,
-        inboxId: EVENT_INBOX_ID,
-        delivery: "queue",
-        cancelRequested: true,
-      });
+      expect(admittedState.type).toBe("idle");
     } finally {
       controller.dispose();
     }

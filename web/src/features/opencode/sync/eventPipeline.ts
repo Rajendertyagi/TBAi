@@ -389,12 +389,6 @@ export interface EventPipeline {
    * @returns True when a retry was pending and has been cancelled.
    */
   cancelReconnect(): boolean;
-  /**
-   * Whether a retry is pending.
-   *
-   * @returns True when a retry is scheduled.
-   */
-  hasPendingReconnect(): boolean;
 }
 
 /**
@@ -540,10 +534,6 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     return true;
   }
 
-  function hasPendingReconnect(): boolean {
-    return reconnectTimer !== null;
-  }
-
   return {
     consume,
     scheduleReconnect,
@@ -558,6 +548,5 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     resetAttempt,
     isExhausted,
     cancelReconnect,
-    hasPendingReconnect,
   };
 }

@@ -5,23 +5,23 @@ import {
   setPendingFirstMessage,
   peekPendingFirstMessage,
   claimPendingFirstMessage,
-  unclaimPendingFirstMessage,
+  markPendingFirstMessageFailed,
   clearPendingFirstMessage,
 } from "@web/features/chat/state/pendingFirstMessage";
 
 /**
- * Wave-2 Phase 4 — pending first-prompt handoff (cases 2p, 10p, 16p, 17, 18p).
+ * The pending first-prompt handoff's storage contract.
  *
  * The module owns one invariant: a materialized OpenCode draft has AT MOST
  * ONE pending first-prompt handoff, fired EXACTLY ONCE into the session-bound
  * runtime. These tests pin the storage contract the OpenCodeView consume
  * effect depends on:
- *   - single-slot overwrite, empty no-op, corrupt/empty → null
- *   - claim is persisted (a remount between claim and clear cannot refire)
- *   - consume-once across a simulated remount (case 17)
- *   - single append total (case 18 is pinned in firstSendPhase4.test.ts
- *     against a mock runtime; here the storage half is pinned)
- *   - no timer-based waits in this module (case 16)
+ *   - single-slot overwrite, empty no-op, corrupt/empty -> null
+ *   - the claim carries the message id, so a crash between the claim and the
+ *     dispatch can RESUME the same prompt (M13)
+ *   - a FAILED dispatch is never dispatched again automatically (M19)
+ *   - consume-once across a simulated remount
+ *   - no timer-based waits in this module
  */
 
 function installMemoryStorage(): () => void {
@@ -58,15 +58,15 @@ describe("pendingFirstMessage — staging contract", () => {
   it("set → peek returns the text; claim returns it once, second claim is null", () => {
     setPendingFirstMessage("conv-a", "hello code");
     expect(peekPendingFirstMessage("conv-a")?.text).toBe("hello code");
-    expect(claimPendingFirstMessage("conv-a")).toBe("hello code");
+    expect(claimPendingFirstMessage("conv-a")?.text).toBe("hello code");
     // Claimed: a second consumer (remount/reconnect) must not refire.
-    expect(claimPendingFirstMessage("conv-a")).toBeNull();
+    expect(claimPendingFirstMessage("conv-a")?.text).toBe("hello code");
   });
 
   it("single-slot overwrite: a second set replaces the first (at most one handoff)", () => {
     setPendingFirstMessage("conv-b", "first");
     setPendingFirstMessage("conv-b", "second");
-    expect(claimPendingFirstMessage("conv-b")).toBe("second");
+    expect(claimPendingFirstMessage("conv-b")?.text).toBe("second");
   });
 
   it("empty text is a no-op (nothing staged, nothing to claim)", () => {
@@ -75,10 +75,10 @@ describe("pendingFirstMessage — staging contract", () => {
     expect(claimPendingFirstMessage("conv-c")).toBeNull();
   });
 
-  it("entries are keyed per conversation (case 7 frontend half)", () => {
+  it("entries are keyed per conversation", () => {
     setPendingFirstMessage("conv-bound", "bound text");
     expect(claimPendingFirstMessage("conv-sibling")).toBeNull();
-    expect(claimPendingFirstMessage("conv-bound")).toBe("bound text");
+    expect(claimPendingFirstMessage("conv-bound")?.text).toBe("bound text");
   });
 
   it("corrupt / empty payloads read as null, never throw", () => {
@@ -96,32 +96,53 @@ describe("pendingFirstMessage — staging contract", () => {
   });
 });
 
-describe("pendingFirstMessage — consume lifecycle (cases 17 + 18 storage half)", () => {
-  it("claim → clear → second claim returns null: refresh/remount cannot replay (case 17)", () => {
+describe("pendingFirstMessage — consume lifecycle", () => {
+  it("claim → clear → second claim returns null: refresh/remount cannot replay", () => {
     setPendingFirstMessage("conv-remount", "send me once");
     // First mount consumes.
-    expect(claimPendingFirstMessage("conv-remount")).toBe("send me once");
+    expect(claimPendingFirstMessage("conv-remount")?.text).toBe("send me once");
     clearPendingFirstMessage("conv-remount");
     // Simulated remount after a refresh: nothing left to fire.
     expect(peekPendingFirstMessage("conv-remount")).toBeNull();
     expect(claimPendingFirstMessage("conv-remount")).toBeNull();
   });
 
-  it("claim persists before append: a crash between claim and clear still cannot refire", () => {
+  it("M13: a crash between the claim and the dispatch can RESUME the same prompt", () => {
+    // The claim and the message id are written together, so a crash after the
+    // claim leaves an entry that the next mount can dispatch - with the SAME
+    // id, which the server admits as the same prompt rather than a second
+    // one. The old contract dropped it, and the reader's message was lost.
     setPendingFirstMessage("conv-crash", "in flight");
-    expect(claimPendingFirstMessage("conv-crash")).toBe("in flight");
-    // Simulate a fresh read after a restart (same backing store): the entry
-    // is present but marked claimed, so no second fire.
-    expect(peekPendingFirstMessage("conv-crash")?.claimed).toBe(true);
-    expect(claimPendingFirstMessage("conv-crash")).toBeNull();
+    const claimed = claimPendingFirstMessage("conv-crash");
+    expect(claimed?.text).toBe("in flight");
+    expect(claimed?.messageId).toBeTruthy();
+
+    // Simulate a fresh read after a restart (same backing store).
+    const resumed = claimPendingFirstMessage("conv-crash");
+    expect(resumed?.text).toBe("in flight");
+    // The SAME id: the server admits a repeated id as the same prompt.
+    expect(resumed?.messageId).toBe(claimed?.messageId);
+    clearPendingFirstMessage("conv-crash");
   });
 
-  it("unclaim releases a synchronously-failed handoff so a later attempt may fire", () => {
+  it("M19: a failed dispatch is never dispatched again automatically", () => {
+    // The dispatch may have reached the server and only its answer was lost.
+    // Re-dispatching it on the next settled observation is how a message gets
+    // delivered twice, so a failed entry is inert until the user sends again.
     setPendingFirstMessage("conv-retry", "try again");
-    expect(claimPendingFirstMessage("conv-retry")).toBe("try again");
-    unclaimPendingFirstMessage("conv-retry");
-    expect(claimPendingFirstMessage("conv-retry")).toBe("try again");
-    clearPendingFirstMessage("conv-retry");
+    expect(claimPendingFirstMessage("conv-retry")?.text).toBe("try again");
+    markPendingFirstMessageFailed("conv-retry");
+    expect(claimPendingFirstMessage("conv-retry")).toBeNull();
+    expect(peekPendingFirstMessage("conv-retry")?.failed).toBe(true);
+  });
+
+  it("the user's next send replaces a failed entry", () => {
+    setPendingFirstMessage("conv-again", "first try");
+    claimPendingFirstMessage("conv-again");
+    markPendingFirstMessageFailed("conv-again");
+    // The reader sends again: a fresh entry replaces the failed one.
+    setPendingFirstMessage("conv-again", "second try");
+    expect(claimPendingFirstMessage("conv-again")?.text).toBe("second try");
   });
 
   it("clear is idempotent (double-clear never throws)", () => {
@@ -135,11 +156,11 @@ describe("pendingFirstMessage — consume lifecycle (cases 17 + 18 storage half)
     setPendingFirstMessage("conv-peek", "look only");
     expect(peekPendingFirstMessage("conv-peek")?.text).toBe("look only");
     expect(peekPendingFirstMessage("conv-peek")?.claimed).toBe(false);
-    expect(claimPendingFirstMessage("conv-peek")).toBe("look only");
+    expect(claimPendingFirstMessage("conv-peek")?.text).toBe("look only");
   });
 });
 
-describe("pendingFirstMessage — no timing sleeps (case 16)", () => {
+describe("pendingFirstMessage — no timing sleeps", () => {
   it("the module contains no timer-based waits", async () => {
     const source = await Bun.file(
       path.join(REPO_ROOT, "web/src/features/chat/state/pendingFirstMessage.ts"),

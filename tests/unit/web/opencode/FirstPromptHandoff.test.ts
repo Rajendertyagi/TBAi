@@ -89,7 +89,7 @@ describe("fireFirstPromptHandoff — draft thread never appends", () => {
     expect(appendCalls).toHaveLength(0);
     // Still staged (and unclaimed) for the settled attempt.
     expect(peekPendingFirstMessage("conv-draft")?.text).toBe("hello code");
-    expect(claimPendingFirstMessage("conv-draft")).toBe("hello code");
+    expect(claimPendingFirstMessage("conv-draft")?.text).toBe("hello code");
   });
 
   it("wrong thread identity: no append, stash retained", async () => {
@@ -171,8 +171,13 @@ describe("fireFirstPromptHandoff — settled thread appends exactly once", () =>
   });
 });
 
-describe("fireFirstPromptHandoff — append failure unclaims for retry", () => {
-  it("rejected append releases the claim; a later settled attempt consumes it", async () => {
+describe("fireFirstPromptHandoff — a failed dispatch is not retried automatically", () => {
+  it("M19: a rejected append is not dispatched again by a later settled attempt", async () => {
+    // The dispatch may have reached the server and only its answer was lost.
+    // Re-dispatching it on the next settled observation is how a message gets
+    // delivered twice, so a failed handoff is inert until the user sends
+    // again. The old behaviour released the claim and the next observation
+    // re-sent the same prompt.
     setPendingFirstMessage("conv-retry", "precious prompt");
     const appendCalls: string[] = [];
     let rejectGate!: (err: unknown) => void;
@@ -191,7 +196,8 @@ describe("fireFirstPromptHandoff — append failure unclaims for retry", () => {
     expect(appendCalls).toEqual(["precious prompt"]);
     rejectGate(new Error("run failed"));
     expect(await first).toBe("failed");
-    // Unclaimed, not lost: the retry consumes it exactly once more.
+
+    // A later settled attempt finds nothing to dispatch.
     const second = await fireFirstPromptHandoff({
       conversationId: "conv-retry",
       sessionId: "ses_1",
@@ -201,9 +207,54 @@ describe("fireFirstPromptHandoff — append failure unclaims for retry", () => {
         return Promise.resolve();
       },
     });
-    expect(second).toBe("sent");
-    expect(appendCalls).toEqual(["precious prompt", "precious prompt"]);
-    expect(peekPendingFirstMessage("conv-retry")).toBeNull();
+    expect(second).toBe("none");
+    expect(appendCalls).toEqual(["precious prompt"]);
+    // The failed entry is still there, marked failed, so the reader can see
+    // that it did not go through.
+    expect(peekPendingFirstMessage("conv-retry")?.failed).toBe(true);
+  });
+
+  it("M13: a crash between the claim and the dispatch resumes the SAME prompt", async () => {
+    // The claim carries the message id, so the resumed dispatch is the same
+    // prompt server-side - the server admits a repeated id as the existing
+    // prompt - and the reader's message is not lost.
+    setPendingFirstMessage("conv-crash", "precious prompt");
+    const sentIds: string[] = [];
+    let rejectGate!: (err: unknown) => void;
+    const gate = new Promise<void>((_resolve, reject) => {
+      rejectGate = reject;
+    });
+    const first = fireFirstPromptHandoff({
+      conversationId: "conv-crash",
+      sessionId: "ses_1",
+      boundSessionId: "ses_1",
+      append: () => Promise.resolve(),
+      sendWithId: (message) => {
+        sentIds.push(String(message.metadata?.custom?.v2PromptMessageId ?? ""));
+        return gate;
+      },
+    });
+    // The dispatch is in flight: the entry is claimed, with an id.
+    const claimed = peekPendingFirstMessage("conv-crash");
+    expect(claimed?.claimed).toBe(true);
+    expect(claimed?.messageId).toBeTruthy();
+    rejectGate(new Error("the tab was closed"));
+    await first;
+
+    // A fresh mount (the same storage) resumes it, with the SAME id.
+    setPendingFirstMessage("conv-crash", "precious prompt");
+    const resumed = await fireFirstPromptHandoff({
+      conversationId: "conv-crash",
+      sessionId: "ses_1",
+      boundSessionId: "ses_1",
+      append: () => Promise.resolve(),
+      sendWithId: (message) => {
+        sentIds.push(String(message.metadata?.custom?.v2PromptMessageId ?? ""));
+        return Promise.resolve();
+      },
+    });
+    expect(resumed).toBe("sent");
+    expect(sentIds[0]).toBe(sentIds[1]);
   });
 });
 
@@ -225,11 +276,16 @@ describe("FirstPromptHandoff — structural boundary pins", () => {
     expect(source).not.toContain("setTimeout");
     expect(source).not.toContain("useNavigate");
     expect(source).not.toContain("AssistantRuntimeProvider");
-    // Null-render boundary with claim → append → clear/unclaim.
+    // Null-render boundary with claim -> dispatch -> clear.
     expect(source).toContain("claimPendingFirstMessage(conversationId)");
     expect(source).toContain("runtime.thread.append(text)");
     expect(source).toContain("clearPendingFirstMessage(conversationId)");
-    expect(source).toContain("unclaimPendingFirstMessage(conversationId)");
+    // M19 CHANGED THIS. The failure path marks the entry FAILED rather than
+    // releasing the claim: a dispatch that failed may have reached the server,
+    // and the next settled observation must not send the prompt again. The
+    // old contract released the claim, and the release is what re-sent it.
+    expect(source).toContain("markPendingFirstMessageFailed(conversationId)");
+    expect(source).not.toContain("unclaimPendingFirstMessage");
     expect(source).toContain("return null");
   });
 

@@ -6528,3 +6528,90 @@ re-review accepted it as such. `bufferedSince` is still named in the
 2026-10-22 section says it is gone. The dead exports (`hasPendingReconnect`,
 `OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP`) and the Phase 5 findings are
 untouched.
+
+## 2026-10-22 - OpenCode Phase 5: an ambiguous prompt is not a rejection, and a cancel is owed
+
+**M3 - the admission has two watchers, because "ambiguous" is a question.**
+The registry used to have one: a settled outcome and a waiter. `markAmbiguous`
+woke the waiters but not the settler the sender registered, so a prompt whose
+request failed in a way that could not prove the server refused it left the
+sender's promise pending forever.
+
+The fix is NOT to settle that promise with "ambiguous". A 5xx cannot prove
+the server refused the prompt, and the server may still be running it:
+settling would end the send with an answer the wire does not have, and the
+caller would treat the prompt as not sent. So the registry keeps two kinds of
+watcher:
+
+- the OUTCOME watch, which accepts "not provably" - it answers "did the
+  server take it?";
+- the ADMISSION watch, which does not - it waits for the admission, because
+  the server can still admit a prompt whose request died.
+
+The sender waits on the admission watch with a **deadline**, so a send always
+ends, and it ends with the truth: a new `V2PromptSendError` kind, `ambiguous`,
+which is not a rejection. The runtime store surfaces it as a plain error rather
+than as `MessageNotSentError` - "not sent" is exactly what the wire could not
+establish.
+
+**`reconcilePendingPrompt` was deleted.** The plan offered the choice: give it
+a caller, or stop exporting it. Once the registry settles every outcome, there
+is nothing left for it to reconcile - it existed only to settle the promise
+that `markAmbiguous` left hanging. A second mechanism over the same window can
+disagree with the first, and this window already has one.
+
+**M6 - a claim before the transport call, released only on a definitive
+failure.** The permission and form replies checked their set and added to it
+AFTER the await, so two overlapping answers both reached the transport - and
+the server answers a second answer to a settled request with an error. The id
+is now claimed before the call. The claim is released only on a definitive
+failure: a network error may mean the server took the answer, and re-sending it
+would be a second answer to the same request, so the request stays claimed and
+stays visible for the reader. A `permission.replied` or `form.replied` event
+invalidates an in-flight decision, because the server has already answered it.
+
+**M7 - a cancel requested before the admission is owed against the inbox id.**
+The `cancel_requested` reducer dropped the `cancelRequested` flag, and nothing
+read the flag to issue a transport call, so a queued prompt executed while the
+reader was told it was cancelled. The `cancelling` state now carries the flag,
+and the admission path issues the cancel against the admitted inbox id. The
+inbox id is what makes the cancel unique, so it happens exactly once even
+though the admission arrives through two paths - the HTTP response and the
+inbox event. The in-flight request is still NOT aborted: its outcome is
+genuinely unknown, and aborting it would not stop the server having taken the
+prompt.
+
+**M13 / M19 - the message id is the handoff's identity, and a failure is
+final.** The claim used to persist before the dispatch and the entry was only
+removed after it resolved, so a crash between the two left an entry that the
+next mount could not claim: the reader's first prompt was silently lost. The
+unclaim on failure had the opposite defect: it released the claim, and the
+next settled observation re-dispatched a prompt the server may have accepted.
+
+The claim now carries the message id, written WITH the claim. A dispatch that
+is resumed after a crash carries the same id, and the server admits a repeated
+message id as the SAME prompt - upstream `Session.prompt` reconciles by id
+before it admits (`SessionInbox.admit` -> `admission.reconcile`). The resume is
+therefore safe without a client-side "did it land?" probe. A failed dispatch is
+marked failed and is inert until the user sends again: the dispatch may have
+reached the server, and an automatic re-dispatch is how a message gets
+delivered twice.
+
+**The reconnect surface reads the runtime's state.** The status chip kept a
+local "the reader pressed Reconnect" flag and used it to decide "Reconnecting",
+while the runtime's own `connection: {type:"reconnecting", attempt}` went
+unread. An automatic reconnect therefore showed as a red Error, because the
+runtime sets `load: error` while it waits for its next attempt and the chip
+read the load state first. The runtime's connection state is the fact - it is
+set by the one component that knows whether a retry is scheduled, and it
+carries the attempt number - so the chip now reads it, and the mapping is a
+pure function (`statusView.ts`) that is testable without a DOM. The terminal
+failure keeps the error presentation and the manual control, and the control
+now calls the controller's `retry()`, which had had no product caller.
+
+**Dead code removed.** `hasPendingReconnect`,
+`OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP` and the `load_reconciling` /
+`load_reconciled` actions had no producer anywhere; each was removed with a
+search of `web/src`, `src`, `tests` and `scripts` behind it. The
+`PromptAdmission.onSettle` handle went with the M3 change: the deadline waiter
+replaced it, and a handle nothing calls is a way to have two waiters.

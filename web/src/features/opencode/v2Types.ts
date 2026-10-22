@@ -231,6 +231,17 @@ export type V2ExecutionState =
       readonly userMessageId: string | null;
       readonly inboxId: string | null;
       readonly assistantMessageId: string | null;
+      /**
+       * Whether a cancel is still owed.
+       *
+       * The `cancelling` state IS a pending cancel, so this is what the state
+       * is ABOUT - and it is the only way the reader can tell a cancel that has
+       * been honoured from one that is still waiting for the prompt to be
+       * admitted. It is `true` from the moment the cancel is requested, and it
+       * is cleared when the cancel has been issued against the admitted inbox
+       * id (M7).
+       */
+      readonly cancelRequested: boolean;
     }
   | { readonly type: "reverting"; readonly userMessageId: string | null }
   | {
@@ -331,8 +342,6 @@ export type V2ThreadAction =
     }
   | { readonly type: "connection_changed"; readonly connection: V2ConnectionState }
   | { readonly type: "load_started" }
-  | { readonly type: "load_reconciling"; readonly reason: "history-convergence-cap" }
-  | { readonly type: "load_reconciled" }
   | { readonly type: "load_completed" }
   | { readonly type: "load_failed"; readonly error: V2SafeError }
   | { readonly type: "session_hydrated"; readonly session: SessionInfo }

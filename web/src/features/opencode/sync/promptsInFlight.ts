@@ -53,7 +53,7 @@ export type V2PromptSubmission = {
  * A handle on one prompt's admission.
  *
  * The record behind it is mutable; this view is not. A caller reads the
- * outcome and registers a settler, and never edits the record.
+ * outcome, and never edits the record.
  */
 export interface PromptAdmission {
   /** The local message id of the prompt. */
@@ -62,15 +62,6 @@ export interface PromptAdmission {
   readonly result: V2PromptAdmissionResult | null;
   /** What the prompt was admitted as, once it was. */
   readonly submission: V2PromptSubmission | null;
-  /**
-   * Registers the callback that settles the promise a caller is waiting on.
-   *
-   * It is called at most once, with the outcome, and never after the record
-   * has settled.
-   *
-   * @param settle - The callback.
-   */
-  onSettle(settle: (result: V2PromptAdmissionResult) => void): void;
 }
 
 /** The registry's surface. */
@@ -96,6 +87,10 @@ export interface PromptsInFlight {
   /**
    * Records that a prompt's admission cannot be decided from the wire.
    *
+   * The prompt is NOT settled by this: the server may still admit it, and an
+   * admission that arrives afterwards is the real answer. What this records is
+   * that the request itself failed, so a waiter can give up on it.
+   *
    * @param messageId - The local message id of the prompt.
    */
   markAmbiguous(messageId: string): void;
@@ -106,6 +101,23 @@ export interface PromptsInFlight {
    * @returns The outcome, immediately if it is already known.
    */
   awaitAdmission(messageId: string): Promise<V2PromptAdmissionResult>;
+  /**
+   * Waits for a prompt's admission, but not past a deadline.
+   *
+   * An ambiguous request is not an answer: the server may still admit the
+   * prompt, and until it says so the client cannot claim the prompt failed.
+   * The deadline is what turns "the wire is silent" into a reported outcome,
+   * so a caller is never left waiting on a request that will never be
+   * answered.
+   *
+   * @param messageId - The local message id of the prompt.
+   * @param timeoutMs - How long to wait before reporting the ambiguity.
+   * @returns The outcome, or `"ambiguous"` when the deadline elapses first.
+   */
+  awaitAdmissionWithDeadline(
+    messageId: string,
+    timeoutMs: number,
+  ): Promise<V2PromptAdmissionResult>;
   /**
    * The admission record for a prompt, if it has one.
    *
@@ -121,8 +133,21 @@ type AdmissionRecord = {
   readonly messageId: string;
   result: V2PromptAdmissionResult | null;
   submission: V2PromptSubmission | null;
+  /**
+   * The watchers of the OUTCOME.
+   *
+   * They want the verdict, including "ambiguous" - that is the answer to
+   * "did the server take it?", and "not provably" is an answer.
+   */
   readonly waiters: Set<(result: V2PromptAdmissionResult) => void>;
-  settle: ((result: V2PromptAdmissionResult) => void) | null;
+  /**
+   * The watchers of the ADMISSION.
+   *
+   * They want the prompt to be admitted, and an ambiguous request does not
+   * settle that: the server can still admit the prompt after the request
+   * failed, and the client cannot claim it was refused before it says so.
+   */
+  readonly admissionWaiters: Set<(result: V2PromptAdmissionResult) => void>;
 };
 
 /**
@@ -141,7 +166,7 @@ export function createPromptsInFlight(): PromptsInFlight {
       result: null,
       submission: null,
       waiters: new Set(),
-      settle: null,
+      admissionWaiters: new Set(),
     };
     admissions.set(messageId, record);
     return record;
@@ -160,9 +185,6 @@ export function createPromptsInFlight(): PromptsInFlight {
       get submission(): V2PromptSubmission | null {
         return record.submission;
       },
-      onSettle(settle: (result: V2PromptAdmissionResult) => void): void {
-        record.settle = settle;
-      },
     };
   }
 
@@ -177,13 +199,23 @@ export function createPromptsInFlight(): PromptsInFlight {
     record.submission = submission;
     for (const waiter of record.waiters) waiter(result);
     record.waiters.clear();
-    record.settle?.(result);
-    record.settle = null;
+    for (const waiter of record.admissionWaiters) waiter(result);
+    record.admissionWaiters.clear();
   }
 
   function markAmbiguous(messageId: string): void {
     const record = admissions.get(messageId);
     if (!record || record.result !== null) return;
+    // The request failed in a way that cannot prove the server refused it. The
+    // prompt may still be running there, so this is NOT a settlement: the
+    // record stays open, and a later admission still settles it (the server
+    // admits a repeated message id as the SAME prompt, so the answer can
+    // arrive after the request died).
+    //
+    // What this does settle is the OUTCOME watch: a waiter that asked "did
+    // the server take it?" is told "not provably", and a caller with a
+    // deadline stops waiting. The ADMISSION watch is left waiting, because
+    // for it "ambiguous" is not an answer but a question.
     record.result = "ambiguous";
     for (const waiter of record.waiters) waiter("ambiguous");
     record.waiters.clear();
@@ -195,6 +227,26 @@ export function createPromptsInFlight(): PromptsInFlight {
     return new Promise((resolve) => record.waiters.add(resolve));
   }
 
+  function awaitAdmissionWithDeadline(
+    messageId: string,
+    timeoutMs: number,
+  ): Promise<V2PromptAdmissionResult> {
+    const record = ensure(messageId);
+    if (record.result !== null && record.result !== "ambiguous")
+      return Promise.resolve(record.result);
+    return new Promise((resolve) => {
+      const wait = (result: V2PromptAdmissionResult) => {
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        record.admissionWaiters.delete(wait);
+        resolve("ambiguous");
+      }, timeoutMs);
+      record.admissionWaiters.add(wait);
+    });
+  }
+
   function get(messageId: string): PromptAdmission | undefined {
     const record = admissions.get(messageId);
     return record ? view(record) : undefined;
@@ -204,5 +256,13 @@ export function createPromptsInFlight(): PromptsInFlight {
     for (const messageId of admissions.keys()) settle(messageId, "disposed");
   }
 
-  return { create, settle, markAmbiguous, awaitAdmission, get, disposeAll };
+  return {
+    create,
+    settle,
+    markAmbiguous,
+    awaitAdmission,
+    awaitAdmissionWithDeadline,
+    get,
+    disposeAll,
+  };
 }

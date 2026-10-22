@@ -23,6 +23,24 @@ export const OPENCODE_V2_HISTORY_PAGE_SIZE = 100;
  */
 export const OPENCODE_V2_EVENT_BUFFER_LIMIT = 4096;
 export const OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256;
+/**
+ * How long a caller may wait for the runtime to become ready.
+ *
+ * A wait with no deadline is a wait with no answer: the composer holds the
+ * reader's text, nothing is sent, and the reader is told nothing. The
+ * deadline turns "waiting" into a reported state.
+ */
+export const OPENCODE_V2_READY_TIMEOUT_MS = 20_000;
+/**
+ * How long a send waits for the server to admit the prompt.
+ *
+ * The admission usually arrives in milliseconds. When the request fails in a
+ * way that cannot prove the server refused it, the prompt may still be running
+ * there, and the client waits for the answer rather than guessing. The
+ * deadline bounds that wait: a send that never returns is worse than a send
+ * that reports an honest ambiguity.
+ */
+export const OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS = 15_000;
 export const OPENCODE_V2_INITIAL_RECONNECT_DELAY_MS = 250;
 export const OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000;
 /**
@@ -51,7 +69,6 @@ export const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409,
  * session is idle, and a re-sync that finds nothing new dispatches nothing.
  */
 export const OPENCODE_V2_AUX_RESYNC_INTERVAL_MS = 30_000;
-export const OPENCODE_V2_HISTORY_CONVERGENCE_PASS_CAP = 4;
 export const OPENCODE_V2_DIAGNOSTIC_COUNT_CAP = 256;
 export const OPENCODE_V2_FORM_FIELD_LIMIT = 100;
 export const OPENCODE_V2_FORM_OPTION_LIMIT = 100;

@@ -7,8 +7,6 @@ import {
   LOCAL_MESSAGE_ID,
   SERVER_VERSION,
   SESSION_ID,
-  USER_MESSAGE,
-  createClient,
   createGeneration,
   createRejectingAfterFirstClient,
   inboxEvent,
@@ -38,7 +36,7 @@ import {
  * that was not really fixed.
  *
  * H2's pin and its helper were deleted in Phase 4, with the finding, and M10's
- * went with its fix. M3's remains: the finding is still open.
+ * went with its fix. M3's went with its fix in Phase 5.
  *
  * ## WHAT "PASSES TODAY" MEANS HERE
  *
@@ -84,50 +82,6 @@ describe("baseline: OpenCode V2 controller behaviour today", () => {
         await waitForState(controller, (state) => state.connection.type === "failed");
         expect(controller.getState().connection).toEqual({ type: "failed", attempt: 3 });
         expect(client.connectCount).toBe(4);
-      } finally {
-        controller.dispose();
-      }
-    });
-  });
-
-  describe("M3 - an ambiguous prompt never settles", () => {
-    it("leaves sendMessage pending when the request fails non-definitively", async () => {
-      const generation = createGeneration(1);
-      const client = createClient([generation]);
-      const controller = createV2ThreadController(client);
-      await controller.awaitReady();
-
-      try {
-        generation.setPromptHandler(async () => {
-          // A 5xx is explicitly NOT a definitive rejection.
-          const error = new Error("upstream 503") as Error & { status?: number };
-          error.status = 503;
-          throw error;
-        });
-
-        let settled = false;
-        const sending = controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID }).then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
-
-        // Give the failure path every microtask it needs.
-        for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
-
-        // PINNED DEFECT (M3): the admission is known to be ambiguous, but the
-        // promise `sendMessage` awaits is never settled.
-        expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
-        expect(settled).toBe(false);
-
-        // Only an explicit reconciliation settles it — and nothing in the
-        // frontend calls that.
-        await controller.reconcilePendingPrompt(LOCAL_MESSAGE_ID);
-        await sending;
-        expect(settled).toBe(true);
       } finally {
         controller.dispose();
       }

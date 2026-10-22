@@ -477,20 +477,13 @@ describe("V2 replay-only event exclusion", () => {
   });
 });
 
-describe("V2 load reconciliation actions", () => {
-  it("moves loading to reconciling, back to loading, and only then to ready", () => {
+describe("V2 load state transitions", () => {
+  it("moves loading to ready, and the execution stays idle", () => {
     const initial = createInitialV2ThreadState(SESSION_ID);
     const loading = reduceV2ThreadState(initial, { type: "load_started" });
-    const reconciling = reduceV2ThreadState(loading, {
-      type: "load_reconciling",
-      reason: "history-convergence-cap",
-    });
-    const refreshing = reduceV2ThreadState(reconciling, { type: "load_reconciled" });
-    const ready = reduceV2ThreadState(refreshing, { type: "load_completed" });
+    const ready = reduceV2ThreadState(loading, { type: "load_completed" });
 
     expect(loading.load).toEqual({ type: "loading" });
-    expect(reconciling.load).toEqual({ type: "reconciling" });
-    expect(refreshing.load).toEqual({ type: "loading" });
     expect(ready.load).toEqual({ type: "ready" });
     expect(ready.execution).toEqual({ type: "idle" });
   });

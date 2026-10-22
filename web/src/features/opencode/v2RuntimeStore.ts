@@ -29,8 +29,30 @@ function permissionViews(state: V2ThreadState): readonly V2PermissionView[] {
     .filter((permission): permission is V2PermissionView => permission !== null);
 }
 
-function toMessageNotSentError(error: unknown): MessageNotSentError {
+/**
+ * Turns a prompt failure into what assistant-ui expects.
+ *
+ * An AMBIGUOUS failure is not a "not sent" error: the server may have taken
+ * the prompt, and the run may still be executing there. Reporting it as
+ * `MessageNotSentError` would tell the reader their message never arrived,
+ * which is exactly what the wire could not establish. It is surfaced as a
+ * plain error instead, so the thread shows a failure without claiming the
+ * message was lost.
+ */
+function toMessageNotSentError(error: unknown): Error {
   if (error instanceof MessageNotSentError) return error;
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    "kind" in error &&
+    (error as { readonly kind?: unknown }).kind === "ambiguous"
+  ) {
+    const detail =
+      "error" in error && typeof (error as { readonly error?: unknown }).error === "object"
+        ? (error as { readonly error: { readonly message?: string } }).error
+        : null;
+    return new Error(detail?.message ?? "OpenCode V2 prompt could not be confirmed");
+  }
   const message = error instanceof Error ? error.message : "OpenCode V2 prompt could not be sent";
   return new MessageNotSentError(message);
 }

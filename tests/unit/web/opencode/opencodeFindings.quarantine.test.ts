@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import type { SessionMessagesResponse, V2Event } from "@opencode/client";
 import { AttemptSupersededError, createAttempt } from "@web/features/opencode/sync/attempt.ts";
 import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
   ASSISTANT_TOOL_MESSAGE,
   EVENT_INBOX_ID,
+  FORM_REPLY,
   LIVE_ASSISTANT_MESSAGE_ID,
   LOCAL_MESSAGE_ID,
   PERMISSION,
@@ -343,10 +344,12 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     await expect(live.gate.pending()).resolves.toBeUndefined();
   });
 
-  test.todo("R-M3: an ambiguous prompt reaches a typed, bounded outcome", async () => {
+  it("R-M3: an ambiguous prompt reaches a typed, bounded outcome", async () => {
     const generation = createGeneration(1);
     const client = createClient([generation]);
-    const controller = createV2ThreadController(client);
+    // A short deadline, so the DEADLINE is what the test observes rather
+    // than a five-minute wait for the product's timeout.
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 200 });
     await controller.awaitReady();
     try {
       generation.setPromptHandler(async () => {
@@ -364,7 +367,9 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
           settled = true;
         },
       );
-      for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+      // The DEADLINE is what settles it, so the wait is the deadline rather
+      // than a fixed number of microtask ticks.
+      await new Promise((r) => setTimeout(r, 300));
 
       // CORRECT: the caller learns the outcome instead of hanging.
       expect(settled).toBe(true);
@@ -374,7 +379,36 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  test.todo("R-M6: two concurrent replies for one permission produce one transport call", async () => {
+  it("R-M3: an ambiguous prompt is NOT reported as a definitive rejection", async () => {
+    // A 5xx cannot prove the server refused the prompt, so the prompt may still
+    // be running there. Reporting it as a rejection would tell the reader
+    // their message never arrived - which is exactly what the wire could not
+    // establish - and would invite a retry that delivers the message twice.
+    const generation = createGeneration(1);
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 30 });
+    await controller.awaitReady();
+    try {
+      generation.setPromptHandler(async () => {
+        const error = new Error("upstream 503") as Error & { status?: number };
+        error.status = 503;
+        throw error;
+      });
+
+      const failure = await controller
+        .sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID })
+        .then(() => null)
+        .catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({ kind: "ambiguous" });
+      // The registry still reports the truth about the admission.
+      expect(await controller.awaitPromptAdmission(LOCAL_MESSAGE_ID)).toBe("ambiguous");
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("R-M6: two concurrent replies for one permission produce one transport call", async () => {
     const generation = createGeneration(1, {
       permissionList: async () => [PERMISSION],
       permissionReply: async () => {
@@ -399,7 +433,62 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     }
   });
 
-  test.todo("R-M7: a cancel requested before admission is honoured once after admission", async () => {
+  it("R-M6: two concurrent replies for one form produce one transport call", async () => {
+    const generation = createGeneration(1, {
+      formList: async () => [FORM_REPLY],
+      formReply: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      },
+    });
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client);
+    try {
+      await controller.awaitReady();
+      await waitForState(controller, (state) => state.forms.length === 1);
+
+      const first = controller.replyToForm(FORM_REPLY.id, { name: "value" });
+      await new Promise((r) => setTimeout(r, 5));
+      const second = controller.replyToForm(FORM_REPLY.id, { name: "value" });
+      await Promise.allSettled([first, second]);
+
+      expect(generation.formReplyInputs).toHaveLength(1);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("R-M6: a failed reply releases the claim, so the reader can answer again", async () => {
+    // A definitive failure is the only case where the request may be answered
+    // again. A network error may mean the server took the answer, so that one
+    // keeps the claim - and the request stays visible for the reader.
+    let call = 0;
+    const generation = createGeneration(1, {
+      permissionList: async () => [PERMISSION],
+      permissionReply: async () => {
+        call += 1;
+        if (call === 1) {
+          const error = new Error("upstream refused") as Error & { status?: number };
+          error.status = 400;
+          throw error;
+        }
+      },
+    });
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client);
+    try {
+      await controller.awaitReady();
+      await waitForState(controller, (state) => state.permissions.length === 1);
+
+      await expect(controller.replyToPermission(PERMISSION.id, "once")).rejects.toThrow();
+      await controller.replyToPermission(PERMISSION.id, "once");
+
+      expect(generation.permissionReplyInputs).toHaveLength(2);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("R-M7: a cancel requested before admission is honoured once after admission", async () => {
     const prompt = deferred<{
       id: string;
       sessionID: string;
@@ -411,7 +500,7 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
     const generation = createGeneration(1);
     generation.setPromptHandler(async () => await prompt.promise);
     const client = createClient([generation]);
-    const controller = createV2ThreadController(client);
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
     await controller.awaitReady();
     try {
       void controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
@@ -429,6 +518,40 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
       // admitted inbox id.
       expect(generation.inboxCancelInputs).toHaveLength(1);
       expect(generation.inboxCancelInputs[0]?.inboxID).toBe(EVENT_INBOX_ID);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("R-M7: a second admission of the same prompt does not cancel it twice", async () => {
+    // The admission arrives through two paths - the HTTP response and the
+    // inbox event - and both must not issue the cancel. The inbox id is what
+    // identifies the queued prompt, so the cancel is keyed on it.
+    const prompt = deferred<{
+      id: string;
+      sessionID: string;
+      time: { created: number };
+      type: "user";
+      payload: { text: string };
+      delivery: "steer";
+    }>();
+    const generation = createGeneration(1);
+    generation.setPromptHandler(async () => await prompt.promise);
+    const client = createClient([generation]);
+    const controller = createV2ThreadController(client, { promptAdmissionTimeoutMs: 5_000 });
+    await controller.awaitReady();
+    try {
+      void controller.sendMessage(USER_MESSAGE, { messageId: LOCAL_MESSAGE_ID });
+      await new Promise((r) => setTimeout(r, 10));
+      await controller.cancel();
+
+      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "steer"));
+      await waitForState(controller, (state) => state.execution.type === "admitted");
+      // The same admission arrives again.
+      generation.events.emit(inboxEvent(EVENT_INBOX_ID, LOCAL_MESSAGE_ID, "steer"));
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(generation.inboxCancelInputs).toHaveLength(1);
     } finally {
       controller.dispose();
     }

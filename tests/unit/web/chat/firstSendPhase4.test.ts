@@ -403,7 +403,12 @@ describe("FirstPromptHandoff settled boundary — source pins the production pat
     expect(source).toContain("claimPendingFirstMessage(conversationId)");
     expect(source).toContain("runtime.thread.append(text)");
     expect(source).toContain("clearPendingFirstMessage(conversationId)");
-    expect(source).toContain("unclaimPendingFirstMessage(conversationId)");
+    // M19 CHANGED THIS. A failed dispatch is marked FAILED rather than
+    // releasing the claim: the dispatch may have reached the server, and the
+    // next settled observation must not send the prompt again. The old
+    // contract released the claim, and the release is what re-sent it.
+    expect(source).toContain("markPendingFirstMessageFailed(conversationId)");
+    expect(source).not.toContain("unclaimPendingFirstMessage");
   });
 
   it("OpenCodeView hosts the boundary inside the provider with no competing consumer", async () => {

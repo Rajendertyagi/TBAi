@@ -2,14 +2,12 @@
 
 import { useEffect } from "react";
 import type { AppendMessage } from "@assistant-ui/react";
-import { createV2MessageId, attachV2PromptMessageId } from "./v2ThreadController";
+import { attachV2PromptMessageId } from "./v2ThreadController";
 import { useAuiState } from "@assistant-ui/react";
 import {
   claimPendingFirstMessage,
   clearPendingFirstMessage,
-  peekPendingFirstMessage,
-  setPendingFirstMessageIdentity,
-  unclaimPendingFirstMessage,
+  markPendingFirstMessageFailed,
 } from "@/features/chat/state/pendingFirstMessage";
 import { logger } from "@/lib/logger";
 import { startOperation, type OperationHandle } from "@/lib/operation";
@@ -74,14 +72,20 @@ export function endHandoffOperation(reason: string): void {
 }
 
 /**
- * Claim → append → clear/unclaim exactly once for a settled session thread.
+ * Claim → dispatch → clear exactly once for a settled session thread.
  *
  * - Returns "skipped" without touching the stash while the thread is still
  *   the draft (or the session id is unknown): the prompt stays staged.
- * - Returns "none" when a previous attempt already claimed/cleared it.
+ * - Returns "none" when there is nothing to dispatch: no stash, or a dispatch
+ *   that already failed.
  * - Returns "sent" after the runtime accepts the prompt (stash cleared).
- * - Returns "failed" when the append rejects: the claim is RELEASED so a
- *   later settled attempt can retry instead of silently losing the prompt.
+ * - Returns "failed" when the dispatch rejects: the entry is marked FAILED
+ *   and is never dispatched again automatically, because the dispatch may
+ *   have reached the server (M19).
+ *
+ * The claim carries the message id, so a dispatch that is resumed after a
+ * crash is the SAME prompt server-side (M13). The server admits a repeated
+ * message id as the existing prompt, so the resume cannot double it.
  */
 export async function fireFirstPromptHandoff(args: {
   conversationId: string | undefined;
@@ -104,16 +108,14 @@ export async function fireFirstPromptHandoff(args: {
     });
     return "skipped";
   }
-  const text = claimPendingFirstMessage(conversationId);
-  if (!text) {
+  const claimed = claimPendingFirstMessage(conversationId);
+  if (!claimed) {
     logger.debug("opencode", "handoff.no_pending", { conversationId, sessionId });
     return "none";
   }
+  const { text, messageId } = claimed;
   beginHandoffOperation();
   logger.info("opencode", "handoff.start", { conversationId, sessionId });
-  const claimedEntry = peekPendingFirstMessage(conversationId);
-  const messageId = claimedEntry?.messageId ?? createV2MessageId();
-  setPendingFirstMessageIdentity(conversationId, messageId);
   try {
     if (sendWithId) {
       await sendWithId(
@@ -134,7 +136,13 @@ export async function fireFirstPromptHandoff(args: {
       await append(text);
     }
   } catch (err) {
-    unclaimPendingFirstMessage(conversationId);
+    // The dispatch FAILED, and that is not the same as "the prompt was not
+    // sent": the request may have reached the server and only its answer was
+    // lost. The entry is therefore marked failed, and a failed entry is never
+    // dispatched again automatically - the user's next send replaces it. The
+    // old behaviour released the claim, and the next settled observation
+    // re-dispatched the same prompt: a message delivered twice (M19).
+    markPendingFirstMessageFailed(conversationId);
     logger.warn("opencode", "handoff.failed", {
       conversationId,
       sessionId,
