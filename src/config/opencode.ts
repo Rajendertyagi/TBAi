@@ -89,7 +89,7 @@ export const OPENCODE_CONFIG = {
   serverHomeDir: path.join(DATA_DIR, "opencode-home"),
   /** User-facing error when the `opencode` binary cannot be found on PATH. */
   binaryMissingError:
-    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15–2.0.x executable or install `opencode` on PATH, then reload.",
+    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15–2.1.x executable or install `opencode` on PATH, then reload.",
 } as const;
 
 export type OpenCodeConfig = {
