@@ -1036,6 +1036,20 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       return isTerminalExecution(state.execution)
         ? state
         : { ...state, execution: { type: "idle" } };
+    case "events_dropped": {
+      // The count is the CUMULATIVE loss, so it is SET rather than added -
+      // otherwise a stream that keeps overflowing would inflate the number
+      // past what was actually lost. The events are NOT recovered: the count is
+      // how the state admits that.
+      //
+      // It is its OWN field, not the diagnostic count: that one counts events
+      // the runtime ignored for other reasons, and a loss must not be
+      // indistinguishable from an ignored event.
+      return {
+        ...state,
+        droppedEventCount: Math.min(Math.max(0, action.count), OPENCODE_V2_DIAGNOSTIC_COUNT_CAP),
+      };
+    }
     case "execution_failed":
       return {
         ...state,
@@ -1204,5 +1218,6 @@ export function createInitialV2ThreadState(
     optimisticMessageIds: [],
     answeredPermissionIds: [],
     diagnosticCount: 0,
+    droppedEventCount: 0,
   };
 }

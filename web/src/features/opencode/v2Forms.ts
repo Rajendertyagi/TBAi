@@ -61,6 +61,21 @@ export type V2FormFieldView = V2FormFieldBase &
         readonly custom: boolean;
       }
     | { readonly type: "external"; readonly url: string; readonly supported: false }
+    | {
+        /**
+         * A field type this renderer does not know.
+         *
+         * The upstream's `Form.Field` union is closed, so a field can only
+         * reach this state if the SERVER adds a type and the client accepts it
+         * before this renderer learns it. Projecting it as something else -
+         * which is what the old catch-all did - would render a control that
+         * cannot work and answer with the wrong shape. So the field is
+         * reported as UNSUPPORTED instead, and the form says why.
+         */
+        readonly type: "unsupported";
+        readonly fieldType: string;
+        readonly supported: false;
+      }
   );
 
 export interface V2FormView {
@@ -78,18 +93,33 @@ export type V2FormValidationResult =
       readonly formError: string | null;
     };
 
-function options(value: readonly FormOption[] | undefined): readonly V2FormOptionView[] | null {
+/**
+ * The options a field offers, and whether the list was truncated.
+ *
+ * The truncation is RETURNED rather than applied silently: a field whose
+ * options exceed the limit is a field the reader cannot answer, because the
+ * answer they need is not in the list they are shown. Reporting it is the
+ * difference between "this form is unanswerable" and "this form silently
+ * offers the wrong answers" (M15).
+ */
+function options(value: readonly FormOption[] | undefined): {
+  readonly options: readonly V2FormOptionView[] | null;
+  readonly truncated: boolean;
+} {
   // `[]` is truthy in JS, so an empty list would otherwise be read as "this
   // field HAS options" and render an empty picker. Verified against the live
   // server: `options: []` without `custom` rejects every value, and with
   // `custom: true` accepts free text — so an empty list is a field with NO
   // options, and `null` is the one representation both readers can test.
-  if (value === undefined || value.length === 0) return null;
-  return value.slice(0, OPENCODE_V2_FORM_OPTION_LIMIT).map((option) => ({
-    value: option.value,
-    label: option.label,
-    description: option.description ?? null,
-  }));
+  if (value === undefined || value.length === 0) return { options: null, truncated: false };
+  return {
+    options: value.slice(0, OPENCODE_V2_FORM_OPTION_LIMIT).map((option) => ({
+      value: option.value,
+      label: option.label,
+      description: option.description ?? null,
+    })),
+    truncated: value.length > OPENCODE_V2_FORM_OPTION_LIMIT,
+  };
 }
 
 function when(value: readonly FormWhen[] | undefined): readonly V2FormWhenView[] {
@@ -130,11 +160,15 @@ export function projectV2Form(form: FormInfo): V2FormView {
       unsupportedReason = "External form fields are not supported";
       fields.push({ ...common, type: "external", url: field.url, supported: false });
     } else if (field.type === "string") {
+      const list = options(field.options);
+      // A truncated option list is a field the reader cannot answer: the
+      // answer they need is not in the list they are shown (M15).
+      if (list.truncated) unsupportedReason = "This field has too many options to answer";
       fields.push({
         ...common,
         type: "string",
         default: field.default ?? null,
-        options: options(field.options),
+        options: list.options,
         custom: field.custom ?? false,
         format: field.format ?? null,
         minLength: field.minLength ?? null,
@@ -153,15 +187,36 @@ export function projectV2Form(form: FormInfo): V2FormView {
       });
     } else if (field.type === "boolean") {
       fields.push({ ...common, type: "boolean", default: field.default ?? null });
-    } else {
+    } else if (field.type === "multiselect") {
+      const list = options(field.options);
+      if (list.truncated) unsupportedReason = "This field has too many options to answer";
       fields.push({
         ...common,
         type: "multiselect",
         default: field.default ?? null,
-        options: options(field.options),
+        options: list.options,
         minItems: field.minItems ?? null,
         maxItems: field.maxItems ?? null,
         custom: field.custom ?? false,
+      });
+    } else {
+      // A type this renderer does not know. The upstream's union is CLOSED
+      // today - `Form.Field` is exactly the six types handled above - so
+      // TypeScript proves this branch is unreachable for the installed client.
+      //
+      // It is kept anyway, and it is the point of the change: the OLD code had
+      // a catch-all that projected EVERY unknown type as a multiselect, so the
+      // day the server grew a seventh type this renderer would have drawn a
+      // picker that could not work and answered with the wrong shape. The
+      // cast is deliberate: the union is closed, so the branch exists for the
+      // server's NEXT type, not for one the client can deliver today.
+      const fieldType = (field as { readonly type: string }).type;
+      unsupportedReason = `Unsupported form field type: ${fieldType}`;
+      fields.push({
+        ...common,
+        type: "unsupported",
+        fieldType,
+        supported: false,
       });
     }
   }

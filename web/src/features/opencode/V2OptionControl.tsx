@@ -471,8 +471,17 @@ export function V2OptionControl({
       </div>
     );
   }
-
   // An external field must be completed in OpenCode itself; there is nothing to
   // answer here, and the form cannot be replied to until it is done.
-  return <p className="text-sm text-destructive">{toolsConfig.copy.form.externalField}</p>;
+  if (field.type === "external")
+    return <p className="text-sm text-destructive">{toolsConfig.copy.form.externalField}</p>;
+
+  // A field type this renderer does not know. It cannot be answered, and
+  // saying so is the honest answer - the form's own `unsupportedReason` says
+  // the same thing at the dock level.
+  return (
+    <p className="text-sm text-destructive">
+      {toolsConfig.copy.form.unsupportedField ?? toolsConfig.copy.form.externalField}
+    </p>
+  );
 }

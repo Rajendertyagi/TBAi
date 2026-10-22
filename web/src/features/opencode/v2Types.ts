@@ -264,6 +264,15 @@ export type V2RevertRecoveryState =
   | { readonly type: "blocked"; readonly error: V2SafeError };
 
 export interface V2ThreadState {
+  /**
+   * How many events the hydration buffer LOST.
+   *
+   * Distinct from `diagnosticCount`, which counts events the runtime ignored
+   * for other reasons (out of scope, replay-only, a stale durable sequence).
+   * This one counts a LOSS: events the client held and then dropped, so the
+   * transcript it committed is short by exactly this much.
+   */
+  readonly droppedEventCount: number;
   readonly sessionId: string;
   /**
    * The workspace this view is subscribed to.
@@ -402,6 +411,18 @@ export type V2ThreadAction =
   | { readonly type: "execution_started" }
   | { readonly type: "execution_streaming"; readonly assistantMessageId: string }
   | { readonly type: "execution_settled" }
+  | {
+      /**
+       * Events were dropped because the hydration buffer overflowed.
+       *
+       * The transcript is INCOMPLETE after this, and the count says by how
+       * much. It is a diagnostic, not a verdict: the attempt's readiness is
+       * failed as well, so the runtime re-reads rather than claiming a
+       * successful reconciliation (M5's outstanding hold).
+       */
+      readonly type: "events_dropped";
+      readonly count: number;
+    }
   | {
       readonly type: "execution_failed";
       readonly userMessageId: string | null;

@@ -45,6 +45,7 @@ The rules that follow from it:
 | `eventPipeline.ts` | The lifecycle of the event stream: the read loop, the ordinal, the buffer that holds events arriving during a history read, the read boundary a held event is dated against, the retry timer, the retry budget and whether that budget is spent | `attempt`, `config` (constants) | domain state; it never settles the readiness gate itself | `createEventPipeline` → `consume` / `scheduleReconnect` / `nextOrdinal` / `beginHistoryRead` / `buffer` / `bufferedEntries` / `clearBuffer` / `resetAttempt` / `isExhausted` / `cancelReconnect` |
 | `sessionMessageLoader.ts` | The mechanics of the history read and the commit of its projection | `v2History`, `v2Types` | domain state; it commits through the reducer | `createSessionMessageLoader` → `read` / `commit` |
 | `historyReplay.ts` | Which held events may be replayed onto a committed snapshot: the parts the snapshot already carries text for, and the rule that follows from it | `v2Types` (types only), `eventPipeline` (types only) | domain state; it decides, the controller applies | `deltaPartId` / `coveredTextPartIds` / `shouldReplayBuffered` |
+| `retention.ts` | The retention policy for the controller's long-lived per-controller collections: a cap, a TTL measured from the last touch, and the protection an in-flight entry has against eviction | `config` (constants) | anything but its own collections | `RetentionSet` → `add` / `has` / `protect` / `release` / `delete` / `sweep` / `ids` / `clear` |
 
 The controller (`v2ThreadController.ts`) owns **domain state, dispatch and
 policy** and delegates the rest. It is the only module that touches the
@@ -73,6 +74,9 @@ gets it here, in the module that owns it:
 | The claim that one answer per request reaches the transport, and the release of a claim that failed definitively | `v2ThreadController.ts` (`claimPermission` / `releasePermission`, `claimForm` / `releaseForm`) | M6 | 5 | **delivered** |
 | The pending cancel that is owed against the admitted inbox id, and the inbox id that makes it unique | `v2ThreadController.ts` (`cancelAdmittedPrompt`) + `v2Events.ts` (the `cancelling` state's `cancelRequested`) | M7 | 5 | **delivered** |
 | The first-prompt handoff's identity: the message id that makes a resumed dispatch the SAME prompt | `web/src/features/chat/state/pendingFirstMessage.ts` | M13, M19 | 5 | **delivered** |
+| The retention policy for the long-lived per-controller collections: a cap, a last-touch TTL, and the protection an in-flight entry has against eviction | `retention.ts` | L1 | 6 | **delivered** |
+| The loss the hydration buffer's backstop carried, and the refusal to claim a successful reconciliation | `eventPipeline.ts` (`buffer` / `droppedEventCount`) + `v2ThreadController.ts` (`reportBufferOverflow`) + `v2Events.ts` (the `events_dropped` reducer) | M5 (hold) | 6 | **delivered** |
+| The exhaustive form-field projection, so an unknown type is reported rather than mis-projected | `v2Forms.ts` (`projectV2Form`) | M15, M16 | 7 | **delivered** |
 
 A module that exists only to be filled in later is not created: an empty
 module has no owner, and the orphan-module gate would report it. Phase 4 is why

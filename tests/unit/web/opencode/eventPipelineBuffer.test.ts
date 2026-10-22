@@ -61,7 +61,7 @@ function toolInputEnded(id: string, toolId: string): V2Event {
 }
 
 /** The host the buffer does not talk to: it only holds events and ordinals. */
-function createHost(): EventPipelineHost {
+function createHost(overrides: Partial<EventPipelineHost> = {}): EventPipelineHost {
   return {
     isDisposed: false,
     config: { maxReconnectAttempts: 3, initialReconnectDelayMs: 10, maxReconnectDelayMs: 10 },
@@ -71,8 +71,10 @@ function createHost(): EventPipelineHost {
     dispatch: () => undefined,
     applyEvent: () => undefined,
     startConnection: () => Promise.resolve(),
+    reportBufferOverflow: () => undefined,
     failReady: () => undefined,
     toSafeError: (_error: unknown, fallback: string) => ({ kind: "unknown", message: fallback }),
+    ...overrides,
   };
 }
 
@@ -158,5 +160,66 @@ describe("the hydration event buffer", () => {
     expect(buffered).toHaveLength(4096);
     expect(buffered[0]?.event.id).toBe(`evt_tool_${total - 4096}`);
     expect(buffered.at(-1)?.event.id).toBe(`evt_tool_${total - 1}`);
+  });
+
+  it("REPORTS the overflow, because a silent drop is a transcript that lies", () => {
+    // M5's outstanding hold: the backstop dropped the oldest events with no
+    // log, no counter and no change of state. A log alone would not be enough
+    // either - the loss has to reach the readiness path, because a transcript
+    // that lost events has NOT been reconciled and must not be reported as
+    // though it had.
+    const reports: { dropped: number; retained: number }[] = [];
+    const pipeline = createEventPipeline(
+      createHost({
+        reportBufferOverflow: (dropped, retained) => reports.push({ dropped, retained }),
+      }),
+    );
+    pipeline.beginHistoryRead();
+
+    const total = 4106;
+    for (let index = 0; index < total; index += 1)
+      pipeline.buffer(
+        toolInputDelta(`evt_tool_${index}`, `tool-${index}`, "x"),
+        pipeline.nextOrdinal(),
+      );
+
+    // The controller was told ONCE - not once per dropped event, which would
+    // bury the one line that matters - and the loss is on the record.
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.dropped).toBeGreaterThan(0);
+    expect(reports[0]?.retained).toBe(4096);
+    // And the FINAL count is available for the reconciliation path.
+    expect(pipeline.droppedEventCount()).toBe(total - 4096);
+  });
+
+  it("reports the overflow only when there IS one", () => {
+    const reports: number[] = [];
+    const pipeline = createEventPipeline(
+      createHost({ reportBufferOverflow: (dropped) => reports.push(dropped) }),
+    );
+    pipeline.beginHistoryRead();
+
+    for (let index = 0; index < 10; index += 1)
+      pipeline.buffer(
+        toolInputDelta(`evt_tool_${index}`, `tool-${index}`, "x"),
+        pipeline.nextOrdinal(),
+      );
+
+    expect(reports).toEqual([]);
+    expect(pipeline.droppedEventCount()).toBe(0);
+  });
+
+  it("clears the loss with the buffer, because the next read starts a new account", () => {
+    const pipeline = createEventPipeline(createHost());
+    pipeline.beginHistoryRead();
+    for (let index = 0; index < 4106; index += 1)
+      pipeline.buffer(
+        toolInputDelta(`evt_tool_${index}`, `tool-${index}`, "x"),
+        pipeline.nextOrdinal(),
+      );
+    expect(pipeline.droppedEventCount()).toBe(10);
+
+    pipeline.clearBuffer();
+    expect(pipeline.droppedEventCount()).toBe(0);
   });
 });

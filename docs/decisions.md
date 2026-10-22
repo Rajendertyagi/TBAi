@@ -6775,3 +6775,78 @@ runtime authentication, and the first-send draft handoff.
 are new and were not exercised, because TBAi does not call them. And 2.1.0 and
 2.1.1 were checked by reading the upstream source, not by running the suites
 against those exact tarballs.
+
+## 2026-10-22 - Phase 6, part one: the retention policy, the M5 hold, and an exhaustive form projection
+
+**L1 - the retention policy, split by what an entry MEANS.** The controller's
+long-lived collections were unbounded, and Phase 5 had added three more. The
+policy is a **split**, and the split is the whole point:
+
+- a **settled** entry records a decision that already happened. It is consulted
+  for one question - "has this been answered?" - and the server can answer that
+  too, so the entry is evictable.
+- an **in-flight** entry records an operation that is still running. It is
+  **protected**: evicting it would let a second operation start for the same id,
+  which is exactly the defect M6 was.
+
+So the two classes get different treatment, and they are separate collections
+rather than one collection with a flag: a protected entry must never be swept,
+and a settled one must never block a sweep. `sync/retention.ts` owns the
+policy - a cap, a TTL measured from the **last touch**, and the protection -
+and each collection keeps its own instance, because each has its own lifecycle
+and its own id namespace. The shared thing is the POLICY, not the storage.
+
+The cap is the reducer's existing 256-item window, so the controller and the
+reducer have one policy rather than two.
+
+**The cap when every entry is protected.** A cap that cannot be honoured is not
+a cap. When every entry is protected and the collection is over its limit, the
+collection **refuses to evict** - the protection is absolute - and **reports**
+it, so the condition is diagnosable rather than silent. The reference
+(OpenChamber's `sync/eviction.ts`) takes the same position in the other
+direction: it goes over the limit rather than evicting a directory with a
+pending request, and says so in its own comment ("going over the limit for a
+while is the cheaper failure"). Going over the limit is the cheaper failure
+here too.
+
+**The M5 hold - the backstop must not be silent.** The hydration buffer's
+backstop dropped the oldest held events when more than 4,096 distinct events
+arrived during one read, and it did so with **no log, no counter, and no change
+of the attempt's readiness**. The runtime then committed the transcript and
+reported `load_completed` - it claimed a successful reconciliation of a
+transcript that was missing events.
+
+A log alone would not fix that, because a log does not recover the events and
+does not stop the runtime claiming success. The loss now reaches the
+reconciliation path: the pipeline reports the overflow, the controller
+announces it, the count reaches the domain state in its OWN field
+(`droppedEventCount`, distinct from `diagnosticCount`, which counts events
+ignored for other reasons), and **the reconciliation refuses to claim
+success** - it raises, so the attempt's readiness fails and the reconnect
+re-reads a fresh snapshot. The events themselves are not recovered, and nothing
+pretends they are.
+
+There is ONE mechanism, not two. The report announces; the reconciliation
+decides. Two mechanisms for one fact would be two places that could disagree
+about whether the transcript is complete.
+
+**M15 / M16 - an exhaustive form projection.** The upstream's `Form.Field`
+union is CLOSED - six types, exactly the ones the renderer handles - and
+TypeScript now PROVES the projection is exhaustive over them. What changed is
+the catch-all: the old code projected every remaining type as a `multiselect`,
+so the day the server grew a seventh type the renderer would have drawn a
+picker that cannot work and answered with the wrong shape. There is now an
+explicit `multiselect` branch and an explicit "unsupported" branch, and an
+unknown type is REPORTED. The behaviour for the six supported types is
+unchanged.
+
+M15 was the same class of defect on a different axis: a field whose options
+exceed the limit was sliced and said nothing, so a required select could never
+be answered and the form claimed to be answerable. The truncation is now
+returned by the projection and reported as the form's `unsupportedReason`.
+
+**What was NOT changed.** The M16 branch is unreachable for the installed
+client - the union is closed - so the cast in it is deliberate and documented:
+the branch exists for the server's NEXT type, not for one the client can
+deliver today. TypeScript's `never` in that position is the exhaustiveness
+working, not an error to silence.

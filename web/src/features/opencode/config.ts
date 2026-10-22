@@ -69,6 +69,22 @@ export const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409,
  * session is idle, and a re-sync that finds nothing new dispatches nothing.
  */
 export const OPENCODE_V2_AUX_RESYNC_INTERVAL_MS = 30_000;
+/**
+ * The most entries a long-lived per-controller collection may hold.
+ *
+ * The reducer's existing 256-item windows are the precedent: the controller's
+ * sets were the one place with no bound at all, and they now share the same
+ * number so there is one policy rather than two.
+ */
+export const OPENCODE_V2_RETENTION_CAP = 256;
+/**
+ * How long an untouched entry survives in a long-lived collection.
+ *
+ * Measured from the last touch, not from creation: an entry that is still
+ * being consulted is alive, and one that has not been touched since it settled
+ * is stale.
+ */
+export const OPENCODE_V2_RETENTION_TTL_MS = 30 * 60 * 1000;
 export const OPENCODE_V2_DIAGNOSTIC_COUNT_CAP = 256;
 export const OPENCODE_V2_FORM_FIELD_LIMIT = 100;
 export const OPENCODE_V2_FORM_OPTION_LIMIT = 100;

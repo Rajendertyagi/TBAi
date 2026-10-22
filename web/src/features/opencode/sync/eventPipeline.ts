@@ -292,6 +292,18 @@ export interface EventPipelineHost {
   retireAttempt(attempt: Attempt): void;
   /** Dispatches a domain action. */
   dispatch(action: V2ThreadAction): void;
+  /**
+   * Reports that the hydration buffer overflowed and events were lost.
+   *
+   * The pipeline owns the buffer, so it owns the fact that the buffer could
+   * not hold everything. The controller owns what that MEANS: it logs it, counts
+   * it, and fails the attempt's readiness - because a transcript that lost
+   * events has not been reconciled, and saying otherwise would be a lie.
+   *
+   * @param dropped - How many events were dropped.
+   * @param retained - How many the buffer still holds.
+   */
+  reportBufferOverflow(dropped: number, retained: number): void;
   /** Applies one event to the domain state. */
   applyEvent(event: V2Event, ordinal: number): void;
   /** Establishes a new connection. */
@@ -357,7 +369,18 @@ export interface EventPipeline {
    * @returns The held events.
    */
   bufferedEntries(): readonly BufferedEvent[];
-  /** Empties the buffer. */
+  /**
+   * How many events the backstop has dropped since the buffer was cleared.
+   *
+   * The controller reads this when the buffer is DRAINED, because that is when
+   * the loss is final: the transcript it is about to commit is short by
+   * exactly this many events, and the reconciliation must say so rather than
+   * claim a complete transcript.
+   *
+   * @returns The number of events lost, or 0.
+   */
+  droppedEventCount(): number;
+  /** Empties the buffer, and the loss it carries with it. */
   clearBuffer(): void;
   /**
    * The number of retries the current attempt has spent.
@@ -411,6 +434,23 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
   let reconnectAttempt = 0;
   /** True once a failure has arrived with no automatic retries left. */
   let exhausted = false;
+  /**
+   * How many events the backstop has dropped since the buffer was last
+   * cleared.
+   *
+   * The running total, so the report names the WHOLE loss rather than "one
+   * more" once per event. It resets with the buffer, because the buffer and
+   * the loss it carries are one thing.
+   */
+  let droppedEvents = 0;
+  /**
+   * Whether the controller has already been told about an overflow.
+   *
+   * One overflow episode is one report: the loss is announced once, and the
+   * attempt's readiness is failed once. The running total keeps counting, so
+   * the count that reaches the domain state is the whole loss.
+   */
+  let overflowReported = false;
 
   async function consume(attempt: Attempt): Promise<void> {
     const generation = attempt.generation;
@@ -499,10 +539,34 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     eventBuffer.push({ ordinal: eventOrdinal, event });
     // The backstop, not the mechanism: coalescing is what keeps a long stream
     // from filling this. Reaching the limit means that many DISTINCT events
-    // arrived during one read, and the oldest are dropped rather than the read
-    // being abandoned.
+    // arrived during one read.
+    //
+    // The drop is ANNOUNCED, never silent (M5's outstanding hold). Three
+    // things happen, because a log alone does not recover the lost events:
+    //
+    // 1. a warning names the loss, so the log shows the transcript is
+    //    incomplete;
+    // 2. the dropped count reaches the domain state, as a diagnostic - so
+    //    the state itself can say "some events were lost";
+    // 3. the attempt's readiness is failed, because a transcript that silently
+    //    lost events is NOT a successful reconciliation, and claiming it was
+    //    would be a lie the reader would act on.
+    //
+    // The events themselves are not recovered: they are gone, and the only
+    // honest repair is a fresh read, which the failed readiness triggers.
     if (eventBuffer.length > OPENCODE_V2_EVENT_BUFFER_LIMIT) {
+      const dropped = eventBuffer.length - OPENCODE_V2_EVENT_BUFFER_LIMIT;
       eventBuffer = eventBuffer.slice(-OPENCODE_V2_EVENT_BUFFER_LIMIT);
+      droppedEvents += dropped;
+      // The report fires ONCE per overflow episode, and it is deferred to the
+      // point where the loss is FINAL: the end of the buffer's life. Reporting
+      // per dropped event would put thousands of identical lines in the log,
+      // and reporting at the first drop would report a number that is still
+      // growing.
+      if (!overflowReported) {
+        overflowReported = true;
+        host.reportBufferOverflow(droppedEvents, eventBuffer.length);
+      }
     }
   }
 
@@ -512,8 +576,25 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     return [...eventBuffer];
   }
 
+  /**
+   * The loss the buffer has carried, if any.
+   *
+   * The controller reads this when the buffer is DRAINED, because that is when
+   * the loss is final. The per-event report is the early warning - it says
+   * "the transcript is already incomplete" - and this is the accounting.
+   *
+   * @returns The number of events lost, or 0.
+   */
+  function droppedEventCount(): number {
+    return droppedEvents;
+  }
+
   function clearBuffer(): void {
     eventBuffer = [];
+    // The loss and the buffer are one thing: clearing the buffer clears the
+    // running total, because the next read starts a new account.
+    droppedEvents = 0;
+    overflowReported = false;
   }
 
   function resetAttempt(): void {
@@ -541,6 +622,7 @@ export function createEventPipeline(host: EventPipelineHost): EventPipeline {
     beginHistoryRead,
     buffer,
     bufferedEntries,
+    droppedEventCount,
     clearBuffer,
     get attemptCount(): number {
       return reconnectAttempt;

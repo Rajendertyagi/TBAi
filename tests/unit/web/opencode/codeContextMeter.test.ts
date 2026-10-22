@@ -187,6 +187,7 @@ describe("Code meter: after a compaction the reading is unknown", () => {
     optimisticMessageIds: [],
     answeredPermissionIds: [],
     diagnosticCount: 0,
+    droppedEventCount: 0,
   };
 
   const settle = { type: "compaction_settled" } as never;

@@ -202,6 +202,8 @@ export const toolsConfig = {
       trueLabel: "True",
       falseLabel: "False",
       externalField: "This field must be completed in OpenCode.",
+      /** A field type this build does not know how to render or answer. */
+      unsupportedField: "This field type is not supported by this build.",
       /** Marks a required field in its label. */
       requiredMarker: "*",
       /**

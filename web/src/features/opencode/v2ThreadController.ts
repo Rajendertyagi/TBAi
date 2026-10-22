@@ -26,6 +26,7 @@ import {
   shouldAutoApprove,
 } from "@/features/permissions/permissionPolicy";
 import { getAutoPolicy } from "./sessionAutoPolicy";
+import { RetentionSet } from "./sync/retention";
 import { createSessionMessageLoader } from "./sync/sessionMessageLoader";
 import { coveredTextPartIds, shouldReplayBuffered } from "./sync/historyReplay";
 import { createInitialV2ThreadState, mapEventError, reduceV2ThreadState } from "./v2Events";
@@ -311,33 +312,73 @@ export function createV2ThreadController(
   const liveTouchedMessageIds = new Set<string>();
   const listeners = new Set<() => void>();
   const prompts = createPromptsInFlight();
-  const answeredPermissions = new Set<string>();
-  const autoApproveAttempted = new Set<string>();
-  const formReplies = new Set<string>();
   /**
-   * The permission request ids with an answer in flight.
+   * The retention policy, applied per collection.
    *
-   * A CLAIM, not a record of success: the id is in this set from the moment
-   * the transport call starts until it succeeds or fails definitively. A
-   * second answer to the same request while this one is in flight is
-   * suppressed (M6).
+   * The collections split into two classes, and the split IS the policy (D16):
+   *
+   * - a **settled** entry records a decision that already happened. It is
+   *   consulted for one question - "has this been answered?" - and the server
+   *   can answer that too, so the entry is evictable.
+   * - an **in-flight** entry records an operation that is still running. It is
+   *   **protected**: evicting it would let a second operation start for the
+   *   same id, which is exactly the defect M6 was.
+   *
+   * Each collection keeps its OWN instance, because each has its own lifecycle
+   * and its own id namespace. The shared thing is the POLICY - the cap, the
+   * TTL and the eviction rules - not the storage.
    */
-  const pendingPermissionReplies = new Set<string>();
+
   /**
-   * The form ids with an answer in flight. The same claim as
-   * `pendingPermissionReplies`.
+   * The permission request ids that have been answered.
+   *
+   * Settled: it records a decision, so it is evictable. It exists so a
+   * re-hydrated permission list does not re-show a request this client already
+   * answered - and the server's own list is the authority if the entry is
+   * gone.
    */
-  const pendingFormReplies = new Set<string>();
+  const answeredPermissions = new RetentionSet<string>();
+  /**
+   * The permission request ids the Auto shield has already answered.
+   *
+   * A one-shot guard: the doc says "one attempt per request id", so it is
+   * PROTECTED while the request is still pending and released when the request
+   * leaves the pending set. That preserves the guard's meaning - a redelivered
+   * `permission.asked` cannot send a second reply - without the collection
+   * growing for the life of the session.
+   */
+  const autoApproveAttempted = new RetentionSet<string>();
+  /**
+   * The form ids that have been answered or cancelled.
+   *
+   * Settled, like `answeredPermissions`: it exists so a re-hydrated form list
+   * does not re-show a form this client already answered.
+   */
+  const formReplies = new RetentionSet<string>();
+  /**
+   * The permission request ids an answer is in flight for.
+   *
+   * A CLAIM, not a record of success: the id is held from the moment the
+   * transport call starts until it succeeds or fails definitively. A second
+   * answer to the same request while this one is in flight is suppressed (M6).
+   * In flight, so PROTECTED.
+   */
+  const pendingPermissionReplies = new RetentionSet<string>();
+  /**
+   * The form ids an answer is in flight for. The same claim as
+   * `pendingPermissionReplies`, and the same protection.
+   */
+  const pendingFormReplies = new RetentionSet<string>();
   /**
    * The inbox ids a pending cancel has already been issued against.
    *
    * A cancel requested before the prompt was admitted is honoured once the
    * admission arrives, and the inbox id is what makes that cancel unique: the
-   * server identifies the queued prompt by it. This set is what makes "exactly
-   * once" true - the admission can arrive through two paths (the HTTP
+   * server identifies the queued prompt by it. This collection is what makes
+   * "exactly once" true - the admission can arrive through two paths (the HTTP
    * response and the inbox event), and both must not issue the cancel.
    */
-  const cancelledInboxIds = new Set<string>();
+  const cancelledInboxIds = new RetentionSet<string>();
 
   /**
    * Whether a cancel is still owed for the current run.
@@ -350,6 +391,45 @@ export function createV2ThreadController(
    */
   function cancelPending(execution: V2ExecutionState): boolean {
     return "cancelRequested" in execution ? execution.cancelRequested : false;
+  }
+
+  /**
+   * Reports that the hydration buffer overflowed and events were lost.
+   *
+   * The loss is real, so it is reported three ways, and none of them is
+   * "the transcript is fine":
+   *
+   * 1. a **warning**, so the log shows the transcript is incomplete;
+   * 2. a **diagnostic count** in the domain state, so the state itself can
+   *    say that some events were lost;
+   * 3. the attempt's **readiness is failed**, so the runtime does not claim a
+   *    successful reconciliation. A transcript that silently lost events is
+   *    not reconciled, and the only honest repair is a fresh read - which the
+   *    failed readiness schedules.
+   *
+   * The events themselves are gone; nothing here pretends otherwise.
+   *
+   * @param dropped - How many events were dropped.
+   * @param retained - How many the buffer still holds.
+   */
+  function reportBufferOverflow(dropped: number, retained: number): void {
+    // The ANNOUNCEMENT. The count reaches the domain state from the
+    // reconciliation path, which owns the final number - the pipeline reports
+    // the cumulative loss as it grows, and the reconciliation is where the
+    // loss is final. Dispatching here as well would set the count twice, from
+    // two places, and the state would depend on which ran last.
+    logger.warn("opencode", "runtime.event_buffer_overflow", {
+      dropped,
+      retained,
+    });
+    const live = currentAttempt;
+    if (!live || live.retired) return;
+    // The attempt's readiness is NOT failed here. The reconciliation path
+    // owns that decision: it is the point where the transcript is committed,
+    // and it is the only place that can say "this transcript is short by N
+    // events, so it is not a reconciliation". Failing the readiness here as
+    // well would be a second mechanism for one fact, and two mechanisms can
+    // disagree about whether the transcript is complete.
   }
 
   /**
@@ -370,6 +450,7 @@ export function createV2ThreadController(
     isLive,
     ownsRuntime,
     retireAttempt,
+    reportBufferOverflow,
     failReady: (failed, error) => failed.fail(new V2ControllerError(error)),
     toSafeError: safeError,
   };
@@ -648,7 +729,7 @@ export function createV2ThreadController(
     // Claimed before the send and never released: one attempt per request id
     // stops a redelivered event from sending a second reply, and a failed send
     // leaves the request pending for the user or the drain rather than looping.
-    autoApproveAttempted.add(event.data.id);
+    autoApproveAttempted.add(event.data.id, Date.now());
     void replyToPermission(event.data.id, AUTO_RESPONSE).catch((error: unknown) => {
       if (disposed) return;
       logger.warn("opencode", "runtime.auto_approve_reply_failed", {
@@ -691,13 +772,21 @@ export function createV2ThreadController(
   function applySettlementEvent(event: V2Event): void {
     switch (event.type) {
       case "permission.replied":
+        pendingPermissionReplies.release(event.data.requestID);
         pendingPermissionReplies.delete(event.data.requestID);
-        answeredPermissions.add(event.data.requestID);
+        answeredPermissions.add(event.data.requestID, Date.now());
+        // The request is settled, so the Auto shield's one-shot guard has done
+        // its job. Releasing it here is what lets the collection be swept
+        // instead of growing for the life of the session - and the guard
+        // cannot fire again, because the request is no longer pending.
+        autoApproveAttempted.release(event.data.requestID);
+        autoApproveAttempted.delete(event.data.requestID);
         return;
       case "form.replied":
       case "form.cancelled":
+        pendingFormReplies.release(event.data.id);
         pendingFormReplies.delete(event.data.id);
-        formReplies.add(event.data.id);
+        formReplies.add(event.data.id, Date.now());
         return;
       default:
     }
@@ -791,6 +880,39 @@ export function createV2ThreadController(
   }
 
   /**
+   * Applies the retention policy to every long-lived collection.
+   *
+   * The sweep is cheap (a map walk over bounded collections) and runs at the
+   * points where the runtime is already doing periodic work, so nothing needs
+   * a timer of its own.
+   *
+   * When every entry in a collection is protected and the collection is over
+   * its cap, the collection cannot honour the cap - and the protection is
+   * absolute, so the entries are NOT evicted. The condition is logged, because
+   * a protected collection that outgrows its cap is a real state the reader
+   * should be able to diagnose.
+   */
+  function sweepRetention(): void {
+    const now = Date.now();
+    const collections: readonly (readonly [string, RetentionSet<string>])[] = [
+      ["answeredPermissions", answeredPermissions],
+      ["autoApproveAttempted", autoApproveAttempted],
+      ["formReplies", formReplies],
+      ["pendingPermissionReplies", pendingPermissionReplies],
+      ["pendingFormReplies", pendingFormReplies],
+      ["cancelledInboxIds", cancelledInboxIds],
+    ];
+    for (const [name, collection] of collections) {
+      if (collection.sweep(now) === "protected")
+        logger.warn("opencode", "runtime.retention_protected_overflow", {
+          collection: name,
+          size: collection.size,
+          protectedCount: collection.protectedCount,
+        });
+    }
+  }
+
+  /**
    * Publishes an auxiliary snapshot, minus anything already resolved locally.
    *
    * The two filters close a race the event stream does not cover: a reply
@@ -800,6 +922,9 @@ export function createV2ThreadController(
    * list still returns.
    */
   function applyAuxiliary(snapshot: V2AuxiliarySnapshot): void {
+    // The re-sync is the runtime's periodic heartbeat, so it is where the
+    // retention policy runs.
+    sweepRetention();
     dispatch({
       type: "inbox_hydrated",
       records: snapshot.inbox,
@@ -890,7 +1015,26 @@ export function createV2ThreadController(
         mode: "observe-and-apply",
       });
     }
+    // The loss the backstop carried, if any. The buffer is about to be
+    // cleared, so this is the last moment the number is available.
+    const dropped = pipeline.droppedEventCount();
     pipeline.clearBuffer();
+    if (dropped > 0) {
+      // The transcript is INCOMPLETE. Claiming `load_completed` here would say
+      // the runtime reconciled, and it did not: events were lost and they are
+      // not recovered.
+      //
+      // The attempt's readiness was ALREADY failed when the overflow was
+      // reported - that is the report's own repair, and it is why this
+      // hydration never reaches the commit. The count is still recorded here,
+      // because the overflow may have been reported before the attempt
+      // existed, and the state must carry the loss either way.
+      dispatch({ type: "events_dropped", count: dropped });
+      throw new V2ControllerError({
+        kind: "network",
+        message: `OpenCode V2 lost ${dropped} events during hydration; the transcript was re-read`,
+      });
+    }
     // The transcript is projected: stop buffering live deltas even though the
     // auxiliary read is still running. This is the attempt's own transition,
     // not a claim that the runtime is ready.
@@ -1319,7 +1463,7 @@ export function createV2ThreadController(
    */
   function cancelAdmittedPrompt(inboxId: string): void {
     if (cancelledInboxIds.has(inboxId)) return;
-    cancelledInboxIds.add(inboxId);
+    cancelledInboxIds.add(inboxId, Date.now());
     const generation = currentAttempt?.generation ?? null;
     if (!generation) return;
     void generation.operations
@@ -1438,8 +1582,8 @@ export function createV2ThreadController(
       });
       // Settled: the claim becomes a record of success, so a later re-hydration
       // does not resurrect the request.
-      pendingPermissionReplies.delete(requestId);
-      answeredPermissions.add(requestId);
+      pendingPermissionReplies.release(requestId);
+      answeredPermissions.add(requestId, Date.now());
       dispatch({ type: "permission_answered", requestId });
     } catch (error) {
       // Only a DEFINITIVE failure releases the claim. A network error may mean
@@ -1452,8 +1596,8 @@ export function createV2ThreadController(
       // a TAGGED error, not as a status - see `clientErrors.ts`.
       if (isAlreadySettled(error) || isPermissionNotFoundError(error)) {
         dispatch({ type: "permission_retired", requestId });
-        pendingPermissionReplies.delete(requestId);
-        answeredPermissions.add(requestId);
+        pendingPermissionReplies.release(requestId);
+        answeredPermissions.add(requestId, Date.now());
       } else releasePermission(requestId);
       throw error;
     }
@@ -1469,16 +1613,24 @@ export function createV2ThreadController(
   function claimPermission(requestId: string): boolean {
     if (answeredPermissions.has(requestId)) return false;
     if (pendingPermissionReplies.has(requestId)) return false;
-    pendingPermissionReplies.add(requestId);
+    pendingPermissionReplies.add(requestId, Date.now());
+    // In flight: protected, so a sweep can never let a second answer through
+    // for the same request.
+    pendingPermissionReplies.protect(requestId);
     return true;
   }
 
   /**
    * Releases a permission claim that failed definitively.
    *
+   * The id is removed, not just unprotected: the claim exists to stop a second
+   * answer while the first is in flight, and the first is over. Leaving the id
+   * behind would keep suppressing the reader's retry.
+   *
    * @param requestId - The permission request id.
    */
   function releasePermission(requestId: string): void {
+    pendingPermissionReplies.release(requestId);
     pendingPermissionReplies.delete(requestId);
   }
 
@@ -1525,8 +1677,8 @@ export function createV2ThreadController(
         formID: formId,
         answer,
       });
-      pendingFormReplies.delete(formId);
-      formReplies.add(formId);
+      pendingFormReplies.release(formId);
+      formReplies.add(formId, Date.now());
       dispatch({ type: "form_retired", formId });
     } catch (error) {
       // Only a definitive failure releases the claim; a network error may mean
@@ -1538,8 +1690,8 @@ export function createV2ThreadController(
       // `clientErrors.ts`. Treating it as a failure would show the reader an
       // error for a form they already answered.
       if (isAlreadySettled(error)) {
-        pendingFormReplies.delete(formId);
-        formReplies.add(formId);
+        pendingFormReplies.release(formId);
+        formReplies.add(formId, Date.now());
         dispatch({ type: "form_retired", formId });
         return;
       }
@@ -1553,15 +1705,15 @@ export function createV2ThreadController(
     const generation = requireGeneration();
     try {
       await generation.operations.formCancel({ sessionID: client.sessionId, formID: formId });
-      pendingFormReplies.delete(formId);
-      formReplies.add(formId);
+      pendingFormReplies.release(formId);
+      formReplies.add(formId, Date.now());
       dispatch({ type: "form_retired", formId });
     } catch (error) {
       // A form the server has already settled is not a failure: the request is
       // over. The client throws it as a tagged error, with no status.
       if (isAlreadySettled(error)) {
-        pendingFormReplies.delete(formId);
-        formReplies.add(formId);
+        pendingFormReplies.release(formId);
+        formReplies.add(formId, Date.now());
         dispatch({ type: "form_retired", formId });
         return;
       }
@@ -1580,16 +1732,22 @@ export function createV2ThreadController(
   function claimForm(formId: string): boolean {
     if (formReplies.has(formId)) return false;
     if (pendingFormReplies.has(formId)) return false;
-    pendingFormReplies.add(formId);
+    pendingFormReplies.add(formId, Date.now());
+    // In flight: protected, for the same reason as a permission.
+    pendingFormReplies.protect(formId);
     return true;
   }
 
   /**
    * Releases a form claim that failed definitively.
    *
+   * The id is removed, not just unprotected - the claim exists to stop a
+   * second answer while the first is in flight, and the first is over.
+   *
    * @param formId - The form id.
    */
   function releaseForm(formId: string): void {
+    pendingFormReplies.release(formId);
     pendingFormReplies.delete(formId);
   }
 

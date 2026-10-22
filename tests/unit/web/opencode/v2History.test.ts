@@ -50,6 +50,7 @@ function repositoryState(projection: ReturnType<typeof projectV2History>): V2Thr
     optimisticMessageIds: [],
     answeredPermissionIds: [],
     diagnosticCount: 0,
+    droppedEventCount: 0,
   };
 }
 

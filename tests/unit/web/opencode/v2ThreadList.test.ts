@@ -38,6 +38,7 @@ const state: V2ThreadState = {
   optimisticMessageIds: [],
   answeredPermissionIds: [],
   diagnosticCount: 0,
+  droppedEventCount: 0,
 };
 
 describe("createV2ThreadListAdapter", () => {
