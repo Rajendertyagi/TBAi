@@ -145,8 +145,20 @@ export interface PromptsInFlight {
    * @returns The handle, or `undefined` when the prompt was never sent.
    */
   get(messageId: string): PromptAdmission | undefined;
+  /** The number of records held. */
+  readonly size: number;
+  /** The number of protected records. */
+  readonly protectedCount: number;
   /** Settles every prompt in flight as `disposed`. */
   disposeAll(): void;
+  /**
+   * Runs the retention sweep now.
+   *
+   * @param now - The current time. Defaults to `Date.now()`.
+   * @returns `protected` when records remain over the cap and every one of them
+   * has a waiter; `none` otherwise.
+   */
+  sweep(now?: number): "none" | "protected";
 }
 
 type AdmissionRecord = {
@@ -197,7 +209,7 @@ export function createPromptsInFlight(): PromptsInFlight {
    *
    * @param now - The current time.
    */
-  function sweep(now: number): void {
+  function sweep(now: number = Date.now()): "none" | "protected" {
     // The TTL first: a record nobody has touched in a long time is stale
     // whatever the count.
     for (const [messageId, touched] of [...touchedAt]) {
@@ -206,16 +218,25 @@ export function createPromptsInFlight(): PromptsInFlight {
       admissions.delete(messageId);
       touchedAt.delete(messageId);
     }
-    // Then the cap: the oldest settled records go.
+    // Then the cap: the oldest by LAST TOUCH go (not creation order).
+    // Build the eviction order once, sorted by touchedAt ascending.
     while (admissions.size > OPENCODE_V2_RETENTION_CAP) {
-      const oldest = [...admissions.keys()].find((messageId) => !protectedIds.has(messageId));
+      let oldest: string | undefined;
+      let oldestTouched = Infinity;
+      for (const [messageId, touched] of touchedAt) {
+        if (protectedIds.has(messageId)) continue;
+        if (touched < oldestTouched) {
+          oldestTouched = touched;
+          oldest = messageId;
+        }
+      }
       // Every remaining record has a waiter on it. The protection is absolute,
-      // so the cap is not honoured - and the collection says so, because a cap
-      // that cannot be honoured is not a cap.
-      if (oldest === undefined) return;
+      // so the cap is not honoured.
+      if (oldest === undefined) return "protected";
       admissions.delete(oldest);
       touchedAt.delete(oldest);
     }
+    return "none";
   }
 
   function ensure(messageId: string): AdmissionRecord {
@@ -292,6 +313,9 @@ export function createPromptsInFlight(): PromptsInFlight {
     // The ADMISSION watch may still be waiting, so the record stays PROTECTED
     // until that watcher is gone. A record with no watcher left is evictable.
     if (record.admissionWaiters.size === 0) protectedIds.delete(messageId);
+    // Bound the registry even when records never settle (all-ambiguous during
+    // a network outage). Sweep runs here too, not only on settle().
+    sweep(Date.now());
   }
 
   function awaitAdmission(messageId: string): Promise<V2PromptAdmissionResult> {
@@ -340,6 +364,12 @@ export function createPromptsInFlight(): PromptsInFlight {
   }
 
   return {
+    get size() {
+      return admissions.size;
+    },
+    get protectedCount() {
+      return protectedIds.size;
+    },
     create,
     settle,
     markAmbiguous,
@@ -347,5 +377,6 @@ export function createPromptsInFlight(): PromptsInFlight {
     awaitAdmissionWithDeadline,
     get,
     disposeAll,
+    sweep,
   };
 }

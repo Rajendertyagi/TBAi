@@ -165,6 +165,6 @@ export function isAlreadySettled(error: unknown): boolean {
  * config copy had no importer at all, so the two could have drifted without
  * anything noticing.
  */
-export const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409, 425, 429];
+const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409, 425, 429];
 
 const RETRYABLE_STATUSES = new Set(OPENCODE_V2_RETRYABLE_HTTP_STATUSES);

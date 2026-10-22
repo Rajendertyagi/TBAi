@@ -381,17 +381,6 @@ export function createV2ThreadController(
    */
   const pendingFormReplies = new RetentionSet<string>();
   /**
-   * The inbox ids a pending cancel has already been issued against.
-   *
-   * A cancel requested before the prompt was admitted is honoured once the
-   * admission arrives, and the inbox id is what makes that cancel unique: the
-   * server identifies the queued prompt by it. This collection is what makes
-   * "exactly once" true - the admission can arrive through two paths (the HTTP
-   * response and the inbox event), and both must not issue the cancel.
-   */
-  const cancelledInboxIds = new RetentionSet<string>();
-
-  /**
    * Whether a cancel is still owed for the current run.
    *
    * The `idle`, `error` and `reverting` states have no run to cancel, so they
@@ -690,9 +679,9 @@ export function createV2ThreadController(
       // carried into the `admitted` state and nothing read it, so the queued
       // prompt executed while the reader was told it was cancelled (M7).
       //
-      // Exactly once: the cancel is issued against the admitted inbox id, and
-      // the inbox id is what makes it unique. A second admission event for the
-      // same inbox id is refused by the set below.
+      // The cancel is issued against the admitted inbox id. "Exactly once" is
+      // provided by the state machine (execution_settled -> idle); this set is
+      // belt-and-braces.
       if (cancelOwed) void cancelAdmittedPrompt(record.id);
     }
   }
@@ -720,7 +709,10 @@ export function createV2ThreadController(
    */
   function applyAutoApproveEvent(event: V2Event): void {
     if (event.type !== "permission.asked") return;
-    if (disposed || autoApproveAttempted.has(event.data.id)) return;
+    if (disposed) return;
+    // Duplicate suppression: already attempted (in-flight) OR already settled.
+    if (autoApproveAttempted.has(event.data.id)) return;
+    if (answeredPermissions.has(event.data.id)) return;
     let eligible = false;
     try {
       // The one place the boolean policy cache meets the policy module's own
@@ -753,12 +745,24 @@ export function createV2ThreadController(
     // and a redelivery can no longer be answered twice.
     autoApproveAttempted.add(event.data.id, Date.now());
     autoApproveAttempted.protect(event.data.id);
-    void replyToPermission(event.data.id, AUTO_RESPONSE).catch((error: unknown) => {
-      if (disposed) return;
-      logger.warn("opencode", "runtime.auto_approve_reply_failed", {
-        errorType: error instanceof Error ? error.name : typeof error,
+    void replyToPermission(event.data.id, AUTO_RESPONSE)
+      .then(() => {
+        // Definitive success: release in-flight protection. The entry stays as a
+        // settled record (TTL-bounded) for duplicate suppression via
+        // answeredPermissions.
+        autoApproveAttempted.release(event.data.id);
+      })
+      .catch((error: unknown) => {
+        if (disposed) return;
+        // Definitive failure (already settled / not found): release protection.
+        // Ambiguous (network): keep protected — the request may still be pending.
+        if (isAlreadySettled(error) || isPermissionNotFoundError(error)) {
+          autoApproveAttempted.release(event.data.id);
+        }
+        logger.warn("opencode", "runtime.auto_approve_reply_failed", {
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
       });
-    });
   }
 
   function applyEvent(event: V2Event, eventOrdinal: number): void {
@@ -923,11 +927,11 @@ export function createV2ThreadController(
     const now = Date.now();
     const collections: readonly (readonly [string, RetentionSet<string>])[] = [
       ["answeredPermissions", answeredPermissions],
-      ["autoApproveAttempted", autoApproveAttempted],
+      // autoApproveAttempted is swept separately (TTL-only, no cap) so that
+      // settled duplicate-suppression records survive cap pressure.
       ["formReplies", formReplies],
       ["pendingPermissionReplies", pendingPermissionReplies],
       ["pendingFormReplies", pendingFormReplies],
-      ["cancelledInboxIds", cancelledInboxIds],
     ];
     for (const [name, collection] of collections) {
       if (collection.sweep(now) === "protected")
@@ -952,6 +956,33 @@ export function createV2ThreadController(
     // The re-sync is the runtime's periodic heartbeat, so it is where the
     // retention policy runs.
     sweepRetention();
+    // Independent sweep trigger for the prompts registry (not tied to settle()).
+    if (prompts.sweep(Date.now()) === "protected") {
+      logger.warn("opencode", "runtime.retention_protected_overflow", {
+        collection: "promptsInFlight",
+        size: prompts.size,
+        protectedCount: prompts.protectedCount,
+      });
+    }
+    // Dropped-event safety net: release in-flight protection for auto-approve
+    // entries whose permission is no longer pending (the server has answered it
+    // but the permission.replied event was dropped). Without this, a dropped
+    // event leaves the entry protected forever.
+    const pendingIds = new Set((snapshot.permissions ?? []).map((request) => request.id));
+    for (const id of autoApproveAttempted.ids()) {
+      // Only release protection when the permission is definitively settled
+      // (recorded in answeredPermissions) AND no longer pending. This avoids
+      // releasing protection for ambiguous (network) outcomes, which would
+      // re-open the one-shot window.
+      if (!answeredPermissions.has(id)) continue;
+      if (pendingPermissionReplies.has(id)) continue;
+      if (pendingIds.has(id)) continue;
+      autoApproveAttempted.release(id);
+    }
+    // TTL-only sweep for autoApproveAttempted (duplicate suppression): evict
+    // expired unprotected entries, but never by cap, so settled records survive
+    // cap pressure long enough to suppress redeliveries.
+    autoApproveAttempted.sweepTtlOnly(Date.now());
     dispatch({
       type: "inbox_hydrated",
       records: snapshot.inbox,
@@ -1234,6 +1265,10 @@ export function createV2ThreadController(
    */
   async function retry(): Promise<void> {
     pipeline.cancelReconnect();
+    // A manual retry is an explicit user action: give it a fresh budget so the
+    // automatic ladder is available again if this attempt fails. The automatic
+    // path still resets the budget only after successful hydration.
+    pipeline.resetAttempt();
     return startConnection();
   }
 
@@ -1483,14 +1518,14 @@ export function createV2ThreadController(
    * What the cancel does is remove the QUEUED prompt, once the server tells
    * us its inbox id, and that is the only handle that identifies it.
    *
-   * Exactly once per inbox id: the admission arrives through two paths (the
-   * HTTP response and the inbox event) and both must not cancel.
+   * Belt-and-braces per inbox id: the admission arrives through two paths (the
+   * HTTP response and the inbox event). "Exactly once" is provided by the state
+   * machine (execution_settled -> idle).
    *
+
    * @param inboxId - The inbox id the server admitted the prompt as.
    */
   function cancelAdmittedPrompt(inboxId: string): void {
-    if (cancelledInboxIds.has(inboxId)) return;
-    cancelledInboxIds.add(inboxId, Date.now());
     const generation = currentAttempt?.generation ?? null;
     if (!generation) return;
     void generation.operations

@@ -318,11 +318,26 @@ describe("the status chip's manual recovery", () => {
     // without a native runtime - so the fallback is not dead code, it is the
     // only path in that configuration.
     runtimeAvailable = false;
+    _retryCalls = 0;
     let reconnectCalls = 0;
     const mounted = mount({ onReconnect: () => (reconnectCalls += 1) });
     try {
-      // With no runtime, the chip renders nothing at all.
-      expect(mounted.container.querySelector("button")).toBeNull();
+      // With no runtime, the chip still renders so the reader can trigger the
+      // heavier rebuild.
+      const content = await openPopover(mounted.container);
+      const button = [...content.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Reconnect",
+      );
+      expect(button).toBeDefined();
+
+      await act(async () => {
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The heavier fallback ran, and the controller's retry() did not.
+      expect(reconnectCalls).toBe(1);
+      expect(_retryCalls).toBe(0);
     } finally {
       unmount(mounted);
       runtimeAvailable = true;

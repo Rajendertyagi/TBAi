@@ -25,8 +25,18 @@ export function OpenCodeStatus({
   onReconnect?: () => void;
 }) {
   const extras = useOptionalV2RuntimeExtras();
-  if (!extras) return null;
-  const { state } = extras;
+  // The heavier `onReconnect` rebuild is the fallback for the case where there
+  // is no native runtime to ask (no controller). Keep it reachable: render the
+  // chip with a terminal-failed presentation so the reader can trigger it.
+  if (!extras && !onReconnect) return null;
+  const state = extras?.state ?? {
+    connection: { type: "failed", attempt: 0 },
+    load: { type: "error", error: { message: "OpenCode runtime unavailable" } },
+    execution: { type: "idle" },
+    revertRecovery: { type: "none" },
+    auxiliary: null,
+    session: null,
+  };
   const recoveryBlocked = state.revertRecovery.type === "blocked";
   // The RUNTIME's connection state is the fact: it is set by the component
   // that schedules the retry, and it carries the attempt number. A local
@@ -62,27 +72,21 @@ export function OpenCodeStatus({
     //
     // The controller itself makes the same call correctly at
     // `v2ThreadController.ts` (`reconcileStagedRevert().catch(() => undefined)`).
-    if (recoveryBlocked) void extras.reconcileStagedRevert().catch(() => undefined);
+    if (recoveryBlocked && extras) void extras.reconcileStagedRevert().catch(() => undefined);
     // The controller's own `retry()` is the manual recovery path: it replaces
     // the failed attempt and starts a fresh one, even after the automatic
     // budget is spent. It is the PRIMARY path, because it is the lighter one
     // - it reuses the client that is already there.
     //
     // The `onReconnect` prop is the heavier fallback: it rebuilds the whole
-    // client. It is used when there is no controller to ask - which is the
-    // case in this component's own DOM test, and the case the prop exists
-    // for.
-    //
-    // The order was the other way round, and it made the controller's
-    // `retry()` unreachable in production: the only production call site
-    // always supplies `onReconnect`, so the `else` branch - the one that
-    // called `retry()` - never ran.
+    // client. It is used when there is no controller to ask.
     else if (extras) void extras.retry().catch(() => undefined);
     else if (onReconnect) onReconnect();
   };
   // Only once the load is ready: before the first read finishes, "unavailable"
   // means "not read yet", which is the loading state and not news.
-  const pendingNotice = state.load.type === "ready" ? pendingSetNotice(state.auxiliary) : null;
+  const pendingNotice =
+    state.load.type === "ready" && state.auxiliary ? pendingSetNotice(state.auxiliary) : null;
   const heartNode = (
     <Popover>
       <PopoverTrigger asChild>
@@ -108,7 +112,9 @@ export function OpenCodeStatus({
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Session id</dt>
-            <dd className="break-all font-mono text-xs">{state.session?.id ?? extras.sessionId}</dd>
+            <dd className="break-all font-mono text-xs">
+              {state.session?.id ?? extras?.sessionId ?? "–"}
+            </dd>
           </div>
         </dl>
         {pendingNotice && <p className="mt-2 text-xs text-muted-foreground">{pendingNotice}</p>}

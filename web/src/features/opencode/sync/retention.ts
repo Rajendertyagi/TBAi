@@ -187,6 +187,21 @@ export class RetentionSet<T extends string> {
   }
 
   /**
+   * Evicts only expired (TTL) entries, ignoring the cap.
+   *
+   * Used for collections where duplicate suppression must survive cap pressure
+   * (e.g. auto-approve settled records): the cap is a memory bound for
+   * long-lived collections, but suppression only needs to live for the TTL.
+   */
+  public sweepTtlOnly(now: number): void {
+    for (const [id, touchedAt] of [...this.entries]) {
+      if (this.protectedIds.has(id)) continue;
+      if (now - touchedAt < this.ttlMs) continue;
+      this.entries.delete(id);
+    }
+  }
+
+  /**
    * The oldest entry that may be evicted.
    *
    * @returns The id, or `null` when every entry is protected.
