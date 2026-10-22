@@ -34,22 +34,38 @@ import {
  */
 
 const PORT_KEY = "server.port";
-/** The port this file's listener binds. */
-const FIRST_PORT = 45410;
-/**
- * The port the user picks.
- *
- * 3030 is the port the product's acceptance criterion names. The port the
- * suite STARTS on is a test-local one on purpose: binding 3000 could collide
- * with a TBAi instance the maintainer is running, and a test must never take
- * the port the real application is on.
- */
-const SECOND_PORT = 3030;
-/** A third port, for the restart-after-save case. */
-const THIRD_PORT = 3031;
 
+/**
+ * Reserves `count` currently-free ports and releases them.
+ *
+ * The ports are deliberately NOT fixed numbers. A fixed port can already be
+ * held by anything on the machine — most importantly a TBAi instance the
+ * maintainer is running outside this repository — and a test must never
+ * compete with the real application for a socket. Asking the OS for port 0
+ * returns a port that is free at allocation time.
+ *
+ * Every reservation is held until all the ports are known: asking one at a
+ * time could hand back the same port twice once the previous reservation is
+ * closed.
+ */
+function allocateFreePorts(count: number): readonly number[] {
+  const reservations = Array.from({ length: count }, () =>
+    Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") }),
+  );
+  const ports = reservations.map((server) => server.port);
+  for (const server of reservations) server.stop(true);
+  return ports;
+}
+
+const PORTS = allocateFreePorts(4);
+/** The port this file's listener binds. */
+const FIRST_PORT = PORTS[0];
+/** The port the user picks, and restarts onto. */
+const SECOND_PORT = PORTS[1];
+/** A third port, for the restart-after-save case. */
+const THIRD_PORT = PORTS[2];
 /** A port the suite occupies itself, to make a restart conflict. */
-const OCCUPIED_PORT = 45413;
+const OCCUPIED_PORT = PORTS[3];
 
 const serverApp = new Hono<{ Variables: { requestId: string } }>();
 serverApp.route("/api/server", serverRoutes);

@@ -185,6 +185,17 @@ Run them all with `bun run verify`.
   flake with its arithmetic, not as a diagnosis. Verify a suspected MCP
   regression by running the single file under `bun run test`'s own timeout,
   not bare.
+- **A test must not bind a port the application may be on.** On 2026-10-22
+  `tests/integration/server/port-configurability.test.ts` restarted onto
+  **3030**, which was held by a TBAi instance the maintainer was running
+  outside the repository, so the full suite failed on a machine where the
+  product worked. The number was never a product fact — the default is
+  **3000** (`src/services/server-port.ts`) — it was a hardcoded fixture. The
+  test now asks the OS for free ports (`Bun.serve({ port: 0 })`, several
+  reserved at once so they cannot be handed the same number) and releases them
+  before binding. A test's sockets come from the machine, never from the
+  application's neighbourhood: the suite must pass while the real app is
+  running.
 - Because the gate can currently fail for the wrong reason (above), do not add a CI
   performance or size gate until that is fixed — it inherits the same noise, and a
   gate that cries wolf gets disabled. See `performance.md`.
