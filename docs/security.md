@@ -185,6 +185,27 @@ approval. OpenCode permissions remain owned by the separate OpenCode boundary.
   by the server; what the browser cannot do is read the response. What a
   request may *do* is decided by the route allowlist and the server-side
   workspace authorization above, which hold regardless of the origin.
+- **The operator's auth password is read from the environment, in upstream's
+  order.** Upstream V2 reads `OPENCODE_PASSWORD` **first** and honours
+  `OPENCODE_SERVER_PASSWORD` as the legacy fallback — the upstream source is
+  `packages/cli/src/env.ts`, and its own comment reads *"The legacy name is
+  still honored."*:
+
+  ```ts
+  export const password = Config.Redacted("OPENCODE_PASSWORD").pipe(
+    Config.orElse(() => Config.Redacted("OPENCODE_SERVER_PASSWORD")),
+    Config.withDefault(undefined),
+  )
+  ```
+
+  TBAi matches that exactly: `src/config/opencode.ts` names the two
+  (`authPasswordEnvVar` / `authPasswordLegacyEnvVar`), and
+  `src/services/opencode/runtime.ts` reads them in that order and sends **both**
+  to the managed child. The published OpenCode prose that names only
+  `OPENCODE_SERVER_PASSWORD` is the **V1-era** documentation surface and is
+  not the authority for V2 — the same reason it is not used as V2 evidence
+  anywhere else. The precedence is unchanged by the runtime-remediation work;
+  this paragraph records it against the upstream source rather than the prose.
 
 ## Logging / redaction
 - Keys are never logged. Error messages that might accidentally include a secret are

@@ -52,14 +52,24 @@ export function OpenCodeStatus({
           ? state.revertRecovery.error.message
           : null;
   const retry = () => {
-    if (recoveryBlocked) void extras.reconcileStagedRevert();
+    // M17: the recovery rejection is CAUGHT. `reconcileStagedRevert` rejects
+    // with a `V2ControllerError` when the recovery fails, and the controller
+    // already dispatches that failure into the store - so the state carries
+    // the error and the chip renders it. Without the catch the same failure
+    // was ALSO an unhandled promise rejection, on every failed "Retry
+    // recovery": two reports of one failure, one of them invisible and
+    // uncatchable by the app.
+    //
+    // The controller itself makes the same call correctly at
+    // `v2ThreadController.ts` (`reconcileStagedRevert().catch(() => undefined)`).
+    if (recoveryBlocked) void extras.reconcileStagedRevert().catch(() => undefined);
     // The controller's own `retry()` is the manual recovery path: it replaces
     // the failed attempt and starts a fresh one, even after the automatic
     // budget is spent. The `onReconnect` prop is the heavier fallback that
     // rebuilds the whole client, and it stays for the case where there is no
     // controller to ask.
     else if (onReconnect) onReconnect();
-    else void extras.retry();
+    else void extras.retry().catch(() => undefined);
   };
   // Only once the load is ready: before the first read finishes, "unavailable"
   // means "not read yet", which is the loading state and not news.

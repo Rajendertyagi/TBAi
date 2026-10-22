@@ -142,7 +142,17 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 - `generation` represents the current active event stream connection (set at line 740 after `client.connect()` succeeds, nulled at line 479 in `scheduleReconnect` and line 1180 in `dispose`).
 - A new conversation creates a new controller (`createV2ThreadController`), so `reconnectAttempt` starts at 0. The retry budget is per-controller, not per-generation.
 - `reconnectAttempt` is reset to 0 only on successful hydration (line 747) and manual retry. It is NOT reset on generation change alone (a failed reconnect should count as a retry).
-- Stale generation callbacks cannot reset the counter because they are no-ops (the `generation === currentGeneration` check prevents them from reaching the reset code).
+- Stale generation callbacks **CAN** reset the counter: the guard does not
+  prevent the reset, it is the path that reaches it. `hydrate` returns *early*
+  (it does not throw) when the generation changed, so the superseded attempt
+  reaches the success tail and runs `reconnectAttempt = 0`. The audit
+  reproduced this: with a budget of 3, six failure cycles produced **7**
+  connection attempts and the controller never reached `{type:"failed"}`.
+  **This line was wrong** and is corrected here; the runtime-remediation plan
+  (§2.2) records the finding and the fix. The accounting rule that replaced
+  it is: the retry budget is **attempt-scoped** — a superseded attempt's
+  success does not reset the budget of the attempt that replaced it, because
+  the reader's turn did not succeed.
 - Disposal clears the timer and sets `disposed = true`, preventing further resets.
 
 **UI file scope:**

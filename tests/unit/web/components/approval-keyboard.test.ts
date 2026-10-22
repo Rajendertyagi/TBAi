@@ -176,7 +176,7 @@ describe("the question dock", () => {
     // Anchored on this effect's own opening guards so the capture cannot drift
     // onto a neighbouring hook's dependency list.
     const deps =
-      /if \(collapsed\) return;\s*\n\s*if \(!dockSeen\.current\) return;[\s\S]*?\}, \[([^\]]*)\]\);/.exec(
+      /if \(collapsed\) return;\s*\n\s*const key = field\?\.key;[\s\S]*?\}, \[([^\]]*)\]\);/.exec(
         formCard,
       )?.[1];
     expect(deps, "focus effect dependency list was not found").toBeDefined();
@@ -206,8 +206,23 @@ describe("the question dock", () => {
     // Arrival belongs to the registry (it yields to a reader mid-sentence and
     // defers to any other owner). A step change is the reader's own doing and
     // must move focus even with text on screen, so it stays here.
-    expect(formCard).toMatch(/if \(!dockSeen\.current\) return;/);
-    expect(formCard).toMatch(/dockSeen\.current = false;/);
+    //
+    // M18: this assertion used to check that the code CONTAINED
+    // `if (!dockSeen.current) return;` and `dockSeen.current = false;` - and
+    // the flag was only ever set to `false`, so the focus move it guarded was
+    // DEAD CODE while this guard stayed green. A source-text assertion cannot
+    // fail for the reason it exists.
+    //
+    // The BEHAVIOUR is now asserted in the DOM suite
+    // (`tests/dom/opencode/V2FormCard.focus.test.tsx`): the step change moves
+    // focus to the new step's first control, and the arrival does not.
+    //
+    // What is left here is the wiring this file exists for: the effect keys on
+    // the field's KEY, and it is keyed on the key rather than on a one-shot
+    // flag - because a one-shot flag fires on the FIRST step change only, and
+    // the second and third steps would leave focus behind.
+    expect(formCard).toMatch(/seenFieldKey\.current === key/);
+    expect(formCard).toMatch(/seenFieldKey\.current = key;/);
   });
 
   it("drops the question on Escape, IME-guarded, matching the Cancel button", () => {

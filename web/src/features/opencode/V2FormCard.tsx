@@ -212,8 +212,33 @@ export function V2FormCard({
   // the top of the conversation. `collapsed` is the `enabled` flag, so a
   // collapsed dock measures nothing and keeps its CSS cap.
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  /** Whether the dock has been seen at least once expanded. Gates the focus guard. */
-  const dockSeen = useRef(false);
+  /**
+   * The visible field's key, as of the last time the dock moved focus onto a
+   * field.
+   *
+   * `null` means "no field has been seen yet".
+   *
+   * This is what separates the dock's ARRIVAL from a STEP CHANGE. The arrival
+   * belongs to the registry (`registerDecisionSurface` -> `scheduleFocusPick`),
+   * which focuses the dock BODY - the body is the element it registered. A step
+   * change is the reader's own doing and must move focus to the new step's
+   * first CONTROL.
+   *
+   * So the step-change effect moves focus when the visible key DIFFERS from
+   * the one it last saw - and its FIRST run is the arrival, which the registry
+   * owns, so it records the key without moving focus. Every later step change
+   * is a focus move, including the second and third, which a one-shot flag
+   * would silently skip.
+   *
+   * The comparison is on the key rather than on a one-shot flag, because a
+   * one-shot flag fires on the FIRST step change only: the second and third
+   * steps would leave focus behind on the step the reader had left.
+   *
+   * M18: the flag used to be `dockSeen`, and it was only ever set to `false`,
+   * so the step-change focus move was DEAD CODE - and a source-text guard
+   * kept it green.
+   */
+  const seenFieldKey = useRef<string | null>(null);
   /** Whether the dock took focus itself, and so has to give it back on unmount. */
   const bodyMaxHeight = useFormDockMaxHeight(bodyRef, !collapsed);
 
@@ -391,9 +416,6 @@ export function V2FormCard({
     if (collapsed) return;
     const element = bodyRef.current;
     const release = registerDecisionSurface(element);
-    // The next step change is the reader's own doing and must move focus; the
-    // arrival above was the registry's job.
-    dockSeen.current = false;
     return () => {
       // Asked of the registry, not of a ref captured when the effect ran: by
       // cleanup time that value is stale, and it decides whether focus is the
@@ -404,13 +426,34 @@ export function V2FormCard({
     };
   }, [collapsed]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `field?.key` is not read in the body on purpose - it is the focus trigger. Focusing follows the VISIBLE field, and the key is what says which field is visible (the field object itself is rebuilt every render, which is why the key is used).
+  // The dependency is the visible field's KEY, never the field object itself:
+  // `field` is rebuilt on every render, so depending on it would re-run this
+  // effect while the reader types in the custom-answer box and throw their
+  // caret back to the start of what they wrote. The key is what says which
+  // field is visible, and it changes exactly when the visible field does.
   useEffect(() => {
     if (collapsed) return;
-    if (!dockSeen.current) return;
+    const key = field?.key;
+    if (key === undefined) return;
     const host = bodyRef.current;
     if (!host) return;
-    dockSeen.current = false;
+    // M18: a step CHANGE moves focus; the dock's ARRIVAL does not.
+    //
+    // The ARRIVAL is this effect's FIRST run - the registry focuses the dock
+    // BODY then, and the body is the element it registered. So the first run
+    // records the key and moves nothing. Every later run has a DIFFERENT key
+    // - the reader moved to another question - and that is a step change, and
+    // it moves focus to that step's first control.
+    //
+    // Before this, the flag was only ever set to `false`, so the guard below
+    // short-circuited on EVERY run: the focus move was dead code, and a
+    // source-text guard kept it green. The reader pressed Enter, the dock
+    // advanced, and focus stayed behind on the step they had left - which is
+    // how one Enter press ends up answering two different questions.
+    if (seenFieldKey.current === key) return;
+    const arrival = seenFieldKey.current === null;
+    seenFieldKey.current = key;
+    if (arrival) return;
     const first = host.querySelector<HTMLElement>(FOCUSABLE_IN_DOCK);
     (first ?? host).focus({ preventScroll: true });
     // Keyed on the key of the visible field, never on the field object itself:
@@ -557,7 +600,16 @@ export function V2FormCard({
             <p className="mt-0.5 text-xs text-muted-foreground">{field.description}</p>
           ) : null}
           <div className="mt-2">
+            {/* M14: the KEY is what makes the control's per-field state
+                PER-FIELD. Without it, React reuses the same instance when the
+                dock advances to the next question, and the state inside it -
+                the "Other" row's open/closed mode and the free-text draft -
+                survives the change: a half-typed custom entry leaks into the
+                next question, and `commitDraft` appends the PREVIOUS
+                question's text to the CURRENT field's answer. Keying by the
+                field's key gives every field its own instance. */}
             <V2OptionControl
+              key={field.key}
               field={field}
               value={answer[field.key]}
               onChange={setFieldValue}

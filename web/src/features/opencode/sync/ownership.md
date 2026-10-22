@@ -77,6 +77,9 @@ gets it here, in the module that owns it:
 | The retention policy for the long-lived per-controller collections: a cap, a last-touch TTL, and the protection an in-flight entry has against eviction | `retention.ts` | L1 | 6 | **delivered** |
 | The loss the hydration buffer's backstop carried, and the refusal to claim a successful reconciliation | `eventPipeline.ts` (`buffer` / `droppedEventCount`) + `v2ThreadController.ts` (`reportBufferOverflow`) + `v2Events.ts` (the `events_dropped` reducer) | M5 (hold) | 6 | **delivered** |
 | The exhaustive form-field projection, so an unknown type is reported rather than mis-projected | `v2Forms.ts` (`projectV2Form`) | M15, M16 | 7 | **delivered** |
+| The per-field identity of the answer control, so its state cannot survive a question change | `V2FormCard.tsx` (the `key` on `V2OptionControl`) | M14 | 7 | **delivered** |
+| The arrival/step-change distinction for the dock's focus, and the focus move that follows from it | `V2FormCard.tsx` (`seenFieldKey` + the step-change effect) | M18 | 7 | **delivered** |
+| The chip's manual recovery, with the rejection caught where the controller reports it | `OpenCodeStatus.tsx` (`retry`) | M17 | 7 | **delivered** |
 
 A module that exists only to be filled in later is not created: an empty
 module has no owner, and the orphan-module gate would report it. Phase 4 is why

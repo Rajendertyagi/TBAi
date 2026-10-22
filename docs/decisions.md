@@ -6903,3 +6903,154 @@ that was never created is not.
 **The adopt path was already tolerant**, and it is unchanged: it caught the
 failure and still handed the live session back. M11 was only ever about the
 creation path, and about the two helpers whose contract said otherwise.
+
+## 2026-10-22 - Phase 7: the status and form surfaces, and the guards that could not fail
+
+**M14 - the control is keyed by its field.** `V2OptionControl` holds two pieces
+of per-field state: `otherChosen` (the reader opened the free-text hatch) and
+`draft` (what they typed into it). React reconciles by POSITION, so without a
+`key` the same instance survived a question change and both pieces of state
+survived with it.
+
+The consequence was not cosmetic. `commitDraft` APPENDS the draft to the
+current field's answer, so a half-typed entry on question one became part of
+the answer to question two - and the answer reached the agent. Verified in a
+DOM: without the key, the second question's free-text box opens holding the
+first question's text.
+
+The fix is the `key`, and it is the only fix: React gives each field its own
+instance, so each field's state is its own.
+
+**M18 - the step-change focus move, and how it tells an arrival from a step
+change.** The old guard was `dockSeen.current`, and it was only ever set to
+`false`, so `if (!dockSeen.current) return;` short-circuited on every run: the
+focus move was DEAD CODE, and a source-text guard kept it green. A guard that
+cannot fail for the reason it exists is a comment.
+
+The fix is not a one-shot flag either. A one-shot flag fires on the FIRST step
+change only, so the second and third steps would leave focus behind on the
+step the reader had left - which is exactly the failure the move exists to
+prevent (one Enter press answering two different questions).
+
+So the state is the visible field's KEY, and the rule is a COMPARISON: the
+effect moves focus when the visible key DIFFERS from the one it last saw. The
+effect's first run is the ARRIVAL - the registry owns that, and it focuses the
+dock BODY - so the first run records the key and moves nothing. Every later run
+has a different key, and that is a step change.
+
+**The source-text guard is gone.** `tests/unit/web/components/approval-keyboard.test.ts`
+kept a source-text assertion for this, and the assertion was green while the
+behaviour was dead. The behaviour is now asserted in a DOM
+(`tests/dom/opencode/V2FormCard.focus.test.tsx`), where the focus move is
+observable. What remains in the source-text file is the WIRING this file exists
+for - that the effect keys on the field's key rather than on the field object -
+which is the part a source-text assertion can honestly guard.
+
+**M17 - the recovery rejection is caught.** `OpenCodeStatus.retry()` called
+`reconcileStagedRevert()` with no `.catch`. That promise rejects with a
+`V2ControllerError` when the recovery fails, and the controller already
+dispatches the failure into the store - so the state carried the error and the
+chip rendered it. Without the catch, the SAME failure was also an unhandled
+promise rejection: two reports of one failure, one of them invisible and
+uncatchable by the app.
+
+The catch is the same one the controller already uses
+(`v2ThreadController.ts`: `reconcileStagedRevert().catch(() => undefined)`).
+The error is not swallowed - it is in the store, and the chip shows it. The
+catch only stops it from ALSO being an unhandled rejection.
+
+**Why the guards moved to the DOM suite.** M14 and M18 are React rendering
+behaviours: a `key`, a `useState` that must not survive a re-render into a
+different element, and a `useEffect` that must move DOM focus. None of them
+can be observed by `renderToStaticMarkup` (which runs no effects and no event
+handlers) or by a source-text match. `bun test` has no DOM, so they live in
+`tests/dom/opencode/`, which runs under happy-dom.
+
+**What was NOT changed.** The M16 branch in the form projection remains
+unreachable for the installed client - the upstream's field union is closed -
+and its deliberate cast is unchanged. M15 and M16 were delivered with Phase 6,
+part one; Phase 7 added the M15/M16 DOM coverage that shows a form with
+truncated options or an unknown field type is reported as unanswerable rather
+than presented as answerable.
+
+## 2026-10-22 - Phase 7 documentation: the decisions that were load-bearing but unrecorded
+
+The runtime-remediation audit found several rules the code already followed and
+the documentation did not say. A rule that is only in the code is a rule the
+next change will not know about, so each of these is now written down.
+
+**D14 - a permission rule is addressed by POSITION plus a re-checked identity.**
+The `PUT` route carries only `{action, resource, effect}`, so a configuration
+with exact duplicates cannot identify which row the user clicked. The pattern
+`removeOpenCodePermissionRule` already uses is the answer: the row's identity
+is its POSITION in the file, and the identity is re-checked at the moment of
+the write, so a file that changed underneath the editor is refused rather than
+edited at the wrong row. The UI's row identity is therefore position-based
+rather than content-based, which is what makes two identical rules two
+different rows.
+
+**Wildcard-overlapping rules are a NORMAL, intended part of the V2 precedence
+model**, and are neither rejected nor hidden. The page INDICATES when a rule is
+shadowed by a later, more specific match, so the user can see that a broad rule
+is not in force while still being able to edit it. The exact-duplicate guard on
+append is kept as-is.
+
+**TBAi does not reimplement permission evaluation.** It reads the upstream
+semantics only to DISPLAY which rule is in force. The defect here is row
+identity, not evaluation, and reimplementing the evaluation would put a second,
+drifting copy of the upstream's precedence rules in the codebase.
+
+**The V1 object form is not removed.** It is V1-scoped upstream, but the
+current V2 schema still accepts legacy-shaped entries, and its status must be
+verified before any removal. Removing a shape the server still accepts would
+break a configuration that works today.
+
+**D15 - the configuration document is redacted, permanently.** The native view
+renders a redacted document by default, and there is NO "reveal" affordance.
+Any origin that can reach the API could use one, and the API is reachable by
+more than the app. The byte-exact document remains on disk and through the
+OpenCode server, where the user already has it, and the permissions table
+remains the editable surface. The diagnostic value - structure, keys, unknown
+fields - survives; the credential exposure does not.
+
+**D1 - a snapshot always preserves the live events observed after its read
+began**, regardless of whether the read was still in flight. The snapshot-
+confirmed deletion is the only removal the merge may perform. This is the
+rule that makes the history commit a reconciliation rather than a replacement.
+
+**D2 / D3 - the retry budget is ATTEMPT-SCOPED, and the attempt is its owner.**
+A superseded attempt must never reset the current attempt's budget: the reset
+becomes attempt-scoped, so the reader's turn does not appear to have succeeded
+when it did not. This is the correction of the assumption `docs/opencode-context.md`
+carried - the generation check did not prevent the reset, it was the path that
+reached it, and the audit reproduced seven connection attempts against a budget
+of three.
+
+The ownership follows: one owner, the attempt. `sync/attempt.ts` holds the
+attempt-local readiness, the load promise, the epoch and the abort signals,
+and the controller owns nothing that belongs to a single attempt.
+
+**D5 - an ambiguous in-flight request is NOT aborted.** Its outcome is
+genuinely unknown, so aborting it would be a claim TBAi cannot make. The cancel
+is recorded as a PENDING cancel against the admitted inbox id, and it is
+honoured exactly once when that id arrives. The inbox id is what makes the
+cancel unique.
+
+**The `x-opencode-directory` header is load-bearing and was undocumented.**
+The caller never chooses the working directory. The proxy resolves the session
+the request names - `session -> conversation -> folder -> absolute directory` -
+strips the caller's `x-opencode-directory`, `x-tbai-session` and
+`location[directory]`, and forwards the server's own directory. A session id
+is a SELECTOR over workspaces the local database already knows about; it can
+never name an arbitrary path. This is the boundary that keeps the proxy
+workspace-scoped, and it was implemented without being written down.
+
+**D18 - the auth environment variables are unchanged.** Upstream V2 reads
+`OPENCODE_PASSWORD` first and honours `OPENCODE_SERVER_PASSWORD` as the legacy
+fallback (`packages/cli/src/env.ts`, whose own comment reads *"The legacy name
+is still honored."*). TBAi already matches that exactly. The earlier
+recommendation to reverse the precedence was a false positive, and the
+published OpenCode prose that names only `OPENCODE_SERVER_PASSWORD` is the
+**V1-era** documentation surface - which is the same reason it is not used as
+V2 evidence anywhere else. `docs/security.md` now states the upstream
+behaviour against the upstream source.
