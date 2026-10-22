@@ -6742,10 +6742,19 @@ point below, and all three are inside the new range:
   deletes the pending row, and `session.message.content.updated` still has a
   projector but no publisher.
 
-**The one observable difference.** `GET /api/permission/request` now DECLARES
-a 404, so the client throws a tagged error for a location that does not exist
-instead of an undeclared status. That is the same class of failure the
-classification in `clientErrors.ts` already handles by tag.
+**The one difference TBAi can observe.** 39 routes gained a DECLARED 404 in
+the 2.1 client, and exactly ONE of them is a route TBAi calls:
+`GET /api/permission/request`. A declared status makes the client throw a
+TAGGED error; an undeclared one makes it throw
+`ClientError("UnexpectedStatus")`. The server's own behaviour for that route
+did not change - only the client's declaration of it - and every other route
+TBAi calls is unchanged. The classification in `clientErrors.ts` already
+handles the tagged case.
+
+**The range's lower half is unchanged, so a 2.0.x server is still supported -
+and that direction was checked too.** The 2.1.2 client was run against a real
+2.0.22 server (the npm tarball, integrity-verified against the hash CI pins):
+the Code view's session boundary and every other real-server suite pass.
 
 **The change.** `maximumVersionExclusive` moves from `2.1.0` to `2.2.0` in
 `src/config/opencode.ts`; `@opencode/client` moves from 2.0.32 to 2.1.2 in

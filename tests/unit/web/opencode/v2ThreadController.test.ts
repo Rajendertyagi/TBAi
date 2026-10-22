@@ -682,6 +682,33 @@ describe("native V2 controller replies and disposal", () => {
     }
   });
 
+  it("an unparseable permission-list failure is a NETWORK failure, not a refusal", async () => {
+    // The client cannot parse the body, so it throws
+    // `ClientError("UnsupportedContentType")` and the status is gone entirely.
+    // Nothing says the server refused, so the runtime must not report a
+    // refusal: the request may still have been served.
+    const generation = createGeneration(1, {
+      permissionList: async () => {
+        throw Object.assign(new Error("UnsupportedContentType: text/plain"), {
+          reason: "UnsupportedContentType",
+          name: "ClientError",
+        });
+      },
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+    await controller.awaitReady();
+
+    try {
+      await waitForState(controller, (state) => state.permissions.length === 0);
+      // The runtime survived: the auxiliary read failed, and the permissions
+      // list is simply empty rather than the runtime being wedged.
+      expect(controller.getState().load.type).toBe("ready");
+      expect(controller.getState().auxiliary.permissions).toBe("unavailable");
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("retires a permission once and suppresses a duplicate reply", async () => {
     const generation = createGeneration(1, {
       permissionList: async () => [PERMISSION],

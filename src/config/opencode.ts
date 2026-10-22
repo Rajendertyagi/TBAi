@@ -38,9 +38,16 @@ export const OPENCODE_CONFIG = {
    * - **The auth contract is unchanged.** The server still reads
    *   `OPENCODE_PASSWORD` first and falls back to `OPENCODE_SERVER_PASSWORD`.
    *
-   * The one difference TBAi can observe: `GET /api/permission/request` now
-   * DECLARES a 404, so the client throws a tagged error for a location that
-   * does not exist instead of an undeclared status.
+   * The difference TBAi can observe: 39 routes gained a DECLARED 404, and
+   * exactly ONE of them is a route TBAi calls - `GET /api/permission/request`.
+   * A declared status makes the client throw a TAGGED error for it; an
+   * undeclared one makes it throw `ClientError("UnexpectedStatus")`. Every
+   * other route TBAi calls is unchanged, and the server's own behaviour for
+   * the one that changed did not - only the client's declaration of it.
+   *
+   * The range's lower half is unchanged too, so a 2.0.x server is still
+   * supported. That direction was checked as well: the 2.1.2 client against a
+   * real 2.0.22 server passes the same real-server suites.
    */
   minimumVersion: "2.0.15",
   maximumVersionExclusive: "2.2.0",
