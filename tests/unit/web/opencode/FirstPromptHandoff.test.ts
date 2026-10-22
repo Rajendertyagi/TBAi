@@ -10,6 +10,7 @@ import {
   peekPendingFirstMessage,
   setPendingFirstMessage,
 } from "@web/features/chat/state/pendingFirstMessage.ts";
+import { V2_PROMPT_MESSAGE_ID_KEY } from "@web/features/opencode/sync/optimistic.ts";
 
 /**
  * Settled-boundary first-prompt handoff.
@@ -218,42 +219,67 @@ describe("fireFirstPromptHandoff — a failed dispatch is not retried automatica
     // The claim carries the message id, so the resumed dispatch is the same
     // prompt server-side - the server admits a repeated id as the existing
     // prompt - and the reader's message is not lost.
+    //
+    // A CRASH, not a failed dispatch. The two are different contracts:
+    //
+    // - a **failed dispatch** marks the entry failed, and a failed entry is
+    //   never dispatched again automatically (M19) - the reader decides;
+    // - a **crash** leaves the entry CLAIMED in storage with its id, and the
+    //   next mount finds it and resumes it.
+    //
+    // So the first dispatch is ABANDONED here - the promise never settles,
+    // because the process that would settle it is gone. That is what a crash
+    // is, and it is the only state a resume can happen from.
     setPendingFirstMessage("conv-crash", "precious prompt");
     const sentIds: string[] = [];
-    let rejectGate!: (err: unknown) => void;
-    const gate = new Promise<void>((_resolve, reject) => {
-      rejectGate = reject;
-    });
-    const first = fireFirstPromptHandoff({
+    // Never settles: the tab is gone.
+    const abandoned = new Promise<void>(() => undefined);
+    void fireFirstPromptHandoff({
       conversationId: "conv-crash",
       sessionId: "ses_1",
       boundSessionId: "ses_1",
       append: () => Promise.resolve(),
       sendWithId: (message) => {
-        sentIds.push(String(message.metadata?.custom?.v2PromptMessageId ?? ""));
-        return gate;
+        sentIds.push(String(message.metadata?.custom?.[V2_PROMPT_MESSAGE_ID_KEY] ?? ""));
+        return abandoned;
       },
     });
     // The dispatch is in flight: the entry is claimed, with an id.
     const claimed = peekPendingFirstMessage("conv-crash");
     expect(claimed?.claimed).toBe(true);
     expect(claimed?.messageId).toBeTruthy();
-    rejectGate(new Error("the tab was closed"));
-    await first;
+    // And it is NOT marked failed - a crash is not a failure.
+    expect(claimed?.failed).toBeFalsy();
 
     // A fresh mount (the same storage) resumes it, with the SAME id.
-    setPendingFirstMessage("conv-crash", "precious prompt");
+    //
+    // NOTHING is re-staged here, and that is the point of the case: a crash
+    // leaves the entry in storage, CLAIMED, with the id the first dispatch
+    // carried. The fresh mount finds that entry and resumes it.
+    //
+    // The old setup called `setPendingFirstMessage` again, which OVERWRITES
+    // the entry with a fresh one - and a fresh one has a fresh id. So the
+    // resume could never carry the same id, and the case could not have
+    // detected it if it had not.
     const resumed = await fireFirstPromptHandoff({
       conversationId: "conv-crash",
       sessionId: "ses_1",
       boundSessionId: "ses_1",
       append: () => Promise.resolve(),
       sendWithId: (message) => {
-        sentIds.push(String(message.metadata?.custom?.v2PromptMessageId ?? ""));
+        sentIds.push(String(message.metadata?.custom?.[V2_PROMPT_MESSAGE_ID_KEY] ?? ""));
         return Promise.resolve();
       },
     });
     expect(resumed).toBe("sent");
+    // The ids are REAL. Without this the equality below would compare two
+    // empty strings - which is what happened when the test read a metadata
+    // key the code never writes: `?? ""` turned "no id" into "", and
+    // `expect("").toBe("")` passed for the wrong reason.
+    expect(sentIds[0]).not.toBe("");
+    expect(sentIds[1]).not.toBe("");
+    // And the resumed dispatch carries the SAME id, so the server admits it
+    // as the SAME prompt rather than a second one.
     expect(sentIds[0]).toBe(sentIds[1]);
   });
 });

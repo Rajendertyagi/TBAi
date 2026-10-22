@@ -53,13 +53,6 @@ export const OPENCODE_V2_MAX_RECONNECT_DELAY_MS = 10_000;
 export const OPENCODE_V2_FOREGROUND_RECONNECT_CAP_MS = 5_000;
 export const OPENCODE_V2_MAX_RECONNECT_ATTEMPTS = 10;
 /**
- * The 4xx statuses that are NOT permanent: a retry can legitimately succeed.
- *
- * Used by the prompt path to decide whether a failure may be reported as a
- * definitive rejection instead of a transient one.
- */
-export const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409, 425, 429];
-/**
  * Idle re-sync cadence for the auxiliary snapshot (inbox, permissions, forms).
  *
  * Backstop for one failure mode the event stream cannot report: `ordinal` is a

@@ -159,5 +159,12 @@ export function isAlreadySettled(error: unknown): boolean {
  * may be tried again. A 409 in particular is what the server answers with for
  * `ConflictError` and `SessionBusyError` - both of which are "not now", not
  * refusals.
+ *
+ * THIS IS THE ONE PLACE THE LIST LIVES. It used to be duplicated - once here
+ * and once as `OPENCODE_V2_RETRYABLE_HTTP_STATUSES` in `config.ts` - and the
+ * config copy had no importer at all, so the two could have drifted without
+ * anything noticing.
  */
-const RETRYABLE_STATUSES = new Set([408, 409, 425, 429]);
+export const OPENCODE_V2_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 409, 425, 429];
+
+const RETRYABLE_STATUSES = new Set(OPENCODE_V2_RETRYABLE_HTTP_STATUSES);

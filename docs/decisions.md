@@ -7054,3 +7054,83 @@ published OpenCode prose that names only `OPENCODE_SERVER_PASSWORD` is the
 **V1-era** documentation surface - which is the same reason it is not used as
 V2 evidence anywhere else. `docs/security.md` now states the upstream
 behaviour against the upstream source.
+
+## 2026-10-22 - Phase 8: what the independent review found, and what it changed
+
+An independent review of the delivered remediation read every invariant in the
+plan's section 5.10 matrix, located the guard that claims to cover it, and
+reintroduced the defect it names to see whether the guard would fail. Fifteen
+of the twenty-four were broken on purpose and failed as claimed; the rest were
+verified by reading the production code.
+
+Five findings came back. All five are fixed, and each fix carries a guard that
+was proved able to fail.
+
+**The Auto-approve one-shot guard was evictable (the one blocker).** Phase 6
+converted `autoApproveAttempted` from an unbounded `Set` to a `RetentionSet` -
+a SETTLED, evictable collection - while its own doc said it was *"PROTECTED
+while the request is still pending"*, and nothing ever called `protect()`. So
+the sweep could evict the guard, and a **redelivered** `permission.asked` for
+the same id sent a **second** auto-approval.
+
+The lesson is worth stating, because the collection's two classes were not the
+classes the code had:
+
+- `answeredPermissions` answers "has this been answered?", a question the
+  **server** can also answer - so evicting it is harmless.
+- `autoApproveAttempted` answers "has the Auto shield already tried this id?",
+  and **nothing server-side can answer it**: the shield is a client-side
+  policy. So evicting it is not harmless, even though the reply it guards has
+  already been sent.
+
+So the guard is now protected while it matters, and the protection is released
+when the request leaves the pending set. The entry is KEPT rather than
+deleted, because it is what a redelivery is checked against.
+
+**The M13 handoff case was vacuous, and for two reasons at once.** It read the
+prompt id from `metadata.custom.v2PromptMessageId` while the code writes
+`opencodeV2MessageId`, so `?? ""` turned "no id" into `""` and
+`expect("").toBe("")` passed for the wrong reason. And it re-staged the
+prompt, which OVERWRITES the entry with a fresh one - so the resume could
+never carry the same id even with the right key.
+
+The case now reads the real key, asserts the ids are not empty, and models a
+**CRASH** rather than a failed dispatch. A failed dispatch is marked failed and
+is never retried automatically (M19), so it is a different contract with a
+different answer; a crash leaves the entry claimed in storage with its id, and
+the next mount resumes it.
+
+**The M7 mechanism was misattributed.** The plan said the inbox id "is what
+makes the cancel unique". The inbox id makes the cancel **addressable**; what
+makes it happen exactly once is the **state machine** - after the first
+admission the execution state is `admitted`, so a second admission of the same
+inbox id never reaches the cancel path. The `cancelledInboxIds` set is a
+belt-and-braces guard inside `cancelAdmittedPrompt`, and the review confirmed
+it is not load-bearing: removing it left every case passing, including the
+one named as its proof. The behaviour is correct; the stated mechanism was
+wrong, and the plan now says so.
+
+**L1's scope had been silently narrowed.** The Phase 6 item named `admissions`
+among the collections to bound. Phase 6 converted the other three and left
+`admissions` an unbounded `Map`, so the registry grew by one record per prompt
+for the life of the session - and the reduction was not disclosed. It is now
+bounded: a settled record is evictable, and a record with a **waiter** on it
+is protected, because evicting it would drop a waiter that would then never
+be woken.
+
+**The `retry()` wiring claim was not supported by the code.** The plan claimed
+the status control "calls the controller's `retry()`, which had had no product
+caller". It did not: the chip tried `onReconnect` first, and the only
+production call site always supplies it, so the branch that called `retry()`
+never ran. The order is now reversed - the controller's own `retry()` is the
+PRIMARY manual recovery, because it is the lighter one (it reuses the client
+that is already there), and the `onReconnect` prop is the heavier fallback
+that rebuilds the whole client, for the case where there is no controller to
+ask.
+
+**THE LESSON, stated once.** Every one of these findings has the same shape:
+**a mechanism the plan named as the guarantee was not the mechanism that
+provided it.** The fix in each case was not to strengthen the mechanism but to
+find out which mechanism was actually load-bearing, and to say so. A plan that
+names the wrong mechanism is worse than a plan that names none, because the
+next change will rely on it.

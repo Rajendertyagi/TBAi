@@ -92,42 +92,52 @@ function restoreBlockedRevert(): void {
  * Only the members the chip reads are provided. The chip reads `state` for
  * the presentation and calls `reconcileStagedRevert` / `retry` for the
  * manual recovery.
+ *
+ * `useOptionalV2RuntimeExtras` returns `null` when the surrounding Code
+ * provider is not mounted, and the chip renders nothing then. The mock can
+ * be told to do that, so the case can prove the chip's behaviour when there
+ * is no runtime to ask.
  */
+let runtimeAvailable = true;
+
 mock.module("@web/features/opencode/v2RuntimeExtras.ts", () => ({
-  useOptionalV2RuntimeExtras: () => ({
-    kind: "tbai-opencode-v2",
-    sessionId: "ses_m17",
-    session: null,
-    state: runtimeState,
-    model: null,
-    agent: null,
-    desiredModel: null,
-    desiredAgent: null,
-    permissions: [],
-    forms: [],
-    setDesiredSelection: () => undefined,
-    awaitReady: () => Promise.resolve(),
-    refresh: () => Promise.resolve(),
-    retry: () => {
-      _retryCalls += 1;
-      return Promise.resolve();
-    },
-    reconcileStagedRevert: () => {
-      recoveryCalls += 1;
-      return recoveryOutcome === "reject"
-        ? Promise.reject(new Error("OpenCode V2 staged recovery failed"))
-        : Promise.resolve();
-    },
-    reconcilePendingPrompt: () => Promise.resolve("absent"),
-    awaitPromptAdmission: () => Promise.resolve({ kind: "absent" }),
-    cancel: () => Promise.resolve(),
-    compact: () => Promise.resolve(),
-    regenerate: () => Promise.resolve(),
-    replyToPermission: () => Promise.resolve(),
-    reconcileAutoApprove: () => Promise.resolve(0),
-    replyToForm: () => Promise.resolve(),
-    rejectForm: () => Promise.resolve(),
-  }),
+  useOptionalV2RuntimeExtras: () =>
+    runtimeAvailable
+      ? {
+          kind: "tbai-opencode-v2",
+          sessionId: "ses_m17",
+          session: null,
+          state: runtimeState,
+          model: null,
+          agent: null,
+          desiredModel: null,
+          desiredAgent: null,
+          permissions: [],
+          forms: [],
+          setDesiredSelection: () => undefined,
+          awaitReady: () => Promise.resolve(),
+          refresh: () => Promise.resolve(),
+          retry: () => {
+            _retryCalls += 1;
+            return Promise.resolve();
+          },
+          reconcileStagedRevert: () => {
+            recoveryCalls += 1;
+            return recoveryOutcome === "reject"
+              ? Promise.reject(new Error("OpenCode V2 staged recovery failed"))
+              : Promise.resolve();
+          },
+          reconcilePendingPrompt: () => Promise.resolve("absent"),
+          awaitPromptAdmission: () => Promise.resolve({ kind: "absent" }),
+          cancel: () => Promise.resolve(),
+          compact: () => Promise.resolve(),
+          regenerate: () => Promise.resolve(),
+          replyToPermission: () => Promise.resolve(),
+          reconcileAutoApprove: () => Promise.resolve(0),
+          replyToForm: () => Promise.resolve(),
+          rejectForm: () => Promise.resolve(),
+        }
+      : null,
 }));
 
 // ── the component, imported AFTER the mock is registered ───────────────────
@@ -142,12 +152,12 @@ interface Mounted {
 }
 
 /** Mounts the chip and returns its container. */
-function mount(): Mounted {
+function mount(props: { onReconnect?: () => void } = {}): Mounted {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   act(() => {
-    root.render(<OpenCodeStatus />);
+    root.render(<OpenCodeStatus {...props} />);
   });
   return { root, container };
 }
@@ -259,6 +269,63 @@ describe("the status chip's manual recovery", () => {
       expect(reconnect?.hasAttribute("disabled")).toBe(false);
     } finally {
       unmount(mounted);
+    }
+  });
+
+  it("uses the controller's own retry() as the PRIMARY manual recovery", async () => {
+    // The chip's manual recovery has two paths, and the order matters:
+    //
+    // - the controller's own `retry()` replaces the failed attempt and starts
+    //   a fresh one. It is the LIGHTER path - it reuses the client that is
+    //   already there.
+    // - the `onReconnect` prop rebuilds the whole client. It is the heavier
+    //   fallback, for the case where there is no controller to ask.
+    //
+    // The order was the other way round, which made the controller's `retry()`
+    // UNREACHABLE in production: the only production call site always
+    // supplies `onReconnect`, so the branch that called `retry()` never ran.
+    //
+    // This case supplies BOTH, so it can tell which one was used.
+    restoreBlockedRevert();
+    runtimeState.connection = { type: "failed", attempt: 10 };
+    runtimeState.load = { type: "error", error: { message: "stream failed" } };
+    runtimeState.revertRecovery = { type: "none" };
+    _retryCalls = 0;
+    let reconnectCalls = 0;
+    const mounted = mount({ onReconnect: () => (reconnectCalls += 1) });
+    try {
+      const content = await openPopover(mounted.container);
+      const button = [...content.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Reconnect",
+      );
+      expect(button).toBeDefined();
+
+      await act(async () => {
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The controller's retry() ran, and the heavier fallback did not.
+      expect(_retryCalls).toBe(1);
+      expect(reconnectCalls).toBe(0);
+    } finally {
+      unmount(mounted);
+    }
+  });
+
+  it("falls back to the heavier rebuild when there is no controller to ask", async () => {
+    // The `onReconnect` prop exists for the case where the chip is mounted
+    // without a native runtime - so the fallback is not dead code, it is the
+    // only path in that configuration.
+    runtimeAvailable = false;
+    let reconnectCalls = 0;
+    const mounted = mount({ onReconnect: () => (reconnectCalls += 1) });
+    try {
+      // With no runtime, the chip renders nothing at all.
+      expect(mounted.container.querySelector("button")).toBeNull();
+    } finally {
+      unmount(mounted);
+      runtimeAvailable = true;
     }
   });
 

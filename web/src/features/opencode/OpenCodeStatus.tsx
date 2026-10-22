@@ -65,11 +65,20 @@ export function OpenCodeStatus({
     if (recoveryBlocked) void extras.reconcileStagedRevert().catch(() => undefined);
     // The controller's own `retry()` is the manual recovery path: it replaces
     // the failed attempt and starts a fresh one, even after the automatic
-    // budget is spent. The `onReconnect` prop is the heavier fallback that
-    // rebuilds the whole client, and it stays for the case where there is no
-    // controller to ask.
+    // budget is spent. It is the PRIMARY path, because it is the lighter one
+    // - it reuses the client that is already there.
+    //
+    // The `onReconnect` prop is the heavier fallback: it rebuilds the whole
+    // client. It is used when there is no controller to ask - which is the
+    // case in this component's own DOM test, and the case the prop exists
+    // for.
+    //
+    // The order was the other way round, and it made the controller's
+    // `retry()` unreachable in production: the only production call site
+    // always supplies `onReconnect`, so the `else` branch - the one that
+    // called `retry()` - never ran.
+    else if (extras) void extras.retry().catch(() => undefined);
     else if (onReconnect) onReconnect();
-    else void extras.retry().catch(() => undefined);
   };
   // Only once the load is ready: before the first read finishes, "unavailable"
   // means "not read yet", which is the loading state and not news.

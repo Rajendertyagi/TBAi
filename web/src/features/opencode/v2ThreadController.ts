@@ -341,11 +341,22 @@ export function createV2ThreadController(
   /**
    * The permission request ids the Auto shield has already answered.
    *
-   * A one-shot guard: the doc says "one attempt per request id", so it is
-   * PROTECTED while the request is still pending and released when the request
-   * leaves the pending set. That preserves the guard's meaning - a redelivered
-   * `permission.asked` cannot send a second reply - without the collection
-   * growing for the life of the session.
+   * A one-shot guard: "one attempt per request id".
+   *
+   * It is SETTLED in the "a decision already happened" sense - the reply has
+   * been sent - but it is **PROTECTED** while the request is still pending,
+   * and the protection is released when the request leaves the pending set.
+   *
+   * The protection is not optional, and it is not the same as
+   * `answeredPermissions`'s case. `answeredPermissions` answers "has this been
+   * answered?", a question the SERVER can also answer, so evicting it is
+   * harmless. This one answers "has the Auto shield already tried this id?",
+   * and nothing server-side can answer it - the shield is a client-side
+   * policy. So an evicted entry would let a REDELIVERED `permission.asked`
+   * send a SECOND auto-approval for the same id.
+   *
+   * That preserves the guard's meaning without the collection growing for the
+   * life of the session.
    */
   const autoApproveAttempted = new RetentionSet<string>();
   /**
@@ -726,10 +737,22 @@ export function createV2ThreadController(
       return;
     }
     if (!eligible) return;
-    // Claimed before the send and never released: one attempt per request id
-    // stops a redelivered event from sending a second reply, and a failed send
-    // leaves the request pending for the user or the drain rather than looping.
+    // Claimed before the send, and PROTECTED while it matters.
+    //
+    // The protection is what makes "one attempt per request id" true. This
+    // collection is SETTLED in the "a decision already happened" sense - the
+    // reply has been sent - but it is NOT evictable, because the question it
+    // answers ("has the Auto shield already tried this id?") is one the
+    // SERVER cannot be asked: the shield is a client-side policy, and nothing
+    // server-side says this client already tried this id.
+    //
+    // So an entry that is evicted would let a REDELIVERED `permission.asked`
+    // pass the check and send a SECOND auto-approval for the same id. The
+    // guard is released when the request leaves the pending set (the
+    // `permission.replied` handler), which is when the server has answered it
+    // and a redelivery can no longer be answered twice.
     autoApproveAttempted.add(event.data.id, Date.now());
+    autoApproveAttempted.protect(event.data.id);
     void replyToPermission(event.data.id, AUTO_RESPONSE).catch((error: unknown) => {
       if (disposed) return;
       logger.warn("opencode", "runtime.auto_approve_reply_failed", {
@@ -776,11 +799,15 @@ export function createV2ThreadController(
         pendingPermissionReplies.delete(event.data.requestID);
         answeredPermissions.add(event.data.requestID, Date.now());
         // The request is settled, so the Auto shield's one-shot guard has done
-        // its job. Releasing it here is what lets the collection be swept
-        // instead of growing for the life of the session - and the guard
-        // cannot fire again, because the request is no longer pending.
+        // its job. Releasing its PROTECTION here is what lets the collection be
+        // swept instead of growing for the life of the session - and the guard
+        // cannot fire again, because the request is no longer pending and the
+        // server has answered it.
+        //
+        // The ENTRY is kept, not deleted: it is what a redelivered
+        // `permission.asked` is checked against, and deleting it would let a
+        // redelivery answer a request the server has already settled.
         autoApproveAttempted.release(event.data.requestID);
-        autoApproveAttempted.delete(event.data.requestID);
         return;
       case "form.replied":
       case "form.cancelled":
