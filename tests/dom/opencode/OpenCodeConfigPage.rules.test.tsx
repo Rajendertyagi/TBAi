@@ -120,6 +120,63 @@ describe("the permission table", () => {
     }
   });
 
+  it("keeps WILDCARD-OVERLAPPING rules independently editable", async () => {
+    // The companion to the duplicate case, and the plan's T15 companion.
+    //
+    // Wildcard-overlapping rules are a NORMAL, intended part of the upstream
+    // precedence model: `shell *` and `shell git *` are two different rules
+    // that both apply to different resources. The page must show the shadowed
+    // one (the reader can see that a broad rule is not in force) AND still
+    // let the reader edit it - a rule that is displayed but not editable is
+    // a rule the reader cannot fix.
+    permissions = [
+      { action: "shell", resource: "*", effect: "ask" },
+      { action: "shell", resource: "git *", effect: "deny" },
+    ];
+    try {
+      const { root, container } = await mount();
+      try {
+        // Both rules are shown, and the broad one is marked as partly
+        // overridden.
+        const names = selects(container).map((element) => element.getAttribute("aria-label") ?? "");
+        expect(names.some((name) => name.includes("shell * effect"))).toBe(true);
+        expect(names.some((name) => name.includes("shell git * effect"))).toBe(true);
+        expect(container.textContent ?? "").toContain("Partly overridden");
+
+        // And the SHADOWED rule - the broad one - is still editable. It has
+        // its own effect selector, and editing it stages a change on that row
+        // alone.
+        const target = selects(container).find((element) =>
+          (element.getAttribute("aria-label") ?? "").includes("shell * effect (rule 1)"),
+        );
+        expect(target).toBeDefined();
+        await act(async () => {
+          target?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        const allow = [...document.querySelectorAll('[role="option"]')].find((option) =>
+          option.textContent?.trim().startsWith("Allow"),
+        );
+        expect(allow).toBeDefined();
+        await act(async () => {
+          allow?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        // Exactly ONE row is staged as changed: the broad one the reader
+        // clicked, and not the narrower one that shadows it.
+        const dirty = [...container.querySelectorAll("span")].filter(
+          (span) => span.textContent === "Unsaved change",
+        );
+        expect(dirty).toHaveLength(1);
+      } finally {
+        act(() => root.unmount());
+      }
+    } finally {
+      permissions = SNAPSHOT.permissions;
+    }
+  });
+
   it("marks the rule a later rule shadows, and leaves the others unmarked", async () => {
     const { root, container } = await mount();
     try {
