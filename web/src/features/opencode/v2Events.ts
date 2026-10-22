@@ -30,6 +30,8 @@ const PUBLIC_EVENT_TYPES = new Set([
   "session.moved",
   "session.renamed",
   "session.metadata.updated",
+  "session.archived",
+  "session.unarchived",
   "session.permissions",
   "session.viewed",
   "session.usage.updated",
@@ -532,12 +534,42 @@ function applyAssistantEvent(
   };
 }
 
+/**
+ * Applies the server's archive fact to the hydrated session.
+ *
+ * `SessionInfo.time.archived` is where the server reports the archive (a
+ * timestamp, cleared on unarchive), and it is also what a hydration snapshot
+ * carries. Updating THAT field keeps the live view and a reload in agreement;
+ * a separate `archived` flag on the thread state could disagree with the
+ * server's own session after the next `session.get`.
+ *
+ * A no-op before the session is known: an event that arrives first has nothing
+ * to attach to, and the snapshot that follows already includes the archive.
+ */
+function withSessionArchivedAt(state: V2ThreadState, archivedAt: number | null): V2ThreadState {
+  const session = state.session;
+  if (session === null) return state;
+  if (session.time.archived === (archivedAt ?? undefined)) return state;
+  const { archived: _previous, ...time } = session.time;
+  return {
+    ...state,
+    session: {
+      ...session,
+      time: archivedAt === null ? time : { ...time, archived: archivedAt },
+    },
+  };
+}
+
 function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
   switch (event.type) {
     case "session.model.selected":
       return applyModelEvent(state, event);
     case "session.agent.selected":
       return applyAgentEvent(state, event);
+    case "session.archived":
+      return withSessionArchivedAt(state, event.created);
+    case "session.unarchived":
+      return withSessionArchivedAt(state, null);
     case "session.usage.updated":
       // Spend only. This event reports the SESSION's cumulative ledger, so it is
       // the wrong thing to measure occupancy from AND the wrong thing to clear a

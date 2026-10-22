@@ -6728,7 +6728,8 @@ point below, and all three are inside the new range:
   TBAi calls. All 18 client methods TBAi calls exist on the same routes with
   the same success statuses.
 - **No event type was removed.** The 2.1 line added `session.archived` and
-  `session.unarchived`.
+  `session.unarchived`; both are now reflected in the runtime (see the
+  "OpenCode session archive" entry below).
 - **The imported types are compatible.** The ids became branded aliases
   (`PermissionID`, `SessionID`, `SessionMessageID`, `FormID`, `EventID`), and
   every one of them is `= string`, so there is no runtime change and no
@@ -7134,3 +7135,42 @@ provided it.** The fix in each case was not to strengthen the mechanism but to
 find out which mechanism was actually load-bearing, and to say so. A plan that
 names the wrong mechanism is worse than a plan that names none, because the
 next change will rely on it.
+
+## 2026-10-22 - OpenCode session archive is reflected, not enforced
+
+**Why.** The 2.1 line added `session.archived` and `session.unarchived` to the
+client's event union, and TBAi's `PUBLIC_EVENT_TYPES` did not list either. Both
+were therefore counted as events the runtime ignored, and the archive state the
+server reported was simply dropped. The session archive is not TBAi's archive:
+TBAi's conversation `status` (SQLite) is a separate, TBAi-owned fact, and a Code
+conversation can be archived in TBAi while its OpenCode session is active.
+
+**What the server's archive means.** Archiving sets `time_archived` on the
+session row and filters the session out of OpenCode's own session list; the
+transcript and the session remain intact, and upstream exposes archive
+filtering on `session.list` and an `archived` update on `session.update`. That
+is a listing fact, not a deletion and not a permission change.
+
+**The change.** `session.archived` and `session.unarchived` join
+`PUBLIC_EVENT_TYPES`, and the reducer updates `SessionInfo.time.archived` on
+the hydrated session: the archive event stamps `event.created`, the unarchive
+event removes the field. This is deliberately the SAME field a hydration
+snapshot carries, so a reload and a live event cannot disagree, and an archive
+that arrives before the first `session.get` is not lost - the snapshot that
+follows is the server's own answer. The status chip reports "Archived in
+OpenCode" from that field.
+
+**What it deliberately does not do.** It does not block sending, cancel
+execution, or touch the TBAi conversation's `status`. Upstream archive only
+hides the session from OpenCode's own list; treating it as a read-only state
+here would invent a policy the server does not enforce. It also does not
+archive the server session when a TBAi conversation is archived: that would
+make TBAi's sidebar action change a remote lifecycle through a shared adapter
+that is not the OpenCode feature's owner.
+
+**Evidence.** `tests/unit/web/opencode/v2Events.test.ts` ("V2 session
+archive") pins the stamp, the clear, the pre-hydration no-op with the snapshot
+that follows, and the other-session exclusion; both guards were observed
+failing before the change. `tests/dom/opencode/OpenCodeStatus.recovery.test.tsx`
+mounts the real chip and asserts the notice appears for an archived session and
+not for an active one; removing the render line made the first case fail.

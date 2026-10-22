@@ -58,11 +58,17 @@ const runtimeState: {
   load: { type: string; error?: { message: string } };
   execution: { type: string };
   revertRecovery: { type: string; error?: { message: string } };
+  session: {
+    id: string;
+    location: { directory: string };
+    time: { created: number; updated: number; archived?: number };
+  } | null;
 } = {
   connection: { type: "failed", attempt: 3 },
   load: { type: "error", error: { message: "the server went away" } },
   execution: { type: "idle" },
   revertRecovery: { type: "blocked", error: { message: "a staged revert remains" } },
+  session: null,
 };
 
 /**
@@ -268,6 +274,50 @@ describe("the status chip's manual recovery", () => {
       expect(reconnect).toBeDefined();
       expect(reconnect?.hasAttribute("disabled")).toBe(false);
     } finally {
+      unmount(mounted);
+    }
+  });
+
+  it("reports a session archived in OpenCode", async () => {
+    // The archive arrives as `session.archived` and is carried on the session
+    // as `time.archived`. This case proves the chip SAYS so, so a reader who
+    // archived the session from OpenCode's own client is not left wondering
+    // why it disappeared there and not here.
+    runtimeState.connection = { type: "failed", attempt: 10 };
+    runtimeState.load = { type: "error", error: { message: "stream failed" } };
+    runtimeState.revertRecovery = { type: "none" };
+    runtimeState.session = {
+      id: "ses_archived",
+      location: { directory: "D:\\workspace\\archived" },
+      time: { created: 1, updated: 2, archived: 3_000 },
+    };
+    const mounted = mount();
+    try {
+      const content = await openPopover(mounted.container);
+
+      expect(content.textContent ?? "").toContain("Archived in OpenCode");
+    } finally {
+      runtimeState.session = null;
+      unmount(mounted);
+    }
+  });
+
+  it("says nothing about archiving for a session the server did not archive", async () => {
+    runtimeState.connection = { type: "failed", attempt: 10 };
+    runtimeState.load = { type: "error", error: { message: "stream failed" } };
+    runtimeState.revertRecovery = { type: "none" };
+    runtimeState.session = {
+      id: "ses_active",
+      location: { directory: "D:\\workspace\\active" },
+      time: { created: 1, updated: 2 },
+    };
+    const mounted = mount();
+    try {
+      const content = await openPopover(mounted.container);
+
+      expect(content.textContent ?? "").not.toContain("Archived in OpenCode");
+    } finally {
+      runtimeState.session = null;
       unmount(mounted);
     }
   });

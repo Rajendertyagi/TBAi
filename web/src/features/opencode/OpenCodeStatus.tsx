@@ -16,6 +16,8 @@ const HEARTS: Record<StatusPresentation, { Icon: typeof HeartHandshake; classNam
   idle: { Icon: HeartHandshake, className: "text-muted-foreground" },
 };
 
+const ARCHIVED_NOTICE = "Archived in OpenCode. Hidden from its own session list.";
+
 /** Heart-chip status for the native Code runtime. */
 export function OpenCodeStatus({
   compact = false,
@@ -87,6 +89,9 @@ export function OpenCodeStatus({
   // means "not read yet", which is the loading state and not news.
   const pendingNotice =
     state.load.type === "ready" && state.auxiliary ? pendingSetNotice(state.auxiliary) : null;
+  // The server reports an archive as a timestamp on the session itself, so this
+  // is the same fact a reload renders - not a local opinion of the event.
+  const archived = state.session?.time.archived !== undefined;
   const heartNode = (
     <Popover>
       <PopoverTrigger asChild>
@@ -117,6 +122,7 @@ export function OpenCodeStatus({
             </dd>
           </div>
         </dl>
+        {archived && <p className="mt-2 text-xs text-muted-foreground">{ARCHIVED_NOTICE}</p>}
         {pendingNotice && <p className="mt-2 text-xs text-muted-foreground">{pendingNotice}</p>}
         {errorDetail && !view.failed && (
           <p role="alert" className="mt-2 text-xs text-destructive">

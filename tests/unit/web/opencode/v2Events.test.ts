@@ -727,6 +727,112 @@ describe("V2 pending-set reconciliation", () => {
   });
 });
 
+/**
+ * Session archive state.
+ *
+ * `session.archived` / `session.unarchived` are the 2.1 line's additions. The
+ * server reports the archive as `SessionInfo.time.archived` (a timestamp), the
+ * same field hydration carries, so the events update that ONE field instead of
+ * a parallel flag that a reload could contradict.
+ */
+describe("V2 session archive", () => {
+  it("records the server's archive timestamp and does not count the event as a diagnostic", () => {
+    const event = durableEvent({
+      id: "evt_session_archived",
+      type: "session.archived",
+      aggregateID: SESSION_ID,
+      seq: 30,
+      data: { sessionID: SESSION_ID },
+    });
+
+    const reduced = reduceV2Event(initialReadyState(), event, "observe-and-apply");
+
+    // `durableEvent` stamps `created = 100 + seq`, so this is the server's own
+    // archive time rather than "roughly now".
+    expect(reduced.session?.time.archived).toBe(130);
+    // The rest of the session is untouched: an archive is a listing fact, not
+    // a replacement of the session.
+    expect(reduced.session?.id).toBe(SESSION_ID);
+    expect(reduced.session?.time.created).toBe(SESSION.time.created);
+    expect(reduced.session?.time.updated).toBe(SESSION.time.updated);
+    // A known event is applied, not counted as one the runtime ignored.
+    expect(reduced.diagnosticCount).toBe(0);
+  });
+
+  it("clears the archive timestamp on unarchived", () => {
+    const archived = reduceV2Event(
+      initialReadyState(),
+      durableEvent({
+        id: "evt_session_archived_first",
+        type: "session.archived",
+        aggregateID: SESSION_ID,
+        seq: 31,
+        data: { sessionID: SESSION_ID },
+      }),
+      "observe-and-apply",
+    );
+
+    const unarchived = reduceV2Event(
+      archived,
+      durableEvent({
+        id: "evt_session_unarchived",
+        type: "session.unarchived",
+        aggregateID: SESSION_ID,
+        seq: 32,
+        data: { sessionID: SESSION_ID },
+      }),
+      "observe-and-apply",
+    );
+
+    expect(unarchived.session?.time.archived).toBeUndefined();
+    expect("archived" in (unarchived.session?.time ?? {})).toBe(false);
+    expect(unarchived.session?.time.updated).toBe(SESSION.time.updated);
+    expect(unarchived.diagnosticCount).toBe(0);
+  });
+
+  it("does nothing before the session is hydrated, and the hydration snapshot then carries the archive", () => {
+    // An archive can arrive before the first `session.get` resolves. There is
+    // no session to attach it to yet, and the snapshot that follows is the
+    // server's own answer, including `time.archived` - so nothing is lost.
+    const reduced = reduceV2Event(
+      createInitialV2ThreadState(SESSION_ID),
+      durableEvent({
+        id: "evt_session_archived_early",
+        type: "session.archived",
+        aggregateID: SESSION_ID,
+        seq: 33,
+        data: { sessionID: SESSION_ID },
+      }),
+      "observe-and-apply",
+    );
+
+    expect(reduced.session).toBeNull();
+
+    const hydrated = reduceV2ThreadState(reduced, {
+      type: "session_hydrated",
+      session: { ...SESSION, time: { ...SESSION.time, archived: 500 } },
+    });
+    expect(hydrated.session?.time.archived).toBe(500);
+  });
+
+  it("ignores an archive for a different session", () => {
+    const reduced = reduceV2Event(
+      initialReadyState(),
+      durableEvent({
+        id: "evt_session_archived_other",
+        type: "session.archived",
+        aggregateID: "ses_other",
+        seq: 34,
+        data: { sessionID: "ses_other" },
+      }),
+      "observe-and-apply",
+    );
+
+    expect(reduced.session?.time.archived).toBeUndefined();
+    expect(reduced.diagnosticCount).toBe(1);
+  });
+});
+
 describe("V2 unknown events", () => {
   it("changes no domain state, records a bounded diagnostic, and creates no identity entry", () => {
     const initial = initialReadyState();
