@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { create } from "zustand";
+import { isPermissionNotFoundError } from "@opencode/client";
 
 /**
  * The canonical wording for "the server no longer holds this permission".
@@ -22,11 +23,23 @@ const PERMISSION_GONE_RE = new RegExp(PERMISSION_GONE_MESSAGE, "i");
 /**
  * True when a failed approval reply means the permission no longer exists.
  *
+ * The TAG is the primary signal, because it is the upstream's own identity for
+ * this failure: the server answers a reply to a permission it has forgotten
+ * with `PermissionNotFoundError` (404), and the official client throws it as a
+ * tagged error.
+ *
+ * The WORDING is the fallback, and it is deliberately kept: this module is
+ * shared with the normal-chat approval path, which does not go through the
+ * OpenCode client, so its failures are not tagged. The match is on the
+ * server's own wording, so it can only ever fire for an OpenCode permission
+ * and never for a normal-chat approval.
+ *
  * Reads a `.message` off any throwable, not just `Error`: missing the signal is
  * what leaves a card wedged, so this errs toward recognising it. `String(x)` on
  * a plain object would only ever yield "[object Object]".
  */
 export function isPermissionGone(error: unknown): boolean {
+  if (isPermissionNotFoundError(error)) return true;
   const message =
     error instanceof Error
       ? error.message

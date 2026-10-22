@@ -1,11 +1,15 @@
 import type { AppendMessage } from "@assistant-ui/react";
-import type {
-  FormInfo,
-  PermissionRequest,
-  SessionFormReplyInput,
-  SessionInboxUser,
-  SessionPromptInput,
-  V2Event,
+import {
+  isFormAlreadySettledError,
+  isFormNotFoundError,
+  isPermissionNotFoundError,
+  isUnauthorizedError,
+  type FormInfo,
+  type PermissionRequest,
+  type SessionFormReplyInput,
+  type SessionInboxUser,
+  type SessionPromptInput,
+  type V2Event,
 } from "@opencode/client";
 import { logger } from "@/lib/logger";
 import {
@@ -14,7 +18,6 @@ import {
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
   OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
   OPENCODE_V2_READY_TIMEOUT_MS,
-  OPENCODE_V2_RETRYABLE_HTTP_STATUSES,
 } from "@/features/opencode/config";
 import {
   AUTO,
@@ -46,6 +49,12 @@ import {
   isAssistantMessageEvent,
   type EventPipelineHost,
 } from "./sync/eventPipeline";
+import {
+  clientErrorReason,
+  errorStatus,
+  isAlreadySettled,
+  isDefinitiveFailure as clientIsDefinitiveFailure,
+} from "./clientErrors";
 import type { OpenCodeV2Client, OpenCodeV2Generation } from "./v2Client";
 import type {
   V2DesiredSelection,
@@ -152,13 +161,32 @@ function safeError(error: unknown, fallback: string): V2SafeError {
     return { kind: "aborted", message: V2_ABORTED_MESSAGE };
   }
   if (error instanceof TypeError) return { kind: "network", message: fallback };
+  // The official client throws TAGGED errors for every status the route
+  // declares, and it does not put the status on the error - the tag is the
+  // only thing that says what happened. Reading `error.status` here read
+  // `undefined` for every error the client throws, which is how a 404 and a
+  // 409 both became "unknown".
+  if (isFormNotFoundError(error) || isPermissionNotFoundError(error))
+    return { kind: "not-found", message: fallback };
+  if (isUnauthorizedError(error)) return { kind: "incompatible-server", message: fallback };
+  if (isFormAlreadySettledError(error)) return { kind: "invalid-response", message: fallback };
   if (error !== null && typeof error === "object") {
     const candidate = error as { readonly status?: unknown; readonly message?: unknown };
-    if (typeof candidate.status === "number") {
+    const status = errorStatus(error);
+    if (status !== null) {
       return {
-        kind: candidate.status >= 500 ? "server" : "unknown",
+        kind: status >= 500 ? "server" : "unknown",
         message: typeof candidate.message === "string" ? candidate.message : fallback,
-        status: candidate.status,
+        status,
+      };
+    }
+    const reason = clientErrorReason(error);
+    if (reason !== null) {
+      // A transport failure: the request may have reached the server, so this
+      // is a NETWORK failure, not a refusal.
+      return {
+        kind: "network",
+        message: typeof candidate.message === "string" ? candidate.message : fallback,
       };
     }
     if (typeof candidate.message === "string")
@@ -168,19 +196,7 @@ function safeError(error: unknown, fallback: string): V2SafeError {
 }
 
 function isDefinitiveFailure(error: unknown): boolean {
-  const status =
-    error !== null &&
-    typeof error === "object" &&
-    "status" in error &&
-    typeof error.status === "number"
-      ? error.status
-      : undefined;
-  return (
-    status !== undefined &&
-    status >= 400 &&
-    status < 500 &&
-    !OPENCODE_V2_RETRYABLE_HTTP_STATUSES.includes(status)
-  );
+  return clientIsDefinitiveFailure(error);
 }
 
 function modelChanged(current: V2ModelSelection | null, desired: V2ModelSelection | null): boolean {
@@ -1430,7 +1446,11 @@ export function createV2ThreadController(
       // the server took the reply, and re-sending it would be a second answer
       // to the same request. The claim stays, and the request stays visible so
       // the reader can act on it.
-      if (safeError(error, "").status === 404) {
+      //
+      // A request the server has GONE is the exception: it is not an answer
+      // the reader can make, so the card is retired. The client throws this as
+      // a TAGGED error, not as a status - see `clientErrors.ts`.
+      if (isAlreadySettled(error) || isPermissionNotFoundError(error)) {
         dispatch({ type: "permission_retired", requestId });
         pendingPermissionReplies.delete(requestId);
         answeredPermissions.add(requestId);
@@ -1511,6 +1531,18 @@ export function createV2ThreadController(
     } catch (error) {
       // Only a definitive failure releases the claim; a network error may mean
       // the server took the answer.
+      //
+      // A form the server has ALREADY SETTLED is not a failure at all: the
+      // answer reached it, and the request is over. The client throws this as
+      // a TAGGED error (`FormAlreadySettledError`), with no status - see
+      // `clientErrors.ts`. Treating it as a failure would show the reader an
+      // error for a form they already answered.
+      if (isAlreadySettled(error)) {
+        pendingFormReplies.delete(formId);
+        formReplies.add(formId);
+        dispatch({ type: "form_retired", formId });
+        return;
+      }
       releaseForm(formId);
       throw error;
     }
@@ -1525,6 +1557,14 @@ export function createV2ThreadController(
       formReplies.add(formId);
       dispatch({ type: "form_retired", formId });
     } catch (error) {
+      // A form the server has already settled is not a failure: the request is
+      // over. The client throws it as a tagged error, with no status.
+      if (isAlreadySettled(error)) {
+        pendingFormReplies.delete(formId);
+        formReplies.add(formId);
+        dispatch({ type: "form_retired", formId });
+        return;
+      }
       releaseForm(formId);
       throw error;
     }

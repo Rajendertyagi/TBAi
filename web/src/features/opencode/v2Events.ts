@@ -556,8 +556,14 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item),
       );
     case "session.inbox.cancelled": {
+      // The server DELETES the inbox row when it cancels a pending entry
+      // (upstream `SessionInbox.cancel` -> `projectDelivered` deletes the
+      // row). The entry is therefore gone, and the pending list must not keep
+      // showing it.
       const record = state.inboxById[event.data.inboxID];
-      return record ? { ...state, inboxById: { ...state.inboxById, [record.id]: record } } : state;
+      if (!record) return state;
+      const { [event.data.inboxID]: _cancelled, ...inboxById } = state.inboxById;
+      return { ...state, inboxById };
     }
     case "session.execution.started":
       return applyExecutionStarted(state);

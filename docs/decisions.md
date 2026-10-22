@@ -6615,3 +6615,97 @@ now calls the controller's `retry()`, which had had no product caller.
 search of `web/src`, `src`, `tests` and `scripts` behind it. The
 `PromptAdmission.onSettle` handle went with the M3 change: the deadline waiter
 replaced it, and a handle nothing calls is a way to have two waiters.
+
+## 2026-10-22 - The audit: the official client discards the HTTP status, so every classification that read it was reading `undefined`
+
+**The finding.** The runtime classified the official client's failures from
+`error.status`. The client never puts a status there. This was MEASURED, not
+inferred: the real installed `@opencode/client@2.0.32` was driven against a
+local server returning the upstream's own declared errors, and the thrown
+object was inspected.
+
+The client's own error construction (`dist/chunks/shared-events-*.js`):
+
+- a **declared** error - a status the route declares - is thrown as a TAGGED
+  error: `Object.assign(new Error(body.message), body)`, with `body._tag`
+  copied onto it and `name` set to the tag. There is **no `status`
+  property**;
+- an **undeclared** status is thrown as `ClientError` with
+  `reason: "UnexpectedStatus"` and the status in `cause.status` - again, not
+  on the error;
+- a transport failure is `ClientError` with `reason: "Transport"`.
+
+**The consequences, all of them user-visible.**
+
+- A permission the server had forgotten was **never retired**. The runtime
+  checked `safeError(error, "").status === 404`, which was `undefined` for
+  every error the client throws, so the card stayed on screen with no way to
+  answer it - the exact wedge the stale-approval guard exists to prevent.
+- A form the server had **already settled** surfaced as an error, so the
+  reader saw a failure for a form they had already answered.
+- A prompt the server **refused** was never recognised as a refusal, so the
+  reader was told the prompt might still be running when the server had
+  rejected it. The prompt path's `isDefinitiveFailure` had the same blind
+  spot, so an ambiguous prompt and a refused prompt were indistinguishable.
+
+The Phase 5 M6 work inherited this and extended it: "release the claim only
+on a definitive failure" was written on top of a check that never fired, so it
+never distinguished the two.
+
+**Decision: classify by the TAG, using the client's own guards.** The package
+exports one guard per declared error, and they are exact
+(`value._tag === "..."`). The upstream's own protocol errors
+(`packages/protocol/src/errors.ts` at the pinned 2.0.22) carry the tag and
+the status:
+
+| error | tag | HTTP | a refusal? |
+|---|---|---|---|
+| `PermissionNotFoundError` | `PermissionNotFoundError` | 404 | yes - the request is gone |
+| `FormNotFoundError` | `FormNotFoundError` | 404 | yes |
+| `FormAlreadySettledError` | `FormAlreadySettledError` | 409 | yes - it was already answered |
+| `SessionNotFoundError` | `SessionNotFoundError` | 404 | yes |
+| `UnauthorizedError` | `UnauthorizedError` | 401 | yes |
+| `InvalidRequestError` | `InvalidRequestError` | 400 | yes |
+| `ConflictError` | `ConflictError` | 409 | **no** - "not now" |
+| `SessionBusyError` | `SessionBusyError` | 409 | **no** - "not now" |
+| `ServiceUnavailableError` | `ServiceUnavailableError` | 503 | no - the server is unwell |
+
+The 409s are deliberately NOT refusals: the server is asking for the request
+again, and a prompt that conflicts or finds the session busy is a prompt that
+may still be worth sending. The first draft of this rule treated
+`ConflictError` as a refusal; the upstream's own status table caught it, and
+the test was corrected rather than the code.
+
+`web/src/features/opencode/clientErrors.ts` is the new owner of the
+classification, and it reads the status from BOTH places the client can put
+it (`error.status` and `error.cause.status`), so a caller never has to know
+which shape it is looking at.
+
+**The wording rule stays, as a fallback.** `isPermissionGone` matches the
+server's message ("Permission request not found", which the pinned server
+does send - `packages/server/src/handlers/permission.ts:14`). It is shared with
+the normal-chat approval path, which does not go through the OpenCode client,
+so its failures are not tagged. The tag is now the PRIMARY signal and the
+wording the fallback; both are tested.
+
+**Two more findings from the same audit.**
+
+- `session.inbox.cancelled` was a no-op reducer: it rewrote the record it was
+  handed. The server DELETES the pending inbox row when it cancels an entry
+  (upstream `SessionInbox.cancel` -> `projectDelivered` -> `delete`), so the
+  entry is gone and the pending list must not keep showing it. This matters
+  now that M7 issues real cancels.
+- The upstream claims Phase 4 and Phase 5 rested on were re-checked at the
+  PINNED version (2.0.22) rather than the 2.0.32 that was read first:
+  `Session.prompt` reconciles by message id before it admits, so a repeated id
+  is the SAME prompt (M13's resume is safe); `inbox.cancel` deletes the
+  pending row (M7's mechanism); and `session.message.content.updated` has a
+  projector but **no publisher** anywhere in the tree - 4,289 `.ts` files
+  swept - so a persisted text part is still either empty or complete (M5's
+  replay rule).
+
+**Verification.** `clientErrorShape.test.ts` drives the real client against a
+local server and pins the shape; `clientErrors.test.ts` pins the
+classification; `v2InboxCancellation.test.ts` pins the cancelled entry's
+removal; and the controller tests cover the retired permission and the settled
+form. Every guard was proved able to fail and reverted.

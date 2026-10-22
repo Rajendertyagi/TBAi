@@ -623,6 +623,65 @@ describe("native V2 prompt admission", () => {
 });
 
 describe("native V2 controller replies and disposal", () => {
+  it("retires a permission the server has already gone", async () => {
+    // The client throws this as a TAGGED error (`PermissionNotFoundError`),
+    // with no status - the server's own 404 is dropped by the client. Before
+    // the fix the runtime read `error.status`, which was `undefined`, so the
+    // card stayed on screen with no way to answer it.
+    const generation = createGeneration(1, {
+      permissionList: async () => [PERMISSION],
+      permissionReply: async () => {
+        throw Object.assign(new Error("permission not found"), {
+          _tag: "PermissionNotFoundError",
+          name: "PermissionNotFoundError",
+        });
+      },
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+    await controller.awaitReady();
+
+    try {
+      await waitForState(controller, (state) => state.permissions.length === 1);
+      // The failure is still reported to the caller - the UI decides what to
+      // do with it - but the request is RETIRED, so the card is gone.
+      await expect(controller.replyToPermission(PERMISSION_ID, "once")).rejects.toThrow();
+
+      expect(controller.getState().permissions).toEqual([]);
+      // A retired request is not an ANSWERED one, so it is not recorded as
+      // answered - the two are different facts, and the reducer keeps them
+      // apart.
+      expect(controller.getState().answeredPermissionIds).toEqual([]);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("treats a form the server has already settled as answered, not as a failure", async () => {
+    // The server answers a second answer to a settled form with
+    // `FormAlreadySettledError`. The reader already answered it, so an error
+    // would be a lie.
+    const generation = createGeneration(1, {
+      formList: async () => [FORM_REPLY],
+      formReply: async () => {
+        throw Object.assign(new Error("form already settled"), {
+          _tag: "FormAlreadySettledError",
+          name: "FormAlreadySettledError",
+        });
+      },
+    });
+    const controller = createV2ThreadController(createClient([generation]));
+    await controller.awaitReady();
+
+    try {
+      await waitForState(controller, (state) => state.forms.length === 1);
+      await controller.replyToForm(FORM_REPLY.id, { name: "value" });
+
+      expect(controller.getState().forms).toEqual([]);
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("retires a permission once and suppresses a duplicate reply", async () => {
     const generation = createGeneration(1, {
       permissionList: async () => [PERMISSION],

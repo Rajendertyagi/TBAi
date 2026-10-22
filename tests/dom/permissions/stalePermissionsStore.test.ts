@@ -26,6 +26,19 @@ describe("isPermissionGone", () => {
     expect(isPermissionGone(undefined)).toBe(false);
     expect(isPermissionGone(new Error("session not found"))).toBe(false);
   });
+
+  it("recognises the server's TAG, whatever the wording says", () => {
+    // The upstream's own identity for this failure is the tag, not the
+    // message: the server answers a reply to a permission it has forgotten
+    // with `PermissionNotFoundError`, and the official client throws it as a
+    // tagged error. The wording is the fallback for the normal-chat path,
+    // which does not go through the OpenCode client at all.
+    const tagged = Object.assign(new Error("something else entirely"), {
+      _tag: "PermissionNotFoundError",
+      name: "PermissionNotFoundError",
+    });
+    expect(isPermissionGone(tagged)).toBe(true);
+  });
 });
 
 describe("stalePermissionsStore", () => {
