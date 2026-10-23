@@ -192,6 +192,26 @@ export type V2ConnectionState =
   | { readonly type: "failed"; readonly attempt: number }
   | { readonly type: "closed" };
 
+/**
+ * The single LIVE retry representation. The historical retry message part is
+ * unchanged and is never read as live state: a durable record proves an attempt
+ * happened, not that a scheduled wait is still counting down.
+ */
+export interface V2RetryInfo {
+  readonly attempt: number;
+  /** Absolute epoch-ms deadline, or null when the server gave no trustworthy value. */
+  readonly next: number | null;
+  readonly error: V2SafeError;
+}
+
+/**
+ * Process-local activity of the session, as the backend reads it.
+ *
+ * `not-running` is not an all-clear: a durable execution claim, a queued inbox
+ * row, or an orphaned server can coexist with it. `unknown` is never idle.
+ */
+export type V2ActivityState = "running" | "not-running" | "unknown";
+
 export type V2ExecutionState =
   | { readonly type: "idle" }
   | {
@@ -285,6 +305,22 @@ export interface V2ThreadState {
   readonly directory: string | null;
   readonly connection: V2ConnectionState;
   readonly load: V2LoadState;
+  /**
+   * The live retry the engine is currently waiting on, or null.
+   *
+   * Only live events/status establish this. It is not rebuilt from history or
+   * from a replayed durable record, so a reconnect does not fabricate a
+   * countdown that no process is counting.
+   */
+  readonly retry: V2RetryInfo | null;
+  /** Confirmed process-local activity, or `unknown` when it was not established. */
+  readonly activity: V2ActivityState;
+  /**
+   * Ordering marker for activity reads. Incremented by every authoritative
+   * activity/retry/connection/load event; an activity response captured at an
+   * older revision is discarded rather than applied over newer evidence.
+   */
+  readonly activityRevision: number;
   readonly execution: V2ExecutionState;
   readonly compaction: V2CompactionState;
   readonly revertRecovery: V2RevertRecoveryState;
@@ -348,11 +384,29 @@ export type V2ThreadAction =
       readonly type: "v2_event";
       readonly event: V2Event;
       readonly mode: "observe-only" | "observe-and-apply";
+      /**
+       * True when the event is being replayed from the hydration buffer.
+       * A replayed durable `session.retry.scheduled` updates only the
+       * transcript part: it never establishes a live retry, activity, or a
+       * revision bump. Only live observation may do that.
+       */
+      readonly replayed?: boolean;
     }
   | { readonly type: "connection_changed"; readonly connection: V2ConnectionState }
-  | { readonly type: "load_started" }
+  /**
+   * `connection` is a fresh connection attempt (retry is invalidated and
+   * activity becomes unknown); `refresh` is ordinary history repair and
+   * preserves both.
+   */
+  | { readonly type: "load_started"; readonly reason: "connection" | "refresh" }
   | { readonly type: "load_completed" }
   | { readonly type: "load_failed"; readonly error: V2SafeError }
+  | {
+      readonly type: "activity_resolved";
+      readonly activity: V2ActivityState;
+      /** The activity revision captured when the read started. */
+      readonly revision: number;
+    }
   | { readonly type: "session_hydrated"; readonly session: SessionInfo }
   | {
       readonly type: "desired_selection_changed";

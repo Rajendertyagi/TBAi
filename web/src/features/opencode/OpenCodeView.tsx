@@ -25,6 +25,8 @@ import { OpenCodeIsolationBoundary } from "./OpenCodeIsolationBoundary";
 import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
 import { OpenCodeQuestions } from "./OpenCodeQuestions";
+import { OpenCodeRecoveryNotice } from "./OpenCodeRecoveryNotice";
+import { OpenCodeRetryBanner } from "./OpenCodeRetryBanner";
 import { OpenCodeSessionRow } from "./OpenCodeSessionRow";
 
 /**
@@ -43,6 +45,10 @@ export function OpenCodeView() {
   // without it a finished reply only appears after a history reload. Kept
   // beside the id so the two are always set together and never used apart.
   const [eventDirectory, setEventDirectory] = useState<string | null>(null);
+  // True only when the backend verified and adopted an existing live session.
+  // Set with the id/directory from the same bootstrap result, because it
+  // describes that exact session.
+  const [reusedExistingSession, setReusedExistingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Init attempt counter: bumping it re-runs the session fetch (a single,
   // idempotent "start one server / resume one session" call — never a poll).
@@ -126,6 +132,7 @@ export function OpenCodeView() {
         // `sessionId` exists — always builds its event subscription from a
         // client that already carries the scope.
         setEventDirectory(data.directory);
+        setReusedExistingSession(data.reusedExistingSession);
         setSessionId(data.sessionId);
       })
       .catch((e: unknown) => {
@@ -182,6 +189,7 @@ export function OpenCodeView() {
       defaultModel={defaultModelWithVariant}
       defaultAgent={defaultAgent}
       conversationId={agentId}
+      reusedExistingSession={reusedExistingSession}
     />
   );
 }
@@ -192,6 +200,7 @@ function AgentRuntime({
   defaultModel,
   defaultAgent,
   conversationId,
+  reusedExistingSession,
 }: {
   sessionId: string;
   eventDirectory: string | null;
@@ -199,6 +208,8 @@ function AgentRuntime({
   defaultAgent?: string;
   /** The TBAi conversation this session belongs to — the Auto shield's owner. */
   conversationId?: string;
+  /** Verified session reuse, from the same bootstrap result that produced `sessionId`. */
+  reusedExistingSession: boolean;
 }) {
   // The conversation's persisted OpenCode config, read through the existing
   // path. `opencodeAutoApprove` on it is the Auto shield's single source of
@@ -306,7 +317,17 @@ function AgentRuntime({
             <div className="min-h-0 flex-1">
               <ChatWindow
                 mode="agent"
-                aboveComposerExtra={<OpenCodeQuestions />}
+                aboveComposerExtra={
+                  <>
+                    <OpenCodeQuestions />
+                    <OpenCodeRecoveryNotice
+                      key={sessionId}
+                      reusedExistingSession={reusedExistingSession}
+                      sessionId={sessionId}
+                    />
+                    <OpenCodeRetryBanner />
+                  </>
+                }
                 belowComposerExtra={<OpenCodeStatus compact onReconnect={reconnect} />}
               />
             </div>

@@ -112,7 +112,7 @@ function durableEvent<T extends V2Event["type"]>({
 
 function initialReadyState() {
   let state = createInitialV2ThreadState(SESSION_ID);
-  state = reduceV2ThreadState(state, { type: "load_started" });
+  state = reduceV2ThreadState(state, { type: "load_started", reason: "refresh" });
   state = reduceV2ThreadState(state, {
     type: "history_loaded",
     messages: [],
@@ -480,7 +480,7 @@ describe("V2 replay-only event exclusion", () => {
 describe("V2 load state transitions", () => {
   it("moves loading to ready, and the execution stays idle", () => {
     const initial = createInitialV2ThreadState(SESSION_ID);
-    const loading = reduceV2ThreadState(initial, { type: "load_started" });
+    const loading = reduceV2ThreadState(initial, { type: "load_started", reason: "refresh" });
     const ready = reduceV2ThreadState(loading, { type: "load_completed" });
 
     expect(loading.load).toEqual({ type: "loading" });
@@ -491,6 +491,7 @@ describe("V2 load state transitions", () => {
   it("moves a failed authoritative refresh to a sanitized load error", () => {
     const loading = reduceV2ThreadState(createInitialV2ThreadState(SESSION_ID), {
       type: "load_started",
+      reason: "refresh",
     });
     const failed = reduceV2ThreadState(loading, { type: "load_failed", error: LOAD_ERROR });
 

@@ -38,7 +38,7 @@ export type LoadState =
   | { readonly type: "error"; readonly error: { readonly message: string } };
 
 /** How the chip presents itself. */
-export type StatusPresentation = "error" | "off" | "working" | "idle";
+export type StatusPresentation = "error" | "off" | "working" | "retrying" | "idle";
 
 /** What the chip shows, derived from the runtime's own state. */
 export interface StatusView {
@@ -78,11 +78,15 @@ export interface StatusView {
  *    once the connection state says the runtime is neither reconnecting nor
  *    connected.
  * 3. A runtime that is not connected is "off".
- * 4. A load or a run in flight is "working".
- * 5. Otherwise the runtime is connected and idle.
+ * 4. An engine retry is "retrying". It comes AFTER terminal failure, recovery
+ *    and load errors, and after disconnection — those are more urgent — and
+ *    BEFORE a load or run in flight, so an ordinary refresh (`load: loading`)
+ *    cannot hide a live retry.
+ * 5. A load or a run in flight is "working".
+ * 6. Otherwise the runtime is connected and idle.
  *
  * @param args - The runtime's connection and load state, whether the run is in
- * flight, and the reconnect budget.
+ * flight, the live engine retry, and the reconnect budget.
  * @returns What the chip shows.
  */
 export function statusView(args: {
@@ -91,9 +95,10 @@ export function statusView(args: {
   readonly running: boolean;
   readonly cancelled: boolean;
   readonly recoveryBlocked: boolean;
+  readonly retry: { readonly attempt: number } | null;
   readonly maxAttempts: number;
 }): StatusView {
-  const { connection, load, running, cancelled, recoveryBlocked, maxAttempts } = args;
+  const { connection, load, running, cancelled, recoveryBlocked, retry, maxAttempts } = args;
   if (connection.type === "reconnecting") {
     return {
       presentation: "working",
@@ -134,6 +139,17 @@ export function statusView(args: {
     return {
       presentation: "off",
       label: "Disconnected",
+      attempt: null,
+      canReconnect: false,
+      failed: false,
+    };
+  }
+  if (retry) {
+    return {
+      presentation: "retrying",
+      label: `Retrying (attempt ${retry.attempt})`,
+      // The reconnect attempt stays its own field: this is the engine's retry,
+      // not a transport reconnect, and the two must never be read as one.
       attempt: null,
       canReconnect: false,
       failed: false,

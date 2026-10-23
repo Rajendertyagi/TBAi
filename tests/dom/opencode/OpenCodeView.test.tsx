@@ -46,5 +46,35 @@ describe("OpenCodeView loading surface", () => {
 
   it("keeps the session creation/resume bootstrap path", () => {
     expect(source).toContain("bootstrapOpenCodeSession(agentId)");
+    // The reuse flag is taken from the SAME bootstrap result as the session id,
+    // because it describes that exact session.
+    expect(source).toContain("setReusedExistingSession(data.reusedExistingSession)");
+  });
+
+  it("renders the retry banner and restoration notice in aboveComposerExtra only", () => {
+    const start = source.indexOf("aboveComposerExtra={");
+    const end = source.indexOf("belowComposerExtra", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const block = source.slice(start, end);
+
+    // Both new surfaces are composed in the existing slot - no new page, route,
+    // dialog, or ChatWindow slot.
+    expect(block).toContain("<OpenCodeRecoveryNotice");
+    expect(block).toContain("<OpenCodeRetryBanner />");
+    // The banner is closest to the composer, so it comes last.
+    expect(block.indexOf("<OpenCodeRecoveryNotice")).toBeLessThan(
+      block.indexOf("<OpenCodeRetryBanner"),
+    );
+    // The notice is keyed by session and told whether this was a verified reuse.
+    expect(block).toContain("key={sessionId}");
+    expect(block).toContain("reusedExistingSession={reusedExistingSession}");
+
+    // Rendered exactly once, in that slot.
+    expect(source.match(/<OpenCodeRetryBanner/g)?.length).toBe(1);
+    expect(source.match(/<OpenCodeRecoveryNotice/g)?.length).toBe(1);
+    // No assistant-ui retry/status primitive was added for this: neither surface
+    // is an assistant-ui element.
+    expect(block).not.toContain("ErrorPrimitive");
   });
 });

@@ -38,6 +38,23 @@ export class EngineMismatchError extends Error {
 }
 
 /**
+ * Caller error: the requested conversation does not own the requested OpenCode
+ * session. Carries a stable code so the route maps it to 404 instead of the
+ * generic 500. The message names no transcript data — it only states that the
+ * pair is not a binding TBAi knows about.
+ */
+export class OpenCodeSessionMismatchError extends Error {
+  readonly code = "SESSION_MISMATCH";
+  constructor(
+    readonly conversationId: string,
+    readonly sessionId: string,
+  ) {
+    super(`Conversation ${conversationId} is not bound to session ${sessionId}`);
+    this.name = "OpenCodeSessionMismatchError";
+  }
+}
+
+/**
  * A conversation's OpenCode session binding: the server-side session identity
  * plus the directory scope that identity is addressed by.
  *
@@ -58,6 +75,13 @@ export type OpenCodeSessionBinding = {
    * directory-keyed routes, and must not guess a path.
    */
   directory: string | null;
+  /**
+   * True only when an existing live session was verified and adopted. False
+   * when a session was created or a stale pointer was replaced. This is a
+   * **reuse** fact, not a restart fact: it says nothing about whether the
+   * application was reloaded, crashed, or merely navigated back to.
+   */
+  reusedExistingSession: boolean;
 };
 
 /** Reads a non-empty string, or `undefined` for anything else. */
@@ -207,7 +231,8 @@ export async function isOpenCodeSessionLive(
  * been migrated out from under an existing session.
  *
  * @param conversationId - TBAi conversation whose workspace roots the session.
- * @returns The session id and its directory scope (`null` when unreadable).
+ * @returns The session id, its directory scope (`null` when unreadable), and
+ *   whether an existing live session was adopted rather than created.
  * @throws {EngineMismatchError} When the conversation is not an OpenCode row.
  * @throws {OpenCodeError} When the server is unreachable or refuses the create.
  */
@@ -263,7 +288,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
         live.id,
         live.model,
       );
-      return { sessionId: live.id, directory: live.directory };
+      return { sessionId: live.id, directory: live.directory, reusedExistingSession: true };
     }
     // Stale pointer (e.g. server restarted since the session was stored):
     // fall through and recreate rather than handing out a dead id.
@@ -343,7 +368,65 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
 
   await conversationService.update(conversationId, { opencodeSessionId: sessionId });
   logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
-  return { sessionId, directory: createdDirectory };
+  return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+}
+
+/**
+ * Process-local activity of one OpenCode session.
+ *
+ * - `running` — this OpenCode process currently holds an active drain for the
+ *   session. It does **not** prove the engine is retrying; only retry events
+ *   and status set the retry banner.
+ * - `not-running` — the session is absent from this process's active map. It
+ *   does **not** mean "no work exists": a durable execution claim, a queued
+ *   inbox row, or an orphaned server can coexist with it.
+ * - `unknown` — the read could not establish a result. Never treated as idle.
+ */
+export type OpenCodeSessionActivity = "running" | "not-running" | "unknown";
+
+/**
+ * Reads whether the managed OpenCode process currently owns an active drain for
+ * one session of one conversation. Purely a read: it never creates a session,
+ * never resumes one, and never returns the upstream active map.
+ *
+ * The conversation/session pair is verified **before** any OpenCode request, so
+ * a caller cannot use this endpoint to probe a session it does not own. The
+ * pairing guard throws; a failed activity read itself degrades to `unknown`.
+ *
+ * Note on server start: this path calls `ensureBaseUrl()` like every other
+ * session read, so it may start the managed server. That side effect is
+ * accepted and deliberate — the read has nothing to answer otherwise — and it
+ * still never creates an OpenCode *session* (the P7 decision).
+ *
+ * @param conversationId - TBAi conversation that must own the session.
+ * @param sessionId - The OpenCode session id to check.
+ * @returns The process-local activity, or `unknown` when it could not be read.
+ * @throws {OpenCodeSessionMismatchError} When the pair is not a known binding.
+ */
+export async function getOpenCodeSessionActivity(
+  conversationId: string,
+  sessionId: string,
+): Promise<OpenCodeSessionActivity> {
+  const conversation = await conversationService.get(conversationId);
+  if (conversation?.engine !== "opencode" || conversation?.opencodeSessionId !== sessionId) {
+    throw new OpenCodeSessionMismatchError(conversationId, sessionId);
+  }
+  try {
+    const resolved = await resolveConversationWorkspace(conversationId);
+    const baseUrl = await openCodeServerManager.ensureBaseUrl();
+    const client = createOpenCodeClient(baseUrl, { directory: resolved.dir });
+    const active = await client.session.active();
+    // Only the requested entry is read. The map itself never leaves this
+    // function — not in the return value and not in a log line.
+    return active[sessionId]?.type === "running" ? "running" : "not-running";
+  } catch (error) {
+    logger.warn("opencode", "opencode.session_activity_failed", {
+      conversationId,
+      sessionId,
+      ...classifyError(error),
+    });
+    return "unknown";
+  }
 }
 
 /**

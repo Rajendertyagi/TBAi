@@ -58,6 +58,7 @@ import {
 } from "./clientErrors";
 import type { OpenCodeV2Client, OpenCodeV2Generation } from "./v2Client";
 import type {
+  V2ActivityState,
   V2DesiredSelection,
   V2ExecutionState,
   V2HistoryMerge,
@@ -278,10 +279,26 @@ const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
   readyTimeoutMs: OPENCODE_V2_READY_TIMEOUT_MS,
 };
 
+export type V2ThreadControllerDeps = {
+  /** The TBAi conversation this session belongs to (the activity pair's other half). */
+  readonly conversationId: string;
+  /**
+   * Reads the backend-filtered activity for this session. Must resolve
+   * `unknown` rather than throw: the check is non-blocking and must never
+   * become a load failure.
+   */
+  readonly fetchActivity: (input: {
+    readonly conversationId: string;
+    readonly sessionId: string;
+    readonly signal: AbortSignal;
+  }) => Promise<V2ActivityState>;
+};
+
 /** Creates the single native OpenCode V2 session controller. */
 export function createV2ThreadController(
   client: OpenCodeV2Client,
   config?: Partial<V2ThreadControllerConfig>,
+  deps?: V2ThreadControllerDeps,
 ): V2ThreadController {
   const cfg: V2ThreadControllerConfig = { ...DEFAULT_V2_CONTROLLER_CONFIG, ...config };
   let state = createInitialV2ThreadState(client.sessionId, client.directory);
@@ -1016,7 +1033,7 @@ export function createV2ThreadController(
       type: "connection_changed",
       connection: { type: "connected", serverVersion: serverInfo.version },
     });
-    dispatch({ type: "load_started" });
+    dispatch({ type: "load_started", reason: "connection" });
     const session = await currentGeneration.operations.sessionGet({ sessionID: client.sessionId });
     if (!isLive(live)) return;
     dispatch({ type: "session_hydrated", session });
@@ -1061,6 +1078,10 @@ export function createV2ThreadController(
         type: "v2_event",
         event: entry.event,
         mode: "observe-and-apply",
+        // A buffered event was observed LIVE but applied late. Everything else
+        // is legitimately applied late; only the durable retry record must not
+        // become a live countdown, so that one branch reads this flag.
+        replayed: true,
       });
     }
     // The loss the backstop carried, if any. The buffer is about to be
@@ -1091,6 +1112,9 @@ export function createV2ThreadController(
     if (!isLive(live)) return;
     applyAuxiliary(auxiliary);
     dispatch({ type: "load_completed" });
+    // Deliberately not awaited: hydration is complete and must not wait for a
+    // read that only refines a status chip and a notice.
+    void checkActivity(live);
   }
 
   /**
@@ -1125,6 +1149,41 @@ export function createV2ThreadController(
       });
     } finally {
       resyncInFlight = false;
+    }
+  }
+
+  /**
+   * Settles the session's process-local activity after hydration.
+   *
+   * Started AFTER `load_completed` and the hydration buffer drain, so a retry
+   * event buffered during hydration has already been applied and cannot be
+   * overwritten by an older activity response. The revision is captured
+   * synchronously here, before the first await: any authoritative event that
+   * arrives while the request is in flight bumps it, and the reducer then
+   * discards this response as stale.
+   *
+   * Never awaited and never throws: a slow or failed read only leaves activity
+   * `unknown`, and it cannot delay or fail the conversation load.
+   *
+   * @param live - The attempt whose hydration just completed.
+   */
+  async function checkActivity(live: Attempt): Promise<void> {
+    if (!deps) return;
+    const revision = state.activityRevision;
+    try {
+      const activity = await deps.fetchActivity({
+        conversationId: deps.conversationId,
+        sessionId: client.sessionId,
+        signal: live.signals.connectionSignal,
+      });
+      if (!isLive(live)) return;
+      dispatch({ type: "activity_resolved", activity, revision });
+    } catch (error) {
+      if (!isLive(live)) return;
+      logger.warn("opencode", "runtime.activity_check_failed", {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      dispatch({ type: "activity_resolved", activity: "unknown", revision });
     }
   }
 
@@ -1265,7 +1324,7 @@ export function createV2ThreadController(
   async function refresh(): Promise<void> {
     await awaitReady();
     requireGeneration();
-    dispatch({ type: "load_started" });
+    dispatch({ type: "load_started", reason: "refresh" });
     try {
       const session = await requireGeneration().operations.sessionGet({
         sessionID: client.sessionId,

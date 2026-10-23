@@ -6,6 +6,7 @@ import {
 import { resolveCodeOccupancy } from "./codeOccupancy";
 import {
   modelRefToV2Selection,
+  type V2ActivityState,
   type V2AuxiliaryAvailability,
   type V2EventIdentityState,
   type V2ExecutionState,
@@ -68,6 +69,7 @@ const PUBLIC_EVENT_TYPES = new Set([
   "session.tool.success",
   "session.tool.failed",
   "session.retry.scheduled",
+  "session.status",
   "session.compaction.started",
   "session.compaction.delta",
   "session.compaction.ended",
@@ -80,7 +82,6 @@ const PUBLIC_EVENT_TYPES = new Set([
   "form.created",
   "form.replied",
   "form.cancelled",
-  "session.status.updated",
   "session.idle",
 ]);
 
@@ -408,22 +409,28 @@ function applyAgentEvent(
 }
 
 function applyExecutionStarted(state: V2ThreadState): V2ThreadState {
-  if (state.execution.type === "reverting" || isTerminalExecution(state.execution)) return state;
-  const ids = currentUserAndInbox(state);
+  // Started work is authoritative evidence that any wait is over, whatever the
+  // execution branch does next. Composing it BEFORE the early return is what
+  // keeps a stale retry from outliving the run that superseded it.
+  const observed = withActivity(withRetryCleared(state), "running");
+  if (observed.execution.type === "reverting" || isTerminalExecution(observed.execution)) {
+    return observed;
+  }
+  const ids = currentUserAndInbox(observed);
   return {
-    ...state,
+    ...observed,
     execution: {
       type: "executing",
       userMessageId: ids.userMessageId,
       inboxId: ids.inboxId,
       assistantMessageId: null,
       cancelRequested:
-        state.execution.type === "cancelling"
+        observed.execution.type === "cancelling"
           ? true
-          : state.execution.type === "submitting" ||
-              state.execution.type === "admitted" ||
-              state.execution.type === "reconciling"
-            ? state.execution.cancelRequested
+          : observed.execution.type === "submitting" ||
+              observed.execution.type === "admitted" ||
+              observed.execution.type === "reconciling"
+            ? observed.execution.cancelRequested
             : false,
     },
   };
@@ -560,7 +567,47 @@ function withSessionArchivedAt(state: V2ThreadState, archivedAt: number | null):
   };
 }
 
-function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
+/**
+ * Applies an authoritative activity result and bumps the ordering marker.
+ *
+ * Every row in the plan's lifecycle table that establishes or invalidates
+ * activity goes through this helper. The revision is what lets a late activity
+ * response be recognised as stale rather than applied over newer evidence.
+ */
+function withActivity(state: V2ThreadState, activity: V2ActivityState): V2ThreadState {
+  return { ...state, activity, activityRevision: state.activityRevision + 1 };
+}
+
+/** Clears the live retry without touching activity or its revision. */
+function withRetryCleared(state: V2ThreadState): V2ThreadState {
+  return state.retry === null ? state : { ...state, retry: null };
+}
+
+/** Accepts only a finite, positive absolute epoch-ms deadline. */
+function trustedDeadline(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Applies a live retry wait.
+ *
+ * The attempt guard is ordering, not display: an older attempt can never
+ * replace a newer one, so a delayed event cannot rewind the banner. A rejected
+ * update changes nothing at all — retry, activity, and revision included —
+ * because it establishes no new evidence.
+ */
+function withRetryScheduled(
+  state: V2ThreadState,
+  attempt: number,
+  next: number | null,
+  error: V2SafeError,
+): V2ThreadState {
+  if (!Number.isInteger(attempt) || attempt <= 0) return state;
+  if (state.retry !== null && attempt < state.retry.attempt) return state;
+  return withActivity({ ...state, retry: { attempt, next, error } }, "unknown");
+}
+
+function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false): V2ThreadState {
   switch (event.type) {
     case "session.model.selected":
       return applyModelEvent(state, event);
@@ -600,14 +647,26 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "session.execution.started":
       return applyExecutionStarted(state);
     case "session.execution.succeeded":
-    case "session.execution.interrupted":
-    case "session.idle":
+    case "session.idle": {
+      const observed = withActivity(withRetryCleared(state), "not-running");
       return isTerminalExecution(state.execution)
-        ? state
-        : { ...state, execution: { type: "idle" } };
-    case "session.execution.failed":
+        ? observed
+        : { ...observed, execution: { type: "idle" } };
+    }
+    case "session.execution.interrupted": {
+      // Every reason clears the wait, including `shutdown`: an interruption
+      // does not prove a retry remains scheduled, and it establishes neither
+      // that the session is idle nor that it is still alive. `unknown` is the
+      // only honest activity here; later evidence can settle it either way.
+      const observed = withActivity(withRetryCleared(state), "unknown");
+      return isTerminalExecution(state.execution)
+        ? observed
+        : { ...observed, execution: { type: "idle" } };
+    }
+    case "session.execution.failed": {
+      const observed = withActivity(withRetryCleared(state), "not-running");
       return {
-        ...state,
+        ...observed,
         execution: {
           type: "error",
           userMessageId: currentUserAndInbox(state).userMessageId,
@@ -616,13 +675,41 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
           error: mapEventError(event.data.error),
         },
       };
-    case "session.retry.scheduled":
-      return applyAssistantEvent(state, event.data.assistantMessageID, {
+    }
+    case "session.status": {
+      const status = event.data.status;
+      if (status.type === "retry") {
+        return withRetryScheduled(
+          state,
+          status.attempt,
+          trustedDeadline(status.next),
+          mapEventError({ message: status.message }),
+        );
+      }
+      return withActivity(
+        withRetryCleared(state),
+        status.type === "busy" ? "running" : "not-running",
+      );
+    }
+    case "session.retry.scheduled": {
+      // The historical part is written either way: it is transcript content,
+      // not live state. Only a LIVE observation may establish the wait; a
+      // replayed durable record proves an attempt happened, not that a wait is
+      // still counting down.
+      const transcript = applyAssistantEvent(state, event.data.assistantMessageID, {
         kind: "retry",
         id: `retry:${event.data.assistantMessageID}`,
         order: state.messages[event.data.assistantMessageID]?.parts.length ?? 0,
         value: event.data.attempt > 0 ? `retry ${event.data.attempt}` : "retry",
       });
+      if (replayed) return transcript;
+      return withRetryScheduled(
+        transcript,
+        event.data.attempt,
+        trustedDeadline(event.data.at),
+        mapEventError(event.data.error),
+      );
+    }
     case "session.revert.staged":
       return {
         ...state,
@@ -656,13 +743,17 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         answeredPermissionIds: appendId(state.answeredPermissionIds, event.data.requestID),
       };
     case "session.text.started":
-      return applyAssistantEvent(state, event.data.assistantMessageID, {
-        kind: "text",
-        id: `text:${event.data.assistantMessageID}:${event.data.ordinal}`,
-        order: event.data.ordinal,
-        value: "",
-        status: "streaming",
-      });
+      return applyAssistantEvent(
+        withActivity(withRetryCleared(state), "running"),
+        event.data.assistantMessageID,
+        {
+          kind: "text",
+          id: `text:${event.data.assistantMessageID}:${event.data.ordinal}`,
+          order: event.data.ordinal,
+          value: "",
+          status: "streaming",
+        },
+      );
     case "session.text.delta": {
       const message = getMessage(state, event.data.assistantMessageID);
       const partId = `text:${event.data.assistantMessageID}:${event.data.ordinal}`;
@@ -836,12 +927,16 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
       );
     }
     case "session.step.started":
-      return applyAssistantEvent(state, event.data.assistantMessageID, {
-        kind: "step",
-        id: `step:${event.data.assistantMessageID}:${event.id}`,
-        order: state.messages[event.data.assistantMessageID]?.parts.length ?? 0,
-        status: "started",
-      });
+      return applyAssistantEvent(
+        withActivity(withRetryCleared(state), "running"),
+        event.data.assistantMessageID,
+        {
+          kind: "step",
+          id: `step:${event.data.assistantMessageID}:${event.id}`,
+          order: state.messages[event.data.assistantMessageID]?.parts.length ?? 0,
+          status: "started",
+        },
+      );
     default:
       return state;
   }
@@ -850,11 +945,29 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
 function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadState {
   switch (action.type) {
     case "v2_event":
-      return reduceV2Event(state, action.event, action.mode);
-    case "connection_changed":
-      return { ...state, connection: action.connection };
-    case "load_started":
-      return { ...state, load: { type: "loading" } };
+      return reduceV2Event(state, action.event, action.mode, action.replayed ?? false);
+    case "connection_changed": {
+      const next = { ...state, connection: action.connection };
+      // `connected` alone proves nothing about the wait: the paired connection
+      // attempt is what invalidates it. Every other target invalidates the
+      // countdown and leaves activity unknown.
+      if (action.connection.type === "connected") return next;
+      return withActivity(withRetryCleared(next), "unknown");
+    }
+    case "load_started": {
+      const next = { ...state, load: { type: "loading" } as const };
+      // A connection attempt owns the invalidation. An ordinary history refresh
+      // is repair, not evidence that the wait ended or the connection changed.
+      return action.reason === "connection"
+        ? withActivity(withRetryCleared(next), "unknown")
+        : next;
+    }
+    case "activity_resolved":
+      // Accept only the snapshot taken at the current revision. A newer
+      // authoritative event has already established newer state.
+      return action.revision === state.activityRevision
+        ? { ...state, activity: action.activity }
+        : state;
     case "load_completed":
       return { ...state, load: { type: "ready" } };
     case "load_failed":
@@ -1166,6 +1279,7 @@ export function reduceV2Event(
   state: V2ThreadState,
   event: V2Event,
   mode: "observe-only" | "observe-and-apply" = "observe-and-apply",
+  replayed = false,
 ): V2ThreadState {
   if (REPLAY_ONLY_EVENT_TYPES.has(event.type) || !PUBLIC_EVENT_TYPES.has(event.type)) {
     return incrementDiagnostic(state);
@@ -1190,7 +1304,7 @@ export function reduceV2Event(
     },
   };
   if (mode === "observe-only") return next;
-  next = applyKnownEvent(next, event);
+  next = applyKnownEvent(next, event, replayed);
   const durableSequenceByAggregate = durable
     ? { ...next.eventIdentity.durableSequenceByAggregate, [durable.aggregateID]: durable.seq }
     : next.eventIdentity.durableSequenceByAggregate;
@@ -1225,6 +1339,9 @@ export function createInitialV2ThreadState(
     directory,
     connection: { type: "waiting-for-server" },
     load: { type: "idle" },
+    retry: null,
+    activity: "unknown",
+    activityRevision: 0,
     execution: { type: "idle" },
     compaction: { type: "idle" },
     revertRecovery: { type: "none" },

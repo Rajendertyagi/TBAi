@@ -25,6 +25,7 @@ function view(
     running?: boolean;
     cancelled?: boolean;
     recoveryBlocked?: boolean;
+    retry?: { attempt: number } | null;
   } = {},
 ) {
   return statusView({
@@ -33,6 +34,7 @@ function view(
     running: overrides.running ?? false,
     cancelled: overrides.cancelled ?? false,
     recoveryBlocked: overrides.recoveryBlocked ?? false,
+    retry: overrides.retry ?? null,
     maxAttempts: BUDGET,
   });
 }
@@ -106,5 +108,61 @@ describe("the OpenCode status chip's presentation", () => {
     expect(shown.presentation).toBe("error");
     expect(shown.label).toBe("Error");
     expect(shown.failed).toBe(false);
+  });
+});
+
+describe("the status chip's live engine retry", () => {
+  it("shows a scheduled engine retry as retrying, with the engine's attempt number", () => {
+    const shown = view({ retry: { attempt: 2 } });
+
+    expect(shown.presentation).toBe("retrying");
+    expect(shown.label).toBe("Retrying (attempt 2)");
+    // The engine's attempt counter is not the transport's; the chip must not
+    // present it as progress toward the reconnect budget.
+    expect(shown.attempt).toBeNull();
+  });
+
+  it("wins over the working predicate, including a client execution flag", () => {
+    // The retry branch sits before the whole "loading/reconciling/working"
+    // predicate, so neither an ordinary refresh nor a stale client-side run
+    // flag can hide a wait the server has confirmed.
+    const loading = view({ retry: { attempt: 1 }, load: { type: "loading" } });
+    expect(loading.presentation).toBe("retrying");
+
+    const running = view({ retry: { attempt: 2 }, running: true });
+    expect(running.presentation).toBe("retrying");
+    expect(running.label).toBe("Retrying (attempt 2)");
+  });
+
+  it("loses to a reconnect: a countdown during a transport retry would contradict the wire", () => {
+    const shown = view({
+      retry: { attempt: 2 },
+      connection: { type: "reconnecting", attempt: 4 },
+    });
+
+    expect(shown.presentation).toBe("working");
+    expect(shown.label).toBe("Reconnecting (attempt 4 of 10)");
+    expect(shown.attempt).toBe(4);
+  });
+
+  it("loses to a terminal failure, which is what the reader must see", () => {
+    const shown = view({
+      retry: { attempt: 2 },
+      connection: { type: "failed", attempt: 10 },
+    });
+
+    expect(shown.presentation).toBe("error");
+    expect(shown.label).toBe("Error");
+    expect(shown.canReconnect).toBe(true);
+  });
+
+  it("loses to a failed load: an error is reported, not a wait", () => {
+    const shown = view({
+      retry: { attempt: 2 },
+      load: { type: "error", error: { message: "history read failed" } },
+    });
+
+    expect(shown.presentation).toBe("error");
+    expect(shown.label).toBe("Error");
   });
 });

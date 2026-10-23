@@ -272,6 +272,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     expect(await ensureOpenCodeSession("conv-1")).toEqual({
       sessionId: LIVE_ID,
       directory: "D:\\ws\\chats\\conv-1",
+      reusedExistingSession: true,
     });
   });
 
@@ -282,6 +283,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     expect(await ensureOpenCodeSession("conv-1")).toEqual({
       sessionId: LIVE_ID,
       directory: null,
+      reusedExistingSession: true,
     });
   });
 
@@ -319,6 +321,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     expect(await ensureOpenCodeSession("conv-1")).toEqual({
       sessionId: CREATED_SESSION_ID,
       directory: "D:\\ws\\server-recorded",
+      reusedExistingSession: false,
     });
     expect(calls).toEqual([`get:${LIVE_ID}`, `create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } }]);
@@ -333,6 +336,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     expect(await ensureOpenCodeSession("conv-1")).toEqual({
       sessionId: CREATED_SESSION_ID,
       directory: SUBMITTED_DIRECTORY,
+      reusedExistingSession: false,
     });
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } }]);

@@ -81,3 +81,45 @@ export const OPENCODE_V2_RETENTION_TTL_MS = 30 * 60 * 1000;
 export const OPENCODE_V2_DIAGNOSTIC_COUNT_CAP = 256;
 export const OPENCODE_V2_FORM_FIELD_LIMIT = 100;
 export const OPENCODE_V2_FORM_OPTION_LIMIT = 100;
+
+/**
+ * How often the retry banner recomputes its countdown from the absolute
+ * deadline. The countdown is derived, never stored, so this is only a repaint
+ * cadence — it does not create a retry or keep one alive.
+ */
+export const OPENCODE_RETRY_TICK_MS = 500;
+
+/**
+ * How long a session-restoration notice stays visible after a verified reuse.
+ * It is an auto-hide duration, not a claim about how long the session lived.
+ */
+export const OPENCODE_RECOVERY_NOTICE_MS = 12_000;
+
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
+
+/**
+ * Formats the seconds remaining in a live retry ("45s", "2m 5s", "1h 3m").
+ *
+ * Feature-local on purpose: the tool and scheduler formatters answer different
+ * questions and are documented as intentionally different. The input is a
+ * DERIVED remaining time; this function never invents a deadline.
+ *
+ * @param remainingSeconds - Seconds left, clamped at zero.
+ * @returns A short human duration.
+ */
+export function formatRetryCountdown(remainingSeconds: number): string {
+  // A non-finite value is not a deadline. Rendering "NaNh NaNm" would put the
+  // bug in front of the reader, so it degrades to the same "no number" answer
+  // as a passed deadline.
+  const total = Number.isFinite(remainingSeconds) ? Math.max(0, Math.floor(remainingSeconds)) : 0;
+  if (total < SECONDS_PER_MINUTE) return `${total}s`;
+  if (total < SECONDS_PER_HOUR) {
+    const minutes = Math.floor(total / SECONDS_PER_MINUTE);
+    const seconds = total % SECONDS_PER_MINUTE;
+    return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  }
+  const hours = Math.floor(total / SECONDS_PER_HOUR);
+  const minutes = Math.floor((total % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}

@@ -138,6 +138,26 @@ export type MemoryUpdate = z.infer<typeof memoryUpdateSchema>;
 /** Trimmed too: a whitespace id is not a valid identifier. */
 export const memoryIdSchema = z.string().trim().min(1).max(200);
 
+/**
+ * The id shape shared by every conversation-scoped request body. Declared once
+ * so a limit change cannot drift between the routes that accept these ids.
+ */
+const identifierSchema = z.string().min(1).max(200);
+
+/** OpenCode session id: an opaque server-side identity, same limits as a conversation id. */
+export const openCodeSessionIdSchema = identifierSchema;
+
+/**
+ * `POST /api/opencode/session/activity` body. The pair is checked against the
+ * conversation row before any OpenCode request, so a caller cannot probe a
+ * session it does not own.
+ */
+export const openCodeSessionActivitySchema = z.object({
+  conversationId: identifierSchema,
+  sessionId: openCodeSessionIdSchema,
+});
+export type OpenCodeSessionActivityRequest = z.infer<typeof openCodeSessionActivitySchema>;
+
 // Conversation persistence (assistant-ui RemoteThreadListAdapter)
 export const conversationCreateSchema = z
   .object({
@@ -151,7 +171,7 @@ export const conversationCreateSchema = z
     workspaceMode: z.enum(["simple", "project"]).optional().default("simple"),
     workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
     // OpenCode session id for Code mode (set by the backend, accepted on create/update).
-    opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
+    opencodeSessionId: openCodeSessionIdSchema.optional().nullable(),
     // Engine selection + OpenCode agent/model chosen at creation (unified picker).
     engine: z.enum(["direct", "opencode"]).optional(),
     opencodeAgent: z.string().min(1).max(200).optional().nullable(),
@@ -189,7 +209,7 @@ export const conversationUpdateSchema = z.object({
   titleSource: z.enum(["auto", "user"]).optional(),
   workspaceMode: z.enum(["simple", "project"]).optional(),
   workspaceFolderId: z.string().min(1).max(200).optional().nullable(),
-  opencodeSessionId: z.string().min(1).max(200).optional().nullable(),
+  opencodeSessionId: openCodeSessionIdSchema.optional().nullable(),
   engine: z.enum(["direct", "opencode"]).optional(),
   opencodeAgent: z.string().min(1).max(200).optional().nullable(),
   opencodeModel: z.string().min(1).max(200).optional().nullable(),

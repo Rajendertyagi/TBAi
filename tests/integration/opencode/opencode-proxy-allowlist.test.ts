@@ -429,4 +429,24 @@ describe("OpenCode proxy workspace authorization (A2)", () => {
     expect(found?.id).toBe(conversationId);
     expect(await conversationService.findByOpenCodeSessionId("ses_not_a_known_session")).toBeNull();
   });
+
+  it("does not expose the global session.active map through the parameterized session route", async () => {
+    // `session.active` answers with the managed process's GLOBAL active-session
+    // map, which is why the browser's only path to it is TBAi's filtered
+    // `POST /api/opencode/session/activity`. There is deliberately no allowlist
+    // entry for the upstream path: `/api/session/active` can only match the
+    // parameterized `session.get` route, with `active` read as a session id.
+    const matched = matchOpenCodeProxyRoute("GET", "/api/session/active");
+    expect(matched?.route.operation).toBe("session.get");
+    expect(matched?.parameters.sessionID).toBe("active");
+    expect(OPENCODE_PROXY_ROUTES.some((route) => route.path === "/api/session/active")).toBe(false);
+
+    // Driven through the real proxy: the literal is authorized as a session id,
+    // no conversation owns one named `active`, so the request is refused and
+    // never reaches the upstream. The map cannot leave the backend this way.
+    captured.length = 0;
+    const response = await openCodeApp.request("http://localhost/api/opencode/api/session/active");
+    expect(response.status).toBe(403);
+    expect(captured.length).toBe(0);
+  });
 });

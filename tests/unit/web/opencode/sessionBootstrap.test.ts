@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import {
   bootstrapOpenCodeSession,
+  fetchOpenCodeSessionActivity,
   hasInFlightBootstrap,
   clearAllBootstraps,
   OPENCODE_BOOTSTRAP_PATH,
+  OPENCODE_SESSION_ACTIVITY_PATH,
 } from "@web/features/opencode/sessionBootstrap";
 
 /**
@@ -349,5 +351,136 @@ describe("sessionBootstrap — failure, retry, and conservative invalidation", (
     const res2 = await p2;
     expect(res2.sessionId).toBe("ses_p2");
     expect(hasInFlightBootstrap("conv_race")).toBe(false);
+  });
+});
+
+/**
+ * The reuse flag is evidence, not a default.
+ *
+ * A malformed or absent field is NOT "the previous session was restored", so
+ * the parser accepts only the literal `true`. The notice's copy depends on
+ * this: reporting reuse for a new session would claim a restoration that never
+ * happened.
+ */
+describe("sessionBootstrap — reusedExistingSession is strict", () => {
+  function bootstrapWith(payload: Record<string, unknown>) {
+    stubBootstrapFetch(() => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ sessionId: "ses_flag", directory: null, ...payload }),
+    }));
+    return bootstrapOpenCodeSession("conv_flag");
+  }
+
+  it("reports true only for the literal true", async () => {
+    const result = await bootstrapWith({ reusedExistingSession: true });
+    expect(result.reusedExistingSession).toBe(true);
+  });
+
+  it("reports false when the backend omits the flag", async () => {
+    const result = await bootstrapWith({});
+    expect(result.reusedExistingSession).toBe(false);
+  });
+
+  it("reports false for a non-boolean masquerading as reuse", async () => {
+    for (const value of ["true", 1, {}]) {
+      const result = await bootstrapWith({ reusedExistingSession: value });
+      expect(result.reusedExistingSession).toBe(false);
+    }
+  });
+});
+
+/**
+ * The activity read must never fail a conversation load.
+ *
+ * `running` and `not-running` are the only two authoritative answers. Every
+ * other outcome — non-OK, a malformed body, a network failure, an abort — is
+ * `unknown`, and `unknown` is never rendered as "not running".
+ */
+describe("fetchOpenCodeSessionActivity — a status read that cannot throw", () => {
+  function stubActivityFetch(respond: (init?: RequestInit) => unknown): {
+    calls: () => number;
+    body: () => unknown;
+  } {
+    const previous = globalThis.fetch;
+    let calls = 0;
+    let body: unknown = null;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).startsWith(OPENCODE_SESSION_ACTIVITY_PATH)) {
+        return previous(input, init);
+      }
+      calls += 1;
+      body = init?.body ? JSON.parse(String(init.body)) : null;
+      return (await respond(init)) as Response;
+    }) as unknown as typeof fetch;
+    return { calls: () => calls, body: () => body };
+  }
+
+  function read(signal: AbortSignal = new AbortController().signal) {
+    return fetchOpenCodeSessionActivity({
+      conversationId: "conv_activity",
+      sessionId: "ses_activity",
+      signal,
+    });
+  }
+
+  it("posts the conversation/session pair to the backend-filtered route", async () => {
+    expect(OPENCODE_SESSION_ACTIVITY_PATH).toBe("/api/opencode/session/activity");
+    const stub = stubActivityFetch(() => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ activity: "running" }),
+    }));
+
+    const activity = await read();
+
+    expect(activity).toBe("running");
+    expect(stub.calls()).toBe(1);
+    expect(stub.body()).toEqual({ conversationId: "conv_activity", sessionId: "ses_activity" });
+  });
+
+  it("accepts not-running as the other authoritative answer", async () => {
+    stubActivityFetch(() => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ activity: "not-running" }),
+    }));
+
+    expect(await read()).toBe("not-running");
+  });
+
+  it("treats a non-OK response as unknown, not idle", async () => {
+    stubActivityFetch(() => ({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: "unavailable" }),
+    }));
+
+    expect(await read()).toBe("unknown");
+  });
+
+  it("treats a malformed body as unknown, not idle", async () => {
+    for (const payload of [{}, { activity: "busy" }, { activity: 1 }]) {
+      stubActivityFetch(() => ({ ok: true, status: 200, json: async () => payload }));
+      expect(await read()).toBe("unknown");
+    }
+  });
+
+  it("never throws on a network failure", async () => {
+    stubActivityFetch(() => {
+      throw new Error("socket closed");
+    });
+
+    expect(await read()).toBe("unknown");
+  });
+
+  it("resolves unknown for an aborted read instead of rejecting", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    stubActivityFetch(() => {
+      throw new DOMException("aborted", "AbortError");
+    });
+
+    expect(await read(abort.signal)).toBe("unknown");
   });
 });

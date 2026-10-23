@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   EngineMismatchError,
   ensureOpenCodeSession,
+  getOpenCodeSessionActivity,
+  OpenCodeSessionMismatchError,
   terminateOpenCodeSession,
 } from "../services/opencode/sessions";
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
@@ -40,6 +42,7 @@ import {
 } from "../services/opencode/configRedaction";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
+import { openCodeSessionActivitySchema } from "../lib/validation";
 
 const sessionRequestSchema = z.object({
   conversationId: z.string().min(1),
@@ -89,8 +92,10 @@ app.post("/session", async (c) => {
     return c.json({ error: "conversationId is required" }, 400);
   }
   try {
-    const { sessionId, directory } = await ensureOpenCodeSession(parsed.data.conversationId);
-    return c.json({ sessionId, directory });
+    const { sessionId, directory, reusedExistingSession } = await ensureOpenCodeSession(
+      parsed.data.conversationId,
+    );
+    return c.json({ sessionId, directory, reusedExistingSession });
   } catch (err) {
     logger.error("opencode", "opencode.session_error", { ...classifyError(err) });
     const mapped = openCodeError(err, "Failed to start OpenCode session");
@@ -121,6 +126,45 @@ app.post("/session/terminate", async (c) => {
       ...classifyError(err),
     });
     const mapped = openCodeError(err, "Failed to terminate OpenCode session");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
+ * Read-only session activity for one conversation/session pair.
+ *
+ * This is the browser's only path to `session.active`. That operation answers
+ * with the **global** active-session map of the managed process; exposing it
+ * would tell the browser about sessions it does not own, so the map never
+ * leaves the backend. The pair is verified against the conversation row before
+ * any OpenCode request (an unknown pair is a 404, not a probe). A failure to
+ * read returns `unknown`, never `not-running`: absent from the active map only
+ * describes this process, and an unreadable answer proves nothing.
+ *
+ * Registered before the proxy catch-all below, so TBAi handles it rather than
+ * forwarding it upstream.
+ */
+app.post("/session/activity", async (c) => {
+  const parsed = openCodeSessionActivitySchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return c.json({ error: "conversationId and sessionId are required" }, 400);
+  }
+  const { conversationId, sessionId } = parsed.data;
+  try {
+    const activity = await getOpenCodeSessionActivity(conversationId, sessionId);
+    return c.json({ activity });
+  } catch (err) {
+    if (err instanceof OpenCodeSessionMismatchError) {
+      logger.warn("opencode", "opencode.session_activity_mismatch", {
+        conversationId,
+      });
+      return c.json({ error: "Unknown conversation/session pair" }, 404);
+    }
+    logger.error("opencode", "opencode.session_activity_error", {
+      conversationId,
+      ...classifyError(err),
+    });
+    const mapped = openCodeError(err, "Failed to read OpenCode session activity");
     return c.json({ error: mapped.message }, mapped.status);
   }
 });

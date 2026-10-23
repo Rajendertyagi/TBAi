@@ -34,6 +34,13 @@ import { OpenCodeError } from "@/services/opencode/errors.ts";
 import { REPO_ROOT } from "../../helpers/repo-root";
 import * as realOpenCodeClient from "@/services/opencode/client.ts";
 
+// The route drives the real managed-server seam, and G2's ownership check
+// correctly refuses to start a second server against a live OpenCode database
+// (including the user's). This file is about session identity and the model on
+// the wire, not storage, so it uses an in-memory database and never touches the
+// machine's real OpenCode data.
+process.env.OPENCODE_DB = ":memory:";
+
 /** The server's advertised default in every case that needs one. */
 const SERVER_DEFAULT = {
   providerID: "openrouter",
@@ -183,7 +190,12 @@ async function bootstrap(conversationId: string) {
   });
   return {
     res,
-    body: (await res.json()) as { sessionId?: string; directory?: string | null; error?: string },
+    body: (await res.json()) as {
+      sessionId?: string;
+      directory?: string | null;
+      reusedExistingSession?: boolean;
+      error?: string;
+    },
   };
 }
 
@@ -202,7 +214,9 @@ describe("A. the Code view's bootstrap reaches the session seam and binds the de
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(200);
     expect(body.sessionId).toBe("ses_fake_1");
-
+    // A newly created session is not a reused one: the restoration notice must
+    // never appear for it.
+    expect(body.reusedExistingSession).toBe(false);
     // The session went out over the wire carrying the default…
     expect(created).toHaveLength(1);
     expect(created[0].model).toEqual({
@@ -228,6 +242,9 @@ describe("B. an existing unbound session is repaired, not duplicated", () => {
 
     // Identity is the conversation's own session — no new one minted.
     expect(body.sessionId).toBe("ses_existing");
+    // Positive evidence: this WAS an adoption of a verified live session,
+    // which is what the restoration notice reports.
+    expect(body.reusedExistingSession).toBe(true);
     expect(created).toHaveLength(0);
     // Repaired in place instead.
     expect(switched).toEqual([
@@ -265,6 +282,8 @@ describe("D. a healthy session is left completely alone", () => {
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(200);
     expect(body.sessionId).toBe("ses_healthy");
+    // Adopted, not recreated — the same reuse fact a navigation reports.
+    expect(body.reusedExistingSession).toBe(true);
     expect(created).toHaveLength(0);
     expect(switched).toHaveLength(0);
     expect(serverSessions.get("ses_healthy")?.model).toEqual({
@@ -296,6 +315,8 @@ describe("E. a stale session pointer is not resurrected", () => {
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(200);
     expect(body.sessionId).toBe("ses_fake_1");
+    // A replacement is not a restoration: the notice must stay silent.
+    expect(body.reusedExistingSession).toBe(false);
     expect(created).toHaveLength(1);
     // The replacement carries the default, and nothing was written to the dead id.
     expect(created[0].model).toEqual({
@@ -331,6 +352,9 @@ describe("E. a stale session pointer is not resurrected", () => {
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(500);
     expect(body.error).toBeTruthy();
+    // A failed lookup reports nothing at all: not "reused", and not "created"
+    // either — the run did not get far enough to know.
+    expect(body.reusedExistingSession).toBeUndefined();
     // No replacement, and the original binding is left exactly as it was.
     expect(created).toHaveLength(0);
     const reloaded = await conversationService.get(conv.id);

@@ -13,6 +13,9 @@ const HEARTS: Record<StatusPresentation, { Icon: typeof HeartHandshake; classNam
   error: { Icon: HeartCrack, className: "text-destructive" },
   off: { Icon: HeartOff, className: "text-muted-foreground/60" },
   working: { Icon: HeartPulse, className: "text-amber-500 animate-pulse" },
+  // The same heart as a working run: only the LABEL separates an engine retry
+  // from a transport reconnect, and the label is what a reader reads.
+  retrying: { Icon: HeartPulse, className: "text-amber-500 animate-pulse" },
   idle: { Icon: HeartHandshake, className: "text-muted-foreground" },
 };
 
@@ -34,6 +37,9 @@ export function OpenCodeStatus({
   const state = extras?.state ?? {
     connection: { type: "failed", attempt: 0 },
     load: { type: "error", error: { message: "OpenCode runtime unavailable" } },
+    retry: null,
+    activity: "unknown",
+    activityRevision: 0,
     execution: { type: "idle" },
     revertRecovery: { type: "none" },
     auxiliary: null,
@@ -49,9 +55,15 @@ export function OpenCodeStatus({
   const view = statusView({
     connection: state.connection,
     load: state.load,
-    running: state.execution.type === "streaming" || state.execution.type === "executing",
+    // Confirmed process-local activity is a RUN, not an idle connection: a
+    // server that still owns a drain must not render as Connected.
+    running:
+      state.execution.type === "streaming" ||
+      state.execution.type === "executing" ||
+      state.activity === "running",
     cancelled: state.execution.type === "cancelling",
     recoveryBlocked,
+    retry: state.retry ? { attempt: state.retry.attempt } : null,
     maxAttempts: OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
   });
   const { Icon, className } = HEARTS[view.presentation];

@@ -64,8 +64,39 @@ export interface StubRequest {
   readonly promptTokens: number;
 }
 
+/** One provider error the stub returned instead of a reply. */
+export interface StubErrorResponse {
+  /** The request this error answered, so an error is attributable to a turn. */
+  readonly sequence: number;
+  /** The HTTP status sent. */
+  readonly status: number;
+  /** Epoch-ms at which the error was sent, for ordering against server events. */
+  readonly at: number;
+}
+
+/**
+ * How the stub fails an agent turn.
+ *
+ * The point is to make a provider failure deterministic rather than
+ * timing-dependent: the test decides exactly how many turns fail and with which
+ * status, so the retry path can be exercised without waiting for a real quota or
+ * outage. `status` defaults to 429 because that is the clearest retryable
+ * failure; a test can send a 5xx instead.
+ */
+export interface StubErrorOptions {
+  /** HTTP status. Defaults to 429 (rate limited). */
+  readonly status?: number;
+  /** Human-readable message placed in the OpenAI-compatible error body. */
+  readonly message?: string;
+  /**
+   * Value for the `Retry-After` header, in seconds. Omitted by default so the
+   * caller sees the server's own backoff rather than one this stub invented.
+   */
+  readonly retryAfterSeconds?: number;
+}
+
 /** What the stub should do with a request. */
-export type StubBehaviour = "text" | "tool-call" | "summary";
+export type StubBehaviour = "text" | "tool-call" | "summary" | "retryable-error";
 
 export interface StubProviderOptions {
   /** Model id the stub answers as. Must match the config's `modelID`. */
@@ -83,6 +114,8 @@ export interface StubProviderOptions {
   readonly respond?: (request: StubRequest) => StubBehaviour | Promise<StubBehaviour>;
   /** Text used for the first plain-text reply. */
   readonly text?: string;
+  /** Status/body/header used when `respond` returns `"retryable-error"`. */
+  readonly error?: StubErrorOptions;
 }
 
 /**
@@ -114,12 +147,18 @@ export interface StubProvider {
   readonly requestsOfferingTools: readonly StubRequest[];
   /** Requests that carried at least one tool result. */
   readonly toolResultRequests: readonly StubRequest[];
+  /** Every request answered with a provider error, in order. */
+  readonly errorResponses: readonly StubErrorResponse[];
   /** Stop the server. Safe to call more than once. */
   stop(): void;
 }
 
 const DEFAULT_MODEL = "tbai-stub-model";
 const DEFAULT_TEXT = "OK";
+/** Default retryable status: unambiguous rate limiting, not an ambiguous 4xx. */
+const DEFAULT_ERROR_STATUS = 429;
+/** Error body message; also what a test asserts the retry carried. */
+const DEFAULT_ERROR_MESSAGE = "stub provider rate limit";
 
 /**
  * The section headings OpenCode's summarisation prompt requires.
@@ -235,6 +274,32 @@ function usageBlock(promptTokens: number, completionTokens: number): Record<stri
 }
 
 /**
+ * The OpenAI-compatible error response for a controlled provider failure.
+ *
+ * Shaped like the real API on purpose: the client under test parses this body,
+ * so a non-conforming shape would prove something about the stub rather than
+ * about OpenCode's retry classification.
+ */
+function errorResponse(options: StubErrorOptions | undefined): Response {
+  const status = options?.status ?? DEFAULT_ERROR_STATUS;
+  const message = options?.message ?? DEFAULT_ERROR_MESSAGE;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (options?.retryAfterSeconds !== undefined) {
+    headers["Retry-After"] = String(options.retryAfterSeconds);
+  }
+  return new Response(
+    JSON.stringify({
+      error: {
+        message,
+        type: status === DEFAULT_ERROR_STATUS ? "rate_limit_error" : "server_error",
+        code: status === DEFAULT_ERROR_STATUS ? "rate_limit_exceeded" : "server_error",
+      },
+    }),
+    { status, headers },
+  );
+}
+
+/**
  * Starts the stub on an ephemeral loopback port.
  *
  * @param options Model id and reply strategy; see {@link StubProviderOptions}.
@@ -244,6 +309,7 @@ function usageBlock(promptTokens: number, completionTokens: number): Record<stri
 export async function startStubProvider(options: StubProviderOptions = {}): Promise<StubProvider> {
   const model = options.model ?? DEFAULT_MODEL;
   const requests: StubRequest[] = [];
+  const errorResponses: StubErrorResponse[] = [];
   let sequence = 0;
 
   /** Monotonic request counter. Named so the call site reads as a call, not an assignment. */
@@ -288,6 +354,15 @@ export async function startStubProvider(options: StubProviderOptions = {}): Prom
       const behaviour =
         (await options.respond?.(record)) ??
         (looksLikeSummaryRequest(messages) ? "summary" : "text");
+
+      if (behaviour === "retryable-error") {
+        errorResponses.push({
+          sequence: record.sequence,
+          status: options.error?.status ?? DEFAULT_ERROR_STATUS,
+          at: Date.now(),
+        });
+        return errorResponse(options.error);
+      }
 
       const reply = behaviour === "summary" ? buildSummaryReply() : (options.text ?? DEFAULT_TEXT);
       const completionTokens = encode(reply).length;
@@ -338,6 +413,7 @@ export async function startStubProvider(options: StubProviderOptions = {}): Prom
     get toolResultRequests() {
       return requests.filter((request) => request.carriesToolResult);
     },
+    errorResponses,
     stop() {
       if (stopped) return;
       stopped = true;
