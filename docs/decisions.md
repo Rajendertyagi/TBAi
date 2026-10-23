@@ -7304,20 +7304,28 @@ unrelated process, and cannot prove who holds the database. Instead:
   tests across 359 files, 325.27s, exit 0.**
 - `bun run typecheck` exit 0; `bun run build` exit 0; `bun run lint` exit 0;
   `bun run format:check` exit 0.
+- Verify run [39949223009](https://github.com/Rajendertyagi/TBAi/actions/runs/39949223009)
+  (commit `7f28c11`): `verify`, `e2e`, and `tauri` all success. The `tauri` job
+  compiled the Rust shell, ran Rust tests, built the Tauri app, assembled the
+  portable folder, and passed the packaged smoke test. Artifact:
+  `tbai-windows-x64-portable` (47,572,352 bytes).
 
-**The Rust half is implemented but not compiled here.** `src-tauri/src/shell_job.rs`
+**The Rust half is compiled and smoke-tested in CI.** `src-tauri/src/shell_job.rs`
 creates the named job and `src-tauri/src/main.rs` creates it before the spawn,
 passes the name, and closes it in `attempt`/`quit_owned`. The Win32 signatures
 were checked against `windows-sys` 0.59 documentation, including the feature
 gates for `CreateJobObjectW` (`Win32_Security`) and
 `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` (`Win32_System_Threading`), and the job
-semantics were proven from Bun FFI probes and the fixture tests. There is no
-local Rust toolchain: `cargo check --all-targets` and `bunx tauri build` must
-run in the configured GitHub Actions workflow. **The packaged Tauri shell
-hard-kill path is therefore pending external verification, and no evidence in
-this entry claims it was exercised locally.** G2's accepted guarantee is the
-tested database-ownership refusal plus the fixture-proven job behaviour; the
-packaged shell path strengthens it but is not the sole basis of the pass.
+semantics were proven from Bun FFI probes and the fixture tests. Verify run
+[39949223009](https://github.com/Rajendertyagi/TBAi/actions/runs/39949223009)
+(commit `7f28c11`) passed the `tauri` job: Rust type-check, Rust tests, Tauri
+build, portable-app assembly, and the packaged-app smoke test. **Still pending:
+a hard kill of the packaged shell with that artifact.** The smoke test is a
+graceful start/stop and does not exercise the kill-on-close path; no evidence in
+this entry claims the packaged hard-kill path was exercised. G2's accepted
+guarantee remains the tested database-ownership refusal plus the fixture-proven
+job behaviour; the packaged shell path strengthens it but is not the sole basis
+of the pass.
 
 **Consequences.**
 
