@@ -14,6 +14,10 @@ import {
 } from "@/services/opencode/serverManager.ts";
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "@/config/opencode.ts";
 import { getOpenCodeAuthHeaders, isSupportedOpenCodeVersion } from "@/services/opencode/runtime.ts";
+import {
+  OpenCodeDatabaseBusyError,
+  type OpenCodeDatabaseLease,
+} from "@/services/opencode/ownership.ts";
 
 const SUPPORTED_VERSION = "2.0.15";
 const CURRENT_SUPPORTED_VERSION = "2.1.2";
@@ -28,6 +32,13 @@ const AUTHENTICATED_READINESS = {
   isSupportedVersion: isSupportedOpenCodeVersion,
 } as const;
 const FAKE_MANAGED_BINARY = "/fake/opencode-v2";
+
+/** No database ownership in the fake-child suite; the real policy is tested separately. */
+const NO_DATABASE_LEASE: OpenCodeDatabaseLease = {
+  acquire: async () => null,
+  verifyChild: async () => undefined,
+  release: () => undefined,
+};
 
 describe("buildOpenCodeServeArgs", () => {
   it("builds the argv for a given port", () => {
@@ -532,6 +543,10 @@ class FakeChild {
 
   kill(signal: string): void {
     this.killCalls.push(signal);
+    // A real SIGKILL terminates the child, which resolves `exited`. The fake
+    // must do the same or production code that waits for the exit after a kill
+    // would hang for the whole shutdown budget.
+    if (signal === "SIGKILL") this.exitWith(1);
   }
 }
 
@@ -546,8 +561,11 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
   public lastDiagnostics: { stdout: string; stderr: string } | undefined;
   private readonly testConfig: OpenCodeConfig;
 
-  constructor(config: OpenCodeConfig = OPENCODE_CONFIG) {
-    super(config);
+  constructor(
+    config: OpenCodeConfig = OPENCODE_CONFIG,
+    lease: OpenCodeDatabaseLease = NO_DATABASE_LEASE,
+  ) {
+    super(config, lease);
     this.testConfig = config;
   }
 
@@ -609,8 +627,11 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
  */
 const liveManagers = new Set<FakeOpenCodeServerManager>();
 
-function newFakeManager(config?: OpenCodeConfig): FakeOpenCodeServerManager {
-  const manager = new FakeOpenCodeServerManager(config);
+function newFakeManager(
+  config?: OpenCodeConfig,
+  lease?: OpenCodeDatabaseLease,
+): FakeOpenCodeServerManager {
+  const manager = new FakeOpenCodeServerManager(config, lease);
   liveManagers.add(manager);
   return manager;
 }
@@ -656,6 +677,35 @@ describe("OpenCodeServerManager.ensureBaseUrl", () => {
       });
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ version: SUPPORTED_VERSION });
+    } finally {
+      mgr.stopFake();
+    }
+  });
+
+  it("does not cache a database-lease refusal: the next attempt retries", async () => {
+    let attempts = 0;
+    const lease: OpenCodeDatabaseLease = {
+      acquire: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new OpenCodeDatabaseBusyError({
+            dbPath: "C:\\tmp\\opencode.db",
+            pids: [4242],
+            reason: "a process already holds the database",
+          });
+        }
+        return null;
+      },
+      verifyChild: async () => undefined,
+      release: () => undefined,
+    };
+    const mgr = newFakeManager(OPENCODE_CONFIG, lease);
+    try {
+      await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeDatabaseBusyError);
+      const baseUrl = await mgr.ensureBaseUrl();
+      expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(attempts).toBe(2);
+      expect(mgr.createChildCalls).toBe(1);
     } finally {
       mgr.stopFake();
     }

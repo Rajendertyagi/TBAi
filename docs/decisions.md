@@ -7174,3 +7174,161 @@ that follows, and the other-session exclusion; both guards were observed
 failing before the change. `tests/dom/opencode/OpenCodeStatus.recovery.test.tsx`
 mounts the real chip and asserts the notice appears for an archived session and
 not for an active one; removing the render line made the first case fail.
+
+## 2026-10-23 - G2: OS-enforced process lifetime and OpenCode database ownership
+
+**Why this entry exists.** G2 asks two questions the earlier lifecycle entry did
+not answer: does an OpenCode child survive a hard TBAi shell kill, and what
+happens when two servers point at one OpenCode database? The 2026-10-17 entry
+concluded that no Job Object was needed for the sidecar's children because
+Bun's non-detached child binding took them down with the parent, and recorded a
+hard kill of the shell itself as unverified. That measurement was correct for
+children Bun spawns, and it was not the whole path. Tauri spawns the sidecar through
+`tauri-plugin-shell` with `set_process_group(true)`; that puts the sidecar in a
+plugin-owned job which is not configured with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. A hard kill of the desktop shell therefore
+leaves the sidecar alive. **This entry supersedes that narrow conclusion; it does
+not dispute the measured Bun behaviour.**
+
+**Decision: two nested jobs, each with one owner.**
+
+- **Shell job (named).** The Rust shell creates
+  `Local\TBAiShellJob-<pid>-<uuid>` with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` **before** spawning the sidecar, keeps the
+  only handle, and passes the name as `TBAI_SHELL_JOB_NAME`. The sidecar opens
+  the job by name, assigns itself, and immediately closes its own handle.
+  - Shell dies **before** the join: the job no longer exists; the sidecar logs
+    `shell_job_join_failed` and exits 1 without serving.
+  - Shell dies **after** the join: the last handle closes, Windows destroys the
+    job, and the sidecar is terminated. This is the hard-kill guarantee the
+    plugin's job does not provide.
+  - Shell job creation fails: the shell does not spawn an unprotected sidecar; it
+    reports `backend-status: failed` and returns.
+- **Backend job (unnamed).** The sidecar creates a second kill-on-close job at
+  boot, assigns itself, and keeps the handle for its lifetime. Every child it
+  spawns inherits the job (the fixture proves this for a `detached: true`
+  grandchild), so a hard sidecar kill terminates OpenCode and MCP children with
+  it. This pins the behaviour explicitly instead of relying on Bun's implicit
+  parent-lifetime binding.
+- The jobs are nested. Windows 8+ supports nested jobs, so joining the shell job
+  does not replace the backend job; the sidecar is in both.
+
+**Decision: the database is owned, not merely recorded.**
+
+There is no PID/port lease. A PID/port record can be stale, can be reused by an
+unrelated process, and cannot prove who holds the database. Instead:
+
+1. **Resolve the path the child will actually use.** TBAi runs
+   `opencode debug paths db` with the child's cwd and environment, parses the last
+   non-empty line, and resolves a relative answer against that cwd. A path that
+   cannot be resolved refuses startup. `:memory:` is exempt because there is no
+   shared file.
+2. **Serialize TBAi starts.** A named mutex
+   (`Local\TBAi.OpenCode.Database.<sha256(path.resolve(dbPath).toLowerCase())>`)
+   is acquired before the spawn. If another TBAi backend holds it, startup is
+   refused with `OpenCodeDatabaseBusyError`.
+3. **Detect an existing holder.** Windows Restart Manager is asked which
+   processes hold the database and any existing `-wal`/`-shm` sidecars. If the
+   query cannot be answered, startup refuses; an unanswerable query is never
+   treated as "no holder". Any PID other than the caller is a refusal, and the
+   mutex is released.
+4. **Verify after readiness.** Once the managed child reports ready, the database
+   files must exist and the Restart Manager query must name no process other than
+   the sidecar and the managed child. On failure TBAi kills its own child, waits
+   for it to exit, and refuses. A failed start is not cached.
+5. **Release on shutdown.** The manager releases the mutex when it shuts down. A
+   restart attempt reuses the lease that is already held; it does not re-acquire
+   or re-check against itself.
+
+**What is guaranteed, and what is not.**
+
+- Within one Windows session, two TBAi backends resolving the same path cannot
+  both pass `acquire`; the loser refuses.
+- A process that already holds the database and is visible to Restart Manager is
+  detected before the spawn, and TBAi refuses. TBAi never kills the foreign
+  process.
+- If a process other than the managed child holds the database when the child
+  becomes ready, TBAi terminates **its own** child and refuses.
+- A hard shell kill after the join terminates the sidecar; when the backend job
+  was installed, it also terminates the sidecar's children. A hard shell kill
+  before the join makes the sidecar refuse to boot.
+- **A foreign process that opens the database after the post-readiness check is
+  outside the enforceable boundary.** TBAi cannot prevent a process it did not
+  spawn from opening the file later.
+- The mutex is `Local\`, so it does **not** serialize two Windows sessions. The
+  cross-session guard is the Restart Manager check before the spawn and after
+  readiness. That detects an existing holder; simultaneous cross-session starts
+  are not claimed to be globally serialized, and the mutex is not described as
+  global.
+- If `installBackendProcessJob` fails, the sidecar records `backend_job_failed`
+  and continues. The shell job still protects the sidecar, but the explicit
+  descendant guarantee is unavailable for that launch; that launch is not
+  G2-accepted. Direct Chat can still run.
+- If `TBAI_SHELL_JOB_NAME` is absent (the sidecar was started directly rather than
+  by the desktop shell), no shell job is joined. The backend job still covers its
+  children, but there is no shell -> sidecar kill-on-close guarantee for that
+  launch; it is not a G2-accepted packaged launch.
+- Non-Windows is a no-op: `acquire`/`verifyChild` do nothing,
+  `installBackendProcessJob` reports `unsupported`, and `joinShellJob` does
+  nothing. **G2 is Windows x64 only.**
+- `:memory:` has no shared file, so no ownership check applies.
+- The post-readiness check excludes only the sidecar and the managed child PID.
+  If a future OpenCode version opens the database from a helper process, that
+  helper is indistinguishable from a foreign holder; TBAi would refuse
+  (fail-closed) rather than accept it. 2.1.2 did not do this in the tested flow.
+- OpenCode 2.0.15 and 2.0.22 remain **Unverified**. The real-server evidence is
+  2.1.2 only.
+
+**Evidence (2026-10-23).**
+
+- `tests/integration/opencode/opencode-ownership-runtime.test.ts` - **2 pass**
+  against the real 2.1.2 binary with an isolated `OPENCODE_DB`/`XDG_DATA_HOME`:
+  (a) a foreign `opencode serve` already holding the database makes the managed
+  sidecar refuse and is left running; (b) hard-killing the shell kills the
+  sidecar and its OpenCode child, and a restart on the same database succeeds
+  with no orphan and exactly one server.
+- `tests/integration/opencode/process-ownership.test.ts` - **6 pass**: backend
+  job installation; mutex exclusivity; missing-shell-job refusal; Restart
+  Manager holder detection; hard shell kill takes the sidecar and a detached
+  descendant; the counterfactual without the join lets both survive.
+- `tests/unit/opencode/ownership.test.ts` - **15 pass**: path parsing, mutex
+  keying, `:memory:`/non-Windows no-op, mutex/foreign-holder/unanswerable-query
+  refusals, readiness verification, missing-file refusal.
+- `tests/integration/opencode/serverManager.test.ts` - **33 pass**, including the
+  ownership-failure kill/wait path.
+- `tests/unit/opencode/codeViewSessionBoundary.test.ts` - **11 pass** after the
+  test was made hermetic with `OPENCODE_DB=:memory:`. Before that, the new refusal
+  correctly rejected the test's use of the user's live database and seven cases
+  failed; the test was not weakened, it stopped touching live storage.
+- Full `bun run test`: **4632 pass, 59 skip, 0 fail, 20980 expect() calls, 4691
+  tests across 359 files, 325.27s, exit 0.**
+- `bun run typecheck` exit 0; `bun run build` exit 0; `bun run lint` exit 0;
+  `bun run format:check` exit 0.
+
+**The Rust half is implemented but not compiled here.** `src-tauri/src/shell_job.rs`
+creates the named job and `src-tauri/src/main.rs` creates it before the spawn,
+passes the name, and closes it in `attempt`/`quit_owned`. The Win32 signatures
+were checked against `windows-sys` 0.59 documentation, including the feature
+gates for `CreateJobObjectW` (`Win32_Security`) and
+`JOBOBJECT_EXTENDED_LIMIT_INFORMATION` (`Win32_System_Threading`), and the job
+semantics were proven from Bun FFI probes and the fixture tests. There is no
+local Rust toolchain: `cargo check --all-targets` and `bunx tauri build` must
+run in the configured GitHub Actions workflow. **The packaged Tauri shell
+hard-kill path is therefore pending external verification, and no evidence in
+this entry claims it was exercised locally.** G2's accepted guarantee is the
+tested database-ownership refusal plus the fixture-proven job behaviour; the
+packaged shell path strengthens it but is not the sole basis of the pass.
+
+**Consequences.**
+
+- New owners: `src/services/process-ownership.ts` (Win32 jobs, named mutex,
+  Restart Manager), `src/services/opencode/ownership.ts` (database path and
+  refusal policy), `src-tauri/src/shell_job.rs` (Rust shell job). The manager
+  consumes the lease; `src/index.ts` installs the backend job and joins the shell
+  job before any boot work.
+- `src/config/opencode.ts` owns `databasePathTimeoutMs`; no other timeout literal
+  is introduced.
+- The 2026-10-17 property remains true where it was measured: Bun's non-detached
+  child binding kills Bun-spawned children. The new jobs make the guarantee
+  explicit and extend it to the shell -> sidecar hard-kill path, which the plugin
+  job did not cover.

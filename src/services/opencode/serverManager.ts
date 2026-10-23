@@ -10,11 +10,30 @@ import {
 } from "./runtime";
 export { OpenCodeBinaryMissingError } from "./runtime";
 import { logger } from "../../lib/logger";
+import {
+  OpenCodeDatabaseBusyError,
+  OpenCodeDatabaseCheckError,
+  OpenCodeDatabaseOwnership,
+  type OpenCodeDatabaseLease,
+} from "./ownership";
 
 /** Appends a chunk to a bounded tail buffer, keeping only the last `maxBytes`. Pure. */
 export function appendTail(tail: string, chunk: string, maxBytes: number): string {
   const next = tail + chunk;
   return next.length <= maxBytes ? next : next.slice(next.length - maxBytes);
+}
+
+/** Waits for a child to exit, bounded, without throwing on an already-closed pipe. */
+async function waitForExit(child: Subprocess, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  try {
+    await Promise.race([child.exited.then(() => undefined).catch(() => undefined), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Builds the argv for `opencode serve` on the given port. Pure. */
@@ -244,8 +263,19 @@ export class OpenCodeServerManager {
   private restartAttempts = 0;
   /** Bounded stdout/stderr tails per child, retained for exit diagnostics. */
   private childDiagnostics = new WeakMap<Subprocess, { stdout: string; stderr: string }>();
+  /** Database ownership lease for this manager's lifetime (G2). */
+  private readonly databaseLease: OpenCodeDatabaseLease;
 
-  constructor(private readonly config: OpenCodeConfig = OPENCODE_CONFIG) {}
+  constructor(
+    private readonly config: OpenCodeConfig = OPENCODE_CONFIG,
+    databaseLease?: OpenCodeDatabaseLease,
+  ) {
+    this.databaseLease =
+      databaseLease ??
+      new OpenCodeDatabaseOwnership({
+        databasePathTimeoutMs: config.databasePathTimeoutMs,
+      });
+  }
 
   /** Returns the base URL of a running, ready server, starting one if needed. */
   /**
@@ -270,8 +300,17 @@ export class OpenCodeServerManager {
     // independent readiness loops. An already-ready server has a resolved
     // promise, so this returns instantly without re-probing.
     if (this.readyPromise) return this.readyPromise;
-    this.readyPromise = this.start();
-    return this.readyPromise;
+    // A failed start must not be cached forever. Preflight failures (missing
+    // binary, a database lease refusal, an ownership check that cannot answer)
+    // happen before `start` reaches its own readiness catch, and a cached
+    // rejection would make every later attempt fail with the first error even
+    // after the competing process is gone.
+    const attempt = this.start().catch((err: unknown) => {
+      if (this.readyPromise === attempt) this.readyPromise = null;
+      throw err;
+    });
+    this.readyPromise = attempt;
+    return attempt;
   }
 
   private baseUrlFor(port: number): string {
@@ -312,6 +351,14 @@ export class OpenCodeServerManager {
     // as an actionable error, never as a spawn failure deep in startup.
     const binary = this.resolveBinary();
     fs.mkdirSync(this.config.serverHomeDir, { recursive: true });
+    // Resolve the database the child will use and take the per-path lease
+    // BEFORE spawning. A foreign holder or another TBAi backend is a refusal,
+    // not a second server.
+    const dbPath = await this.databaseLease.acquire(binary, this.config.serverHomeDir);
+    if (this.stopping) {
+      this.databaseLease.release();
+      throw new OpenCodeReadinessCancelledError();
+    }
     const port = allocateLoopbackPort();
     const child = this.createChild(port, binary);
     this.child = child;
@@ -342,6 +389,11 @@ export class OpenCodeServerManager {
         getStopping: () => this.stopping,
         exited: child.exited,
       });
+      // Readiness proves the child LISTENS. It does not prove the child is the
+      // only process holding the database. The pre-spawn check can be raced by a
+      // foreign process that opens the file while this child boots, so verify
+      // again now and exclude only this child.
+      if (dbPath !== null) await this.databaseLease.verifyChild(child.pid, dbPath);
       // The moment this process became reachable. `waitForHttpReady` proves the
       // server is LISTENING — not that its provider catalogue has finished
       // loading — and the two are seconds apart. Consumers that need the
@@ -357,15 +409,23 @@ export class OpenCodeServerManager {
         this.readyPromise = null;
       }
       // A readiness timeout leaves a live child untracked; kill it so a
-      // slow-starting server can never become an orphan. The other failure
-      // modes already have the child exiting (OpenCodeProcessExitedError) or
-      // being terminated by shutdown() (OpenCodeReadinessCancelledError).
-      if (err instanceof OpenCodeReadinessTimeoutError && !this.stopping) {
+      // slow-starting server can never become an orphan. Database ownership
+      // failures happen after readiness, so that child is live too and must be
+      // terminated before the refusal is returned. The other failure modes
+      // already have the child exiting (OpenCodeProcessExitedError) or being
+      // terminated by shutdown() (OpenCodeReadinessCancelledError).
+      if (
+        (err instanceof OpenCodeReadinessTimeoutError ||
+          err instanceof OpenCodeDatabaseBusyError ||
+          err instanceof OpenCodeDatabaseCheckError) &&
+        !this.stopping
+      ) {
         try {
           child.kill("SIGKILL");
         } catch {
           /* already exited */
         }
+        await waitForExit(child, this.config.shutdownTimeoutMs);
       }
       throw err;
     }
@@ -450,7 +510,10 @@ export class OpenCodeServerManager {
   async shutdown(): Promise<void> {
     this.stopping = true;
     const child = this.child;
-    if (!child) return;
+    if (!child) {
+      this.databaseLease.release();
+      return;
+    }
     child.kill("SIGTERM");
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<boolean>((resolve) => {
@@ -469,6 +532,7 @@ export class OpenCodeServerManager {
     this.child = null;
     this.port = null;
     this.readyPromise = null;
+    this.databaseLease.release();
   }
 }
 

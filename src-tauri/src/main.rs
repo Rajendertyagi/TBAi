@@ -25,6 +25,8 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod shell_job;
+
 /// Overall budget for one backend startup attempt.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(25);
 /// Identity re-poll cadence.
@@ -52,6 +54,10 @@ struct StartupConfig {
 struct StartupOwned {
     lock: Mutex<Option<std::fs::File>>,
     child: Mutex<Option<CommandChild>>,
+    /// Named kill-on-close job whose only handle is held here. Dropping/closing
+    /// it terminates the sidecar (and, through the sidecar's own job, its
+    /// descendants). Created fresh for every launch attempt.
+    shell_job: Mutex<Option<shell_job::ShellJob>>,
     exited: Mutex<Option<String>>,
     verified: Mutex<bool>,
     verified_endpoint: Mutex<Option<EndpointInfo>>,
@@ -318,6 +324,9 @@ fn quit_owned(app: &AppHandle) {
             );
             eprintln!("[shutdown] sidecar outcome: {outcome:?}");
         }
+        if let Some(mut job) = owned.shell_job.lock().expect("shell job lock").take() {
+            job.close();
+        }
         *owned.exited.lock().expect("exited lock") = Some("user quit".to_string());
     }
     app.exit(0);
@@ -359,6 +368,12 @@ fn attempt(app: &AppHandle) {
     if let Some(child) = owned.child.lock().expect("child lock").take() {
         let _ = child.kill();
     }
+    // Close the previous job too. `child.kill()` targets the plugin's child
+    // handle; closing the job is the OS-level guarantee for the sidecar and its
+    // descendants, including when `kill()` raced with a restart.
+    if let Some(mut job) = owned.shell_job.lock().expect("shell job lock").take() {
+        job.close();
+    }
     *owned.exited.lock().expect("exited lock") = None;
     *owned.last_start.lock().expect("start lock") = Instant::now();
     *owned.status.lock().expect("status lock") = "starting".to_string();
@@ -398,14 +413,46 @@ fn attempt(app: &AppHandle) {
         }
     };
 
+    // G2: create the named kill-on-close job BEFORE spawning the sidecar. The
+    // sidecar opens this job by name, assigns itself, and closes its handle; the
+    // handle kept here is then the sidecar's lifetime. If creation fails we do
+    // not spawn an unprotected backend.
+    let mut shell_job_for_sidecar: Option<shell_job::ShellJob> = None;
+    #[cfg(windows)]
+    {
+        let name = format!(
+            "Local\\TBAiShellJob-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
+        match shell_job::ShellJob::create(name) {
+            Ok(job) => shell_job_for_sidecar = Some(job),
+            Err(err) => {
+                eprintln!("[server] shell job creation failed: {err}");
+                *owned.status.lock().expect("status lock") = "failed".to_string();
+                let _ = app.emit(
+                    "backend-status",
+                    serde_json::json!({
+                        "status": "failed",
+                        "reason": format!("Shell job creation failed: {err}")
+                    }),
+                );
+                owned.is_starting.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+
     let web_dist = resolve_web_dir().unwrap_or_else(|| cfg.data_dir.clone());
-    let (mut rx, child) = match sidecar
+    let mut sidecar_command = sidecar
         .env("TBAI_INSTANCE_ID", &expected)
         .env("WEB_DIST_DIR", web_dist.to_string_lossy().to_string())
         .env("DATA_DIR", cfg.data_dir.to_string_lossy().to_string())
-        .set_process_group(true)
-        .spawn()
-    {
+        .set_process_group(true);
+    if let Some(job) = &shell_job_for_sidecar {
+        sidecar_command = sidecar_command.env("TBAI_SHELL_JOB_NAME", job.name());
+    }
+    let (mut rx, child) = match sidecar_command.spawn() {
         Ok(pair) => pair,
         Err(err) => {
             eprintln!("[server] spawn error: {err}");
@@ -419,6 +466,7 @@ fn attempt(app: &AppHandle) {
         }
     };
     *owned.child.lock().expect("child lock") = Some(child);
+    *owned.shell_job.lock().expect("shell job lock") = shell_job_for_sidecar;
 
     // Diagnostics + termination watcher
     let app_handle = app.clone();
@@ -628,6 +676,7 @@ fn main() {
             app.manage(StartupOwned {
                 lock: Mutex::new(None),
                 child: Mutex::new(None),
+                shell_job: Mutex::new(None),
                 exited: Mutex::new(None),
                 verified: Mutex::new(false),
                 verified_endpoint: Mutex::new(None),

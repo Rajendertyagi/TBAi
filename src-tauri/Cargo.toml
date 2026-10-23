@@ -21,6 +21,19 @@ uuid = { version = "1", features = ["v4"] }
 ureq = { version = "2", features = ["json"] }
 fs2 = "0.4"
 
+# G2 shell lifecycle: named kill-on-close job. Target-scoped so non-Windows
+# builds do not pull the Win32 metadata. `Win32_Security` is required because
+# windows-sys gates `CreateJobObjectW` behind it, and `Win32_System_Threading`
+# is required because it gates `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` (via
+# `IO_COUNTERS`). The remaining features cover the job functions and HANDLE.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

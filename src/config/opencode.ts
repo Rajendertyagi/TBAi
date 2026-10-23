@@ -20,6 +20,12 @@ export const OPENCODE_CONFIG = {
   /** OpenCode V2 authenticated readiness endpoint. */
   readinessProbePath: "/api/info",
   /**
+   * Budget for `opencode debug paths db`, the authoritative way to learn which
+   * database the managed child will open before it is spawned. A timeout is a
+   * refusal (G2), never a guess at a default path.
+   */
+  databasePathTimeoutMs: 5_000,
+  /**
    * Inclusive managed OpenCode version range.
    *
    * The 2.1 line was adopted on 2026-10-22 after checking every surface TBAi
@@ -99,6 +105,7 @@ export type OpenCodeConfig = {
   readonly startupTimeoutMs: number;
   readonly readyPollMs: number;
   readonly readinessProbePath: string;
+  readonly databasePathTimeoutMs: number;
   readonly minimumVersion: string;
   readonly maximumVersionExclusive: string;
   readonly authUsername: string;

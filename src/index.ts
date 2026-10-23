@@ -3,6 +3,11 @@ import { getActiveServer } from "./services/server-listener";
 import { installDesktopStdinShutdown } from "./services/desktop-stdin";
 import { resolveConfiguredPort } from "./services/server-port";
 import { installProcessErrorHandlers } from "./services/process-handlers";
+import {
+  installBackendProcessJob,
+  joinShellJob,
+  ShellJobUnavailableError,
+} from "./services/process-ownership";
 import { logger, normalizeError } from "./lib/logger";
 
 // Boot port: explicit PORT env wins, then the persisted setting, then 3000.
@@ -13,6 +18,27 @@ const { port: PORT } = resolveConfiguredPort();
 // so the handler tests exercise the production wiring rather than a copy).
 // Rationale, runtime evidence and the deliberate counterfactual live there.
 installProcessErrorHandlers();
+
+// OS-enforced lifecycle (G2, Windows). The backend job must exist before any
+// child can spawn; it is what takes OpenCode and MCP children with the sidecar
+// on a hard kill. When Tauri supplied a shell-job name, join it before any boot
+// work: a missing job means the shell already died, and an unprotected sidecar
+// must exit rather than keep running.
+installBackendProcessJob();
+const shellJobName = process.env.TBAI_SHELL_JOB_NAME?.trim();
+if (shellJobName) {
+  try {
+    joinShellJob(shellJobName);
+    logger.info("process", "shell_job_joined", { shellJobName });
+  } catch (err) {
+    logger.error("process", "shell_job_join_failed", {
+      shellJobName,
+      ...normalizeError(err),
+      expected: err instanceof ShellJobUnavailableError,
+    });
+    process.exit(1);
+  }
+}
 
 // Desktop stdin shutdown: Tauri writes {"type":"shutdown"}\n to the sidecar's
 // stdin. The reader (owned by services/desktop-stdin) invokes the canonical
