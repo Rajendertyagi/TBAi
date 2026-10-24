@@ -174,12 +174,19 @@ function SidebarResizeHandle() {
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
     const startX = e.clientX;
     const startW = useDesktopLayout.getState().sidebarWidth;
     const onMove = (ev: PointerEvent) => {
       setSidebarWidth(startW + (ev.clientX - startX));
     };
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
+      try {
+        handle.releasePointerCapture(ev.pointerId);
+      } catch {
+        // pointer may have already been released
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };

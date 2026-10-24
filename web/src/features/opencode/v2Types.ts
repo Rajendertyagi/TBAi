@@ -326,6 +326,7 @@ export interface V2ThreadState {
   readonly revertRecovery: V2RevertRecoveryState;
   readonly eventIdentity: V2EventIdentityState;
   readonly session: SessionInfo | null;
+  readonly title?: string | null;
   readonly model: V2ModelSelection | null;
   readonly agent: string | null;
   readonly desiredModel: V2ModelSelection | null;

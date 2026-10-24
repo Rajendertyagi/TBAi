@@ -44,11 +44,14 @@ import {
 } from "@/features/chat/state/conversationMutations";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
+import { useAuiState } from "@assistant-ui/react";
+import { formatRelativeTime } from "@/lib/date-format";
 
 export interface SidebarRowItem {
   remoteId: string;
   title?: string;
   status?: string;
+  lastMessageAt?: Date | string;
   /** Engine for route selection (chat vs code surface). Null = legacy Direct. */
   engine?: string | null;
 }
@@ -78,6 +81,21 @@ export function SidebarThreadRow({
   const activeKey = useChatTabsStore((s) => s.activeKey);
   const title = item.title ?? "Untitled";
   const removeConversation = useDeleteConversation();
+
+  const lastMessageAt = useAuiState((s) => {
+    try {
+      const items = s.threads?.threadItems ?? [];
+      const match =
+        items.find((t) => t.remoteId === item.remoteId) ??
+        items.find((t) => t.id === item.remoteId);
+      return match?.lastMessageAt;
+    } catch {
+      return undefined;
+    }
+  });
+
+  const effectiveDate = lastMessageAt ?? item.lastMessageAt;
+  const time = formatRelativeTime(effectiveDate);
 
   const isActive = activeKey === `chat:${item.remoteId}` || activeKey === `agent:${item.remoteId}`;
 
@@ -154,37 +172,46 @@ export function SidebarThreadRow({
               <span className="truncate">{title}</span>
             </button>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100 outline-none"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <MoreVertical className="size-4" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="right" className="z-50 min-w-40">
-                {historyConfig.renameEnabled && (
-                  <DropdownMenuItem onSelect={() => handleOpenRename()}>
-                    <Pencil className="size-4" /> {copy.rename}
-                  </DropdownMenuItem>
-                )}
-                {historyConfig.archiveEnabled && item.status === "regular" && (
-                  <DropdownMenuItem onSelect={() => handleArchive(item.remoteId)}>
-                    <Archive className="size-4" /> {copy.archive}
-                  </DropdownMenuItem>
-                )}
-                {historyConfig.deleteEnabled && (
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onSelect={() => handleDelete(item.remoteId)}
-                  >
-                    <Trash2 className="size-3.5" /> {copy.delete}
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="relative flex shrink-0 items-center justify-end min-w-6">
+              {time && (
+                <span className="text-xs tabular-nums text-muted-foreground/60 transition-opacity duration-150 group-hover:opacity-0">
+                  {time}
+                </span>
+              )}
+              <div className="absolute inset-0 flex items-center justify-end opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded-full p-1 text-muted-foreground hover:bg-background outline-none cursor-pointer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreVertical className="size-4" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="right" className="z-50 min-w-40">
+                    {historyConfig.renameEnabled && (
+                      <DropdownMenuItem onSelect={() => handleOpenRename()}>
+                        <Pencil className="size-4" /> {copy.rename}
+                      </DropdownMenuItem>
+                    )}
+                    {historyConfig.archiveEnabled && item.status === "regular" && (
+                      <DropdownMenuItem onSelect={() => handleArchive(item.remoteId)}>
+                        <Archive className="size-4" /> {copy.archive}
+                      </DropdownMenuItem>
+                    )}
+                    {historyConfig.deleteEnabled && (
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => handleDelete(item.remoteId)}
+                      >
+                        <Trash2 className="size-3.5" /> {copy.delete}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
           </div>
         </ContextMenuTrigger>
 

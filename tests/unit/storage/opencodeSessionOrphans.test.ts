@@ -1210,3 +1210,234 @@ describe("opencodeOrphanService.settleTerminatedSession", () => {
     ).toBe("absent");
   });
 });
+
+/**
+ * RT-011: a conversation deletion arms a durable `delete` marker before any
+ * remote call. Its lifecycle differs from create recovery:
+ *  - the phase is sticky and is never downgraded by a create/orphan write;
+ *  - a nonzero risk is preserved EXACTLY, and a risk-free marker is raised
+ *    (deleting a conversation is never proof that a create finished);
+ *  - the generic ownership settlement may rotate it but never resolves it;
+ *  - confirmed removal or the bounded absence horizon is what settles it, and
+ *    the audit row is kept.
+ */
+describe("opencodeOrphanService — delete markers (RT-011)", () => {
+  function rowFor(conversationId: string, sessionId: string): Record<string, unknown> {
+    return db
+      .query("SELECT * FROM opencode_session_orphans WHERE conversation_id = ? AND session_id = ?")
+      .get(conversationId, sessionId) as Record<string, unknown>;
+  }
+
+  async function armDeletion(sessionId = "ses_a"): Promise<void> {
+    await opencodeOrphanService.recordDeletionIntent({
+      conversationId: "conv-1",
+      sessionId,
+      locationDirectory: "D:\\ws\\conv-1",
+    });
+  }
+
+  it("arms a risk-bearing delete marker", async () => {
+    await armDeletion();
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.location_directory).toBe("D:\\ws\\conv-1");
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("is sticky: a create/orphan write neither downgrades the phase nor lowers the risk", async () => {
+    await armDeletion();
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("preserves an exact nonzero risk (a stored -1 stays -1) on every delete write", async () => {
+    await armDeletion();
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = -1 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(-1);
+
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(-1);
+
+    await opencodeOrphanService.recordDeletionIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(-1);
+
+    expect(
+      await opencodeOrphanService.retainDeletionAfterFailedRemoval({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe(true);
+    expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(-1);
+  });
+
+  it("reopens a resolved row when a conversation still names the session", async () => {
+    await armDeletion();
+    await opencodeOrphanService.resolveOrphanedSession("conv-1", "ses_a");
+    expect(rowFor("conv-1", "ses_a").resolved_at).not.toBeNull();
+
+    expect(
+      await opencodeOrphanService.recordDeletionIntent({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+      }),
+    ).toBe(true);
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("raises a risk-free marker but keeps a nonzero one in the retention write", async () => {
+    await armDeletion();
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 0 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.retainDeletionAfterFailedRemoval({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe(true);
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.first_absent_at).toBeNull();
+    expect(row.last_checked_at).toBe(5_000);
+  });
+
+  it("retains a bound delete marker through the generic ownership settlement", async () => {
+    await armDeletion();
+    // Even a hand-edited risk-free marker is not settled while its
+    // conversation still points at the session: the deletion did not finish.
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 0 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.late_create_risk).toBe(0);
+    expect(row.resolved_at).toBeNull();
+    expect(row.last_checked_at).toBe(5_000);
+  });
+
+  it("keeps a risk-bearing marker open after a confirmed removal", async () => {
+    await armDeletion();
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+
+    expect(
+      await opencodeOrphanService.settleConfirmedDeletion({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.resolved_at).toBeNull();
+    expect(row.first_absent_at).toBeNull();
+    expect(row.last_checked_at).toBe(5_000);
+  });
+
+  it("stamps a risk-free marker resolved after a confirmed removal and keeps the audit row", async () => {
+    await armDeletion();
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 0 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleConfirmedDeletion({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("released");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.resolved_at).toBe(5_000);
+    expect(row.late_create_risk).toBe(0);
+  });
+
+  it("settles a marker only after the bounded absence horizon, never deleting it", async () => {
+    await armDeletion();
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+
+    const input = {
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      absenceHorizonMs: 10_000,
+    };
+    expect(await opencodeOrphanService.settleAbsentSession({ ...input, at: 2_000 })).toBe(
+      "retained",
+    );
+    expect(rowFor("conv-1", "ses_a").resolved_at).toBeNull();
+
+    expect(await opencodeOrphanService.settleAbsentSession({ ...input, at: 12_000 })).toBe(
+      "expired",
+    );
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("delete");
+    expect(row.resolved_at).toBe(12_000);
+  });
+
+  it("never treats a delete marker as a proven-unused create intent", async () => {
+    await armDeletion();
+    expect(await opencodeOrphanService.deleteCreateIntent("conv-1", "ses_a")).toBe(false);
+    expect(rowFor("conv-1", "ses_a").phase).toBe("delete");
+  });
+});

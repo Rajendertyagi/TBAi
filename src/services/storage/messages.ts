@@ -27,11 +27,6 @@ interface MessageRow {
   content: string;
 }
 
-// The opaque serialized message body produced by the runtime's format adapter.
-interface StoredMessageContent {
-  content?: Array<{ type?: unknown; text?: unknown }>;
-}
-
 /**
  * A message id already belongs to a DIFFERENT conversation than the one the
  * write addressed.
@@ -299,23 +294,59 @@ export function resolveMessageForHistorySync(
   return stored ? "repaired" : "written";
 }
 
-/**
- * Extracts plain text from an assistant-ui ThreadMessage for use as an
- * auto-generated conversation title.
- */
-function threadMessageText(message: unknown): string {
-  if (typeof message !== "object" || message === null) return "";
-  const content = (message as StoredMessageContent).content;
-  if (!Array.isArray(content)) return "";
-  return content
+function extractTextFromParts(parts: unknown[]): string {
+  return parts
     .filter((p): p is { type: "text"; text: string } => {
       if (typeof p !== "object" || p === null) return false;
       const part = p as { type?: unknown; text?: unknown };
-      return part.type === "text" && typeof part.text === "string";
+      // Explicitly allow only "text" parts; exclude dynamic-tool, tool-*, reasoning, file, image, source-url, source-document
+      if (part.type !== "text") return false;
+      return typeof part.text === "string";
     })
     .map((p) => p.text)
     .join(" ")
     .trim();
+}
+
+/**
+ * Extracts plain text from an assistant-ui ThreadMessage for use as an
+ * auto-generated conversation title.
+ *
+ * Evaluates strictly in order:
+ * (a) rec.parts (Array.isArray) — authoritative AI SDK v7 / assistant-ui shape
+ * (b) rec.content (Array.isArray) — legacy parts array
+ * (c) rec.content (string) — legacy flat text
+ * (d) Array.isArray(message) — rare legacy array-at-root format
+ */
+export function threadMessageText(message: unknown): string {
+  if (typeof message !== "object" || message === null) return "";
+  const rec = message as Record<string, unknown>;
+
+  // (a) rec.parts (Array.isArray)
+  if (Array.isArray(rec.parts)) {
+    const text = extractTextFromParts(rec.parts);
+    if (text) return text;
+  }
+
+  // (b) rec.content (Array.isArray)
+  if (Array.isArray(rec.content)) {
+    const text = extractTextFromParts(rec.content);
+    if (text) return text;
+  }
+
+  // (c) rec.content (string)
+  if (typeof rec.content === "string") {
+    const text = rec.content.trim();
+    if (text) return text;
+  }
+
+  // (d) message itself is an array
+  if (Array.isArray(message)) {
+    const text = extractTextFromParts(message);
+    if (text) return text;
+  }
+
+  return "";
 }
 
 /** One row of the persisted head chain, in root-to-tip order. */

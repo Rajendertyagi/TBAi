@@ -28,14 +28,10 @@ export function useThreadListItemRunning(remoteId: string): boolean {
   const { pathname } = useLocation();
   const isOpenConversation = conversationIdFromPath(pathname) === remoteId;
 
-  // Both selectors are guarded because `useAuiState` runs them DURING render, and
-  // a component rendered without a real client (the OpenCode view mounts its own
-  // provider) receives a default client whose scope accessors THROW on use. An
-  // unguarded selector therefore took down the whole surface with an
-  // AuiProvider boundary error instead of just reading "not running".
+  // The open row reads the thread list item's running state from official API.
   const openThreadRunning = useAuiState((state) => {
     try {
-      return state.thread?.isRunning === true;
+      return state.threadListItem.isRunning;
     } catch {
       return false;
     }

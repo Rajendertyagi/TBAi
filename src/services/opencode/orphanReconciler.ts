@@ -139,6 +139,17 @@ export interface OpenCodeOrphanReconcilerDeps {
     at: number,
   ): Promise<"retained" | "cleared" | "absent">;
   /**
+   * Settles a `delete` marker after this pass confirmed the remote removal.
+   * Such a marker is audit-kept: a nonzero risk is reopened and retained (an
+   * outstanding create may recreate the freed id), a risk-free marker is
+   * stamped resolved. The generic ownership settlement never touches it.
+   */
+  settleDeleted(
+    conversationId: string,
+    sessionId: string,
+    at: number,
+  ): Promise<"retained" | "released" | "absent">;
+  /**
    * Settles a positive-404 observation against the CURRENT durable row, in one
    * transaction. `recordProbe` has already stamped the epoch; this decides
    * whether the absence releases the row. A risk-bearing row is retained until
@@ -306,6 +317,38 @@ async function settleRemovedRow(
   reconcilerDeps: OpenCodeOrphanReconcilerDeps,
   report: OpenCodeOrphanReconcileReport,
 ): Promise<void> {
+  // A delete marker has its own terminal settlement: it is kept as an audit
+  // row rather than deleted, and a nonzero risk reopens it.
+  if (record.phase === "delete") {
+    try {
+      const outcome = await reconcilerDeps.settleDeleted(
+        record.conversationId,
+        record.sessionId,
+        now(),
+      );
+      if (outcome === "retained") {
+        report.retainedAfterRemoval += 1;
+        logger.info("opencode", "opencode.orphan_deleted_marker_retained", {
+          conversationId: record.conversationId,
+        });
+        return;
+      }
+      if (outcome === "absent") {
+        logger.debug("opencode", "opencode.orphan_deleted_marker_closed", {
+          conversationId: record.conversationId,
+        });
+      }
+      report.removed += 1;
+    } catch (error) {
+      report.unresolved += 1;
+      logger.warn("opencode", "opencode.orphan_deleted_marker_settle_failed", {
+        conversationId: record.conversationId,
+        ...classifyError(error),
+      });
+    }
+    return;
+  }
+
   try {
     const outcome = await reconcilerDeps.settleOwned(
       record.conversationId,
@@ -483,6 +526,31 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
             conversationId: record.conversationId,
             phase: record.phase,
           });
+          continue;
+        }
+
+        // Ownership recheck AFTER the observation and BEFORE any settlement: a
+        // pointer written while the probe was in flight wins, so a row that
+        // became bound must not be released as absent. This process's own
+        // creates are already excluded by `isCreateInFlight`, so this is
+        // cross-process defense in depth. `settleOwnedRow` makes the
+        // retain-versus-clear decision against the current durable row.
+        let stillUnbound: boolean;
+        try {
+          const latest = await reconcilerDeps.getConversation(record.conversationId);
+          stillUnbound = latest?.opencodeSessionId !== record.sessionId;
+        } catch (error) {
+          report.unresolved += 1;
+          logger.warn("opencode", "opencode.orphan_reconcile_recheck_failed", {
+            conversationId: record.conversationId,
+            phase: record.phase,
+            outcome: "absent",
+            ...classifyError(error),
+          });
+          continue;
+        }
+        if (!stillUnbound) {
+          await settleOwnedRow(record, reconcilerDeps, report);
           continue;
         }
 
@@ -718,6 +786,8 @@ export const openCodeOrphanReconcilerDeps: OpenCodeOrphanReconcilerDeps = {
   },
   settleOwned: (conversationId, sessionId, at) =>
     opencodeOrphanService.settleOwnedSession({ conversationId, sessionId, at }),
+  settleDeleted: (conversationId, sessionId, at) =>
+    opencodeOrphanService.settleConfirmedDeletion({ conversationId, sessionId, at }),
   settleAbsent: (input) => opencodeOrphanService.settleAbsentSession(input),
   getOpenSessionRisk: (conversationId, sessionId) =>
     opencodeOrphanService.getOpenSessionRisk(conversationId, sessionId),

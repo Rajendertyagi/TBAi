@@ -324,6 +324,30 @@ export function pendingPatchMap(
   return patches;
 }
 
+/** Formats an OpenCode error for display in the assistant message error notice. */
+export function formatOpenCodeErrorNotice(
+  error: { message?: string } | string | null | undefined,
+): string {
+  if (!error) return "An error occurred during OpenCode execution.";
+  const detail = typeof error === "string" ? error : error.message || "An error occurred";
+  const lower = detail.toLowerCase();
+  if (
+    lower.includes("token refresh failed") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid token") ||
+    lower.includes("401")
+  ) {
+    return "Authentication failed for this provider. Please re-authenticate and retry.";
+  }
+  if (lower.includes("aborted") || lower.includes("step interrupted")) {
+    return "The running turn was stopped before OpenCode could send the next message.";
+  }
+  if (lower.includes("sessionretry")) {
+    return `Opencode failed to send a message. Retry attempt info: ${detail}`;
+  }
+  return `Opencode failed to send message with error: ${detail}`;
+}
+
 /** Projects the current state into branchable assistant-ui repository items. */
 export function projectV2RepositoryItems(state: V2ThreadState): readonly V2BranchableMessageItem[] {
   const permissions: readonly V2PermissionView[] = state.permissions
@@ -339,6 +363,53 @@ export function projectV2RepositoryItems(state: V2ThreadState): readonly V2Branc
     result.push({ message: projected, parentId });
     parentId = message.id;
   }
+
+  // Map OpenCode execution error into the latest assistant message status
+  if (state.execution.type === "error") {
+    const errorNotice = formatOpenCodeErrorNotice(state.execution.error);
+    const targetId = state.execution.assistantMessageId;
+    let lastAssistantIdx = targetId ? result.findIndex((item) => item.message.id === targetId) : -1;
+    if (lastAssistantIdx < 0 && !targetId) {
+      for (let i = result.length - 1; i >= 0; i--) {
+        if (result[i].message.role === "assistant") {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (lastAssistantIdx >= 0) {
+      const existing = result[lastAssistantIdx];
+      result[lastAssistantIdx] = {
+        ...existing,
+        message: {
+          ...existing.message,
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: errorNotice,
+          },
+        },
+      };
+    } else {
+      const errorMsgId = `err:${state.execution.userMessageId ?? Date.now()}`;
+      result.push({
+        message: {
+          id: errorMsgId,
+          role: "assistant",
+          content: [],
+          createdAt: new Date(),
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: errorNotice,
+          },
+        },
+        parentId,
+      });
+    }
+  }
+
   return result;
 }
 

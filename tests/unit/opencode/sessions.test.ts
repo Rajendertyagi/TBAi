@@ -216,9 +216,12 @@ mock.module("@/services/opencode/client", () => ({
 const { openCodeServerManager } = await import("@/services/opencode/serverManager.ts");
 const { createOpenCodeClient } = await import("@/services/opencode/client.ts");
 const { OpenCodeError } = await import("@/services/opencode/errors.ts");
-const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } = await import(
-  "@/services/opencode/sessions.ts"
-);
+const {
+  terminateOpenCodeSession,
+  terminateSessionForConversationDeletion,
+  isOpenCodeSessionLive,
+  ensureOpenCodeSession,
+} = await import("@/services/opencode/sessions.ts");
 const { OpenCodeSessionPersistError, OpenCodeSessionIntentError } = await import(
   "@/services/opencode/sessions.ts"
 );
@@ -1226,5 +1229,106 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     expect(failure.recorded).toBe(true);
     expect(intentRecords.length).toBe(1);
     expect(deletedIntents).toEqual([]);
+  });
+});
+
+/**
+ * RT-011: the deletion coordinator's remote half. It must terminate ONLY the
+ * exact session the request snapshot named, and it must never write the pointer
+ * or settle the journal itself — those belong to the coordinator.
+ */
+describe("terminateSessionForConversationDeletion — entry-snapshot guard", () => {
+  it("terminates the matching session and leaves journal/pointer untouched", async () => {
+    removeImpl = async () => {
+      throw sessionNotFound(LIVE_ID);
+    };
+
+    const result = await terminateSessionForConversationDeletion({
+      conversationId: "conv-1",
+      expectedSessionId: LIVE_ID,
+      directory: SUBMITTED_DIRECTORY,
+    });
+
+    expect(result).toEqual({ outcome: "removed", error: undefined });
+    expect(calls).toEqual([`interrupt:${LIVE_ID}`, `remove:${LIVE_ID}`]);
+    // Settlement and pointer clearing are the coordinator's job.
+    expect(updates).toEqual([]);
+    expect(settledSessions).toEqual([]);
+    expect(deletedIntents).toEqual([]);
+  });
+
+  it("refuses without any remote call when the conversation no longer exists", async () => {
+    conversation = null;
+
+    const result = await terminateSessionForConversationDeletion({
+      conversationId: "conv-1",
+      expectedSessionId: LIVE_ID,
+      directory: SUBMITTED_DIRECTORY,
+    });
+
+    expect(result).toEqual({ outcome: "missing" });
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses when the engine changed after the snapshot", async () => {
+    conversation = { engine: "direct", opencodeSessionId: LIVE_ID };
+
+    const result = await terminateSessionForConversationDeletion({
+      conversationId: "conv-1",
+      expectedSessionId: LIVE_ID,
+      directory: SUBMITTED_DIRECTORY,
+    });
+
+    expect(result).toEqual({ outcome: "blocked" });
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses when the pointer was rebound to a different session", async () => {
+    conversation = { engine: "opencode", opencodeSessionId: "ses_other0001" };
+
+    const result = await terminateSessionForConversationDeletion({
+      conversationId: "conv-1",
+      expectedSessionId: LIVE_ID,
+      directory: SUBMITTED_DIRECTORY,
+    });
+
+    expect(result).toEqual({ outcome: "blocked" });
+    expect(calls).toEqual([]);
+  });
+
+  it("reports unconfirmed when removal fails, without clearing anything", async () => {
+    removeImpl = async () => {
+      throw new ClientError("Transport", { cause: new Error("offline") });
+    };
+
+    const result = await terminateSessionForConversationDeletion({
+      conversationId: "conv-1",
+      expectedSessionId: LIVE_ID,
+      directory: SUBMITTED_DIRECTORY,
+    });
+
+    expect(result.outcome).toBe("unconfirmed");
+    expect(updates).toEqual([]);
+    expect(settledSessions).toEqual([]);
+  });
+
+  it("reports unreachable when the managed server cannot provide a base URL", async () => {
+    const sm = openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> };
+    const real = sm.ensureBaseUrl;
+    sm.ensureBaseUrl = async () => {
+      throw new Error("server unavailable");
+    };
+    try {
+      const result = await terminateSessionForConversationDeletion({
+        conversationId: "conv-1",
+        expectedSessionId: LIVE_ID,
+        directory: SUBMITTED_DIRECTORY,
+      });
+      expect(result.outcome).toBe("unreachable");
+      expect(calls).toEqual([]);
+      expect(updates).toEqual([]);
+    } finally {
+      sm.ensureBaseUrl = real;
+    }
   });
 });

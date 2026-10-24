@@ -379,6 +379,21 @@ export async function removeUnboundSession(
   outcome: "removed" | "unconfirmed" | "inconclusive";
   error: unknown;
 }> {
+  return removeAndConfirm(client, sessionId);
+}
+
+/**
+ * Remove + confirming lookup, shared by orphan cleanup and conversation
+ * deletion. Ownership is deliberately NOT checked here: callers establish it
+ * at their own boundary, and this helper only answers "is it gone?".
+ */
+async function removeAndConfirm(
+  client: OpenCodeClient,
+  sessionId: string,
+): Promise<{
+  outcome: "removed" | "unconfirmed" | "inconclusive";
+  error: unknown;
+}> {
   try {
     await client.session.remove({ sessionID: sessionId });
   } catch (error) {
@@ -401,6 +416,65 @@ export async function removeUnboundSession(
       : { outcome: "removed", error: undefined };
   } catch (error) {
     return { outcome: "inconclusive", error };
+  }
+}
+
+/**
+ * Remote termination for a conversation deletion request (RT-011).
+ *
+ * The caller (the deletion coordinator) owns journaling, pointer clearing and
+ * the conversation delete. This function only terminates the EXACT session the
+ * request observed, and refuses before any remote call when the row no longer
+ * matches that snapshot:
+ *
+ *  - `missing` — the conversation row vanished;
+ *  - `blocked` — engine changed, or the pointer is null/different.
+ *
+ * A `blocked` result leaves the pointer and journal untouched; the caller
+ * re-reads and either deletes (pointer null) or returns 409 (a rebind).
+ */
+export async function terminateSessionForConversationDeletion(input: {
+  conversationId: string;
+  expectedSessionId: string;
+  directory: string | null;
+}): Promise<{
+  outcome: "removed" | "unconfirmed" | "inconclusive" | "unreachable" | "blocked" | "missing";
+  error?: unknown;
+}> {
+  let conversation: Awaited<ReturnType<typeof conversationService.get>>;
+  try {
+    conversation = await conversationService.get(input.conversationId);
+  } catch (error) {
+    return { outcome: "unreachable", error };
+  }
+  if (!conversation) return { outcome: "missing" };
+  if (
+    conversation.engine !== "opencode" ||
+    conversation.opencodeSessionId !== input.expectedSessionId
+  ) {
+    return { outcome: "blocked" };
+  }
+
+  try {
+    const directory =
+      input.directory ?? (await resolveConversationWorkspace(input.conversationId)).dir;
+    const baseUrl = await openCodeServerManager.ensureBaseUrl();
+    const client = createOpenCodeClient(baseUrl, { directory });
+    try {
+      await client.session.interrupt({ sessionID: input.expectedSessionId });
+    } catch (err) {
+      logger.debug("opencode", "opencode.session_interrupt_skipped", {
+        conversationId: input.conversationId,
+        ...classifyError(toOpenCodeError(err)),
+      });
+    }
+    return await removeAndConfirm(client, input.expectedSessionId);
+  } catch (error) {
+    logger.warn("opencode", "opencode.session_delete_terminate_failed", {
+      conversationId: input.conversationId,
+      ...classifyError(toOpenCodeError(error)),
+    });
+    return { outcome: "unreachable", error };
   }
 }
 

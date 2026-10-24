@@ -425,6 +425,59 @@ export const conversationService = {
     return updated;
   },
 
+  /**
+   * Clears the OpenCode pointer only while it still names the expected session.
+   *
+   * Compare-and-set, not read-then-write: a rebind between the deletion
+   * request's snapshot and this call makes the update match no row, and the
+   * caller must re-read instead of overwriting the new binding.
+   *
+   * @returns True when the pointer was cleared by this call.
+   */
+  async clearOpenCodeSessionPointer(id: string, expectedSessionId: string): Promise<boolean> {
+    return (
+      db.run(
+        `UPDATE conversations
+            SET opencode_session_id = NULL, updated_at = ?
+          WHERE id = ? AND opencode_session_id = ?`,
+        [Date.now(), id, expectedSessionId],
+      ).changes > 0
+    );
+  },
+
+  /**
+   * Deletes a conversation and its messages only while no OpenCode session is
+   * bound.
+   *
+   * The pointer check and both deletes run in one transaction, so a session
+   * bound after the caller's compare-and-set cannot be destroyed by a stale
+   * deletion: the conversation delete matches zero rows, no message is
+   * touched, and the caller receives `rebound`.
+   *
+   * @returns `deleted`, `rebound` (a pointer is bound; nothing was written),
+   *   or `missing` (leftover messages are removed for idempotency).
+   */
+  async deleteIfNoOpenCodeSession(id: string): Promise<"deleted" | "rebound" | "missing"> {
+    return db.transaction((): "deleted" | "rebound" | "missing" => {
+      const deleted = db.run(
+        "DELETE FROM conversations WHERE id = ? AND opencode_session_id IS NULL",
+        [id],
+      ).changes;
+      if (deleted > 0) {
+        db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
+        return "deleted";
+      }
+      const exists = db
+        .query<{ present: number }, SQLQueryBindings[]>(
+          "SELECT 1 AS present FROM conversations WHERE id = ?",
+        )
+        .get(id);
+      if (exists) return "rebound";
+      db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);
+      return "missing";
+    })();
+  },
+
   /** Removes the conversation and its messages. Returns whether a row existed. */
   async delete(id: string): Promise<boolean> {
     db.run("DELETE FROM messages WHERE conversation_id = ?", [id]);

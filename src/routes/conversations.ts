@@ -8,8 +8,8 @@ import {
   messageService,
 } from "../services/storage";
 import type { Conversation } from "../types";
-import { terminateOpenCodeSession } from "../services/opencode/sessions";
-import { logger, normalizeError } from "../lib/logger";
+import { deleteOpenCodeConversation } from "../services/opencode/conversationDeletion";
+import { logger } from "../lib/logger";
 import {
   conversationsListQuerySchema,
   conversationCreateSchema,
@@ -487,19 +487,48 @@ app.delete("/api/conversations/:id", async (c) => {
     // clean up the hidden chat folder afterward.
     const conv = await conversationService.get(id);
     const folderId = conv?.workspaceFolderId ?? null;
-    // Phase 6: terminate the bound OpenCode session BEFORE the deletes —
-    // terminate reads the conversation row for the session id, and only
-    // opencode-engine conversations own a session. Best-effort: a failed
-    // cleanup is logged and never blocks conversation teardown.
+    // RT-011: an OpenCode row owns a remote session. The entry snapshot is the
+    // only binding this request may act on: the coordinator arms a durable
+    // marker before its first decision read, terminates only that session, and
+    // refuses to delete a row that was rebound after the snapshot. Direct rows
+    // keep the plain teardown below.
     if (conv?.engine === "opencode") {
-      try {
-        await terminateOpenCodeSession(id);
-      } catch (err) {
-        logger.warn("opencode", "conversation_delete_terminate_failed", {
+      const outcome = await deleteOpenCodeConversation({
+        conversationId: id,
+        entry: {
+          engine: conv.engine,
+          opencodeSessionId: conv.opencodeSessionId ?? null,
+        },
+      });
+      if (outcome.kind === "conflict") {
+        logger.warn("opencode", "conversation.delete_rebound", {
           conversationId: id,
-          ...normalizeError(err),
+          reason: outcome.reason,
         });
+        return c.json({ error: "session_rebound" }, 409);
       }
+      if (outcome.kind === "unavailable") {
+        logger.error("opencode", "conversation.delete_cleanup_unavailable", {
+          conversationId: id,
+          reason: outcome.reason,
+        });
+        return c.json({ error: "session_cleanup_unavailable" }, 503);
+      }
+      // Cleanup hidden chat folder if no other conversations reference it.
+      if (folderId) {
+        await folderService.cleanupChatFolder(folderId);
+      }
+      logger.info("conversations", "conversation.delete", {
+        conversationId: id,
+        deleted: outcome.kind === "deleted",
+        engine: "opencode",
+        sessionCleanup: outcome.sessionCleanup,
+      });
+      return c.json({
+        success: true,
+        deleted: outcome.kind === "deleted",
+        sessionCleanup: outcome.sessionCleanup,
+      });
     }
     await messageService.deleteByConversation(id);
     const deleted = await conversationService.delete(id);

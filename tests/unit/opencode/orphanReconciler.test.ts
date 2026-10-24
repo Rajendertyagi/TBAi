@@ -83,6 +83,14 @@ function makeHarness(options: HarnessOptions = {}) {
     settleOwnedError: null as Error | null,
     /** Thrown by every absence settlement. */
     settleAbsentError: null as Error | null,
+    /** Thrown by every delete-marker settlement. */
+    settleDeletedError: null as Error | null,
+    /** Delete-marker settlements, in call order. */
+    deletedSettles: [] as Array<{
+      conversationId: string;
+      sessionId: string;
+      risk: "risk" | "safe";
+    }>,
     /** Thrown by every current-risk read. */
     riskReadError: null as Error | null,
     /** `(conversation, session)` pairs this process is still creating. */
@@ -94,7 +102,7 @@ function makeHarness(options: HarnessOptions = {}) {
     removeCalls: [] as string[],
     createClientCalls: 0,
     clears: [] as Array<{
-      kind: "intent" | "orphan";
+      kind: OpenCodeOrphanRecord["phase"];
       conversationId: string;
       sessionId: string;
     }>,
@@ -198,6 +206,14 @@ function makeHarness(options: HarnessOptions = {}) {
         (r) => r.conversationId === conversationId && r.sessionId === sessionId,
       );
       if (!row) return "absent";
+      // Mirrors the delete-marker branch: bound markers are retained and
+      // rotated, never settled by the generic ownership operation.
+      if (row.phase === "delete") {
+        state.touches.push({ conversationId, sessionId, at });
+        row.firstAbsentAt = null;
+        row.lastCheckedAt = new Date(at);
+        return "retained";
+      }
       if (row.lateCreateRisk) {
         state.touches.push({ conversationId, sessionId, at });
         row.firstAbsentAt = null;
@@ -207,6 +223,30 @@ function makeHarness(options: HarnessOptions = {}) {
       if (state.clearError) throw state.clearError;
       state.clears.push({ kind: row.phase, conversationId, sessionId });
       return removeRow(conversationId, sessionId) ? "cleared" : "absent";
+    },
+    // Mirrors `settleConfirmedDeletion`: a nonzero risk reopens and retains the
+    // audit row; a risk-free one is stamped resolved (kept, never deleted).
+    settleDeleted: async (conversationId, sessionId, at) => {
+      if (state.settleDeletedError) throw state.settleDeletedError;
+      const row = rows.find(
+        (r) => r.conversationId === conversationId && r.sessionId === sessionId,
+      );
+      if (!row) return "absent";
+      state.deletedSettles.push({
+        conversationId,
+        sessionId,
+        risk: row.lateCreateRisk ? "risk" : "safe",
+      });
+      if (row.lateCreateRisk) {
+        state.touches.push({ conversationId, sessionId, at });
+        row.resolvedAt = null;
+        row.firstAbsentAt = null;
+        row.lastCheckedAt = new Date(at);
+        return "retained";
+      }
+      if (row.resolvedAt !== null) return "absent";
+      row.resolvedAt = new Date(at);
+      return "released";
     },
     // Mirrors `settleAbsentSession`: the recorded 404 releases a risk-free row
     // and retains a risk-bearing one until its own epoch horizon elapses.
@@ -1142,5 +1182,143 @@ describe("orphan reconciliation lifecycle", () => {
     expect(DEFAULT_ORPHAN_RECONCILE_INTERVAL_MS).toBe(5 * 60 * 1000);
     expect(DEFAULT_ORPHAN_RECONCILE_GRACE_MS).toBe(60 * 1000);
     expect(DEFAULT_ORPHAN_RECONCILE_LIMIT).toBe(20);
+  });
+});
+
+/**
+ * RT-011 delete markers. A conversation deletion leaves a durable `delete`
+ * row when its remote session could not be removed. The reconciler must treat
+ * it as an audit obligation, not as a create intent:
+ *  - bound markers are rotated and retained, never settled by the generic
+ *    ownership rule (which would delete a risk-free intent);
+ *  - a confirmed removal goes through the delete-specific settlement, which
+ *    keeps the row;
+ *  - a 404 is still bounded by the absence horizon.
+ */
+describe("runOrphanReconciliationOnce — delete markers (RT-011)", () => {
+  it("retains and rotates a bound delete marker instead of settling it", async () => {
+    const h = makeHarness({ rows: [record({ phase: "delete", lateCreateRisk: true })] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ bound: 0, retainedBound: 1, removed: 0, unresolved: 0 });
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.touches).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", at: NOW },
+    ]);
+  });
+
+  it("retains a bound delete marker even when its stored risk is zero", async () => {
+    // The conversation still names the session, so the deletion did not
+    // complete. A risk-free marker must not be deleted as a stale intent.
+    const h = makeHarness({ rows: [record({ phase: "delete", lateCreateRisk: false })] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    start(h.deps);
+
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedBound: 1, bound: 0 });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.resolvedAt).toBeNull();
+  });
+
+  it("keeps an unbound delete marker through a 404 until its horizon elapses", async () => {
+    const h = makeHarness({ rows: [record({ phase: "delete", lateCreateRisk: true })] });
+    start(h.deps, { absenceHorizonMs: 10_000 });
+
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ lateRisk: 1, absent: 0 });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.firstAbsentAt).toEqual(new Date(NOW));
+
+    const later = makeHarness({ rows: h.state.rows });
+    start(later.deps, { absenceHorizonMs: 10_000, now: () => NOW + 11_000 });
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ expiredAbsent: 1, absent: 0 });
+    expect(later.state.rows).toHaveLength(0);
+  });
+
+  it("settles a delete marker through the delete-specific path after a confirmed removal", async () => {
+    const h = makeHarness({ rows: [record({ phase: "delete", lateCreateRisk: true })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ removed: 0, retainedAfterRemoval: 1, absent: 0 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.deletedSettles).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", risk: "risk" },
+    ]);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.resolvedAt).toBeNull();
+  });
+
+  it("releases a risk-free delete marker after a confirmed removal without dropping the audit row", async () => {
+    const h = makeHarness({ rows: [record({ phase: "delete", lateCreateRisk: false })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    // The harness records the release by stamping the row; the real store
+    // keeps it as an audit record (proven in the storage suite).
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ removed: 1 });
+    expect(h.state.deletedSettles).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", risk: "safe" },
+    ]);
+    expect(h.state.rows[0]?.resolvedAt).not.toBeNull();
+  });
+
+  it("discovers a binding written while the absence probe was in flight", async () => {
+    // The exact race the late ownership recheck exists to prevent: the row is
+    // listed unbound, the probe answers 404, and a cross-process writer binds
+    // this exact session before settlement. Without the recheck the row would
+    // be settled as absent; with it, ownership wins and the absence epoch ends.
+    const row = record({ phase: "intent", lateCreateRisk: true });
+    const h = makeHarness({ rows: [row] });
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      if (reads === 1) return { opencodeSessionId: null };
+      return { opencodeSessionId: "ses_orphan0001" };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(reads).toBe(2);
+    expect(report).toMatchObject({
+      retainedBound: 1,
+      lateRisk: 0,
+      absent: 0,
+      expiredAbsent: 0,
+      unresolved: 0,
+    });
+    expect(h.state.probes).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", outcome: "absent", at: NOW },
+    ]);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("leaves the absence unsettled when the ownership recheck cannot be read", async () => {
+    const h = makeHarness({ rows: [record({ phase: "orphan", lateCreateRisk: true })] });
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      if (reads === 1) return { opencodeSessionId: null };
+      throw new Error("database is locked");
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, absent: 0, lateRisk: 0 });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
   });
 });

@@ -40,8 +40,14 @@ import type { ErrorCategory } from "../../lib/errors";
 /**
  * Why a row exists. `intent` is a pre-create crash marker, not a claim that a
  * remote session is orphaned; the reconciler decides that by probing the id.
+ *
+ * `delete` is the conversation-deletion obligation (RT-011): the conversation
+ * is about to be torn down, and this row is the durable handle that lets the
+ * remote session be cleaned up even after the conversation row is gone. It is
+ * sticky: generic create/orphan writers never downgrade it and never lower its
+ * nonzero risk. Only deletion settlement or the bounded reconciler releases it.
  */
-export type OpenCodeOrphanPhase = "intent" | "orphan";
+export type OpenCodeOrphanPhase = "intent" | "orphan" | "delete";
 
 /**
  * One durable recovery record. `sessionId` is the OpenCode handle and is kept
@@ -131,7 +137,9 @@ function mapOrphanRow(row: OrphanRow): OpenCodeOrphanRecord {
     sessionId: row.session_id,
     // An unknown phase can only come from a hand-edited row; treating it as an
     // orphan is the conservative read (it is acted on, never silently dropped).
-    phase: row.phase === "intent" ? "intent" : "orphan",
+    // `delete` must survive the mapping: collapsing it to `orphan` would let
+    // the generic reconciliation rules act on a deletion marker.
+    phase: row.phase === "intent" ? "intent" : row.phase === "delete" ? "delete" : "orphan",
     firstSeenAt: new Date(row.first_seen_at),
     lastSeenAt: new Date(row.last_seen_at),
     locationDirectory: row.location_directory ?? undefined,
@@ -173,11 +181,23 @@ export const opencodeOrphanService = {
        VALUES (?, ?, ?, ?, 'intent', ?, 1)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
+         phase = CASE
+           WHEN opencode_session_orphans.phase = 'delete' THEN 'delete'
+           ELSE 'intent'
+         END,
          location_directory = COALESCE(
            opencode_session_orphans.location_directory,
            excluded.location_directory
          ),
-         late_create_risk = 1,
+         -- A delete marker is sticky and a nonzero risk is preserved EXACTLY
+         -- (a legacy/hand-edited -1 is still risk-bearing). Only a delete row
+         -- that is already risk-free is raised, never lowered.
+         late_create_risk = CASE
+           WHEN opencode_session_orphans.phase = 'delete'
+                AND opencode_session_orphans.late_create_risk <> 0
+             THEN opencode_session_orphans.late_create_risk
+           ELSE 1
+         END,
          first_absent_at = NULL
        WHERE opencode_session_orphans.resolved_at IS NULL`,
       [input.conversationId, input.sessionId, now, now, input.locationDirectory ?? null],
@@ -227,7 +247,10 @@ export const opencodeOrphanService = {
        VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?, COALESCE(?, 0), NULL)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
-         phase = 'orphan',
+         phase = CASE
+           WHEN opencode_session_orphans.phase = 'delete' THEN 'delete'
+           ELSE 'orphan'
+         END,
          location_directory = COALESCE(
            opencode_session_orphans.location_directory,
            excluded.location_directory
@@ -240,7 +263,17 @@ export const opencodeOrphanService = {
            opencode_session_orphans.cleanup_error_category,
            excluded.cleanup_error_category
          ),
-         late_create_risk = COALESCE(?, opencode_session_orphans.late_create_risk),
+         -- Delete markers are sticky: preserve an existing nonzero risk EXACTLY
+         -- and never downgrade the phase. A risk-free delete marker is raised
+         -- because an orphan observation means the remote may still exist.
+         late_create_risk = CASE
+           WHEN opencode_session_orphans.phase = 'delete'
+                AND opencode_session_orphans.late_create_risk <> 0
+             THEN opencode_session_orphans.late_create_risk
+           WHEN opencode_session_orphans.phase = 'delete'
+             THEN 1
+           ELSE COALESCE(?, opencode_session_orphans.late_create_risk)
+         END,
          first_absent_at = NULL
        WHERE opencode_session_orphans.resolved_at IS NULL`,
       [
@@ -351,6 +384,10 @@ export const opencodeOrphanService = {
    * which is what lets the reconciler fail closed instead of discarding the
    * obligation.
    *
+   * A `delete` marker is only ever retained and rotated here, never settled:
+   * the conversation still pointing at the session means the deletion did not
+   * complete, so the durable handle must survive regardless of its risk value.
+   *
    * @returns `retained` (risk kept and rotated), `cleared` (risk-free row
    *   settled) or `absent` (already settled; nothing to do).
    */
@@ -360,7 +397,19 @@ export const opencodeOrphanService = {
     at: number;
   }): Promise<"retained" | "cleared" | "absent"> {
     const settle = db.transaction((): "retained" | "cleared" | "absent" => {
-      // The risk-bearing write comes first: it is the only outcome that must
+      // A delete marker is retained unconditionally: the conversation still
+      // names the session, so the deletion did not complete and the handle must
+      // outlive this pass. Touching it keeps a bound marker rotating.
+      const retainedDelete = db.run(
+        `UPDATE opencode_session_orphans
+           SET first_absent_at = NULL, last_checked_at = ?
+         WHERE conversation_id = ? AND session_id = ?
+           AND resolved_at IS NULL AND phase = 'delete'`,
+        [input.at, input.conversationId, input.sessionId],
+      ).changes;
+      if (retainedDelete > 0) return "retained";
+
+      // The risk-bearing write comes next: it is the only outcome that must
       // never be missed, and a re-armed row must not fall through to a clear.
       // Anything other than an explicit 0 is risk-bearing, matching the read
       // mapping: a legacy or hand-edited nonzero value is never treated as safe.
@@ -368,7 +417,8 @@ export const opencodeOrphanService = {
         `UPDATE opencode_session_orphans
            SET first_absent_at = NULL, last_checked_at = ?
          WHERE conversation_id = ? AND session_id = ?
-           AND resolved_at IS NULL AND late_create_risk <> 0`,
+           AND resolved_at IS NULL AND late_create_risk <> 0
+           AND COALESCE(phase, 'orphan') <> 'delete'`,
         [input.at, input.conversationId, input.sessionId],
       ).changes;
       if (retained > 0) return "retained";
@@ -390,7 +440,8 @@ export const opencodeOrphanService = {
            SET resolved_at = ?
          WHERE conversation_id = ? AND session_id = ?
            AND resolved_at IS NULL AND late_create_risk = 0
-           AND COALESCE(phase, 'orphan') <> 'intent'`,
+           AND COALESCE(phase, 'orphan') <> 'intent'
+           AND COALESCE(phase, 'orphan') <> 'delete'`,
         [input.at, input.conversationId, input.sessionId],
       ).changes;
       return resolved > 0 ? "cleared" : "absent";
@@ -492,10 +543,144 @@ export const opencodeOrphanService = {
       `UPDATE opencode_session_orphans
          SET first_absent_at = NULL, last_checked_at = ?
        WHERE conversation_id = ? AND session_id = ?
-         AND resolved_at IS NULL AND late_create_risk <> 0`,
+         AND resolved_at IS NULL AND late_create_risk <> 0
+         AND COALESCE(phase, 'orphan') <> 'delete'`,
       [input.at, input.conversationId, input.sessionId],
     ).changes;
     return retained > 0 ? "retained" : "absent";
+  },
+
+  /**
+   * Arms the durable conversation-deletion obligation for one session.
+   *
+   * Written BEFORE any remote termination so the handle survives a crash, an
+   * unconfirmed removal, or the conversation row being deleted. The pair is
+   * unconditionally reopened: a conversation that still names this session
+   * proves a current lifecycle exists, so an earlier terminal orphan
+   * resolution must not suppress a new deletion obligation.
+   *
+   * The phase is sticky (`delete`), and a nonzero risk is preserved EXACTLY.
+   * A risk-free row is raised to 1 because the bound pointer may still have an
+   * outstanding create request.
+   *
+   * @returns True when an open delete record exists after the write. The
+   *   caller MUST fail closed with 503 when this is false.
+   */
+  async recordDeletionIntent(input: {
+    conversationId: string;
+    sessionId: string;
+    locationDirectory?: string | null;
+  }): Promise<boolean> {
+    const now = Date.now();
+    const result = db.run(
+      `INSERT INTO opencode_session_orphans
+         (conversation_id, session_id, first_seen_at, last_seen_at, phase,
+          location_directory, late_create_risk, first_absent_at)
+       VALUES (?, ?, ?, ?, 'delete', ?, 1, NULL)
+       ON CONFLICT(conversation_id, session_id) DO UPDATE SET
+         first_seen_at = excluded.first_seen_at,
+         last_seen_at = excluded.last_seen_at,
+         phase = 'delete',
+         location_directory = COALESCE(
+           opencode_session_orphans.location_directory,
+           excluded.location_directory
+         ),
+         late_create_risk = CASE
+           WHEN opencode_session_orphans.phase = 'delete'
+                AND opencode_session_orphans.late_create_risk <> 0
+             THEN opencode_session_orphans.late_create_risk
+           ELSE 1
+         END,
+         first_absent_at = NULL,
+         resolved_at = NULL`,
+      [input.conversationId, input.sessionId, now, now, input.locationDirectory ?? null],
+    );
+    return result.changes > 0;
+  },
+
+  /**
+   * Re-affirms a delete marker after a failed or inconclusive remote removal.
+   *
+   * The conversation may still be deleted (the marker is the durable handle),
+   * so the row must survive with a risk-bearing state: an unknown remote
+   * session, plus a possible late create, must never be released by the next
+   * probe. An existing nonzero risk is preserved EXACTLY.
+   *
+   * @returns True when an open delete record exists after the write.
+   */
+  async retainDeletionAfterFailedRemoval(input: {
+    conversationId: string;
+    sessionId: string;
+    at: number;
+    locationDirectory?: string | null;
+  }): Promise<boolean> {
+    const result = db.run(
+      `UPDATE opencode_session_orphans
+          SET phase = 'delete',
+              location_directory = COALESCE(
+                opencode_session_orphans.location_directory,
+                ?
+              ),
+              late_create_risk = CASE
+                WHEN opencode_session_orphans.late_create_risk <> 0
+                  THEN opencode_session_orphans.late_create_risk
+                ELSE 1
+              END,
+              first_absent_at = NULL,
+              last_checked_at = ?
+        WHERE conversation_id = ? AND session_id = ?
+          AND resolved_at IS NULL`,
+      [input.locationDirectory ?? null, input.at, input.conversationId, input.sessionId],
+    );
+    return result.changes > 0;
+  },
+
+  /**
+   * Settles a delete marker after the remote removal was CONFIRMED.
+   *
+   * A nonzero risk is retained (and a resolved nonzero row is reopened): the
+   * removal freed the id, and a create request whose response was lost may
+   * still recreate it. A risk-free row is resolved and kept as an audit row;
+   * it is never deleted. Phase is left as-is (`delete`).
+   *
+   * @returns `retained`, `released`, or `absent` when no row/change exists.
+   */
+  async settleConfirmedDeletion(input: {
+    conversationId: string;
+    sessionId: string;
+    at: number;
+  }): Promise<"retained" | "released" | "absent"> {
+    const settle = db.transaction((): "retained" | "released" | "absent" => {
+      const row = db
+        .query<{ late_create_risk: number | null }, SQLQueryBindings[]>(
+          `SELECT late_create_risk
+             FROM opencode_session_orphans
+            WHERE conversation_id = ? AND session_id = ?`,
+        )
+        .get(input.conversationId, input.sessionId);
+      if (!row) return "absent";
+
+      if (row.late_create_risk !== 0) {
+        const retained = db.run(
+          `UPDATE opencode_session_orphans
+              SET resolved_at = NULL, first_absent_at = NULL, last_checked_at = ?
+            WHERE conversation_id = ? AND session_id = ?
+              AND late_create_risk <> 0`,
+          [input.at, input.conversationId, input.sessionId],
+        ).changes;
+        return retained > 0 ? "retained" : "absent";
+      }
+
+      const released = db.run(
+        `UPDATE opencode_session_orphans
+            SET resolved_at = ?
+          WHERE conversation_id = ? AND session_id = ?
+            AND resolved_at IS NULL AND late_create_risk = 0`,
+        [input.at, input.conversationId, input.sessionId],
+      ).changes;
+      return released > 0 ? "released" : "absent";
+    });
+    return settle();
   },
 
   /**

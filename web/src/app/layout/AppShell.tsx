@@ -1,5 +1,12 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Outlet } from "react-router";
+import {
+  AssistantRuntimeProvider,
+  AuiConfig,
+  Tools,
+  Suggestions,
+  makeAssistantDataUI,
+} from "@assistant-ui/react";
 import { Sidebar } from "../../components/Sidebar";
 import { StatusBar } from "../../components/StatusBar";
 import { ActivityBar } from "../../components/ActivityBar";
@@ -17,6 +24,27 @@ import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 import { useAvailabilityStore } from "../../features/availability/availabilityStore";
 import { registerAvailabilityRecovery } from "../../features/availability/recovery";
 import { registerTabReconciliation } from "../../features/chat/state/tabReconciliation";
+import { useAppChatRuntime } from "../../runtime";
+import { threadListAdapter } from "../adapter";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
+import { NEW_DRAFT_TAB_ID, activeTab, useChatTabsStore } from "../../features/chat/state/chatTabs";
+import { getWelcomeEngineSnapshot } from "../../features/chat/state/welcomeEngine";
+import { peekMaterializedEngine } from "../../features/chat/state/materializeDraft";
+import { appToolkit } from "../../tools/toolkit";
+import { ProgressStages } from "../../components/assistant-ui/elements/progress-stages";
+import { CompactionDivider } from "../../components/assistant-ui/elements/compaction-divider";
+import { DIRECT_COMPACT_DATA_NAME } from "../../features/chat/compactCommand";
+import { logger } from "../../lib/logger";
+
+const TbaiProgressDataUI = makeAssistantDataUI({
+  name: "tbai-progress",
+  render: ProgressStages,
+});
+
+const TbaiCompactDataUI = makeAssistantDataUI({
+  name: DIRECT_COMPACT_DATA_NAME,
+  render: CompactionDivider,
+});
 
 /**
  * Single application shell for BOTH the browser and the Windows desktop.
@@ -28,9 +56,10 @@ import { registerTabReconciliation } from "../../features/chat/state/tabReconcil
  * fixed corner overlays, and the native-style caption buttons float as a
  * top-right overlay that is simply absent in the browser.
  *
- * The shell navigation (Sidebar, TabStrip, ActivityBar, StatusBar) does NOT
- * depend on an assistant-ui execution runtime — chat/code execution runtimes
- * are isolated to their respective route surfaces (/chat, /code).
+ * AppShell hosts the root AssistantRuntimeProvider using the canonical
+ * `threadListAdapter` singleton so the Sidebar (ThreadRunningDot, lastMessageAt)
+ * and Chat share the official assistant-ui thread state without duplicate stores.
+ * Code mode isolates via CodeShell and OpenCodeIsolationBoundary (<AuiProvider extends={null}>).
  *
  * Chrome geometry (sidebar width, overlay reserves, band heights) is published
  * as CSS variables by `syncChromeVars` and consumed via `var(--…)` classes —
@@ -44,6 +73,42 @@ export function AppShell() {
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
   const searchOpen = useDesktopLayout((s) => s.searchOpen);
+
+  const active = useChatTabsStore(activeTab);
+  const runtimeThreadId =
+    active?.kind === "chat" && active.ref !== NEW_DRAFT_TAB_ID ? active.ref : undefined;
+
+  const handleThreadIdChange = useCallback((id: string | undefined) => {
+    if (!id) return;
+    const state = useChatTabsStore.getState();
+    const current = activeTab(state);
+    logger.info("app", "runtime.bind", { threadId: id });
+    if (current?.kind === "chat" && current.ref === NEW_DRAFT_TAB_ID) {
+      state.resolveDraftId(id, peekMaterializedEngine(id) ?? getWelcomeEngineSnapshot().engine);
+    } else if (!state.tabs.some((t) => t.kind === "chat" && t.ref === id)) {
+      state.openChat(id);
+    }
+  }, []);
+
+  const runtime = useAppChatRuntime(threadListAdapter, runtimeThreadId, handleThreadIdChange);
+
+  const { loadProviders } = useSettingsStore();
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
+
+  const config = useMemo(
+    () =>
+      AuiConfig({
+        tools: Tools({ toolkit: appToolkit }),
+        suggestions: Suggestions([
+          "What can you help me with?",
+          "Explain a concept",
+          "Help me write code",
+        ]),
+      }),
+    [],
+  );
 
   // The frameless Windows caption strip exists only in the Tauri desktop;
   // the browser reserves just the button cluster.
@@ -73,55 +138,59 @@ export function AppShell() {
   }, []);
 
   return (
-    <div className="relative flex h-screen flex-col bg-background text-foreground">
-      <div className="relative flex min-w-0 flex-1 flex-row overflow-hidden">
-        <ActivityBar />
-        {sidebarVisible && <Sidebar />}
-        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-          {/* codeg-style content-area tab strip (top of the conversation column) */}
-          <div className="relative flex h-[var(--title-bar-height)] shrink-0 items-stretch border-b border-border glass-surface">
-            {!sidebarVisible && (
+    <AssistantRuntimeProvider runtime={runtime} config={config}>
+      <TbaiProgressDataUI />
+      <TbaiCompactDataUI />
+      <div className="relative flex h-screen flex-col bg-background text-foreground">
+        <div className="relative flex min-w-0 flex-1 flex-row overflow-hidden">
+          <ActivityBar />
+          {sidebarVisible && <Sidebar />}
+          <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+            {/* codeg-style content-area tab strip (top of the conversation column) */}
+            <div className="relative flex h-[var(--title-bar-height)] shrink-0 items-stretch border-b border-border glass-surface">
+              {!sidebarVisible && (
+                <div
+                  data-tauri-drag-region
+                  className="h-full w-[var(--left-chrome-width)] shrink-0"
+                />
+              )}
+              <TabStrip />
+              {/* Reserve the right overlay cluster + caption buttons (Tauri). */}
               <div
                 data-tauri-drag-region
-                className="h-full w-[var(--left-chrome-width)] shrink-0"
+                className="h-full w-[var(--right-chrome-reserve)] shrink-0"
               />
-            )}
-            <TabStrip />
-            {/* Reserve the right overlay cluster + caption buttons (Tauri). */}
-            <div
-              data-tauri-drag-region
-              className="h-full w-[var(--right-chrome-reserve)] shrink-0"
-            />
-          </div>
+            </div>
 
-          {/* Page-level context menu is its own chrome component; the shell only
-              composes it around the routed content. */}
-          <PageContextMenu>
-            <Outlet />
-          </PageContextMenu>
-        </main>
-      </div>
+            {/* Page-level context menu is its own chrome component; the shell only
+                composes it around the routed content. */}
+            <PageContextMenu>
+              <Outlet />
+            </PageContextMenu>
+          </main>
+        </div>
 
-      {statusBarVisible && <StatusBar />}
+        {statusBarVisible && <StatusBar />}
 
-      {/* Corner overlays — rendered in BOTH web + desktop (codeg pattern). Only
-          the caption buttons self-null in the browser. */}
-      <div className="absolute top-0 z-50 h-[var(--title-bar-height)] w-[var(--left-chrome-width)] left-[var(--activity-bar-width)]">
-        <LeftEdgeChrome />
-      </div>
-      <div className="absolute top-0 z-50 h-[var(--title-bar-height)] right-[var(--right-chrome-reserve)]">
-        <RightEdgeChrome />
-      </div>
-      <div className="absolute right-0 top-0 z-50 h-[var(--title-bar-height)]">
-        <WindowControls />
-      </div>
+        {/* Corner overlays — rendered in BOTH web + desktop (codeg pattern). Only
+            the caption buttons self-null in the browser. */}
+        <div className="absolute top-0 z-50 h-[var(--title-bar-height)] w-[var(--left-chrome-width)] left-[var(--activity-bar-width)]">
+          <LeftEdgeChrome />
+        </div>
+        <div className="absolute top-0 z-50 h-[var(--title-bar-height)] right-[var(--right-chrome-reserve)]">
+          <RightEdgeChrome />
+        </div>
+        <div className="absolute right-0 top-0 z-50 h-[var(--title-bar-height)]">
+          <WindowControls />
+        </div>
 
-      {/* Desktop keyboard shortcuts (self-gates on isTauri) */}
-      <ChromeShortcuts />
-      <TabUrlSync />
-      {/* Route transitions are part of every operation's story — recorded once,
-          for both shells, since both render through this component. */}
-      <RouteObserver />
-    </div>
+        {/* Desktop keyboard shortcuts (self-gates on isTauri) */}
+        <ChromeShortcuts />
+        <TabUrlSync />
+        {/* Route transitions are part of every operation's story — recorded once,
+            for both shells, since both render through this component. */}
+        <RouteObserver />
+      </div>
+    </AssistantRuntimeProvider>
   );
 }

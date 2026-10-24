@@ -7660,11 +7660,11 @@ make the failure distinguishable server-side.
 - `terminateOpenCodeSession` still clears the pointer after a resolved
   `remove()` without a confirmation lookup (pre-existing behaviour, unchanged
   here; recorded as a separate finding rather than folded into RT-001).
-- **Conversation deletion is untouched (RT-011).** `DELETE /api/conversations/:id`
-  still calls `terminateOpenCodeSession` best-effort before deleting the row, but
-  that route is outside this correction's scope. Any defect in it — including
-  deletion racing an in-flight create — is tracked separately and is not claimed
-  fixed here.
+- **Conversation deletion was untouched by RT-001 (RT-011).** At the time of
+  this correction `DELETE /api/conversations/:id` still called
+  `terminateOpenCodeSession` best-effort before deleting the row. That defect —
+  including deletion racing an in-flight create — was tracked separately and is
+  addressed by the RT-011 entry below.
 - The reconciler settles rows only while a managed server is running. Rows
   created while offline wait; that is intentional, not a lost obligation.
 
@@ -7714,3 +7714,110 @@ the deterministic seams and a fake clock: the lifecycle test adds the id back to
 a fake server to stand in for an outstanding create. The real-server suite proves
 the API properties these rules depend on but does not inject a delayed commit,
 so it does not reproduce the interleaving itself.
+
+## 2026-10-24 - RT-011: durable delete markers for OpenCode conversations
+
+**Context.** `DELETE /api/conversations/:id` read the row, called
+`terminateOpenCodeSession` best-effort, then deleted messages and the
+conversation. Two defects followed from that order:
+
+1. A failed remote removal was warn-and-continue. The row was the only handle
+   naming the remote session, so destroying it orphaned a session that the
+   server still had, with nothing durable left that could remove it.
+2. Deletion raced creation. Between the route's entry read and the row delete,
+   a create could bind a new session id (or clear/move the pointer). The route
+   then deleted the row anyway, and the stale termination path could act on an
+   id the request had not observed.
+
+RT-001's journal already provided the missing durable handle, but its phases
+describe create recovery. Deletion needed a marker that is not discharged by
+ownership, presence, or a risk-free settlement.
+
+**Decision.** OpenCode rows enter a deletion coordinator
+(`src/services/opencode/conversationDeletion.ts`) from the DELETE route. Direct
+rows keep the existing teardown unchanged.
+
+- **Snapshot, then arm, then read.** The request-entry row supplies
+  `{ engine, opencodeSessionId }`. The coordinator writes
+  `recordDeletionIntent` for that id BEFORE its first decision read. A pointer
+  cleared in the window between the entry snapshot and that read therefore
+  cannot suppress the durable handle: the marker names the session the request
+  observed.
+- **Terminate only the snapshot.** `terminateSessionForConversationDeletion`
+  re-reads the row and returns `blocked` without any remote call when the engine
+  is no longer `opencode` or the pointer is null/different. It never clears the
+  pointer and never settles the journal; those belong to the coordinator.
+- **Option A.** A confirmed removal settles the marker
+  (`settleConfirmedDeletion`) and then finalizes the row. An unconfirmed,
+  inconclusive or unreachable removal re-affirms the marker
+  (`retainDeletionAfterFailedRemoval`) and deletes the row anyway: the marker is
+  the durable recovery obligation.
+- **Preservation failure is structural.** If the marker cannot be written, or
+  cannot be re-affirmed after a failed removal, the route answers 503
+  `{ error: "session_cleanup_unavailable" }` and deletes nothing.
+- **Finalization is conditional.** The coordinator compare-and-sets the pointer
+  to null for the expected id, then deletes only while
+  `opencode_session_id IS NULL` (`deleteIfNoOpenCodeSession`, one transaction
+  covering the conversation and its messages). A rebind after the snapshot is
+  preserved and answered 409 `{ error: "session_rebound" }`. An already-null
+  pointer is a valid intermediate state, not a storage fault: it proceeds.
+- **The journal phase is `delete`.** It is sticky: create/orphan writes never
+  downgrade it. A nonzero `late_create_risk` is preserved EXACTLY (a stored
+  `-1` stays `-1`); a risk-free marker is raised to 1, because deleting a
+  conversation is not proof that a create request finished. Generic ownership
+  settlement may rotate a bound marker but never resolves it. A marker is
+  settled only by a confirmed removal (kept as an audit row) or the bounded
+  absence horizon.
+- **Reconciler.** `phase = 'delete'` rows are routed to
+  `settleConfirmedDeletion` after a confirmed removal, retained and rotated
+  while their conversation still names the session, and subject to the same
+  bounded 404 horizon. The absent path now re-checks ownership after
+  `recordProbe` and before `settleAbsent`, so a binding written while the probe
+  was in flight wins. (This process's own creates are already excluded by the
+  in-flight registry; that recheck is cross-process defense in depth.)
+
+**Alternatives rejected.**
+
+- *Refuse deletion whenever the remote removal fails.* Leaves the user unable
+  to delete a conversation whose server is unreachable, and still destroys
+  nothing useful. Option A keeps the obligation in the journal instead.
+- *Delete the row first and clean up afterwards.* Reverses the original defect:
+  it removes the association before any durable handle exists.
+- *Read the row before arming.* Reintroduces the pre-arm drift window: a
+  concurrent pointer clear would hide the session from the journal.
+- *Treat `remove()` resolving as settlement.* RT-001 already showed removal
+  frees the id while a lost create may still commit; the marker is kept for
+  that reason.
+
+**Known limits.**
+
+- The marker is only as durable as the journal. A journal write failure is
+  surfaced as 503 and deletes nothing; it is not retried in place.
+- A 409 preserves the row and the marker but does not attempt to reconcile the
+  newly bound session; that session belongs to the operation that bound it.
+- The reconciler still acts only while a managed server is running, so an
+  offline deletion's marker waits rather than being resolved optimistically.
+- The deletion coordinator is in-process. Two TBAi processes sharing one
+  database remain outside the in-flight registry (as in RT-001); the final
+  conditional delete is the last guard against a rebind.
+
+**Evidence.** `tests/unit/storage/opencodeSessionOrphans.test.ts` (real
+file-backed SQLite: delete-marker arm, sticky phase, exact nonzero risk
+preservation including `-1`, reopen on a new deletion, risk-free raise,
+ownership retention, confirmed-removal retention and risk-free release kept as
+an audit row, horizon settlement without deleting the row, and
+`deleteCreateIntent` refusing a delete marker);
+`tests/unit/opencode/orphanReconciler.test.ts` (bound delete markers retained
+and rotated at any risk value, bounded 404 retention/expiry, delete-specific
+settlement after confirmed removal, and the absent-path ownership recheck test
+that fails when the recheck is disabled);
+`tests/unit/opencode/sessions.test.ts` (deletion termination delegates the
+exact id, refuses `missing`/`blocked` without a remote call, and never writes
+the pointer or journal);
+`tests/integration/opencode/conversation-deletion.test.ts` (pre-arm pointer
+clear still journaled from the entry snapshot, Direct rows unchanged, engine
+drift 409, arm failure 503 with nothing deleted, retain failure 503 with the row
+preserved, and a live DELETE racing a real create that binds a new session:
+409, new session intact, its pointer preserved); and
+`tests/integration/core/engine-guards.test.ts` Phase 6 (direct/no-session/
+absent-session/confirmed-removal/Option-A route contracts).

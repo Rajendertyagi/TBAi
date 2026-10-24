@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import {
   ActionBarPrimitive,
   ErrorPrimitive,
@@ -9,7 +10,8 @@ import {
   useMessageTiming,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
-import { Check, Copy, RefreshCw, Loader2 } from "lucide-react";
+import { AlertCircle, Check, Copy, RefreshCw, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { MarkdownText } from "./assistant-ui/elements/markdown-text";
 import { SessionTimeline } from "./assistant-ui/elements/session-timeline";
 import {
@@ -698,26 +700,6 @@ function HighlightingSyntax(props: {
 }
 
 function AssistantError() {
-  return (
-    <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="mt-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
-        <AssistantErrorMessage />
-      </ErrorPrimitive.Root>
-    </MessagePrimitive.Error>
-  );
-}
-
-/**
- * Transport-aware error copy. Reads the raw message error through the
- * library's own hook and substitutes the single specified copy for transport
- * kills; every other error renders exactly as before (same component, same
- * DOM). No state changes, no runtime interference, no recovery attempts.
- */
-function AssistantErrorMessage() {
-  // Message-error text read through `useAuiState` from `@assistant-ui/react`
-  // (the provider's context). Selector mirrors the library's own
-  // `messageErrorText` predicate line-for-line; only `incomplete`/`error`
-  // message statuses carry a value and error-likes collapse to their message.
   const error = useAuiState((s) => {
     const status = s.message.status;
     if (status?.type !== "incomplete" || status.reason !== "error") return undefined;
@@ -731,8 +713,59 @@ function AssistantErrorMessage() {
     ) {
       return err.message;
     }
-    return err ?? "An error occurred";
+    return err ? String(err) : "An error occurred";
   });
-  const copy = error === undefined ? null : chatErrorCopy(classifyChatError(error));
-  return <>{copy ?? <ErrorPrimitive.Message />}</>;
+
+  if (!error) return null;
+
+  const transportCopy = chatErrorCopy(classifyChatError(error));
+  const displayText = transportCopy ?? error;
+  const lower = displayText.toLowerCase();
+  const isQuotaOrAuthError =
+    lower.includes("usage limit") ||
+    lower.includes("free usage") ||
+    lower.includes("authentication failed") ||
+    lower.includes("connect a provider") ||
+    lower.includes("401");
+
+  const hasRawDetails = displayText.length > 300;
+
+  return (
+    <MessagePrimitive.Error>
+      <ErrorPrimitive.Root
+        role="alert"
+        className="mt-2 flex flex-col gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertCircle className="size-4 shrink-0 text-destructive" />
+            <span className="break-words">{displayText}</span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isQuotaOrAuthError && (
+              <Button size="xs" variant="outline" asChild className="h-6 text-[11px]">
+                <Link to="/settings/providers">Open Provider Settings</Link>
+              </Button>
+            )}
+            <ActionBarPrimitive.Reload asChild>
+              <Button size="xs" variant="outline" className="h-6 text-[11px]">
+                <RefreshCw className="mr-1 size-3" />
+                Retry
+              </Button>
+            </ActionBarPrimitive.Reload>
+          </div>
+        </div>
+        {hasRawDetails && (
+          <details className="mt-1 text-[11px] text-muted-foreground/90">
+            <summary className="cursor-pointer font-medium hover:text-foreground">
+              Error Details
+            </summary>
+            <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/50 p-2 font-mono text-[10px] text-foreground">
+              {displayText}
+            </pre>
+          </details>
+        )}
+      </ErrorPrimitive.Root>
+    </MessagePrimitive.Error>
+  );
 }

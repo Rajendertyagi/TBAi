@@ -617,6 +617,8 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
       return withSessionArchivedAt(state, event.created);
     case "session.unarchived":
       return withSessionArchivedAt(state, null);
+    case "session.renamed":
+      return { ...state, title: event.data.title };
     case "session.usage.updated":
       // Spend only. This event reports the SESSION's cumulative ledger, so it is
       // the wrong thing to measure occupancy from AND the wrong thing to clear a
@@ -1347,6 +1349,7 @@ export function createInitialV2ThreadState(
     revertRecovery: { type: "none" },
     eventIdentity: EMPTY_EVENT_IDENTITY,
     session: null,
+    title: null,
     model: null,
     agent: null,
     desiredModel: null,
