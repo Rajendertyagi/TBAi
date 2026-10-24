@@ -102,6 +102,10 @@ jobs:
         env:
           TBAI_OPENCODE_RUNTIME_TESTS: "1"
         run: |
+          # GitHub runs bash with `-e`; a failing suite must be RECORDED, not
+          # abort the loop, or one credential-dependent failure hides the eight
+          # timings this job exists to collect.
+          set +e
           set -u
           summary="$RUNNER_TEMP/suite-timings.txt"
           : > "$summary"
