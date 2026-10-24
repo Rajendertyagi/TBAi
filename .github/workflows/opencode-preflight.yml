@@ -13,7 +13,10 @@ name: OpenCode preflight measurements
 # The permanent `opencode-runtime` job in tests.yml replaces this file.
 
 on:
-  workflow_dispatch:
+  # Push-triggered on a throwaway branch: `workflow_dispatch` discovery requires
+  # the file on the default branch, and this measurement must not be merged.
+  push:
+    branches: [ci/opencode-preflight-measure]
 
 env:
   BUN_VERSION: "1.4.2"
