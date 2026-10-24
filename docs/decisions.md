@@ -6048,7 +6048,7 @@ command-catalogue parser mismatch was not touched either.
 
 Plan: `docs/2026-10-20-opencode-runtime-remediation-plan.md` (unit C, gaps G3 and G7).
 
-### G3 — the live evaluation, and what it actually says
+### G3 ï¿½ the live evaluation, and what it actually says
 
 The plan's permission semantics were read from the upstream source. They were then
 **verified live**, because the read-only override indicator may only claim what the
@@ -6057,8 +6057,8 @@ running server does.
 **Setup.** A managed `opencode serve` **2.0.32** (`D:\Coding\OpenCode\opencode.exe`)
 was started with `XDG_CONFIG_HOME` pointed at a **temporary** directory, so the
 user's real OpenCode configuration was never read or written. Its only provider was
-the repository's own local stub (`scripts/e2e-stub-provider.ts`) — an
-OpenAI-compatible HTTP server with no credentials and no network — armed with one
+the repository's own local stub (`scripts/e2e-stub-provider.ts`) ï¿½ an
+OpenAI-compatible HTTP server with no credentials and no network ï¿½ armed with one
 `shell` tool call per case. The ruleset under test travelled in the isolated
 configuration's `permissions` key; nothing else was written.
 
@@ -6067,32 +6067,32 @@ configuration's `permissions` key; nothing else was written.
 | ruleset (same action) | observed |
 |---|---|
 | `*` allow | the call RAN |
-| `*` ask | the server ASKED — `permission.asked` with `action=shell`, `resources=["echo g3"]` |
+| `*` ask | the server ASKED ï¿½ `permission.asked` with `action=shell`, `resources=["echo g3"]` |
 | `*` deny | the tool was **not offered** to the model at all, and never called |
-| `*` allow, then `*` deny | not offered — the **LAST** rule won |
-| `*` deny, then `*` allow | offered, and the call RAN — the **LAST** rule won |
+| `*` allow, then `*` deny | not offered ï¿½ the **LAST** rule won |
+| `*` deny, then `*` allow | offered, and the call RAN ï¿½ the **LAST** rule won |
 | `*` allow + `git *` deny, command `git status` | refused: `{"type":"permission.rejected","message":"Permission denied: shell"}` |
-| `*` allow + `git *` deny, command `echo hi` | RAN — the narrow rule did not match |
+| `*` allow + `git *` deny, command `echo hi` | RAN ï¿½ the narrow rule did not match |
 | `git *` ask, command `git status` | ASKED, with the resource `["git status"]` |
-| `git *` ask, command `echo hi` | not asked — the rule did not match |
-| `write *` deny, `shell` called | the `shell` call RAN — the **action is the tool's name** |
-| `* *` deny (both dimensions) | no tool was offered — the action's `*` matches every tool |
-| `git *` deny then `*` allow, command `git status` | RAN — the later, broader rule won |
+| `git *` ask, command `echo hi` | not asked ï¿½ the rule did not match |
+| `write *` deny, `shell` called | the `shell` call RAN ï¿½ the **action is the tool's name** |
+| `* *` deny (both dimensions) | no tool was offered ï¿½ the action's `*` matches every tool |
+| `git *` deny then `*` allow, command `git status` | RAN ï¿½ the later, broader rule won |
 
 **What the plan assumed, and what the live server says.** The plan's `findLast` and
 wildcard reading is **confirmed, not contradicted**. Three details the source did
 not spell out for the reader, and the live run settled:
 
-- The upstream's shell tool is named `shell`, not `bash` — the permission
+- The upstream's shell tool is named `shell`, not `bash` ï¿½ the permission
   action is the **tool's name**.
 - The resource is the **command string** (`permission.asked` carried
   `resources: ["git status"]`).
 - A `deny` rule does not only refuse a call: it removes the tool from the list
   the model is offered, so the model never asks for it.
 
-### G7 — Option C, and what it means for the write path
+### G7 ï¿½ Option C, and what it means for the write path
 
-**Approved by the maintainer: Option C — duplicate rows are independently
+**Approved by the maintainer: Option C ï¿½ duplicate rows are independently
 editable, using a stable, position-aware identity.**
 
 The page therefore keys its rows by the rule's **position in the configuration
@@ -6104,7 +6104,7 @@ changed since the page read it.
 Two details this exposed, both fixed by the same change:
 
 - The page's rows were keyed by the `(action, resource)` pair, so two
-  identical rules shared one React key and one "pending edit" identity — an edit
+  identical rules shared one React key and one "pending edit" identity ï¿½ an edit
   on one of them marked both.
 - The **remove** path sent the row's number on screen, not the rule's position in
   the file. Those differ whenever a rule the page cannot read is present, so a
@@ -6116,7 +6116,7 @@ Two details this exposed, both fixed by the same change:
 
 The indicator is **read-only** and says which later rule takes over. It is
 computed from the relations the live run established, using exact string
-comparisons and one fact about the upstream's wildcard — that `*` matches every
+comparisons and one fact about the upstream's wildcard ï¿½ that `*` matches every
 string:
 
 - a later rule with the **same** action and resource overrides the earlier one
@@ -6124,7 +6124,7 @@ string:
 - a later rule whose action or resource is `*` overrides the earlier one
   completely when the other dimension is the same or also `*`;
 - a later rule that is **narrower** overrides the earlier one only for the
-  resources it matches — the earlier rule still applies to the rest.
+  resources it matches ï¿½ the earlier rule still applies to the rest.
 
 Every claim the indicator makes is therefore **sound**: it never reports an
 override OpenCode would not act on. It is deliberately **incomplete**: two
@@ -6134,8 +6134,8 @@ saying nothing.
 
 **What it is not.** It is not the upstream's evaluation. TBAi does not evaluate
 permissions; OpenCode does, and re-implementing that here is forbidden by the
-plan. What the page owns is the display question — *is this row the one that
-wins?* — and the plan's "Must not" is respected: no rule is rejected, no
+plan. What the page owns is the display question ï¿½ *is this row the one that
+wins?* ï¿½ and the plan's "Must not" is respected: no rule is rejected, no
 wildcard-overlapping ruleset is hidden, and the evaluation itself is untouched.
 
 ---
@@ -7340,3 +7340,116 @@ of the pass.
   child binding kills Bun-spawned children. The new jobs make the guarantee
   explicit and extend it to the shell -> sidecar hard-kill path, which the plugin
   job did not cover.
+
+## 2026-10-24 - RT-001: caller-supplied session ids, a durable create-intent journal and a bounded orphan reconciler
+
+**Decision.** `ensureOpenCodeSession` decides the OpenCode session id itself
+(`ses_<generateId()>`) and sends it in the `session.create` body, and it writes
+a durable **intent** row naming that id *before* the request. Persistence
+failures are resolved by a three-outcome pointer check, and an unresolved row is
+settled later by a bounded background reconciler. The journal is a new table,
+`opencode_session_orphans`, with a `phase` column (`intent` | `orphan`).
+
+**Why the id must be minted locally.** The original ordering â€” read the id off
+the create response, then persist it â€” has a window the log cannot close: the
+log redacts session ids by policy, and an in-memory buffer dies with the
+process. A crash after the server commits the session but before the response
+is durable leaves a live handle TBAi cannot name.
+
+**Verified OpenCode 2.1.2 behaviour (live probe, not inferred from the types):**
+
+- `POST /api/session` accepts a **flat** caller-supplied `id` string alongside
+  `location.directory`. A repeat create for the same id returns the existing
+  session unchanged, so the id is an idempotent correlation key.
+- The generated `.d.ts` suggests a nested `{ id: {...} }`; that shape is
+  rejected (`Expected Session.ID | null at ["id"]`). The runtime accepts the
+  flat string and echoes it.
+- `get` and `remove` are **not** directory-scoped. A probe therefore does not
+  depend on which workspace the reconciler uses, only on the running server.
+- `remove` answers 204 and a later `get` answers 404. A 404 is the **only**
+  evidence of absence; every other failure (transport, auth, 5xx, malformed,
+  a response naming a different id) is inconclusive.
+
+**The write-ahead ordering.** The intent row is a single atomic UPSERT on
+`(conversation_id, session_id)`; concurrent attempts cannot race a
+read-then-insert into a duplicate or a UNIQUE failure. It is deleted when the
+create is proven absent or the pointer is bound. If the intent write itself
+fails, creation still proceeds (a journal outage must not make Code mode
+unusable); that one attempt has no durable handle, which is logged at error
+level and is the one window this design cannot close.
+
+**Create-failure probe.** A thrown `session.create` is not proof the server did
+not create the session (an aborted response can hide a committed one). The
+failure path probes the supplied id: present â†’ adopt it and continue to the
+pointer write, 404 â†’ clear the intent and fail, inconclusive â†’ keep the intent
+durable and fail. A create response naming a different id is refused.
+
+**Three-outcome verification.** A thrown pointer write is verified with a read:
+`bound` (the row carries this id) keeps the session and returns the binding;
+`unbound` (a successful read shows no/different pointer) permits compensating
+removal; `unknown` (the read failed) **never** removes the session and records
+the unresolved state. The same rule governs the reconciler.
+
+**Removal is confirmed, not assumed.** `removeUnboundSession` issues the remove
+and then looks the session up again. A resolved remove that leaves the session
+present, or a confirmation lookup that fails, is `unconfirmed`/`inconclusive`
+and leaves the journal row open.
+
+**Journal semantics.** `phase` is promoted `intent â†’ orphan`, never demoted.
+`first_seen_at` / `last_seen_at` are refreshed; failure categories are
+first-wins (`COALESCE`) and are classifications, never raw provider errors.
+Resolution is terminal: a resolved row is never reopened, and a resolved
+**orphan** is kept for audit; a proven-unused **intent** is deleted. Discovery
+is deterministic: unresolved rows oldest first, bounded by a batch limit.
+
+**Reconciler.** `src/services/opencode/orphanReconciler.ts` runs one pass at
+boot and then on an interval. In order: (1) a conversation that points at the
+session is authoritative â€” clear the row, never delete; (2) rows younger than a
+grace window are deferred, so the pass cannot race a healthy create; (3) a
+running managed server is required â€” the reconciler never starts one, because
+boot must not depend on OpenCode; (4) absence must be a positive 404; (5)
+ownership is re-read immediately before removal; (6) removal must be confirmed.
+Every failure leaves the row open. The timer is `unref`'d, passes are
+single-flight, and shutdown drains an in-flight pass before
+`openCodeServerManager.shutdown()` and before the database closes.
+
+**Security.** The session id stays out of free-text log messages: the
+`session_not_found` message no longer embeds it, and the logger's value
+redaction now covers `ses_...` shapes in messages, stacks and serialized
+errors in addition to the key-based `sessionId` rule. The id remains on the
+error object and in the journal, which is where recovery needs it. The HTTP
+route still returns a generic 500 for persistence failures; the journal rows
+and the dedicated log events (`opencode.session_persist_unresolved`,
+`opencode.session_orphaned`, `opencode.session_persist_compensated`) are what
+make the failure distinguishable server-side.
+
+**Alternatives rejected.**
+
+- *Persist first, create second* â€” impossible: the id only exists after create
+  unless TBAi mints it.
+- *Retry create on persistence failure* â€” creates a second remote session and
+  still leaves the first unaccounted for.
+- *Use the log as the recovery record* â€” redacted by policy, and lost on
+  rotation.
+- *Delete on `unknown` verification* â€” destroys a session the conversation may
+  legitimately point at.
+- *Start the server from the reconciler* â€” makes boot and background
+  bookkeeping depend on OpenCode being installable/runnable.
+
+**Known limits (deliberately not claimed as closed).**
+
+- A crash in the window between a **failed intent write** and the create has no
+  durable handle. This is the only remaining create-side crash window.
+- `terminateOpenCodeSession` still clears the pointer after a resolved
+  `remove()` without a confirmation lookup (pre-existing behaviour, unchanged
+  here; recorded as a separate finding rather than folded into RT-001).
+- The reconciler settles rows only while a managed server is running. Rows
+  created while offline wait; that is intentional, not a lost obligation.
+
+**Evidence.** `tests/unit/opencode/sessions.test.ts` (create/persist window,
+probe adoption, identity refusal, journal-failure honest `recorded`, redaction),
+`tests/unit/storage/opencodeSessionOrphans.test.ts` (real file-backed SQLite:
+idempotency, first-wins, promotion, concurrent burst, terminal resolution,
+deterministic listing), `tests/unit/opencode/orphanReconciler.test.ts` (all
+ownership/evidence/grace/limit/lifecycle rules), and
+`tests/unit/opencode/sessions-concurrency.test.ts` (single-flight create).

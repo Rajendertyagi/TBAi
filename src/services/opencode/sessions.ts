@@ -1,22 +1,33 @@
 import { createOpenCodeClient, lastStatusForSessionLookup, type OpenCodeClient } from "./client";
 import { OpenCodeError, toOpenCodeError } from "./errors";
 import { conversationService } from "../storage";
+import { opencodeOrphanService } from "../storage/opencodeSessionOrphans";
 import { resolveConversationWorkspace } from "../workspace";
 import { openCodeServerManager } from "./serverManager";
 import { resolveOpenCodeModelRef } from "./capabilities";
 import { fetchServerDefaultModel, pickSessionModel, resolveStoredModel } from "./sessionModel";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
+import { generateId } from "../../lib/utils";
 
 /** OpenCode `ModelRef` shape accepted by `session.create` / `defaultModel`. */
 type ModelRef = { id: string; providerID: string; variant?: string };
 
 /** Mutable form of the official `SessionCreateInput` (whose fields are readonly). */
 type SessionCreateParams = {
+  /**
+   * Caller-supplied session id. OpenCode honours it and treats a repeat create
+   * for the same id as idempotent, which is what makes it a durable
+   * correlation key across a process crash (RT-001).
+   */
+  id: string;
   location: { directory: string };
   agent?: string;
   model?: ModelRef;
 };
+
+/** Prefix every TBAi-minted OpenCode session id carries. */
+const SESSION_ID_PREFIX = "ses_";
 
 /**
  * Caller error: the conversation row is not an OpenCode row. The row is
@@ -55,31 +66,51 @@ export class OpenCodeSessionMismatchError extends Error {
 }
 
 /**
- * The remote session was created but its pointer could not be persisted
- * (RT-001). Raised only after the compensating cleanup ran, so it always
- * carries the outcome:
+ * The remote session was created but its pointer could not be bound to the
+ * conversation (RT-001). Carries enough state for diagnosis and recovery:
  *
- *  - `cleanup: "removed"` — the remote session was confirmed gone; TBAi left no
- *    orphan. The operation still FAILS (the binding was never established).
- *  - `cleanup: "unconfirmed"` — removal could not be confirmed, so a live remote
- *    session may exist with no TBAi pointer. `sessionId` is preserved on the
- *    error and recorded durably so the orphan is observable and recoverable.
+ *  - `cleanup` classifies what happened after the persistence failure:
+ *    `confirmed_removed` (positive evidence of absence), `removal_failed`
+ *    (the remove call itself failed and the session may still be live),
+ *    `lookup_inconclusive` (the confirmation lookup could not establish
+ *    absence), `verification_unknown` (the pointer state itself was
+ *    unknown, so removal was refused and no claim about the session's
+ *    current state is made).
+ *  - `recorded` is true when a durable recovery record was actually written
+ *    (or was already open) — the answer to "can a future reconciler act on
+ *    this?". A false here means the journal write itself failed and the
+ *    only record is the error-level log.
  *
- * `cause` is the original persistence failure, so diagnosis is not lost.
+ * The class carries the session id on purpose: it is the handle the recovery
+ * record needs, and it stays on the error object rather than in a log
+ * message or the HTTP body. `cause` is the original persistence failure, so
+ * diagnosis is not lost.
  */
 export class OpenCodeSessionPersistError extends Error {
   readonly code = "OPENCODE_SESSION_PERSIST_FAILED";
   constructor(
     readonly conversationId: string,
     readonly sessionId: string,
-    readonly cleanup: "removed" | "unconfirmed",
+    readonly cleanup:
+      | "confirmed_removed"
+      | "removal_failed"
+      | "lookup_inconclusive"
+      | "verification_unknown",
+    readonly recorded: boolean,
     readonly cleanupError: unknown,
     options: ErrorOptions,
   ) {
     super(
-      cleanup === "removed"
-        ? `OpenCode session ${sessionId} for conversation ${conversationId} was created but not persisted; the remote session was removed`
-        : `OpenCode session ${sessionId} for conversation ${conversationId} was created but not persisted, and remote removal could NOT be confirmed`,
+      {
+        confirmed_removed:
+          "OpenCode session could not be persisted; the remote session was confirmed removed",
+        removal_failed:
+          "OpenCode session could not be persisted and remote removal could not complete",
+        lookup_inconclusive:
+          "OpenCode session could not be persisted; removal was attempted but the outcome is inconclusive",
+        verification_unknown:
+          "OpenCode session could not be persisted and its pointer state is unknown; no cleanup was attempted",
+      }[cleanup],
       options,
     );
     this.name = "OpenCodeSessionPersistError";
@@ -148,12 +179,15 @@ const SESSION_NOT_FOUND_STATUS = 404;
  * malformed body or a server fault must all surface as the real error rather than
  * be read as "gone". A session is only ever declared absent on positive evidence.
  *
+ * Shared with the orphan reconciler rather than copied there: this is the one
+ * implementation of "is this session present, and is the answer about THIS id?".
+ *
  * @param client - Client bound to the managed server's base URL.
  * @param sessionId - The persisted OpenCode session id to look up.
  * @returns The session id + directory, or null when the server has no such session.
  * @throws {OpenCodeError} When absence could not be established either way.
  */
-async function fetchOpenCodeSession(
+export async function fetchOpenCodeSession(
   client: OpenCodeClient,
   sessionId: string,
 ): Promise<{ id: string; directory: string | null; model: string | null } | null> {
@@ -161,6 +195,12 @@ async function fetchOpenCodeSession(
     const session = await client.session.get({ sessionID: sessionId });
     if (typeof session?.id !== "string" || session.id.length === 0) {
       throw new OpenCodeError("malformed", "OpenCode session response carried no session id");
+    }
+    // Identity, not just existence: a server that answered for a different id
+    // must never be read as evidence about THIS one. The reconciler depends on
+    // this to decide whether a remote session is safe to remove.
+    if (session.id !== sessionId) {
+      throw new OpenCodeError("malformed", "OpenCode session lookup returned a different id");
     }
     return {
       id: session.id,
@@ -251,42 +291,64 @@ export async function isOpenCodeSessionLive(
 }
 
 /**
- * Whether the session pointer is actually on the conversation row.
+ * Whether the session pointer is actually on the conversation row, in
+ * **three outcomes** that the caller must not collapse.
  *
- * A thrown `conversationService.update` is not proof the pointer is absent: the
- * UPDATE may have committed and a later step failed. This re-reads the row and
- * answers the one question that decides between "recover" and "compensate".
- * A read that itself fails is treated as NOT persisted — the conservative
- * choice, because the cleanup path is safe to run against a session whose
- * pointer may already exist (removal of a not-yet-used session is harmless).
+ * A thrown `conversationService.update` is not proof the pointer is absent:
+ * the UPDATE may have committed and a later step (or a later read) failed.
+ * Only a **successful** read that positively identifies the pointer (or proves
+ * its absence) is evidence. A read that fails is NOT evidence of absence —
+ * it is `unknown`, and the caller must refuse compensating cleanup and record
+ * the unresolved state instead of guessing.
  *
- * @returns True only when the row was read and carries this exact session id.
+ *  - `bound` — the read succeeded and the row carries exactly this session
+ *    id. The remote session is TBAi's; keep it.
+ *  - `unbound` — the read succeeded and the row has no pointer or a different
+ *    one. No TBAi handle exists; a failed compensating removal may be
+ *    recorded as an orphan.
+ *  - `unknown` — the read failed. The caller may NOT delete the session.
+ *
+ * @returns The outcome; never throws.
  */
-async function sessionPointerPersisted(
+async function verifySessionPointer(
   conversationId: string,
   sessionId: string,
-): Promise<boolean> {
+): Promise<{ outcome: "bound" | "unbound" | "unknown"; error?: unknown }> {
   try {
     const conversation = await conversationService.get(conversationId);
-    return conversation?.opencodeSessionId === sessionId;
-  } catch {
-    return false;
+    if (conversation?.opencodeSessionId === sessionId) {
+      return { outcome: "bound" };
+    }
+    return { outcome: "unbound" };
+  } catch (error) {
+    return { outcome: "unknown", error };
   }
 }
 
 /**
- * Compensating removal of a remote session whose pointer was never persisted
- * (RT-001). Confirms the outcome instead of assuming the call succeeded:
- * `session.remove` is followed by a lookup, and a `session_not_found` from
- * removal itself counts as already-gone.
+ * Compensating removal of a remote session whose pointer is known to be
+ * absent (RT-001). Confirms the outcome instead of assuming the call
+ * succeeded: `session.remove` is followed by a lookup, and a
+ * `session_not_found` from removal itself counts as already-gone.
+ *
+ * The `lookupInconclusive` outcome is the conservative one: when the
+ * confirmation lookup fails without positive evidence of absence, the caller
+ * must NOT claim the session is gone.
+ *
+ * Shared with the orphan reconciler, which performs the same removal after it
+ * has independently established that no conversation points at the session.
  *
  * @returns `"removed"` only when the server positively no longer has the
- *   session; `"unconfirmed"` when removal failed or the session is still there.
+ *   session; `"unconfirmed"` when removal failed; `"inconclusive"` when the
+ *   confirmation lookup itself could not establish absence.
  */
-async function removeUnpersistedSession(
+export async function removeUnboundSession(
   client: OpenCodeClient,
   sessionId: string,
-): Promise<{ outcome: "removed" | "unconfirmed"; error: unknown }> {
+): Promise<{
+  outcome: "removed" | "unconfirmed" | "inconclusive";
+  error: unknown;
+}> {
   try {
     await client.session.remove({ sessionID: sessionId });
   } catch (error) {
@@ -302,10 +364,123 @@ async function removeUnpersistedSession(
     // returned. The session must actually be gone from the server's record.
     const stillThere = await fetchOpenCodeSession(client, sessionId);
     return stillThere
-      ? { outcome: "unconfirmed", error: new Error("session still present after remove") }
+      ? {
+          outcome: "unconfirmed",
+          error: new Error("session still present after remove"),
+        }
       : { outcome: "removed", error: undefined };
   } catch (error) {
-    return { outcome: "unconfirmed", error };
+    return { outcome: "inconclusive", error };
+  }
+}
+
+/**
+ * Writes the durable pre-create intent for a caller-supplied session id.
+ *
+ * Best-effort by design: a journal outage must not make session creation
+ * impossible. It is logged at error level when it fails, because the
+ * crash-before-response window is then unmitigated for this one attempt. The
+ * id itself still makes a RETRY idempotent, but nothing durable names it.
+ *
+ * @returns True when an open durable record exists after the write.
+ */
+async function recordCreateIntent(
+  conversationId: string,
+  sessionId: string,
+  locationDirectory: string,
+): Promise<boolean> {
+  try {
+    return await opencodeOrphanService.recordCreateIntent({
+      conversationId,
+      sessionId,
+      locationDirectory,
+    });
+  } catch (error) {
+    logger.error("opencode", "opencode.session_intent_record_failed", {
+      conversationId,
+      ...classifyError(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * Deletes a create-intent row once the session's outcome is proven (bound,
+ * or definitively never created). Best-effort: a surviving row is harmless,
+ * because the reconciler re-proves the same facts before acting.
+ */
+async function discardCreateIntent(conversationId: string, sessionId: string): Promise<void> {
+  try {
+    await opencodeOrphanService.deleteCreateIntent(conversationId, sessionId);
+  } catch (error) {
+    logger.warn("opencode", "opencode.session_intent_cleanup_failed", {
+      conversationId,
+      ...classifyError(error),
+    });
+  }
+}
+
+/**
+ * Records one unresolved orphan in the durable journal. The journal is the
+ * ONLY log-bearing record that can name the session id: the structured log
+ * redacts `sessionId`-shaped fields by policy, and an in-memory buffer is not
+ * durable.
+ *
+ * Best-effort: a failed record does not block the compensating flow (the
+ * operation already has to fail), but it is surfaced as an error-level log
+ * with enough context for diagnosis, so a dead journal does not silently
+ * lose the record. When the pre-create intent was durable, that row IS still
+ * a recovery record (the reconciler probes the same id), so `recorded`
+ * reports true rather than claiming every durable trace was lost.
+ *
+ * @returns True when a durable record is (still) open and actionable; false
+ *   when the pair was already resolved and no intent survived.
+ */
+async function recordOrphan(input: {
+  conversationId: string;
+  sessionId: string;
+  locationDirectory?: string;
+  persistError: unknown;
+  intentRecorded: boolean;
+  cleanupError?: unknown;
+  verificationError?: unknown;
+}): Promise<boolean> {
+  const persistCategory = classifyError(input.persistError).category;
+  const cleanupCategory =
+    input.cleanupError !== undefined ? classifyError(input.cleanupError).category : undefined;
+  try {
+    const open = await opencodeOrphanService.recordOrphanedSession({
+      conversationId: input.conversationId,
+      sessionId: input.sessionId,
+      locationDirectory: input.locationDirectory,
+      persistErrorCategory: persistCategory,
+      cleanupErrorCategory: cleanupCategory,
+    });
+    logger.warn(
+      "opencode",
+      open ? "opencode.session_orphan_recorded" : "opencode.session_orphan_already_resolved",
+      {
+        conversationId: input.conversationId,
+        persistErrorCategory: persistCategory,
+        ...(cleanupCategory ? { cleanupErrorCategory: cleanupCategory } : {}),
+        ...(input.verificationError !== undefined
+          ? { verificationError: classifyError(input.verificationError) }
+          : {}),
+      },
+    );
+    return open;
+  } catch (error) {
+    // The journal itself failed (database unavailable / closed / locked).
+    // The operation still fails with its original error; this only records
+    // that the orphan upgrade could not be written. A durable intent written
+    // before the create is still actionable, so do not deny it.
+    logger.error("opencode", "opencode.session_orphan_record_failed", {
+      conversationId: input.conversationId,
+      persistErrorCategory: persistCategory,
+      ...(cleanupCategory ? { cleanupErrorCategory: cleanupCategory } : {}),
+      ...classifyError(error),
+    });
+    return input.intentRecorded;
   }
 }
 
@@ -390,11 +565,18 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
   }
 
   // `session.create` posts to `POST /api/session` and accepts a flat
-  // `{ location: { directory }, agent?, model? }` body — `location.directory`
+  // `{ id?, location: { directory }, agent?, model? }` body — `location.directory`
   // is what roots the session in the conversation's workspace (it is NOT a
-  // query param). The call resolves to the created `SessionInfo`, so the id is
-  // read straight off it. Verified live against the managed server.
-  const params: SessionCreateParams = { location: { directory } };
+  // query param).
+  //
+  // RT-001: the id is minted HERE, not read off the response. OpenCode honours
+  // a caller-supplied `ses_...` id and treats a repeat create for that id as
+  // idempotent (verified against 2.1.2: the second create returns the first
+  // session unchanged). That makes the id a correlation key that exists in
+  // TBAi's hands BEFORE the request, so a crash after the server commits the
+  // session but before any response is durable is still recoverable.
+  const sessionId = `${SESSION_ID_PREFIX}${generateId()}`;
+  const params: SessionCreateParams = { id: sessionId, location: { directory } };
 
   if (conversation.opencodeAgent) {
     params.agent = conversation.opencodeAgent;
@@ -443,58 +625,157 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     }
   }
 
-  let sessionId: string | undefined;
+  // Durable BEFORE the request: the intent row carries the id the server will
+  // be asked to use, so the remote session can be found even if this process
+  // dies before it ever sees a response.
+  const intentRecorded = await recordCreateIntent(conversationId, sessionId, directory);
+
   let createdDirectory: string;
+  let responseMismatch = false;
   try {
     const session = await client.session.create(params);
-    sessionId = session?.id;
     // Prefer the V2 response's authoritative location over the submitted path.
     createdDirectory = asDirectory(session.location?.directory) ?? directory;
-  } catch (err) {
-    throw toOpenCodeError(err);
-  }
-  if (typeof sessionId !== "string" || sessionId.length === 0) {
-    throw new Error("OpenCode session create failed: response carried no session id");
+    if (session?.id !== sessionId) {
+      // Refuse to bind an id the request did not name: it would point at a
+      // session TBAi cannot account for. The intent row stays recoverable.
+      responseMismatch = true;
+      throw new OpenCodeError(
+        "malformed",
+        "OpenCode session create did not return the supplied session id",
+      );
+    }
+  } catch (createError) {
+    const failure = toOpenCodeError(createError);
+    if (responseMismatch) throw failure;
+
+    // A thrown create is NOT proof the server did not create the session: an
+    // aborted or truncated response can hide a committed create. The supplied
+    // id is the probe key, and the server's own record decides the outcome.
+    let probe: Awaited<ReturnType<typeof fetchOpenCodeSession>>;
+    try {
+      probe = await fetchOpenCodeSession(client, sessionId);
+    } catch (probeError) {
+      // Neither presence nor absence established. Leave the intent durable
+      // and surface the original failure; the reconciler settles it later.
+      logger.error("opencode", "opencode.session_create_unresolved", {
+        conversationId,
+        persistErrorCategory: classifyError(failure).category,
+        probeError: classifyError(probeError),
+      });
+      throw failure;
+    }
+    if (!probe) {
+      // Positive 404: the create never committed (or was already cleaned up).
+      // There is nothing to recover, so the intent is no longer needed.
+      await discardCreateIntent(conversationId, sessionId);
+      throw failure;
+    }
+    // The session exists despite the failed call. It carries the id TBAi
+    // minted, so it is ours: adopt it and continue to the pointer write.
+    createdDirectory = probe.directory ?? directory;
+    logger.warn("opencode", "opencode.session_create_recovered", {
+      conversationId,
+      persistErrorCategory: classifyError(failure).category,
+    });
   }
 
   // RT-001: the remote session exists from here on, and the pointer write is
-  // the only thing that binds it to TBAi. A failure here must never leave the
-  // session orphaned with no handle, and must never report success.
+  // the only thing that binds it to TBAi. A failure here must never leave
+  // the session orphaned with no handle, and must never report success.
   try {
     await conversationService.update(conversationId, { opencodeSessionId: sessionId });
+    // Bound. The intent has served its purpose. A failure to delete it is
+    // harmless: the reconciler re-proves the binding before acting.
+    await discardCreateIntent(conversationId, sessionId);
   } catch (persistError) {
     // A thrown update is not proof the pointer is absent — it may have
-    // committed before a later step failed. Re-read before compensating.
-    if (await sessionPointerPersisted(conversationId, sessionId)) {
+    // committed before a later step failed. Verify before acting.
+    const verification = await verifySessionPointer(conversationId, sessionId);
+    if (verification.outcome === "bound") {
+      // The binding IS durable even though the write call rejected. The
+      // session is TBAi's; keep it, return the established binding, and
+      // surface the write failure without treating it as a session loss.
+      await discardCreateIntent(conversationId, sessionId);
       logger.warn("opencode", "opencode.session_persist_recovered", {
         conversationId,
         sessionId,
+        ...classifyError(persistError),
       });
       return { sessionId, directory: createdDirectory, reusedExistingSession: false };
     }
-    const { outcome, error: cleanupError } = await removeUnpersistedSession(client, sessionId);
+
+    // No confirmed TBAi handle for this session.
+    if (verification.outcome === "unknown") {
+      // The read failed: the pointer may exist. Do NOT delete a possibly
+      // valid session. Record the unresolved state durably and fail the
+      // operation without claiming anything about the session.
+      const recorded = await recordOrphan({
+        conversationId,
+        sessionId,
+        locationDirectory: createdDirectory,
+        persistError,
+        intentRecorded,
+        verificationError: verification.error,
+      });
+      logger.error("opencode", "opencode.session_persist_unresolved", {
+        conversationId,
+        ...classifyError(persistError),
+        verificationError: classifyError(verification.error),
+      });
+      throw new OpenCodeSessionPersistError(
+        conversationId,
+        sessionId,
+        "verification_unknown",
+        recorded,
+        verification.error,
+        { cause: persistError },
+      );
+    }
+
+    // Confirmed unbound: compensate by removing the remote session.
+    const { outcome, error: cleanupError } = await removeUnboundSession(client, sessionId);
+    const recorded =
+      outcome === "removed"
+        ? false
+        : await recordOrphan({
+            conversationId,
+            sessionId,
+            locationDirectory: createdDirectory,
+            persistError,
+            intentRecorded,
+            cleanupError,
+          });
     if (outcome === "removed") {
+      await discardCreateIntent(conversationId, sessionId);
       logger.warn("opencode", "opencode.session_persist_compensated", {
         conversationId,
         sessionId,
         ...classifyError(persistError),
       });
     } else {
-      // Unconfirmed removal: a live remote session may exist with no pointer.
-      // `sessionId` is deliberately carried in `message` — the structured
-      // `sessionId` field is redacted by the logger, so a field-only record
-      // could not identify the orphan. This line is the durable record that
-      // makes it observable and recoverable; both errors are retained.
       logger.error("opencode", "opencode.session_orphaned", {
         conversationId,
-        message: `Unremoved OpenCode session ${sessionId} has no persisted pointer`,
+        recorded,
         persistError: classifyError(persistError),
         cleanupError: classifyError(cleanupError),
+        cleanupOutcome: outcome,
       });
     }
-    throw new OpenCodeSessionPersistError(conversationId, sessionId, outcome, cleanupError, {
-      cause: persistError,
-    });
+    const mappedOutcome: OpenCodeSessionPersistError["cleanup"] =
+      outcome === "removed"
+        ? "confirmed_removed"
+        : outcome === "unconfirmed"
+          ? "removal_failed"
+          : "lookup_inconclusive";
+    throw new OpenCodeSessionPersistError(
+      conversationId,
+      sessionId,
+      mappedOutcome,
+      recorded,
+      cleanupError,
+      { cause: persistError },
+    );
   }
   logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
   return { sessionId, directory: createdDirectory, reusedExistingSession: false };
@@ -625,6 +906,9 @@ export async function terminateOpenCodeSession(
     return { terminated: false, reason: "unreachable" };
   }
   await conversationService.update(conversationId, { opencodeSessionId: null });
+  // A crash-interrupted create could have left an intent for this same id;
+  // the session is now gone, so the intent has nothing left to recover.
+  await discardCreateIntent(conversationId, sessionId);
   logger.info("opencode", "opencode.session_terminate", {
     conversationId,
     sessionId,

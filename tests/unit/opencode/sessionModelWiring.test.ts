@@ -29,6 +29,16 @@ function install() {
       update: async () => undefined,
     },
   }));
+  // The RT-001 create-intent journal is not the subject here, and the seam
+  // writes one before every create. Stub it so the file stays free of database
+  // side effects.
+  mock.module("@/services/storage/opencodeSessionOrphans", () => ({
+    opencodeOrphanService: {
+      recordCreateIntent: async () => true,
+      deleteCreateIntent: async () => true,
+      recordOrphanedSession: async () => true,
+    },
+  }));
   mock.module("@/services/workspace", () => ({
     resolveConversationWorkspace: async () => ({
       mode: "simple",
@@ -68,7 +78,8 @@ function install() {
         }),
         create: async (params: Record<string, unknown>) => {
           creates.push(params);
-          return { id: "ses_new", location: { directory: "D:/tmp/x" } };
+          // The real server echoes the caller-supplied id (RT-001).
+          return { id: params.id as string, location: { directory: "D:/tmp/x" } };
         },
         switchModel: async (input: {
           sessionID: string;
@@ -140,7 +151,7 @@ describe("the adopt seam — a bound session with no model", () => {
       createOpenCodeClient: () => ({
         session: {
           get: async () => ({ id: "ses_bound", location: { directory: "D:/tmp/x" }, model: null }),
-          create: async () => ({ id: "ses_new" }),
+          create: async (params: { id: string }) => ({ id: params.id }),
           switchModel: async () => {
             throw new Error("server refused");
           },
@@ -231,9 +242,9 @@ describe("the create seam — a conversation with no stored choice", () => {
 
     const binding = await ensureOpenCodeSession("conv-1");
 
-    // The session EXISTS.
-    expect(binding.sessionId).toBe("ses_new");
+    // The session EXISTS, bound under the id the seam minted and sent.
     expect(creates).toHaveLength(1);
+    expect(binding.sessionId).toBe(creates[0].id as string);
     // And it is honestly unbound, with no model invented.
     expect(creates[0].model).toBeUndefined();
   });

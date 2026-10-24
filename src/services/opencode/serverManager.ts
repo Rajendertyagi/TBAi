@@ -294,6 +294,18 @@ export class OpenCodeServerManager {
     return this.readyAtMs === null ? null : Date.now() - this.readyAtMs;
   }
 
+  /**
+   * Whether a managed child currently exists.
+   *
+   * Deliberately reads the process, not the readiness clock: `msSinceReady`
+   * is a catalogue-window timer that is never cleared, so it cannot answer
+   * "is there a server to talk to right now". Background work that must never
+   * spawn a server on its own (orphan reconciliation) checks this first.
+   */
+  isRunning(): boolean {
+    return this.child !== null && this.port !== null;
+  }
+
   async ensureBaseUrl(): Promise<string> {
     // Single in-flight startup/readiness operation: every caller (concurrent or
     // repeated) shares this promise, so we never spawn multiple servers or run

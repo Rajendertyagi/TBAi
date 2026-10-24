@@ -50,6 +50,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useRef,
   type ReactNode,
@@ -180,7 +181,12 @@ export function VirtualizedTranscript({
   className,
 }: VirtualizedTranscriptProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const stickyRef = useRef(true);
+
   const rows = useAuiState(selectRows);
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const prevIsRunningRef = useRef(isRunning);
 
   // Memoized because TanStack documents it: the virtualizer invalidates its
   // measurement cache when measurement-affecting options change, and a new
@@ -197,38 +203,105 @@ export function VirtualizedTranscript({
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: SCROLL_END_THRESHOLD_PX,
+    // Measurement guard: suppresses virtualizer scroll corrections from pulling
+    // away from the live bottom while stickyRef is armed.
+    scrollToFn: (offset, { adjustments = 0, behavior }, instance) => {
+      const el = instance.scrollElement;
+      if (!el) return;
+      const top = offset + adjustments;
+      if (stickyRef.current) {
+        const maxScroll = el.scrollHeight - el.clientHeight;
+        if (maxScroll - el.scrollTop <= 4 && top < maxScroll) {
+          return;
+        }
+      }
+      el.scrollTo({ top, ...(behavior && { behavior }) });
+    },
   });
 
-  // A thread opens at its latest message. The library's own call, in a layout
-  // effect keyed on the instance so it runs once the scroll element exists and
-  // lands before paint — the documented lifecycle, not a timing hack.
+  // Track user scroll gestures to arm or disarm bottom stickiness.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+
+    let lastScrollTop = el.scrollTop;
+    let lastScrollHeight = el.scrollHeight;
+    let lastClientHeight = el.clientHeight;
+
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+      if (atBottom) {
+        stickyRef.current = true;
+      } else if (
+        el.scrollTop < lastScrollTop &&
+        el.scrollHeight === lastScrollHeight &&
+        Math.abs(el.clientHeight - lastClientHeight) <= 1
+      ) {
+        stickyRef.current = false;
+      }
+      lastScrollTop = el.scrollTop;
+      lastScrollHeight = el.scrollHeight;
+      lastClientHeight = el.clientHeight;
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        stickyRef.current = false;
+      }
+    };
+
+    const onTouchMove = () => {
+      stickyRef.current = false;
+    };
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchmove", onTouchMove);
+    };
+  }, []);
+
+  // Content wrapper ResizeObserver: keep pinned to bottom during streaming while stickyRef is true.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+
+    const observer = new ResizeObserver(() => {
+      if (stickyRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  // Pre-paint run-start jump: when isRunning flips false -> true, jump to bottom.
+  useLayoutEffect(() => {
+    if (isRunning && !prevIsRunningRef.current) {
+      stickyRef.current = true;
+      if (rows.length > 0) {
+        virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+      }
+      requestAnimationFrame(() => {
+        const el = scrollerRef.current;
+        if (el && stickyRef.current) {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    }
+    prevIsRunningRef.current = isRunning;
+  }, [isRunning, rows.length, virtualizer]);
+
+  // A thread opens at its latest message.
   useLayoutEffect(() => {
     virtualizer.scrollToEnd();
   }, [virtualizer]);
-
-  // ── No run-start jump, deliberately ──
-  //
-  // assistant-ui's official virtualization guide lists a "run-start jump": jump to
-  // the bottom when `thread.isRunning` flips true "so a just-sent message never
-  // flashes below the fold". P2 REBASE 2 removed it with the rest of the
-  // hand-rolled following, and that removal is correct: the guide's version is
-  // UNCONDITIONAL, and `R2` parks the reader ~4,200px from the end, sends, and
-  // asserts the read position does NOT move. An unconditional jump fails R2.
-  //
-  // It was also TRIED here in a narrower form — jump only when the reader was
-  // already within `scrollEndThreshold` of the end — and then removed again.
-  // The guard was right (R2 passed 2/2, `scrollTopDeltaPx 0`), but it fixed
-  // nothing: the start-of-run excursion persisted unchanged (3 pass / 3 fail
-  // with the jump, versus 1 pass / 5 fail without). Keeping a change that adds a
-  // scroll write and demonstrably helps nothing is worse than not having it.
-  //
-  // The excursion is real and is tracked in `run-start-scroll.spec.ts`
-  // (`test.fixme`): ~316px away from the live end at frame 3 of ~150, settling
-  // to ~22px. That is ≈ `ESTIMATED_ROW_SIZE_PX`, so the likely cause is one
-  // unmeasured row's estimate landing before `followOnAppend` compensates.
-  // The sent message itself was on screen in 150/150 frames, so the guide's
-  // stated failure mode does not occur here.
-  //
 
   const items = virtualizer.getVirtualItems();
 
@@ -316,7 +389,10 @@ export function VirtualizedTranscript({
           The total-size container IS the coordinate system: as tall as the whole
           logical list, with every row positioned inside it by its virtual offset.
         */}
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+          <div
+            ref={contentRef}
+            style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}
+          >
             {items.map((item) => {
               const row = rows[item.index];
               // A row whose message has left the thread renders nothing, so a row

@@ -730,7 +730,7 @@ export const messageService = {
           break;
         }
         if (i === 0) {
-          if (row.parent_id !== null) messages.unshift(toChainMessage(row, content));
+          messages.unshift(toChainMessage(row, content));
           continue;
         }
         if (row.id !== rows[i - 1].parent_id) {

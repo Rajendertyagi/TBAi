@@ -1,0 +1,509 @@
+import { describe, it, expect, afterEach } from "bun:test";
+import type { OpenCodeClient } from "@/services/opencode/client";
+import { OpenCodeError } from "@/services/opencode/errors";
+import type { OpenCodeOrphanRecord } from "@/services/storage/opencodeSessionOrphans";
+import {
+  DEFAULT_ORPHAN_RECONCILE_GRACE_MS,
+  DEFAULT_ORPHAN_RECONCILE_INTERVAL_MS,
+  DEFAULT_ORPHAN_RECONCILE_LIMIT,
+  drainOrphanReconciliation,
+  getOrphanReconciliationState,
+  runOrphanReconciliationOnce,
+  startOrphanReconciliation,
+  stopOrphanReconciliation,
+  type OpenCodeOrphanReconcilerDeps,
+} from "@/services/opencode/orphanReconciler";
+
+/**
+ * The reconciler's decision rules, exercised with an injected journal and a
+ * stubbed OpenCode client. The probe and removal helpers are the REAL ones
+ * (`fetchOpenCodeSession` / `removeUnboundSession`), so "removal confirmed" is
+ * tested rather than assumed: a resolved `remove()` that leaves the session in
+ * place must not clear the row.
+ *
+ * Every write to the journal is recorded as a `clear`, which is what lets the
+ * tests assert the *obligation* discharged (intent deleted vs orphan resolved)
+ * and, more importantly, that no removal happens on inconclusive evidence.
+ */
+
+const NOW = 1_800_000_000_000;
+
+/** The tagged 404 the real client surfaces for a missing session. */
+const NOT_FOUND = new OpenCodeError("session_not_found", "OpenCode session not found", 404);
+
+function record(overrides: Partial<OpenCodeOrphanRecord> = {}): OpenCodeOrphanRecord {
+  return {
+    conversationId: "conv-1",
+    sessionId: "ses_orphan0001",
+    phase: "orphan",
+    firstSeenAt: new Date(NOW - 600_000),
+    lastSeenAt: new Date(NOW - 600_000),
+    resolvedAt: null,
+    ...overrides,
+  };
+}
+
+type ConversationRow = { opencodeSessionId: string | null };
+
+interface HarnessOptions {
+  /** Pass an existing array to share journal state across two harnesses. */
+  rows?: OpenCodeOrphanRecord[];
+  runningUrl?: string | null;
+}
+
+function makeHarness(options: HarnessOptions = {}) {
+  const rows = options.rows ?? [];
+  const conversations = new Map<string, ConversationRow>();
+  const state = {
+    rows,
+    conversations,
+    remote: new Set<string>(),
+    runningUrl:
+      options.runningUrl === undefined
+        ? ("http://127.0.0.1:0" as string | null)
+        : options.runningUrl,
+    /** Thrown by every probe, before any existence check. */
+    probeError: null as Error | null,
+    /** The probe answers for a different id (identity mismatch). */
+    probeMismatch: false,
+    /** Thrown by probes made after a remove call. */
+    probeErrorAfterRemove: null as Error | null,
+    removeError: null as Error | null,
+    /** A resolved remove that leaves the session present. */
+    removeEffect: "remove" as "remove" | "keep",
+    /** Thrown by every journal clear (deleteIntent / resolve). */
+    clearError: null as Error | null,
+    listError: null as Error | null,
+    conversationError: null as Error | null,
+    getConversationImpl: null as ((id: string) => Promise<ConversationRow | null>) | null,
+    getCalls: [] as string[],
+    removeCalls: [] as string[],
+    createClientCalls: 0,
+    clears: [] as Array<{
+      kind: "intent" | "orphan";
+      conversationId: string;
+      sessionId: string;
+    }>,
+    listLimits: [] as number[],
+    conversationReads: 0,
+  };
+
+  const client = {
+    session: {
+      get: async ({ sessionID }: { sessionID: string }) => {
+        state.getCalls.push(sessionID);
+        if (state.probeError) throw state.probeError;
+        if (state.removeCalls.length > 0 && state.probeErrorAfterRemove) {
+          throw state.probeErrorAfterRemove;
+        }
+        if (!state.remote.has(sessionID)) throw NOT_FOUND;
+        return {
+          id: state.probeMismatch ? `${sessionID}-other` : sessionID,
+          location: { directory: "D:\\ws\\conv" },
+        };
+      },
+      remove: async ({ sessionID }: { sessionID: string }) => {
+        state.removeCalls.push(sessionID);
+        if (state.removeError) throw state.removeError;
+        if (state.removeEffect === "remove") state.remote.delete(sessionID);
+      },
+    },
+  } as unknown as OpenCodeClient;
+
+  function removeRow(conversationId: string, sessionId: string): boolean {
+    const index = rows.findIndex(
+      (row) => row.conversationId === conversationId && row.sessionId === sessionId,
+    );
+    if (index < 0) return false;
+    rows.splice(index, 1);
+    return true;
+  }
+
+  const deps: OpenCodeOrphanReconcilerDeps = {
+    listUnresolved: async (batchLimit) => {
+      state.listLimits.push(batchLimit);
+      if (state.listError) throw state.listError;
+      return rows.slice(0, batchLimit);
+    },
+    getConversation: async (id) => {
+      state.conversationReads += 1;
+      if (state.getConversationImpl) return state.getConversationImpl(id);
+      if (state.conversationError) throw state.conversationError;
+      return conversations.get(id) ?? null;
+    },
+    resolve: async (conversationId, sessionId) => {
+      if (state.clearError) throw state.clearError;
+      state.clears.push({ kind: "orphan", conversationId, sessionId });
+      return removeRow(conversationId, sessionId);
+    },
+    deleteIntent: async (conversationId, sessionId) => {
+      if (state.clearError) throw state.clearError;
+      state.clears.push({ kind: "intent", conversationId, sessionId });
+      return removeRow(conversationId, sessionId);
+    },
+    getRunningBaseUrl: async () => state.runningUrl,
+    createClient: () => {
+      state.createClientCalls += 1;
+      return client;
+    },
+  };
+
+  return { state, deps };
+}
+
+/** Starts with the immediate pass off so each test drives its own pass. */
+function start(
+  deps: OpenCodeOrphanReconcilerDeps,
+  overrides: Partial<Parameters<typeof startOrphanReconciliation>[0]> = {},
+) {
+  stopOrphanReconciliation();
+  return startOrphanReconciliation({
+    deps,
+    runImmediately: false,
+    graceMs: 0,
+    now: () => NOW,
+    ...overrides,
+  });
+}
+
+afterEach(() => {
+  stopOrphanReconciliation();
+});
+
+describe("runOrphanReconciliationOnce — ownership", () => {
+  it("clears a row whose conversation now points at the session, and never touches the remote", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, bound: 1, removed: 0, unresolved: 0 });
+    expect(h.state.clears).toEqual([
+      { kind: "orphan", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    ]);
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("clears an intent (not the orphan) when a crash happened after the pointer was written", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent" })] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ bound: 1, removed: 0 });
+    expect(h.state.clears).toEqual([
+      { kind: "intent", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    ]);
+    expect(h.state.removeCalls).toHaveLength(0);
+  });
+
+  it("re-checks ownership after the probe: a pointer written meanwhile prevents removal", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      return reads === 1 ? { opencodeSessionId: null } : { opencodeSessionId: "ses_orphan0001" };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(reads).toBe(2);
+    expect(report).toMatchObject({ bound: 1, removed: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(0);
+  });
+});
+
+describe("runOrphanReconciliationOnce — remote evidence", () => {
+  it("removes an unbound session whose conversation is gone, after confirming removal", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, removed: 1, unresolved: 0 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.remote.has("ses_orphan0001")).toBe(false);
+    expect(h.state.clears).toEqual([
+      { kind: "orphan", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    ]);
+    expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("removes a session whose conversation now points at a different one", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_replacement1" });
+    h.state.remote.add("ses_orphan0001");
+    h.state.remote.add("ses_replacement1");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ removed: 1 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.remote.has("ses_replacement1")).toBe(true);
+  });
+
+  it("deletes a proven-unused intent when the remote session is absent (positive 404)", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent" })] });
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ absent: 1, removed: 0 });
+    expect(h.state.clears).toEqual([
+      { kind: "intent", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    ]);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("removes a session left by a dead process once a server is available", async () => {
+    const shared: OpenCodeOrphanRecord[] = [record({ phase: "intent" })];
+    const offline = makeHarness({ rows: shared, runningUrl: null });
+    start(offline.deps);
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ skippedNoServer: 1 });
+    expect(shared).toHaveLength(1);
+
+    const online = makeHarness({ rows: shared });
+    online.state.remote.add("ses_orphan0001");
+    start(online.deps);
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ removed: 1 });
+    expect(shared).toHaveLength(0);
+  });
+});
+
+describe("runOrphanReconciliationOnce — inconclusive evidence never deletes", () => {
+  it("leaves the row when the probe fails", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.probeError = new OpenCodeError("connection", "offline");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, unresolved: 1, removed: 0, absent: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row when the probe answers for a different id", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.probeMismatch = true;
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row when the conversation cannot be read", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.conversationError = new Error("database is locked");
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row when the remove call fails", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.removeError = new OpenCodeError("connection", "offline");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.clears).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row when remove resolves but the session remains", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.removeEffect = "keep";
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.clears).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row when the confirmation lookup after removal is inconclusive", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.probeErrorAfterRemove = new OpenCodeError("connection", "offline");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.clears).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row when clearing it fails, even after a confirmed removal", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.clearError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.rows).toHaveLength(1);
+  });
+});
+
+describe("runOrphanReconciliationOnce — scope and bounds", () => {
+  it("defers rows younger than the grace window", async () => {
+    const h = makeHarness({ rows: [record({ lastSeenAt: new Date(NOW - 1_000) })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps, { graceMs: DEFAULT_ORPHAN_RECONCILE_GRACE_MS });
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 0, deferred: 1, removed: 0 });
+    expect(h.state.conversationReads).toBe(0);
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("skips remote work when no managed server is running, without starting one", async () => {
+    const h = makeHarness({ rows: [record()], runningUrl: null });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, skippedNoServer: 1, removed: 0 });
+    expect(h.state.createClientCalls).toBe(0);
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("passes the bounded limit to the journal and drains a backlog over passes", async () => {
+    const h = makeHarness({
+      rows: [
+        record({ sessionId: "ses_orphan0001" }),
+        record({ sessionId: "ses_orphan0002" }),
+        record({ sessionId: "ses_orphan0003" }),
+      ],
+    });
+    start(h.deps, { limit: 1 });
+
+    const first = await runOrphanReconciliationOnce();
+    expect(first).toMatchObject({ scanned: 1, absent: 1 });
+    expect(h.state.listLimits).toEqual([1]);
+    expect(h.state.rows).toHaveLength(2);
+
+    await runOrphanReconciliationOnce();
+    await runOrphanReconciliationOnce();
+    expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("is idempotent: a cleared row is not acted on again", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent" })] });
+    start(h.deps);
+
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ absent: 1 });
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ scanned: 0, absent: 0 });
+    expect(h.state.clears).toHaveLength(1);
+    expect(h.state.getCalls).toEqual(["ses_orphan0001"]);
+  });
+
+  it("refuses a second overlapping pass", async () => {
+    const h = makeHarness();
+    let release!: (rows: OpenCodeOrphanRecord[]) => void;
+    h.deps.listUnresolved = () =>
+      new Promise<OpenCodeOrphanRecord[]>((resolve) => {
+        release = resolve;
+      });
+    start(h.deps);
+
+    const first = runOrphanReconciliationOnce();
+    expect(await runOrphanReconciliationOnce()).toBeNull();
+    release([]);
+    expect(await first).not.toBeNull();
+  });
+
+  it("does nothing before it is started", async () => {
+    stopOrphanReconciliation();
+    expect(await runOrphanReconciliationOnce()).toBeNull();
+  });
+});
+
+describe("orphan reconciliation lifecycle", () => {
+  it("starts once, runs an immediate tick, and stops idempotently", async () => {
+    const h = makeHarness();
+    stopOrphanReconciliation();
+
+    const started = startOrphanReconciliation({
+      deps: h.deps,
+      runImmediately: true,
+      intervalMs: 60_000,
+      graceMs: 0,
+      now: () => NOW,
+    });
+    expect(started).toEqual({ started: true, alreadyRunning: false });
+
+    const again = startOrphanReconciliation({ deps: h.deps });
+    expect(again).toEqual({ started: false, alreadyRunning: true });
+
+    await Bun.sleep(10);
+    expect(getOrphanReconciliationState().ticks).toBe(1);
+    expect(getOrphanReconciliationState().running).toBe(true);
+
+    expect(stopOrphanReconciliation()).toBe(true);
+    expect(stopOrphanReconciliation()).toBe(false);
+    expect(getOrphanReconciliationState().running).toBe(false);
+  });
+
+  it("drains an in-flight pass before shutdown can close the database", async () => {
+    const h = makeHarness();
+    let release!: (rows: OpenCodeOrphanRecord[]) => void;
+    h.deps.listUnresolved = () =>
+      new Promise<OpenCodeOrphanRecord[]>((resolve) => {
+        release = resolve;
+      });
+    start(h.deps);
+
+    const pass = runOrphanReconciliationOnce();
+    let drained = false;
+    const drain = drainOrphanReconciliation().then(() => {
+      drained = true;
+    });
+    await Bun.sleep(5);
+    expect(drained).toBe(false);
+
+    release([]);
+    await Promise.all([pass, drain]);
+    expect(drained).toBe(true);
+  });
+
+  it("resolves the default interval, grace and batch bound", () => {
+    expect(DEFAULT_ORPHAN_RECONCILE_INTERVAL_MS).toBe(5 * 60 * 1000);
+    expect(DEFAULT_ORPHAN_RECONCILE_GRACE_MS).toBe(60 * 1000);
+    expect(DEFAULT_ORPHAN_RECONCILE_LIMIT).toBe(20);
+  });
+});

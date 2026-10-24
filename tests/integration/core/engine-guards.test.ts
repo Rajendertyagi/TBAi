@@ -474,11 +474,14 @@ describe("positive paths — direct/legacy rows still pass both guards", () => {
     const fake = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
-      fetch(req) {
+      async fetch(req) {
         const url = new URL(req.url);
         if (req.method === "POST" && url.pathname === "/api/session") {
+          // RT-001: the seam mints the session id and sends it; the real
+          // server echoes it (and treats a repeat create as idempotent).
+          const body = (await req.json()) as { id?: string };
           return Response.json({
-            data: { id: "sess-fake", slug: "fake" },
+            data: { id: body.id, slug: "fake" },
           });
         }
         const m = url.pathname.match(/^\/api\/session\/([^/]+)$/);

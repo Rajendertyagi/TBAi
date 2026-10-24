@@ -15,9 +15,10 @@ import * as realOpenCodeClient from "@/services/opencode/client.ts";
  * failure is expected and wanted: it pins the race the fix must close.
  *
  * Isolation: `sessions.ts` reaches the outside world through `../storage`
- * (conversation row), `./client` (the official V2 client),
+ * (conversation row), `../storage/opencodeSessionOrphans` (the RT-001
+ * create-intent journal), `./client` (the official V2 client),
  * `openCodeServerManager.ensureBaseUrl` (process ownership) and
- * `../workspace` (workspace dir resolution). All four are stubbed — no
+ * `../workspace` (workspace dir resolution). All five are stubbed — no
  * process is spawned, no database is opened, no network I/O happens — so the
  * `create` is given an artificial delay to force the real race window open.
  * Specifiers mirror `sessions.test.ts` (`../storage`, `./client`); the
@@ -50,6 +51,14 @@ mock.module("@/services/storage", () => ({
   },
 }));
 
+mock.module("@/services/storage/opencodeSessionOrphans", () => ({
+  opencodeOrphanService: {
+    recordCreateIntent: async () => true,
+    deleteCreateIntent: async () => true,
+    recordOrphanedSession: async () => true,
+  },
+}));
+
 mock.module("@/services/opencode/client", () => ({
   ...realOpenCodeClient,
   createOpenCodeClient: () => ({
@@ -57,12 +66,13 @@ mock.module("@/services/opencode/client", () => ({
       get: async () => {
         throw new Error("not reached: no stored session in this probe");
       },
-      create: async () => {
+      create: async (args: { id: string }) => {
         createCalls += 1;
         // Hold the race window open so both callers overlap inside `create`
         // instead of one finishing before the other starts.
         await Bun.sleep(25);
-        return { id: `ses-race-${createCalls}` };
+        // The real server echoes the caller-supplied id (RT-001).
+        return { id: args.id };
       },
     },
     // Reached by `fetchServerDefaultModel` for a session created with no model.

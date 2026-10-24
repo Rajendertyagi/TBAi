@@ -93,12 +93,13 @@ export function toOpenCodeError(err: unknown): OpenCodeError {
   if (err instanceof OpenCodeError) return err;
 
   if (isSessionNotFoundError(err)) {
-    return new OpenCodeError(
-      "session_not_found",
-      `OpenCode session not found: ${err.sessionID}`,
-      404,
-      { cause: err },
-    );
+    // The id is deliberately NOT in the message: this error is spread into
+    // structured logs by several callers, and a session id must never ride
+    // out in free text (the logger redacts id-shaped FIELDS only). The kind
+    // and status are enough to act on; the id stays on `cause`.
+    return new OpenCodeError("session_not_found", "OpenCode session not found", 404, {
+      cause: err,
+    });
   }
   if (isUnauthorizedError(err) || isForbiddenError(err)) {
     return new OpenCodeError("auth", `OpenCode authentication failed: ${bodyDetail(err)}`, 401, {

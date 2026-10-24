@@ -249,7 +249,11 @@ describe("toOpenCodeError", () => {
     expect(err).toBeInstanceOf(OpenCodeError);
     expect(err.kind).toBe("session_not_found");
     expect(err.statusCode).toBe(404);
-    expect(err.message).toContain("ses_missing");
+    // The id must not ride out in free text: this error is spread into
+    // structured logs, which redact id-shaped FIELDS but not prose (RT-001).
+    expect(err.message).not.toContain("ses_missing");
+    // It is still recoverable internally, on the cause.
+    expect(Reflect.get(err.cause as object, "sessionID")).toBe("ses_missing");
   });
 
   it("maps a transport fault to connection and names the network cause", () => {

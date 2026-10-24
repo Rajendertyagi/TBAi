@@ -5,6 +5,10 @@ import { logger } from "../lib/logger";
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
 import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "./schema/chat-streams";
+// Leaf module (no app imports) that owns the OpenCode orphan-session journal
+// DDL. RT-001: a remote session created but not bound persists here so a
+// reconciler can remove it; see the module header for scope and lifecycle.
+import { applyOpenCodeOrphanSchema } from "./schema/opencode-session-orphans";
 // Leaf module (no app imports) that owns the messages DDL, so the boot migration
 // and the tests that need a real `messages` table apply one definition.
 import { MESSAGES_REBUILD_SQL, MESSAGES_TABLE_SQL } from "./schema/messages";
@@ -120,6 +124,14 @@ applyChatStreamsSchema(sqlite);
 // Columns introduced after the chat-stream DDL was first shipped reach an
 // existing install only through this additive, idempotent pass.
 addChatStreamsColumnsIfMissing(sqlite);
+
+// OpenCode session journal (RT-001): additive, idempotent — one new table and
+// one partial index, no existing table altered and no row rewritten. It holds
+// the pre-create intent (the durable correlation id) and confirmed orphans, so
+// a crash in the create/persist window is recoverable by the reconciler; see
+// `src/services/storage/opencodeSessionOrphans.ts` for the service and
+// `src/services/opencode/orphanReconciler.ts` for the consumer.
+applyOpenCodeOrphanSchema(sqlite);
 
 // Durable key/value app settings (runtime log capture level/overrides, ...).
 // Single-row-per-key; values are JSON. Read at boot, written by settings APIs.

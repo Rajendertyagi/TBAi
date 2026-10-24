@@ -35,6 +35,12 @@ import {
   startHistoryReconciliation,
   stopHistoryReconciliation,
 } from "./services/chat-streams/historyReconciler";
+import {
+  drainOrphanReconciliation,
+  openCodeOrphanReconcilerDeps,
+  startOrphanReconciliation,
+  stopOrphanReconciliation,
+} from "./services/opencode/orphanReconciler";
 import { resolveConfiguredPort, writePortFile } from "./services/server-port";
 import {
   bindBootPort,
@@ -181,6 +187,13 @@ export async function startServer(port = resolveConfiguredPort().port) {
     // claim sweep above so it cannot begin until abandoned claims are settled.
     startHistoryReconciliation({ deps: chatHistoryReconcilerDeps, gate: swept });
 
+    // OpenCode session journal reconciliation (RT-001): drains create intents
+    // and confirmed orphans left by a failed or crashed create. Fire-and-forget
+    // and unref'd, and it never starts the managed server — the boot pass only
+    // clears rows that are provably bound, and remote probes wait for a pass
+    // that runs while Code mode already has the server up.
+    startOrphanReconciliation({ deps: openCodeOrphanReconcilerDeps });
+
     // Transport backstop: Bun kills connections idle for 10s by default, which
     // murders quiet streams (a thinking model, a long tool run). 240s covers
     // normal stalls for this local single-user app (Bun's maximum is 255).
@@ -288,6 +301,13 @@ export async function rollbackPartialStartup(): Promise<StartupRollbackResult> {
   }
 
   // Background timers started before the failure.
+  try {
+    stopOrphanReconciliation();
+    await drainOrphanReconciliation();
+  } catch (err) {
+    logger.warn("opencode", "shutdown_orphan_reconcile_failed", { ...normalizeError(err) });
+    timedOut = true;
+  }
   try {
     stopChatStreamCleanup();
   } catch (err) {
@@ -462,6 +482,19 @@ async function runShutdown(
     stopPromise = server.stop(true);
   } catch (err) {
     logger.warn("server", "shutdown_stop_failed", { ...normalizeError(err) });
+  }
+
+  // Stop journal reconciliation BEFORE the OpenCode server goes away: a pass
+  // already probing would otherwise race the child's teardown, and the drain
+  // guarantees no journal write can land after the database closes.
+  try {
+    if (stopOrphanReconciliation()) {
+      logger.info("opencode", "opencode.orphan_reconcile_stopped", { signal: "shutdown" });
+    }
+    await drainOrphanReconciliation();
+  } catch (err) {
+    logger.warn("opencode", "shutdown_orphan_reconcile_failed", { ...normalizeError(err) });
+    shutdownFailed = true;
   }
 
   try {

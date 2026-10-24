@@ -44,6 +44,8 @@ import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
 import { formatDuration } from "@/tools/elapsed";
+import { AgentStatus } from "./assistant-ui/elements/agent-status";
+import { useAssistantActivity } from "../features/chat/hooks/useAssistantActivity";
 /**
  * Whether the thread boot skeleton renders. Pure (no hooks) so the
  * draft/loading/mode matrix is unit-testable without a DOM runner.
@@ -94,6 +96,17 @@ export function shouldShowSessionTimeline({
   mode: "chat" | "agent";
 }): boolean {
   return mode === "agent";
+}
+
+function AssistantStatusPill() {
+  const activity = useAssistantActivity();
+  if (!activity) return null;
+
+  return (
+    <div className="flex items-center justify-start pb-2">
+      <AgentStatus {...activity} />
+    </div>
+  );
 }
 
 export function ChatWindow({
@@ -225,7 +238,8 @@ export function ChatWindow({
             overlay={<ScrollPill />}
           />
 
-          <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+          <div className="relative z-10 mx-auto w-full max-w-3xl px-4 pb-4 bg-background">
+            <AssistantStatusPill />
             {/* In flow, between the transcript and the composer, so the
                 viewport's `flex-1` absorbs the height and the last rows stay
                 reachable. No absolute positioning, no measurement. */}

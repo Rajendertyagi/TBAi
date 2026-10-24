@@ -413,21 +413,16 @@ export function createThreadHistoryAdapter(
             // publishing it unguarded would put UI state on screen for a controller
             // that is not registered. Guarding re-adopts it, so the failure state and
             // the controller that owns it stay consistent and Retry still resolves one.
-            if (controller && !superseded) {
+            if (superseded) return reportCurrentWindow(remoteId);
+            if (error instanceof HistoryWindowTimeoutError) {
+              const retained = retainedHistory<any>(remoteId);
+              if (retained.length > 0) return { messages: retained };
+            }
+
+            if (controller) {
               markHistoryLoadFailed(remoteId);
               publishWindowUiFor(remoteId, controller);
             }
-            // A superseded load must not report emptiness: the conversation owns a
-            // window now, and returning [] here would blank a populated transcript.
-            if (superseded) return reportCurrentWindow(remoteId);
-            // Empty, not a retained projection. The retention cache and the
-            // window controller are populated and dropped TOGETHER
-            // (invalidateHistoryCache clears both, and dropWindowController is
-            // reachable from nowhere else), and a conversation holding a
-            // retained projection also holds committed rows — so the fetch above
-            // would have been skipped entirely and this catch unreachable. The
-            // old `retainedHistory(remoteId)` fallback could therefore only ever
-            // return [], so this is behaviour-preserving.
             return { messages: [] };
           }
         },

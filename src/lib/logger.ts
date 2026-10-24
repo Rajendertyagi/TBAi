@@ -173,6 +173,11 @@ const SECRET_VALUE_PATTERNS: RegExp[] = [
   /AIza[0-9A-Za-z_-]{8,}/g,
   /xox[baprs]-[0-9A-Za-z-]{8,}/g,
   /Bearer\s+[A-Za-z0-9\-._~+/=]{8,}/g,
+  // OpenCode session ids are not credentials, but they are opaque handles to
+  // a user's remote session and must not appear in log text. Key-based
+  // redaction covers `sessionId` fields; this covers ids embedded in messages,
+  // stack traces and serialized error bodies (RT-001).
+  /ses_[A-Za-z0-9]{8,}/g,
 ];
 
 function redactString(value: string): string {

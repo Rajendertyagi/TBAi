@@ -64,11 +64,10 @@ let lookupStatus: Map<string, number | null>;
 let ambiguousIds: Set<string>;
 /** The default the fake advertises, or null when it advertises none. */
 let serverDefault: typeof SERVER_DEFAULT | null;
-/** Every created session, with the model that was actually put on the wire. */
-let created: Array<{ model?: { id: string; providerID: string } }>;
+/** Every created session: the id the seam minted, and the model put on the wire. */
+let created: Array<{ id: string; model?: { id: string; providerID: string } }>;
 /** Every `session.switchModel` the seam issued, as the server received it. */
 let switched: Array<{ sessionID: string; model: { id: string; providerID: string } }>;
-let nextId: number;
 
 beforeEach(() => {
   // The seam's only outbound dependency is the official V2 client, so the fake
@@ -109,16 +108,18 @@ beforeEach(() => {
           throw new OpenCodeError("malformed", "unsupported content type");
         },
         create: async (params: {
+          id: string;
           location: { directory: string };
           model?: { id: string; providerID: string };
         }) => {
-          created.push({ model: params.model });
-          const id = `ses_fake_${nextId++}`;
-          serverSessions.set(id, {
+          // RT-001: the seam mints the id and sends it; the real server echoes
+          // it and treats a repeat create for that id as idempotent.
+          created.push({ id: params.id, model: params.model });
+          serverSessions.set(params.id, {
             directory: params.location.directory,
             ...(params.model ? { model: params.model } : {}),
           });
-          return { id, location: { directory: params.location.directory } };
+          return { id: params.id, location: { directory: params.location.directory } };
         },
         switchModel: async (args: {
           sessionID: string;
@@ -158,7 +159,6 @@ beforeEach(() => {
   serverDefault = SERVER_DEFAULT;
   created = [];
   switched = [];
-  nextId = 1;
 });
 
 afterEach(() => mock.restore());
@@ -213,18 +213,19 @@ describe("A. the Code view's bootstrap reaches the session seam and binds the de
     const conv = await openCodeConversation();
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(200);
-    expect(body.sessionId).toBe("ses_fake_1");
+    expect(created).toHaveLength(1);
+    // The response names the id the seam minted and the server echoed.
+    expect(body.sessionId).toBe(created[0].id);
     // A newly created session is not a reused one: the restoration notice must
     // never appear for it.
     expect(body.reusedExistingSession).toBe(false);
     // The session went out over the wire carrying the default…
-    expect(created).toHaveLength(1);
     expect(created[0].model).toEqual({
       id: SERVER_DEFAULT.modelID,
       providerID: SERVER_DEFAULT.providerID,
     });
     // …and it is really on the session, not merely requested.
-    expect(serverSessions.get("ses_fake_1")?.model).toEqual({
+    expect(serverSessions.get(created[0].id)?.model).toEqual({
       id: SERVER_DEFAULT.modelID,
       providerID: SERVER_DEFAULT.providerID,
     });
@@ -314,10 +315,10 @@ describe("E. a stale session pointer is not resurrected", () => {
 
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(200);
-    expect(body.sessionId).toBe("ses_fake_1");
+    expect(created).toHaveLength(1);
+    expect(body.sessionId).toBe(created[0].id);
     // A replacement is not a restoration: the notice must stay silent.
     expect(body.reusedExistingSession).toBe(false);
-    expect(created).toHaveLength(1);
     // The replacement carries the default, and nothing was written to the dead id.
     expect(created[0].model).toEqual({
       id: SERVER_DEFAULT.modelID,
@@ -331,10 +332,11 @@ describe("E. a stale session pointer is not resurrected", () => {
     await conversationService.update(conv.id, { opencodeSessionId: "ses_vanished" });
 
     const { body } = await bootstrap(conv.id);
-    expect(body.sessionId).toBe("ses_fake_1");
+    expect(created).toHaveLength(1);
+    expect(body.sessionId).toBe(created[0].id);
 
     const reloaded = await conversationService.get(conv.id);
-    expect(reloaded?.opencodeSessionId).toBe("ses_fake_1");
+    expect(reloaded?.opencodeSessionId).toBe(created[0].id);
   });
 
   it("does NOT replace the session when absence could not be established", async () => {
@@ -368,8 +370,8 @@ describe("F. with no server default the session stays honestly unbound", () => {
     const conv = await openCodeConversation();
     const { res, body } = await bootstrap(conv.id);
     expect(res.status).toBe(200);
-    expect(body.sessionId).toBe("ses_fake_1");
     expect(created).toHaveLength(1);
+    expect(body.sessionId).toBe(created[0].id);
     expect(created[0].model).toBeUndefined();
     expect(switched).toHaveLength(0);
   });

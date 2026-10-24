@@ -437,7 +437,7 @@ function Composer({
           onSubmit={handleComposerSubmit}
           className={cn(
             "relative flex flex-col",
-            "rounded-xl border-none glass-surface shadow-floating",
+            "rounded-xl border border-border/50 bg-card shadow-floating",
             "transition-shadow duration-200 ease-in-out",
             "focus-within:ring-1 focus-within:ring-ring",
           )}
