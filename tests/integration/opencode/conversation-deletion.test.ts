@@ -45,6 +45,7 @@ afterEach(() => {
   for (const trigger of [
     "rt011_drift_clear",
     "rt011_drift_engine",
+    "rt011_rebind_early",
     "rt011_arm_fail",
     "rt011_retain_fail",
   ]) {
@@ -269,6 +270,41 @@ describe("DELETE /api/conversations/:id — RT-011 deletion coordinator", () => 
     await conversationService.delete(convId);
   });
 
+  it("answers 409 when the pointer changes to a new session before the first decision read", async () => {
+    const convId = await createOpenCodeConversation("ses_rt011_s1");
+    // The pointer moves to S2 AFTER the route's entry snapshot but BEFORE the
+    // coordinator's first decision read. This is the pre-read rebind: the
+    // request must terminate neither the stale S1 nor the new S2.
+    db.run(`
+      CREATE TRIGGER rt011_rebind_early
+      BEFORE INSERT ON opencode_session_orphans
+      WHEN NEW.phase = 'delete'
+      BEGIN
+        UPDATE conversations
+           SET opencode_session_id = 'ses_rt011_s2'
+         WHERE id = NEW.conversation_id;
+      END;
+    `);
+
+    await withFake({}, async (fake) => {
+      const res = await app.request(`/api/conversations/${convId}`, { method: "DELETE" });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "session_rebound" });
+      expect(fake.calls).toEqual([]);
+    });
+
+    const preserved = await conversationService.get(convId);
+    expect(preserved?.opencodeSessionId).toBe("ses_rt011_s2");
+    // S1 was observed at entry and journaled before the decision read, so the
+    // rebind does not erase the obligation to account for it.
+    const marker = journalRow(convId, "ses_rt011_s1");
+    expect(marker?.phase).toBe("delete");
+    expect(marker?.resolved_at).toBeNull();
+
+    await conversationService.delete(convId);
+  });
+
   it("returns 503 and deletes nothing when the durable marker cannot be written", async () => {
     const convId = await createOpenCodeConversation("ses_rt011_arm");
     db.run(`
@@ -320,6 +356,36 @@ describe("DELETE /api/conversations/:id — RT-011 deletion coordinator", () => 
     expect(marker?.resolved_at).toBeNull();
 
     await conversationService.delete(convId);
+  });
+
+  it("deletes the conversation and retains the marker when removal is unconfirmed (Option A)", async () => {
+    const convId = await createOpenCodeConversation("ses_rt011_unconfirmed");
+
+    await withFake({ keepOnRemove: true }, async (fake) => {
+      fake.sessions.add("ses_rt011_unconfirmed");
+
+      const res = await app.request(`/api/conversations/${convId}`, { method: "DELETE" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        success: true,
+        deleted: true,
+        sessionCleanup: "retained",
+      });
+      // Removal was attempted and answered 204, but the confirmation lookup
+      // still found the session, so the request may not claim it is gone.
+      expect(fake.calls).toContain("remove:ses_rt011_unconfirmed");
+      expect(fake.calls).toContain("get:ses_rt011_unconfirmed");
+      expect(fake.sessions.has("ses_rt011_unconfirmed")).toBe(true);
+    });
+
+    // Option A: the row is deleted anyway; the durable marker is the handle
+    // the reconciler uses later.
+    expect(await conversationService.get(convId)).toBeNull();
+    const marker = journalRow(convId, "ses_rt011_unconfirmed");
+    expect(marker?.phase).toBe("delete");
+    expect(marker?.late_create_risk).not.toBe(0);
+    expect(marker?.resolved_at).toBeNull();
   });
 
   it("answers 409 when a real create rebinds a new session while the removal is in flight", async () => {

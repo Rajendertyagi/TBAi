@@ -60,6 +60,31 @@ describe("opencodeOrphanService.recordCreateIntent", () => {
     expect(rows.length).toBe(1);
   });
 
+  it("keeps an existing open orphan as an orphan, never downgrading it to intent", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      persistErrorCategory: "database",
+    });
+
+    const open = await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+
+    expect(open).toBe(true);
+    const rows = db.query("SELECT * FROM opencode_session_orphans").all() as Array<
+      Record<string, unknown>
+    >;
+    expect(rows.length).toBe(1);
+    // Observed-exists is stronger than a pre-create intent; a retried create
+    // must not talk the journal back down. The risk is re-armed because a new
+    // create is about to be issued.
+    expect(rows[0].phase).toBe("orphan");
+    expect(rows[0].late_create_risk).toBe(1);
+    expect(rows[0].resolved_at).toBeNull();
+  });
+
   it("does not reopen or downgrade a resolved orphan", async () => {
     await opencodeOrphanService.recordOrphanedSession({
       conversationId: "conv-1",

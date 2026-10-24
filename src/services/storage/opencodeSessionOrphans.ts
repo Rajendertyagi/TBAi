@@ -183,6 +183,7 @@ export const opencodeOrphanService = {
          last_seen_at = excluded.last_seen_at,
          phase = CASE
            WHEN opencode_session_orphans.phase = 'delete' THEN 'delete'
+           WHEN opencode_session_orphans.phase = 'orphan' THEN 'orphan'
            ELSE 'intent'
          END,
          location_directory = COALESCE(

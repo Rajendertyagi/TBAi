@@ -7762,7 +7762,9 @@ rows keep the existing teardown unchanged.
   preserved and answered 409 `{ error: "session_rebound" }`. An already-null
   pointer is a valid intermediate state, not a storage fault: it proceeds.
 - **The journal phase is `delete`.** It is sticky: create/orphan writes never
-  downgrade it. A nonzero `late_create_risk` is preserved EXACTLY (a stored
+  downgrade it, and an already-open `orphan` keeps its phase when a create
+  intent is re-recorded, so RT-001's `intent → orphan` promotion rule still
+  holds. A nonzero `late_create_risk` is preserved EXACTLY (a stored
   `-1` stays `-1`); a risk-free marker is raised to 1, because deleting a
   conversation is not proof that a create request finished. Generic ownership
   settlement may rotate a bound marker but never resolves it. A marker is
