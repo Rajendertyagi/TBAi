@@ -1,0 +1,130 @@
+name: OpenCode preflight measurements
+
+# DISPATCH-ONLY and TEMPORARY. This workflow exists to answer two questions the
+# runtime remediation plan depends on, on the same runner that will host the
+# permanent job:
+#
+#   1. How long does a cold `opencode serve` take to answer its own readiness
+#      probe? (Does the frontend's 20s warm-ready budget have room for it?)
+#   2. What wall-clock do the nine real-binary runtime suites cost?
+#
+# It is deliberately NOT a gate: every suite step records but does not abort, so
+# one credential-dependent suite cannot hide the timing of the other eight.
+# The permanent `opencode-runtime` job in tests.yml replaces this file.
+
+on:
+  workflow_dispatch:
+
+env:
+  BUN_VERSION: "1.4.2"
+  OPENCODE_VERSION: "2.1.2"
+  OPENCODE_CLI_SHA512: "sha512-r2DUwYbPe++6y4vWRuHX7slVCMIHyLyC8YAgJO7YAKX7dMgfXe4RDlJK7eZ6KHNBdpIY62Nxd6DPzKiCOP8uMg=="
+
+jobs:
+  measure:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: actions/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      - name: Measure cold start to authenticated readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Get-Command opencode -ErrorAction Stop).Source
+          $password = 'tbai-preflight-fixture'
+          $auth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("opencode:$password"))
+          $results = @()
+          for ($i = 1; $i -le 3; $i++) {
+            $root = Join-Path $env:RUNNER_TEMP "cold-$i"
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            $env:XDG_DATA_HOME = Join-Path $root 'xdg-data'
+            $env:XDG_CONFIG_HOME = Join-Path $root 'xdg-config'
+            $env:XDG_CACHE_HOME = Join-Path $root 'xdg-cache'
+            $env:OPENCODE_DB = Join-Path $root 'opencode.db'
+            $env:OPENCODE_PASSWORD = $password
+            $env:OPENCODE_CONFIG_PROJECT_DISABLE = '1'
+            $env:OPENCODE_DISABLE_PROJECT_CONFIG = '1'
+
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
+
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $child = Start-Process -FilePath $exe -ArgumentList @('serve', '--port', "$port") `
+              -WorkingDirectory $root -PassThru -WindowStyle Hidden
+            $readyVersion = $null
+            try {
+              while ($sw.Elapsed.TotalSeconds -lt 60) {
+                try {
+                  $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/info" `
+                    -Headers @{ Authorization = $auth; Accept = 'application/json' } `
+                    -TimeoutSec 2 -SkipHttpErrorCheck -UseBasicParsing
+                  if ($response.StatusCode -eq 200) {
+                    $readyVersion = ($response.Content | ConvertFrom-Json).version
+                    break
+                  }
+                } catch { }
+                Start-Sleep -Milliseconds 50
+              }
+            } finally {
+              $sw.Stop()
+              if ($child -and -not $child.HasExited) {
+                taskkill /PID $child.Id /T /F | Out-Null
+              }
+            }
+            if (-not $readyVersion) { throw "cold start $i never became ready" }
+            $line = "cold-start-$i ready_ms=$([math]::Round($sw.Elapsed.TotalMilliseconds)) version=$readyVersion"
+            Write-Output $line
+            $results += $line
+          }
+          $results | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Time the nine real-binary runtime suites
+        shell: bash
+        env:
+          TBAI_OPENCODE_RUNTIME_TESTS: "1"
+        run: |
+          set -u
+          summary="$RUNNER_TEMP/suite-timings.txt"
+          : > "$summary"
+          for f in \
+            opencode-context-meter-runtime \
+            opencode-database-compat \
+            opencode-native-compaction-conformance \
+            opencode-ownership-runtime \
+            opencode-retry-restart \
+            opencode-retry-runtime \
+            opencode-runtime-auth \
+            opencode-session-idempotency-runtime \
+            opencode-stub-provider-spike
+          do
+            start=$(date +%s%3N)
+            bun test "tests/integration/opencode/$f.test.ts" --timeout=300000 > "$RUNNER_TEMP/$f.log" 2>&1
+            rc=$?
+            end=$(date +%s%3N)
+            echo "::group::$f rc=$rc ms=$((end-start))"
+            tail -25 "$RUNNER_TEMP/$f.log"
+            echo "::endgroup::"
+            echo "$f rc=$rc ms=$((end-start))" | tee -a "$summary"
+          done
+          {
+            echo '### Runtime suite timings'
+            echo '```'
+            cat "$summary"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
