@@ -66,6 +66,18 @@ export interface OpenCodeOrphanRecord {
   cleanupErrorCategory?: ErrorCategory;
   /** When a reconciler proved the session gone or bound; `null` = still open. */
   resolvedAt: Date | null;
+  /**
+   * Whether an ambiguous create request for this id could still commit. True
+   * for a fresh intent (and all legacy intents); false once the exact id has
+   * been observed present, or when the row is an orphan. A bare 404 never
+   * clears it: absence at lookup time is not proof that a lost request cannot
+   * still complete.
+   */
+  lateCreateRisk: boolean;
+  /** First positive 404 seen for a risk-bearing intent; `null` otherwise. */
+  firstAbsentAt: Date | null;
+  /** Last probe completed by the reconciler; `null` until one runs. */
+  lastCheckedAt: Date | null;
 }
 
 interface OrphanRow {
@@ -78,6 +90,9 @@ interface OrphanRow {
   persist_error_category: string | null;
   cleanup_error_category: string | null;
   resolved_at: number | null;
+  late_create_risk: number | null;
+  first_absent_at: number | null;
+  last_checked_at: number | null;
 }
 
 function mapOrphanRow(row: OrphanRow): OpenCodeOrphanRecord {
@@ -93,6 +108,11 @@ function mapOrphanRow(row: OrphanRow): OpenCodeOrphanRecord {
     persistErrorCategory: (row.persist_error_category as ErrorCategory | null) ?? undefined,
     cleanupErrorCategory: (row.cleanup_error_category as ErrorCategory | null) ?? undefined,
     resolvedAt: row.resolved_at !== null ? new Date(row.resolved_at) : null,
+    // Anything other than an explicit 0 is risk-bearing: a missing/legacy
+    // value must never be read as "safe to clear".
+    lateCreateRisk: row.late_create_risk !== 0,
+    firstAbsentAt: row.first_absent_at !== null ? new Date(row.first_absent_at) : null,
+    lastCheckedAt: row.last_checked_at !== null ? new Date(row.last_checked_at) : null,
   };
 }
 
@@ -103,9 +123,12 @@ export const opencodeOrphanService = {
    * the "created remotely but no id is durable" crash window.
    *
    * Idempotent on `(conversationId, sessionId)`. An existing `orphan` row is
-   * kept as an orphan; the phase is never downgraded.
+   * kept as an orphan; the phase is never downgraded. A repeated intent write
+   * means a create request is about to be issued again, so it re-arms the
+   * late-create risk and clears the previous absence observation.
    *
-   * @returns True when an open durable record exists after the write.
+   * @returns True when an open durable record exists after the write. The
+   *   caller MUST fail closed when this is false.
    */
   async recordCreateIntent(input: {
     conversationId: string;
@@ -115,14 +138,17 @@ export const opencodeOrphanService = {
     const now = Date.now();
     const result = db.run(
       `INSERT INTO opencode_session_orphans
-         (conversation_id, session_id, first_seen_at, last_seen_at, phase, location_directory)
-       VALUES (?, ?, ?, ?, 'intent', ?)
+         (conversation_id, session_id, first_seen_at, last_seen_at, phase,
+          location_directory, late_create_risk)
+       VALUES (?, ?, ?, ?, 'intent', ?, 1)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
          location_directory = COALESCE(
            opencode_session_orphans.location_directory,
            excluded.location_directory
-         )
+         ),
+         late_create_risk = 1,
+         first_absent_at = NULL
        WHERE opencode_session_orphans.resolved_at IS NULL`,
       [input.conversationId, input.sessionId, now, now, input.locationDirectory ?? null],
     );
@@ -139,6 +165,10 @@ export const opencodeOrphanService = {
    * (the first failure is the one that opened the record). A resolved row is
    * never resurrected: resolution is terminal.
    *
+   * A recorded orphan is a session that was OBSERVED to exist, so it is no
+   * longer a late-create risk: any duplicate create of the same id resolves to
+   * that same session.
+   *
    * @returns True when the record is (still) open after the write, false
    *   when the pair was already resolved.
    */
@@ -153,8 +183,9 @@ export const opencodeOrphanService = {
     const result = db.run(
       `INSERT INTO opencode_session_orphans
          (conversation_id, session_id, first_seen_at, last_seen_at, phase,
-          location_directory, persist_error_category, cleanup_error_category)
-       VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?)
+          location_directory, persist_error_category, cleanup_error_category,
+          late_create_risk, first_absent_at)
+       VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?, 0, NULL)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
          phase = 'orphan',
@@ -169,7 +200,9 @@ export const opencodeOrphanService = {
          cleanup_error_category = COALESCE(
            opencode_session_orphans.cleanup_error_category,
            excluded.cleanup_error_category
-         )
+         ),
+         late_create_risk = 0,
+         first_absent_at = NULL
        WHERE opencode_session_orphans.resolved_at IS NULL`,
       [
         input.conversationId,
@@ -181,6 +214,43 @@ export const opencodeOrphanService = {
         input.cleanupErrorCategory ?? null,
       ],
     );
+    return result.changes > 0;
+  },
+
+  /**
+   * Records the outcome of one reconciler probe against the remote session.
+   *
+   * `present` proves the id exists, so a duplicate create can only resolve to
+   * it: the late-create risk is cleared. `absent` is a 404, which proves
+   * absence only at lookup time and therefore never clears that risk; it does
+   * stamp `first_absent_at` (once) so the reconciler can bound how long a
+   * risk-bearing intent is retained.
+   *
+   * Always advances `last_checked_at`, which is what rotates an unsettleable
+   * row behind rows that have not been examined.
+   *
+   * @returns Whether an open row was updated.
+   */
+  async recordProbe(input: {
+    conversationId: string;
+    sessionId: string;
+    outcome: "present" | "absent";
+    at: number;
+  }): Promise<boolean> {
+    const result =
+      input.outcome === "present"
+        ? db.run(
+            `UPDATE opencode_session_orphans
+             SET late_create_risk = 0, first_absent_at = NULL, last_checked_at = ?
+             WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+            [input.at, input.conversationId, input.sessionId],
+          )
+        : db.run(
+            `UPDATE opencode_session_orphans
+             SET first_absent_at = COALESCE(first_absent_at, ?), last_checked_at = ?
+             WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+            [input.at, input.at, input.conversationId, input.sessionId],
+          );
     return result.changes > 0;
   },
 
@@ -203,9 +273,14 @@ export const opencodeOrphanService = {
   },
 
   /**
-   * Unresolved records (both phases), oldest first. The read side of the
-   * journal: a reconciler lists these, acts on each against the live server,
-   * then clears the row when the outcome is proven.
+   * Unresolved records (both phases), least-recently-examined first. The read
+   * side of the journal: a reconciler lists these, acts on each against the
+   * live server, then clears the row when the outcome is proven.
+   *
+   * `last_checked_at` rotates rows whose probe outcome could not settle them
+   * (a risk-bearing intent that keeps answering 404) behind rows that have
+   * not been examined, so a bounded batch cannot starve a newer backlog. A
+   * row that has never been probed sorts by its `first_seen_at`.
    *
    * @param limit - Bounded scan; `undefined` for the whole backlog.
    */
@@ -214,7 +289,8 @@ export const opencodeOrphanService = {
       .query<OrphanRow, SQLQueryBindings[]>(
         `SELECT * FROM opencode_session_orphans
          WHERE resolved_at IS NULL
-         ORDER BY first_seen_at ASC, conversation_id ASC, session_id ASC
+         ORDER BY COALESCE(last_checked_at, first_seen_at) ASC,
+                  first_seen_at ASC, conversation_id ASC, session_id ASC
          ${limit !== undefined ? "LIMIT ?" : ""}`,
       )
       .all(...(limit !== undefined ? [limit] : []));

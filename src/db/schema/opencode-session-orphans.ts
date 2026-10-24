@@ -34,6 +34,19 @@ import type { Database } from "bun:sqlite";
  *    orphan.
  *  - `location_directory` is the directory the create was scoped to. It is
  *    recovery scope, not a secret.
+ *  - `late_create_risk` says whether an AMBIGUOUS create request could still
+ *    commit after the last observation. It starts at 1 (a create is about to
+ *    be issued), becomes 0 once the exact id is observed present — at that
+ *    point any duplicate create resolves to the same id and cannot produce an
+ *    untracked session — and is never cleared by a bare 404. A 404 proves
+ *    absence only at lookup time; the failed request may still complete.
+ *  - `first_absent_at` is the first positive 404 seen for a risk-bearing
+ *    intent. Together with the absence horizon in the reconciler it bounds how
+ *    long such an intent is retained, because upstream exposes no terminality
+ *    signal for a request whose response was lost.
+ *  - `last_checked_at` rotates rows that cannot be settled (a risk-bearing
+ *    intent that keeps answering 404) behind ones that have not been probed,
+ *    so a bounded batch cannot starve a newer backlog.
  *  - No transcript content, no secrets. The record deliberately stores
  *    failure CLASSIFICATIONS (`persist_error_category`,
  *    `cleanup_error_category`), not raw provider errors.
@@ -52,6 +65,9 @@ CREATE TABLE IF NOT EXISTS opencode_session_orphans (
   persist_error_category  TEXT,
   cleanup_error_category  TEXT,
   resolved_at             INTEGER,
+  late_create_risk        INTEGER NOT NULL DEFAULT 1,
+  first_absent_at         INTEGER,
+  last_checked_at         INTEGER,
   PRIMARY KEY (conversation_id, session_id)
 );
 
@@ -77,4 +93,10 @@ export function applyOpenCodeOrphanSchema(db: Database): void {
   // additions are nullable/defaulted, so existing rows remain valid.
   addColumnIfMissing(db, "phase", "TEXT NOT NULL DEFAULT 'orphan'");
   addColumnIfMissing(db, "location_directory", "TEXT");
+  // A pre-existing intent predates late-create tracking; defaulting it to 1 is
+  // the conservative read (its create may have been ambiguous), so the
+  // reconciler will not clear it on a bare 404.
+  addColumnIfMissing(db, "late_create_risk", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "first_absent_at", "INTEGER");
+  addColumnIfMissing(db, "last_checked_at", "INTEGER");
 }

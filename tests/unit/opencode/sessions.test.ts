@@ -191,7 +191,9 @@ const { OpenCodeError } = await import("@/services/opencode/errors.ts");
 const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } = await import(
   "@/services/opencode/sessions.ts"
 );
-const { OpenCodeSessionPersistError } = await import("@/services/opencode/sessions.ts");
+const { OpenCodeSessionPersistError, OpenCodeSessionIntentError } = await import(
+  "@/services/opencode/sessions.ts"
+);
 const { logger } = await import("@/lib/logger.ts");
 
 (openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
@@ -728,7 +730,7 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     expect(orphanRecords[0]).toMatchObject({ sessionId: id });
   });
 
-  it("I. clears the pre-create intent when the create is proven absent", async () => {
+  it("I. retains the risk-bearing intent on a 404 and retries the SAME id once", async () => {
     noPointerConversation();
     // The call fails before the server commits anything; the probe answers 404.
     createImpl = async () => {
@@ -747,12 +749,138 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
 
     expect(caught).toBeInstanceOf(OpenCodeError);
     const id = createdId();
-    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`, `get:${id}`]);
+    // One retry of the SAME caller-supplied id: a duplicate can only converge
+    // on that session, so it can never mint a second identity.
+    expect(createArgs.map((args) => args.id)).toEqual([id, id]);
+    expect(calls).toEqual([
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+    ]);
     expect(conversation?.opencodeSessionId).toBeNull();
     expect(orphanRecords).toEqual([]);
-    // Proven never-created: no recovery obligation remains.
+    // A 404 is absence at lookup time, NOT proof the lost request cannot still
+    // commit. The durable intent therefore survives for the reconciler.
     expect(intentRecords.length).toBe(1);
+    expect(deletedIntents).toEqual([]);
+  });
+
+  it("I1. adopts the session its SAME-id retry creates", async () => {
+    noPointerConversation();
+    let attempts = 0;
+    createImpl = async (args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ClientError("Transport", { cause: new Error("lost response") });
+      }
+      return { id: args.id, location: { directory: SERVER_RECORDED_DIRECTORY } };
+    };
+    getImpl = async (args) => {
+      throw sessionNotFound(args.sessionID);
+    };
+
+    const binding = await ensureOpenCodeSession("conv-1");
+    const id = createdId();
+    expect(binding).toEqual({
+      sessionId: id,
+      directory: SERVER_RECORDED_DIRECTORY,
+      reusedExistingSession: false,
+    });
+    expect(createArgs.map((args) => args.id)).toEqual([id, id]);
+    // No probe after the successful retry: its response names the exact id.
+    expect(calls).toEqual([
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+      `create:${SUBMITTED_DIRECTORY}`,
+    ]);
+    expect(conversation?.opencodeSessionId).toBe(id);
     expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: id }]);
+  });
+
+  it("I2. adopts the original request when it commits after the retry failed", async () => {
+    noPointerConversation();
+    createImpl = async () => {
+      throw new ClientError("Transport", { cause: new Error("lost response") });
+    };
+    let probes = 0;
+    getImpl = async (args) => {
+      probes += 1;
+      if (probes === 1) throw sessionNotFound(args.sessionID);
+      return { id: args.sessionID, location: { directory: SERVER_RECORDED_DIRECTORY } };
+    };
+
+    const binding = await ensureOpenCodeSession("conv-1");
+    const id = createdId();
+    expect(binding).toEqual({
+      sessionId: id,
+      directory: SERVER_RECORDED_DIRECTORY,
+      reusedExistingSession: false,
+    });
+    expect(calls).toEqual([
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+    ]);
+    expect(orphanRecords).toEqual([]);
+    expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: id }]);
+  });
+
+  it("I3. deletes the intent only on a DEFINITIVE create rejection, without probing", async () => {
+    noPointerConversation();
+    // A declared 400 is the server answering and refusing: nothing was created.
+    createImpl = async () => {
+      throw new ClientError("UnexpectedStatus", { cause: { status: 400 } });
+    };
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeError);
+    const id = createdId();
+    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
+    expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: id }]);
+    expect(orphanRecords).toEqual([]);
+    expect(conversation?.opencodeSessionId).toBeNull();
+  });
+
+  it("I4. keeps the intent when the retry is rejected but the first request is unproven", async () => {
+    noPointerConversation();
+    let attempts = 0;
+    createImpl = async () => {
+      attempts += 1;
+      throw attempts === 1
+        ? new ClientError("Transport", { cause: new Error("lost response") })
+        : new ClientError("UnexpectedStatus", { cause: { status: 400 } });
+    };
+    getImpl = async (args) => {
+      throw sessionNotFound(args.sessionID);
+    };
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeError);
+    const id = createdId();
+    // A definitive rejection of the RETRY says nothing about the FIRST request.
+    expect(calls).toEqual([
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+    ]);
+    expect(intentRecords.length).toBe(1);
+    expect(deletedIntents).toEqual([]);
+    expect(orphanRecords).toEqual([]);
   });
 
   it("J. adopts a session the server created despite a failed create response", async () => {
@@ -822,17 +950,10 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     expect(orphanRecords).toEqual([]);
   });
 
-  it("M. reports recorded=false when neither journal write is durable", async () => {
+  it("M. fails closed when the intent write throws: the remote create is never called", async () => {
     noPointerConversation();
-    failPersistAndNotPersisted();
     intentRecordImpl = async () => {
       throw new Error("database is closed");
-    };
-    orphanRecordImpl = async () => {
-      throw new Error("database is closed");
-    };
-    removeImpl = async () => {
-      throw new ClientError("Transport", { cause: new Error("offline") });
     };
 
     let caught: unknown;
@@ -842,11 +963,52 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       caught = error;
     }
 
-    expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
-    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
-    expect(failure.cleanup).toBe("removal_failed");
-    // No durable record exists, so the error must not claim one.
-    expect(failure.recorded).toBe(false);
+    expect(caught).toBeInstanceOf(OpenCodeSessionIntentError);
+    const failure = caught as InstanceType<typeof OpenCodeSessionIntentError>;
+    expect(failure.code).toBe("OPENCODE_SESSION_INTENT_FAILED");
+    expect(failure.cause).toBeInstanceOf(Error);
+    // No remote create, no probe, no pointer write: fail closed.
+    expect(createArgs).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(updates).toEqual([]);
+    expect(conversation?.opencodeSessionId).toBeNull();
+    expect(orphanRecords).toEqual([]);
+  });
+
+  it("M1. fails closed when the journal reports no open intent", async () => {
+    noPointerConversation();
+    intentRecordImpl = async () => false;
+
+    await expect(ensureOpenCodeSession("conv-1")).rejects.toBeInstanceOf(
+      OpenCodeSessionIntentError,
+    );
+    expect(createArgs).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(updates).toEqual([]);
+  });
+
+  it("M2. the fail-closed error and its logs name no session id", async () => {
+    noPointerConversation();
+    intentRecordImpl = async () => {
+      throw new Error("database is closed");
+    };
+    const before = logger.lastSeq;
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeSessionIntentError);
+    const failure = caught as InstanceType<typeof OpenCodeSessionIntentError>;
+    // The id exists only on the typed error object, never in the message.
+    expect(failure.sessionId.startsWith("ses_")).toBe(true);
+    expect(failure.message).not.toContain(failure.sessionId);
+    for (const entry of logger.getRecentEntries(before)) {
+      expect(JSON.stringify(entry)).not.toContain(failure.sessionId);
+    }
   });
 
   it("N. still reports recorded=true when the intent survived an orphan-write failure", async () => {

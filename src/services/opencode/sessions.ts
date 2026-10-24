@@ -118,6 +118,32 @@ export class OpenCodeSessionPersistError extends Error {
 }
 
 /**
+ * The durable recovery journal could not establish the pre-create intent, so
+ * no remote session was requested (RT-001, fail-closed).
+ *
+ * Creating the session first and hoping the journal write works afterwards is
+ * exactly the untracked-creation window this design exists to close: if the
+ * process dies (or the database closes) between the two, nothing durable names
+ * the remote session. A journal outage therefore fails the operation instead
+ * of proceeding without a recovery record.
+ *
+ * The message is safe to surface: it names no conversation, session id or
+ * database detail. Those stay on the error object for diagnosis, and `cause`
+ * carries the underlying failure.
+ */
+export class OpenCodeSessionIntentError extends Error {
+  readonly code = "OPENCODE_SESSION_INTENT_FAILED";
+  constructor(
+    readonly conversationId: string,
+    readonly sessionId: string,
+    options: ErrorOptions,
+  ) {
+    super("OpenCode session recovery is unavailable; no session was created", options);
+    this.name = "OpenCodeSessionIntentError";
+  }
+}
+
+/**
  * A conversation's OpenCode session binding: the server-side session identity
  * plus the directory scope that identity is addressed by.
  *
@@ -377,20 +403,21 @@ export async function removeUnboundSession(
 /**
  * Writes the durable pre-create intent for a caller-supplied session id.
  *
- * Best-effort by design: a journal outage must not make session creation
- * impossible. It is logged at error level when it fails, because the
- * crash-before-response window is then unmitigated for this one attempt. The
- * id itself still makes a RETRY idempotent, but nothing durable names it.
+ * FAIL-CLOSED. The remote create is only safe once a durable record names the
+ * id it is about to use, so a journal error, a closed database, or a `false`
+ * (no open record) result all abort before `session.create` is reached. The
+ * throw is a typed error the route maps to 503 with an id-free message.
  *
- * @returns True when an open durable record exists after the write.
+ * @throws {OpenCodeSessionIntentError} When no open durable intent exists.
  */
-async function recordCreateIntent(
+async function requireCreateIntent(
   conversationId: string,
   sessionId: string,
   locationDirectory: string,
-): Promise<boolean> {
+): Promise<void> {
+  let open: boolean;
   try {
-    return await opencodeOrphanService.recordCreateIntent({
+    open = await opencodeOrphanService.recordCreateIntent({
       conversationId,
       sessionId,
       locationDirectory,
@@ -400,8 +427,57 @@ async function recordCreateIntent(
       conversationId,
       ...classifyError(error),
     });
-    return false;
+    throw new OpenCodeSessionIntentError(conversationId, sessionId, { cause: error });
   }
+  if (!open) {
+    // The store returned "no open record". The id is freshly minted, so this
+    // is not an expected already-resolved case; treating it as anything other
+    // than a refusal would issue a create with no durable handle.
+    const cause = new Error("journal reported no open intent record");
+    logger.error("opencode", "opencode.session_intent_not_open", {
+      conversationId,
+      ...classifyError(cause),
+    });
+    throw new OpenCodeSessionIntentError(conversationId, sessionId, { cause });
+  }
+}
+
+/**
+ * Whether a create failure is a DEFINITIVE rejection: the server answered the
+ * request and refused it, so this request did not create a session.
+ *
+ * Only declared 4xx answers qualify. A transport fault, timeout, abort, 5xx,
+ * or unparseable body proves nothing about whether the request committed — the
+ * response may simply have been lost — so those stay ambiguous.
+ */
+function isDefinitiveCreateRejection(failure: OpenCodeError): boolean {
+  if (failure.kind === "auth") return true;
+  const status = failure.statusCode;
+  return status !== undefined && status >= 400 && status < 500;
+}
+
+/**
+ * Create attempts this process currently has in flight for one
+ * `(conversation, session)` pair: from the intent write through the pointer
+ * persistence and any compensating cleanup.
+ *
+ * The reconciler consults this so it can never remove a session whose create
+ * is still being bound. The grace window remains defense in depth, but it is
+ * not the guarantee: a slow create can outlive any fixed window, and a
+ * background pass must not race a live binding.
+ */
+const sessionCreatesInFlight = new Set<string>();
+
+function createInFlightKey(conversationId: string, sessionId: string): string {
+  return `${conversationId}\u0000${sessionId}`;
+}
+
+/** True while this process is creating or binding the exact session. */
+export function isOpenCodeSessionCreateInFlight(
+  conversationId: string,
+  sessionId: string,
+): boolean {
+  return sessionCreatesInFlight.has(createInFlightKey(conversationId, sessionId));
 }
 
 /**
@@ -428,20 +504,18 @@ async function discardCreateIntent(conversationId: string, sessionId: string): P
  *
  * Best-effort: a failed record does not block the compensating flow (the
  * operation already has to fail), but it is surfaced as an error-level log
- * with enough context for diagnosis, so a dead journal does not silently
- * lose the record. When the pre-create intent was durable, that row IS still
- * a recovery record (the reconciler probes the same id), so `recorded`
- * reports true rather than claiming every durable trace was lost.
+ * with enough context for diagnosis. A durable record is still open in every
+ * case that reaches here: the create path runs only after a mandatory intent,
+ * and that intent is only deleted once the session is provably bound or gone.
+ * So `recorded` reports true rather than claiming every durable trace was lost.
  *
- * @returns True when a durable record is (still) open and actionable; false
- *   when the pair was already resolved and no intent survived.
+ * @returns True when a durable record is (still) open and actionable.
  */
 async function recordOrphan(input: {
   conversationId: string;
   sessionId: string;
   locationDirectory?: string;
   persistError: unknown;
-  intentRecorded: boolean;
   cleanupError?: unknown;
   verificationError?: unknown;
 }): Promise<boolean> {
@@ -471,16 +545,15 @@ async function recordOrphan(input: {
     return open;
   } catch (error) {
     // The journal itself failed (database unavailable / closed / locked).
-    // The operation still fails with its original error; this only records
-    // that the orphan upgrade could not be written. A durable intent written
-    // before the create is still actionable, so do not deny it.
+    // The operation still fails with its original error; the mandatory
+    // pre-create intent remains open, so recovery is not lost.
     logger.error("opencode", "opencode.session_orphan_record_failed", {
       conversationId: input.conversationId,
       persistErrorCategory: persistCategory,
       ...(cleanupCategory ? { cleanupErrorCategory: cleanupCategory } : {}),
       ...classifyError(error),
     });
-    return input.intentRecorded;
+    return true;
   }
 }
 
@@ -625,160 +698,255 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     }
   }
 
-  // Durable BEFORE the request: the intent row carries the id the server will
-  // be asked to use, so the remote session can be found even if this process
-  // dies before it ever sees a response.
-  const intentRecorded = await recordCreateIntent(conversationId, sessionId, directory);
-
-  let createdDirectory: string;
-  let responseMismatch = false;
+  // RT-001: from here to the returned binding, this process owns this session.
+  // The reconciler consults this registry so it can never remove a session
+  // whose create is still being bound; the release runs on every outcome.
+  const inFlightKey = createInFlightKey(conversationId, sessionId);
+  sessionCreatesInFlight.add(inFlightKey);
   try {
-    const session = await client.session.create(params);
-    // Prefer the V2 response's authoritative location over the submitted path.
-    createdDirectory = asDirectory(session.location?.directory) ?? directory;
-    if (session?.id !== sessionId) {
-      // Refuse to bind an id the request did not name: it would point at a
-      // session TBAi cannot account for. The intent row stays recoverable.
-      responseMismatch = true;
-      throw new OpenCodeError(
-        "malformed",
-        "OpenCode session create did not return the supplied session id",
-      );
-    }
-  } catch (createError) {
-    const failure = toOpenCodeError(createError);
-    if (responseMismatch) throw failure;
+    // Durable BEFORE the request, and MANDATORY: the intent row carries the id
+    // the server will be asked to use, so the remote session can be found even
+    // if this process dies before it ever sees a response. A journal failure
+    // throws here, so `session.create` is never reached without a durable
+    // handle (fail-closed).
+    await requireCreateIntent(conversationId, sessionId, directory);
 
-    // A thrown create is NOT proof the server did not create the session: an
-    // aborted or truncated response can hide a committed create. The supplied
-    // id is the probe key, and the server's own record decides the outcome.
-    let probe: Awaited<ReturnType<typeof fetchOpenCodeSession>>;
+    const createdDirectory = await createOrAdoptSession();
+
+    // RT-001: the remote session exists from here on, and the pointer write is
+    // the only thing that binds it to TBAi. A failure here must never leave
+    // the session orphaned with no handle, and must never report success.
     try {
-      probe = await fetchOpenCodeSession(client, sessionId);
-    } catch (probeError) {
-      // Neither presence nor absence established. Leave the intent durable
-      // and surface the original failure; the reconciler settles it later.
-      logger.error("opencode", "opencode.session_create_unresolved", {
-        conversationId,
-        persistErrorCategory: classifyError(failure).category,
-        probeError: classifyError(probeError),
-      });
-      throw failure;
-    }
-    if (!probe) {
-      // Positive 404: the create never committed (or was already cleaned up).
-      // There is nothing to recover, so the intent is no longer needed.
+      await conversationService.update(conversationId, { opencodeSessionId: sessionId });
+      // Bound. The intent has served its purpose. A failure to delete it is
+      // harmless: the reconciler re-proves the binding before acting.
       await discardCreateIntent(conversationId, sessionId);
-      throw failure;
-    }
-    // The session exists despite the failed call. It carries the id TBAi
-    // minted, so it is ours: adopt it and continue to the pointer write.
-    createdDirectory = probe.directory ?? directory;
-    logger.warn("opencode", "opencode.session_create_recovered", {
-      conversationId,
-      persistErrorCategory: classifyError(failure).category,
-    });
-  }
+    } catch (persistError) {
+      // A thrown update is not proof the pointer is absent — it may have
+      // committed before a later step failed. Verify before acting.
+      const verification = await verifySessionPointer(conversationId, sessionId);
+      if (verification.outcome === "bound") {
+        // The binding IS durable even though the write call rejected. The
+        // session is TBAi's; keep it, return the established binding, and
+        // surface the write failure without treating it as a session loss.
+        await discardCreateIntent(conversationId, sessionId);
+        logger.warn("opencode", "opencode.session_persist_recovered", {
+          conversationId,
+          sessionId,
+          ...classifyError(persistError),
+        });
+        return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+      }
 
-  // RT-001: the remote session exists from here on, and the pointer write is
-  // the only thing that binds it to TBAi. A failure here must never leave
-  // the session orphaned with no handle, and must never report success.
-  try {
-    await conversationService.update(conversationId, { opencodeSessionId: sessionId });
-    // Bound. The intent has served its purpose. A failure to delete it is
-    // harmless: the reconciler re-proves the binding before acting.
-    await discardCreateIntent(conversationId, sessionId);
-  } catch (persistError) {
-    // A thrown update is not proof the pointer is absent — it may have
-    // committed before a later step failed. Verify before acting.
-    const verification = await verifySessionPointer(conversationId, sessionId);
-    if (verification.outcome === "bound") {
-      // The binding IS durable even though the write call rejected. The
-      // session is TBAi's; keep it, return the established binding, and
-      // surface the write failure without treating it as a session loss.
-      await discardCreateIntent(conversationId, sessionId);
-      logger.warn("opencode", "opencode.session_persist_recovered", {
-        conversationId,
-        sessionId,
-        ...classifyError(persistError),
-      });
-      return { sessionId, directory: createdDirectory, reusedExistingSession: false };
-    }
+      // No confirmed TBAi handle for this session.
+      if (verification.outcome === "unknown") {
+        // The read failed: the pointer may exist. Do NOT delete a possibly
+        // valid session. Record the unresolved state durably and fail the
+        // operation without claiming anything about the session.
+        const recorded = await recordOrphan({
+          conversationId,
+          sessionId,
+          locationDirectory: createdDirectory,
+          persistError,
+          verificationError: verification.error,
+        });
+        logger.error("opencode", "opencode.session_persist_unresolved", {
+          conversationId,
+          ...classifyError(persistError),
+          verificationError: classifyError(verification.error),
+        });
+        throw new OpenCodeSessionPersistError(
+          conversationId,
+          sessionId,
+          "verification_unknown",
+          recorded,
+          verification.error,
+          { cause: persistError },
+        );
+      }
 
-    // No confirmed TBAi handle for this session.
-    if (verification.outcome === "unknown") {
-      // The read failed: the pointer may exist. Do NOT delete a possibly
-      // valid session. Record the unresolved state durably and fail the
-      // operation without claiming anything about the session.
-      const recorded = await recordOrphan({
-        conversationId,
-        sessionId,
-        locationDirectory: createdDirectory,
-        persistError,
-        intentRecorded,
-        verificationError: verification.error,
-      });
-      logger.error("opencode", "opencode.session_persist_unresolved", {
-        conversationId,
-        ...classifyError(persistError),
-        verificationError: classifyError(verification.error),
-      });
+      // Confirmed unbound: compensate by removing the remote session.
+      const { outcome, error: cleanupError } = await removeUnboundSession(client, sessionId);
+      const recorded =
+        outcome === "removed"
+          ? false
+          : await recordOrphan({
+              conversationId,
+              sessionId,
+              locationDirectory: createdDirectory,
+              persistError,
+              cleanupError,
+            });
+      if (outcome === "removed") {
+        await discardCreateIntent(conversationId, sessionId);
+        logger.warn("opencode", "opencode.session_persist_compensated", {
+          conversationId,
+          sessionId,
+          ...classifyError(persistError),
+        });
+      } else {
+        logger.error("opencode", "opencode.session_orphaned", {
+          conversationId,
+          recorded,
+          persistError: classifyError(persistError),
+          cleanupError: classifyError(cleanupError),
+          cleanupOutcome: outcome,
+        });
+      }
+      const mappedOutcome: OpenCodeSessionPersistError["cleanup"] =
+        outcome === "removed"
+          ? "confirmed_removed"
+          : outcome === "unconfirmed"
+            ? "removal_failed"
+            : "lookup_inconclusive";
       throw new OpenCodeSessionPersistError(
         conversationId,
         sessionId,
-        "verification_unknown",
+        mappedOutcome,
         recorded,
-        verification.error,
+        cleanupError,
         { cause: persistError },
       );
     }
-
-    // Confirmed unbound: compensate by removing the remote session.
-    const { outcome, error: cleanupError } = await removeUnboundSession(client, sessionId);
-    const recorded =
-      outcome === "removed"
-        ? false
-        : await recordOrphan({
-            conversationId,
-            sessionId,
-            locationDirectory: createdDirectory,
-            persistError,
-            intentRecorded,
-            cleanupError,
-          });
-    if (outcome === "removed") {
-      await discardCreateIntent(conversationId, sessionId);
-      logger.warn("opencode", "opencode.session_persist_compensated", {
-        conversationId,
-        sessionId,
-        ...classifyError(persistError),
-      });
-    } else {
-      logger.error("opencode", "opencode.session_orphaned", {
-        conversationId,
-        recorded,
-        persistError: classifyError(persistError),
-        cleanupError: classifyError(cleanupError),
-        cleanupOutcome: outcome,
-      });
-    }
-    const mappedOutcome: OpenCodeSessionPersistError["cleanup"] =
-      outcome === "removed"
-        ? "confirmed_removed"
-        : outcome === "unconfirmed"
-          ? "removal_failed"
-          : "lookup_inconclusive";
-    throw new OpenCodeSessionPersistError(
-      conversationId,
-      sessionId,
-      mappedOutcome,
-      recorded,
-      cleanupError,
-      { cause: persistError },
-    );
+    logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
+    return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+  } finally {
+    sessionCreatesInFlight.delete(inFlightKey);
   }
-  logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
-  return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+
+  /**
+   * Creates the session, or recovers the exact id after an ambiguous failure.
+   *
+   * A thrown create is NOT proof the server did not create the session: an
+   * aborted, truncated or lost response can hide a committed create. The
+   * caller-supplied id is the correlation key, so the server's own record for
+   * THAT id decides the outcome. Two outcomes are distinguished by the error:
+   *
+   *  - **Definitive rejection** (the server answered 4xx): this request did
+   *    not create anything, so the intent has no obligation and is removed.
+   *  - **Everything else** (transport, timeout, abort, 5xx, malformed/absent
+   *    response body): ambiguous. The intent is kept, and a 404 does NOT
+   *    authorise deleting it — absence at lookup time says nothing about a
+   *    request whose response was lost.
+   *
+   * On a 404 the SAME id is retried once. That is safe only because upstream
+   * is idempotent for a caller-supplied id: verified against OpenCode 2.1.2,
+   * sequential and concurrent repeats return the first session unchanged and
+   * never rebind it to another directory. So a retry can neither mint a second
+   * identity nor overwrite an established binding; if the original request
+   * also completes, both converge on one session.
+   *
+   * If the retry is also unresolved, the risk-bearing intent is left for the
+   * reconciler, which never clears it on a bare 404.
+   */
+  async function createOrAdoptSession(): Promise<string> {
+    let responseMismatch = false;
+
+    const attempt = async (): Promise<string> => {
+      responseMismatch = false;
+      const session = await client.session.create(params);
+      const responseId = typeof session?.id === "string" ? session.id : "";
+      if (responseId.length === 0) {
+        // The response proves the call returned, not what it created. Treat it
+        // as ambiguous and let the exact-id probe decide.
+        throw new OpenCodeError(
+          "malformed",
+          "OpenCode session create response carried no session id",
+        );
+      }
+      if (responseId !== sessionId) {
+        // Refuse to bind an id the request did not name: it would point at a
+        // session TBAi cannot account for. The intent stays recoverable.
+        responseMismatch = true;
+        throw new OpenCodeError(
+          "malformed",
+          "OpenCode session create did not return the supplied session id",
+        );
+      }
+      // Prefer the V2 response's authoritative location over the submitted path.
+      return asDirectory(session.location?.directory) ?? directory;
+    };
+
+    try {
+      return await attempt();
+    } catch (createError) {
+      const failure = toOpenCodeError(createError);
+      if (responseMismatch) throw failure;
+
+      if (isDefinitiveCreateRejection(failure)) {
+        // The server processed and refused this request. No session exists to
+        // recover, so the intent is no longer needed.
+        await discardCreateIntent(conversationId, sessionId);
+        throw failure;
+      }
+
+      let probe: Awaited<ReturnType<typeof fetchOpenCodeSession>>;
+      try {
+        probe = await fetchOpenCodeSession(client, sessionId);
+      } catch (probeError) {
+        // Neither presence nor absence established. Leave the intent durable
+        // and surface the original failure; the reconciler settles it later.
+        logger.error("opencode", "opencode.session_create_unresolved", {
+          conversationId,
+          persistErrorCategory: classifyError(failure).category,
+          probeError: classifyError(probeError),
+        });
+        throw failure;
+      }
+      if (probe) {
+        // The session exists despite the failed call. It carries the id TBAi
+        // minted, so it is ours: adopt it and continue to the pointer write.
+        logger.warn("opencode", "opencode.session_create_recovered", {
+          conversationId,
+          persistErrorCategory: classifyError(failure).category,
+        });
+        return probe.directory ?? directory;
+      }
+
+      // A 404 is NOT terminal: the failed request may still commit. Retry the
+      // SAME id under the verified upstream idempotency guarantee.
+      logger.warn("opencode", "opencode.session_create_retry", {
+        conversationId,
+        persistErrorCategory: classifyError(failure).category,
+      });
+      try {
+        return await attempt();
+      } catch (retryError) {
+        const retryFailure = toOpenCodeError(retryError);
+        if (responseMismatch) throw retryFailure;
+
+        // The retry's outcome still does not settle the ORIGINAL request: a
+        // definitive rejection now does not prove the earlier attempt failed.
+        // Probe the exact id once more so a late commit is adopted now.
+        let retryProbe: Awaited<ReturnType<typeof fetchOpenCodeSession>>;
+        try {
+          retryProbe = await fetchOpenCodeSession(client, sessionId);
+        } catch (retryProbeError) {
+          logger.error("opencode", "opencode.session_create_unresolved", {
+            conversationId,
+            persistErrorCategory: classifyError(retryFailure).category,
+            probeError: classifyError(retryProbeError),
+          });
+          throw retryFailure;
+        }
+        if (retryProbe) {
+          logger.warn("opencode", "opencode.session_create_recovered", {
+            conversationId,
+            persistErrorCategory: classifyError(retryFailure).category,
+            attempt: "retry",
+          });
+          return retryProbe.directory ?? directory;
+        }
+        // Still absent, still not terminal: the intent is retained. The
+        // reconciler will not clear a risk-bearing intent on a bare 404.
+        logger.error("opencode", "opencode.session_create_retry_failed", {
+          conversationId,
+          persistErrorCategory: classifyError(retryFailure).category,
+        });
+        throw retryFailure;
+      }
+    }
+  }
 }
 
 /**

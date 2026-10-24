@@ -39,6 +39,10 @@ function record(overrides: Partial<OpenCodeOrphanRecord> = {}): OpenCodeOrphanRe
     firstSeenAt: new Date(NOW - 600_000),
     lastSeenAt: new Date(NOW - 600_000),
     resolvedAt: null,
+    // An orphan was observed to exist, so a duplicate create resolves to it.
+    lateCreateRisk: false,
+    firstAbsentAt: null,
+    lastCheckedAt: null,
     ...overrides,
   };
 }
@@ -73,6 +77,10 @@ function makeHarness(options: HarnessOptions = {}) {
     removeEffect: "remove" as "remove" | "keep",
     /** Thrown by every journal clear (deleteIntent / resolve). */
     clearError: null as Error | null,
+    /** Thrown by every probe-outcome write. */
+    probeRecordError: null as Error | null,
+    /** `(conversation, session)` pairs this process is still creating. */
+    inFlightKeys: new Set<string>(),
     listError: null as Error | null,
     conversationError: null as Error | null,
     getConversationImpl: null as ((id: string) => Promise<ConversationRow | null>) | null,
@@ -83,6 +91,12 @@ function makeHarness(options: HarnessOptions = {}) {
       kind: "intent" | "orphan";
       conversationId: string;
       sessionId: string;
+    }>,
+    probes: [] as Array<{
+      conversationId: string;
+      sessionId: string;
+      outcome: "present" | "absent";
+      at: number;
     }>,
     listLimits: [] as number[],
     conversationReads: 0,
@@ -141,6 +155,26 @@ function makeHarness(options: HarnessOptions = {}) {
       state.clears.push({ kind: "intent", conversationId, sessionId });
       return removeRow(conversationId, sessionId);
     },
+    // Mirrors the real store: a probe outcome is durable state, not a call
+    // record. `present` settles the risk; `absent` stamps the FIRST 404 only.
+    recordProbe: async ({ conversationId, sessionId, outcome, at }) => {
+      if (state.probeRecordError) throw state.probeRecordError;
+      state.probes.push({ conversationId, sessionId, outcome, at });
+      const row = rows.find(
+        (r) => r.conversationId === conversationId && r.sessionId === sessionId,
+      );
+      if (!row) return false;
+      row.lastCheckedAt = new Date(at);
+      if (outcome === "present") {
+        row.lateCreateRisk = false;
+        row.firstAbsentAt = null;
+      } else {
+        row.firstAbsentAt ??= new Date(at);
+      }
+      return true;
+    },
+    isCreateInFlight: (conversationId, sessionId) =>
+      state.inFlightKeys.has(`${conversationId}\u0000${sessionId}`),
     getRunningBaseUrl: async () => state.runningUrl,
     createClient: () => {
       state.createClientCalls += 1;
@@ -253,8 +287,10 @@ describe("runOrphanReconciliationOnce — remote evidence", () => {
     expect(h.state.remote.has("ses_replacement1")).toBe(true);
   });
 
-  it("deletes a proven-unused intent when the remote session is absent (positive 404)", async () => {
-    const h = makeHarness({ rows: [record({ phase: "intent" })] });
+  it("deletes a risk-free intent when the remote session is absent (positive 404)", async () => {
+    // A risk-free intent never carried an ambiguous create request, so absence
+    // is terminal and the row can go.
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: false })] });
     start(h.deps);
 
     const report = await runOrphanReconciliationOnce();
@@ -265,6 +301,94 @@ describe("runOrphanReconciliationOnce — remote evidence", () => {
     ]);
     expect(h.state.removeCalls).toHaveLength(0);
     expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("retains a risk-bearing intent after a 404: absence now is not terminality", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ absent: 0, lateRisk: 1, removed: 0, unresolved: 0 });
+    expect(h.state.clears).toHaveLength(0);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.probes).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", outcome: "absent", at: NOW },
+    ]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.firstAbsentAt).toEqual(new Date(NOW));
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("keeps the FIRST absence timestamp across repeated 404 passes", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    start(h.deps, { absenceHorizonMs: 10_000 });
+
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ lateRisk: 1 });
+    const firstAbsentAt = h.state.rows[0]?.firstAbsentAt;
+
+    const later = makeHarness({ rows: h.state.rows });
+    start(later.deps, { absenceHorizonMs: 10_000, now: () => NOW + 5_000 });
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ lateRisk: 1 });
+    expect(later.state.rows[0]?.firstAbsentAt).toEqual(firstAbsentAt);
+    expect(later.state.rows).toHaveLength(1);
+  });
+
+  it("releases a risk-bearing intent only once the absence horizon elapses", async () => {
+    const h = makeHarness({
+      rows: [
+        record({ phase: "intent", lateCreateRisk: true, firstAbsentAt: new Date(NOW - 20_000) }),
+      ],
+    });
+    start(h.deps, { absenceHorizonMs: 10_000, now: () => NOW + 10_000 });
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ absent: 0, lateRisk: 0, expiredAbsent: 1 });
+    expect(h.state.clears).toEqual([
+      { kind: "intent", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    ]);
+    expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("leaves a risk-bearing intent when the absence itself cannot be recorded", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.probeRecordError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, absent: 0, lateRisk: 0 });
+    expect(h.state.clears).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("records a present probe before the ownership re-check and removal", async () => {
+    const h = makeHarness({ rows: [record()] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ removed: 1 });
+    expect(h.state.probes).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", outcome: "present", at: NOW },
+    ]);
+  });
+
+  it("never touches a row whose create is still in flight in this process", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.inFlightKeys.add("conv-1\u0000ses_orphan0001");
+    start(h.deps, { graceMs: 0 });
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 0, inflight: 1, removed: 0, lateRisk: 0 });
+    expect(h.state.conversationReads).toBe(0);
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.probes).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
   });
 
   it("removes a session left by a dead process once a server is available", async () => {
@@ -423,7 +547,7 @@ describe("runOrphanReconciliationOnce — scope and bounds", () => {
   });
 
   it("is idempotent: a cleared row is not acted on again", async () => {
-    const h = makeHarness({ rows: [record({ phase: "intent" })] });
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: false })] });
     start(h.deps);
 
     expect(await runOrphanReconciliationOnce()).toMatchObject({ absent: 1 });

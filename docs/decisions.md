@@ -7345,10 +7345,12 @@ of the pass.
 
 **Decision.** `ensureOpenCodeSession` decides the OpenCode session id itself
 (`ses_<generateId()>`) and sends it in the `session.create` body, and it writes
-a durable **intent** row naming that id *before* the request. Persistence
-failures are resolved by a three-outcome pointer check, and an unresolved row is
-settled later by a bounded background reconciler. The journal is a new table,
-`opencode_session_orphans`, with a `phase` column (`intent` | `orphan`).
+a durable **intent** row naming that id *before* the request. The intent write
+is **fail-closed**: if it does not durably record an open row, no remote create
+is issued. Persistence failures are resolved by a three-outcome pointer check,
+and an unresolved row is settled later by a bounded background reconciler. The
+journal is a new table, `opencode_session_orphans`, with a `phase` column
+(`intent` | `orphan`) plus late-create tracking columns.
 
 **Why the id must be minted locally.** The original ordering — read the id off
 the create response, then persist it — has a window the log cannot close: the
@@ -7364,25 +7366,46 @@ is durable leaves a live handle TBAi cannot name.
 - The generated `.d.ts` suggests a nested `{ id: {...} }`; that shape is
   rejected (`Expected Session.ID | null at ["id"]`). The runtime accepts the
   flat string and echoes it.
+- Sequential **and concurrent** duplicate creates for one id converge on the
+  first session. A duplicate submitted with a different `location.directory`
+  does not rebind the existing session.
 - `get` and `remove` are **not** directory-scoped. A probe therefore does not
   depend on which workspace the reconciler uses, only on the running server.
 - `remove` answers 204 and a later `get` answers 404. A 404 is the **only**
   evidence of absence; every other failure (transport, auth, 5xx, malformed,
   a response naming a different id) is inconclusive.
+- After removal, the id is **free again**: a create with the same id mints a new
+  session. This is the residual hazard a bare 404 cannot rule out, and it is why
+  a risk-bearing intent is retained rather than treated as settled.
 
-**The write-ahead ordering.** The intent row is a single atomic UPSERT on
-`(conversation_id, session_id)`; concurrent attempts cannot race a
-read-then-insert into a duplicate or a UNIQUE failure. It is deleted when the
-create is proven absent or the pointer is bound. If the intent write itself
-fails, creation still proceeds (a journal outage must not make Code mode
-unusable); that one attempt has no durable handle, which is logged at error
-level and is the one window this design cannot close.
+**The write-ahead ordering is fail-closed.** The intent row is a single atomic
+UPSERT on `(conversation_id, session_id)`; concurrent attempts cannot race a
+read-then-insert into a duplicate or a UNIQUE failure. `requireCreateIntent`
+throws `OpenCodeSessionIntentError` when the write throws, when the database is
+closed, or when the store reports no open row — and `session.create` is only
+reached after that call returns. Proceeding without a durable handle would
+recreate exactly the untracked-creation window this design closes, so a journal
+outage fails the operation (HTTP 503, id-free message, safe to retry) instead of
+degrading silently.
 
-**Create-failure probe.** A thrown `session.create` is not proof the server did
-not create the session (an aborted response can hide a committed one). The
-failure path probes the supplied id: present → adopt it and continue to the
-pointer write, 404 → clear the intent and fail, inconclusive → keep the intent
-durable and fail. A create response naming a different id is refused.
+**Create-failure classification.** A thrown `session.create` is not proof the
+server did not create the session (an aborted or truncated response can hide a
+committed one). Only a **definitive rejection** — an auth failure or a declared
+4xx answer, meaning the server processed and refused *this* request — clears the
+intent without a probe. Transport faults, timeouts, aborts, 5xx and malformed or
+absent response bodies are **ambiguous**. For those, the code probes the exact
+supplied id:
+
+- present → adopt the session and continue to the pointer write;
+- probe failure → keep the intent and fail (no claim either way);
+- 404 → retry the **same** id once, which is safe only under the verified
+  idempotency above: a duplicate can neither mint a second identity nor rebind
+  an established session. If the retry also fails, the id is probed once more;
+  present → adopt, otherwise the risk-bearing intent is **retained** for the
+  reconciler. A 404 is absence at lookup time, not terminality.
+
+A create response naming a different id is refused outright: binding it would
+point TBAi at a session it cannot account for.
 
 **Three-outcome verification.** A thrown pointer write is verified with a read:
 `bound` (the row carries this id) keeps the session and returns the binding;
@@ -7400,17 +7423,37 @@ and leaves the journal row open.
 first-wins (`COALESCE`) and are classifications, never raw provider errors.
 Resolution is terminal: a resolved row is never reopened, and a resolved
 **orphan** is kept for audit; a proven-unused **intent** is deleted. Discovery
-is deterministic: unresolved rows oldest first, bounded by a batch limit.
+is bounded and fair: unresolved rows are ordered by
+`COALESCE(last_checked_at, first_seen_at)` so a row that keeps answering 404
+rotates behind rows nobody has examined.
+
+Late-create tracking is part of the row, not an in-memory flag:
+
+- `late_create_risk` starts at 1 (a create is about to be issued), becomes 0
+  once the exact id is observed present or the row is an orphan (the session was
+  observed to exist), and is **never** cleared by a bare 404. A repeated intent
+  write re-arms it, because a create is about to be reissued.
+- `first_absent_at` is the first positive 404 for a risk-bearing intent, stamped
+  once and never moved, and cleared when the id is observed present.
+- `last_checked_at` records the last probe, for rotation.
 
 **Reconciler.** `src/services/opencode/orphanReconciler.ts` runs one pass at
-boot and then on an interval. In order: (1) a conversation that points at the
-session is authoritative — clear the row, never delete; (2) rows younger than a
-grace window are deferred, so the pass cannot race a healthy create; (3) a
-running managed server is required — the reconciler never starts one, because
-boot must not depend on OpenCode; (4) absence must be a positive 404; (5)
-ownership is re-read immediately before removal; (6) removal must be confirmed.
-Every failure leaves the row open. The timer is `unref`'d, passes are
-single-flight, and shutdown drains an in-flight pass before
+boot and then on an interval. In order: (1) a row whose create is still in
+flight **in this process** is untouchable — the create path registers the
+`(conversation, session)` pair from the intent write through persistence and
+compensating cleanup, and a slow create can outlive any fixed window; (2) a
+conversation that points at the session is authoritative — clear the row, never
+delete; (3) rows younger than a grace window are deferred as defense in depth;
+(4) a running managed server is required — the reconciler never starts one,
+because boot must not depend on OpenCode; (5) absence must be a positive 404,
+and on a risk-bearing intent the 404 only stamps `first_absent_at`: the row is
+retained until the **absence horizon** (24h), after which it is released as a
+bounded best effort, not as proof; (6) presence records the probe (clearing the
+risk) and ownership is re-read immediately before removal; (7) removal must be
+confirmed by a follow-up lookup. Every failure — probe, journal read, ownership
+read, removal, confirmation, row clear — leaves the row open, and a probe-outcome
+write failure on the 404 path prevents any clearing. The timer is `unref`'d,
+passes are single-flight, and shutdown drains an in-flight pass before
 `openCodeServerManager.shutdown()` and before the database closes.
 
 **Security.** The session id stays out of free-text log messages: the
@@ -7418,8 +7461,12 @@ single-flight, and shutdown drains an in-flight pass before
 redaction now covers `ses_...` shapes in messages, stacks and serialized
 errors in addition to the key-based `sessionId` rule. The id remains on the
 error object and in the journal, which is where recovery needs it. The HTTP
-route still returns a generic 500 for persistence failures; the journal rows
-and the dedicated log events (`opencode.session_persist_unresolved`,
+route maps a journal outage to **503** with the fixed message
+`OpenCode session recovery is unavailable; no session was created` (nothing was
+requested remotely, so a retry is safe) and a persistence failure to a generic
+500; neither body carries an id. The journal rows and the dedicated log events
+(`opencode.session_intent_record_failed`, `opencode.session_create_unresolved`,
+`opencode.session_create_retry_failed`, `opencode.session_persist_unresolved`,
 `opencode.session_orphaned`, `opencode.session_persist_compensated`) are what
 make the failure distinguishable server-side.
 
@@ -7427,8 +7474,13 @@ make the failure distinguishable server-side.
 
 - *Persist first, create second* — impossible: the id only exists after create
   unless TBAi mints it.
+- *Create first and write the journal after* — the intent would not be durable
+  before the request, reopening the untracked-creation window.
 - *Retry create on persistence failure* — creates a second remote session and
   still leaves the first unaccounted for.
+- *Treat a 404 after an ambiguous create as terminal* — the request's response
+  may have been lost while the server is still committing; clearing the intent
+  then would allow an untracked session.
 - *Use the log as the recovery record* — redacted by policy, and lost on
   rotation.
 - *Delete on `unknown` verification* — destroys a session the conversation may
@@ -7438,18 +7490,33 @@ make the failure distinguishable server-side.
 
 **Known limits (deliberately not claimed as closed).**
 
-- A crash in the window between a **failed intent write** and the create has no
-  durable handle. This is the only remaining create-side crash window.
+- **Upstream terminality cannot be observed.** OpenCode exposes no signal that a
+  request whose response was lost can no longer commit, and removal frees the id
+  for recreation. A risk-bearing intent is therefore retained through continuous
+  404s for a 24h absence horizon and then released: a bounded best effort, not
+  proof. A request that commits after the horizon (or after a confirmed
+  removal) can still create a session the journal no longer names.
+- **The in-flight registry is process-local.** It closes the race with the
+  reconciler inside this process (the only process that owns the managed server
+  and the journal). A second TBAi process sharing the same database is outside
+  this design.
 - `terminateOpenCodeSession` still clears the pointer after a resolved
   `remove()` without a confirmation lookup (pre-existing behaviour, unchanged
   here; recorded as a separate finding rather than folded into RT-001).
 - The reconciler settles rows only while a managed server is running. Rows
   created while offline wait; that is intentional, not a lost obligation.
 
-**Evidence.** `tests/unit/opencode/sessions.test.ts` (create/persist window,
-probe adoption, identity refusal, journal-failure honest `recorded`, redaction),
+**Evidence.** `tests/unit/opencode/sessions.test.ts` (fail-closed intent,
+definitive-vs-ambiguous create, same-id retry, adoption of a late commit, the
+create/persist window, identity refusal, redaction),
 `tests/unit/storage/opencodeSessionOrphans.test.ts` (real file-backed SQLite:
 idempotency, first-wins, promotion, concurrent burst, terminal resolution,
-deterministic listing), `tests/unit/opencode/orphanReconciler.test.ts` (all
-ownership/evidence/grace/limit/lifecycle rules), and
-`tests/unit/opencode/sessions-concurrency.test.ts` (single-flight create).
+late-create risk, first-absence stamping, rotation),
+`tests/unit/opencode/orphanReconciler.test.ts` (ownership, in-flight skip,
+positive-404 retention, horizon expiry, probe recording, inconclusive-evidence
+refusal, grace/limit/lifecycle),
+`tests/unit/routes/opencodeSessionIntent.test.ts` (HTTP 503, id-free body, no
+remote create) and
+`tests/integration/opencode/opencode-session-idempotency-runtime.test.ts`
+(opt-in real server: supplied-id echo, sequential/concurrent idempotency, no
+rebind, removal frees the id).

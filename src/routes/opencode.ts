@@ -4,6 +4,7 @@ import {
   EngineMismatchError,
   ensureOpenCodeSession,
   getOpenCodeSessionActivity,
+  OpenCodeSessionIntentError,
   OpenCodeSessionMismatchError,
   terminateOpenCodeSession,
 } from "../services/opencode/sessions";
@@ -52,15 +53,21 @@ const app = new Hono();
 
 /**
  * Maps OpenCode failures to a message + status. A missing CLI binary is a 503
- * with an actionable message (the user can install it); a wrong-engine caller
- * is a 422 (the row, not the server, is at fault); everything else is a
- * generic 500 so internals never leak to the browser.
+ * with an actionable message (the user can install it); a journal outage is a
+ * 503 because the session was deliberately NOT created and retrying is safe; a
+ * wrong-engine caller is a 422 (the row, not the server, is at fault);
+ * everything else is a generic 500 so internals never leak to the browser.
  */
 function openCodeError(
   err: unknown,
   fallback: string,
 ): { message: string; status: 503 | 422 | 500 } {
   if (err instanceof OpenCodeBinaryMissingError) {
+    return { message: err.message, status: 503 };
+  }
+  if (err instanceof OpenCodeSessionIntentError) {
+    // Fail-closed: no remote session was requested. The message names no
+    // conversation or session id; the retry is safe because nothing was made.
     return { message: err.message, status: 503 };
   }
   if (err instanceof EngineMismatchError) {

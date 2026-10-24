@@ -265,3 +265,140 @@ describe("opencodeOrphanService.resolveOrphanedSession", () => {
     expect(missing).toBe(false);
   });
 });
+
+describe("opencodeOrphanService — late-create risk", () => {
+  function rowFor(conversationId: string, sessionId: string): Record<string, unknown> {
+    return db
+      .query("SELECT * FROM opencode_session_orphans WHERE conversation_id = ? AND session_id = ?")
+      .get(conversationId, sessionId) as Record<string, unknown>;
+  }
+
+  it("starts a create intent risk-bearing with no absence observation", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.first_absent_at).toBeNull();
+  });
+
+  it("records an orphan as risk-free: the session was observed to exist", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("orphan");
+    expect(row.late_create_risk).toBe(0);
+  });
+
+  it("re-arms the risk when a create request is issued again", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "present",
+      at: 1_000,
+    });
+    expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(0);
+
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.first_absent_at).toBeNull();
+  });
+
+  it("present clears the risk; absent stamps the FIRST 404 and never clears it", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    expect(
+      await opencodeOrphanService.recordProbe({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        outcome: "absent",
+        at: 1_000,
+      }),
+    ).toBe(true);
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 2_000,
+    });
+    let row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.first_absent_at).toBe(1_000);
+    expect(row.last_checked_at).toBe(2_000);
+
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "present",
+      at: 3_000,
+    });
+    row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(0);
+    expect(row.first_absent_at).toBeNull();
+    expect(row.last_checked_at).toBe(3_000);
+  });
+
+  it("never rewrites a resolved row", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.resolveOrphanedSession("conv-1", "ses_a");
+    const before = rowFor("conv-1", "ses_a");
+
+    const recorded = await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "present",
+      at: 5_000,
+    });
+    expect(recorded).toBe(false);
+    expect(rowFor("conv-1", "ses_a")).toEqual(before);
+  });
+
+  it("rotates an unsettleable row behind unexamined ones", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_b",
+    });
+
+    expect((await opencodeOrphanService.listUnresolvedOrphans()).map((r) => r.sessionId)).toEqual([
+      "ses_a",
+      "ses_b",
+    ]);
+
+    // A probe that cannot settle `ses_a` rotates it behind `ses_b`.
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: Date.now() + 60_000,
+    });
+    expect((await opencodeOrphanService.listUnresolvedOrphans()).map((r) => r.sessionId)).toEqual([
+      "ses_b",
+      "ses_a",
+    ]);
+  });
+});
