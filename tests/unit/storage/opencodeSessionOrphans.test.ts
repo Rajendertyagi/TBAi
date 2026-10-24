@@ -527,6 +527,515 @@ describe("opencodeOrphanService.touchOrphanedSession", () => {
   });
 });
 
+describe("opencodeOrphanService.settleOwnedSession", () => {
+  function rowFor(conversationId: string, sessionId: string): Record<string, unknown> {
+    return db
+      .query("SELECT * FROM opencode_session_orphans WHERE conversation_id = ? AND session_id = ?")
+      .get(conversationId, sessionId) as Record<string, unknown>;
+  }
+
+  it("retains a risk-bearing orphan, ending its absence epoch and advancing rotation", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: true,
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.first_absent_at).toBeNull();
+    expect(row.last_checked_at).toBe(5_000);
+    expect(row.late_create_risk).toBe(1);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("retains a risk-bearing intent without deleting it", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("intent");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("resolves a risk-free orphan instead of deleting it", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("cleared");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.resolved_at).toBe(5_000);
+    expect(row.late_create_risk).toBe(0);
+  });
+
+  it("deletes a risk-free intent", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 0 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("cleared");
+
+    const count = (
+      db.query("SELECT COUNT(*) AS c FROM opencode_session_orphans").get() as { c: number }
+    ).c;
+    expect(count).toBe(0);
+  });
+
+  it("decides from the CURRENT durable risk, not the caller's earlier view", async () => {
+    // The reconciler listed this row as risk-free. Another writer re-arms it
+    // before the bound settlement lands; that must win.
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 1 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("retains a row whose stored risk is an unexpected nonzero value", async () => {
+    // The column has no CHECK constraint and the read mapping treats anything
+    // other than an explicit 0 as risk-bearing. Settlement must agree, or a
+    // legacy value like 2 would fall through to "absent" and lose the
+    // obligation (and the rotation touch).
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 2 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(2);
+    expect(row.first_absent_at).toBeNull();
+    expect(row.last_checked_at).toBe(5_000);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("settles a risk-free row with a malformed phase as an orphan", async () => {
+    // An unknown phase is read as an orphan (see `mapOrphanRow`); settlement
+    // must resolve it rather than leave it open because `phase = 'orphan'`
+    // does not match.
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET phase = 'legacy' WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("cleared");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("legacy");
+    expect(row.resolved_at).toBe(5_000);
+  });
+
+  it("reports absent for a resolved row and leaves it unchanged", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.resolveOrphanedSession("conv-1", "ses_a");
+    const before = rowFor("conv-1", "ses_a");
+
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("absent");
+    expect(rowFor("conv-1", "ses_a")).toEqual(before);
+  });
+
+  it("reports absent for a pair with no row", async () => {
+    expect(
+      await opencodeOrphanService.settleOwnedSession({
+        conversationId: "conv-9",
+        sessionId: "ses_x",
+        at: 5_000,
+      }),
+    ).toBe("absent");
+  });
+});
+
+describe("opencodeOrphanService.settleAbsentSession", () => {
+  function rowFor(conversationId: string, sessionId: string): Record<string, unknown> {
+    return db
+      .query("SELECT * FROM opencode_session_orphans WHERE conversation_id = ? AND session_id = ?")
+      .get(conversationId, sessionId) as Record<string, unknown>;
+  }
+
+  async function riskFreeIntent(): Promise<void> {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 0 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+  }
+
+  it("deletes a risk-free intent", async () => {
+    await riskFreeIntent();
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("cleared");
+
+    const count = (
+      db.query("SELECT COUNT(*) AS c FROM opencode_session_orphans").get() as { c: number }
+    ).c;
+    expect(count).toBe(0);
+  });
+
+  it("resolves a risk-free orphan instead of deleting it", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("cleared");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.resolved_at).toBe(5_000);
+  });
+
+  it("retains a risk-bearing row inside the horizon for its own epoch", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 2_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.first_absent_at).toBe(1_000);
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("releases a risk-bearing row only after the horizon", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 11_001,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("expired");
+
+    expect(
+      (db.query("SELECT COUNT(*) AS c FROM opencode_session_orphans").get() as { c: number }).c,
+    ).toBe(0);
+  });
+
+  it("starts the horizon at settlement when the epoch stamp was cleared", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 20_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("retained");
+    expect(rowFor("conv-1", "ses_a").first_absent_at).toBeNull();
+  });
+
+  it("decides from the CURRENT durable risk, not the caller's earlier view", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 1 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("retained");
+    expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(1);
+  });
+
+  it("settles a risk-free row with a malformed phase as an orphan", async () => {
+    // Unknown phases are read as orphans, so the absence release must resolve
+    // them; matching only `phase = 'orphan'` would settle nothing and report
+    // "absent" for a row that is still open.
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET phase = 'legacy' WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("cleared");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("legacy");
+    expect(row.resolved_at).toBe(5_000);
+  });
+
+  it("expires a malformed-phase row after the horizon", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET phase = 'legacy' WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 11_001,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("expired");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.resolved_at).toBe(11_001);
+  });
+
+  it("reports absent for a resolved row and leaves it unchanged", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.resolveOrphanedSession("conv-1", "ses_a");
+    const before = rowFor("conv-1", "ses_a");
+
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("absent");
+    expect(rowFor("conv-1", "ses_a")).toEqual(before);
+  });
+
+  it("reports absent for a pair with no row", async () => {
+    expect(
+      await opencodeOrphanService.settleAbsentSession({
+        conversationId: "conv-9",
+        sessionId: "ses_x",
+        at: 5_000,
+        absenceHorizonMs: 10_000,
+      }),
+    ).toBe("absent");
+  });
+});
+
+describe("opencodeOrphanService.getOpenSessionRisk", () => {
+  it("reports risk for a create intent", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    expect(await opencodeOrphanService.getOpenSessionRisk("conv-1", "ses_a")).toBe("risk");
+  });
+
+  it("reports safe for a risk-free orphan", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    expect(await opencodeOrphanService.getOpenSessionRisk("conv-1", "ses_a")).toBe("safe");
+  });
+
+  it("reports risk for an unexpected nonzero stored value", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 2 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+    expect(await opencodeOrphanService.getOpenSessionRisk("conv-1", "ses_a")).toBe("risk");
+  });
+
+  it("reflects a risk re-armed after the caller's earlier view", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 1 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+    expect(await opencodeOrphanService.getOpenSessionRisk("conv-1", "ses_a")).toBe("risk");
+  });
+
+  it("reports absent for a resolved row", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.resolveOrphanedSession("conv-1", "ses_a");
+    expect(await opencodeOrphanService.getOpenSessionRisk("conv-1", "ses_a")).toBe("absent");
+  });
+
+  it("reports absent for a pair with no row", async () => {
+    expect(await opencodeOrphanService.getOpenSessionRisk("conv-9", "ses_x")).toBe("absent");
+  });
+});
+
 describe("opencodeOrphanService.settleTerminatedSession", () => {
   function rowFor(conversationId: string, sessionId: string): Record<string, unknown> {
     return db
@@ -603,6 +1112,39 @@ describe("opencodeOrphanService.settleTerminatedSession", () => {
       }),
     ).toBe("retained");
     expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(1);
+  });
+
+  it("retains a row whose stored risk is an unexpected nonzero value", async () => {
+    // Termination must apply the same conservative read as the mapper; an
+    // `= 1` match would return "absent" and leave the obligation unrotated.
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 1_000,
+    });
+    db.run(
+      "UPDATE opencode_session_orphans SET late_create_risk = 2 WHERE conversation_id = ? AND session_id = ?",
+      ["conv-1", "ses_a"],
+    );
+
+    expect(
+      await opencodeOrphanService.settleTerminatedSession({
+        conversationId: "conv-1",
+        sessionId: "ses_a",
+        at: 5_000,
+      }),
+    ).toBe("retained");
+
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(2);
+    expect(row.first_absent_at).toBeNull();
+    expect(row.last_checked_at).toBe(5_000);
+    expect(row.resolved_at).toBeNull();
   });
 
   it("leaves a risk-free orphan untouched", async () => {

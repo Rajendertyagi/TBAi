@@ -112,18 +112,22 @@ const reconcilerDeps = {
     conversation
       ? { opencodeSessionId: (conversation.opencodeSessionId as string | null | undefined) ?? null }
       : null,
-  resolve: (conversationId: string, sessionId: string) =>
-    opencodeOrphanService.resolveOrphanedSession(conversationId, sessionId),
-  deleteIntent: (conversationId: string, sessionId: string) =>
-    opencodeOrphanService.deleteCreateIntent(conversationId, sessionId),
   recordProbe: (input: {
     conversationId: string;
     sessionId: string;
     outcome: "present" | "absent";
     at: number;
   }) => opencodeOrphanService.recordProbe(input),
-  touch: (conversationId: string, sessionId: string, at: number) =>
-    opencodeOrphanService.touchOrphanedSession(conversationId, sessionId, at),
+  settleOwned: (conversationId: string, sessionId: string, at: number) =>
+    opencodeOrphanService.settleOwnedSession({ conversationId, sessionId, at }),
+  settleAbsent: (input: {
+    conversationId: string;
+    sessionId: string;
+    at: number;
+    absenceHorizonMs: number;
+  }) => opencodeOrphanService.settleAbsentSession(input),
+  getOpenSessionRisk: (conversationId: string, sessionId: string) =>
+    opencodeOrphanService.getOpenSessionRisk(conversationId, sessionId),
   isCreateInFlight: isOpenCodeSessionCreateInFlight,
   getRunningBaseUrl: async () => "http://127.0.0.1:0",
   createClient: () => lifecycleClient(),

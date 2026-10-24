@@ -7498,6 +7498,34 @@ current rules:
   (`retainedBound` in the pass report), so a bound backlog rotates behind
   unexamined entries instead of starving them. A failed touch leaves the row
   open and reports it unresolved.
+- **The post-probe ownership recheck is the same decision, against fresh
+  state.** The pass re-reads ownership after the remote probe. A pointer
+  written while that probe was in flight used to clear the row unconditionally
+  — discarding the obligation during a concurrent bind. It now applies the same
+  retain/clear rule through `settleOwnedSession`: a risk-bearing row is kept,
+  its absence epoch ended and `last_checked_at` advanced; a risk-free row keeps
+  the established settlement (intent deleted, orphan resolved). The decision is
+  made **atomically against the CURRENT row**, not the `lateCreateRisk` of the
+  record listed before the probe, because a create path can re-arm that flag
+  while the probe is in flight. The listed record is a snapshot; trusting it
+  could clear a row whose durable obligation had just been re-armed. A failed
+  settlement write leaves the row untouched and reports it unresolved — it
+  never falls through to a clear.
+- **Every other risk-dependent branch uses the same rule.** A listed record is
+  a snapshot, so the reconciler no longer trusts its flag anywhere a decision
+  can release or remove the row. A positive 404 is settled by
+  `settleAbsentSession`, which reads the CURRENT row in one transaction: a
+  risk-bearing row is retained until the horizon of its own epoch, a risk-free
+  row is released, and a risk re-armed after listing cannot be cleared by the
+  stale snapshot (`opencode.orphan_reconcile_absent_settle_failed` leaves it
+  open). A confirmed removal is settled by the same `settleOwnedSession` used
+  for binding — retain a risk-bearing row (`retainedAfterRemoval`), release a
+  risk-free one. When the presence observation could not be recorded, the pass
+  reads `getOpenSessionRisk` before removing anything: a currently risk-bearing
+  row (or an unreadable risk) blocks removal, so an unrecorded epoch reset can
+  never be followed by a removal that a later 404 would measure from a stale
+  timestamp. A failed settlement or risk read reports the row unresolved and
+  performs no destructive action.
 - **Successful termination.** After the remote removal is confirmed, the journal
   is *settled* (`settleTerminatedSession`), never deleted unconditionally. A
   risk-free intent is released (established behaviour); a risk-bearing row —
@@ -7506,6 +7534,15 @@ current rules:
   remote session is gone. A settlement failure deletes nothing and still clears
   the pointer: the remote state is accurate, and the durable obligation survives.
   The meaning of `terminated` is unchanged.
+- **The stored flag and phase are read conservatively.** `late_create_risk` has
+  no `CHECK` constraint, so every read and every settlement treats any value
+  other than an explicit `0` as risk-bearing (`mapOrphanRow`,
+  `getOpenSessionRisk`, `settleOwnedSession`, `settleAbsentSession`,
+  `settleTerminatedSession`). An `= 1` match would return "absent" for a legacy
+  `2`, silently dropping the obligation and its rotation touch. `phase` is also
+  unconstrained: an unknown value is read as an orphan, and the settlement
+  updates match `COALESCE(phase, 'orphan') <> 'intent'`, so a malformed row is
+  resolved instead of staying open forever. No schema change was required.
 - **Bounded fairness.** Both the bind touch and the termination settlement
   advance `last_checked_at`, so the existing `COALESCE(last_checked_at,
   first_seen_at)` ordering rotates permanent rows behind ones nobody has
@@ -7531,26 +7568,33 @@ flight **in this process** is untouchable — the create path registers the
 `(conversation, session)` pair from the intent write through persistence and
 compensating cleanup, and a slow create can outlive any fixed window; (2) a
 conversation that points at the session is authoritative for the **session** —
-never delete it — and a risk-free row is cleared, while a risk-bearing row is
-preserved and touched so it rotates fairly; (3) rows younger than a grace window
+never delete it — and the journal's *current* row decides the rest atomically:
+a risk-free row is cleared, while a risk-bearing row is preserved and touched so
+it rotates fairly; (3) rows younger than a grace window
 are deferred as defense in depth;
 (4) a running managed server is required — the reconciler never starts one,
 because boot must not depend on OpenCode; (5) absence must be a positive 404, and
-on a risk-bearing row the 404 only stamps `first_absent_at`: the row is retained
-until the **absence horizon** (24h) for the current epoch, after which it is
-released as a bounded best effort, not as proof; (6) a present observation is
-written to the journal and ends the absence epoch, but **does not clear the
-risk** — and for a risk-bearing row, if that write cannot be confirmed, the pass
-stops before removal, because an untracked epoch reset would be worse than no
-progress; ownership is re-read immediately before removal; (7) removal must be
-confirmed by a follow-up lookup; (8) a confirmed removal of a **risk-free** row
-settles it, while a confirmed removal of a **risk-bearing** row retains it and
-resets absence tracking (`retainedAfterRemoval` in the pass report). Every
-failure — probe, journal read, ownership read, removal, confirmation, row clear,
-present-probe write — leaves the row open, and a probe-outcome write failure on
-the 404 path prevents any clearing. The timer is `unref`'d, passes are
-single-flight, and shutdown drains an in-flight pass before
-`openCodeServerManager.shutdown()` and before the database closes.
+the release decision is made against the journal's *current* row: a risk-bearing
+row only stamps `first_absent_at` and is retained until the **absence horizon**
+(24h) for the current epoch, after which it is released as a bounded best
+effort, not as proof; a risk-free row is released immediately; (6) a present
+observation is written to the journal and ends the absence epoch, but **does not
+clear the risk** — and if that write cannot be confirmed, the CURRENT risk is
+read before acting: a risk-bearing row (or an unreadable risk) stops the pass
+before removal, because an untracked epoch reset would be worse than no
+progress; ownership is re-read immediately before removal, and a pointer that
+appeared while the probe was in flight sends the row through that same
+current-row settlement — never a removal, and never the unconditional clear this
+correction replaces; (7) removal must be
+confirmed by a follow-up lookup; (8) the confirmed removal is settled against
+the journal's *current* row: a risk-free row is released, while a risk-bearing
+row is retained with absence tracking reset (`retainedAfterRemoval` in the pass
+report). Every failure — probe, journal read, risk read, ownership read,
+removal, confirmation, row settlement, present-probe write — leaves the row
+open, and a probe-outcome write failure on the 404 path prevents any clearing.
+The timer is `unref`'d, passes are single-flight, and shutdown drains an
+in-flight pass before `openCodeServerManager.shutdown()` and before the database
+closes.
 
 **Compensating removal in the create path follows the same rule.** A create
 that was **retried** after an ambiguous first attempt may have two requests
@@ -7635,16 +7679,27 @@ clears the pointer, identity refusal, redaction),
 idempotency, first-wins, promotion, concurrent burst, terminal resolution,
 risk preserved on promotion, risk never cleared by presence, epoch restart on
 the next 404, persisted-state read-back, rotation, `touchOrphanedSession`
-epoch-reset/rotation/no-reopen, and `settleTerminatedSession`
+epoch-reset/rotation/no-reopen, `settleOwnedSession` retained/cleared/absent
+outcomes, `settleAbsentSession` retained/expired/cleared/absent outcomes
+including a decision from the current durable risk and a horizon restarted when
+the re-arm cleared the epoch stamp, `getOpenSessionRisk` risk/safe/absent with a
+re-armed flag, conservative reads of an unexpected nonzero risk value and of a
+malformed phase settling as an orphan, and `settleTerminatedSession`
 released/retained/absent outcomes with idempotency),
 `tests/unit/opencode/orphanReconciler.test.ts` (ownership, in-flight skip,
 positive-404 retention, horizon expiry, probe recording, inconclusive-evidence
-refusal, grace/limit/lifecycle, and the presence-is-not-terminality suite:
+refusal, grace/limit/lifecycle, the presence-is-not-terminality suite:
 retention after confirmed removal, post-removal epoch start, stale-timestamp
 refusal, recreation handled again with a restarted horizon, unrecordable
 presence blocking removal, bound risk-bearing retention with a fair rotation
-and no remote work, stale bind epoch reset, touch-failure retention, restarted
-reconciler preserving risk and safe behavior), and
+and no remote work, stale bind epoch reset, bound-settlement failure leaving the
+row open, a concurrent bind discovered at the ownership recheck retaining the
+risk-bearing row with a reset epoch and no removal, recheck-settlement failure
+retaining the obligation, and a restarted reconciler preserving risk and safe
+behavior, plus the listed-record-is-a-snapshot suite: a 404 and a confirmed
+removal both retaining a flag re-armed after listing, an unrecorded presence on
+a re-armed row blocking removal, an unreadable current risk blocking removal,
+and an absence-settlement failure leaving the row open), and
 `tests/unit/opencode/rt001RiskLifecycle.test.ts` (the full deterministic
 lifecycle over the REAL journal: ambiguous create → 404 → same-id retry →
 successful bind → bound reconciliation → termination → late recreation →

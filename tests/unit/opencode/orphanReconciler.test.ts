@@ -75,12 +75,16 @@ function makeHarness(options: HarnessOptions = {}) {
     removeError: null as Error | null,
     /** A resolved remove that leaves the session present. */
     removeEffect: "remove" as "remove" | "keep",
-    /** Thrown by every journal clear (deleteIntent / resolve). */
+    /** Thrown by every journal clear (settleOwned / settleAbsent). */
     clearError: null as Error | null,
     /** Thrown by every probe-outcome write. */
     probeRecordError: null as Error | null,
-    /** Thrown by every bound-row touch. */
-    touchError: null as Error | null,
+    /** Thrown by every owned-row settlement. */
+    settleOwnedError: null as Error | null,
+    /** Thrown by every absence settlement. */
+    settleAbsentError: null as Error | null,
+    /** Thrown by every current-risk read. */
+    riskReadError: null as Error | null,
     /** `(conversation, session)` pairs this process is still creating. */
     inFlightKeys: new Set<string>(),
     listError: null as Error | null,
@@ -144,31 +148,28 @@ function makeHarness(options: HarnessOptions = {}) {
       // first, never-probed rows by first-seen. Without this the rotation
       // assertions below would pass on insertion order alone.
       const order = (row: OpenCodeOrphanRecord) => (row.lastCheckedAt ?? row.firstSeenAt).getTime();
-      return [...rows]
-        .sort(
-          (a, b) =>
-            order(a) - order(b) ||
-            a.firstSeenAt.getTime() - b.firstSeenAt.getTime() ||
-            a.conversationId.localeCompare(b.conversationId) ||
-            a.sessionId.localeCompare(b.sessionId),
-        )
-        .slice(0, batchLimit);
+      return (
+        [...rows]
+          .sort(
+            (a, b) =>
+              order(a) - order(b) ||
+              a.firstSeenAt.getTime() - b.firstSeenAt.getTime() ||
+              a.conversationId.localeCompare(b.conversationId) ||
+              a.sessionId.localeCompare(b.sessionId),
+          )
+          .slice(0, batchLimit)
+          // The real store maps rows to fresh objects. Returning the harness's
+          // own row objects would let later durable writes mutate the record the
+          // pass already listed, hiding exactly the stale-flag race these tests
+          // exercise.
+          .map((row) => ({ ...row }))
+      );
     },
     getConversation: async (id) => {
       state.conversationReads += 1;
       if (state.getConversationImpl) return state.getConversationImpl(id);
       if (state.conversationError) throw state.conversationError;
       return conversations.get(id) ?? null;
-    },
-    resolve: async (conversationId, sessionId) => {
-      if (state.clearError) throw state.clearError;
-      state.clears.push({ kind: "orphan", conversationId, sessionId });
-      return removeRow(conversationId, sessionId);
-    },
-    deleteIntent: async (conversationId, sessionId) => {
-      if (state.clearError) throw state.clearError;
-      state.clears.push({ kind: "intent", conversationId, sessionId });
-      return removeRow(conversationId, sessionId);
     },
     // Mirrors the real store: a probe outcome is durable state, not a call
     // record. `present` ends the absence epoch but never settles the risk;
@@ -188,18 +189,51 @@ function makeHarness(options: HarnessOptions = {}) {
       }
       return true;
     },
-    // Mirrors `touchOrphanedSession`: ends the absence epoch and advances the
-    // rotation stamp, never resolving the row or clearing its risk.
-    touch: async (conversationId, sessionId, at) => {
-      if (state.touchError) throw state.touchError;
-      state.touches.push({ conversationId, sessionId, at });
+    // Mirrors `settleOwnedSession`: decides from the CURRENT row, atomically.
+    // A risk-bearing row is touched (epoch reset + rotation) and kept; a
+    // risk-free row is cleared with the established phase-specific operation.
+    settleOwned: async (conversationId, sessionId, at) => {
+      if (state.settleOwnedError) throw state.settleOwnedError;
       const row = rows.find(
         (r) => r.conversationId === conversationId && r.sessionId === sessionId,
       );
-      if (!row) return false;
-      row.firstAbsentAt = null;
-      row.lastCheckedAt = new Date(at);
-      return true;
+      if (!row) return "absent";
+      if (row.lateCreateRisk) {
+        state.touches.push({ conversationId, sessionId, at });
+        row.firstAbsentAt = null;
+        row.lastCheckedAt = new Date(at);
+        return "retained";
+      }
+      if (state.clearError) throw state.clearError;
+      state.clears.push({ kind: row.phase, conversationId, sessionId });
+      return removeRow(conversationId, sessionId) ? "cleared" : "absent";
+    },
+    // Mirrors `settleAbsentSession`: the recorded 404 releases a risk-free row
+    // and retains a risk-bearing one until its own epoch horizon elapses.
+    settleAbsent: async ({ conversationId, sessionId, at, absenceHorizonMs }) => {
+      if (state.settleAbsentError) throw state.settleAbsentError;
+      const row = rows.find(
+        (r) => r.conversationId === conversationId && r.sessionId === sessionId,
+      );
+      if (!row) return "absent";
+      const riskBearing = row.lateCreateRisk;
+      if (riskBearing) {
+        const firstAbsentAt = row.firstAbsentAt?.getTime() ?? at;
+        if (at - firstAbsentAt < absenceHorizonMs) return "retained";
+      }
+      if (state.clearError) throw state.clearError;
+      state.clears.push({ kind: row.phase, conversationId, sessionId });
+      if (!removeRow(conversationId, sessionId)) return "absent";
+      return riskBearing ? "expired" : "cleared";
+    },
+    // Mirrors `getOpenSessionRisk`: the durable row, not the listed snapshot.
+    getOpenSessionRisk: async (conversationId, sessionId) => {
+      if (state.riskReadError) throw state.riskReadError;
+      const row = rows.find(
+        (r) => r.conversationId === conversationId && r.sessionId === sessionId,
+      );
+      if (!row) return "absent";
+      return row.lateCreateRisk ? "risk" : "safe";
     },
     isCreateInFlight: (conversationId, sessionId) =>
       state.inFlightKeys.has(`${conversationId}\u0000${sessionId}`),
@@ -281,6 +315,210 @@ describe("runOrphanReconciliationOnce — ownership", () => {
     expect(report).toMatchObject({ bound: 1, removed: 0 });
     expect(h.state.removeCalls).toHaveLength(0);
     expect(h.state.rows).toHaveLength(0);
+  });
+
+  it("retains a risk-bearing orphan when the conversation is bound during the ownership recheck", async () => {
+    const h = makeHarness({
+      rows: [
+        record({
+          lateCreateRisk: true,
+          // An absence epoch from before the binding; it must not survive.
+          firstAbsentAt: new Date(NOW - 100_000),
+        }),
+      ],
+    });
+    h.state.remote.add("ses_orphan0001");
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      // The pass lists and checks the row as UNBOUND, so it probes the remote;
+      // the pointer is written before the post-probe ownership recheck.
+      return reads === 1 ? { opencodeSessionId: null } : { opencodeSessionId: "ses_orphan0001" };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(reads).toBe(2);
+    // The probe ran and confirmed presence, so the bind was discovered at the
+    // LATE recheck rather than at the pre-probe ownership read.
+    expect(h.state.getCalls).toEqual(["ses_orphan0001"]);
+    expect(report).toMatchObject({
+      scanned: 1,
+      bound: 0,
+      retainedBound: 1,
+      removed: 0,
+      unresolved: 0,
+    });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+    expect(h.state.rows[0]?.lastCheckedAt).toEqual(new Date(NOW));
+
+    // The retained row is usable by the next pass: with the conversation
+    // unbound and the session gone, the next 404 starts a FRESH epoch.
+    h.state.getConversationImpl = null;
+    h.state.conversations.delete("conv-1");
+    h.state.remote.delete("ses_orphan0001");
+    start(h.deps, { absenceHorizonMs: 50_000, now: () => NOW + 1_000 });
+    const next = await runOrphanReconciliationOnce();
+
+    expect(next).toMatchObject({ lateRisk: 1, expiredAbsent: 0, absent: 0 });
+    expect(h.state.rows[0]?.firstAbsentAt).toEqual(new Date(NOW + 1_000));
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("uses the current durable risk at the recheck, not the flag read before the probe", async () => {
+    // The listed record is a snapshot, exactly as the real store returns one.
+    // The durable row is RE-ARMED while the probe is in flight, which the
+    // snapshot cannot reflect.
+    const listed = record({ lateCreateRisk: false });
+    const h = makeHarness({ rows: [listed] });
+    h.state.remote.add("ses_orphan0001");
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      if (reads === 1) {
+        listed.lateCreateRisk = true;
+        return { opencodeSessionId: null };
+      }
+      return { opencodeSessionId: "ses_orphan0001" };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(reads).toBe(2);
+    expect(report).toMatchObject({ bound: 0, retainedBound: 1, removed: 0, unresolved: 0 });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("leaves the recheck row open when the bound settlement cannot be recorded", async () => {
+    const h = makeHarness({ rows: [record({ lateCreateRisk: true })] });
+    h.state.remote.add("ses_orphan0001");
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      return reads === 1 ? { opencodeSessionId: null } : { opencodeSessionId: "ses_orphan0001" };
+    };
+    h.state.settleOwnedError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(reads).toBe(2);
+    expect(report).toMatchObject({
+      bound: 0,
+      retainedBound: 0,
+      unresolved: 1,
+      removed: 0,
+    });
+    expect(h.state.getCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+});
+
+/**
+ * The listed record is a snapshot taken before the remote probe. A create path
+ * can re-arm its durable risk while the probe is in flight, so every decision
+ * that follows must be made against the journal's CURRENT row. These tests
+ * mutate the durable row after it has been listed to prove exactly that.
+ */
+describe("runOrphanReconciliationOnce — the listed record is a snapshot", () => {
+  it("retains when a 404 arrives after the durable risk was re-armed mid-pass", async () => {
+    const listed = record({ phase: "intent", lateCreateRisk: false });
+    const h = makeHarness({ rows: [listed] });
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      // Re-armed AFTER the row was listed, BEFORE the 404 is settled.
+      if (reads === 1) listed.lateCreateRisk = true;
+      return { opencodeSessionId: null };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ absent: 0, lateRisk: 1, expiredAbsent: 0, unresolved: 0 });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("retains after a confirmed removal when the durable risk was re-armed mid-pass", async () => {
+    const listed = record({ phase: "intent", lateCreateRisk: false });
+    const h = makeHarness({ rows: [listed] });
+    h.state.remote.add("ses_orphan0001");
+    let reads = 0;
+    h.state.getConversationImpl = async () => {
+      reads += 1;
+      if (reads === 1) listed.lateCreateRisk = true;
+      return { opencodeSessionId: null };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ removed: 0, retainedAfterRemoval: 1 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+  });
+
+  it("blocks removal on a re-armed row when the presence write was not recorded", async () => {
+    const listed = record({ phase: "intent", lateCreateRisk: false });
+    const h = makeHarness({ rows: [listed] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.probeRecordError = new Error("database is closed");
+    h.state.getConversationImpl = async () => {
+      listed.lateCreateRisk = true;
+      return { opencodeSessionId: null };
+    };
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0, retainedAfterRemoval: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("blocks removal when the current risk cannot be read after an unrecorded presence", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: false })] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.probeRecordError = new Error("database is closed");
+    h.state.riskReadError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, removed: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("leaves the row open when the absence settlement cannot be recorded", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.settleAbsentError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, absent: 0, lateRisk: 0, expiredAbsent: 0 });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
   });
 });
 
@@ -562,11 +800,11 @@ describe("runOrphanReconciliationOnce — presence is not terminality", () => {
     ]);
   });
 
-  it("leaves a bound risk-bearing row when the touch cannot be recorded", async () => {
+  it("leaves a bound risk-bearing row when the settlement cannot be recorded", async () => {
     const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
     h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
     h.state.remote.add("ses_orphan0001");
-    h.state.touchError = new Error("database is closed");
+    h.state.settleOwnedError = new Error("database is closed");
     start(h.deps);
 
     const report = await runOrphanReconciliationOnce();

@@ -296,6 +296,29 @@ export const opencodeOrphanService = {
   },
 
   /**
+   * Reads the CURRENT durable risk of an open row.
+   *
+   * Callers must not decide removal from the risk flag of a record listed
+   * earlier: a create path can re-arm the row while a remote probe is in
+   * flight. `absent` means the row was settled concurrently and carries no
+   * obligation.
+   */
+  async getOpenSessionRisk(
+    conversationId: string,
+    sessionId: string,
+  ): Promise<"risk" | "safe" | "absent"> {
+    const row = db
+      .query<{ late_create_risk: number }, SQLQueryBindings[]>(
+        `SELECT late_create_risk
+           FROM opencode_session_orphans
+          WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+      )
+      .get(conversationId, sessionId);
+    if (!row) return "absent";
+    return row.late_create_risk !== 0 ? "risk" : "safe";
+  },
+
+  /**
    * Ends the current absence epoch and advances `last_checked_at` on an open
    * row, WITHOUT resolving or deleting it.
    *
@@ -312,6 +335,131 @@ export const opencodeOrphanService = {
     at: number = Date.now(),
   ): Promise<boolean> {
     return endAbsenceEpoch(conversationId, sessionId, at);
+  },
+
+  /**
+   * Settles the journal when a reconciliation pass will not remove the
+   * session: the conversation points at it (bound), or the pass already
+   * confirmed its removal.
+   *
+   * Binding/removal is ownership, not completion. The decision is made against
+   * the CURRENT durable row inside one transaction, so a risk flag re-armed
+   * while the probe was in flight cannot be missed: a risk-bearing row is
+   * retained and touched, while a risk-free row keeps the established
+   * settlement (a proven-unused intent is deleted, an orphan is resolved). The
+   * transaction also means a failed write leaves the row exactly as it was,
+   * which is what lets the reconciler fail closed instead of discarding the
+   * obligation.
+   *
+   * @returns `retained` (risk kept and rotated), `cleared` (risk-free row
+   *   settled) or `absent` (already settled; nothing to do).
+   */
+  async settleOwnedSession(input: {
+    conversationId: string;
+    sessionId: string;
+    at: number;
+  }): Promise<"retained" | "cleared" | "absent"> {
+    const settle = db.transaction((): "retained" | "cleared" | "absent" => {
+      // The risk-bearing write comes first: it is the only outcome that must
+      // never be missed, and a re-armed row must not fall through to a clear.
+      // Anything other than an explicit 0 is risk-bearing, matching the read
+      // mapping: a legacy or hand-edited nonzero value is never treated as safe.
+      const retained = db.run(
+        `UPDATE opencode_session_orphans
+           SET first_absent_at = NULL, last_checked_at = ?
+         WHERE conversation_id = ? AND session_id = ?
+           AND resolved_at IS NULL AND late_create_risk <> 0`,
+        [input.at, input.conversationId, input.sessionId],
+      ).changes;
+      if (retained > 0) return "retained";
+
+      // Risk-free rows keep the established settlement: a proven-unused
+      // intent is deleted, an orphan is stamped resolved (audit-retained).
+      const deleted = db.run(
+        `DELETE FROM opencode_session_orphans
+         WHERE conversation_id = ? AND session_id = ?
+           AND resolved_at IS NULL AND late_create_risk = 0 AND phase = 'intent'`,
+        [input.conversationId, input.sessionId],
+      ).changes;
+      if (deleted > 0) return "cleared";
+
+      // An unknown phase is read as an orphan (see `mapOrphanRow`), so it takes
+      // the orphan settlement here and cannot be left open indefinitely.
+      const resolved = db.run(
+        `UPDATE opencode_session_orphans
+           SET resolved_at = ?
+         WHERE conversation_id = ? AND session_id = ?
+           AND resolved_at IS NULL AND late_create_risk = 0
+           AND COALESCE(phase, 'orphan') <> 'intent'`,
+        [input.at, input.conversationId, input.sessionId],
+      ).changes;
+      return resolved > 0 ? "cleared" : "absent";
+    });
+    return settle();
+  },
+
+  /**
+   * Settles a positive-404 observation against the CURRENT durable row, in one
+   * transaction.
+   *
+   * The reconciler has already recorded the absence (`recordProbe` stamps the
+   * first 404 of the epoch and rotates the row). This operation decides what
+   * that observation means: a risk-bearing row is retained until the absence
+   * horizon for its epoch elapses, then released as a bounded best effort; a
+   * risk-free row is released immediately. Reading the row inside the same
+   * transaction is what makes the decision safe against a risk flag re-armed
+   * after the record was listed: a stale risk-free snapshot cannot clear a
+   * row that is now risk-bearing.
+   *
+   * @returns `retained` (risk-bearing, epoch still running), `expired`
+   *   (risk-bearing, horizon released), `cleared` (risk-free row settled) or
+   *   `absent` (no open row).
+   */
+  async settleAbsentSession(input: {
+    conversationId: string;
+    sessionId: string;
+    at: number;
+    absenceHorizonMs: number;
+  }): Promise<"retained" | "expired" | "cleared" | "absent"> {
+    const settle = db.transaction((): "retained" | "expired" | "cleared" | "absent" => {
+      const row = db
+        .query<{ late_create_risk: number; first_absent_at: number | null }, SQLQueryBindings[]>(
+          `SELECT late_create_risk, first_absent_at
+             FROM opencode_session_orphans
+            WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+        )
+        .get(input.conversationId, input.sessionId);
+      if (!row) return "absent";
+
+      const riskBearing = row.late_create_risk !== 0;
+      if (riskBearing) {
+        // A missing epoch stamp (a re-arm clears it) starts the horizon now.
+        const firstAbsentAt = row.first_absent_at ?? input.at;
+        if (input.at - firstAbsentAt < Math.max(0, input.absenceHorizonMs)) {
+          return "retained";
+        }
+      }
+
+      const outcome = riskBearing ? "expired" : "cleared";
+      const deleted = db.run(
+        `DELETE FROM opencode_session_orphans
+          WHERE conversation_id = ? AND session_id = ?
+            AND resolved_at IS NULL AND phase = 'intent'`,
+        [input.conversationId, input.sessionId],
+      ).changes;
+      if (deleted > 0) return outcome;
+
+      const resolved = db.run(
+        `UPDATE opencode_session_orphans
+            SET resolved_at = ?
+          WHERE conversation_id = ? AND session_id = ?
+            AND resolved_at IS NULL
+            AND COALESCE(phase, 'orphan') <> 'intent'`,
+        [input.at, input.conversationId, input.sessionId],
+      ).changes;
+      return resolved > 0 ? outcome : "absent";
+    });
+    return settle();
   },
 
   /**
@@ -344,7 +492,7 @@ export const opencodeOrphanService = {
       `UPDATE opencode_session_orphans
          SET first_absent_at = NULL, last_checked_at = ?
        WHERE conversation_id = ? AND session_id = ?
-         AND resolved_at IS NULL AND late_create_risk = 1`,
+         AND resolved_at IS NULL AND late_create_risk <> 0`,
       [input.at, input.conversationId, input.sessionId],
     ).changes;
     return retained > 0 ? "retained" : "absent";
