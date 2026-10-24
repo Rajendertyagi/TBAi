@@ -39,7 +39,7 @@ function record(overrides: Partial<OpenCodeOrphanRecord> = {}): OpenCodeOrphanRe
     firstSeenAt: new Date(NOW - 600_000),
     lastSeenAt: new Date(NOW - 600_000),
     resolvedAt: null,
-    // An orphan was observed to exist, so a duplicate create resolves to it.
+    // The create path ruled out an outstanding duplicate for this row.
     lateCreateRisk: false,
     firstAbsentAt: null,
     lastCheckedAt: null,
@@ -156,7 +156,8 @@ function makeHarness(options: HarnessOptions = {}) {
       return removeRow(conversationId, sessionId);
     },
     // Mirrors the real store: a probe outcome is durable state, not a call
-    // record. `present` settles the risk; `absent` stamps the FIRST 404 only.
+    // record. `present` ends the absence epoch but never settles the risk;
+    // `absent` stamps the FIRST 404 of the current epoch only.
     recordProbe: async ({ conversationId, sessionId, outcome, at }) => {
       if (state.probeRecordError) throw state.probeRecordError;
       state.probes.push({ conversationId, sessionId, outcome, at });
@@ -166,7 +167,6 @@ function makeHarness(options: HarnessOptions = {}) {
       if (!row) return false;
       row.lastCheckedAt = new Date(at);
       if (outcome === "present") {
-        row.lateCreateRisk = false;
         row.firstAbsentAt = null;
       } else {
         row.firstAbsentAt ??= new Date(at);
@@ -403,6 +403,151 @@ describe("runOrphanReconciliationOnce — remote evidence", () => {
     start(online.deps);
     expect(await runOrphanReconciliationOnce()).toMatchObject({ removed: 1 });
     expect(shared).toHaveLength(0);
+  });
+});
+
+/**
+ * The interleaving independent review identified:
+ *
+ *   risk-bearing intent → probe sees the session present → removal confirmed
+ *   → journal row cleared → the outstanding create completes and recreates
+ *   the id with no durable record left.
+ *
+ * Presence at one instant proves the session existed at that instant; it does
+ * not prove that every create request TBAi submitted for the id has finished.
+ */
+describe("runOrphanReconciliationOnce — presence is not terminality", () => {
+  it("retains a risk-bearing intent after a confirmed removal and never clears its risk", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    // The removal itself is correct and confirmed...
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.remote.has("ses_orphan0001")).toBe(false);
+    // ...but it is not a settlement: the row must survive, and the risk stays.
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+    expect(report).toMatchObject({ removed: 0, retainedAfterRemoval: 1 });
+  });
+
+  it("retains a risk-bearing ORPHAN after a confirmed removal", async () => {
+    // An orphan can carry the flag when a retried create may still be in
+    // flight; the phase decides how a settled row is cleared, not whether it
+    // is safe to clear.
+    const h = makeHarness({ rows: [record({ phase: "orphan", lateCreateRisk: true })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    expect(await runOrphanReconciliationOnce()).toMatchObject({
+      retainedAfterRemoval: 1,
+      removed: 0,
+    });
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("does not release on an absence timestamp taken BEFORE the removal", async () => {
+    const h = makeHarness({
+      rows: [
+        record({
+          phase: "intent",
+          lateCreateRisk: true,
+          // Long past the horizon, but from an epoch that ended at the removal.
+          firstAbsentAt: new Date(NOW - 100_000),
+        }),
+      ],
+    });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps, { absenceHorizonMs: 50_000 });
+
+    // Present → confirmed removal: the stale epoch is ended, not carried over.
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedAfterRemoval: 1 });
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+
+    // The next 404 starts a NEW epoch at its own time. The old timestamp was
+    // already older than the horizon, and must not release the row.
+    start(h.deps, { absenceHorizonMs: 50_000, now: () => NOW + 1_000 });
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ lateRisk: 1, expiredAbsent: 0, absent: 0 });
+    expect(h.state.rows[0]?.firstAbsentAt).toEqual(new Date(NOW + 1_000));
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("re-handles a session the outstanding create recreates, restarting the horizon each time", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps, { absenceHorizonMs: 50_000 });
+
+    // First pass: present → removed → retained.
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedAfterRemoval: 1 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+
+    // The lost create commits: the id is back.
+    h.state.remote.add("ses_orphan0001");
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedAfterRemoval: 1 });
+    expect(h.state.removeCalls).toEqual(["ses_orphan0001", "ses_orphan0001"]);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    // The second removal restarts absence tracking too.
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+  });
+
+  it("never removes a risk-bearing session when the presence observation cannot be recorded", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.remote.add("ses_orphan0001");
+    h.state.probeRecordError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ unresolved: 1, retainedAfterRemoval: 0, removed: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("settles a risk-bearing intent by binding, without touching the remote", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ bound: 1, retainedAfterRemoval: 0, removed: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.clears).toEqual([
+      { kind: "intent", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    ]);
+  });
+
+  it("keeps the risk and the safe behavior across a restarted reconciler", async () => {
+    const rows = [record({ phase: "intent", lateCreateRisk: true })];
+
+    const first = makeHarness({ rows });
+    first.state.remote.add("ses_orphan0001");
+    start(first.deps);
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedAfterRemoval: 1 });
+    // What a restart can rely on is the persisted state, not process memory.
+    expect(rows[0]?.lateCreateRisk).toBe(true);
+    expect(rows[0]?.firstAbsentAt).toBeNull();
+
+    const restarted = makeHarness({ rows });
+    restarted.state.remote.add("ses_orphan0001");
+    start(restarted.deps);
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedAfterRemoval: 1 });
+    expect(restarted.state.removeCalls).toEqual(["ses_orphan0001"]);
+    expect(restarted.state.clears).toEqual([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.lateCreateRisk).toBe(true);
   });
 });
 

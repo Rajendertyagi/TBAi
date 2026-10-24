@@ -283,7 +283,24 @@ describe("opencodeOrphanService — late-create risk", () => {
     expect(row.first_absent_at).toBeNull();
   });
 
-  it("records an orphan as risk-free: the session was observed to exist", async () => {
+  it("records a risk-free orphan when the create path ruled out a duplicate", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      lateCreateRisk: false,
+    });
+    const row = rowFor("conv-1", "ses_a");
+    expect(row.phase).toBe("orphan");
+    expect(row.late_create_risk).toBe(0);
+  });
+
+  it("preserves an existing risk when promotion omits the flag", async () => {
+    // Fail-safe default: a caller that cannot state the risk must not be able
+    // to talk the journal out of an intent that was written risk-bearing.
     await opencodeOrphanService.recordCreateIntent({
       conversationId: "conv-1",
       sessionId: "ses_a",
@@ -294,7 +311,7 @@ describe("opencodeOrphanService — late-create risk", () => {
     });
     const row = rowFor("conv-1", "ses_a");
     expect(row.phase).toBe("orphan");
-    expect(row.late_create_risk).toBe(0);
+    expect(row.late_create_risk).toBe(1);
   });
 
   it("re-arms the risk when a create request is issued again", async () => {
@@ -302,11 +319,10 @@ describe("opencodeOrphanService — late-create risk", () => {
       conversationId: "conv-1",
       sessionId: "ses_a",
     });
-    await opencodeOrphanService.recordProbe({
+    await opencodeOrphanService.recordOrphanedSession({
       conversationId: "conv-1",
       sessionId: "ses_a",
-      outcome: "present",
-      at: 1_000,
+      lateCreateRisk: false,
     });
     expect(rowFor("conv-1", "ses_a").late_create_risk).toBe(0);
 
@@ -319,7 +335,7 @@ describe("opencodeOrphanService — late-create risk", () => {
     expect(row.first_absent_at).toBeNull();
   });
 
-  it("present clears the risk; absent stamps the FIRST 404 and never clears it", async () => {
+  it("absent stamps the FIRST 404 and keeps the risk; present ends that epoch", async () => {
     await opencodeOrphanService.recordCreateIntent({
       conversationId: "conv-1",
       sessionId: "ses_a",
@@ -343,6 +359,8 @@ describe("opencodeOrphanService — late-create risk", () => {
     expect(row.first_absent_at).toBe(1_000);
     expect(row.last_checked_at).toBe(2_000);
 
+    // Presence proves existence at one instant. It ends the absence epoch but
+    // cannot prove the create request that produced the id has finished.
     await opencodeOrphanService.recordProbe({
       conversationId: "conv-1",
       sessionId: "ses_a",
@@ -350,9 +368,50 @@ describe("opencodeOrphanService — late-create risk", () => {
       at: 3_000,
     });
     row = rowFor("conv-1", "ses_a");
-    expect(row.late_create_risk).toBe(0);
+    expect(row.late_create_risk).toBe(1);
     expect(row.first_absent_at).toBeNull();
     expect(row.last_checked_at).toBe(3_000);
+
+    // The next 404 starts a NEW epoch rather than resuming the old timestamp.
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 4_000,
+    });
+    row = rowFor("conv-1", "ses_a");
+    expect(row.late_create_risk).toBe(1);
+    expect(row.first_absent_at).toBe(4_000);
+    expect(row.last_checked_at).toBe(4_000);
+  });
+
+  it("persists risk and absence across a fresh read of the row", async () => {
+    // A restarted process has only the database: no in-memory state carries
+    // the obligation, so these columns alone must be sufficient.
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 7_000,
+    });
+
+    const restored = db
+      .query(
+        `SELECT phase, late_create_risk, first_absent_at, last_checked_at
+           FROM opencode_session_orphans
+          WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+      )
+      .get("conv-1", "ses_a") as Record<string, unknown>;
+    expect(restored).toEqual({
+      phase: "intent",
+      late_create_risk: 1,
+      first_absent_at: 7_000,
+      last_checked_at: 7_000,
+    });
   });
 
   it("never rewrites a resolved row", async () => {

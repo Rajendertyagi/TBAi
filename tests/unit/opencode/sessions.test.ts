@@ -609,6 +609,55 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: createdId() }]);
   });
 
+  it("D2. retains the intent when a retried create may still be outstanding", async () => {
+    noPointerConversation();
+    failPersistAndNotPersisted();
+    // First create loses its response; the probe is absent, so the SAME id is
+    // retried and succeeds. The first request is not provably finished: either
+    // attempt may have produced the session, and either may still commit.
+    let attempts = 0;
+    createImpl = async (args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ClientError("Transport", { cause: new Error("lost response") });
+      }
+      return { id: args.id, location: { directory: SERVER_RECORDED_DIRECTORY } };
+    };
+    getImpl = async (args) => {
+      throw sessionNotFound(args.sessionID);
+    };
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
+    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
+    const id = createdId();
+    expect(createArgs.map((args) => args.id)).toEqual([id, id]);
+    // The compensating removal was confirmed gone at that instant...
+    expect(failure.cleanup).toBe("confirmed_removed");
+    expect(failure.sessionId).toBe(id);
+    // ...but the durable intent is deliberately KEPT, because an outstanding
+    // same-id create can recreate the session after the removal. The error
+    // still reports that a recovery record exists.
+    expect(failure.recorded).toBe(true);
+    expect(deletedIntents).toEqual([]);
+    expect(intentRecords.length).toBe(1);
+    expect(orphanRecords).toEqual([]);
+    expect(conversation?.opencodeSessionId).toBeNull();
+    expect(calls).toEqual([
+      `create:${SUBMITTED_DIRECTORY}`,
+      `get:${id}`,
+      `create:${SUBMITTED_DIRECTORY}`,
+      `remove:${id}`,
+      `get:${id}`,
+    ]);
+  });
+
   it("E. records the orphan durably when removal fails", async () => {
     noPointerConversation();
     failPersistAndNotPersisted();

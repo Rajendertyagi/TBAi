@@ -39,14 +39,21 @@ import {
  *  3. A row younger than the grace window is left alone.
  *  4. Absence must be positive (a 404). A lookup that fails for any other
  *     reason leaves the row unresolved for a later pass.
- *  5. **A bare 404 never clears a risk-bearing intent.** A create whose
- *     response was lost may still commit after the lookup. Such a row is
- *     retained, rotated behind unexamined rows, and only released after the
- *     absence horizon — a bounded best effort, because upstream exposes no
- *     terminality signal (documented in the ADR).
- *  6. Ownership is re-checked immediately before removal, so a pointer that
+ *  5. **A bare 404 never clears a risk-bearing row.** A create whose response
+ *     was lost may still commit after the lookup. Such a row is retained,
+ *     rotated behind unexamined rows, and only released after the absence
+ *     horizon — a bounded best effort, because upstream exposes no terminality
+ *     signal (documented in the ADR).
+ *  6. **Presence is not terminality.** Seeing the id present proves only that
+ *     it existed at that instant; it does not prove every create request for it
+ *     has finished. A confirmed removal of a risk-bearing session is therefore
+ *     NOT a settlement: the row survives, and the removal ends the current
+ *     absence epoch so the next 404 starts a NEW post-removal horizon. If the
+ *     outstanding request recreates the id, the next pass detects it, re-checks
+ *     ownership, and removes it again under these same rules.
+ *  7. Ownership is re-checked immediately before removal, so a pointer that
  *     appeared while the probe was in flight still wins.
- *  7. Removal is confirmed by a follow-up lookup, exactly as the create path
+ *  8. Removal is confirmed by a follow-up lookup, exactly as the create path
  *     does. "The call returned" is never treated as "the session is gone".
  *
  * It never starts the managed server. If no server is running it still clears
@@ -96,8 +103,9 @@ export interface OpenCodeOrphanReconcilerDeps {
   /** Deletes a proven-unused create intent. */
   deleteIntent(conversationId: string, sessionId: string): Promise<boolean>;
   /**
-   * Records what one probe established. `present` clears the late-create risk;
-   * `absent` stamps the first 404 and never clears it.
+   * Records what one probe established. `present` ends the current absence
+   * epoch but deliberately does NOT clear the late-create risk; `absent`
+   * stamps the first 404 of the current epoch and never clears the risk.
    */
   recordProbe(input: {
     conversationId: string;
@@ -130,10 +138,16 @@ export interface OpenCodeOrphanReconcileReport {
   bound: number;
   /** Rows cleared because the remote session is positively absent. */
   absent: number;
-  /** Remote sessions removed AND confirmed gone. */
+  /** Rows cleared because their remote session was removed and confirmed gone. */
   removed: number;
   /**
-   * Risk-bearing intents retained after a 404: a lost create response may
+   * Risk-bearing sessions removed and confirmed gone, whose journal row was
+   * deliberately KEPT: a create request may still be outstanding and recreate
+   * the id, so removal is not settlement. The row's absence epoch restarts.
+   */
+  retainedAfterRemoval: number;
+  /**
+   * Risk-bearing rows retained after a 404: a lost create response may
    * still commit, so absence at lookup time is not terminal.
    */
   lateRisk: number;
@@ -190,6 +204,20 @@ async function clearRow(
 }
 
 /**
+ * Whether a create request for this row's id may still be outstanding.
+ *
+ * This is the durable `late_create_risk` flag, not the phase: the phase decides
+ * how the obligation is discharged (delete the intent vs resolve the orphan),
+ * while the flag decides whether the row may be released at all. A create path
+ * that could rule out an outstanding duplicate writes a risk-free row even in
+ * the `intent` phase, and that row may be settled on absence. A presence probe
+ * never clears the flag.
+ */
+function isLateCreateRisk(record: OpenCodeOrphanRecord): boolean {
+  return record.lateCreateRisk;
+}
+
+/**
  * Runs one reconciliation pass. Never throws: this is background bookkeeping,
  * and a failure must not take the server down.
  *
@@ -217,6 +245,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
     bound: 0,
     absent: 0,
     removed: 0,
+    retainedAfterRemoval: 0,
     lateRisk: 0,
     expiredAbsent: 0,
     unresolved: 0,
@@ -311,11 +340,11 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
 
       if (remote === null) {
         // Positive 404 — but only "absent at lookup time". For a risk-bearing
-        // intent that is not terminal: the request whose response was lost may
+        // row that is not terminal: the request whose response was lost may
         // still commit. Record the observation (which also rotates the row
         // behind unexamined ones) and keep the obligation until the bounded
         // absence horizon (rule 5).
-        if (record.phase === "intent" && record.lateCreateRisk) {
+        if (isLateCreateRisk(record)) {
           const observedAt = now();
           let recorded: boolean;
           try {
@@ -379,18 +408,46 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         continue;
       }
 
-      // The exact id is present, so a duplicate create can only resolve to it:
-      // record that observation (clearing the late-create risk) before acting.
-      // Best-effort: the row survives if this write fails, which can only make
-      // a later 404 retain it longer.
+      // The id is present RIGHT NOW. Record that observation first: it ends the
+      // current absence epoch, so any later 404 starts a fresh horizon. It does
+      // not settle a risk-bearing row — existence at this instant says nothing
+      // about whether an earlier create request has finished.
+      const riskBearing = isLateCreateRisk(record);
       try {
-        await reconcilerDeps.recordProbe({
+        const recorded = await reconcilerDeps.recordProbe({
           conversationId: record.conversationId,
           sessionId: record.sessionId,
           outcome: "present",
           at: now(),
         });
+        if (riskBearing && !recorded) {
+          // The row was settled concurrently, or the observation did not land.
+          // Acting now could remove a session whose obligation we cannot
+          // durably describe, so leave it to a later pass.
+          report.unresolved += 1;
+          logger.warn("opencode", "opencode.orphan_reconcile_probe_not_recorded", {
+            conversationId: record.conversationId,
+            phase: record.phase,
+            outcome: "present",
+          });
+          continue;
+        }
       } catch (error) {
+        if (riskBearing) {
+          // Without the durable epoch reset, a later 404 could be measured
+          // from a timestamp taken BEFORE this observation. Never act on
+          // state we could not write.
+          report.unresolved += 1;
+          logger.warn("opencode", "opencode.orphan_reconcile_probe_record_failed", {
+            conversationId: record.conversationId,
+            phase: record.phase,
+            outcome: "present",
+            ...classifyError(error),
+          });
+          continue;
+        }
+        // An orphan has no horizon to protect: the row survives this failure,
+        // and a confirmed removal still settles it.
         logger.warn("opencode", "opencode.orphan_reconcile_probe_record_failed", {
           conversationId: record.conversationId,
           phase: record.phase,
@@ -440,6 +497,21 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         });
         continue;
       }
+      if (riskBearing) {
+        // Rule 6: the session is gone, but a create whose response was lost may
+        // still commit and recreate this exact id. Removing the row here is the
+        // untracked-orphan window this correction closes. Keep the durable
+        // obligation; the present probe above already ended the absence epoch,
+        // so the next 404 starts a NEW post-removal horizon. If the id
+        // reappears, the next pass sees it, re-checks ownership, and removes it
+        // again under the same rules.
+        report.retainedAfterRemoval += 1;
+        logger.info("opencode", "opencode.orphan_removed_retained", {
+          conversationId: record.conversationId,
+          phase: record.phase,
+        });
+        continue;
+      }
       try {
         await clearRow(record, reconcilerDeps);
         report.removed += 1;
@@ -459,6 +531,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
       report.deferred > 0 ||
       report.inflight > 0 ||
       report.removed > 0 ||
+      report.retainedAfterRemoval > 0 ||
       report.unresolved > 0
     ) {
       logger.info("opencode", "opencode.orphan_reconciled", {
@@ -469,6 +542,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         bound: report.bound,
         absent: report.absent,
         removed: report.removed,
+        retainedAfterRemoval: report.retainedAfterRemoval,
         lateRisk: report.lateRisk,
         expiredAbsent: report.expiredAbsent,
         unresolved: report.unresolved,

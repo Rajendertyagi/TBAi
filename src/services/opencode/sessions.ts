@@ -80,6 +80,10 @@ export class OpenCodeSessionMismatchError extends Error {
  *    (or was already open) — the answer to "can a future reconciler act on
  *    this?". A false here means the journal write itself failed and the
  *    only record is the error-level log.
+ *    `confirmed_removed` with `recorded: true` is a deliberate combination:
+ *    the session is gone NOW, but a create attempt whose response was lost may
+ *    still recreate the id, so the risk-bearing intent was kept for the
+ *    reconciler rather than deleted.
  *
  * The class carries the session id on purpose: it is the handle the recovery
  * record needs, and it stays on the error object rather than in a log
@@ -518,6 +522,12 @@ async function recordOrphan(input: {
   persistError: unknown;
   cleanupError?: unknown;
   verificationError?: unknown;
+  /**
+   * Whether an earlier create attempt may still commit. Passing `false` says
+   * the create path ruled it out; omitting it preserves whatever the intent
+   * already knew.
+   */
+  duplicateCreatePossible?: boolean;
 }): Promise<boolean> {
   const persistCategory = classifyError(input.persistError).category;
   const cleanupCategory =
@@ -527,6 +537,7 @@ async function recordOrphan(input: {
       conversationId: input.conversationId,
       sessionId: input.sessionId,
       locationDirectory: input.locationDirectory,
+      lateCreateRisk: input.duplicateCreatePossible,
       persistErrorCategory: persistCategory,
       cleanupErrorCategory: cleanupCategory,
     });
@@ -711,7 +722,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     // handle (fail-closed).
     await requireCreateIntent(conversationId, sessionId, directory);
 
-    const createdDirectory = await createOrAdoptSession();
+    const { directory: createdDirectory, duplicateCreatePossible } = await createOrAdoptSession();
 
     // RT-001: the remote session exists from here on, and the pointer write is
     // the only thing that binds it to TBAi. A failure here must never leave
@@ -749,6 +760,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
           locationDirectory: createdDirectory,
           persistError,
           verificationError: verification.error,
+          duplicateCreatePossible,
         });
         logger.error("opencode", "opencode.session_persist_unresolved", {
           conversationId,
@@ -767,24 +779,39 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
 
       // Confirmed unbound: compensate by removing the remote session.
       const { outcome, error: cleanupError } = await removeUnboundSession(client, sessionId);
-      const recorded =
-        outcome === "removed"
-          ? false
-          : await recordOrphan({
-              conversationId,
-              sessionId,
-              locationDirectory: createdDirectory,
-              persistError,
-              cleanupError,
-            });
-      if (outcome === "removed") {
-        await discardCreateIntent(conversationId, sessionId);
-        logger.warn("opencode", "opencode.session_persist_compensated", {
+      const removed = outcome === "removed";
+      let recorded = false;
+      if (removed) {
+        if (duplicateCreatePossible) {
+          // An attempt whose response was lost may still be in flight and can
+          // recreate this id after the confirmed removal. Dropping the intent
+          // here would leave that recreation with no durable record, so the
+          // risk-bearing intent is kept. Its absence epoch is still unstarted,
+          // so the reconciler's next 404 begins the post-removal horizon.
+          recorded = true;
+          logger.warn("opencode", "opencode.session_persist_compensated_intent_retained", {
+            conversationId,
+            ...classifyError(persistError),
+          });
+        } else {
+          // The create path ruled out any outstanding duplicate, so removal is
+          // settlement and the intent has served its purpose.
+          await discardCreateIntent(conversationId, sessionId);
+          logger.warn("opencode", "opencode.session_persist_compensated", {
+            conversationId,
+            sessionId,
+            ...classifyError(persistError),
+          });
+        }
+      } else {
+        recorded = await recordOrphan({
           conversationId,
           sessionId,
-          ...classifyError(persistError),
+          locationDirectory: createdDirectory,
+          persistError,
+          cleanupError,
+          duplicateCreatePossible,
         });
-      } else {
         logger.error("opencode", "opencode.session_orphaned", {
           conversationId,
           recorded,
@@ -838,8 +865,17 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
    *
    * If the retry is also unresolved, the risk-bearing intent is left for the
    * reconciler, which never clears it on a bare 404.
+   *
+   * @returns The scope to hand the runtime, plus whether an earlier ambiguous
+   *   attempt might STILL be in flight. That is true only on a retried path: a
+   *   first attempt that returned (or that a probe proved had committed) leaves
+   *   no second request outstanding. The flag matters after a compensating
+   *   removal, because a request still in flight can recreate the freed id.
    */
-  async function createOrAdoptSession(): Promise<string> {
+  async function createOrAdoptSession(): Promise<{
+    directory: string;
+    duplicateCreatePossible: boolean;
+  }> {
     let responseMismatch = false;
 
     const attempt = async (): Promise<string> => {
@@ -868,7 +904,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     };
 
     try {
-      return await attempt();
+      return { directory: await attempt(), duplicateCreatePossible: false };
     } catch (createError) {
       const failure = toOpenCodeError(createError);
       if (responseMismatch) throw failure;
@@ -896,11 +932,16 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
       if (probe) {
         // The session exists despite the failed call. It carries the id TBAi
         // minted, so it is ours: adopt it and continue to the pointer write.
+        // The id could only appear because that request committed, so it is
+        // finished: no second request exists for this id in this process.
         logger.warn("opencode", "opencode.session_create_recovered", {
           conversationId,
           persistErrorCategory: classifyError(failure).category,
         });
-        return probe.directory ?? directory;
+        return {
+          directory: probe.directory ?? directory,
+          duplicateCreatePossible: false,
+        };
       }
 
       // A 404 is NOT terminal: the failed request may still commit. Retry the
@@ -910,7 +951,9 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
         persistErrorCategory: classifyError(failure).category,
       });
       try {
-        return await attempt();
+        // The FIRST attempt's outcome is still unknown: it may commit even
+        // though the retry returned. That is what the flag records.
+        return { directory: await attempt(), duplicateCreatePossible: true };
       } catch (retryError) {
         const retryFailure = toOpenCodeError(retryError);
         if (responseMismatch) throw retryFailure;
@@ -935,7 +978,12 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
             persistErrorCategory: classifyError(retryFailure).category,
             attempt: "retry",
           });
-          return retryProbe.directory ?? directory;
+          return {
+            directory: retryProbe.directory ?? directory,
+            // Either attempt may have produced the session; the first is not
+            // provably finished, so a removal must not discard the intent.
+            duplicateCreatePossible: true,
+          };
         }
         // Still absent, still not terminal: the intent is retained. The
         // reconciler will not clear a risk-bearing intent on a bare 404.

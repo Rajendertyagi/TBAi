@@ -7422,20 +7422,59 @@ and leaves the journal row open.
 `first_seen_at` / `last_seen_at` are refreshed; failure categories are
 first-wins (`COALESCE`) and are classifications, never raw provider errors.
 Resolution is terminal: a resolved row is never reopened, and a resolved
-**orphan** is kept for audit; a proven-unused **intent** is deleted. Discovery
+**orphan** is kept for audit; a proven-unused **intent** is deleted, while a
+risk-bearing intent is retained until settlement or bounded release. Discovery
 is bounded and fair: unresolved rows are ordered by
 `COALESCE(last_checked_at, first_seen_at)` so a row that keeps answering 404
 rotates behind rows nobody has examined.
 
 Late-create tracking is part of the row, not an in-memory flag:
 
-- `late_create_risk` starts at 1 (a create is about to be issued), becomes 0
-  once the exact id is observed present or the row is an orphan (the session was
-  observed to exist), and is **never** cleared by a bare 404. A repeated intent
-  write re-arms it, because a create is about to be reissued.
-- `first_absent_at` is the first positive 404 for a risk-bearing intent, stamped
-  once and never moved, and cleared when the id is observed present.
+- `late_create_risk` starts at 1 (a create is about to be issued) and is
+  **never cleared by observing the id present**. Presence proves only that the
+  session existed at that instant; it says nothing about whether every create
+  request already submitted for the id has finished. The flag is cleared only
+  when the row is definitively settled (the conversation is bound to the
+  session) or released by the bounded absence policy. Promoting `intent →
+  orphan` **preserves an existing risk by default**; only a create path that
+  can rule out an outstanding duplicate writes `lateCreateRisk: false`, so an
+  incomplete caller can only be over-cautious, never optimistic. A repeated
+  create intent re-arms it.
+- `first_absent_at` is the start of the **current continuous-absence epoch**,
+  stamped once per epoch. A presence observation ends the epoch (`NULL`), and a
+  confirmed removal also ends it (`NULL`) — because removal frees the id for
+  recreation, so a timestamp taken before the removal must never be used to
+  release the row. The next positive 404 starts a **new** horizon.
 - `last_checked_at` records the last probe, for rotation.
+
+**Presence is not terminality, and removal is not settlement.** An earlier
+version cleared `late_create_risk` when the id was observed present, and the
+reconciler then deleted a risk-bearing intent after a confirmed removal. That
+left this sequence unrecorded: intent → an earlier create is still outstanding →
+a probe sees the id present → the risk is cleared → the session is removed and
+the row deleted → the outstanding create commits and recreates the id with no
+durable record. Sequential and concurrent idempotency do not close this case,
+because the hazard is *removal followed by recreation*, not two creates
+converging. The current design keeps the obligation instead:
+
+1. A risk-bearing row is never released merely because the observed session was
+   removed. The reconciler removes it (freeing the id and the remote resource),
+   **keeps the row**, and clears `first_absent_at` so the next 404 begins a new
+   post-removal horizon.
+2. If the id reappears during that horizon, the next pass sees it, re-checks
+   ownership, and applies the same rules again: never remove a bound session,
+   confirm the removal, keep the row, restart the horizon.
+3. The row is released only after a continuous post-removal absence epoch
+   reaches the 24h horizon, or when the conversation is bound. A stale absence
+   timestamp from before a presence or a confirmed removal can never release it.
+4. Risk-free rows (a create path that ruled out an outstanding duplicate) keep
+   the previous behaviour: a confirmed removal settles them, because no request
+   can recreate the id.
+
+The alternative — never removing a risk-bearing session — was rejected. It
+leaves permanent remote residue, and at horizon release it would leave the same
+live session with no record at all; removing plus retaining is strictly safer
+and starts the observation window from a state where the id was actually freed.
 
 **Reconciler.** `src/services/opencode/orphanReconciler.ts` runs one pass at
 boot and then on an interval. In order: (1) a row whose create is still in
@@ -7445,16 +7484,32 @@ compensating cleanup, and a slow create can outlive any fixed window; (2) a
 conversation that points at the session is authoritative — clear the row, never
 delete; (3) rows younger than a grace window are deferred as defense in depth;
 (4) a running managed server is required — the reconciler never starts one,
-because boot must not depend on OpenCode; (5) absence must be a positive 404,
-and on a risk-bearing intent the 404 only stamps `first_absent_at`: the row is
-retained until the **absence horizon** (24h), after which it is released as a
-bounded best effort, not as proof; (6) presence records the probe (clearing the
-risk) and ownership is re-read immediately before removal; (7) removal must be
-confirmed by a follow-up lookup. Every failure — probe, journal read, ownership
-read, removal, confirmation, row clear — leaves the row open, and a probe-outcome
-write failure on the 404 path prevents any clearing. The timer is `unref`'d,
-passes are single-flight, and shutdown drains an in-flight pass before
+because boot must not depend on OpenCode; (5) absence must be a positive 404, and
+on a risk-bearing row the 404 only stamps `first_absent_at`: the row is retained
+until the **absence horizon** (24h) for the current epoch, after which it is
+released as a bounded best effort, not as proof; (6) a present observation is
+written to the journal and ends the absence epoch, but **does not clear the
+risk** — and for a risk-bearing row, if that write cannot be confirmed, the pass
+stops before removal, because an untracked epoch reset would be worse than no
+progress; ownership is re-read immediately before removal; (7) removal must be
+confirmed by a follow-up lookup; (8) a confirmed removal of a **risk-free** row
+settles it, while a confirmed removal of a **risk-bearing** row retains it and
+resets absence tracking (`retainedAfterRemoval` in the pass report). Every
+failure — probe, journal read, ownership read, removal, confirmation, row clear,
+present-probe write — leaves the row open, and a probe-outcome write failure on
+the 404 path prevents any clearing. The timer is `unref`'d, passes are
+single-flight, and shutdown drains an in-flight pass before
 `openCodeServerManager.shutdown()` and before the database closes.
+
+**Compensating removal in the create path follows the same rule.** A create
+that was **retried** after an ambiguous first attempt may have two requests
+outstanding; a successful retry does not prove the first request finished. When
+the pointer write then fails and the compensating removal is confirmed, the
+risk-bearing intent is **kept** rather than deleted, and the thrown
+`OpenCodeSessionPersistError` reports `cleanup: "confirmed_removed"` with
+`recorded: true` — the session is gone now, but the obligation is still
+durable. Only a create that was never retried (no second request exists) deletes
+its intent after a confirmed removal.
 
 **Security.** The session id stays out of free-text log messages: the
 `session_not_found` message no longer embeds it, and the logger's value
@@ -7491,11 +7546,16 @@ make the failure distinguishable server-side.
 **Known limits (deliberately not claimed as closed).**
 
 - **Upstream terminality cannot be observed.** OpenCode exposes no signal that a
-  request whose response was lost can no longer commit, and removal frees the id
-  for recreation. A risk-bearing intent is therefore retained through continuous
-  404s for a 24h absence horizon and then released: a bounded best effort, not
-  proof. A request that commits after the horizon (or after a confirmed
-  removal) can still create a session the journal no longer names.
+  request whose response was lost can no longer commit, and `remove` frees the
+  id for recreation. A present observation therefore stays non-terminal: it
+  proves existence at that instant, not that every submitted create finished.
+  The correction makes a confirmed removal **retain** the risk-bearing row and
+  start a fresh post-removal absence epoch, so a recreation during that epoch is
+  detected and handled. It does **not** make recreation impossible: a create
+  that commits after a full 24h continuous post-removal absence epoch — or after
+  a risk-free row was settled — can still produce a session the journal no
+  longer names. That is a bounded best effort under an upstream API that exposes
+  no completion signal, not a mathematical guarantee.
 - **The in-flight registry is process-local.** It closes the race with the
   reconciler inside this process (the only process that owns the managed server
   and the journal). A second TBAi process sharing the same database is outside
@@ -7508,15 +7568,25 @@ make the failure distinguishable server-side.
 
 **Evidence.** `tests/unit/opencode/sessions.test.ts` (fail-closed intent,
 definitive-vs-ambiguous create, same-id retry, adoption of a late commit, the
-create/persist window, identity refusal, redaction),
+create/persist window, retry-outstanding compensation keeps the intent, identity
+refusal, redaction),
 `tests/unit/storage/opencodeSessionOrphans.test.ts` (real file-backed SQLite:
 idempotency, first-wins, promotion, concurrent burst, terminal resolution,
-late-create risk, first-absence stamping, rotation),
+risk preserved on promotion, risk never cleared by presence, epoch restart on
+the next 404, persisted-state read-back, rotation),
 `tests/unit/opencode/orphanReconciler.test.ts` (ownership, in-flight skip,
 positive-404 retention, horizon expiry, probe recording, inconclusive-evidence
-refusal, grace/limit/lifecycle),
+refusal, grace/limit/lifecycle, and the presence-is-not-terminality suite:
+retention after confirmed removal, post-removal epoch start, stale-timestamp
+refusal, recreation handled again with a restarted horizon, unrecordable
+presence blocking removal, binding settles without remote work, restarted
+reconciler preserving risk and safe behavior),
 `tests/unit/routes/opencodeSessionIntent.test.ts` (HTTP 503, id-free body, no
 remote create) and
 `tests/integration/opencode/opencode-session-idempotency-runtime.test.ts`
 (opt-in real server: supplied-id echo, sequential/concurrent idempotency, no
-rebind, removal frees the id).
+rebind, removal frees the id). The dangerous presence→remove→recreate
+interleaving is exercised through the reconciler's deterministic seams and a
+fake clock; the real-server suite proves the API properties it depends on but
+does not inject a delayed commit, so it does not reproduce the interleaving
+itself.

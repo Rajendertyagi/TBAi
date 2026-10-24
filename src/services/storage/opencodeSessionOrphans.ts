@@ -67,14 +67,24 @@ export interface OpenCodeOrphanRecord {
   /** When a reconciler proved the session gone or bound; `null` = still open. */
   resolvedAt: Date | null;
   /**
-   * Whether an ambiguous create request for this id could still commit. True
-   * for a fresh intent (and all legacy intents); false once the exact id has
-   * been observed present, or when the row is an orphan. A bare 404 never
-   * clears it: absence at lookup time is not proof that a lost request cannot
-   * still complete.
+   * Whether a create request for this id may still be outstanding: its
+   * response was lost and nothing has proven it can no longer commit.
+   *
+   * Set by the pre-create intent and re-armed on every create attempt. It is
+   * cleared only by a create path that can definitively rule out a duplicate
+   * attempt, by settlement (the session is bound to the conversation), or by
+   * the reconciler's bounded absence release — never by observing the id
+   * present. Presence proves the session exists at that instant, not that every
+   * request TBAi submitted for it has finished; a later removal can free the id
+   * while one of those requests is still in flight.
    */
   lateCreateRisk: boolean;
-  /** First positive 404 seen for a risk-bearing intent; `null` otherwise. */
+  /**
+   * Start of the CURRENT continuous-absence epoch, or `null` when no absence is
+   * being tracked. A presence observation or a confirmed removal ends the
+   * epoch (sets this to `null`), so the next 404 starts a fresh one and a stale
+   * timestamp can never release a row.
+   */
   firstAbsentAt: Date | null;
   /** Last probe completed by the reconciler; `null` until one runs. */
   lastCheckedAt: Date | null;
@@ -165,9 +175,13 @@ export const opencodeOrphanService = {
    * (the first failure is the one that opened the record). A resolved row is
    * never resurrected: resolution is terminal.
    *
-   * A recorded orphan is a session that was OBSERVED to exist, so it is no
-   * longer a late-create risk: any duplicate create of the same id resolves to
-   * that same session.
+   * An orphan's session was OBSERVED to exist. That does not by itself prove
+   * that every create request for the id finished, so the caller states what it
+   * knows through `lateCreateRisk`: true when an earlier attempt's response was
+   * lost and may still commit (the retried-create path), false when the create
+   * path can rule that out. OMITTING it preserves an existing risk on
+   * promotion and defaults a fresh orphan to risk-free, so an incomplete caller
+   * can only be over-cautious, never unsafe.
    *
    * @returns True when the record is (still) open after the write, false
    *   when the pair was already resolved.
@@ -178,14 +192,19 @@ export const opencodeOrphanService = {
     locationDirectory?: string;
     persistErrorCategory?: ErrorCategory;
     cleanupErrorCategory?: ErrorCategory;
+    lateCreateRisk?: boolean;
   }): Promise<boolean> {
     const now = Date.now();
+    // `null` means "the caller said nothing": keep whatever the row already
+    // knows (an intent's risk survives promotion), and start a new orphan
+    // risk-free. An explicit boolean is authoritative.
+    const risk = input.lateCreateRisk === undefined ? null : input.lateCreateRisk ? 1 : 0;
     const result = db.run(
       `INSERT INTO opencode_session_orphans
          (conversation_id, session_id, first_seen_at, last_seen_at, phase,
           location_directory, persist_error_category, cleanup_error_category,
           late_create_risk, first_absent_at)
-       VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?, 0, NULL)
+       VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?, COALESCE(?, 0), NULL)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
          phase = 'orphan',
@@ -201,7 +220,7 @@ export const opencodeOrphanService = {
            opencode_session_orphans.cleanup_error_category,
            excluded.cleanup_error_category
          ),
-         late_create_risk = 0,
+         late_create_risk = COALESCE(?, opencode_session_orphans.late_create_risk),
          first_absent_at = NULL
        WHERE opencode_session_orphans.resolved_at IS NULL`,
       [
@@ -212,6 +231,8 @@ export const opencodeOrphanService = {
         input.locationDirectory ?? null,
         input.persistErrorCategory ?? null,
         input.cleanupErrorCategory ?? null,
+        risk,
+        risk,
       ],
     );
     return result.changes > 0;
@@ -220,11 +241,16 @@ export const opencodeOrphanService = {
   /**
    * Records the outcome of one reconciler probe against the remote session.
    *
-   * `present` proves the id exists, so a duplicate create can only resolve to
-   * it: the late-create risk is cleared. `absent` is a 404, which proves
-   * absence only at lookup time and therefore never clears that risk; it does
-   * stamp `first_absent_at` (once) so the reconciler can bound how long a
-   * risk-bearing intent is retained.
+   * `present` proves the id exists AT THAT INSTANT, which ends any continuous
+   * absence but does NOT prove that every create request TBAi submitted for the
+   * id has finished. The late-create risk therefore survives a presence
+   * observation: the reconciler may remove the session afterwards, and a
+   * request still in flight could then recreate the id.
+   *
+   * `absent` is a 404, which proves absence only at lookup time and never
+   * clears the risk. It stamps `first_absent_at` ONCE per absence epoch so the
+   * reconciler can bound retention; a presence or confirmed removal clears that
+   * stamp so the next 404 begins a new post-observation horizon.
    *
    * Always advances `last_checked_at`, which is what rotates an unsettleable
    * row behind rows that have not been examined.
@@ -241,7 +267,7 @@ export const opencodeOrphanService = {
       input.outcome === "present"
         ? db.run(
             `UPDATE opencode_session_orphans
-             SET late_create_risk = 0, first_absent_at = NULL, last_checked_at = ?
+             SET first_absent_at = NULL, last_checked_at = ?
              WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
             [input.at, input.conversationId, input.sessionId],
           )
