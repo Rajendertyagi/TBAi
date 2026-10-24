@@ -72,18 +72,18 @@ export interface OpenCodeOrphanRecord {
    *
    * Set by the pre-create intent and re-armed on every create attempt. It is
    * cleared only by a create path that can definitively rule out a duplicate
-   * attempt, by settlement (the session is bound to the conversation), or by
-   * the reconciler's bounded absence release — never by observing the id
-   * present. Presence proves the session exists at that instant, not that every
-   * request TBAi submitted for it has finished; a later removal can free the id
-   * while one of those requests is still in flight.
+   * attempt or by the reconciler's bounded absence release — never by observing
+   * the id present, and never by binding the session to the conversation.
+   * Presence proves existence at that instant; binding proves ownership. Neither
+   * proves every request for the id has finished, and a later removal frees the
+   * id for recreation.
    */
   lateCreateRisk: boolean;
   /**
    * Start of the CURRENT continuous-absence epoch, or `null` when no absence is
-   * being tracked. A presence observation or a confirmed removal ends the
-   * epoch (sets this to `null`), so the next 404 starts a fresh one and a stale
-   * timestamp can never release a row.
+   * being tracked. A presence observation, a successful binding, or a confirmed
+   * removal ends the epoch (sets this to `null`), so the next 404 starts a
+   * fresh one and a stale timestamp can never release a row.
    */
   firstAbsentAt: Date | null;
   /** Last probe completed by the reconciler; `null` until one runs. */
@@ -103,6 +103,26 @@ interface OrphanRow {
   late_create_risk: number | null;
   first_absent_at: number | null;
   last_checked_at: number | null;
+}
+
+/**
+ * Ends the current absence epoch and advances the rotation stamp without
+ * resolving the row.
+ *
+ * Presence, binding and a confirmed removal all invalidate prior absence
+ * without proving that an ambiguous create can no longer commit, so they share
+ * this write: the next 404 starts a fresh horizon, and the row rotates behind
+ * ones that have not been examined.
+ */
+function endAbsenceEpoch(conversationId: string, sessionId: string, at: number): boolean {
+  return (
+    db.run(
+      `UPDATE opencode_session_orphans
+         SET first_absent_at = NULL, last_checked_at = ?
+       WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+      [at, conversationId, sessionId],
+    ).changes > 0
+  );
 }
 
 function mapOrphanRow(row: OrphanRow): OpenCodeOrphanRecord {
@@ -263,21 +283,71 @@ export const opencodeOrphanService = {
     outcome: "present" | "absent";
     at: number;
   }): Promise<boolean> {
-    const result =
-      input.outcome === "present"
-        ? db.run(
-            `UPDATE opencode_session_orphans
-             SET first_absent_at = NULL, last_checked_at = ?
-             WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
-            [input.at, input.conversationId, input.sessionId],
-          )
-        : db.run(
-            `UPDATE opencode_session_orphans
-             SET first_absent_at = COALESCE(first_absent_at, ?), last_checked_at = ?
-             WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
-            [input.at, input.at, input.conversationId, input.sessionId],
-          );
+    if (input.outcome === "present") {
+      return endAbsenceEpoch(input.conversationId, input.sessionId, input.at);
+    }
+    const result = db.run(
+      `UPDATE opencode_session_orphans
+       SET first_absent_at = COALESCE(first_absent_at, ?), last_checked_at = ?
+       WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+      [input.at, input.at, input.conversationId, input.sessionId],
+    );
     return result.changes > 0;
+  },
+
+  /**
+   * Ends the current absence epoch and advances `last_checked_at` on an open
+   * row, WITHOUT resolving or deleting it.
+   *
+   * Used when the session becomes bound: binding establishes ownership, not
+   * that every earlier create request for the id has finished. The durable
+   * risk therefore survives, and the touch keeps the row rotating so a bound
+   * backlog cannot starve unexamined entries.
+   *
+   * @returns Whether an open row was touched.
+   */
+  async touchOrphanedSession(
+    conversationId: string,
+    sessionId: string,
+    at: number = Date.now(),
+  ): Promise<boolean> {
+    return endAbsenceEpoch(conversationId, sessionId, at);
+  },
+
+  /**
+   * Settles the journal after the bound remote session was successfully
+   * removed.
+   *
+   * A risk-free create intent is released: nothing can recreate the id. A
+   * risk-bearing row is preserved and its absence epoch ended, because removal
+   * frees the id and an outstanding create may still commit and recreate it;
+   * the next 404 must start a fresh post-removal horizon. Any other row (an
+   * orphan, resolved or not) is left as it was.
+   *
+   * @returns `released` (risk-free intent deleted), `retained` (risk-bearing
+   *   row touched) or `absent` (no matching open row).
+   */
+  async settleTerminatedSession(input: {
+    conversationId: string;
+    sessionId: string;
+    at: number;
+  }): Promise<"released" | "retained" | "absent"> {
+    const released = db.run(
+      `DELETE FROM opencode_session_orphans
+       WHERE conversation_id = ? AND session_id = ?
+         AND phase = 'intent' AND late_create_risk = 0`,
+      [input.conversationId, input.sessionId],
+    ).changes;
+    if (released > 0) return "released";
+
+    const retained = db.run(
+      `UPDATE opencode_session_orphans
+         SET first_absent_at = NULL, last_checked_at = ?
+       WHERE conversation_id = ? AND session_id = ?
+         AND resolved_at IS NULL AND late_create_risk = 1`,
+      [input.at, input.conversationId, input.sessionId],
+    ).changes;
+    return retained > 0 ? "retained" : "absent";
   },
 
   /**

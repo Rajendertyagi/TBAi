@@ -35,7 +35,9 @@ import {
  *     window below is defense in depth, not the guarantee: a slow create can
  *     outlive any fixed window.
  *  2. **A conversation that now points at the session is authoritative.** The
- *     row is cleared and the session is NEVER deleted.
+ *     session is NEVER deleted. A risk-free row is cleared; a risk-bearing row
+ *     is preserved and touched, because binding proves ownership, not that an
+ *     earlier create request has finished.
  *  3. A row younger than the grace window is left alone.
  *  4. Absence must be positive (a 404). A lookup that fails for any other
  *     reason leaves the row unresolved for a later pass.
@@ -114,6 +116,12 @@ export interface OpenCodeOrphanReconcilerDeps {
     at: number;
   }): Promise<boolean>;
   /**
+   * Ends the current absence epoch and advances rotation on an open row
+   * WITHOUT resolving it. Used for a bound risk-bearing row, which must be
+   * preserved but must not starve unexamined entries.
+   */
+  touch(conversationId: string, sessionId: string, at: number): Promise<boolean>;
+  /**
    * True while this process is creating/binding the exact session. Such a row
    * must never be acted on by a background pass.
    */
@@ -134,8 +142,14 @@ export interface OpenCodeOrphanReconcileReport {
   deferred: number;
   /** Rows skipped because this process is still creating/binding them. */
   inflight: number;
-  /** Rows cleared because the conversation now points at the session. */
+  /** Risk-free rows cleared because the conversation points at the session. */
   bound: number;
+  /**
+   * Risk-bearing rows kept because the conversation is bound: binding proves
+   * ownership, not that an earlier create request has finished. The row was
+   * touched so it rotates behind unexamined entries.
+   */
+  retainedBound: number;
   /** Rows cleared because the remote session is positively absent. */
   absent: number;
   /** Rows cleared because their remote session was removed and confirmed gone. */
@@ -243,6 +257,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
     deferred: 0,
     inflight: 0,
     bound: 0,
+    retainedBound: 0,
     absent: 0,
     removed: 0,
     retainedAfterRemoval: 0,
@@ -301,6 +316,35 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         continue;
       }
       if (conversation?.opencodeSessionId === record.sessionId) {
+        if (isLateCreateRisk(record)) {
+          // Binding is ownership, not terminality. Never remove the session and
+          // never discard the risk-bearing row; touch it so a bound backlog
+          // rotates behind entries nobody has examined.
+          try {
+            const touched = await reconcilerDeps.touch(
+              record.conversationId,
+              record.sessionId,
+              now(),
+            );
+            if (!touched) {
+              report.unresolved += 1;
+              logger.warn("opencode", "opencode.orphan_reconcile_bound_risk_touch_missed", {
+                conversationId: record.conversationId,
+                phase: record.phase,
+              });
+              continue;
+            }
+            report.retainedBound += 1;
+          } catch (error) {
+            report.unresolved += 1;
+            logger.warn("opencode", "opencode.orphan_reconcile_bound_risk_touch_failed", {
+              conversationId: record.conversationId,
+              phase: record.phase,
+              ...classifyError(error),
+            });
+          }
+          continue;
+        }
         try {
           await clearRow(record, reconcilerDeps);
           report.bound += 1;
@@ -530,6 +574,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
       report.scanned > 0 ||
       report.deferred > 0 ||
       report.inflight > 0 ||
+      report.retainedBound > 0 ||
       report.removed > 0 ||
       report.retainedAfterRemoval > 0 ||
       report.unresolved > 0
@@ -540,6 +585,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         deferred: report.deferred,
         inflight: report.inflight,
         bound: report.bound,
+        retainedBound: report.retainedBound,
         absent: report.absent,
         removed: report.removed,
         retainedAfterRemoval: report.retainedAfterRemoval,
@@ -628,6 +674,8 @@ export const openCodeOrphanReconcilerDeps: OpenCodeOrphanReconcilerDeps = {
   deleteIntent: (conversationId, sessionId) =>
     opencodeOrphanService.deleteCreateIntent(conversationId, sessionId),
   recordProbe: (input) => opencodeOrphanService.recordProbe(input),
+  touch: (conversationId, sessionId, at) =>
+    opencodeOrphanService.touchOrphanedSession(conversationId, sessionId, at),
   isCreateInFlight: isOpenCodeSessionCreateInFlight,
   getRunningBaseUrl: async () =>
     openCodeServerManager.isRunning() ? openCodeServerManager.ensureBaseUrl() : null,

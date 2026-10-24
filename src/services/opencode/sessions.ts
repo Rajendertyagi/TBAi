@@ -501,6 +501,43 @@ async function discardCreateIntent(conversationId: string, sessionId: string): P
 }
 
 /**
+ * Settles the journal after a successful pointer write.
+ *
+ * A single-attempt create has no request left that could recreate the id, so
+ * its intent is released. A create that was RETRIED may still have the first
+ * request in flight: binding proves ownership, not that the request finished.
+ * The risk-bearing row is therefore KEPT, and the touch ends any absence epoch
+ * so the next 404 starts a fresh one. A failed touch deletes nothing, so the
+ * obligation survives even when the journal write does not.
+ */
+async function settleBoundIntent(
+  conversationId: string,
+  sessionId: string,
+  duplicateCreatePossible: boolean,
+): Promise<void> {
+  if (!duplicateCreatePossible) {
+    await discardCreateIntent(conversationId, sessionId);
+    return;
+  }
+  try {
+    const touched = await opencodeOrphanService.touchOrphanedSession(
+      conversationId,
+      sessionId,
+      Date.now(),
+    );
+    logger.warn("opencode", "opencode.session_bound_risk_retained", {
+      conversationId,
+      touched,
+    });
+  } catch (error) {
+    logger.error("opencode", "opencode.session_bound_risk_touch_failed", {
+      conversationId,
+      ...classifyError(error),
+    });
+  }
+}
+
+/**
  * Records one unresolved orphan in the durable journal. The journal is the
  * ONLY log-bearing record that can name the session id: the structured log
  * redacts `sessionId`-shaped fields by policy, and an in-memory buffer is not
@@ -729,9 +766,9 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     // the session orphaned with no handle, and must never report success.
     try {
       await conversationService.update(conversationId, { opencodeSessionId: sessionId });
-      // Bound. The intent has served its purpose. A failure to delete it is
-      // harmless: the reconciler re-proves the binding before acting.
-      await discardCreateIntent(conversationId, sessionId);
+      // Bound. A single-attempt intent has served its purpose; a retried one
+      // keeps its risk because the first request may still commit.
+      await settleBoundIntent(conversationId, sessionId, duplicateCreatePossible);
     } catch (persistError) {
       // A thrown update is not proof the pointer is absent — it may have
       // committed before a later step failed. Verify before acting.
@@ -740,7 +777,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
         // The binding IS durable even though the write call rejected. The
         // session is TBAi's; keep it, return the established binding, and
         // surface the write failure without treating it as a session loss.
-        await discardCreateIntent(conversationId, sessionId);
+        await settleBoundIntent(conversationId, sessionId, duplicateCreatePossible);
         logger.warn("opencode", "opencode.session_persist_recovered", {
           conversationId,
           sessionId,
@@ -1121,13 +1158,29 @@ export async function terminateOpenCodeSession(
     });
     return { terminated: false, reason: "unreachable" };
   }
+  // The session is gone, but an outstanding create may still recreate the id.
+  // A risk-free intent is released; a risk-bearing row is kept, and its
+  // absence epoch is reset so the next 404 starts a fresh post-removal
+  // horizon. A journal failure deletes nothing, so the obligation survives;
+  // the pointer still reflects the remote state and is cleared either way.
+  let journal: "released" | "retained" | "absent" | "failed" = "failed";
+  try {
+    journal = await opencodeOrphanService.settleTerminatedSession({
+      conversationId,
+      sessionId,
+      at: Date.now(),
+    });
+  } catch (error) {
+    logger.error("opencode", "opencode.session_terminate_journal_failed", {
+      conversationId,
+      ...classifyError(error),
+    });
+  }
   await conversationService.update(conversationId, { opencodeSessionId: null });
-  // A crash-interrupted create could have left an intent for this same id;
-  // the session is now gone, so the intent has nothing left to recover.
-  await discardCreateIntent(conversationId, sessionId);
   logger.info("opencode", "opencode.session_terminate", {
     conversationId,
     sessionId,
+    journal,
   });
   return { terminated: true };
 }

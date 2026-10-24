@@ -74,6 +74,16 @@ let intentRecords: Array<{
   locationDirectory?: string;
 }> = [];
 let deletedIntents: Array<{ conversationId: string; sessionId: string }> = [];
+/** Durable risk rows kept (and their absence epoch ended) after binding. */
+let touchedIntents: Array<{ conversationId: string; sessionId: string; at: number }> = [];
+let touchImpl: (conversationId: string, sessionId: string, at: number) => Promise<boolean>;
+/** Journal settlements after a confirmed termination. */
+let settledSessions: Array<{ conversationId: string; sessionId: string; at: number }> = [];
+let settleImpl: (input: {
+  conversationId: string;
+  sessionId: string;
+  at: number;
+}) => Promise<"released" | "retained" | "absent">;
 let orphanRecords: Array<{
   conversationId: string;
   sessionId: string;
@@ -145,6 +155,24 @@ mock.module("@/services/storage/opencodeSessionOrphans", () => ({
       orphanRecords.push(input);
       return orphanRecordImpl(input);
     },
+    touchOrphanedSession: async (
+      conversationId: string,
+      sessionId: string,
+      at: number,
+    ): Promise<boolean> => {
+      steps.push("touch-intent");
+      touchedIntents.push({ conversationId, sessionId, at });
+      return touchImpl(conversationId, sessionId, at);
+    },
+    settleTerminatedSession: async (input: {
+      conversationId: string;
+      sessionId: string;
+      at: number;
+    }): Promise<"released" | "retained" | "absent"> => {
+      steps.push("settle-session");
+      settledSessions.push(input);
+      return settleImpl(input);
+    },
   },
 }));
 
@@ -209,6 +237,8 @@ beforeEach(() => {
   updates = [];
   intentRecords = [];
   deletedIntents = [];
+  touchedIntents = [];
+  settledSessions = [];
   orphanRecords = [];
   storageGetCallCount = 0;
   conversation = { engine: "opencode", opencodeSessionId: LIVE_ID };
@@ -230,6 +260,8 @@ beforeEach(() => {
   intentRecordImpl = async () => true;
   intentDeleteImpl = async () => true;
   orphanRecordImpl = async () => true;
+  touchImpl = async () => true;
+  settleImpl = async () => "absent";
   verifyFailsAfterEntryRead = null;
 });
 
@@ -248,9 +280,48 @@ describe("terminateOpenCodeSession — V2 call mapping", () => {
   it("clears the persisted pointer after a successful termination", async () => {
     await terminateOpenCodeSession("conv-1");
     expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: null } }]);
-    // A crash-interrupted create may have left an intent for the same id; it
-    // has nothing left to recover once the session is gone.
-    expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: LIVE_ID }]);
+    // The journal is SETTLED, never deleted outright: a risk-bearing row must
+    // survive so a lost create request that recreates the id stays recoverable.
+    expect(settledSessions).toEqual([
+      { conversationId: "conv-1", sessionId: LIVE_ID, at: expect.any(Number) },
+    ]);
+    expect(deletedIntents).toEqual([]);
+  });
+
+  it("retains a risk-bearing journal row after a successful termination", async () => {
+    settleImpl = async () => "retained";
+
+    const result = await terminateOpenCodeSession("conv-1");
+
+    expect(result).toEqual({ terminated: true });
+    expect(settledSessions).toHaveLength(1);
+    expect(deletedIntents).toEqual([]);
+    // The remote session is gone, so the pointer still reflects reality.
+    expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: null } }]);
+  });
+
+  it("releases a risk-free intent through settlement, never by an unconditional delete", async () => {
+    settleImpl = async () => "released";
+
+    const result = await terminateOpenCodeSession("conv-1");
+
+    expect(result).toEqual({ terminated: true });
+    expect(settledSessions).toHaveLength(1);
+    expect(deletedIntents).toEqual([]);
+  });
+
+  it("deletes nothing when settlement fails, and still clears the pointer", async () => {
+    settleImpl = async () => {
+      throw new Error("database is closed");
+    };
+
+    const result = await terminateOpenCodeSession("conv-1");
+
+    // The remote removal was confirmed, so `terminated` is unchanged; the
+    // journal failure fails CLOSED (no delete) and is logged.
+    expect(result).toEqual({ terminated: true });
+    expect(deletedIntents).toEqual([]);
+    expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: null } }]);
   });
 
   it("D. stays best-effort: a failing interrupt still lets remove run", async () => {
@@ -273,8 +344,11 @@ describe("terminateOpenCodeSession — V2 call mapping", () => {
     const result = await terminateOpenCodeSession("conv-1");
     expect(result.terminated).toBe(false);
     expect(result.reason).toBe("remote-removal-failed");
-    // The pointer is NOT cleared.
+    // The pointer is NOT cleared and the journal obligation is NOT settled:
+    // the remote session may still be live.
     expect(updates).toEqual([]);
+    expect(settledSessions).toEqual([]);
+    expect(deletedIntents).toEqual([]);
   });
 
   it("L2: a failing remove keeps the pointer, but a SUCCESSFUL one clears it", async () => {
@@ -815,7 +889,7 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
     expect(deletedIntents).toEqual([]);
   });
 
-  it("I1. adopts the session its SAME-id retry creates", async () => {
+  it("I1. adopts the SAME-id retry and keeps the create risk across a successful bind", async () => {
     noPointerConversation();
     let attempts = 0;
     createImpl = async (args) => {
@@ -844,7 +918,70 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       `create:${SUBMITTED_DIRECTORY}`,
     ]);
     expect(conversation?.opencodeSessionId).toBe(id);
-    expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: id }]);
+    // The FIRST attempt's outcome is still unknown and may commit later. A
+    // successful pointer write establishes ownership, not terminality, so the
+    // risk-bearing intent must survive and its absence epoch must end.
+    expect(deletedIntents).toEqual([]);
+    expect(touchedIntents.length).toBe(1);
+    expect(touchedIntents[0]).toMatchObject({ conversationId: "conv-1", sessionId: id });
+  });
+
+  it("I1b. keeps the retried-create risk when the bound-row touch fails", async () => {
+    noPointerConversation();
+    let attempts = 0;
+    createImpl = async (args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ClientError("Transport", { cause: new Error("lost response") });
+      }
+      return { id: args.id, location: { directory: SERVER_RECORDED_DIRECTORY } };
+    };
+    getImpl = async (args) => {
+      throw sessionNotFound(args.sessionID);
+    };
+    touchImpl = async () => {
+      throw new Error("database is closed");
+    };
+
+    const binding = await ensureOpenCodeSession("conv-1");
+
+    // Binding succeeded and is reported; the touch failure must not turn into
+    // a delete, because the intent is the only durable record of the risk.
+    expect(binding.sessionId).toBe(createdId());
+    expect(conversation?.opencodeSessionId).toBe(createdId());
+    expect(touchedIntents.length).toBe(1);
+    expect(deletedIntents).toEqual([]);
+  });
+
+  it("I1c. keeps the retried-create risk when the pointer write throws but is confirmed bound", async () => {
+    noPointerConversation();
+    let attempts = 0;
+    createImpl = async (args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ClientError("Transport", { cause: new Error("lost response") });
+      }
+      return { id: args.id, location: { directory: SERVER_RECORDED_DIRECTORY } };
+    };
+    getImpl = async (args) => {
+      throw sessionNotFound(args.sessionID);
+    };
+    // The UPDATE landed, but its acknowledgement was lost.
+    updateImpl = async (_id, patch) => {
+      if (conversation) conversation = { ...conversation, ...patch };
+      throw new Error("commit acknowledgement lost");
+    };
+
+    const binding = await ensureOpenCodeSession("conv-1");
+    const id = createdId();
+
+    expect(binding.sessionId).toBe(id);
+    expect(conversation?.opencodeSessionId).toBe(id);
+    // The verification path reaches the same settlement rule: keep, do not
+    // delete, because the first create may still commit.
+    expect(touchedIntents.length).toBe(1);
+    expect(touchedIntents[0]).toMatchObject({ conversationId: "conv-1", sessionId: id });
+    expect(deletedIntents).toEqual([]);
   });
 
   it("I2. adopts the original request when it commits after the retry failed", async () => {
@@ -873,7 +1010,11 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       `get:${id}`,
     ]);
     expect(orphanRecords).toEqual([]);
-    expect(deletedIntents).toEqual([{ conversationId: "conv-1", sessionId: id }]);
+    // Either attempt may have produced the session: the retry failed, but the
+    // original request is not provably finished, so the risk survives binding.
+    expect(deletedIntents).toEqual([]);
+    expect(touchedIntents.length).toBe(1);
+    expect(touchedIntents[0]).toMatchObject({ conversationId: "conv-1", sessionId: id });
   });
 
   it("I3. deletes the intent only on a DEFINITIVE create rejection, without probing", async () => {

@@ -7431,21 +7431,24 @@ rotates behind rows nobody has examined.
 Late-create tracking is part of the row, not an in-memory flag:
 
 - `late_create_risk` starts at 1 (a create is about to be issued) and is
-  **never cleared by observing the id present**. Presence proves only that the
-  session existed at that instant; it says nothing about whether every create
-  request already submitted for the id has finished. The flag is cleared only
-  when the row is definitively settled (the conversation is bound to the
-  session) or released by the bounded absence policy. Promoting `intent →
-  orphan` **preserves an existing risk by default**; only a create path that
-  can rule out an outstanding duplicate writes `lateCreateRisk: false`, so an
-  incomplete caller can only be over-cautious, never optimistic. A repeated
-  create intent re-arms it.
+  **never cleared by observing the id present, and never by binding the session
+  to the conversation**. Presence proves only that the session existed at that
+  instant, and binding proves ownership; neither says whether every create
+  request already submitted for the id has finished, and a later termination
+  frees the id for recreation. The flag is cleared only by a create path that
+  can definitively rule out an outstanding duplicate, or by the bounded absence
+  release. Promoting `intent → orphan` **preserves an existing risk by
+  default**; only a create path that can rule out an outstanding duplicate
+  writes `lateCreateRisk: false`, so an incomplete caller can only be
+  over-cautious, never optimistic. A repeated create intent re-arms it.
 - `first_absent_at` is the start of the **current continuous-absence epoch**,
-  stamped once per epoch. A presence observation ends the epoch (`NULL`), and a
-  confirmed removal also ends it (`NULL`) — because removal frees the id for
-  recreation, so a timestamp taken before the removal must never be used to
-  release the row. The next positive 404 starts a **new** horizon.
-- `last_checked_at` records the last probe, for rotation.
+  stamped once per epoch. A presence observation ends the epoch (`NULL`), a
+  successful **binding** ends it, and a confirmed removal also ends it (`NULL`)
+  — because removal frees the id for recreation, so a timestamp taken before
+  the removal must never be used to release the row. The next positive 404
+  starts a **new** horizon.
+- `last_checked_at` records the last probe **or the last bind/termination
+  touch**, for rotation.
 
 **Presence is not terminality, and removal is not settlement.** An earlier
 version cleared `late_create_risk` when the id was observed present, and the
@@ -7465,11 +7468,57 @@ converging. The current design keeps the obligation instead:
    ownership, and applies the same rules again: never remove a bound session,
    confirm the removal, keep the row, restart the horizon.
 3. The row is released only after a continuous post-removal absence epoch
-   reaches the 24h horizon, or when the conversation is bound. A stale absence
-   timestamp from before a presence or a confirmed removal can never release it.
+   reaches the 24h horizon. A stale absence timestamp from before a presence, a
+   binding, or a confirmed removal can never release it.
 4. Risk-free rows (a create path that ruled out an outstanding duplicate) keep
    the previous behaviour: a confirmed removal settles them, because no request
    can recreate the id.
+
+**Binding and termination are ownership events, not settlements.** An earlier
+version deleted the intent unconditionally on a successful pointer write, and
+`terminateOpenCodeSession` deleted it whenever `remove()` resolved. Both left
+the same untracked-recreation window: the risk-bearing intent was the only
+durable record of a first create whose response was lost, and the first request
+can commit after the retry was bound and the session was later terminated. The
+current rules:
+
+- **Successful bind.** A create that was never retried has no outstanding
+  request, so its intent is released as before. A create that was retried
+  (`duplicateCreatePossible`) **keeps** its risk-bearing row; binding only
+  establishes ownership. The bind writes a *touch* (`first_absent_at = NULL`,
+  `last_checked_at = now`) rather than deleting. If that touch fails, the row is
+  left untouched — the obligation survives a journal outage, and the failure is
+  logged (`opencode.session_bound_risk_touch_failed`). The same rule applies on
+  the verification-recovered path (the pointer write threw but a re-read
+  confirmed the binding).
+- **Bound rows and the reconciler.** A conversation that points at the session
+  is still authoritative for the *session*: it is never deleted. But the row is
+  no longer cleared just because the conversation points at it. A risk-free row
+  is cleared as before; a risk-bearing row is **preserved and touched**
+  (`retainedBound` in the pass report), so a bound backlog rotates behind
+  unexamined entries instead of starving them. A failed touch leaves the row
+  open and reports it unresolved.
+- **Successful termination.** After the remote removal is confirmed, the journal
+  is *settled* (`settleTerminatedSession`), never deleted unconditionally. A
+  risk-free intent is released (established behaviour); a risk-bearing row —
+  intent or orphan — is kept, and its absence epoch is reset so the next 404
+  starts a fresh post-removal horizon. The pointer is still cleared, because the
+  remote session is gone. A settlement failure deletes nothing and still clears
+  the pointer: the remote state is accurate, and the durable obligation survives.
+  The meaning of `terminated` is unchanged.
+- **Bounded fairness.** Both the bind touch and the termination settlement
+  advance `last_checked_at`, so the existing `COALESCE(last_checked_at,
+  first_seen_at)` ordering rotates permanent rows behind ones nobody has
+  examined. No row can starve another.
+- **No schema change.** `late_create_risk`, `first_absent_at` and
+  `last_checked_at` carry the whole correction; the table shape is unchanged.
+
+The residual sequence this closes: ambiguous create → 404 → same-id retry
+succeeds → pointer written → (previously) intent deleted → termination removes
+the session → the first create commits and recreates it with no durable record.
+Now the row survives the bind, survives termination, detects the recreation on
+the next pass, removes it again, retains the row, and starts a fresh absence
+horizon after the following 404.
 
 The alternative — never removing a risk-bearing session — was rejected. It
 leaves permanent remote residue, and at horizon release it would leave the same
@@ -7481,8 +7530,10 @@ boot and then on an interval. In order: (1) a row whose create is still in
 flight **in this process** is untouchable — the create path registers the
 `(conversation, session)` pair from the intent write through persistence and
 compensating cleanup, and a slow create can outlive any fixed window; (2) a
-conversation that points at the session is authoritative — clear the row, never
-delete; (3) rows younger than a grace window are deferred as defense in depth;
+conversation that points at the session is authoritative for the **session** —
+never delete it — and a risk-free row is cleared, while a risk-bearing row is
+preserved and touched so it rotates fairly; (3) rows younger than a grace window
+are deferred as defense in depth;
 (4) a running managed server is required — the reconciler never starts one,
 because boot must not depend on OpenCode; (5) absence must be a positive 404, and
 on a risk-bearing row the 404 only stamps `first_absent_at`: the row is retained
@@ -7551,11 +7602,13 @@ make the failure distinguishable server-side.
   proves existence at that instant, not that every submitted create finished.
   The correction makes a confirmed removal **retain** the risk-bearing row and
   start a fresh post-removal absence epoch, so a recreation during that epoch is
-  detected and handled. It does **not** make recreation impossible: a create
-  that commits after a full 24h continuous post-removal absence epoch — or after
-  a risk-free row was settled — can still produce a session the journal no
-  longer names. That is a bounded best effort under an upstream API that exposes
-  no completion signal, not a mathematical guarantee.
+  detected and handled. Binding and termination likewise retain the row rather
+  than treating ownership (or a resolved `remove()`) as completion. It does
+  **not** make recreation impossible: a create that commits after a full 24h
+  continuous post-removal absence epoch — or after a risk-free row was settled —
+  can still produce a session the journal no longer names. That is a bounded
+  best effort under an upstream API that exposes no completion signal, not a
+  mathematical guarantee.
 - **The in-flight registry is process-local.** It closes the race with the
   reconciler inside this process (the only process that owns the managed server
   and the journal). A second TBAi process sharing the same database is outside
@@ -7563,30 +7616,46 @@ make the failure distinguishable server-side.
 - `terminateOpenCodeSession` still clears the pointer after a resolved
   `remove()` without a confirmation lookup (pre-existing behaviour, unchanged
   here; recorded as a separate finding rather than folded into RT-001).
+- **Conversation deletion is untouched (RT-011).** `DELETE /api/conversations/:id`
+  still calls `terminateOpenCodeSession` best-effort before deleting the row, but
+  that route is outside this correction's scope. Any defect in it — including
+  deletion racing an in-flight create — is tracked separately and is not claimed
+  fixed here.
 - The reconciler settles rows only while a managed server is running. Rows
   created while offline wait; that is intentional, not a lost obligation.
 
 **Evidence.** `tests/unit/opencode/sessions.test.ts` (fail-closed intent,
 definitive-vs-ambiguous create, same-id retry, adoption of a late commit, the
-create/persist window, retry-outstanding compensation keeps the intent, identity
-refusal, redaction),
+create/persist window, retry-outstanding compensation keeps the intent,
+retried create keeps the risk across a successful bind and across the
+verification-recovered path, a failed bind touch deletes nothing, termination
+settles instead of deleting, a settlement failure deletes nothing and still
+clears the pointer, identity refusal, redaction),
 `tests/unit/storage/opencodeSessionOrphans.test.ts` (real file-backed SQLite:
 idempotency, first-wins, promotion, concurrent burst, terminal resolution,
 risk preserved on promotion, risk never cleared by presence, epoch restart on
-the next 404, persisted-state read-back, rotation),
+the next 404, persisted-state read-back, rotation, `touchOrphanedSession`
+epoch-reset/rotation/no-reopen, and `settleTerminatedSession`
+released/retained/absent outcomes with idempotency),
 `tests/unit/opencode/orphanReconciler.test.ts` (ownership, in-flight skip,
 positive-404 retention, horizon expiry, probe recording, inconclusive-evidence
 refusal, grace/limit/lifecycle, and the presence-is-not-terminality suite:
 retention after confirmed removal, post-removal epoch start, stale-timestamp
 refusal, recreation handled again with a restarted horizon, unrecordable
-presence blocking removal, binding settles without remote work, restarted
-reconciler preserving risk and safe behavior),
+presence blocking removal, bound risk-bearing retention with a fair rotation
+and no remote work, stale bind epoch reset, touch-failure retention, restarted
+reconciler preserving risk and safe behavior), and
+`tests/unit/opencode/rt001RiskLifecycle.test.ts` (the full deterministic
+lifecycle over the REAL journal: ambiguous create → 404 → same-id retry →
+successful bind → bound reconciliation → termination → late recreation →
+re-removal → fresh 404 epoch → restart → bounded expiry),
 `tests/unit/routes/opencodeSessionIntent.test.ts` (HTTP 503, id-free body, no
 remote create) and
 `tests/integration/opencode/opencode-session-idempotency-runtime.test.ts`
 (opt-in real server: supplied-id echo, sequential/concurrent idempotency, no
-rebind, removal frees the id). The dangerous presence→remove→recreate
-interleaving is exercised through the reconciler's deterministic seams and a
-fake clock; the real-server suite proves the API properties it depends on but
-does not inject a delayed commit, so it does not reproduce the interleaving
-itself.
+rebind, removal frees the id). The dangerous
+bind/termination/presence→remove→recreate interleavings are exercised through
+the deterministic seams and a fake clock: the lifecycle test adds the id back to
+a fake server to stand in for an outstanding create. The real-server suite proves
+the API properties these rules depend on but does not inject a delayed commit,
+so it does not reproduce the interleaving itself.

@@ -70,7 +70,12 @@ type Captured = {
 };
 
 function runTodoSuite(): Captured {
-  const result = spawnSync("bun", ["test", "--todo", ...QUARANTINE_ROOTS], {
+  // `--isolate` is required, not incidental: these trees contain files that
+  // replace modules with `mock.module`, which is process-global. Without a
+  // fresh module registry per file, one file's replacements leak into the
+  // next and fail tests that never touched a mock. `bun run test` uses the
+  // same flag for the same reason (see tests/setup.ts).
+  const result = spawnSync("bun", ["test", "--isolate", "--todo", ...QUARANTINE_ROOTS], {
     cwd: REPO_ROOT,
     encoding: "utf8",
     env: { ...process.env, CI: "1" },

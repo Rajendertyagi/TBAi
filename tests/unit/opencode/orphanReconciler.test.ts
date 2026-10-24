@@ -79,6 +79,8 @@ function makeHarness(options: HarnessOptions = {}) {
     clearError: null as Error | null,
     /** Thrown by every probe-outcome write. */
     probeRecordError: null as Error | null,
+    /** Thrown by every bound-row touch. */
+    touchError: null as Error | null,
     /** `(conversation, session)` pairs this process is still creating. */
     inFlightKeys: new Set<string>(),
     listError: null as Error | null,
@@ -98,6 +100,7 @@ function makeHarness(options: HarnessOptions = {}) {
       outcome: "present" | "absent";
       at: number;
     }>,
+    touches: [] as Array<{ conversationId: string; sessionId: string; at: number }>,
     listLimits: [] as number[],
     conversationReads: 0,
   };
@@ -137,7 +140,19 @@ function makeHarness(options: HarnessOptions = {}) {
     listUnresolved: async (batchLimit) => {
       state.listLimits.push(batchLimit);
       if (state.listError) throw state.listError;
-      return rows.slice(0, batchLimit);
+      // Mirrors the real store's fairness ordering: least-recently-examined
+      // first, never-probed rows by first-seen. Without this the rotation
+      // assertions below would pass on insertion order alone.
+      const order = (row: OpenCodeOrphanRecord) => (row.lastCheckedAt ?? row.firstSeenAt).getTime();
+      return [...rows]
+        .sort(
+          (a, b) =>
+            order(a) - order(b) ||
+            a.firstSeenAt.getTime() - b.firstSeenAt.getTime() ||
+            a.conversationId.localeCompare(b.conversationId) ||
+            a.sessionId.localeCompare(b.sessionId),
+        )
+        .slice(0, batchLimit);
     },
     getConversation: async (id) => {
       state.conversationReads += 1;
@@ -171,6 +186,19 @@ function makeHarness(options: HarnessOptions = {}) {
       } else {
         row.firstAbsentAt ??= new Date(at);
       }
+      return true;
+    },
+    // Mirrors `touchOrphanedSession`: ends the absence epoch and advances the
+    // rotation stamp, never resolving the row or clearing its risk.
+    touch: async (conversationId, sessionId, at) => {
+      if (state.touchError) throw state.touchError;
+      state.touches.push({ conversationId, sessionId, at });
+      const row = rows.find(
+        (r) => r.conversationId === conversationId && r.sessionId === sessionId,
+      );
+      if (!row) return false;
+      row.firstAbsentAt = null;
+      row.lastCheckedAt = new Date(at);
       return true;
     },
     isCreateInFlight: (conversationId, sessionId) =>
@@ -514,7 +542,7 @@ describe("runOrphanReconciliationOnce — presence is not terminality", () => {
     expect(h.state.rows).toHaveLength(1);
   });
 
-  it("settles a risk-bearing intent by binding, without touching the remote", async () => {
+  it("keeps a risk-bearing intent whose conversation is bound, without touching the remote", async () => {
     const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
     h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
     h.state.remote.add("ses_orphan0001");
@@ -522,11 +550,113 @@ describe("runOrphanReconciliationOnce — presence is not terminality", () => {
 
     const report = await runOrphanReconciliationOnce();
 
-    expect(report).toMatchObject({ bound: 1, retainedAfterRemoval: 0, removed: 0 });
+    // Binding is ownership, not settlement. The row must survive with its
+    // risk, and the touch rotates it behind unexamined entries.
+    expect(report).toMatchObject({ bound: 0, retainedBound: 1, removed: 0, unresolved: 0 });
     expect(h.state.removeCalls).toHaveLength(0);
-    expect(h.state.clears).toEqual([
-      { kind: "intent", conversationId: "conv-1", sessionId: "ses_orphan0001" },
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+    expect(h.state.touches).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", at: NOW },
     ]);
+  });
+
+  it("leaves a bound risk-bearing row when the touch cannot be recorded", async () => {
+    const h = makeHarness({ rows: [record({ phase: "intent", lateCreateRisk: true })] });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    h.state.remote.add("ses_orphan0001");
+    h.state.touchError = new Error("database is closed");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ bound: 0, retainedBound: 0, unresolved: 1, removed: 0 });
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.clears).toEqual([]);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0]?.lateCreateRisk).toBe(true);
+  });
+
+  it("ends a stale absence epoch when the risk-bearing session becomes bound", async () => {
+    const h = makeHarness({
+      rows: [
+        record({
+          phase: "intent",
+          lateCreateRisk: true,
+          // Older than the horizon, but from an epoch that ended at binding.
+          firstAbsentAt: new Date(NOW - 100_000),
+        }),
+      ],
+    });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    start(h.deps, { absenceHorizonMs: 50_000 });
+
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedBound: 1 });
+    expect(h.state.rows[0]?.firstAbsentAt).toBeNull();
+
+    // The conversation is unbound, the session is gone, and the next 404 must
+    // start a fresh horizon rather than release on the pre-binding stamp.
+    h.state.conversations.delete("conv-1");
+    start(h.deps, { absenceHorizonMs: 50_000, now: () => NOW + 1_000 });
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ lateRisk: 1, expiredAbsent: 0, absent: 0 });
+    expect(h.state.rows[0]?.firstAbsentAt).toEqual(new Date(NOW + 1_000));
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("rotates a bound risk-bearing row so an unexamined row is not starved", async () => {
+    const h = makeHarness({
+      rows: [
+        record({
+          sessionId: "ses_bound0001",
+          phase: "intent",
+          lateCreateRisk: true,
+          firstSeenAt: new Date(NOW - 700_000),
+          lastSeenAt: new Date(NOW - 700_000),
+        }),
+        record({ sessionId: "ses_orphan0002" }),
+      ],
+    });
+    h.state.conversations.set("conv-1", { opencodeSessionId: "ses_bound0001" });
+    h.state.remote.add("ses_bound0001");
+    start(h.deps, { limit: 1 });
+
+    // Pass 1 picks the older bound risk row, keeps it, and touches it.
+    expect(await runOrphanReconciliationOnce()).toMatchObject({
+      scanned: 1,
+      retainedBound: 1,
+      deferred: 0,
+    });
+    expect(h.state.rows).toHaveLength(2);
+
+    // Pass 2 must now examine the row nobody has looked at, not the bound row.
+    const second = await runOrphanReconciliationOnce();
+    expect(second).toMatchObject({ scanned: 1, absent: 1 });
+    expect(h.state.rows.map((row) => row.sessionId)).toEqual(["ses_bound0001"]);
+    expect(h.state.touches).toHaveLength(1);
+  });
+
+  it("keeps a bound risk across a restarted reconciler", async () => {
+    const rows = [record({ phase: "intent", lateCreateRisk: true })];
+
+    const first = makeHarness({ rows });
+    first.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    start(first.deps);
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedBound: 1 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.lateCreateRisk).toBe(true);
+
+    // A restart keeps only the database and the conversation row.
+    const restarted = makeHarness({ rows });
+    restarted.state.conversations.set("conv-1", { opencodeSessionId: "ses_orphan0001" });
+    start(restarted.deps);
+    expect(await runOrphanReconciliationOnce()).toMatchObject({ retainedBound: 1 });
+    expect(restarted.state.clears).toEqual([]);
+    expect(restarted.state.removeCalls).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.lateCreateRisk).toBe(true);
   });
 
   it("keeps the risk and the safe behavior across a restarted reconciler", async () => {

@@ -36,14 +36,15 @@ import type { Database } from "bun:sqlite";
  *    recovery scope, not a secret.
  *  - `late_create_risk` says whether an AMBIGUOUS create request could still
  *    commit after the last observation. It starts at 1 (a create is about to
- *    be issued), becomes 0 once the exact id is observed present — at that
- *    point any duplicate create resolves to the same id and cannot produce an
- *    untracked session — and is never cleared by a bare 404. A 404 proves
- *    absence only at lookup time; the failed request may still complete.
- *  - `first_absent_at` is the first positive 404 seen for a risk-bearing
- *    intent. Together with the absence horizon in the reconciler it bounds how
- *    long such an intent is retained, because upstream exposes no terminality
- *    signal for a request whose response was lost.
+ *    be issued) and is never cleared by a bare 404, by observing the id
+ *    present, or by binding the session: none of those proves that an earlier
+ *    request has finished. Only a create path that can rule out a duplicate
+ *    attempt clears it, or the reconciler's bounded absence release does.
+ *  - `first_absent_at` is the start of the current continuous-absence epoch.
+ *    Presence, binding and a confirmed removal end it, so the next 404 starts a
+ *    fresh horizon. Together with the absence horizon in the reconciler it
+ *    bounds how long a risk-bearing row is retained, because upstream exposes
+ *    no terminality signal for a request whose response was lost.
  *  - `last_checked_at` rotates rows that cannot be settled (a risk-bearing
  *    intent that keeps answering 404) behind ones that have not been probed,
  *    so a bounded batch cannot starve a newer backlog.
