@@ -55,6 +55,38 @@ export class OpenCodeSessionMismatchError extends Error {
 }
 
 /**
+ * The remote session was created but its pointer could not be persisted
+ * (RT-001). Raised only after the compensating cleanup ran, so it always
+ * carries the outcome:
+ *
+ *  - `cleanup: "removed"` — the remote session was confirmed gone; TBAi left no
+ *    orphan. The operation still FAILS (the binding was never established).
+ *  - `cleanup: "unconfirmed"` — removal could not be confirmed, so a live remote
+ *    session may exist with no TBAi pointer. `sessionId` is preserved on the
+ *    error and recorded durably so the orphan is observable and recoverable.
+ *
+ * `cause` is the original persistence failure, so diagnosis is not lost.
+ */
+export class OpenCodeSessionPersistError extends Error {
+  readonly code = "OPENCODE_SESSION_PERSIST_FAILED";
+  constructor(
+    readonly conversationId: string,
+    readonly sessionId: string,
+    readonly cleanup: "removed" | "unconfirmed",
+    readonly cleanupError: unknown,
+    options: ErrorOptions,
+  ) {
+    super(
+      cleanup === "removed"
+        ? `OpenCode session ${sessionId} for conversation ${conversationId} was created but not persisted; the remote session was removed`
+        : `OpenCode session ${sessionId} for conversation ${conversationId} was created but not persisted, and remote removal could NOT be confirmed`,
+      options,
+    );
+    this.name = "OpenCodeSessionPersistError";
+  }
+}
+
+/**
  * A conversation's OpenCode session binding: the server-side session identity
  * plus the directory scope that identity is addressed by.
  *
@@ -219,6 +251,65 @@ export async function isOpenCodeSessionLive(
 }
 
 /**
+ * Whether the session pointer is actually on the conversation row.
+ *
+ * A thrown `conversationService.update` is not proof the pointer is absent: the
+ * UPDATE may have committed and a later step failed. This re-reads the row and
+ * answers the one question that decides between "recover" and "compensate".
+ * A read that itself fails is treated as NOT persisted — the conservative
+ * choice, because the cleanup path is safe to run against a session whose
+ * pointer may already exist (removal of a not-yet-used session is harmless).
+ *
+ * @returns True only when the row was read and carries this exact session id.
+ */
+async function sessionPointerPersisted(
+  conversationId: string,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const conversation = await conversationService.get(conversationId);
+    return conversation?.opencodeSessionId === sessionId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compensating removal of a remote session whose pointer was never persisted
+ * (RT-001). Confirms the outcome instead of assuming the call succeeded:
+ * `session.remove` is followed by a lookup, and a `session_not_found` from
+ * removal itself counts as already-gone.
+ *
+ * @returns `"removed"` only when the server positively no longer has the
+ *   session; `"unconfirmed"` when removal failed or the session is still there.
+ */
+async function removeUnpersistedSession(
+  client: OpenCodeClient,
+  sessionId: string,
+): Promise<{ outcome: "removed" | "unconfirmed"; error: unknown }> {
+  try {
+    await client.session.remove({ sessionID: sessionId });
+  } catch (error) {
+    const failure = toOpenCodeError(error);
+    // Already gone is success for this purpose: there is nothing to orphan.
+    if (failure.kind === "session_not_found" || failure.statusCode === SESSION_NOT_FOUND_STATUS) {
+      return { outcome: "removed", error: undefined };
+    }
+    return { outcome: "unconfirmed", error: failure };
+  }
+  try {
+    // Confirmation, not assumption: a resolved remove is only proof the call
+    // returned. The session must actually be gone from the server's record.
+    const stillThere = await fetchOpenCodeSession(client, sessionId);
+    return stillThere
+      ? { outcome: "unconfirmed", error: new Error("session still present after remove") }
+      : { outcome: "removed", error: undefined };
+  } catch (error) {
+    return { outcome: "unconfirmed", error };
+  }
+}
+
+/**
  * Ensures an OpenCode session exists for a conversation and returns its
  * **binding** — the session id plus the directory scope that id is addressed
  * by. Reuses the conversation's resolved workspace directory as the session
@@ -366,7 +457,45 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     throw new Error("OpenCode session create failed: response carried no session id");
   }
 
-  await conversationService.update(conversationId, { opencodeSessionId: sessionId });
+  // RT-001: the remote session exists from here on, and the pointer write is
+  // the only thing that binds it to TBAi. A failure here must never leave the
+  // session orphaned with no handle, and must never report success.
+  try {
+    await conversationService.update(conversationId, { opencodeSessionId: sessionId });
+  } catch (persistError) {
+    // A thrown update is not proof the pointer is absent — it may have
+    // committed before a later step failed. Re-read before compensating.
+    if (await sessionPointerPersisted(conversationId, sessionId)) {
+      logger.warn("opencode", "opencode.session_persist_recovered", {
+        conversationId,
+        sessionId,
+      });
+      return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+    }
+    const { outcome, error: cleanupError } = await removeUnpersistedSession(client, sessionId);
+    if (outcome === "removed") {
+      logger.warn("opencode", "opencode.session_persist_compensated", {
+        conversationId,
+        sessionId,
+        ...classifyError(persistError),
+      });
+    } else {
+      // Unconfirmed removal: a live remote session may exist with no pointer.
+      // `sessionId` is deliberately carried in `message` — the structured
+      // `sessionId` field is redacted by the logger, so a field-only record
+      // could not identify the orphan. This line is the durable record that
+      // makes it observable and recoverable; both errors are retained.
+      logger.error("opencode", "opencode.session_orphaned", {
+        conversationId,
+        message: `Unremoved OpenCode session ${sessionId} has no persisted pointer`,
+        persistError: classifyError(persistError),
+        cleanupError: classifyError(cleanupError),
+      });
+    }
+    throw new OpenCodeSessionPersistError(conversationId, sessionId, outcome, cleanupError, {
+      cause: persistError,
+    });
+  }
   logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
   return { sessionId, directory: createdDirectory, reusedExistingSession: false };
 }

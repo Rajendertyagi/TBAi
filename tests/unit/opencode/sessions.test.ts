@@ -35,6 +35,8 @@ let createImpl: (args: {
 }) => Promise<unknown>;
 let interruptImpl: () => Promise<unknown>;
 let removeImpl: () => Promise<unknown>;
+/** Storage seam: the pointer write. Defaults to succeeding and landing. */
+let updateImpl: (id: string, patch: Record<string, unknown>) => Promise<void>;
 
 const SUBMITTED_DIRECTORY = "D:\\ws\\chats\\conv-1";
 const CREATED_SESSION_ID = "ses_created00000000000000000000";
@@ -47,8 +49,9 @@ function sessionNotFound(sessionID: string): unknown {
 mock.module("@/services/storage", () => ({
   conversationService: {
     get: async () => conversation,
-    update: async (id: string, patch: unknown) => {
+    update: async (id: string, patch: Record<string, unknown>) => {
       updates.push({ id, patch });
+      await updateImpl(id, patch);
     },
   },
 }));
@@ -94,6 +97,8 @@ const { OpenCodeError } = await import("@/services/opencode/errors.ts");
 const { terminateOpenCodeSession, isOpenCodeSessionLive, ensureOpenCodeSession } = await import(
   "@/services/opencode/sessions.ts"
 );
+const { OpenCodeSessionPersistError } = await import("@/services/opencode/sessions.ts");
+const { logger } = await import("@/lib/logger.ts");
 
 (openCodeServerManager as unknown as { ensureBaseUrl: () => Promise<string> }).ensureBaseUrl =
   async () => "http://127.0.0.1:0";
@@ -114,6 +119,11 @@ beforeEach(() => {
   });
   interruptImpl = async () => ({ interrupted: true });
   removeImpl = async () => undefined;
+  // Default storage write succeeds AND lands on the row, mirroring the real
+  // store. A test that forces a failure overrides this.
+  updateImpl = async (_id, patch) => {
+    if (conversation) conversation = { ...conversation, ...patch };
+  };
 });
 
 describe("terminateOpenCodeSession — V2 call mapping", () => {
@@ -340,5 +350,142 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     });
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([{ id: "conv-1", patch: { opencodeSessionId: CREATED_SESSION_ID } }]);
+  });
+});
+
+/**
+ * RT-001 — the create→persist window. A successful remote create must never be
+ * followed by a persistence failure that silently loses TBAi's only handle to
+ * the remote session. These cases force `conversationService.update` to fail
+ * immediately after a real (mocked) remote create and assert the resulting
+ * state, not merely that an error surfaced.
+ */
+describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
+  /** A create-path conversation: no stored pointer, so `create` runs. */
+  function noPointerConversation(): void {
+    conversation = { engine: "opencode", opencodeSessionId: null };
+  }
+
+  it("A. persists the id and runs no compensating cleanup on success", async () => {
+    noPointerConversation();
+    const binding = await ensureOpenCodeSession("conv-1");
+
+    expect(binding).toEqual({
+      sessionId: CREATED_SESSION_ID,
+      directory: "D:\\ws\\server-recorded",
+      reusedExistingSession: false,
+    });
+    // The pointer is on the row, and the create was the ONLY remote call:
+    // no interrupt/remove ran, because nothing needed compensating.
+    expect(conversation?.opencodeSessionId).toBe(CREATED_SESSION_ID);
+    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
+  });
+
+  it("A2. treats a failed write whose pointer LANDED as success, with no cleanup", async () => {
+    noPointerConversation();
+    // The row is written, then the call still throws (e.g. a lost commit ack).
+    // The pointer is durable, so the binding is safely established.
+    updateImpl = async (_id, patch) => {
+      if (conversation) conversation = { ...conversation, ...patch };
+      throw new Error("commit acknowledgement lost");
+    };
+
+    const binding = await ensureOpenCodeSession("conv-1");
+    expect(binding.sessionId).toBe(CREATED_SESSION_ID);
+    expect(conversation?.opencodeSessionId).toBe(CREATED_SESSION_ID);
+    // No remote cleanup: the session is bound and must be kept.
+    expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
+  });
+
+  it("B. removes the exact remote session and rejects when persistence fails", async () => {
+    noPointerConversation();
+    updateImpl = async () => {
+      throw new Error("database is locked");
+    };
+    // Confirmation lookup: the session is gone after removal.
+    getImpl = async () => {
+      throw sessionNotFound(CREATED_SESSION_ID);
+    };
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
+    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
+    expect(failure.cleanup).toBe("removed");
+    expect(failure.sessionId).toBe(CREATED_SESSION_ID);
+    expect(failure.cause).toBeInstanceOf(Error);
+    // The compensating removal targeted THIS session id, and the outcome was
+    // confirmed by a lookup rather than assumed from the call returning.
+    expect(calls).toEqual([
+      `create:${SUBMITTED_DIRECTORY}`,
+      `remove:${CREATED_SESSION_ID}`,
+      `get:${CREATED_SESSION_ID}`,
+    ]);
+    // No successful binding was handed back, and the pointer was not written.
+    expect(conversation?.opencodeSessionId).toBeNull();
+  });
+
+  it("C. records the orphan durably and does NOT claim removal when cleanup fails", async () => {
+    noPointerConversation();
+    updateImpl = async () => {
+      throw new Error("database is locked");
+    };
+    removeImpl = async () => {
+      throw new ClientError("Transport", { cause: new Error("offline") });
+    };
+    const before = logger.lastSeq;
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OpenCodeSessionPersistError);
+    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
+    expect(failure.cleanup).toBe("unconfirmed");
+    // The id is preserved on the error and the message does not claim removal.
+    expect(failure.sessionId).toBe(CREATED_SESSION_ID);
+    expect(failure.message).toContain("could NOT be confirmed");
+    expect(failure.cleanupError).toBeDefined();
+
+    // The durable record: a log entry that still names the orphaned session.
+    // (The structured `sessionId` field is redacted, so the id rides in
+    // `message`; this asserts the record is actually actionable.)
+    const orphanRecords = logger
+      .getRecentEntries(before)
+      .filter((entry) => entry.event === "opencode.session_orphaned");
+    expect(orphanRecords.length).toBe(1);
+    expect(String(orphanRecords[0]!.message)).toContain(CREATED_SESSION_ID);
+    expect(orphanRecords[0]!.conversationId).toBe("conv-1");
+  });
+
+  it("C2. reports unconfirmed when remove resolves but the session still exists", async () => {
+    noPointerConversation();
+    updateImpl = async () => {
+      throw new Error("database is locked");
+    };
+    // `remove` returns without error, but the session is still on the server:
+    // a resolved call is not proof of removal.
+    removeImpl = async () => undefined;
+    getImpl = async () => ({ id: CREATED_SESSION_ID });
+
+    let caught: unknown;
+    try {
+      await ensureOpenCodeSession("conv-1");
+    } catch (error) {
+      caught = error;
+    }
+
+    const failure = caught as InstanceType<typeof OpenCodeSessionPersistError>;
+    expect(failure).toBeInstanceOf(OpenCodeSessionPersistError);
+    expect(failure.cleanup).toBe("unconfirmed");
+    expect(failure.sessionId).toBe(CREATED_SESSION_ID);
   });
 });
