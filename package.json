@@ -28,6 +28,7 @@
     "test:startup-rollback": "bun test tests/integration/core/startup-rollback.test.ts",
     "test:lifecycle-integration": "bun test tests/integration/core/lifecycle-integration.test.ts",
     "test:quarantine": "bun scripts/check-opencode-quarantine.ts",
+    "test:opencode-runtime": "bun scripts/run-opencode-runtime-suites.ts",
     "test:e2e": "bun scripts/run-e2e.ts",
     "gen:icon": "bun run scripts/gen-icon.ts"
   },

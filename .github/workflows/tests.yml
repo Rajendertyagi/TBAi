@@ -7,9 +7,11 @@ name: Verify
 # environment-dependent test can never block a release build, and a build never
 # waits on a suite it cannot act on.
 #
-# Two jobs, also independent of each other for the same reason:
-#   verify  typecheck, lint, backend suite, DOM contract suite (fast, hermetic)
-#   e2e     Playwright history specs (browser + spawned server, slower)
+# Jobs, all independent of each other for the same reason:
+#   verify            typecheck, lint, backend suite, DOM contract suite (fast, hermetic)
+#   opencode-runtime  the required real-binary OpenCode runtime suites (RT-007)
+#   e2e               Playwright history specs (browser + spawned server, slower)
+#   e2e-big-pickle    live acceptance spec; dispatch-only, because it needs credentials
 #
 # Runs on every push to main and every PR, so suite feedback arrives on the
 # code push rather than at release time.
@@ -248,6 +250,51 @@ jobs:
           $head = "test-output.log present=$exists bytes=$size"
           $tailBody = ((@($head) + $tail) -join [char]10) -replace '%','%25' -replace [char]13,'%0D' -replace [char]10,'%0A'
           Write-Output "::error title=Test log tail::$tailBody"
+
+  # RT-007: the real-binary OpenCode runtime suites, REQUIRED on every PR.
+  #
+  # `bun run test` collects these files but the harness self-skips them without
+  # TBAI_OPENCODE_RUNTIME_TESTS, and a skipped suite exits 0 - so before this
+  # job, "the runtime suites ran" was never actually asserted anywhere. This
+  # job runs the required seven against the pinned binary and fails if any
+  # suite is missing, fails, executes nothing, or skips a case. The script
+  # (`scripts/run-opencode-runtime-suites.ts`) owns that rule, including the
+  # classification of every suite file.
+  #
+  # Not in `verify`: ~38 s of real process spawning and ports, measured on
+  # windows-latest 2026-10-24 (run 40126225730). Keeping it separate means a
+  # runtime regression is attributable on its own and never delays the fast
+  # gates. Independent of `verify` and `e2e` - deliberately no `needs:`.
+  opencode-runtime:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      - name: Required real-binary runtime suites
+        run: bun run test:opencode-runtime
 
   # The Playwright E2E suite, as its own job.
   #

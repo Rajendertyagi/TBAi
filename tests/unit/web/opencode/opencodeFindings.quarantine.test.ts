@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "bun:test";
 import type { SessionMessagesResponse, V2Event } from "@opencode/client";
 import { AttemptSupersededError, createAttempt } from "@web/features/opencode/sync/attempt.ts";
+import { OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS } from "@web/features/opencode/config";
 import { createV2ThreadController } from "@web/features/opencode/v2ThreadController.ts";
 import {
   ASSISTANT_TOOL_MESSAGE,
@@ -326,22 +327,28 @@ describe("OpenCode V2 defect regression (quarantined)", () => {
 
   test("R-L4: a superseded attempt cannot resolve a readiness promise", async () => {
     const lifecycle = new AbortController();
-    const stale = createAttempt(1, lifecycle.signal);
-    const live = createAttempt(2, lifecycle.signal);
+    try {
+      const stale = createAttempt(1, lifecycle.signal, OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS);
+      const live = createAttempt(2, lifecycle.signal, OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS);
 
-    stale.beginHydration();
-    stale.retire();
-    // A late hydration return is the case the defect is about: it used to
-    // resolve whichever gate was current, which was the NEWER attempt's.
-    stale.markReady();
+      stale.beginHydration();
+      stale.retire();
+      // A late hydration return is the case the defect is about: it used to
+      // resolve whichever gate was current, which was the NEWER attempt's.
+      stale.markReady();
 
-    await expect(stale.gate.pending()).rejects.toBeInstanceOf(AttemptSupersededError);
-    // The dead attempt cannot leave the transcript buffering either.
-    expect(stale.hydrating).toBe(false);
+      await expect(stale.gate.pending()).rejects.toBeInstanceOf(AttemptSupersededError);
+      // The dead attempt cannot leave the transcript buffering either.
+      expect(stale.hydrating).toBe(false);
 
-    // The live attempt's own outcome is the only thing that settles readiness.
-    live.markReady();
-    await expect(live.gate.pending()).resolves.toBeUndefined();
+      // The live attempt's own outcome is the only thing that settles readiness.
+      live.markReady();
+      await expect(live.gate.pending()).resolves.toBeUndefined();
+    } finally {
+      // Clears the live attempt's idle watchdog, which would otherwise
+      // outlive the test.
+      lifecycle.abort();
+    }
   });
 
   it("R-M3: an ambiguous prompt reaches a typed, bounded outcome", async () => {

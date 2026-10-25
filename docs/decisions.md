@@ -7823,3 +7823,139 @@ preserved, and a live DELETE racing a real create that binds a new session:
 409, new session intact, its pointer preserved); and
 `tests/integration/core/engine-guards.test.ts` Phase 6 (direct/no-session/
 absent-session/confirmed-removal/Option-A route contracts).
+
+## 2026-10-25 - OpenCode RT-012 / RT-008 / RT-007: one bounded readiness wait, a byte-level stream watchdog, and a runtime gate that cannot pass by skipping
+
+**Context.** The runtime audit's three open operational findings were approved
+together, with three measurements required before any code changed. All three are
+now measured, two of them twice (once locally, once on a clean `windows-latest`
+runner from a throwaway branch):
+
+1. **The heartbeat, against the exact pinned binary.** Not inferred from
+   neighbouring versions: the installed `@opencode/cli-windows-x64` 2.1.2, whose
+   SHA512 is the one in the workflow `env`, was observed writing
+   `: heartbeat\n\n` on `/api/event` at a 15 s period. That is what the watchdog
+   budget is derived from.
+2. **Cold start to ready, on `windows-latest`.** Three runs: **713 ms, 514 ms,
+   527 ms**. The warm readiness budget is 20 s, so the measured boot is about
+   2.5 % of it. The approved plan said to split the cold/warm budgets *if* the
+   measurements justified it; they did not, so there is one number.
+3. **All nine real-binary runtime suites timed on `windows-latest`.** Together
+   they are ~310 s, and that total includes the two suites that cannot pass on an
+   isolated runner: `opencode-context-meter-runtime` (2 pass / 3 fail - it needs a
+   real provider credential) and `opencode-native-compaction-conformance`
+   (5 pass / 3 fail against 2.1.2). The seven that can pass run in ~38 s, the
+   slowest single suite at 10.3 s.
+
+Finding 3 is also what corrected the instruction. "All nine runtime suites
+required on every PR" is not achievable: two of the nine fail on a clean,
+credential-free runner for reasons the PR cannot fix, and a required job that is
+permanently red is a gate people learn to ignore (see AGENTS.md §6b rule 8 - a
+gate must be able to fail, not a gate that always does). The audit register's
+"eight suites" was likewise stale: nine exist on disk.
+
+**Decision.**
+
+*RT-012 - the readiness wait is one bounded wait.*
+`v2ThreadController.ts` gained `awaitReady()`, which takes
+`OPENCODE_V2_READY_TIMEOUT_MS` as a single absolute deadline and draws from it
+across both legs: the start/load promise and the attempt's own readiness gate.
+When an attempt is superseded mid-wait the loop continues on the survivor with
+only the *remaining* budget, so a retry storm cannot extend the caller's wait
+indefinitely. Expiry throws a typed network error and touches nothing else:
+`sync/startupGate.ts` now exposes `withDeadline()`, which rejects the **waiter**
+and leaves the gate unsettled, so the underlying readiness can still settle
+genuinely afterwards and the state machine reports the truth. The caller's timeout
+is a report about the caller, not a verdict about the runtime.
+
+*RT-008 - liveness is bytes, and silence kills only the connection.*
+`OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS` is **30 s = two missed heartbeats** at the
+measured 15 s period, and it is documented as required to stay ABOVE
+`OPENCODE_V2_READY_TIMEOUT_MS`: a merely quiet stream during a slow hydration must
+not be torn down while the caller still has budget. The timer is armed by
+`onActivity`, threaded through `V2ConnectionSignals` and passed to the official
+client's `event.subscribe({ signal, onActivity })` - that callback fires for every
+read chunk *including comment-only keepalive frames*, which is the property that
+makes an idle session survivable. On true silence the attempt calls
+`connection.abort()` and nothing more: it deliberately does not call `fail()` or
+`retire()`, so the stream reader's existing error path routes into
+`scheduleReconnect`, the runtime state becomes `reconnecting` rather than dead,
+and because prompts run on `lifecycleSignal` while only history and operations use
+`connectionSignal`, an in-flight prompt is not cancelled by its own transport being
+replaced.
+
+*RT-007 - a required job whose green means the suites ran.*
+`scripts/run-opencode-runtime-suites.ts` is the gate, `.github/workflows/tests.yml`
+gained the `opencode-runtime` job (pinned CLI installed with the same composite
+action, no `needs:`, ~38 s), and `package.json` gained `test:opencode-runtime`.
+A suite counts as passing only with **file present, at least 1 pass, 0 fail, 0
+skip**, because every runtime suite self-skips - and self-skipping exits 0 - when
+the binary or the `TBAI_OPENCODE_RUNTIME_TESTS` opt-in is missing. Suites are
+classified, not filtered: every real-binary suite on disk must appear in
+`REQUIRED_SUITES` or `EXCLUDED_SUITES`, and an unclassified one fails the gate.
+`opencode-context-meter-runtime` and `opencode-native-compaction-conformance` are
+the two exclusions, each with the condition that would admit it. Credential-
+dependent live acceptance stays where it was: dispatch-only, in `e2e-big-pickle`.
+
+**Alternatives rejected.**
+
+- *RT-008 on event activity instead of bytes.* An OpenCode session can be
+  legitimately silent for hours. A timeout on "no events" would reconnect healthy
+  idle threads forever, and would have to be tuned to a session's patience rather
+  than the server's keepalive.
+- *RT-008 retiring the attempt (`fail()`/`retire()`).* That ends the runtime, and a
+  retired lifecycle signal cancels the in-flight prompt - turning a transport stall
+  into a lost user message. The acceptance condition for this finding was exactly
+  that the abort enter the existing reconnect path without either effect.
+- *A 15 s idle timeout.* One lost or delayed heartbeat frame, which is ordinary on
+  a loaded runner, would read as death. Two periods is the smallest budget that
+  tolerates a single miss.
+- *RT-012 with one deadline per leg.* Each leg would restart its own 20 s whenever
+  an attempt was superseded, so the total wait is unbounded while every individual
+  wait looks bounded.
+- *RT-012 settling the gate on expiry.* The gate would then report a runtime the
+  server may still bring up, and a later genuine `ready` or `failed` would be
+  discarded - a timeout dressed up as a verdict. This is the false "runtime dead"
+  the acceptance condition named.
+- *RT-007 as a loop in YAML, or as a step inside `verify`.* A loop can only read the
+  exit code, which is 0 for a self-skipped suite; and `verify` is hermetic by
+  design, so a job that needs a spawned third-party binary cannot live in it (the
+  same reasoning as `test:e2e`). Requiring all nine would make the job permanently
+  red for credential and vendor-conformance reasons.
+
+**Known limits.**
+
+- The watchdog trusts the official client's `onActivity` contract. If a future
+  version stops reporting keepalive frames, an idle stream reconnects every 30 s:
+  wasteful and visible, not corrupting. `v2Client.test.ts` pins the current
+  behaviour against a literal `: heartbeat` chunk, so the drift shows up as a test
+  failure rather than as a reconnect loop in production.
+- The cold-start figures are three samples on one runner class. They justify not
+  splitting the budget today; they do not make 20 s a permanent constant.
+- Suite classification reads the harness's own gate symbols out of the file text.
+  A runtime suite that reaches the binary another way would not be discovered -
+  but it would also not run under this job until someone added it to the lists, so
+  the failure mode is a missing name in a register, not a silent pass.
+- The `opencode-native-compaction-conformance` exclusion is a real conformance
+  finding recorded as **RT-013**, not permission to retry until green. Its three
+  failing cases were captured by name from the clean-runner run.
+
+**Evidence.** `tests/unit/web/opencode/v2ThreadController.readyDeadline.test.ts`
+("stops waiting at its deadline while hydration is in flight, then still reports
+the runtime ready"; "does not settle the attempt's own load promise when a waiter
+times out"); `tests/unit/web/opencode/v2ThreadController.streamIdle.test.ts`
+("stays connected when the only traffic is keepalives"; "reconnects a genuinely
+silent stream without retiring the runtime or cancelling in-flight work", which
+asserts `connectionSignal.aborted` true and `lifecycleSignal.aborted` false on the
+same attempt); `tests/unit/web/opencode/v2Client.test.ts` ("reports keepalive-only
+traffic as activity, so silence means bytes");
+`tests/unit/tooling/opencode-runtime-gate.test.ts` (20 cases: classification
+completeness in both directions, no required/excluded overlap, an exclusion reason
+that names a condition, `isRuntimeSuiteSource` accepting the harness gate and
+rejecting `opencode-harness-isolation`, `parseCounts` against the exact `bun test`
+summary tail plus both skip spellings and the non-count lines, the `package.json`
+mapping, and the workflow job's uncommented gate command, pinned-CLI install,
+absent `needs:` and header listing). Every guard here was proved able to fail
+against its own defect and then reverted: a commented-out CI step, an unclassified
+suite file dropped into `tests/integration/opencode`, a renamed required suite
+entry, and `parseCounts` narrowed until it stopped reading the `skipped` spelling.

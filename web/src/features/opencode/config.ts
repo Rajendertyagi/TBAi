@@ -29,8 +29,28 @@ export const OPENCODE_V2_RECENT_EVENT_ID_WINDOW = 256;
  * A wait with no deadline is a wait with no answer: the composer holds the
  * reader's text, nothing is sent, and the reader is told nothing. The
  * deadline turns "waiting" into a reported state.
+ *
+ * It budgets the WHOLE wait — the start/load promise and the attempt's readiness
+ * gate together, not each leg separately (`v2ThreadController.ts#awaitReady`). A
+ * leg that restarts on a superseded attempt draws from what is left, so slow
+ * hydration cannot extend the caller's wait past this number.
  */
 export const OPENCODE_V2_READY_TIMEOUT_MS = 20_000;
+/**
+ * How long the event stream may be completely silent before it is considered
+ * dead and reconnected.
+ *
+ * The pinned OpenCode 2.1.2 server sends an SSE keepalive comment every 15
+ * seconds on `/api/event`, and the official client reports every chunk - so
+ * 30 seconds is two missed heartbeats, measured against the exact binary
+ * rather than a neighbouring version. Silence, not "no events": an idle
+ * session legitimately delivers no events for hours.
+ *
+ * It must stay ABOVE `OPENCODE_V2_READY_TIMEOUT_MS`. A stream that is merely
+ * quiet during a slow hydration must not be torn down while the caller still
+ * has budget left; the caller reports its own timeout first.
+ */
+export const OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS = 30_000;
 /**
  * How long a send waits for the server to admit the prompt.
  *

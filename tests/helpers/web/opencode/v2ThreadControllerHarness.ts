@@ -455,6 +455,14 @@ export function createGeneration(
     bindSignals(signals: V2ConnectionSignals) {
       lifecycleSignal = signals.lifecycleSignal;
       connectionSignal = signals.connectionSignal;
+      // A real stream dies when its connection signal aborts. Mirror that here
+      // so a controller-initiated abort (including the idle watchdog) reaches
+      // the same failure path as a dropped connection.
+      signals.connectionSignal.addEventListener(
+        "abort",
+        () => events.fail(new Error("connection aborted")),
+        { once: true },
+      );
     },
   };
 }

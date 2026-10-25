@@ -59,6 +59,8 @@ type Fixture = {
   readonly eventRequest: Promise<CapturedRequest>;
   readonly restRequest: Promise<CapturedRequest>;
   readonly sendEvent: (event: unknown) => void;
+  /** Enqueues an arbitrary chunk, for frames that carry no event (keepalives). */
+  readonly sendRaw: (chunk: string) => void;
   readonly releaseRest: () => void;
 };
 
@@ -147,17 +149,25 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       }
       eventController.enqueue(eventFrame(event));
     },
+    sendRaw: (chunk) => {
+      if (!eventController) {
+        throw new Error("event stream has not started");
+      }
+      eventController.enqueue(new TextEncoder().encode(chunk));
+    },
     releaseRest: () => restRelease.resolve(undefined),
   };
 }
 
-function makeSignals(): {
+function makeSignals(onActivity: () => void = () => undefined): {
   readonly connectionSignal: AbortSignal;
   readonly lifecycleSignal: AbortSignal;
+  readonly onActivity: () => void;
 } {
   return {
     connectionSignal: new AbortController().signal,
     lifecycleSignal: new AbortController().signal,
+    onActivity,
   };
 }
 
@@ -218,6 +228,51 @@ describe("createOpenCodeV2Client", () => {
     try {
       expect(settled).toBe(true);
       expect(generation.generationId).toBe(1);
+    } finally {
+      await generation.events.close();
+    }
+  });
+
+  it("reports keepalive-only traffic as activity, so silence means bytes", async () => {
+    // The pinned 2.1.2 server keeps an idle stream alive with a bare SSE
+    // comment every 15 seconds. Those chunks carry no event but they are the
+    // proof the connection is alive, so the client must report them as
+    // activity or an idle session is indistinguishable from a dead one.
+    const fixture = makeFixture();
+    const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, {
+      fetch: fixture.fetch,
+    });
+    let activity = 0;
+    const connection = client.connect(makeSignals(() => (activity += 1)));
+    await fixture.eventRequest;
+    fixture.sendEvent(CONNECTED_EVENT);
+    const generation = await connection;
+
+    try {
+      // Activity is reported as chunks are READ, so keep a read outstanding.
+      const pending = generation.events.next();
+      let readSettled = false;
+      const observed = pending.then(
+        () => {
+          readSettled = true;
+        },
+        () => {
+          readSettled = true;
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const before = activity;
+      fixture.sendRaw(": heartbeat\n\n");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(activity).toBeGreaterThan(before);
+      // The keepalive is not an event: the read is still waiting.
+      expect(readSettled).toBe(false);
+
+      await generation.events.close();
+      // Closing the generation ends the read; the handler above absorbs the
+      // close error so the test does not leak a rejection.
+      await observed;
     } finally {
       await generation.events.close();
     }

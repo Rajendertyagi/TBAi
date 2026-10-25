@@ -18,6 +18,7 @@ import {
   OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
   OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
   OPENCODE_V2_READY_TIMEOUT_MS,
+  OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS,
 } from "@/features/opencode/config";
 import {
   AUTO,
@@ -45,6 +46,7 @@ import {
   type V2PromptSubmission,
 } from "./sync/promptsInFlight";
 import { AttemptSupersededError, createAttempt, type Attempt } from "./sync/attempt";
+import { StartupTimeoutError, withDeadline } from "./sync/startupGate";
 import {
   createEventPipeline,
   isAssistantMessageEvent,
@@ -269,6 +271,13 @@ export type V2ThreadControllerConfig = {
    * by waiting it out is a wait nobody will test.
    */
   readonly readyTimeoutMs: number;
+  /**
+   * How long the event stream may be silent before the attempt reconnects.
+   *
+   * Injectable so the silence threshold can be observed in a test without
+   * holding a stream open for the product's 30 seconds.
+   */
+  readonly streamIdleTimeoutMs: number;
 };
 
 const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
@@ -277,6 +286,7 @@ const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
   maxReconnectDelayMs: OPENCODE_V2_MAX_RECONNECT_DELAY_MS,
   promptAdmissionTimeoutMs: OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
   readyTimeoutMs: OPENCODE_V2_READY_TIMEOUT_MS,
+  streamIdleTimeoutMs: OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS,
 };
 
 export type V2ThreadControllerDeps = {
@@ -529,7 +539,7 @@ export function createV2ThreadController(
     // apart.
     pipeline.clearBuffer();
     nextAttemptId += 1;
-    const started = createAttempt(nextAttemptId, lifecycle.signal);
+    const started = createAttempt(nextAttemptId, lifecycle.signal, cfg.streamIdleTimeoutMs);
     currentAttempt = started;
     return started;
   }
@@ -1349,35 +1359,48 @@ export function createV2ThreadController(
    * than reporting the replacement as a failure. Only a real failure — a
    * terminal one, or a disposed runtime — is thrown.
    *
-   * The wait is BOUNDED. A caller that waits forever holds the reader's text
-   * with no way to release it and no way to say why, so a runtime that never
-   * comes up ends the wait with a typed error instead of a hang.
+   * The wait is BOUNDED, and the bound covers the WHOLE wait: establishing the
+   * connection and hydrating it are the readiness work, so waiting for those
+   * outside the deadline would make the deadline describe only the last
+   * instant of the wait. Every pass re-reads the clock, so a takeover spends
+   * the same budget rather than restarting it.
+   *
+   * Expiry stops the WAITER, not the runtime: the attempt keeps hydrating and
+   * its gate is left unsettled, so a later call can still observe the runtime
+   * come up. A caller that treats the timeout as a dead runtime would report a
+   * slow one as broken.
    */
   async function awaitReady(): Promise<void> {
     const deadline = Date.now() + cfg.readyTimeoutMs;
     for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw readyTimeoutError();
       try {
-        await ensureLoaded();
+        await withDeadline(ensureLoaded(), remaining);
       } catch (error) {
         if (error instanceof AttemptSupersededError) continue;
+        if (error instanceof StartupTimeoutError) throw readyTimeoutError();
         throw error;
       }
       const live = currentAttempt;
       if (live === null) continue;
-      const remaining = deadline - Date.now();
-      if (remaining <= 0)
-        throw new V2ControllerError({
-          kind: "network",
-          message: `OpenCode V2 runtime was not ready within ${cfg.readyTimeoutMs}ms`,
-        });
       try {
-        await live.gate.waitWithDeadline(remaining);
+        await live.gate.waitWithDeadline(Math.max(0, deadline - Date.now()));
       } catch (error) {
         if (error instanceof AttemptSupersededError) continue;
+        if (error instanceof StartupTimeoutError) throw readyTimeoutError();
         throw error;
       }
       return;
     }
+  }
+
+  /** The typed error a wait that ran out of time reports. */
+  function readyTimeoutError(): V2ControllerError {
+    return new V2ControllerError({
+      kind: "network",
+      message: `OpenCode V2 runtime was not ready within ${cfg.readyTimeoutMs}ms`,
+    });
   }
 
   async function reconcileStagedRevert(): Promise<void> {

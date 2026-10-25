@@ -72,6 +72,16 @@ export interface V2HistoryReader {
 export interface V2ConnectionSignals {
   readonly connectionSignal: AbortSignal;
   readonly lifecycleSignal: AbortSignal;
+  /**
+   * Reports raw transport activity on the event stream.
+   *
+   * The OpenCode stream sends an SSE keepalive comment every 15 seconds, and
+   * the official client calls this for every read chunk that carries one -
+   * including chunks with no event. Liveness is therefore a question about
+   * BYTES, not about delivered events: a healthy but idle session delivers
+   * nothing for hours and is still alive.
+   */
+  readonly onActivity: () => void;
 }
 
 export interface OpenCodeV2GenerationOperations {
@@ -171,11 +181,12 @@ export function createOpenCodeV2Client(
   async function connect({
     connectionSignal,
     lifecycleSignal,
+    onActivity,
   }: V2ConnectionSignals): Promise<OpenCodeV2Generation> {
     if (connectionSignal.aborted || lifecycleSignal.aborted) {
       throw new V2GenerationClosedError();
     }
-    const eventStream = officialClient.event.subscribe({ signal: connectionSignal });
+    const eventStream = officialClient.event.subscribe({ signal: connectionSignal, onActivity });
     const iterator = eventStream[Symbol.asyncIterator]();
     let first: IteratorResult<V2Event>;
     try {

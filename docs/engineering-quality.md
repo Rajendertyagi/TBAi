@@ -28,11 +28,13 @@ which is, in order:
 | DOM contracts | `bun run test:dom` | Contracts that need a mounted React tree |
 | OpenCode quarantine | `bun run test:quarantine` | A defect-regression entry left in the quarantine after its finding was fixed — i.e. a finding closed without its regression test being promoted |
 
-Not part of `verify`, because it needs a browser and a spawned server:
+Not part of `verify`, because it needs a browser, a spawned server, or a pinned
+third-party binary:
 
 | Gate | Command | Notes |
 | --- | --- | --- |
 | E2E | `bun run test:e2e` | see below |
+| OpenCode runtime suites | `bun run test:opencode-runtime` | spawns the real pinned `opencode serve`; see below |
 | Security | `bun run security` | `verify:full` runs it after `verify` |
 
 ### The build runs before the tests, in CI and locally
@@ -163,6 +165,49 @@ artifact on every run. Rerun command:
 reports a genuine defect must not be able to pass CI by being downgraded to a
 warning — that is the exact configuration that made this gate inert before it was
 repaired (see `docs/decisions.md`).
+
+### The real-binary OpenCode runtime suites (RT-007)
+
+`bun run test:opencode-runtime` runs the OpenCode suites that talk to a real
+`opencode serve` process. It is not in `verify`: it spawns processes, binds ports,
+and needs the pinned CLI, which `verify` deliberately never does. On CI it is its
+own job (`opencode-runtime`), installed with the same
+`./.github/actions/install-opencode` action and the same pinned version and SHA512
+from the workflow's `env`. Measured cost on `windows-latest`, 2026-10-24 (run
+40126225730): **about 38 s** for the seven required suites, slowest single suite
+10.3 s.
+
+The verdict is not "the command exited 0", and that is the whole reason this is a
+script (`scripts/run-opencode-runtime-suites.ts`) rather than a loop in YAML. Every
+runtime suite **self-skips** when the binary or the `TBAI_OPENCODE_RUNTIME_TESTS`
+opt-in is absent, and a skipped suite exits 0 while proving nothing. So for each
+required suite the gate requires all of:
+
+- the file exists;
+- at least one test **passed**;
+- no test **failed**;
+- no test **skipped**.
+
+Any suite that runs after a failure still runs, so one PR reports the full picture
+instead of the first red line.
+
+The second rule is a completeness rule, not a courtesy: every real-binary runtime
+suite on disk must be named by the gate as required or excluded. A new suite that
+nobody classified would otherwise be invisible, which is how the audit register
+came to say "eight suites" while nine existed. An exclusion is not a suppression
+either — each one carries the condition that would admit it:
+
+| Suite | Why it is not required |
+| --- | --- |
+| `opencode-context-meter-runtime` | needs a real provider credential, which the isolated runner does not have; live acceptance coverage stays dispatch-only (`e2e-big-pickle`) |
+| `opencode-native-compaction-conformance` | 3 of its 8 cases fail against the pinned 2.1.2 binary on a clean runner (finding RT-013); re-admit once its assertions match 2.1.2 |
+
+`tests/unit/tooling/opencode-runtime-gate.test.ts` guards this gate. It reads the
+lists and the discovery function **from the script itself** (a copy of the lists in
+the test would pass while the gate drifted), checks that required ∪ excluded covers
+the tree and holds no stale name, feeds `parseCounts` the exact summary text `bun
+test` prints, and reads the workflow to prove the job runs `bun run
+test:opencode-runtime` uncommented, installs the pinned CLI, and carries no `needs:`.
 
 ## Tooling is pinned, not resolved at run time
 

@@ -450,3 +450,152 @@ A move to a conditional **Pass** requires closing all **Tier 1 — mandatory blo
 ## 12. Change boundary and audit-only constraint
 
 This task is **documentation-only.** The only repository change produced by this audit is this report. No source code, test, configuration, other documentation, or user file was modified; no destructive tests were run; no live OpenCode database was touched; nothing was staged, committed, or pushed. The repository is clean except this untracked report. No finding was implemented; no acceptance was declared on the auditor's own authority.
+
+---
+
+## 13. Closure addendum - 2026-10-25 (RT-008, RT-012, RT-007; RT-013 opened)
+
+§5 is the **audit-time snapshot as of 2026-10-23** and is deliberately not
+rewritten: its `Status` column, its "8 deep real-server integration suites", and
+its line citations are what was true at the snapshot commit `9cc7c29`. This
+section records what has since changed, with the measurements the §11 closure
+criteria asked for. Where this addendum and §5 disagree, §5 is history and this is
+current.
+
+### 13.1 The measurements §11 required
+
+Cold start was measured on `windows-latest` (Bun 1.4.2, pinned CLI 2.1.2) by a
+throwaway CI job: **713 ms, 514 ms, 527 ms** process-start to readiness. Against
+the 20 s warm budget that is about 2.5 %, so the approved plan's conditional
+"split the cold/warm budgets if the measurements justify it" did not trigger; one
+deadline remains.
+
+The heartbeat was read off the **installed pinned binary**, not inferred from a
+neighbouring version: `@opencode/cli-windows-x64` 2.1.2, SHA512
+`sha512-r2DUwYbPe++6y4vWRuHX7slVCMIHyLyC8YAgJO7YAKX7dMgfXe4RDlJK7eZ6KHNBdpIY62Nxd6DPzKiCOP8uMg==`
+(the workflow `env` value), writes `: heartbeat\n\n` on `/api/event` every **15 s**.
+
+All nine real-binary suites, timed on the same runner class, each in its own
+process with `TBAI_OPENCODE_RUNTIME_TESTS=1`:
+
+| Suite | ms | exit | Disposition |
+|---|---:|---:|---|
+| `opencode-session-idempotency-runtime` | 1024 | 0 | required |
+| `opencode-runtime-auth` | 2914 | 0 | required |
+| `opencode-database-compat` | 3504 | 0 | required |
+| `opencode-stub-provider-spike` | 4392 | 0 | required |
+| `opencode-ownership-runtime` | 6220 | 0 | required |
+| `opencode-retry-restart` | 9733 | 0 | required |
+| `opencode-retry-runtime` | 10303 | 0 | required |
+| `opencode-context-meter-runtime` | 8786 | 1 | **excluded** - needs a real provider credential |
+| `opencode-native-compaction-conformance` | 263149 | 1 | **excluded** - see RT-013 |
+
+Required seven: **38.1 s**. All nine: **310.0 s**. §5's "8 gated suites" was wrong
+in count (nine exist) and wrong in kind: a required job that includes either of the
+last two rows is permanently red for reasons the diff cannot fix.
+
+### 13.2 RT-012 - Closed
+
+Criterion asked for "a controlled test that forces `ensureLoaded()` (connection or
+hydration) to stall past the advertised deadline and proves `awaitReady()` rejects
+or times out within the end-to-end budget." Delivered: `awaitReady()` now holds one
+absolute deadline and spends it across both legs; a superseded attempt continues the
+loop against the *remaining* budget rather than restarting it. Expiry rejects the
+waiter only - `withDeadline()` in `sync/startupGate.ts` never settles the gate - so
+the runtime can still become ready afterwards and the state machine keeps reporting
+truth.
+
+Evidence: `tests/unit/web/opencode/v2ThreadController.readyDeadline.test.ts` -
+"stops waiting at its deadline while hydration is in flight, then still reports the
+runtime ready" (hydration stalled 150 ms against a 25 ms budget; the waiter returns
+inside the budget, the runtime subsequently reports ready) and "does not settle the
+attempt's own load promise when a waiter times out".
+
+### 13.3 RT-008 - Closed
+
+Criterion asked for "an idle-timeout watchdog on the open stream that triggers the
+same reconnect/terminal path as a disconnect, plus a connected-but-silent test",
+distinct from the disconnected path. Delivered: `OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS
+= 30_000` (two missed heartbeats at the measured 15 s period, documented as required
+to stay above `OPENCODE_V2_READY_TIMEOUT_MS`), armed by the official client's
+`onActivity` callback, which fires on **every read chunk including keepalive-only
+frames** - so the timer measures bytes, not delivered events, exactly as the PM
+decision specified. On silence the attempt aborts its **connection only**: it does
+not `fail()` or `retire()`, so the reader's existing error path enters
+`scheduleReconnect`.
+
+Evidence, both directions: `tests/unit/web/opencode/v2ThreadController.streamIdle.test.ts` -
+"stays connected when the only traffic is keepalives" (heartbeat-only frames, connect
+count stays 1) and "reconnects a genuinely silent stream without retiring the runtime
+or cancelling in-flight work" (state becomes `reconnecting`, a second connection is
+established, and on the same attempt `connectionSignal.aborted` is true while
+`lifecycleSignal.aborted` is false - the seam that keeps an in-flight prompt alive,
+because prompts run on the lifecycle signal and only history/operations on the
+connection signal). The keepalive contract itself is pinned by
+`tests/unit/web/opencode/v2Client.test.ts` - "reports keepalive-only traffic as
+activity, so silence means bytes".
+
+### 13.4 RT-007 - Closed as re-scoped; one residual disclosed
+
+The PM decision of 2026-10-24 required the real-binary suites on every PR and said
+the job must fail if a required suite is missing or skipped. Delivered:
+`scripts/run-opencode-runtime-suites.ts` + `bun run test:opencode-runtime` + the
+`opencode-runtime` job in `.github/workflows/tests.yml` (installs the pinned CLI with
+the same composite action as the other jobs, no `needs:`). A suite counts as passing
+only with file present, at least 1 pass, 0 fail and **0 skip** - the skip condition is
+the point, because every runtime suite exits 0 while self-skipping when the binary or
+the opt-in is absent. The job's measured cost is the 38.1 s above.
+
+**Scope correction, stated rather than absorbed.** §11's criterion was "runs the 8
+gated suites" plus a separate `TBAI_E2E_LIVE=1` live-model run. As written, neither
+half can be a per-PR gate: nine suites exist, not eight, and two of them cannot pass
+on a credential-free clean runner (13.1). The gate therefore requires the seven that
+can, and *classifies* the other two - `EXCLUDED_SUITES` carries a reason per entry,
+and an unclassified new suite fails the gate, so the count cannot silently drift
+again. The live-model half of the criterion stays **dispatch-only** by the same
+decision (`e2e-big-pickle`, `TBAI_E2E_LIVE=1`), which means RT-007's original wording
+is satisfied for the real-server suites and deliberately not for live-model ones.
+That is a residual risk the gate records, not a coverage claim.
+
+Evidence: `tests/unit/tooling/opencode-runtime-gate.test.ts` (20 cases), which
+imports the lists and the discovery function **from the gate script** so a drift in
+the script cannot pass a test holding a stale copy.
+
+### 13.5 RT-013 - Opened (new finding, outside §5's ID range)
+
+**RT-013 - `opencode-native-compaction-conformance` does not pass against the pinned
+2.1.2 binary.** Severity: Medium, evidence class **Reproduced** (clean
+`windows-latest` runner, `rc=1`, 5 pass / 3 fail, 263 s). The suite's describe block
+still says "real OpenCode 2.0.22", i.e. its assertions encode the older server's
+compaction behaviour; against 2.1.2 a settled compaction produces no pre-compaction
+slice and `/context` does not return only post-compaction messages. Two of the three
+failing cases are captured by name from the retained log tail:
+
+- "compaction state is durable: /context returns only post-compaction messages" -
+  `Expected: true, Received: false` at `opencode-native-compaction-conformance.test.ts:369`;
+- "TBAi's meter projects a REAL settled compaction as unknown, then recovers" -
+  `expect(slice.length).toBeGreaterThan(0)` received `0` at `:398`.
+
+The third name was lost to the runner's 25-line-per-suite tail. **This is a conformance
+finding against the supported version, not flakiness, and it is not closed by the
+exclusion**: the exclusion only stops it from turning every PR red. Closure = the
+assertions updated and verified against 2.1.2, then the suite moved into
+`REQUIRED_SUITES`. Note also that at 263 s it is roughly seven times the whole
+required job, so admitting it is a CI-cost decision as well as a correctness one.
+
+A related measurement gap, recorded and not fixed here: the same truncation means
+`opencode-context-meter-runtime`'s third failing case name is uncaptured; two are
+("admits a manual compaction and records it as a compaction message", "a settled
+compaction is unknown, and a later response repopulates it"), and that suite's
+failures are credential-shaped (it asks a real model to answer), which is why it is
+excluded rather than repaired.
+
+### 13.6 Effect on the §11 verdict
+
+The five Tier 1 blockers were RT-001, RT-011, RT-008, RT-012 and RT-007. RT-001 and
+RT-011 closed with their durable-journal and delete-marker work (ADRs of 2026-10-24)
+and passed independent review; RT-008, RT-012 and RT-007 close with this addendum,
+RT-007 in the re-scoped form above. **Moving the verdict from Hold is the
+maintainer's decision**, not a self-declared consequence of this section - and the
+live-model certification run (§11, RT-007 criterion, `TBAI_E2E_LIVE=1`) has not been
+executed as part of this work.

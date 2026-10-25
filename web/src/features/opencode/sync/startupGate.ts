@@ -16,8 +16,10 @@
  *   handle that can settle it, and a superseded attempt refuses to resolve it.
  * - **The failure.** The gate is told what went wrong; it does not classify
  *   the error, and it does not decide whether the runtime should retry.
- * - **The waiter's deadline.** A caller that waits forever is a Phase 5
- *   problem (the bounded wait), not this module's.
+ * - **The work that makes the runtime ready.** The gate reports the outcome;
+ *   hydration and connection are somebody else's. What this module does own is
+ *   the *deadline* those waits share: `withDeadline()` bounds any promise the
+ *   same way `waitWithDeadline()` bounds the gate's.
  *
  * ## WHY A GATE AND NOT A BARE PROMISE
  *
@@ -101,6 +103,35 @@ export interface StartupGate {
 }
 
 /**
+ * Waits for a promise, but not longer than `timeoutMs`.
+ *
+ * The deadline stops only the waiter. The underlying work keeps running, and
+ * a promise that settles after the deadline neither turns into a timeout nor
+ * surfaces as an unhandled rejection - which is exactly what "the runtime is
+ * slow" must look like: the caller gets an answer, the runtime keeps coming
+ * up.
+ *
+ * @param promise - The work to wait for.
+ * @param timeoutMs - How long to wait before giving up.
+ * @returns The promise's value, or a rejection carrying `StartupTimeoutError`.
+ */
+export function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new StartupTimeoutError(timeoutMs)), timeoutMs);
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
  * Creates the readiness gate.
  *
  * @returns The gate.
@@ -141,23 +172,13 @@ export function createStartupGate(): StartupGate {
 
   function waitWithDeadline(timeoutMs: number): Promise<void> {
     const opened = promise;
+    // A gate nobody opened is already past its deadline: waiting on it can
+    // only ever time out.
     if (opened === null) return Promise.reject(new StartupTimeoutError(timeoutMs));
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new StartupTimeoutError(timeoutMs)), timeoutMs);
-      // The deadline only stops THIS waiter. The gate keeps its own promise:
-      // a late resolve must not be reported as a timeout, and a timeout must
-      // not settle the gate for anybody else.
-      void opened.then(
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        (error: unknown) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      );
-    });
+    // The deadline only stops THIS waiter. The gate keeps its own promise:
+    // a late resolve must not be reported as a timeout, and a timeout must
+    // not settle the gate for anybody else.
+    return withDeadline(opened, timeoutMs);
   }
 
   return { open, resolve, reject, pending, waitWithDeadline };

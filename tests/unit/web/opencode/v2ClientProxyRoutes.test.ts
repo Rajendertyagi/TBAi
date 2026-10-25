@@ -76,6 +76,7 @@ describe("OpenCode web client and the proxy allowlist", () => {
     const generation = await client.connect({
       connectionSignal: abort.signal,
       lifecycleSignal: abort.signal,
+      onActivity: () => undefined,
     });
 
     const session = SESSION_ID;
@@ -147,6 +148,7 @@ describe("OpenCode web client and the proxy allowlist", () => {
     const generation = await client.connect({
       connectionSignal: abort.signal,
       lifecycleSignal: abort.signal,
+      onActivity: () => undefined,
     });
     await generation.operations.sessionGet({ sessionID: SESSION_ID }).catch(() => undefined);
     await generation.events.close();

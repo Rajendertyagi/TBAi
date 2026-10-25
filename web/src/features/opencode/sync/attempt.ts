@@ -9,6 +9,8 @@
  * - the generation it adopted,
  * - its own readiness gate (so its readiness promise has exactly one owner),
  * - its connection signal (aborted the moment the attempt stops being live),
+ * - its idle watchdog: a silent stream aborts the CONNECTION (not the attempt)
+ *   so the pipeline's existing reconnect path replaces it,
  * - the promise of the load in flight,
  * - whether it is still awaiting its first history projection (`hydrating`),
  * - whether it is settled (`retired`): superseded by a newer attempt,
@@ -165,6 +167,14 @@ export interface Attempt {
    * @param promise - The promise, or `null` to clear it.
    */
   setLoad(promise: Promise<void> | null): void;
+  /**
+   * Reports transport activity on this attempt's event stream and resets its
+   * idle watchdog.
+   *
+   * Fed by BYTES, including SSE keepalives that carry no event: an idle
+   * session is silent in events for hours and is still alive.
+   */
+  noteActivity(): void;
 }
 
 /**
@@ -177,21 +187,58 @@ export interface Attempt {
  * @param id - The attempt's id, unique within the owning controller.
  * @param lifecycleSignal - The controller-lifetime signal, which outlives this
  * attempt and is aborted only when the controller is disposed.
+ * @param streamIdleTimeoutMs - How long the event stream may be silent before
+ * this attempt's connection is aborted to force a reconnect.
  * @returns The attempt.
  */
-export function createAttempt(id: number, lifecycleSignal: AbortSignal): Attempt {
+export function createAttempt(
+  id: number,
+  lifecycleSignal: AbortSignal,
+  streamIdleTimeoutMs: number,
+): Attempt {
   const connection = new AbortController();
   const gate = createStartupGate();
-  const signals: V2ConnectionSignals = {
-    connectionSignal: connection.signal,
-    lifecycleSignal,
-  };
   let adopted: OpenCodeV2Generation | null = null;
   let hydrating = false;
   let retired = false;
   let loadPromise: Promise<void> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearIdleTimer(): void {
+    if (idleTimer === null) return;
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
+  function onIdle(): void {
+    idleTimer = null;
+    if (retired) return;
+    // Deliberately NOT `retire()` or `fail()`. Both settle the attempt, which
+    // would report a silent stream as a terminal failure. A silent stream is
+    // the same situation as a dropped connection: abort the connection and let
+    // the stream reader route the failure into the reconnect path, where the
+    // attempt is retired and a replacement is scheduled.
+    connection.abort();
+  }
+
+  function armIdleTimer(): void {
+    clearIdleTimer();
+    if (retired || lifecycleSignal.aborted) return;
+    idleTimer = setTimeout(onIdle, streamIdleTimeoutMs);
+  }
+
+  const signals: V2ConnectionSignals = {
+    connectionSignal: connection.signal,
+    lifecycleSignal,
+    onActivity: armIdleTimer,
+  };
+
+  // A watchdog outliving its controller would keep a Node/Bun process alive
+  // for its whole duration after the runtime is gone.
+  lifecycleSignal.addEventListener("abort", clearIdleTimer, { once: true });
 
   gate.open();
+  armIdleTimer();
 
   function adopt(generation: OpenCodeV2Generation): void {
     if (retired) return;
@@ -224,6 +271,7 @@ export function createAttempt(id: number, lifecycleSignal: AbortSignal): Attempt
     // attempt. The failure is kept as readiness's rejection reason.
     retired = true;
     hydrating = false;
+    clearIdleTimer();
     connection.abort();
     gate.reject(error);
   }
@@ -232,6 +280,7 @@ export function createAttempt(id: number, lifecycleSignal: AbortSignal): Attempt
     if (retired) return;
     retired = true;
     hydrating = false;
+    clearIdleTimer();
     connection.abort();
     gate.reject(new AttemptSupersededError(id));
   }
@@ -266,5 +315,6 @@ export function createAttempt(id: number, lifecycleSignal: AbortSignal): Attempt
     retire,
     load,
     setLoad,
+    noteActivity: armIdleTimer,
   };
 }
