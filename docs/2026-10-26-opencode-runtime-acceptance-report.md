@@ -31,6 +31,11 @@ failures were changed.
 |---|---|---|---|---|---|---|---|---|
 | 40294666676 | 36f5f13 | push | **FAIL** (2 tests) | PASS | PASS | PASS | **FAIL** (2 specs) | skipped |
 | 40323271013 | fa60060 | push | **PASS** | **FAIL** (G2 step) | PASS | PASS | **FAIL** (2 specs) | skipped |
+| 40329107636 | 6624227 | push | **PASS** | **FAIL** (G2 step) | PASS | PASS | **FAIL** (2 specs) | skipped |
+
+Run 40329107636 (the docs commit) is consistent with 40323271013: `verify` passes, the G2
+step fails for the same runner port-3000 condition, and the two pre-existing E2E spec
+failures persist. It confirms no job behaviour changed with the docs-only commit.
 
 ### Run 40294666676 (at 36f5f13)
 
@@ -207,7 +212,8 @@ G2 evidence from run 40323271013 (`tauri` job, `tauri-webview-origin` artifact, 
 `12650616923`) records the new `backendStartupFailed: true` flag. **G2 cannot produce a
 clean PASS until the runner's port 3000 condition is addressed** (e.g. by ensuring the
 port is free before the `tauri` job, or by moving the G2 observation to a
-non-contented runner).
+non-contented runner). The condition was observed in both run 40323271013 and run
+40329107636 (the docs-only follow-up), so it is consistent, not a one-off.
 
 ### Unresolved — pre-existing E2E failures (out of scope)
 
@@ -220,7 +226,7 @@ The following two E2E spec failures are present in both `36f5f13` and `fa60060` 
 
 Both are **pre-existing** (present in the G5 comparison's 8 common failures). They are
 not regressions from the G2 commit. Per the task instruction, they are not expanded into
-unrelated E2E repairs.
+unrelated E2E repairs. They persist in runs 40323271013 and 40329107636 as well.
 
 ### Not executed — `verify` re-run at `36f5f13`
 
