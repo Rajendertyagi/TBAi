@@ -8,8 +8,8 @@
 
 ```
 Branch : ci/tauri-e2e-verify
-Code   : 0458faa4e441aa90a369e12e6a8ee3446e59f66c   (every job below ran this tree)
-Docs   : ab9406ae2c7d26f6982bc3fa0edb68b2d2508cb2   (this document's first committed form)
+Code   : 0458faa4e441aa90a369e12e6a8ee3446e59f66c   (the code under test)
+Docs   : ab9406a, c621fb0, and later — this document only
 ```
 
 Four commits carry the work, in the order they were pushed:
@@ -24,10 +24,12 @@ Four commits carry the work, in the order they were pushed:
 The task started from `ae41ff6`. No G1 implementation was changed, and no E2E spec,
 acceptance criterion, timeout or assertion was relaxed.
 
-This document was refined afterwards in docs-only commits. A docs-only commit cannot
-change what a job executes, so every claim below cites the run whose SHA it names rather
-than "the current head": the three runs that carry the code fix are `0efbd11`,
-`0458faa` and `ab9406a`, and a later edit to this file neither re-runs them nor inherits
+This document was refined afterwards in docs-only commits (`ab9406a`, `c621fb0`, and the
+commit that carries the text you are reading). A docs-only commit cannot change what a
+job executes — `git diff 0458faa..c621fb0 -- src web src-tauri` is empty — so every claim
+below cites the run whose SHA it names rather than "the current head": the runs that carry
+the fix are `0efbd11` and `0458faa`, plus `ab9406a` and `c621fb0`, whose trees differ from
+`0458faa` only in `docs/`. A later edit to this file neither re-runs them nor inherits
 their conclusions.
 
 ---
@@ -43,14 +45,18 @@ their conclusions.
 | 40350649628 | 0efbd11 | **FAIL** (1 flaky test) | **PASS** | PASS | **PASS** | PASS | PASS | **FAIL** |
 | 40351287342 | 0458faa | **PASS** | **PASS** | PASS | **PASS** | **FAIL** | PASS | **FAIL** |
 | 40353996209 | ab9406a (docs-only) | **PASS** | **PASS** | PASS | **PASS** | **PASS** | PASS | **FAIL** |
+| 40357762624 | c621fb0 (docs-only) | **FAIL** (1 flaky test) | **PASS** | PASS | **PASS** | **PASS** | PASS | **FAIL** |
 
 `e2e-full` (G5) and `e2e-big-pickle` are dispatch-only and were skipped in every run.
 
-The rows that matter for this task are `0efbd11`, `0458faa` and `ab9406a`: **G2 passed in
-all three**, G1 passed in all three, and the `tauri` job is fully green in all three —
-Rust typecheck, Rust tests, `tauri build`, the packaged smoke test, G1, G2 and both
-uploads. `verify` is green in two of the three; `opencode-g3` is green in two of the
-three. Both exceptions are addressed in §5 and §7.
+The rows that matter for this task are `0efbd11`, `0458faa`, `ab9406a` and `c621fb0`:
+**G2 passed in all four**, G1 passed in all four, and the `tauri` job — Rust typecheck,
+Rust tests, `tauri build`, the packaged smoke test, G1, G2 and both uploads — is green in
+all four. `opencode-g3` is green in three of the four. `verify` is green in two of the
+four, and its two failures are different tests: `0efbd11` failed `memory-wiring`, and
+`c621fb0` — a commit that changes **only this Markdown file** — failed a `mcp-v2`
+transport-loss case. Neither failure is reachable from the code in those commits; §5 and
+§7 record them.
 
 ### The `36f5f13` G2 "PASS" was a false positive
 
@@ -166,8 +172,8 @@ that exit code:
   and no teardown error was recorded;
 - the evidence file was written.
 
-G2 succeeded in **all three** runs that carried the fix (`0efbd11`, `0458faa` and the
-docs commit `ab9406a`), and G1 succeeded in the same three. Artifact
+G2 succeeded in **all four** runs that carry the fix (`0efbd11`, `0458faa`, and the
+docs-only commits `ab9406a` and `c621fb0`), and G1 succeeded in the same four. Artifact
 `tauri-webview-origin`:
 
 | Run | Artifact ID | Bytes |
@@ -175,6 +181,7 @@ docs commit `ab9406a`), and G1 succeeded in the same three. Artifact
 | 40350649628 (`0efbd11`) | `12664382195` | 11,169 |
 | 40351287342 (`0458faa`) | `12664332072` | 11,244 |
 | 40353996209 (`ab9406a`) | `12666271026` | 11,144 |
+| 40357762624 (`c621fb0`) | `12667533914` | 11,247 |
 
 The artifact contents (`dev.json`, the sanitized logs) could **not** be downloaded from
 this environment: GitHub requires authentication for artifact zips and step logs
@@ -206,9 +213,9 @@ observation.
 
 ## 4. G1 evidence (accepted, unchanged)
 
-G1 was not touched. In all three runs that carry the work (`0efbd11`, `0458faa`,
-`ab9406a`) the packaged observation step succeeded, together with the packaged build,
-the portable-folder assembly and the packaged smoke test. The accepted G1 evidence
+G1 was not touched. In all four runs that carry the work (`0efbd11`, `0458faa`,
+`ab9406a`, `c621fb0`) the packaged observation step succeeded, together with the packaged
+build, the portable-folder assembly and the packaged smoke test. The accepted G1 evidence
 remains run `40294666676`, artifact
 `tauri-webview-origin` (ID `12638461295`): origin `http://app.localhost`, in-origin API
 `200`, instance `e760d3cb-e9b1-4282-b43d-838d51769d8c`, WebDriver session delete `200`,
@@ -216,21 +223,38 @@ temporary root removed, both logs written. No G1 code changed.
 
 ---
 
-## 5. `verify` job — results and the known flaky test
+## 5. `verify` job — results and three intermittent failures
 
 | Run | Result | Detail |
 |---|---|---|
 | 40294666676 (`36f5f13`) | FAIL | `memory-wiring.test.ts` "considers at most 50 candidates" ~40.2 s vs 30 s; `stdin-shutdown.test.ts` "graceful shutdown" 3,361 ms vs 3,000 ms |
-| 40323271013, 40329107636, 40332084934 | PASS | both tests pass |
+| 40323271013, 40329107636, 40332084934 | PASS | all tests pass |
 | 40350649628 (`0efbd11`) | FAIL | **1** test: `memory-wiring.test.ts` "considers at most 50 candidates" **33,537 ms** vs 30 s; totals 5,026 pass / 64 skip / 1 fail |
 | 40351287342 (`0458faa`) | PASS | — |
 | 40353996209 (`ab9406a`) | PASS | — |
+| 40357762624 (`c621fb0`, docs-only) | FAIL | **1** test: `mcp-v2.test.ts` "F3 — unexpected session/transport loss > transitions to error and reconnects when transport closes unexpectedly" **5,735.87 ms**; totals 5,026 pass / 64 skip / 1 fail |
 
-Local evidence for the same test: ~1.3–1.4 s per run in three consecutive runs. The
-500-row `assembleContext` call is load-sensitive under full-suite runner load; it is
-intermittent, not deterministic, and it is not touched by any commit here (the only
-`src/` changes add an `instanceId` field to two log records). **No timeout was
-relaxed and no test was skipped or removed.**
+Three different tests have now failed intermittently on this branch, each on a tree where
+the same suite passed elsewhere, and the last one on a commit that changes **only this
+Markdown file** (`git diff 0458faa..c621fb0 -- src web src-tauri` is empty). That is the
+clearest evidence available that these are environmental timings, not regressions: the
+inputs of the passing and failing `verify` jobs are byte-identical in every file a test
+compiles.
+
+- `memory-wiring.test.ts` "considers at most 50 candidates": ~1.3–1.4 s per run locally in
+  three consecutive runs, 33.5–40.2 s against a 30 s budget in CI. The 500-row
+  `assembleContext` call is load-sensitive under full-suite runner load.
+- `stdin-shutdown.test.ts` "graceful shutdown": 3,361 ms against a 3,000 ms budget in CI,
+  well under 3 s locally; the drain paths it waits on are bounded but load-sensitive.
+- `mcp-v2.test.ts` F3: 28 pass / 0 fail twice locally (`69.84 s` and `69.18 s` for the
+  whole file). The case is built on two wall-clock waits — a 5 s poll for the `onclose`
+  error transition, then the manager's 5 s `RECONNECT_DELAY_MS` retry timer — so a
+  5,735.87 ms failure is consistent with either assertion group (the error transition not
+  logged within its 5 s budget, or the reconnect assertions after the timer fired). Which
+  one it was is **not observed**: step logs are not readable from here (§7). No assertion
+  was relaxed to explain it.
+
+**No timeout was relaxed and no test was skipped or removed.**
 
 ---
 
@@ -276,11 +300,11 @@ provenance claim was re-checked here with `git diff` against the code head.
 
 ## 7. All unresolved findings and limitations
 
-### Unresolved — `opencode-g3` failed once in three runs
+### Unresolved — `opencode-g3` failed once in four runs
 
 Run 40351287342 (`0458faa`): the `Override-notice evidence (G3)` step exited 1. The
-same job passed in run 40350649628 (`0efbd11`), four minutes earlier, and passed again
-in run 40353996209 (`ab9406a`). `git diff
+same job passed in run 40350649628 (`0efbd11`), four minutes earlier, and passed again in
+runs 40353996209 (`ab9406a`) and 40357762624 (`c621fb0`). `git diff
 0efbd11..0458faa --name-only` is exactly `scripts/observe-dev-webview-origin.ts` and
 its unit test; the G3 driver (`scripts/run-g3-override-evidence.ts`) imports neither,
 and no product source differs between those runs. The job's own inputs were therefore
@@ -289,10 +313,22 @@ this work.
 
 Its cause was **not observed**: step logs and the `g3-override-evidence` artifacts
 require authentication to read. The one observable difference is size —
-`12664081214` (failing run) is 13,995 bytes against 20,095 and 20,091 bytes in the two
-passing runs, which is consistent with the failing run stopping before both cases wrote
-their evidence. The failure is recorded as unresolved, not explained away, and it is
-not being called green: a red job occurred at a commit that carries this work.
+`12664081214` (failing run) is 13,995 bytes against 20,095, 20,091 and 20,108 bytes in
+the three passing runs, which is consistent with the failing run stopping before both
+cases wrote their evidence. The failure is recorded as unresolved, not explained away,
+and it is not being called green: a red job occurred at a commit that carries this work.
+
+### Unresolved — `verify` is intermittent, and one failure landed on a docs-only commit
+
+Three of the eight runs in §2 have a red `verify` — `36f5f13` (two tests), `0efbd11`
+(`memory-wiring`) and `c621fb0` (a `mcp-v2` transport-loss case) — and `c621fb0` is the
+commit that changes **only this Markdown file**, so its tree differs from the passing
+`ab9406a` in `docs/` alone. The per-test timings are in §5. This is an unresolved property
+of the suite under runner load, not of the change: the same compiled inputs passed and
+failed. No timeout was relaxed and no test was skipped, so the job can still be red for
+reasons this task did not cause and does not fix. The honest consequence is that
+"`verify` is green" is true of `0458faa` and `ab9406a` only, and is not a stable property
+of the branch.
 
 ### Unresolved — pre-existing E2E failures (out of scope)
 
@@ -318,9 +354,11 @@ downloadable. What *is* readable unauthenticated — run and job conclusions, pe
 conclusions, artifact names/IDs/sizes, and check-run annotations — is quoted above with
 its run and artifact identifiers. The literal values quoted for G1 (§4) and for the
 `fa60060` launch (§3.1) were recorded when those artifacts were first inspected earlier
-in this work; they were **not** re-read for this revision, and the G2 `dev.json` for the
-three passing runs was never opened. Those passes rest on the step exit codes plus the
-unit tests that pin each assertion.
+in this work; they were **not** re-read for this revision, and no G2 `dev.json` was
+opened. Those passes rest on the step exit codes plus the unit tests that pin each
+assertion. Step *logs* are readable only as the annotations GitHub exposes, which is how
+the failing test names and counts in §5 were obtained; the assertion that fired inside
+`mcp-v2.test.ts` F3 was not among them.
 
 ### Limitation — the Rust change was compiled only in CI
 
@@ -361,10 +399,20 @@ Every command below was run against `0458faa` and its real exit code is reported
 | `bun run test:lifecycle-integration` | exit 0 — 3 tests, 0 fail |
 | `bun run test:dom` | exit 0 — **577 pass**, 0 fail |
 | `bun run test:quarantine` | exit 0 |
+| `bun test tests/integration/mcp/mcp-v2.test.ts` | exit 0 twice — **28 pass**, 0 fail (`69.84 s`, `69.18 s` for the file) |
+
+Several entries were re-run while composing this revision, against the same code tree
+(`docs/` changes do not affect any of them): `bun run format:check`, `bun run lint`,
+`bun run test:locations`, `bun run build`, the focused 67-case suite, the full
+`bun run test` (5,025 pass / 66 skip / 0 fail), the three lifecycle suites, `test:dom`
+(577 pass) and `test:quarantine`, all exit 0 — the same results as recorded above. The
+`mcp-v2` file was run twice specifically because CI failed it at `c621fb0`: it passed
+both times locally.
 
 The two local failures in the first full run were not captured with their names; the
-second full run of the identical tree was clean, and CI's `verify` at `0458faa` and
-`ab9406a` was clean. They are recorded here rather than omitted.
+second full run of the identical tree was clean, and CI's `verify` was clean at `0458faa`
+and `ab9406a` and red at `c621fb0` (docs-only). They are recorded here rather than
+omitted.
 
 ### Tests that cover this work
 
@@ -389,24 +437,26 @@ second full run of the identical tree was clean, and CI's `verify` at `0458faa` 
 ## 9. Verdict
 
 **G2: PASS.** The development window is served by the backend that owns the configured
-port, the failure attribution is per process, and the observation passed three times with
-the fix in place (`0efbd11`, `0458faa`, `ab9406a`) while G1 and the packaged smoke test
-stayed green in the same jobs. The previous HOLD rested on a misattributed failure; that
-attribution is corrected in §3 and the competing backend it described no longer exists in
-a development launch.
+port, the failure attribution is per process, and the observation passed four times with
+the fix in place (`0efbd11`, `0458faa` and the docs-only commits `ab9406a` and `c621fb0`)
+while G1 and the packaged smoke test stayed green in the same jobs. The previous HOLD
+rested on a misattributed failure; that attribution is corrected in §3 and the competing
+backend it described no longer exists in a development launch.
 
-**Overall acceptance: HOLD**, for two reasons that are not the G2 defect:
+**Overall acceptance: HOLD**, for reasons that are not the G2 defect:
 
-1. `opencode-g3` failed in one of the three runs that carry this work (`0458faa`), with
+1. `opencode-g3` failed in one of the four runs that carry this work (`0458faa`), with
    no observable cause, against inputs identical to runs that passed immediately before
    and after it. One red job at a commit carrying the work is not a pass.
 2. The two pre-existing E2E spec failures remain, as they did at the base commit, and
    were explicitly out of scope.
+3. `verify` is intermittent across three distinct tests, and at `c621fb0` it failed on a
+   tree that differs from a green run only in `docs/`. That is a suite-under-load problem
+   this task did not introduce and did not fix, and it is not being called green.
 
-Both are disclosed rather than absorbed, and neither is caused by this work. The
-`verify` flake is the third item: green at `0458faa` and `ab9406a`, red at `0efbd11`,
-with the known 30 s-budget test at 33.5 s.
+Each is disclosed rather than absorbed, and none is caused by this work.
 
 What is **not** claimed: that the `e2e` job's per-spec failures were re-read for the new
-runs, that the G2 artifact's literal values were read back, or that `opencode-g3` is
-fixed. No gate was made green by weakening it.
+runs, that the G2 artifact's literal values were read back, that the exact assertion
+inside `mcp-v2.test.ts` F3 is known, or that `opencode-g3` and `verify` are fixed. No gate
+was made green by weakening it.
