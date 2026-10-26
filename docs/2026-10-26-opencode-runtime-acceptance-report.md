@@ -1,172 +1,217 @@
 # OpenCode Runtime — Final Evidence and CI Remediation
 
-**Branch:** `ci/tauri-e2e-verify` · **HEAD:** `fa60060fbee796271f88dd328880295fcd5a0234` · **Date:** 2026-10-26
+**Branch:** `ci/tauri-e2e-verify` · **HEAD under test:** `0458faa4e441aa90a369e12e6a8ee3446e59f66c` · **Date:** 2026-10-26
 
 ---
 
-## 1. Branch HEAD and commit SHA
+## 1. Branch HEAD and commits
 
 ```
 Branch : ci/tauri-e2e-verify
-HEAD   : fa60060fbee796271f88dd328880295fcd5a0234
-Title  : fix(g2): fail the dev origin observation when the launched backend failed to start
+HEAD   : 0458faa4e441aa90a369e12e6a8ee3446e59f66c
 ```
 
-The task started from `36f5f13` (the G1 gsudo fix). The G2 probe defect was fixed in one
-additional commit, `fa60060`, which touched only:
+Three commits carry the work, in the order they were pushed:
 
-- `scripts/observe-dev-webview-origin.ts` — added `backendStartupFailed` to `DevOriginInput`,
-  `assessDevOrigin`, and `main()`; recorded the flag in the uploaded `dev.json`.
-- `tests/unit/tooling/webview-origin-evidence.test.ts` — added the `backendStartupFailed`
-  default to `devInput` and two regression tests.
+| Commit | Subject | Touches |
+|---|---|---|
+| `e279daf` | `fix(tauri): development attaches to the beforeDevCommand backend instead of spawning a sidecar` | `src-tauri/src/main.rs`, `docs/architecture.md`, `docs/decisions.md` |
+| `0efbd11` | `fix(g2): attribute backend startup by instance, and log the instance id` | `src/server.ts`, `src/index.ts`, `scripts/observe-dev-webview-origin.ts`, its unit test, `docs/logging.md` |
+| `0458faa` | `refactor(g2): name the attribution's unconsumed lines for what they are` | the same script and test (`nonLogLines` → `otherLines`, comment corrected) |
 
-No G1 implementation was changed. No production modules exercised by the two `verify` test
-failures were changed.
+The task started from `ae41ff6`. No G1 implementation was changed, and no E2E spec,
+acceptance criterion, timeout or assertion was relaxed.
 
 ---
 
 ## 2. GitHub Actions runs and job conclusions
 
-| Run ID | SHA | Trigger | `verify` | `tauri` | `opencode-runtime` | `opencode-g3` | `e2e` | `e2e-full` |
+| Run ID | SHA | `verify` | `tauri` | G1 | G2 | `opencode-g3` | `opencode-runtime` | `e2e` |
 |---|---|---|---|---|---|---|---|---|
-| 40294666676 | 36f5f13 | push | **FAIL** (2 tests) | PASS | PASS | PASS | **FAIL** (2 specs) | skipped |
-| 40323271013 | fa60060 | push | **PASS** | **FAIL** (G2 step) | PASS | PASS | **FAIL** (2 specs) | skipped |
-| 40329107636 | 6624227 | push | **PASS** | **FAIL** (G2 step) | PASS | PASS | **FAIL** (2 specs) | skipped |
+| 40294666676 | 36f5f13 | **FAIL** (2 tests) | PASS | PASS | **PASS (false positive)** | PASS | PASS | **FAIL** (2 specs) |
+| 40323271013 | fa60060 | PASS | **FAIL** | PASS | **FAIL** | PASS | PASS | **FAIL** |
+| 40329107636 | 6624227 | PASS | **FAIL** | PASS | **FAIL** | PASS | PASS | **FAIL** |
+| 40332084934 | ae41ff6 | PASS | **FAIL** | PASS | **FAIL** | PASS | PASS | **FAIL** |
+| 40350649628 | 0efbd11 | **FAIL** (1 flaky test) | **PASS** | PASS | **PASS** | PASS | PASS | **FAIL** |
+| 40351287342 | 0458faa | **PASS** | **PASS** | PASS | **PASS** | **FAIL** | PASS | **FAIL** |
 
-Run 40329107636 (the docs commit) is consistent with 40323271013: `verify` passes, the G2
-step fails for the same runner port-3000 condition, and the two pre-existing E2E spec
-failures persist. It confirms no job behaviour changed with the docs-only commit.
+`e2e-full` (G5) and `e2e-big-pickle` are dispatch-only and were skipped in every run.
 
-### Run 40294666676 (at 36f5f13)
+The row that matters for this task is `0458faa`: the `tauri` job is fully green —
+Rust typecheck, Rust tests, `tauri build`, the packaged smoke test, G1 and G2 — and
+`verify` is green. The two red jobs are addressed in §5 to §7.
 
-- `verify`: FAILED — `memory-wiring.test.ts` "considers at most 50 candidates" exceeded the
-  30 s timeout (measured ~40.2 s); `stdin-shutdown.test.ts` "graceful shutdown" measured 3,361 ms
-  against a 3,000 ms budget.
-- `tauri`: PASSED — G1 and G2 both reported success (G2 is the run this task investigated).
-- `opencode-runtime`: PASSED.
-- `opencode-g3`: PASSED.
-- `e2e`: FAILED — `p2-live-runtime.spec.ts` "A/D/E: streaming follows at the end" and
-  `phase-8-tabs-navigation.spec.ts` "deleting the active conversation falls back safely;
-  deleted id never active" (120 s click timeout).
-- `e2e-full` (G5): skipped (dispatch-only job).
+### The `36f5f13` G2 "PASS" was a false positive
 
-### Run 40323271013 (at fa60060, triggered by pushing the G2 fix)
-
-- `verify`: PASSED — both tests that failed at `36f5f13` passed on this run, confirming
-  they are **intermittent, load-sensitive** failures, not code defects.
-- `tauri`: FAILED — the `Observe the development WebView origin (G2)` step exited 1.
-  This is the expected consequence of the G2 fix: the runner's port 3000 was again in use,
-  the `beforeDevCommand` backend logged `startup_failed` (EADDRINUSE), and the corrected
-  probe now correctly refuses to report PASS on the foreign API. See §4.
-- `opencode-runtime`: PASSED.
-- `opencode-g3`: PASSED.
-- `e2e`: FAILED — the same two spec failures as at `36f5f13` (pre-existing, not a regression
-  from the G2 commit; the G2 commit touched only `scripts/` and one test file).
+G2 passed on `36f5f13` because the probe could only ask "does the application log
+contain `startup_failed`" — and at that revision it did not ask even that. The window
+and the API it observed were real, but the launch was simultaneously failing in a
+process the check could not name. That pass is the reason the check was investigated;
+it is **not** evidence that the development launch was healthy. See §3.
 
 ---
 
-## 3. G1 evidence (accepted, unchanged)
+## 3. G2 — verified root cause, the ownership fix, and the attribution rule
 
-Run 40294666676, `tauri` job, artifact `tauri-webview-origin` (ID `12638461295`):
+### 3.1 Root cause (proven, not inferred)
 
-| Value | Evidence |
-|---|---|
-| Packaged app launched | G1 step success; driver tree confirmed stopped at teardown |
-| Host integrity | `medium`; `elevated: false` |
-| Observed WebView origin | `http://app.localhost` |
-| In-origin API status | `200` |
-| Instance ID (in-origin) | `e760d3cb-e9b1-4282-b43d-838d51769d8c` |
-| WebDriver session delete | `200` |
-| Temporary root removed | confirmed |
-| Both logs written | confirmed |
+A single `tauri dev` launch started **two backends** and let one of them fail:
 
-G1 is **PASS** for run 40294666676. No code was changed.
+1. `tauri.conf.json` sets `build.beforeDevCommand: "bun run dev"` and
+   `build.devUrl: "http://localhost:3000"`. The Tauri CLI starts `beforeDevCommand`
+   and **waits for `devUrl` to answer before it launches the Rust app** — the CLI
+   exposes `--no-dev-server-wait` precisely because waiting is the default
+   (`bun node_modules/@tauri-apps/cli/tauri.js dev --help`, run locally).
+   So the `beforeDevCommand` backend bound :3000 first and owned it.
+2. The G2 driver forces `PORT=3000` into the `tauri dev` process, so the dev backend
+   binds the port the window loads instead of self-healing upward. With an explicit
+   `PORT`, `bindBootPort` treats the port as authoritative and does not scan
+   (`src/services/server-listener.ts`).
+3. The Rust shell then ran `attempt()`, which spawned the packaged `tbai-server`
+   sidecar. `tauri-plugin-shell` starts that child with the parent environment plus
+   the explicit `.env()` calls, so it inherited `PORT=3000`, `DATA_DIR` and
+   `TBAI_LOG_FILE`.
+4. The sidecar's `bindBootPort(3000)` threw `EADDRINUSE` — again with no heal scan,
+   because `PORT` was set — `startServer` rejected, `src/index.ts` logged
+   `server.startup_failed`, and the child exited. The Rust shell's crash window then
+   retried it (up to 3 times in 30s) while the window kept loading the first backend.
+5. Both processes wrote to the **same** application log, because both inherited
+   `TBAI_LOG_FILE` from the launch.
+
+Evidence that the failing process was the sidecar and not the frontend's backend: the
+log carried the compiled sidecar's own stack frames, the `tauri dev` process tree
+stayed up (`dev.exitedEarly: false`), and the in-page API answered `200` with an
+instance id (`96158112-9204-42d3-a94a-c4ee24ea5048` in artifact `12650616923`) while
+the failure was being logged. A process that has failed to bind cannot serve that
+answer; two processes were present, and the log did not say which one spoke.
+
+**This corrects §4 of the previous revision of this report.** That revision read the
+same `startup_failed` line as "the `beforeDevCommand` backend failed and a foreign
+server held port 3000". The ordering above (Tauri waits for `devUrl` first) and the
+stack trace make that attribution wrong: the intended backend was serving the page the
+whole time, and the redundant sidecar was the process that died.
+
+### 3.2 The fix — one owner per launch
+
+`src-tauri/src/main.rs`:
+
+- `attempt()` now branches on `tauri::is_dev()` (`!cfg!(feature = "custom-protocol")`,
+  the CLI's own build-time switch: true for `tauri dev`, false for release **and**
+  `--debug` packaged builds). In development it calls `attach_dev_backend()` and
+  returns before any sidecar code runs — no spawn, no port mirror, no shell job, no
+  crash recovery, no stdin handshake, because there is no child.
+- `attach_dev_backend()` reads the port from `build.devUrl` (never `PORT`, never the
+  mirror) and polls `GET /api/server/instance` until an answer **carrying an instance
+  id** arrives, then publishes the endpoint and emits `backend-ready`. A static page
+  or a non-TBAi server on the same port answers without `instanceId` and is not
+  accepted. `retry_startup` re-enters the same path.
+- `quit_owned()` is unchanged: with no child it has nothing to handshake with and
+  exits immediately.
+
+Packaged startup, crash recovery, the named kill-on-close job and the graceful
+shutdown handshake are untouched. `tauri build` and the packaged smoke test passed in
+both new runs, which is the observable proof that the packaged branch still works.
+
+### 3.3 The attribution rule — a record names its process
+
+- `server.started` now logs `port` and `instanceId`; `server.startup_failed` logs
+  `instanceId`. `instanceId` is exactly what `GET /api/server/instance` returns
+  (`TBAI_INSTANCE_ID`, or a fresh UUID).
+- `scripts/observe-dev-webview-origin.ts#attributeBackendLog()` parses the log's JSON
+  lines, keeps only `scope: "server"` lifecycle records, and groups starts and failures
+  by the instance that wrote them. Entries with no instance id are kept as
+  `unattributedFailures` rather than credited to somebody.
+- `assessDevOrigin()` accepts an observation only when the instance that answered the
+  in-page API is the instance the log records as having **started on the configured
+  port**. The failure matrix is: own failure → `dev-start` failure; no start record for
+  the answering instance → `dev-start` failure; bound-port mismatch → `dev-start`
+  failure. A `startup_failed` from a **different** instance becomes a `note`, printed as
+  `[g2] note: …` and recorded in `dev.json`, and does not fail the run.
+- The evidence file records `observations.observedInstanceId`, a derived
+  `observations.backendStartupFailed` (true only for the answering instance) and the
+  full `backendStartup` attribution.
+
+This is the rule that was missing: a shared log file must not turn one process's crash
+into another process's failed evidence, and a failure from one process must not be
+reported as another's.
+
+### 3.4 What a G2 PASS asserts
+
+`main()` returns 0 only when **all** of the following hold, and the step conclusion is
+that exit code:
+
+- the web bundle was built by this run;
+- `tauri dev` started and did not exit early;
+- the CDP endpoint answered and a `page` target exists on the configured origin;
+- `Runtime.evaluate` reported `location.origin === "http://localhost:3000"` — the
+  observed origin, never the configured value;
+- the in-page `GET /api/server/instance` returned `200` with a non-empty instance id;
+- that instance has a `server.started` record whose `port` is 3000;
+- teardown: the dev process tree was confirmed terminated, the temporary root removed,
+  and no teardown error was recorded;
+- the evidence file was written.
+
+G2 succeeded in **both** runs that carried the fix (`0efbd11` and `0458faa`), and G1
+succeeded in both. Artifact `tauri-webview-origin`:
+
+| Run | Artifact ID | Bytes |
+|---|---|---|
+| 40350649628 (`0efbd11`) | `12664382195` | 11,169 |
+| 40351287342 (`0458faa`) | `12664332072` | 11,244 |
+
+The artifact contents (`dev.json`, the sanitized logs) could **not** be downloaded from
+this environment: GitHub requires authentication for artifact zips and step logs
+(`/actions/artifacts/<id>/zip` answers `401` with no token available). Everything in
+this section therefore rests on the step conclusions — which are the exit code of the
+assertions above — plus the unit tests that pin each of those assertions. The literal
+observed instance id and origin string are inside `dev.json` and were not read back.
+
+### 3.5 Why this is not a false positive
+
+For a `PASS` to be wrong, a **foreign** TBAi backend on :3000 would have to answer the
+in-page probe with an instance id that also appears in a `server.started` record in
+*this run's* application log. The log is a fresh file in a fresh temporary root
+(`TBAI_LOG_FILE` under `mkdtemp`), inherited only by this launch's own children, and
+the instance id is a per-boot UUID. A second, unrelated instance cannot write into it.
+The accepted answer and the accepted start record therefore belong to the same process
+the launch started.
+
+### 3.6 What G2 does not assert
+
+G2 does **not** assert that no other process in the launch failed. That is deliberate:
+making another instance's failure fatal would restore exactly the misattribution this
+work removed. The absence of the redundant sidecar is a property of the source
+(`tauri::is_dev()` returns before any sidecar code), and its compiled reality is the
+green `cargo check --all-targets`, `cargo test` and `tauri build` steps — not a G2
+observation.
 
 ---
 
-## 4. G2 `EADDRINUSE` log — root cause and disposition
+## 4. G1 evidence (accepted, unchanged)
 
-### Causal chain
-
-1. The G2 probe (`scripts/observe-dev-webview-origin.ts`) forces `PORT=3000` into the
-   `beforeDevCommand` child's environment so the backend binds the port `devUrl` names
-   (`http://localhost:3000`).
-2. If port 3000 is already held on the CI runner (a prior TBAi instance, another job's
-   leftover process, or runner infrastructure), the launched backend's
-   `bindBootPort(3000)` throws `EADDRINUSE`. Because `PORT` is in the environment
-   (`isPortEnvLocked()` returns true), the heal-scan is skipped and the error is
-   re-thrown: the backend logs `startup_failed` and exits.
-3. The Tauri shell (`tauri dev` Rust process) does **not** exit — it continues running.
-   The WebView loads `http://localhost:3000` and the CDP endpoint becomes available.
-4. The probe's CDP observation finds a page target on `http://localhost:3000` and runs
-   the in-page `fetch('/api/server/instance')`. The response comes from **whatever
-   server is holding port 3000** — not necessarily the process this run launched.
-5. Before the fix, `assessDevOrigin` had no way to detect this: it checked
-   `dev.exitedEarly` (the `tauri dev` process, not the backend child) and the CDP/probe
-   results. A PASS was recorded even though the observed API belonged to a **foreign
-   server** — a false-positive acceptance.
-
-### Disposition
-
-This is a **real defect in the G2 probe**, not an expected architectural consequence.
-The fix (commit `fa60060`):
-
-- `main()` now reads the application log (`TBAI_LOG_FILE`, written by the
-  `beforeDevCommand` backend, captured **before** the temporary root is removed) and
-  computes `backendStartupFailed = /startup_failed/.test(appLogText)`.
-- `assessDevOrigin` adds a `dev-start` failure when the flag is set, with the message:
-  *"the backend that beforeDevCommand spawned failed to start (startup_failed in the
-  application log), so the observed WebView/API belongs to a foreign server on the same
-  port, not to this launch."*
-- The flag is recorded in the uploaded `dev.json` under `observations.backendStartupFailed`,
-  so the artifact makes the attribution failure visible.
-
-### Verification
-
-Run 40323271013 (`fa60060`) `tauri` job: the G2 step **failed with exit code 1**.
-This is the correct new behaviour: the runner again had port 3000 occupied, the
-`beforeDevCommand` backend logged `startup_failed`, and the probe now correctly refuses
-to report PASS. The runner's repeated port 3000 contention is a **test-environment
-condition** (not reproducible locally; the port is free locally), and it is now
-**correctly surfaced** rather than silently absorbed.
-
-**G2 is HOLD**: the probe is fixed and the fix is committed with regression tests, but
-the underlying runner condition (port 3000 already in use when the `tauri` job runs)
-is not resolved. G2 cannot produce a clean PASS on a runner where 3000 is occupied.
-
-Regression tests added (`tests/unit/tooling/webview-origin-evidence.test.ts`):
-- `dev-start` stage failure when `backendStartupFailed: true` (and the message text).
-- Clean PASS when `backendStartupFailed: false`.
-- 59 tests pass locally; `bun run typecheck` and `bun run test:locations` exit 0.
+G1 was not touched. In both new runs (`0efbd11`, `0458faa`) the packaged observation
+step succeeded, together with the packaged build, the portable-folder assembly and the
+packaged smoke test. The accepted G1 evidence remains run `40294666676`, artifact
+`tauri-webview-origin` (ID `12638461295`): origin `http://app.localhost`, in-origin API
+`200`, instance `e760d3cb-e9b1-4282-b43d-838d51769d8c`, WebDriver session delete `200`,
+temporary root removed, both logs written. No G1 code changed.
 
 ---
 
-## 5. `verify` job test failures — root-cause assessment
+## 5. `verify` job — results and the known flaky test
 
-### "considers at most 50 candidates" (`memory-wiring.test.ts`)
+| Run | Result | Detail |
+|---|---|---|
+| 40294666676 (`36f5f13`) | FAIL | `memory-wiring.test.ts` "considers at most 50 candidates" ~40.2 s vs 30 s; `stdin-shutdown.test.ts` "graceful shutdown" 3,361 ms vs 3,000 ms |
+| 40323271013, 40329107636, 40332084934 | PASS | both tests pass |
+| 40350649628 (`0efbd11`) | FAIL | **1** test: `memory-wiring.test.ts` "considers at most 50 candidates" **33,537 ms** vs 30 s; totals 5,026 pass / 64 skip / 1 fail |
+| 40351287342 (`0458faa`) | PASS | — |
 
-- CI at `36f5f13`: measured ~40.2 s against a 30 s per-test timeout.
-- Locally: 3 consecutive runs completed in ~1.3–1.4 s each (well under the budget).
-- CI at `fa60060` (run 40323271013): **PASSED**.
-- `36f5f13` changed only `.github/workflows/tests.yml` and the G2 unit test — neither
-  touches the production memory-assembly modules. The prior passing `verify` run at
-  `66f6936` (40292211888) supports that the production code is unchanged.
-- **Classification: intermittent, load-sensitive.** Under full CI-suite runner load the
-  500-row `assembleContext` call exceeds the 30 s budget. No code defect. No timeout
-  relaxation is authorized.
-
-### "graceful shutdown" (`stdin-shutdown.test.ts`)
-
-- CI at `36f5f13`: measured 3,361 ms against a 3,000 ms budget.
-- Locally: 4 tests in ~12.7 s total; the shutdown child exits well under 3 s.
-- CI at `fa60060` (run 40323271013): **PASSED**.
-- **Classification: intermittent, load-sensitive.** The shutdown spine's drain paths
-  (scheduler, MCP, chat runs, stream cleanup) are bounded but can exceed 3,000 ms under
-  runner load. No code defect. No timeout relaxation is authorized.
-
-Both failures are **supported as intermittent by two independent CI runs**
-(40294666676 failed; 40323271013 passed) and by local evidence. No code changes to
-those tests were made or authorized.
+Local evidence for the same test: ~1.3–1.4 s per run in three consecutive runs. The
+500-row `assembleContext` call is load-sensitive under full-suite runner load; it is
+intermittent, not deterministic, and it is not touched by any commit here (the only
+`src/` changes add an `instanceId` field to two log records). **No timeout was
+relaxed and no test was skipped or removed.**
 
 ---
 
@@ -193,87 +238,150 @@ G5 comparison run `40289523595` (at `dd51334`, dispatch-triggered):
 specified comparison — **not** that the E2E suite is fully passing. The 8 common
 failures are pre-existing and are not addressed by this task.
 
-**Provenance check:** `git diff 5f85e53..36f5f13 -- src web` returns no product source
-changes. All commits between `5f85e53` and `36f5f13` (and `fa60060`) touch only
-`.github/workflows/tests.yml`, `docs/`, `scripts/`, `tests/unit/tooling/`, and
-`package.json`. The product source covered by the G5 comparison has **not** been
-modified by any subsequent commit.
+**Provenance check:** `git diff 5f85e53..0458faa --name-status -- src web` reports exactly
+two backend files, `src/index.ts` and `src/server.ts`, and **no** file under `web/`.
+Both changes add one field to a log record (`instanceId` on `server.started` and on
+`server.startup_failed`); neither changes request handling, chat streaming, tool
+execution, the OpenCode runtime or any rendered behaviour. The other commits after
+`5f85e53` touch `.github/workflows/tests.yml`, `docs/`, `scripts/`,
+`tests/unit/tooling/`, `src-tauri/src/main.rs` (desktop shell only) and
+`package.json`. The product surface the G5 comparison covered (backend chat/OpenCode
+runtime + web app) is therefore unchanged, so a new two-revision G5 run would compare
+the same behaviour.
+
+**Disclosure:** the numbers above are from the original G5 dispatch run. Its report
+files live in that run's artifacts, which this environment cannot download (§7); the
+provenance claim was re-checked here with `git diff` against the head.
 
 ---
 
-## 7. All unresolved findings
+## 7. All unresolved findings and limitations
 
-### Unresolved — G2 runner condition
+### Unresolved — `opencode-g3` failed once, at the head commit
 
-The `tauri` CI runner has port 3000 in use when the G2 `beforeDevCommand` child starts.
-This causes the backend to log `startup_failed` and the G2 observation to now (correctly)
-fail. The probe fix is committed; the runner's port-3000 contention is not resolved.
-G2 evidence from run 40323271013 (`tauri` job, `tauri-webview-origin` artifact, ID
-`12650616923`) records the new `backendStartupFailed: true` flag. **G2 cannot produce a
-clean PASS until the runner's port 3000 condition is addressed** (e.g. by ensuring the
-port is free before the `tauri` job, or by moving the G2 observation to a
-non-contented runner). The condition was observed in both run 40323271013 and run
-40329107636 (the docs-only follow-up), so it is consistent, not a one-off.
+Run 40351287342 (`0458faa`): the `Override-notice evidence (G3)` step exited 1. The
+same job passed in run 40350649628 (`0efbd11`), four minutes earlier, and in every
+earlier run of this branch. `git diff 0efbd11..0458faa --name-only` is exactly
+`scripts/observe-dev-webview-origin.ts` and its unit test; the G3 driver
+(`scripts/run-g3-override-evidence.ts`) imports neither, and no product source differs
+between the two runs. The job's own inputs were therefore identical and its outcomes
+differed — an intermittent failure.
+
+Its cause was **not observed**: step logs and the `g3-override-evidence` artifact
+(`12664081214`, 13,995 bytes vs 20,095 bytes in the passing run, which is consistent
+with the run stopping before both cases wrote evidence) require authentication to read.
+The failure is recorded as unresolved, not explained away. It is unrelated to the G2
+work by input identity, but it is red on the head and is not being called green.
 
 ### Unresolved — pre-existing E2E failures (out of scope)
 
-The following two E2E spec failures are present in both `36f5f13` and `fa60060` runs:
+The `e2e` job failed in **every** run of this branch, including the base commit
+`ae41ff6`, where it failed with the same two specs that the G5 comparison records among
+its 8 common failures:
 
 1. `p2-live-runtime.spec.ts` — "A/D/E: streaming follows at the end, and does NOT steal
    position when scrolled away."
 2. `phase-8-tabs-navigation.spec.ts` — "deleting the active conversation falls back
    safely; deleted id never active" (120-second click timeout).
 
-Both are **pre-existing** (present in the G5 comparison's 8 common failures). They are
-not regressions from the G2 commit. Per the task instruction, they are not expanded into
-unrelated E2E repairs. They persist in runs 40323271013 and 40329107636 as well.
+No E2E spec, acceptance criterion or timeout was modified. **Disclosure:** the per-spec
+failure list for the new runs could not be re-read (step logs require authentication);
+what is known is that the job exited 1 exactly as it did at the base commit, and that
+nothing in this task touches `web/`.
 
-### Not executed — `verify` re-run at `36f5f13`
+### Limitation — artifact and log contents are not readable from here
 
-The task asked to re-run the `verify` job at `36f5f13` without changing code. This
-**could not be executed** because no GitHub Actions authentication token is available in
-this environment (`gh` is not logged in; no `GH_TOKEN` or `GITHUB_TOKEN` set;
-`POST /rerun-failed-jobs` returns 401).
+No GitHub token is available in this environment: `gh` is not logged in, `GH_TOKEN` and
+`GITHUB_TOKEN` are unset, artifact zips answer `401`, and step logs are not
+downloadable. What *is* readable unauthenticated — run and job conclusions, per-step
+conclusions, artifact names/IDs/sizes, and check-run annotations — is quoted above with
+its run and artifact identifiers. The G1/G2 evidence *files* were not opened; their
+contents are asserted by the step exit codes and pinned by the unit tests.
 
-The equivalent evidence was obtained by **pushing the G2 fix** (commit `fa60060`),
-which triggered run 40323271013 — a complete `verify` run at a later SHA on the same
-branch. The `verify` job passed in that run, confirming both `36f5f13` failures were
-intermittent. This is stronger evidence than a bare re-run at `36f5f13`, because the
-G2 commit does not touch the two failing tests.
+### Limitation — the Rust change was compiled only in CI
+
+There is no Rust toolchain on this machine (`cargo`, `rustc` and `rustup` are absent;
+no Visual Studio build tools). The `src-tauri` change could not be compiled or tested
+locally. It is verified by the CI steps `Type-check the Rust shell` (`cargo check
+--all-targets`), `Run Rust tests` (`cargo test`), `Build Tauri (compile, no bundle)`
+and `Smoke test the packaged desktop app`, all green in both runs that carry it.
+
+### Not executed — a re-run of `verify` at `36f5f13`
+
+Re-running a job and dispatching a workflow both require authentication, which is
+unavailable. The equivalent evidence is the complete `verify` run at `0efbd11` and
+`0458faa` on the same branch.
 
 ### Not in scope — Semgrep
 
 `bun run security` (Semgrep) is out of scope per `f50f5f6`. No claim of Semgrep passing
 is made.
 
-### G5 `e2e-full` job not re-run at `fa60060`
+---
 
-The `e2e-full` (G5) job is dispatch-only and was not triggered by the `fa60060` push.
-The G5 comparison at `40289523595` remains the accepted baseline. A new G5 run would be
-required only if the product source it compared (`5f85e53` ↔ `795ca50`) were modified —
-which has not happened.
+## 8. Local verification (this machine)
+
+Every command below was run against `0458faa` and its real exit code is reported:
+
+| Command | Result |
+|---|---|
+| `bun run typecheck` | exit 0 |
+| `bun run lint` (Biome, `--error-on-warnings`) | exit 0 |
+| `bun run format:check` | exit 0 |
+| `bun run test:locations` | exit 0 |
+| `bun run build` (backend compile + web build) | exit 0 |
+| `bun test tests/unit/tooling/webview-origin-evidence.test.ts` | exit 0 — **67 pass**, 0 fail |
+| `bun run test` (full unit + integration) | run 1: 2 failures, **names not captured before the output was truncated**; run 2: **5,025 pass / 66 skip / 0 fail**, exit 0 |
+| `bun run test:shutdown` | exit 0 — 1 test, 0 fail |
+| `bun run test:startup-rollback` | exit 0 — 2 tests, 0 fail |
+| `bun run test:lifecycle-integration` | exit 0 — 3 tests, 0 fail |
+| `bun run test:dom` | exit 0 — **577 pass**, 0 fail |
+| `bun run test:quarantine` | exit 0 |
+
+The two local failures in the first full run were not captured with their names; the
+second full run of the identical tree was clean, and CI's `verify` at the head was
+clean. They are recorded here rather than omitted.
+
+### Tests that cover this work
+
+`tests/unit/tooling/webview-origin-evidence.test.ts` (67 cases) now includes:
+
+- the intended backend failing → `dev-start` failure, naming the instance and its reason;
+- a **different** instance failing while the page's backend started cleanly → `ok: true`
+  with a `note`, never a failure;
+- a shared/interleaved log (two instances, one start, one failure, one non-JSON line)
+  → the right instance decides the verdict and is the only one named in the notes;
+- no start record for the answering instance → `dev-start` failure;
+- the answering instance bound another port → `dev-start` failure;
+- `attributeBackendLog` boundaries: grouping, an id-less failure staying unattributed,
+  wrong scope, a start with no id, malformed JSON;
+- `instanceIdFromProbe` boundaries: 200 with and without an id, 404, HTML, whitespace;
+- `portOfOrigin` boundaries: explicit port, default 80/443, non-URL, null;
+- the pre-existing matrix (build, CDP, target list, evaluate, probe, packaged origin,
+  artifact set, sanitized uploads) unchanged.
 
 ---
 
-## 8. Verdict
+## 9. Verdict
 
-**HOLD**
+**G2: PASS.** The development window is served by the backend that owns the configured
+port, the failure attribution is per process, and the observation passed twice with the
+fix in place (`0efbd11`, `0458faa`) while G1 and the packaged smoke test stayed green in
+the same jobs. The previous HOLD rested on a misattributed failure; that attribution is
+corrected in §3 and the competing backend it described no longer exists in a
+development launch.
 
-Reasons:
+**Overall acceptance: HOLD**, for two reasons that are not the G2 defect:
 
-1. **G2 is correctly fixed but the runner condition is unresolved.** The probe no longer
-   produces a false-positive PASS. However, the `tauri` job cannot complete a clean G2
-   observation while port 3000 is held by a foreign process on the CI runner. This is
-   a test-environment condition that requires a runner-side fix or a change to the port
-   allocation strategy — not a code defect in the probe itself.
-2. **G1 is PASS** (accepted without change, per task instruction).
-3. **`verify` test failures are intermittent and confirmed** by two CI runs and local
-   evidence. No code changes were made or authorized.
-4. **E2E failures are pre-existing** and out of scope for this task.
-5. **G5 baseline is preserved** with provenance verified: no product source changed after
-   `5f85e53`.
+1. `opencode-g3` is red on the head commit once, with no observable cause, against
+   identical inputs that passed minutes earlier. A red job at the head is not a pass.
+2. The two pre-existing E2E spec failures remain, as they did at the base commit, and
+   were explicitly out of scope.
 
-Phase 8 is **not complete** while the G2 runner condition (port 3000 contention) remains
-unresolved and the `tauri` job's G2 step continues to fail. All evidence collected in
-this task is committed to the branch. The acceptance report above is the current state
-of record.
+Both are disclosed rather than absorbed, and neither is caused by this work. The
+`verify` flake is the third item: green at the head, red one commit earlier, with the
+known 30 s-budget test at 33.5 s.
+
+What is **not** claimed: that the `e2e` job's per-spec failures were re-read for the new
+runs, that the G2 artifact's literal values were read back, or that `opencode-g3` is
+fixed. No gate was made green by weakening it.

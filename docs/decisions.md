@@ -8086,7 +8086,7 @@ no port mirror, and runs no crash recovery or stdin shutdown handshake, because
 it owns no child. The switch is `tauri::is_dev()` (in tauri 2.x:
 `!cfg!(feature = "custom-protocol")`), which is true for `tauri dev` and false
 for both release and `--debug` packaged builds, so packaged startup, recovery
-and teardown are byte-for-byte the behaviour that already shipped.
+and teardown follow the code path that already shipped.
 
 Backend startup is attributed per process. `server.started` now logs `port` plus
 `instanceId`, and `server.startup_failed` logs `instanceId`; `instanceId` is the
