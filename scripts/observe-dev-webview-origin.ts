@@ -303,8 +303,12 @@ export interface BackendLogAttribution {
   readonly booted: readonly BackendBootRecord[];
   readonly failed: readonly BackendFailureRecord[];
   readonly unattributedFailures: readonly string[];
-  /** Lines that are not JSON log entries (a child's plain output, a stack frame). */
-  readonly nonLogLines: number;
+  /**
+   * Lines the attribution did not consume as startup evidence: other log scopes,
+   * malformed JSON or a child's plain output, and a `started` record with no
+   * instance id. Counted, not interpreted — a large number here is normal.
+   */
+  readonly otherLines: number;
 }
 
 /**
@@ -318,7 +322,7 @@ export function attributeBackendLog(logText: string): BackendLogAttribution {
   const booted: BackendBootRecord[] = [];
   const failed: BackendFailureRecord[] = [];
   const unattributedFailures: string[] = [];
-  let nonLogLines = 0;
+  let otherLines = 0;
 
   for (const line of logText.split(/\r?\n/)) {
     const text = line.trim();
@@ -327,23 +331,23 @@ export function attributeBackendLog(logText: string): BackendLogAttribution {
     try {
       parsed = JSON.parse(text);
     } catch {
-      nonLogLines += 1;
+      otherLines += 1;
       continue;
     }
     if (parsed === null || typeof parsed !== "object") {
-      nonLogLines += 1;
+      otherLines += 1;
       continue;
     }
     const entry = parsed as Record<string, unknown>;
     if (entry.scope !== "server" || typeof entry.event !== "string") {
-      nonLogLines += 1;
+      otherLines += 1;
       continue;
     }
     const instanceId = typeof entry.instanceId === "string" ? entry.instanceId.trim() : "";
     if (entry.event === "started") {
       if (instanceId === "") {
         // A start with no identity cannot prove ownership of anything.
-        nonLogLines += 1;
+        otherLines += 1;
         continue;
       }
       const port =
@@ -366,7 +370,7 @@ export function attributeBackendLog(logText: string): BackendLogAttribution {
     }
   }
 
-  return { booted, failed, unattributedFailures, nonLogLines };
+  return { booted, failed, unattributedFailures, otherLines };
 }
 
 /** The port an origin string names, or null when it names none usable. */
@@ -990,7 +994,7 @@ async function main(): Promise<number> {
         booted: backend.booted,
         failed: backend.failed,
         unattributedFailures: backend.unattributedFailures,
-        nonLogLines: backend.nonLogLines,
+        otherLines: backend.otherLines,
       },
     },
     assessment: {

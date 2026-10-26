@@ -106,7 +106,7 @@ function devInput(overrides: Partial<DevOriginInput> = {}): DevOriginInput {
       booted: [{ instanceId: "instance-a", port: 3000 }],
       failed: [],
       unattributedFailures: [],
-      nonLogLines: 0,
+      otherLines: 0,
     },
     ...overrides,
   };
@@ -609,7 +609,7 @@ describe("G2 development origin: the failure matrix", () => {
             { instanceId: "instance-a", reason: "Failed to start server. Is port 3000 in use?" },
           ],
           unattributedFailures: [],
-          nonLogLines: 0,
+          otherLines: 0,
         },
       }),
     );
@@ -628,7 +628,7 @@ describe("G2 development origin: the failure matrix", () => {
           booted: [{ instanceId: "instance-a", port: 3000 }],
           failed: [{ instanceId: "instance-b", reason: "EADDRINUSE: port 3000" }],
           unattributedFailures: [],
-          nonLogLines: 0,
+          otherLines: 0,
         },
       }),
     );
@@ -664,7 +664,7 @@ describe("G2 development origin: the failure matrix", () => {
   it("refuses the observation when the log has no start record for the answering instance", () => {
     const assessed = assessDevOrigin(
       devInput({
-        backend: { booted: [], failed: [], unattributedFailures: [], nonLogLines: 0 },
+        backend: { booted: [], failed: [], unattributedFailures: [], otherLines: 0 },
       }),
     );
     expect(assessed.stage).toBe("dev-start");
@@ -678,7 +678,7 @@ describe("G2 development origin: the failure matrix", () => {
           booted: [{ instanceId: "instance-a", port: 3001 }],
           failed: [],
           unattributedFailures: [],
-          nonLogLines: 0,
+          otherLines: 0,
         },
       }),
     );
@@ -708,7 +708,7 @@ describe("application-log attribution", () => {
       booted: [{ instanceId: "dev-1", port: 3000 }],
       failed: [{ instanceId: "sidecar-2", reason: "EADDRINUSE: port 3000" }],
       unattributedFailures: [],
-      nonLogLines: 1,
+      otherLines: 1,
     });
   });
 
@@ -729,7 +729,7 @@ describe("application-log attribution", () => {
       ].join("\n"),
     );
     expect(attribution.booted).toEqual([]);
-    expect(attribution.nonLogLines).toBe(3);
+    expect(attribution.otherLines).toBe(3);
   });
 
   it("reads only an instance id from the in-page answer", () => {
