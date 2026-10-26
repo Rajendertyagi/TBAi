@@ -30,6 +30,8 @@
     "test:quarantine": "bun scripts/check-opencode-quarantine.ts",
     "test:opencode-runtime": "bun scripts/run-opencode-runtime-suites.ts",
     "test:opencode-g3": "bun scripts/run-g3-override-evidence.ts",
+    "verify:packaged-origin": "bun scripts/verify-packaged-webview-origin.ts",
+    "observe:dev-origin": "bun scripts/observe-dev-webview-origin.ts",
     "test:e2e": "bun scripts/run-e2e.ts",
     "e2e:settings": "bun scripts/dump-playwright-settings.ts",
     "e2e:aggregate": "bun scripts/aggregate-e2e-reports.ts",

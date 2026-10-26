@@ -901,6 +901,79 @@ jobs:
             Get-Process -Name "tbai-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Cache tauri-driver
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin
+          key: tauri-driver-v1-${{ runner.os }}
+
+      - name: Install tauri-driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $driver = Join-Path $env:USERPROFILE ".cargo\bin\tauri-driver.exe"
+          if (-not (Test-Path $driver)) {
+            cargo install tauri-driver --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed" }
+          }
+          if (-not (Test-Path $driver)) { throw "tauri-driver not installed at $driver" }
+          Write-Output "tauri-driver: $(& $driver --version)"
+
+      # Windows WebDriver must match the WebView2 runtime that is actually
+      # installed on the runner: a mismatched pair fails every session. The
+      # version is therefore read from the runtime's own registry entry (falling
+      # back to the Edge binary), never pinned here.
+      - name: Install msedgedriver matching the WebView2 runtime
+        shell: pwsh
+        env:
+          EDGEDRIVER_DIR: ${{ runner.temp }}\msedgedriver
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runtimeKey = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          $version = $null
+          if (Test-Path $runtimeKey) {
+            $version = (Get-ItemProperty -Path $runtimeKey -Name pv -ErrorAction SilentlyContinue).pv
+          }
+          if (-not $version) {
+            $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            if (Test-Path $edge) { $version = (Get-Item $edge).VersionInfo.ProductVersion }
+          }
+          if (-not $version) { throw "could not determine the installed WebView2 or Edge version" }
+          Write-Output "WebView2 runtime version: $version"
+          $url = "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip"
+          New-Item -ItemType Directory -Force -Path $env:EDGEDRIVER_DIR | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP "edgedriver.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $env:EDGEDRIVER_DIR -Force
+          $exe = Join-Path $env:EDGEDRIVER_DIR "msedgedriver.exe"
+          if (-not (Test-Path $exe)) { throw "msedgedriver.exe missing after extraction" }
+          $reported = (& $exe --version).Trim()
+          Write-Output "msedgedriver: $reported"
+          if ($reported -notmatch [regex]::Escape(($version -split '\.')[0])) {
+            throw "msedgedriver $reported does not match WebView2 $version"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "EDGEDRIVER=$exe"
+
+      # G1: the origin is read from the running packaged WebView, not assumed.
+      - name: Observe the packaged WebView origin (G1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:RUNNER_TEMP "origin-evidence\packaged"
+          bun run verify:packaged-origin --app="TBAi-windows-x64-portable/TBAi.exe" --native-driver="$env:EDGEDRIVER" --out="$out"
+          if ($LASTEXITCODE -ne 0) { throw "G1: the packaged WebView origin was not observed (exit $LASTEXITCODE)" }
+
+      # G2: runs even when G1 failed, because the two observations are
+      # independent and a missing G2 would read as "not applicable".
+      - name: Observe the development WebView origin (G2)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:RUNNER_TEMP "origin-evidence\dev"
+          bun run observe:dev-origin --out="$out"
+          if ($LASTEXITCODE -ne 0) { throw "G2: the development WebView origin was not observed (exit $LASTEXITCODE)" }
+
       - name: Upload portable app artifact
         if: always()
         uses: actions/upload-artifact@v6
@@ -908,6 +981,22 @@ jobs:
           name: tbai-windows-x64-portable
           path: TBAi-windows-x64-portable
           if-no-files-found: warn
+
+      # Narrow on purpose: the data directory contains the app database and the
+      # per-boot instance identity, so only these named files are published.
+      # Both logs are sanitized by the driver that writes them.
+      - name: Upload WebView origin evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tauri-webview-origin
+          path: |
+            ${{ runner.temp }}/origin-evidence/packaged/packaged.json
+            ${{ runner.temp }}/origin-evidence/packaged/tauri-driver.log
+            ${{ runner.temp }}/origin-evidence/packaged/tbai.log
+            ${{ runner.temp }}/origin-evidence/dev/dev.json
+            ${{ runner.temp }}/origin-evidence/dev/tbai.log
+          if-no-files-found: ignore
 
       - name: Upload smoke logs
         if: failure()
