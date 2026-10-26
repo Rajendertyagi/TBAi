@@ -8039,3 +8039,40 @@ fallback; the new guard case was proved able to fail by removing the import.
 `bun run verify` exit 0: unit+integration **4882 pass / 66 skip / 0 fail** across
 374 files / 4948 tests; DOM **577 pass / 0 fail** across 58 files; shutdown 1,
 startup-rollback 2, lifecycle-integration 3; quarantine clean.
+
+## 2026-10-26 - Semgrep is out of scope for the runtime programme
+
+**Decision.** The OpenCode runtime programme's `bun run verify:full` condition is
+withdrawn to `bun run verify`. Semgrep (`bun run security` = `semgrep scan
+--config auto`) is not run by CI, not run for this programme, and **no Semgrep
+result is claimed** anywhere in the evidence. The `security` script itself is
+left unchanged.
+
+**Why.** The programme's completion conditions are the ones its evidence can
+actually satisfy. A gate that no job executes is not a gate; it is a line in a
+document that reads as if the tree had been scanned. The programme's real gates
+— typecheck, lint, format, test locations, build, the full unit+integration
+tree, the lifecycle suites, the DOM suite and the quarantine check — all run in
+CI and locally, and they are the ones whose results are reported. Naming a
+static-analysis run that never happened would put a false assurance next to real
+ones, which is the same class of defect as the prompt-vacuous live answer check
+recorded in `docs/opencode-runtime-audit-final.md` §13.6.
+
+**Alternatives rejected.**
+
+- *Run Semgrep once locally and paste the output.* A single ad-hoc run against a
+  changing tree is not a gate, and reporting it as one would imply coverage of a
+  commit that was not the one shipped. A result must be reproducible by the job
+  that claims it.
+- *Add Semgrep to CI.* That is a CI-policy change with its own cost (ruleset
+  choice, false positives, runtime) and was explicitly excluded from this
+  programme's scope. It remains a reasonable future decision; it is not this one.
+- *Delete the `security` script.* Removing the capability is worse than leaving
+  it available and unclaimed. The script stays; only the claim changes.
+
+**Consequences.** Phase 8's remaining completion conditions are the
+packaged-webview origin observation (G1/G2) and the live override-notice check
+(G3 display). The plan's `verify:full` mentions are superseded by the dated note
+in `docs/2026-10-20-opencode-runtime-remediation-plan.md` §8.3 and the Phase 8
+row in §15.5. Anyone who later adds Semgrep to CI must also add the result to
+the evidence it is claimed by; until then, the absence of a claim is accurate.

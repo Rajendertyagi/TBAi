@@ -1411,6 +1411,19 @@ A phase is complete only when **all** of these hold, per `AGENTS.md` §Definitio
 - `docs/phases.md`, `docs/decisions.md`, `docs/security.md`, the tracked `docs/opencode-context.md`, and a **V2 integration contract** match the shipped behaviour; the contract states that the pinned `@opencode/client` type surface is authoritative over the published prose, records the tested CLI/client version, and separates documented from empirically-verified upstream behaviour.
 - The OpenCode-scoped suites carry **new** cases for every finding, named for the finding, and the invariant matrix in §5.10 is fully covered.
 
+> **Dated note (2026-10-26) — the `verify:full` half of this condition is withdrawn.**
+> The bullet above, §15.4's gate list, and the Phase 8 row in §15.5 name
+> `bun run verify:full` (which appends `semgrep scan --config auto`) as a
+> completion condition. That half is **out of scope by decision**. `bun run verify`
+> — which already runs typecheck, lint, format, test locations, build, the full
+> unit+integration tree, the three lifecycle suites, the DOM suite and the
+> quarantine gate — is the programme's gate. The `security` script is **left
+> unchanged** so the capability is still available; it is simply not run by CI and
+> not a condition of this programme. **No Semgrep result is claimed anywhere in
+> this repository**, including in the Phase 8 evidence: nothing here was scanned,
+> so nothing here can be described as scanned. See `docs/decisions.md`
+> ("2026-10-26 - Semgrep is out of scope for the runtime programme").
+
 ---
 
 ## 9. Decisions, and the evidence gaps behind them
@@ -1708,7 +1721,7 @@ The five fixes above were themselves reviewed. **Three of them were incomplete, 
 | **G3** (the live permission behaviour of the running server) | **OPEN for the DISPLAY only; the server relation is closed.** Phase 1 confirmed the relation live against a managed 2.0.32 server (12 cases, §9.1). The live specs that exist do **not** assert the override relation: `opencode-config-live.spec.ts` covers read, ordered listing, effect writes, protected denies and malformed config; `opencode-big-pickle-live.spec.ts` covers streaming and history; `opencode-v2-permission-live.spec.ts` covers a real Approve/Deny round trip but is **not** in either CI command. The override notice is asserted only by the static DOM test (`OpenCodeConfigPage.rules.test.tsx`). Closing the display needs a live spec that seeds overlapping rules and asserts the notice against the server's confirmed relations. |
 | **G7** (the policy for a pre-existing exact-duplicate rule) | **CLOSED.** The decision is Option C - rows keyed by the rule's position in the **file**, each independently editable - and `OpenCodeConfigPage.rules.test.tsx` proves two identical rules are separately editable and that the override notice names the right row. It runs in `test:dom`, inside the `verify` job. |
 | Any **live** OpenCode evaluation, prompt, session, or configuration write | **PARTIALLY closed.** The CI `e2e-big-pickle` job ran a real managed `opencode serve` with a real model and a real stream on `908202f`; **that spec's answer check was prompt-vacuous until 2026-10-25** (the prompt carries the marker it searched for), so its green was not evidence that an answer rendered - see `docs/opencode-runtime-audit-final.md` §13.6. The local 2026-10-25 run with the pinned **2.1.2** server and **`opencode/big-pickle`** reached the provider and hit its **free-tier usage limit**; the turn failed silently in the transcript (**RT-014**). The 2.1.x work was verified against a **real 2.1.2 server** on this machine, and the 2.1.2 client against a real, integrity-verified **2.0.22** server. Beyond those surfaces, every finding is source-confirmed or runtime-verified against the **real controller**. |
-| **Phase 8** (full verification and independent review) | **DELIVERED in code; NOT yet complete as a phase.** The gate sweep is green in CI, both review rounds are closed with regression tests, and every closed finding has a guard that was shown to fail on its defect. The phase cannot be marked **DONE** until the packaged-webview observation behind G1/G2 and the live override-notice check behind G3 exist (see above) and `bun run verify:full` (the semgrep half) is run - CI does not run `security`, and it was not run in this round. |
+| **Phase 8** (full verification and independent review) | **DELIVERED in code; NOT yet complete as a phase.** The gate sweep is green in CI, both review rounds are closed with regression tests, and every closed finding has a guard that was shown to fail on its defect. The phase cannot be marked **DONE** until the packaged-webview observation behind G1/G2 and the live override-notice check behind G3 exist (see above). **Semgrep is not one of those conditions**: as recorded in §8.3 and `docs/decisions.md`, the `verify:full` half was withdrawn on 2026-10-26, the `security` script is unchanged but not a gate, and **no Semgrep result is claimed** — this row supersedes every earlier `verify:full` mention in this plan. |
 
 **The one thing this verdict adds to §15.1.** §15.1 was a plan awaiting approval; the evidence then established that the *defects were real* and said nothing about the *remedies*. The evidence now establishes the remedies too - each one with a guard that fails on its defect, which is the only form of evidence that distinguishes a fix from a hope.
 
