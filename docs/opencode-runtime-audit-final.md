@@ -512,16 +512,19 @@ inside the budget, the runtime subsequently reports ready) and "does not settle 
 attempt's own load promise when a waiter times out".
 
 **Follow-up, same day: a terminal failure now reports as a failure.** The deadline
-above was correct, but the error a waiter received was not. `Attempt.superseded`
-resolves only in `retire()`, and a terminal `scheduleReconnect` calls `failReady()`
-**before** `retireAttempt()`. An attempt parked in `hydrate()` never settled its load
-leg, so `awaitReady()` spent its remaining budget and rejected as a **deadline
-timeout** - the opposite of its own contract, "Only a real failure - a terminal one
-... - is thrown". The distinction could not be inferred from ordering, because a
-*recoverable* failure retires first on purpose and must keep following its
-replacement. `sync/attempt.ts` now carries a `failure` promise settled only in
-`fail()`, raced in `startConnection` beside `runAttempt` and `superseded`; `fail()`
-settles `retired` first so `retire()` early-returns and a failure stays a failure.
+above was correct, but the error a waiter received was not. At `2c444cc` an
+attempt's load leg was settled only through its readiness gate: `retire()` rejected
+it as superseded, `fail()` with the failure. A terminal `scheduleReconnect` calls
+`failReady()` **before** `retireAttempt()`, so an attempt parked in `hydrate()` -
+no longer awaiting the gate - never settled its load leg, and `awaitReady()` spent
+its remaining budget and rejected as a **deadline timeout**, the opposite of its own
+contract, "Only a real failure - a terminal one ... - is thrown". The distinction
+could not be inferred from ordering: stream death retires first on purpose so its
+load follows the replacement, while connect and hydration failures call `fail()`
+before `scheduleReconnect` and must surface as that failure. `sync/attempt.ts` now
+carries a `failure` promise settled only in `fail()`, raced in `startConnection`
+beside `runAttempt` and `superseded`; `fail()` settles `retired` first so
+`retire()` early-returns and a failure stays a failure.
 Evidence: the same suite's "reports a terminal stream failure while hydration is
 unresolved instead of following a replacement" (asserts the typed
 `V2ControllerError`, `connectCount` 1, `load: error`, `connection: failed`, no

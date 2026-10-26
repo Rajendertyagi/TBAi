@@ -354,8 +354,9 @@ export function createAttempt(
     gate.reject(error);
     // The load's other settlement: readiness only settles a waiter that has
     // already hydrated, and a terminal failure can arrive while hydration is
-    // unresolved. `retire()` does not reach here, so a recoverable failure
-    // that schedules a replacement stays a supersession for the load.
+    // unresolved. `fail()` settles `retired` first, so `retire()` early-returns
+    // and `superseded` never fires for this attempt: a connect or hydration
+    // failure is reported as itself even when a retry is scheduled.
     signalFailure?.(error);
   }
 

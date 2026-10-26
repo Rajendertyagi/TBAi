@@ -7968,15 +7968,17 @@ entry, and `parseCounts` narrowed until it stopped reading the `skipped` spellin
 delivery). Both are recorded here because both change a contract rather than
 just a line of code.
 
-*Readiness reported a timeout for a failure.* `Attempt.superseded` resolves only
-in `retire()`, and a terminal `scheduleReconnect` calls `failReady()` **before**
-`retireAttempt()`. An attempt parked in `hydrate()` therefore never settled its
-load leg, so `awaitReady()` spent its remaining budget and rejected as a
-**deadline timeout** - the opposite of its own docstring, "Only a real failure -
-a terminal one ... - is thrown". A *recoverable* failure retires first on
-purpose, so it must keep following its replacement rather than surfacing as a
-failure. The distinction had to be carried by the attempt, not inferred from
-ordering.
+*Readiness reported a timeout for a failure.* At `2c444cc` an attempt's load leg
+was settled only through its readiness gate: `retire()` rejected it as
+superseded, `fail()` rejected it with the failure. A terminal
+`scheduleReconnect` calls `failReady()` **before** `retireAttempt()`, so an
+attempt parked in `hydrate()` - no longer awaiting the gate - never settled its
+load leg, and `awaitReady()` spent its remaining budget and rejected as a
+**deadline timeout**, the opposite of its own docstring, "Only a real failure -
+a terminal one ... - is thrown". The distinction had to be carried by the
+attempt, not inferred from ordering: stream death retires first on purpose so
+its load follows the replacement, while connect and hydration failures call
+`fail()` before `scheduleReconnect` and must surface as that failure.
 
 *The sidebar read assistant-ui directly.* The relative timestamp added in
 `57b9dbc` was fetched with `useAuiState` inside `SidebarThreadRow.tsx`, which the
@@ -7990,9 +7992,11 @@ genuinely runtime-derived.
   `failure` promise, settled only in `fail()`. `startConnection` races it beside
   `runAttempt` and `superseded`. A terminal stream failure during unresolved
   hydration now rejects `awaitReady()` with the controller's typed
-  `V2ControllerError` (kind `network`), and a recoverable failure still enters
-  `scheduleReconnect` and is superseded by the replacement. `fail()` settles
-  `retired` first so `retire()` early-returns and a failure stays a failure.
+  `V2ControllerError` (kind `network`). A recoverable **stream** failure still
+  retires into `scheduleReconnect` and its load follows the replacement; a
+  connect or hydration failure is failed first, so its load reports that failure
+  while the retry is scheduled. `fail()` settles `retired` first so `retire()`
+  early-returns and a failure stays a failure.
 - *Runtime-derived presentation lives in shared UI leaves.* The row now composes
   `components/ui/thread-last-message-time.tsx`, the sibling of
   `thread-running-dot.tsx`. Both own their assistant-ui subscription; the sidebar
