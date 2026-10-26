@@ -79,6 +79,11 @@
     "unit/core/patch-to-diffs.test.ts",
     "unit/core/sidebar-sections.test.ts",
     "unit/scheduler/scheduler-view.test.ts",
+    // G3 tooling holds the orchestrator's expectations to the PRODUCT copy and
+    // the override relation in `web/src/features/opencode/`, so it is checked
+    // here where `@/*` means the web tree. tests/tsconfig.backend.json excludes
+    // it for the same reason.
+    "unit/tooling/g3-override-evidence.test.ts",
     "unit/tools/terminal-lines.test.ts",
     "unit/tools/toolkit.test.ts",
     "dom/**/*.ts",

@@ -11,6 +11,7 @@ name: Verify
 #   verify            typecheck, lint, backend suite, DOM contract suite (fast, hermetic)
 #   opencode-runtime  the required real-binary OpenCode runtime suites (RT-007)
 #   e2e               Playwright history specs (browser + spawned server, slower)
+#   opencode-g3       override-notice evidence against a real managed server
 #   e2e-big-pickle    live acceptance spec; dispatch-only, because it needs credentials
 #
 # Runs on every push to main and every PR, so suite feedback arrives on the
@@ -295,6 +296,64 @@ jobs:
 
       - name: Required real-binary runtime suites
         run: bun run test:opencode-runtime
+
+  # G3: evidence that the override notice is rendered from the REAL managed
+  # OpenCode configuration.
+  #
+  # Separate from `e2e` because it is an EVIDENCE run, not a gate over the
+  # maintainer's own configuration: it starts its own app + managed server
+  # against a fixture supplied through `OPENCODE_CONFIG`, and each case writes a
+  # JSON record of the reported path, the rendered notice, the fixture hashes
+  # and the process-tree termination. It needs the same pinned CLI and browser as
+  # `e2e`, and deliberately no model credentials.
+  opencode-g3:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-v2-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        uses: ./.github/actions/install-opencode
+        with:
+          version: ${{ env.OPENCODE_VERSION }}
+          sha512: ${{ env.OPENCODE_CLI_SHA512 }}
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+
+      # Builds the bundle itself, then runs both cases. Exits non-zero when any
+      # case's evidence fails its own assessment — including a cleanup failure,
+      # which is recorded rather than swallowed.
+      - name: Override-notice evidence (G3)
+        run: bun run test:opencode-g3
+
+      # Narrow, and `always()` so a FAILED run still carries the evidence that
+      # explains it. Only the run's own outputs are uploaded.
+      - name: Upload G3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g3-override-evidence
+          path: tests/.artifacts/g3
+          if-no-files-found: warn
+          retention-days: 14
 
   # The Playwright E2E suite, as its own job.
   #
