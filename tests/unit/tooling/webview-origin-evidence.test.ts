@@ -717,7 +717,7 @@ describe("G1 runs where WebView2 honours the driver's debugging port", () => {
   const WORKFLOW = fs.readFileSync(repoPath(".github", "workflows", "tests.yml"), "utf8");
   const SOURCE = fs.readFileSync(repoPath("scripts", "verify-packaged-webview-origin.ts"), "utf8");
 
-  it("de-elevates the packaged observation before driving it", () => {
+  function g1Step(): string {
     const lines = WORKFLOW.split(/\r?\n/);
     const start = lines.findIndex(
       (line) => line.trim() === "- name: Observe the packaged WebView origin (G1)",
@@ -728,16 +728,33 @@ describe("G1 runs where WebView2 honours the driver's debugging port", () => {
       if (/^ {6}- name: /.test(lines[index])) break;
       block.push(lines[index]);
     }
-    const step = block.join("\n");
+    return block.join("\n");
+  }
+
+  it("de-elevates the packaged observation before driving it", () => {
+    const step = g1Step();
     // WebView2 Runtime 150+ drops WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an
     // elevated host, and that variable carries the port msedgedriver attaches to.
-    expect(step).toContain("gerardog.gsudo");
     expect(step).toContain("--integrity Medium");
     expect(step).toContain('icacls "$env:GITHUB_WORKSPACE"');
     // The observation itself must be the de-elevated command, not a sibling.
     expect(step.indexOf("--integrity Medium")).toBeLessThan(step.indexOf("verify:packaged-origin"));
     // An absolute app path, so the child does not depend on its working directory.
     expect(step).toContain("(Resolve-Path");
+    // The de-elevated child must still be able to resolve the runner.
+    expect(step).toContain("Get-Command bun");
+  });
+
+  it("takes gsudo from the pinned archive, not from an installer that edits PATH", () => {
+    // The MSI writes to %ProgramFiles% and appends to the machine PATH, which the
+    // already-running step cannot observe; run 40292211888 failed exactly there.
+    const step = g1Step();
+    expect(step).not.toContain("winget");
+    expect(step).toContain("gerardog/gsudo/releases/download/v2.6.1/gsudo.portable.zip");
+    // A pinned hash, checked before anything from the archive is executed.
+    expect(step).toContain("21130bf178d7b9891207f00bff56f05b6b363ce9cec7b2d084e45fb12ee51f44");
+    expect(step.indexOf("Get-FileHash")).toBeLessThan(step.indexOf("--integrity Medium"));
+    expect(step).toContain('"x64\\gsudo.exe"');
   });
 
   it("records the integrity level, and names it when a session times out on an elevated host", () => {

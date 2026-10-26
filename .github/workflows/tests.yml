@@ -985,30 +985,37 @@ jobs:
       # how msedgedriver hands the app the --remote-debugging-port it attaches to,
       # so an elevated run leaves the CDP endpoint closed and session creation
       # times out (wry#1782, WebView2Feedback#5645). Tauri's own Windows e2e job
-      # drives the suite at medium integrity for the same reason; packaged.json
-      # records the integrity level so the artifact shows it happened.
+      # drives the suite at medium integrity for the same reason.
+      #
+      # gsudo is taken from the pinned portable zip, not from winget: the MSI
+      # installs under %ProgramFiles% and appends to the machine PATH, which this
+      # already-running step cannot see. The portable build needs no installer and
+      # no service (an elevated caller drops integrity in-process), so the pinned
+      # archive and its hash are the only inputs. packaged.json records the
+      # integrity level the observation was actually taken at.
       - name: Observe the packaged WebView origin (G1)
         shell: pwsh
         env:
           G1_OUT: ${{ runner.temp }}\origin-evidence\packaged
         run: |
           $ErrorActionPreference = "Stop"
-          $gsudo = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\gsudo.exe"
-          $sudo = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\sudo.exe"
-          if (-not (Test-Path $gsudo) -and -not (Test-Path $sudo)) {
-            winget install --id gerardog.gsudo --accept-source-agreements --accept-package-agreements --silent
-            # winget can report "already installed" with a non-zero code, so the
-            # install is judged by the binary it was supposed to produce.
-          }
-          $gsudo = if (Test-Path $gsudo) { $gsudo } else { $sudo }
-          if (-not (Test-Path $gsudo)) { throw "gsudo not found after winget install" }
+          $gsudoZip = Join-Path $env:RUNNER_TEMP "gsudo.portable.zip"
+          $gsudoDir = Join-Path $env:RUNNER_TEMP "gsudo"
+          Invoke-WebRequest -Uri "https://github.com/gerardog/gsudo/releases/download/v2.6.1/gsudo.portable.zip" -OutFile $gsudoZip -UseBasicParsing
+          $actual = (Get-FileHash -Path $gsudoZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "21130bf178d7b9891207f00bff56f05b6b363ce9cec7b2d084e45fb12ee51f44"
+          if ($actual -ne $expected) { throw "gsudo archive sha256 $actual does not match the pinned $expected" }
+          Expand-Archive -Path $gsudoZip -DestinationPath $gsudoDir -Force
+          $gsudo = Join-Path $gsudoDir "x64\gsudo.exe"
+          if (-not (Test-Path $gsudo)) { throw "gsudo.exe missing after extraction" }
           # The de-elevated child needs to execute the portable app from the
           # workspace and write its evidence, so both are opened up explicitly.
           icacls "$env:GITHUB_WORKSPACE" /grant "Everyone:(OI)(CI)F" | Out-Null
           New-Item -ItemType Directory -Force -Path $env:G1_OUT | Out-Null
           icacls "$env:G1_OUT" /grant "Everyone:(OI)(CI)F" | Out-Null
           $app = (Resolve-Path "TBAi-windows-x64-portable/TBAi.exe").Path
-          & $gsudo --integrity Medium bun run verify:packaged-origin --app="$app" --native-driver="$env:EDGEDRIVER" --out="$env:G1_OUT"
+          $bun = (Get-Command bun -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          & $gsudo --integrity Medium $bun run verify:packaged-origin --app="$app" --native-driver="$env:EDGEDRIVER" --out="$env:G1_OUT"
           if ($LASTEXITCODE -ne 0) { throw "G1: the packaged WebView origin was not observed (exit $LASTEXITCODE)" }
 
       # G2: runs even when G1 failed, because the two observations are
