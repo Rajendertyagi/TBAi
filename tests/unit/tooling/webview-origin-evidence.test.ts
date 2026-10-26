@@ -44,10 +44,13 @@ import {
 import {
   type DevOriginInput,
   assessDevOrigin,
+  buildDebugPortOverlay,
+  headText,
   parseCdpTargets,
   parseEvaluateResponse,
   readDevConfiguration,
   selectDevTarget,
+  selectLaunchMarkers,
 } from "../../../scripts/observe-dev-webview-origin";
 import { repoPath } from "../../helpers/repo-root";
 
@@ -672,6 +675,78 @@ describe("the driver probe", () => {
     expect(checked.available).toBe(false);
     expect(checked.version).toBeNull();
     expect(checked.error).not.toBeNull();
+  });
+});
+
+describe("G2 launch configuration: the debug-port overlay", () => {
+  function windowAt(overlay: Record<string, unknown>, index: number): Record<string, unknown> {
+    const app = overlay.app;
+    if (app === null || typeof app !== "object") throw new Error("the overlay has no app section");
+    const windows = (app as Record<string, unknown>).windows;
+    if (!Array.isArray(windows)) throw new Error("the overlay has no window list");
+    const entry: unknown = windows[index];
+    if (entry === null || typeof entry !== "object") throw new Error("the window entry is missing");
+    return entry as Record<string, unknown>;
+  }
+
+  const config = {
+    build: { devUrl: "http://localhost:3000" },
+    app: {
+      windows: [
+        { label: "main", title: "TBAi", width: 1280, decorations: false },
+        { label: "second" },
+      ],
+    },
+  };
+
+  it("adds the arguments to every window and preserves what was there", () => {
+    const built = buildDebugPortOverlay(config, "--remote-debugging-port=5555");
+    expect(built.error).toBeNull();
+    if (built.overlay === null) throw new Error("no overlay was built");
+
+    const main = windowAt(built.overlay, 0);
+    expect(main.label).toBe("main");
+    expect(main.width).toBe(1280);
+    expect(main.decorations).toBe(false);
+    expect(main.additionalBrowserArgs).toBe("--remote-debugging-port=5555");
+    expect(windowAt(built.overlay, 1).additionalBrowserArgs).toBe("--remote-debugging-port=5555");
+  });
+
+  it("refuses a configuration it cannot attach a port to, instead of writing a partial one", () => {
+    for (const malformed of [null, {}, { app: {} }, { app: { windows: [] } }]) {
+      const built = buildDebugPortOverlay(malformed, "--remote-debugging-port=5555");
+      expect(built.overlay).toBeNull();
+      expect(built.error).toContain("app.windows");
+    }
+  });
+});
+
+describe("G2 launch attribution", () => {
+  it("keeps the opening of the log and says how much it dropped", () => {
+    const text = `${"a".repeat(20)}${"b".repeat(80)}`;
+    const head = headText(text, 20);
+    expect(head.startsWith("a".repeat(20))).toBe(true);
+    expect(head).toContain("80 characters omitted");
+    expect(headText("short", 20)).toBe("short");
+  });
+
+  it("picks the lines that say whether the build finished and the app started", () => {
+    const log = [
+      "   Compiling tbai v0.1.0",
+      "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.4s",
+      "     Running `target\\debug\\tbai.exe`",
+      "GET /readyz 200",
+      "error[E0433]: failed to resolve: use of undeclared crate",
+    ].join("\n");
+
+    expect(selectLaunchMarkers(log, 10)).toEqual([
+      "Compiling tbai v0.1.0",
+      "Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.4s",
+      "Running `target\\debug\\tbai.exe`",
+      "error[E0433]: failed to resolve: use of undeclared crate",
+    ]);
+    expect(selectLaunchMarkers(log, 1)).toEqual(["Compiling tbai v0.1.0"]);
+    expect(selectLaunchMarkers("GET /readyz 200\nGET /api/server 200", 10)).toEqual([]);
   });
 });
 

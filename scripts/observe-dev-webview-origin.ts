@@ -12,7 +12,10 @@
  * and the observation comes from the running page:
  *
  *   1. `build`           — the bundle `bun run dev` serves is built and stamped;
- *   2. `dev-start`       — `tauri dev` is started with WebView2 remote debugging;
+ *   2. `dev-start`       — `tauri dev` is started with WebView2 remote debugging,
+ *                          declared on the window through a `--config` overlay
+ *                          because Tauri passes wry's own browser arguments and
+ *                          WebView2 then ignores its environment variable;
  *   3. `cdp-unavailable` — `http://127.0.0.1:<port>/json/list` answers;
  *   4. `target-list`     — a `page` target on the configured origin exists;
  *   5. `evaluate`        — `Runtime.evaluate` returns `location.origin`, `href`, `title`;
@@ -30,9 +33,11 @@
  *
  * ## Debugging a failure
  *
- * The dev child's own output goes to a log; its sanitized tail is in `dev.json`
- * so a red CI step names the stage and quotes the last lines. The application
- * log is uploaded sanitized. The data directory is never uploaded.
+ * The dev child's own output goes to a log; its sanitized tail, its opening
+ * section and the lines that say whether the Rust build finished and the app
+ * started are all in `dev.json`, so a red CI step names the stage instead of
+ * leaving a wait to be guessed at. The application log is uploaded sanitized.
+ * The data directory is never uploaded.
  *
  * Usage:
  *   bun run observe:dev-origin [--out=<dir>] [--cdp-timeout-ms=<n>]
@@ -70,6 +75,18 @@ const DEFAULT_CDP_TIMEOUT_MS = 10 * 60_000;
 const EVALUATE_TIMEOUT_MS = 30_000;
 const POLL_MS = 500;
 const LOG_TAIL_CHARS = 8_000;
+const LOG_HEAD_CHARS = 4_000;
+
+/**
+ * wry passes these itself, and a window that sets `additionalBrowserArgs`
+ * replaces them, so they are repeated in the overlay (Tauri's config schema
+ * says as much). The debug port is the only addition.
+ */
+const WEBVIEW2_BASE_ARGS = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/** Lines that say whether the Rust build finished and the app started. */
+const LAUNCH_MARKER_PATTERN =
+  /Compiling |Finished |Running |error\[|could not compile|VITE v|Local: /;
 
 export const DEV_STAGES = [
   "build",
@@ -109,6 +126,59 @@ export function readDevConfiguration(confPath: string): DevConfiguration {
   } catch (error) {
     return { devUrl: null, beforeDevCommand: null, error: `${confPath}: ${errorMessage(error)}` };
   }
+}
+
+/**
+ * The `--config` overlay that gives the dev window a remote debugging port.
+ *
+ * Tauri passes wry's own WebView2 arguments, which makes WebView2 ignore
+ * `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the port has to be declared on the
+ * window itself. The overlay is written for this run only; the app's own
+ * configuration is not modified. Pure, so its shape is testable.
+ */
+export function buildDebugPortOverlay(
+  config: unknown,
+  debugArgs: string,
+): { overlay: Record<string, unknown> | null; error: string | null } {
+  const record =
+    config !== null && typeof config === "object" ? (config as Record<string, unknown>) : null;
+  const app = record?.app;
+  const windows =
+    app !== null && typeof app === "object" ? (app as Record<string, unknown>).windows : undefined;
+  if (!Array.isArray(windows) || windows.length === 0) {
+    return {
+      overlay: null,
+      error: "the configuration declares no app.windows to attach the port to",
+    };
+  }
+  return {
+    overlay: {
+      app: {
+        windows: windows.map((entry) =>
+          entry !== null && typeof entry === "object"
+            ? { ...(entry as Record<string, unknown>), additionalBrowserArgs: debugArgs }
+            : entry,
+        ),
+      },
+    },
+    error: null,
+  };
+}
+
+/** The first `maxChars` characters, so the launch's own output survives a noisy tail. */
+export function headText(text: string, maxChars: number): string {
+  return text.length <= maxChars
+    ? text
+    : `${text.slice(0, maxChars)}\n…[${text.length - maxChars} characters omitted]`;
+}
+
+/** Build/launch lines from the dev log, so a failed wait is attributable. */
+export function selectLaunchMarkers(text: string, limit: number): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && LAUNCH_MARKER_PATTERN.test(line))
+    .slice(0, limit);
 }
 
 export interface CdpTarget {
@@ -468,6 +538,10 @@ async function main(): Promise<number> {
   let logFd: number | null = null;
   let stoppingForTeardown = false;
   let portEnv: string | null = null;
+  let debugArgs: string | null = null;
+  let overlayWritten = false;
+  let cdpAttempts = 0;
+  let lastPollError: string | null = null;
   let devStop: ProcessStopResult = {
     attempted: false,
     method: null,
@@ -486,30 +560,43 @@ async function main(): Promise<number> {
       cdp.error = `the Tauri CLI is missing at ${TAURI_CLI}; run bun install`;
     } else {
       cdp.port = await allocateFreePort();
+      debugArgs = `--remote-debugging-port=${cdp.port} ${WEBVIEW2_BASE_ARGS}`;
+      const overlayPath = path.join(tempRoot, "dev-overlay.json");
+      const overlay = buildDebugPortOverlay(
+        JSON.parse(fs.readFileSync(TAURI_CONF, "utf8")),
+        debugArgs,
+      );
+      if (overlay.overlay === null) {
+        cdp.error = `${overlay.error} (${TAURI_CONF})`;
+      }
+      if (overlay.overlay !== null) {
+        fs.writeFileSync(overlayPath, JSON.stringify(overlay.overlay, null, 2));
+        overlayWritten = true;
+      }
       portEnv = configuredOrigin === null ? null : new URL(configuredOrigin).port || null;
       logFd = fs.openSync(devLogPath, "a");
-      devChild = spawn(process.execPath, [TAURI_CLI, "dev", "--no-watch"], {
-        cwd: REPO_ROOT,
-        env: {
-          ...process.env,
-          // WebView2 reads this when it creates the environment, so the remote
-          // debugging endpoint exists on the window tauri dev opens.
-          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdp.port}`,
-          DATA_DIR: dataDir,
-          TBAI_LOG_FILE: appLogPath,
-          // The backend `beforeDevCommand` starts must bind the port devUrl
-          // names. Left to self-heal it would scan upward while the window kept
-          // loading the configured port, and the page could then be an error
-          // page that still reports the expected origin.
-          ...(portEnv === null ? {} : { PORT: portEnv }),
-        },
-        stdio: ["ignore", logFd, logFd],
-        windowsHide: true,
-      });
-      devChild.on("error", (error) => {
+      devChild = overlayWritten
+        ? spawn(process.execPath, [TAURI_CLI, "dev", "--no-watch", "--config", overlayPath], {
+            cwd: REPO_ROOT,
+            env: {
+              ...process.env,
+              DATA_DIR: dataDir,
+              TBAI_LOG_FILE: appLogPath,
+              // The backend `beforeDevCommand` starts must bind the port
+              // devUrl names. Left to self-heal it would scan upward while
+              // the window kept loading the configured port, and the page
+              // could then be an error page that still reports the expected
+              // origin.
+              ...(portEnv === null ? {} : { PORT: portEnv }),
+            },
+            stdio: ["ignore", logFd, logFd],
+            windowsHide: true,
+          })
+        : null;
+      devChild?.on("error", (error) => {
         dev.spawnError = errorMessage(error);
       });
-      devChild.on("exit", (code) => {
+      devChild?.on("exit", (code) => {
         if (stoppingForTeardown) return;
         dev.exitedEarly = true;
         dev.exitCode = code;
@@ -517,9 +604,14 @@ async function main(): Promise<number> {
 
       const deadline = Date.now() + options.cdpTimeoutMs;
       for (;;) {
+        // Nothing was launched: `cdp.error` already says why, and polling an
+        // endpoint that cannot exist would only replace that reason.
+        if (devChild === null) break;
+        cdpAttempts += 1;
         const listing = await httpJson(`http://127.0.0.1:${cdp.port}/json/list`, {
           timeoutMs: 5_000,
         });
+        lastPollError = listing.error;
         if (listing.status !== null) {
           cdp.available = true;
           const targets = parseCdpTargets(listing.text);
@@ -539,7 +631,9 @@ async function main(): Promise<number> {
         }
         if (dev.exitedEarly || dev.spawnError !== null) break;
         if (Date.now() > deadline) {
-          cdp.error = `no page target appeared on ${configuredOrigin ?? "(configured origin)"} within ${options.cdpTimeoutMs} ms`;
+          cdp.error =
+            `no page target appeared on ${configuredOrigin ?? "(configured origin)"} within ${options.cdpTimeoutMs} ms` +
+            ` (${cdpAttempts} probes; last: ${lastPollError ?? "no error recorded"})`;
           break;
         }
         await sleep(POLL_MS);
@@ -667,7 +761,18 @@ async function main(): Promise<number> {
       targetUrl: target.url,
       targetsSeen: target.seen,
     },
-    cdp: { port: cdp.port, available: cdp.available, error: cdp.error },
+    launch: {
+      tauriCli: TAURI_CLI,
+      configOverlay: overlayWritten,
+      windowAdditionalBrowserArgs: debugArgs,
+    },
+    cdp: {
+      port: cdp.port,
+      available: cdp.available,
+      error: cdp.error,
+      attempts: cdpAttempts,
+      lastPollError,
+    },
     build,
     probe,
     observations: {
@@ -686,6 +791,12 @@ async function main(): Promise<number> {
       },
       /** Sanitized: this file is uploaded too. */
       devTail: sanitizeLogText(tailText(rawDevLog, LOG_TAIL_CHARS)).text,
+      /** The launch's opening output, which the tail loses once the backend logs. */
+      devHead: sanitizeLogText(headText(rawDevLog, LOG_HEAD_CHARS)).text,
+      /** Whether the Rust build finished and the app started, or why it did not. */
+      launchMarkers: selectLaunchMarkers(rawDevLog, 30).map(
+        (line) => sanitizeLogText(line, 500).text,
+      ),
     },
     dataDir,
   };
