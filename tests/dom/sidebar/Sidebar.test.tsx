@@ -32,11 +32,19 @@ describe("Sidebar architectural guard (Step 1B)", () => {
     expect(sidebarSource).not.toContain("ThreadListPrimitive");
   });
 
-  it("SidebarThreadRow.tsx does not import or depend on assistant-ui", () => {
+  it("SidebarThreadRow.tsx does not import assistant-ui directly", () => {
     expect(rowSource).not.toContain("@assistant-ui/react");
     expect(rowSource).not.toContain("useAuiState");
     expect(rowSource).not.toContain("useAui");
     expect(rowSource).not.toContain("ThreadListItemPrimitive");
+  });
+
+  it("SidebarThreadRow.tsx composes runtime-derived presentation from shared UI leaves", () => {
+    // The row renders two values that are live runtime state: the running dot and
+    // the relative timestamp. Both must come from `components/ui/` leaves, which
+    // own the assistant-ui subscription (see thread-running-dot.tsx).
+    expect(rowSource).toContain("@/components/ui/thread-running-dot");
+    expect(rowSource).toContain("@/components/ui/thread-last-message-time");
   });
 
   it("SidebarViewMenu.tsx does not import or depend on assistant-ui", () => {

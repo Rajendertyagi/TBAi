@@ -86,7 +86,13 @@ export interface Attempt {
   readonly id: number;
   /** This attempt's readiness promise, and the only handles that settle it. */
   readonly gate: StartupGate;
-  /** This attempt's abort signals, as handed to the client. */
+  /**
+   * This attempt's abort signals, as handed to the client.
+   *
+   * `onActivity` is the whole watchdog interface: the official client reports
+   * every chunk it reads there (SSE keepalives included), and the attempt
+   * resets its idle timer from it.
+   */
   readonly signals: V2ConnectionSignals;
   /**
    * The generation this attempt adopted.
@@ -103,6 +109,27 @@ export interface Attempt {
   readonly hydrating: boolean;
   /** Whether this attempt has been superseded, failed or disposed. */
   readonly retired: boolean;
+  /**
+   * Settles when this attempt stops owning the runtime WITHOUT failing: a newer
+   * attempt replaced it, or the controller was disposed.
+   *
+   * Deliberately not settled by `fail()`. A waiter must report a real failure as
+   * itself, and only re-join a replacement; conflating the two would turn a
+   * failed connect into a silent retry. It exists because a superseded attempt's
+   * hydration may never finish, so waiting for its load promise alone can hang
+   * past the point where the attempt is gone.
+   */
+  readonly superseded: Promise<void>;
+  /**
+   * Settles with the real failure when `fail()` ends this attempt.
+   *
+   * The load may be waiting on a hydration read that never returns, so a
+   * terminal failure has to reach the waiter without hydration: it is not a
+   * supersession, and the load must reject with the failure itself. Resolves
+   * (rather than rejects) so an attempt that is failed without a load waiting
+   * on it cannot surface as an unhandled rejection.
+   */
+  readonly failure: Promise<unknown>;
   /**
    * Adopts the generation the connection produced.
    *
@@ -167,14 +194,6 @@ export interface Attempt {
    * @param promise - The promise, or `null` to clear it.
    */
   setLoad(promise: Promise<void> | null): void;
-  /**
-   * Reports transport activity on this attempt's event stream and resets its
-   * idle watchdog.
-   *
-   * Fed by BYTES, including SSE keepalives that carry no event: an idle
-   * session is silent in events for hours and is still alive.
-   */
-  noteActivity(): void;
 }
 
 /**
@@ -203,11 +222,63 @@ export function createAttempt(
   let retired = false;
   let loadPromise: Promise<void> | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let signalSuperseded: (() => void) | null = null;
+  /**
+   * Resolved by `retire()` only.
+   *
+   * A superseded attempt's load may never settle, so this is what lets a waiter
+   * let go of it and re-join the attempt that replaced it.
+   */
+  const superseded = new Promise<void>((resolve) => {
+    signalSuperseded = resolve;
+  });
+  let signalFailure: ((error: unknown) => void) | null = null;
+  /**
+   * Settled by `fail()` only.
+   *
+   * `superseded` cannot carry a failure: `scheduleReconnect` retires an attempt
+   * before failing its readiness on the recoverable path, so the load would
+   * otherwise see a replacement where a terminal failure has none. A failure
+   * that ends the attempt resolves this, and the load rejects with the error
+   * itself rather than waiting for a hydration read that may never return.
+   */
+  const failure = new Promise<unknown>((resolve) => {
+    signalFailure = resolve;
+  });
+  /**
+   * Whether this attempt still has its listener on the controller-lifetime
+   * signal.
+   *
+   * The signal outlives the attempt, so a settled attempt that left its
+   * listener behind would add one per reconnect cycle to an object aborted
+   * only when the controller is disposed.
+   */
+  let lifecycleListening = true;
 
   function clearIdleTimer(): void {
     if (idleTimer === null) return;
     clearTimeout(idleTimer);
     idleTimer = null;
+  }
+
+  /**
+   * Detaches this attempt's lifecycle listener, at most once.
+   *
+   * Idempotent because `fail()`, `retire()` and the abort dispatch itself can
+   * all reach it, and removing the same listener twice would make an
+   * add/remove balance meaningless.
+   */
+  function detachLifecycleListener(): void {
+    if (!lifecycleListening) return;
+    lifecycleListening = false;
+    lifecycleSignal.removeEventListener("abort", onLifecycleAbort);
+  }
+
+  function onLifecycleAbort(): void {
+    // The controller is going away: nothing may keep a watchdog timer alive
+    // after it, and the listener that reported it is done.
+    clearIdleTimer();
+    detachLifecycleListener();
   }
 
   function onIdle(): void {
@@ -223,7 +294,11 @@ export function createAttempt(
 
   function armIdleTimer(): void {
     clearIdleTimer();
-    if (retired || lifecycleSignal.aborted) return;
+    // A settled attempt has no stream to watch, and an aborted connection is
+    // already dead: rearming would only schedule an abort that has happened.
+    // Activity can still be reported in the window between the abort and the
+    // reader observing it, and after retirement.
+    if (retired || lifecycleSignal.aborted || connection.signal.aborted) return;
     idleTimer = setTimeout(onIdle, streamIdleTimeoutMs);
   }
 
@@ -234,8 +309,10 @@ export function createAttempt(
   };
 
   // A watchdog outliving its controller would keep a Node/Bun process alive
-  // for its whole duration after the runtime is gone.
-  lifecycleSignal.addEventListener("abort", clearIdleTimer, { once: true });
+  // for its whole duration after the runtime is gone. The listener is removed
+  // by `fail()`/`retire()` as well, because those settle the attempt long
+  // before the controller is disposed.
+  lifecycleSignal.addEventListener("abort", onLifecycleAbort, { once: true });
 
   gate.open();
   armIdleTimer();
@@ -271,17 +348,29 @@ export function createAttempt(
     // attempt. The failure is kept as readiness's rejection reason.
     retired = true;
     hydrating = false;
+    detachLifecycleListener();
     clearIdleTimer();
     connection.abort();
     gate.reject(error);
+    // The load's other settlement: readiness only settles a waiter that has
+    // already hydrated, and a terminal failure can arrive while hydration is
+    // unresolved. `retire()` does not reach here, so a recoverable failure
+    // that schedules a replacement stays a supersession for the load.
+    signalFailure?.(error);
   }
 
   function retire(): void {
     if (retired) return;
     retired = true;
     hydrating = false;
+    detachLifecycleListener();
     clearIdleTimer();
     connection.abort();
+    // Settled before the gate so a waiter that was waiting on the LOAD (whose
+    // hydration may never finish) stops waiting on an attempt that is gone.
+    // `fail()` does not reach here: it settles `retired` first, so the early
+    // return above keeps a real failure a failure.
+    signalSuperseded?.();
     gate.reject(new AttemptSupersededError(id));
   }
 
@@ -306,6 +395,8 @@ export function createAttempt(
     get retired(): boolean {
       return retired;
     },
+    superseded,
+    failure,
     adopt,
     beginHydration,
     projectionCommitted,
@@ -315,6 +406,5 @@ export function createAttempt(
     retire,
     load,
     setLoad,
-    noteActivity: armIdleTimer,
   };
 }

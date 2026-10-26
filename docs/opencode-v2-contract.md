@@ -26,7 +26,7 @@ recorded here rather than resolved silently.
 | Official client (`@opencode/client`) | **2.1.2** | `package.json` and `web/package.json` |
 | Managed server, supported range | **`>=2.0.15 <2.2.0`** | `src/config/opencode.ts` |
 | CI's pinned server binary | **2.1.2** | the CI workflow, with npm's `dist.integrity` re-verified |
-| Upstream source read for this work | **2.0.32** (a local checkout) | `packages/cli/src/env.ts`, `packages/opencode/src/server/…` |
+| Upstream source read for this work | **2.0.32** (an audit-time local checkout; the pinned, tested surface is the **2.1.2** release above) | `packages/cli/src/env.ts`, `packages/opencode/src/server/…` |
 
 The supported range's **lower half is unchanged**, so a 2.0.x server is still
 supported. That direction was checked too: the 2.1.2 client against a real,

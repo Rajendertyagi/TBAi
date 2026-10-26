@@ -36,6 +36,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Resolves to the rejection reason, so a test can assert on the failure type. */
+function failure(promise: Promise<unknown>): Promise<Error | null> {
+  return promise.then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+}
+
 /**
  * Resolves `true` when the state predicate is met, `false` after `ms`.
  *
@@ -127,6 +135,99 @@ describe("RT-008: the event stream idle watchdog", () => {
         2_000,
       );
       expect(recovered).toBe(true);
+    } finally {
+      controller.dispose();
+    }
+  });
+});
+
+describe("RT-008: the watchdog also covers silence BEFORE the first stream byte", () => {
+  it("lets a shorter readiness deadline expire first, without ending the attempt", async () => {
+    // The two bounds are different promises about different things, so they are
+    // not combined in one test: here the READINESS deadline (25 ms) is shorter
+    // than the idle timeout (400 ms), and it must be the one that fires.
+    const client = createClient([createGeneration(1), createGeneration(2)], {
+      stallFirstConnect: true,
+    });
+    const controller = createV2ThreadController(client, {
+      readyTimeoutMs: 25,
+      streamIdleTimeoutMs: 400,
+      initialReconnectDelayMs: 5,
+    });
+
+    try {
+      const outcome = await failure(controller.awaitReady());
+
+      expect(outcome?.message).toContain("not ready within 25ms");
+      // The waiter gave up; the connection attempt did not. A connect that
+      // produces no byte yet is still `idle` / `waiting-for-server`, and
+      // nothing aborted it on the caller's behalf.
+      expect(controller.getState().load.type).toBe("idle");
+      expect(controller.getState().connection.type).toBe("waiting-for-server");
+      expect(client.signals[0]?.connectionSignal.aborted).toBe(false);
+      expect(client.signals[0]?.lifecycleSignal.aborted).toBe(false);
+      expect(client.connectCount).toBe(1);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it("reconnects a connection that never produced a byte, and keepalives prevent that", async () => {
+    // Same window, opposite order: the idle timeout is shorter than the
+    // readiness budget, so the WATCHDOG is the one that fires. A hanging first
+    // connect is the case an established-stream test cannot reach: there is no
+    // event, and the first byte may never arrive.
+    const client = createClient([createGeneration(1), createGeneration(2)], {
+      stallFirstConnect: true,
+    });
+    const controller = createV2ThreadController(client, {
+      readyTimeoutMs: 5_000,
+      streamIdleTimeoutMs: IDLE_TIMEOUT_MS,
+      initialReconnectDelayMs: 5,
+    });
+
+    try {
+      const firstConnect = client.waitForConnect(1);
+      const waiting = failure(controller.awaitReady());
+      await firstConnect;
+
+      // Five idle windows of heartbeat-only traffic. The stream has produced no
+      // byte yet, so this is the only liveness signal there is; it must count.
+      for (let beat = 0; beat < (IDLE_TIMEOUT_MS / HEARTBEAT_MS) * 5; beat += 1) {
+        await sleep(HEARTBEAT_MS);
+        client.signals[0]?.onActivity();
+      }
+
+      expect(client.connectCount).toBe(1);
+      expect(controller.getState().connection.type).toBe("waiting-for-server");
+      expect(controller.getState().load.type).toBe("idle");
+
+      // Now let it go silent: the watchdog aborts the connection, and the
+      // existing reconnect path replaces it. No test-only recovery branch.
+      const secondConnect = client.waitForConnect(2);
+      const reconnecting = await waitForWithin(
+        controller,
+        (state) => state.connection.type === "reconnecting",
+        2_000,
+      );
+      expect(reconnecting).toBe(true);
+      await secondConnect;
+
+      // A caller that was already waiting reports the connection failure for
+      // the attempt it was waiting on - not a timeout, and not a silent hang.
+      const outcome = await waiting;
+      expect(outcome).not.toBeNull();
+      expect(outcome?.message).not.toContain("not ready within");
+      expect(client.signals[0]?.connectionSignal.aborted).toBe(true);
+      expect(client.signals[0]?.lifecycleSignal.aborted).toBe(false);
+
+      const recovered = await waitForWithin(
+        controller,
+        (state) => state.load.type === "ready" && state.connection.type === "connected",
+        2_000,
+      );
+      expect(recovered).toBe(true);
+      expect(client.connectCount).toBe(2);
     } finally {
       controller.dispose();
     }

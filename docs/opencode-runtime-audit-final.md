@@ -453,7 +453,7 @@ This task is **documentation-only.** The only repository change produced by this
 
 ---
 
-## 13. Closure addendum - 2026-10-25 (RT-008, RT-012, RT-007; RT-013 opened)
+## 13. Closure addendum - 2026-10-25 (RT-008, RT-012, RT-007; RT-013 and RT-014 opened)
 
 §5 is the **audit-time snapshot as of 2026-10-23** and is deliberately not
 rewritten: its `Status` column, its "8 deep real-server integration suites", and
@@ -511,6 +511,24 @@ runtime ready" (hydration stalled 150 ms against a 25 ms budget; the waiter retu
 inside the budget, the runtime subsequently reports ready) and "does not settle the
 attempt's own load promise when a waiter times out".
 
+**Follow-up, same day: a terminal failure now reports as a failure.** The deadline
+above was correct, but the error a waiter received was not. `Attempt.superseded`
+resolves only in `retire()`, and a terminal `scheduleReconnect` calls `failReady()`
+**before** `retireAttempt()`. An attempt parked in `hydrate()` never settled its load
+leg, so `awaitReady()` spent its remaining budget and rejected as a **deadline
+timeout** - the opposite of its own contract, "Only a real failure - a terminal one
+... - is thrown". The distinction could not be inferred from ordering, because a
+*recoverable* failure retires first on purpose and must keep following its
+replacement. `sync/attempt.ts` now carries a `failure` promise settled only in
+`fail()`, raced in `startConnection` beside `runAttempt` and `superseded`; `fail()`
+settles `retired` first so `retire()` early-returns and a failure stays a failure.
+Evidence: the same suite's "reports a terminal stream failure while hydration is
+unresolved instead of following a replacement" (asserts the typed
+`V2ControllerError`, `connectCount` 1, `load: error`, `connection: failed`, no
+pending timer, empty `unhandledRejection` probe) and "follows the replacement a
+recoverable stream failure schedules, and cancels its timer". The terminal case
+failed in 4.31 ms with `Received value: undefined` before the fix.
+
 ### 13.3 RT-008 - Closed
 
 Criterion asked for "an idle-timeout watchdog on the open stream that triggers the
@@ -555,7 +573,10 @@ and an unclassified new suite fails the gate, so the count cannot silently drift
 again. The live-model half of the criterion stays **dispatch-only** by the same
 decision (`e2e-big-pickle`, `TBAI_E2E_LIVE=1`), which means RT-007's original wording
 is satisfied for the real-server suites and deliberately not for live-model ones.
-That is a residual risk the gate records, not a coverage claim.
+That is a residual risk the gate records, not a coverage claim. And the dispatched
+spec itself was weaker than it looked: its success check matched the prompt's own
+`pickle-ok` until 2026-10-25, so its green never established that an answer
+rendered (§13.6). The check is fixed; the job remains dispatch-only.
 
 Evidence: `tests/unit/tooling/opencode-runtime-gate.test.ts` (20 cases), which
 imports the lists and the discovery function **from the gate script** so a drift in
@@ -596,6 +617,48 @@ The five Tier 1 blockers were RT-001, RT-011, RT-008, RT-012 and RT-007. RT-001 
 RT-011 closed with their durable-journal and delete-marker work (ADRs of 2026-10-24)
 and passed independent review; RT-008, RT-012 and RT-007 close with this addendum,
 RT-007 in the re-scoped form above. **Moving the verdict from Hold is the
-maintainer's decision**, not a self-declared consequence of this section - and the
-live-model certification run (§11, RT-007 criterion, `TBAI_E2E_LIVE=1`) has not been
-executed as part of this work.
+maintainer's decision**, not a self-declared consequence of this section.
+
+**The live-model run was executed on 2026-10-25 and did not pass.** With the pinned
+2.1.2 CLI/server and `opencode/big-pickle` (`TBAI_E2E_LIVE=1`, the same spec the
+`e2e-big-pickle` job runs), the capability assertion and prompt admission both
+succeeded, but the turn failed at the provider: OpenCode's own log
+(`<XDG_DATA_HOME>/opencode/log/opencode.log`) records `AI.Error: Free usage limit
+reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode
+Go to keep going`. The transcript rendered no answer and, over a 180 s observation,
+no failure either (RT-014). This is a **quota limit of the free tier**, not a
+code regression: the same model answered a direct CLI prompt minutes earlier,
+before the limit was reached.
+
+**The run also exposed a defect in the spec itself, and fixed it.** The prompt asks
+the model to write `pickle-ok`, so the spec's own success check matched the *user's
+echoed prompt*. The earlier `e2e-big-pickle` green therefore could not distinguish
+an answer from the echo: it would have passed with an empty transcript. The check
+now strips the prompt from the transcript, samples only what follows it, and reads
+the session's assistant content as separate evidence. The red this produces today
+is a real red, and the green it produced before was not evidence of a rendered
+answer.
+
+### 13.7 RT-014 - Opened (new finding, outside §5's ID range)
+
+**RT-014 - A failed Code turn is silent in the transcript.** Severity: Medium,
+evidence class **Reproduced** (big-pickle live run, 2.1.2 CLI/server, 2026-10-25).
+The prompt was admitted (`200`, 662 ms; a second run 819 ms) and the status chip
+returned from `Working` to `Connected`, but the provider rejected the turn with the
+free-tier quota error quoted in §13.6. The tab showed the user message and no
+assistant content: after a 180 s wait the only growth sample was the user row's
+own timestamp/actions (21 characters), and the session read returned **0 assistant
+characters**. The accessibility snapshot shows **no error, toast, or status text**
+anywhere in it; the status chip is back to `Connected`. The failure is in the
+OpenCode log only.
+
+This is distinct from RT-013 (a compaction conformance failure) and from the
+provider limit itself: the provider refusing is external, but a turn that ends
+without an answer must not look like a turn that succeeded. Closure = the session
+error event is surfaced where the turn is rendered (a transcript/system message or
+the status chip), with a test that a failed turn is visibly failed; then the
+big-pickle live spec is re-run when quota is available.
+
+**Not claimed by this finding.** Whether the UI should also offer a retry, and
+which error classes deserve one, is unspecified; the missing *signal* is the
+defect.

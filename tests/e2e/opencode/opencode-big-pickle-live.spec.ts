@@ -8,9 +8,11 @@
  *   - the prompt goes through the real composer and the real SSE event stream,
  *   - the answer is read from the rendered transcript.
  *
- * Why this cannot be a hermetic spec: the free tier is only usable from inside
- * OpenCode, and the model must actually answer. The hermetic E2E server has no
- * provider credentials, which is exactly why this is `-live` and opt-in.
+ * Why this cannot be a hermetic spec: the answer comes from a live provider and
+ * the free tier is metered, so the run is opt-in (`TBAI_E2E_LIVE=1`) rather than
+ * part of `verify`. A failed turn is not a pass: the answer is read from the
+ * rendered transcript AND from the session's assistant content, so "the model
+ * never answered" and "the UI never rendered the answer" stay distinguishable.
  *
  * The capability assertion comes first so a model that is missing from the
  * catalogue fails with that reason rather than as a mystery timeout.
@@ -95,21 +97,60 @@ test("real Big Pickle stream through the Code surface", async ({ page, request }
     const scroller = page.locator('[data-testid="virtual-transcript-scroller"]');
     await scroller.waitFor({ state: "visible", timeout: LIVE_TIMEOUT_MS });
 
+    // The answer is everything AFTER the echoed prompt. Matching the scroller's
+    // whole text is vacuous here: the prompt itself contains "pickle-ok", so the
+    // user's own message satisfies the check before the model has said anything,
+    // and the samples then describe the prompt (the first live run failed its
+    // streaming assertion for exactly that reason). Stripping the prompt leaves
+    // the user row's timestamp/actions plus the assistant turn - the only place
+    // the token can come from is the answer.
+    const answerText = async () => {
+      const whole = await scroller.innerText().catch(() => "");
+      return whole.split(PROMPT).pop()?.trim() ?? "";
+    };
+
     const samples: Array<{ ms: number; chars: number }> = [];
     let lastChars = 0;
     let text = "";
+    // The user row's timestamp/actions are part of the stripped remainder and
+    // appear before any answer text. They are a stable baseline, not a streaming
+    // step, so the step count starts above them; otherwise one inserted answer
+    // plus the baseline would look like two steps.
+    let baselineChars = 0;
     const deadline = Date.now() + LIVE_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      text = await scroller.innerText().catch(() => "");
-      const chars = text.split(PROMPT).pop()?.trim().length ?? 0;
+      text = await answerText();
+      const chars = text.length;
+      if (baselineChars === 0 && chars > 0) baselineChars = chars;
       if (chars !== lastChars) {
         samples.push({ ms: Date.now() - startedAt, chars });
         lastChars = chars;
       }
       if (/pickle-ok/i.test(text) && (await working.count()) === 0) break;
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(100);
     }
     const finishedAt = Date.now() - startedAt;
+
+    // Distinguish "the model never answered" from "the answer exists on the
+    // server but never reached the transcript". A UI-only assertion cannot tell
+    // them apart, and they have completely different owners. This is the same
+    // session read the reload below performs.
+    const sessionRead = await request.get(`/api/opencode/api/session/${sessionId}/message`);
+    type SessionRow = {
+      type?: string;
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    const sessionBody: { data?: SessionRow[] } = sessionRead.ok()
+      ? ((await sessionRead.json()) as { data?: SessionRow[] })
+      : {};
+    const sessionRows = Array.isArray(sessionBody.data) ? sessionBody.data : [];
+    const serverAnswer = sessionRows
+      .filter((row) => row.type === "assistant")
+      .flatMap((row) =>
+        (row.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? ""),
+      )
+      .join("\n")
+      .trim();
 
     await page.screenshot({ path: testInfo.outputPath("big-pickle.png") });
 
@@ -117,20 +158,21 @@ test("real Big Pickle stream through the Code surface", async ({ page, request }
       `[big-pickle] admitted=${admittedAt}ms working=${workingAt}ms finished=${finishedAt}ms`,
     );
     console.log(`[big-pickle] growth samples: ${JSON.stringify(samples)}`);
+    console.log(`[big-pickle] server answer chars: ${serverAnswer.length}`);
     console.log(`[big-pickle] tail: ${JSON.stringify(text.slice(-400))}`);
 
     expect(text, "the model's answer must be rendered").toMatch(/pickle-ok/i);
     expect(
-      samples.filter((sample) => sample.chars > 0).length,
+      samples.filter((sample) => sample.chars > baselineChars).length,
       "the reply must arrive in more than one visible step (real streaming)",
     ).toBeGreaterThanOrEqual(2);
 
     // ── 5. The same answer survives a reload (history came from the session) ─
     await page.reload();
     await openCodeConversation(page, conversationId);
-    await expect(page.getByText(/pickle-ok/i).first()).toBeVisible({
-      timeout: LIVE_TIMEOUT_MS,
-    });
+    // Prompt-stripped for the same reason as the live read: after the reload the
+    // prompt is on screen again, and it also carries "pickle-ok".
+    await expect.poll(answerText, { timeout: LIVE_TIMEOUT_MS }).toMatch(/pickle-ok/i);
   } finally {
     await deleteCodeConversation(request, conversationId);
   }

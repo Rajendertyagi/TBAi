@@ -45,8 +45,9 @@ import {
   SUITE_DIR,
   isRuntimeSuiteSource,
   parseCounts,
+  runGate,
   runtimeSuiteNames,
-  unclassifiedSuites,
+  validateRuntimeSuiteRegistry,
 } from "../../../scripts/run-opencode-runtime-suites";
 import { REPO_ROOT } from "../../helpers/repo-root";
 
@@ -86,6 +87,11 @@ const runtimeSuites = runtimeSuiteNames();
 const required = new Set<string>(REQUIRED_SUITES);
 const excluded = new Set(Object.keys(EXCLUDED_SUITES));
 
+/** The codes the shared validator reports, in report order. */
+function problemCodes(registry: Parameters<typeof validateRuntimeSuiteRegistry>[0]): string[] {
+  return validateRuntimeSuiteRegistry(registry).map((problem) => problem.code);
+}
+
 describe("every real-binary runtime suite is classified", () => {
   it("finds the suites on disk (non-vacuity)", () => {
     // Without this, a discovery function that returned [] would make every
@@ -96,18 +102,16 @@ describe("every real-binary runtime suite is classified", () => {
     }
   });
 
-  it("has required ∪ excluded cover the whole tree", () => {
-    expect(unclassifiedSuites(runtimeSuites)).toEqual([]);
-  });
-
-  it("names no suite that is not on disk", () => {
-    // The mirror of the above: a stale entry in either list reads as coverage
-    // for a file that was deleted or renamed.
-    const onDisk = new Set(runtimeSuites);
-    const stale = [...REQUIRED_SUITES, ...Object.keys(EXCLUDED_SUITES)].filter(
-      (name) => !onDisk.has(name),
-    );
-    expect(stale).toEqual([]);
+  it("has required ∪ excluded cover the whole tree, with nothing stale", () => {
+    // One assertion for the three tree relationships the gate enforces before
+    // it spawns anything: coverage, no stale name, no overlap.
+    expect(
+      validateRuntimeSuiteRegistry({
+        discovered: runtimeSuites,
+        required: REQUIRED_SUITES,
+        excluded: EXCLUDED_SUITES,
+      }),
+    ).toEqual([]);
   });
 
   it("never classifies one suite as both required and excluded", () => {
@@ -126,6 +130,96 @@ describe("every real-binary runtime suite is classified", () => {
       // the soundness itself is the measurement cited in the reason.
       expect(reason).toMatch(/\b(needs|because|until|once|re-admit|fail[a-z]*)\b/i);
     }
+  });
+});
+
+describe("the shared registry validator refuses every invalid registry", () => {
+  it("accepts a registry whose lists match the discovered suites", () => {
+    expect(
+      problemCodes({
+        discovered: ["opencode-alpha", "opencode-beta"],
+        required: ["opencode-alpha"],
+        excluded: { "opencode-beta": "needs a credential" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports a runtime suite nobody classified", () => {
+    const problems = validateRuntimeSuiteRegistry({
+      discovered: ["opencode-alpha", "opencode-brand-new"],
+      required: ["opencode-alpha"],
+      excluded: {},
+    });
+    expect(problems.map((problem) => problem.code)).toEqual(["unclassified"]);
+    expect(problems[0]?.message).toContain("opencode-brand-new");
+  });
+
+  it("reports a stale EXCLUDED suite, which would read as coverage for a missing file", () => {
+    const problems = validateRuntimeSuiteRegistry({
+      discovered: ["opencode-alpha"],
+      required: ["opencode-alpha"],
+      excluded: { "opencode-removed": "was excluded for a reason that no longer applies" },
+    });
+    expect(problems.map((problem) => problem.code)).toEqual(["stale"]);
+    expect(problems[0]?.message).toContain("opencode-removed");
+  });
+
+  it("reports a stale REQUIRED suite", () => {
+    const problems = validateRuntimeSuiteRegistry({
+      discovered: ["opencode-alpha"],
+      required: ["opencode-alpha", "opencode-gone"],
+      excluded: {},
+    });
+    expect(problems.map((problem) => problem.code)).toEqual(["stale"]);
+    expect(problems[0]?.message).toContain("opencode-gone");
+  });
+
+  it("reports a suite classified as both required and excluded", () => {
+    const problems = validateRuntimeSuiteRegistry({
+      discovered: ["opencode-alpha"],
+      required: ["opencode-alpha"],
+      excluded: { "opencode-alpha": "cannot be both" },
+    });
+    expect(problems.map((problem) => problem.code)).toContain("overlap");
+    expect(problems.find((problem) => problem.code === "overlap")?.message).toContain(
+      "opencode-alpha",
+    );
+  });
+
+  it("reports an empty required list", () => {
+    expect(problemCodes({ discovered: [], required: [], excluded: {} })).toEqual([
+      "empty-required",
+    ]);
+  });
+
+  it("reports every defect, not only the first", () => {
+    // A gate that stops at the first problem makes the next run reveal the next
+    // one; the validator reports the whole picture in one pass.
+    expect(
+      problemCodes({
+        discovered: ["opencode-brand-new"],
+        required: [],
+        excluded: { "opencode-removed": "stale" },
+      }),
+    ).toEqual(["empty-required", "unclassified", "stale"]);
+  });
+
+  it("makes the gate exit non-zero on an invalid registry", () => {
+    // Empty required list: refused before `spawnSync("opencode", ...)` and
+    // before any suite command, which the source-order guard below pins.
+    expect(runGate({ discovered: [], required: [], excluded: {} })).toBe(1);
+  });
+
+  it("validates before it spawns the binary or a suite", () => {
+    const source = readFileSync(path.join(REPO_ROOT, GATE_SCRIPT), "utf8");
+    const validateAt = source.indexOf("validateRuntimeSuiteRegistry(registry)");
+    const binaryAt = source.indexOf('spawnSync("opencode"');
+    const suiteAt = source.indexOf("runSuite(name)");
+    expect(validateAt).toBeGreaterThan(-1);
+    expect(binaryAt).toBeGreaterThan(-1);
+    expect(suiteAt).toBeGreaterThan(-1);
+    expect(validateAt).toBeLessThan(binaryAt);
+    expect(validateAt).toBeLessThan(suiteAt);
   });
 });
 
@@ -149,10 +243,20 @@ describe("the runtime-suite predicate matches the harness gate, not the file nam
   it("refuses a suite the lists never mention", () => {
     // The gate's own refusal, driven with a synthetic name: an unknown runtime
     // suite must be reported, not run and not skipped.
-    expect(unclassifiedSuites([...runtimeSuites, "opencode-brand-new"])).toEqual([
-      "opencode-brand-new",
-    ]);
-    expect(unclassifiedSuites()).toEqual([]);
+    const problems = validateRuntimeSuiteRegistry({
+      discovered: [...runtimeSuites, "opencode-brand-new"],
+      required: REQUIRED_SUITES,
+      excluded: EXCLUDED_SUITES,
+    });
+    expect(problems.map((problem) => problem.code)).toEqual(["unclassified"]);
+    expect(problems[0]?.message).toContain("opencode-brand-new");
+    expect(
+      validateRuntimeSuiteRegistry({
+        discovered: runtimeSuites,
+        required: REQUIRED_SUITES,
+        excluded: EXCLUDED_SUITES,
+      }),
+    ).toEqual([]);
   });
 });
 

@@ -149,7 +149,15 @@ export interface V2ThreadController {
  */
 export { attachV2PromptMessageId, createV2MessageId, V2_PROMPT_MESSAGE_ID_KEY };
 
-class V2ControllerError extends Error {
+/**
+ * The error the controller's public surface rejects with, carrying the
+ * classified failure a view can render.
+ *
+ * Exported because the typed failure is part of the controller's contract: a
+ * caller has to be able to tell a disposed runtime (`safe.kind === "aborted"`)
+ * from a timeout or a server failure.
+ */
+export class V2ControllerError extends Error {
   public readonly safe: V2SafeError;
 
   public constructor(safe: V2SafeError) {
@@ -278,6 +286,15 @@ export type V2ThreadControllerConfig = {
    * holding a stream open for the product's 30 seconds.
    */
   readonly streamIdleTimeoutMs: number;
+  /**
+   * The clock the readiness deadline is measured against.
+   *
+   * A deadline is one absolute instant, and proving that a replacement attempt
+   * draws on the budget that is LEFT means observing time passing between
+   * attempts. Injectable so a test can spend the budget without waiting it
+   * out; the product always reads `Date.now`.
+   */
+  readonly nowMs: () => number;
 };
 
 const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
@@ -287,6 +304,7 @@ const DEFAULT_V2_CONTROLLER_CONFIG: V2ThreadControllerConfig = {
   promptAdmissionTimeoutMs: OPENCODE_V2_PROMPT_ADMISSION_TIMEOUT_MS,
   readyTimeoutMs: OPENCODE_V2_READY_TIMEOUT_MS,
   streamIdleTimeoutMs: OPENCODE_V2_STREAM_IDLE_TIMEOUT_MS,
+  nowMs: () => Date.now(),
 };
 
 export type V2ThreadControllerDeps = {
@@ -1213,7 +1231,24 @@ export function createV2ThreadController(
         new V2ControllerError({ kind: "aborted", message: V2_DISPOSED_MESSAGE }),
       );
     const live = beginAttempt();
-    const started = runAttempt(live).catch((error: unknown) => {
+    const started = Promise.race([
+      runAttempt(live),
+      // A superseded attempt's hydration may never finish (a hung history read
+      // is the normal case), so waiting for its load promise alone would pin a
+      // caller to an attempt that no longer exists. Racing the attempt's
+      // replacement settles the load as the sentinel `awaitReady()` follows.
+      live.superseded.then(() => {
+        throw new AttemptSupersededError(live.id);
+      }),
+      // A real failure is not a replacement. Readiness cannot deliver it to a
+      // load that is still hydrating (the gate is only awaited after the
+      // history reads), and a terminal failure never settles `superseded`, so
+      // the load would stay pinned to an attempt that is already dead. Racing
+      // the attempt's own failure settles it as the failure itself.
+      live.failure.then((error: unknown) => {
+        throw error;
+      }),
+    ]).catch((error: unknown) => {
       // This attempt's own slot, so a newer attempt's promise cannot be
       // dropped from here (M2).
       live.setLoad(null);
@@ -1362,18 +1397,24 @@ export function createV2ThreadController(
    * The wait is BOUNDED, and the bound covers the WHOLE wait: establishing the
    * connection and hydrating it are the readiness work, so waiting for those
    * outside the deadline would make the deadline describe only the last
-   * instant of the wait. Every pass re-reads the clock, so a takeover spends
-   * the same budget rather than restarting it.
+   * instant of the wait. The deadline is one ABSOLUTE instant, captured once;
+   * every pass re-reads the clock, so a takeover spends the budget that is left
+   * rather than restarting it.
    *
    * Expiry stops the WAITER, not the runtime: the attempt keeps hydrating and
    * its gate is left unsettled, so a later call can still observe the runtime
    * come up. A caller that treats the timeout as a dead runtime would report a
    * slow one as broken.
+   *
+   * Disposal is different, and is not a timeout: the runtime is gone, so the
+   * waiter stops waiting the moment the attempt it was waiting on is retired,
+   * and reports the typed `aborted` failure on the next pass. The hydration that
+   * was in flight keeps its own promise; only this wait ends.
    */
   async function awaitReady(): Promise<void> {
-    const deadline = Date.now() + cfg.readyTimeoutMs;
+    const deadline = cfg.nowMs() + cfg.readyTimeoutMs;
     for (;;) {
-      const remaining = deadline - Date.now();
+      const remaining = deadline - cfg.nowMs();
       if (remaining <= 0) throw readyTimeoutError();
       try {
         await withDeadline(ensureLoaded(), remaining);
@@ -1385,7 +1426,7 @@ export function createV2ThreadController(
       const live = currentAttempt;
       if (live === null) continue;
       try {
-        await live.gate.waitWithDeadline(Math.max(0, deadline - Date.now()));
+        await live.gate.waitWithDeadline(Math.max(0, deadline - cfg.nowMs()));
       } catch (error) {
         if (error instanceof AttemptSupersededError) continue;
         if (error instanceof StartupTimeoutError) throw readyTimeoutError();

@@ -7959,3 +7959,79 @@ absent `needs:` and header listing). Every guard here was proved able to fail
 against its own defect and then reverted: a commented-out CI step, an unclassified
 suite file dropped into `tests/integration/opencode`, a renamed required suite
 entry, and `parseCounts` narrowed until it stopped reading the `skipped` spelling.
+
+---
+
+## 2026-10-25 - OpenCode readiness reports a real failure, and the sidebar's runtime values move to shared leaves
+
+**Context.** Two defects surfaced after `2c444cc` (the RT-012/RT-008/RT-007
+delivery). Both are recorded here because both change a contract rather than
+just a line of code.
+
+*Readiness reported a timeout for a failure.* `Attempt.superseded` resolves only
+in `retire()`, and a terminal `scheduleReconnect` calls `failReady()` **before**
+`retireAttempt()`. An attempt parked in `hydrate()` therefore never settled its
+load leg, so `awaitReady()` spent its remaining budget and rejected as a
+**deadline timeout** - the opposite of its own docstring, "Only a real failure -
+a terminal one ... - is thrown". A *recoverable* failure retires first on
+purpose, so it must keep following its replacement rather than surfacing as a
+failure. The distinction had to be carried by the attempt, not inferred from
+ordering.
+
+*The sidebar read assistant-ui directly.* The relative timestamp added in
+`57b9dbc` was fetched with `useAuiState` inside `SidebarThreadRow.tsx`, which the
+Step 1B architectural guard in `tests/dom/sidebar/Sidebar.test.tsx` forbids and
+`test:dom` caught. The guard was right about the layering; the value itself is
+genuinely runtime-derived.
+
+**Decision.**
+
+- *A failure is signalled by the attempt that failed.* `sync/attempt.ts` gained a
+  `failure` promise, settled only in `fail()`. `startConnection` races it beside
+  `runAttempt` and `superseded`. A terminal stream failure during unresolved
+  hydration now rejects `awaitReady()` with the controller's typed
+  `V2ControllerError` (kind `network`), and a recoverable failure still enters
+  `scheduleReconnect` and is superseded by the replacement. `fail()` settles
+  `retired` first so `retire()` early-returns and a failure stays a failure.
+- *Runtime-derived presentation lives in shared UI leaves.* The row now composes
+  `components/ui/thread-last-message-time.tsx`, the sibling of
+  `thread-running-dot.tsx`. Both own their assistant-ui subscription; the sidebar
+  composes them and never subscribes itself. The guard keeps its rule, is
+  retitled to say "direct" import, and gained a case pinning that the row gets
+  those two values from `components/ui/`.
+
+**Baseline (pinned).** The OpenCode API and CLI are **2.1.2**
+(`@opencode/client` 2.1.2 in both manifests, CI binary 2.1.2). Live acceptance
+uses the **`opencode/big-pickle` free-tier model** and stays dispatch-only
+(`TBAI_E2E_LIVE=1`, `e2e-big-pickle`); it is not part of `verify`. The 2026-10-25
+local run did not get an answer - the free tier's usage limit was reached - and
+it exposed two honesty defects, both recorded in
+`docs/opencode-runtime-audit-final.md` §13: the spec's answer check matched the
+prompt's own `pickle-ok` (now stripped, so only the answer can satisfy it), and a
+failed turn is silent in the transcript (**RT-014**).
+
+**Alternatives rejected.**
+
+- *Settle `superseded` in `fail()`.* A terminal failure would then read as a
+  supersession and follow a replacement that does not exist - the silent
+  replacement the contract forbids.
+- *Reject only when no replacement is scheduled.* Correct outcome, fragile
+  mechanism: it makes the error depend on the order inside `scheduleReconnect`,
+  which is exactly the coupling that produced the original timeout report.
+- *Drop the timestamp, or delete the guard.* Both remove a real capability to
+  make a check green; the guard had caught a real violation.
+
+**Evidence.** `tests/unit/web/opencode/v2ThreadController.readyDeadline.test.ts`:
+"reports a terminal stream failure while hydration is unresolved instead of
+following a replacement" (asserts the `V2ControllerError` kind, `connectCount`
+1, `load: error`, `connection: failed`, no pending timer and an empty
+`unhandledRejection` probe) and "follows the replacement a recoverable stream
+failure schedules, and cancels its timer". Red evidence before the fix: the
+terminal case failed in 4.31 ms with `Received value: undefined`. The comparison
+case is driven by an injected `nowMs` (0 -> 200 -> 500 -> 700 against a 600 ms
+budget), not wall-clock. `tests/dom/sidebar/Sidebar.test.tsx` and
+`tests/dom/sidebar/thread-last-message-time.test.tsx` cover the leaf and its
+fallback; the new guard case was proved able to fail by removing the import.
+`bun run verify` exit 0: unit+integration **4882 pass / 66 skip / 0 fail** across
+374 files / 4948 tests; DOM **577 pass / 0 fail** across 58 files; shutdown 1,
+startup-rollback 2, lifecycle-integration 3; quarantine clean.

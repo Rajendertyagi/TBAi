@@ -15,10 +15,17 @@
  * - no test FAILED, and
  * - no test was SKIPPED.
  *
- * It also fails when the directory contains a runtime suite that this file has
- * not classified, so adding a suite without deciding whether it is required is
- * a visible change rather than a silent coverage hole. (This register once said
- * "eight suites" while nine existed.)
+ * It also refuses to run at all - BEFORE the binary is spawned or any suite
+ * executes - when the registry itself is invalid:
+ *
+ * - a runtime suite on disk is neither required nor excluded,
+ * - a required or excluded name is stale (no such suite on disk),
+ * - a suite is classified as both required and excluded, or
+ * - `REQUIRED_SUITES` is empty.
+ *
+ * That validation is one pure function (`validateRuntimeSuiteRegistry`) so the
+ * unit test and the gate cannot disagree about what "valid" means. (This
+ * register once said "eight suites" while nine existed.)
  *
  * Every suite runs even after an earlier one fails, so one PR reports the whole
  * picture instead of the first failure.
@@ -167,32 +174,112 @@ export function runtimeSuiteNames(): string[] {
     .sort();
 }
 
+/** One entry of the runtime-suite registry the gate is asked to run. */
+export type RuntimeSuiteRegistry = {
+  /** The real-binary suites discovered on disk. */
+  readonly discovered: readonly string[];
+  /** Suites that must run on every PR. */
+  readonly required: readonly string[];
+  /** Suites deliberately not required, each with its reason. */
+  readonly excluded: Readonly<Record<string, string>>;
+};
+
 /**
- * Real-binary runtime suites the lists have not classified.
+ * A reason the registry must not be executed.
  *
- * `names` defaults to the on-disk tree; the guard test passes a synthetic list
- * so the refusal itself is exercised without installing a second suite file.
+ * `code` is the stable half: tests assert it, so the refusal they prove is the
+ * one the gate performs even if the wording changes.
  */
-export function unclassifiedSuites(names: readonly string[] = runtimeSuiteNames()): string[] {
-  const classified = new Set<string>([...REQUIRED_SUITES, ...Object.keys(EXCLUDED_SUITES)]);
-  return names.filter((name) => !classified.has(name));
+export type RuntimeSuiteRegistryProblem = {
+  readonly code: "unclassified" | "stale" | "overlap" | "empty-required";
+  readonly message: string;
+};
+
+/**
+ * Validates the runtime-suite registry against the suites on disk.
+ *
+ * Pure, and the SINGLE implementation the gate and its unit test both use: a
+ * copy of these rules in the test could pass while the gate drifted.
+ *
+ * @param registry - The discovered suites and the two classification lists.
+ * @returns Every defect found, in report order; empty means the gate may run.
+ */
+export function validateRuntimeSuiteRegistry(
+  registry: RuntimeSuiteRegistry,
+): RuntimeSuiteRegistryProblem[] {
+  const problems: RuntimeSuiteRegistryProblem[] = [];
+  const discovered = new Set(registry.discovered);
+  const required = new Set(registry.required);
+  const excluded = new Set(Object.keys(registry.excluded));
+
+  if (registry.required.length === 0) {
+    problems.push({
+      code: "empty-required",
+      message: "REQUIRED_SUITES is empty; a gate with nothing required proves nothing.",
+    });
+  }
+
+  const unclassified = registry.discovered.filter(
+    (name) => !required.has(name) && !excluded.has(name),
+  );
+  if (unclassified.length > 0) {
+    problems.push({
+      code: "unclassified",
+      message: `runtime suites exist that are neither required nor excluded: ${unclassified.join(", ")}. Add each one to REQUIRED_SUITES or EXCLUDED_SUITES (with a reason).`,
+    });
+  }
+
+  const stale = [...required, ...excluded].filter((name) => !discovered.has(name)).sort();
+  if (stale.length > 0) {
+    problems.push({
+      code: "stale",
+      message: `classified suites are not runtime suites on disk: ${stale.join(", ")}. Remove each stale name or restore the suite.`,
+    });
+  }
+
+  const overlap = [...required].filter((name) => excluded.has(name));
+  if (overlap.length > 0) {
+    problems.push({
+      code: "overlap",
+      message: `suites are classified as BOTH required and excluded: ${overlap.join(", ")}. A suite is one or the other.`,
+    });
+  }
+
+  return problems;
 }
 
-function main(): number {
-  const unclassified = unclassifiedSuites();
-  if (unclassified.length > 0) {
-    console.error(
-      "Runtime suites exist that this gate has not classified as required or excluded:",
-    );
-    for (const name of unclassified) console.error(`  - ${name}`);
-    console.error("Add each one to REQUIRED_SUITES or EXCLUDED_SUITES (with a reason).");
+/** The registry as this repository defines it right now. */
+function currentRuntimeSuiteRegistry(): RuntimeSuiteRegistry {
+  return {
+    discovered: runtimeSuiteNames(),
+    required: REQUIRED_SUITES,
+    excluded: EXCLUDED_SUITES,
+  };
+}
+
+/**
+ * Runs the gate, refusing an invalid registry BEFORE the binary or any suite.
+ *
+ * Takes the registry rather than reading the module constants so a test can
+ * prove the refusal with synthetic lists.
+ *
+ * @param registry - The registry to validate and run.
+ * @returns The process exit code.
+ */
+export function runGate(registry: RuntimeSuiteRegistry = currentRuntimeSuiteRegistry()): number {
+  const problems = validateRuntimeSuiteRegistry(registry);
+  if (problems.length > 0) {
+    // Before spawning anything: an invalid registry is a defect in this file,
+    // not a suite result, and running a partial list would report it as green.
+    console.error("The runtime-suite registry is invalid; refusing to run any suite:");
+    for (const problem of problems) console.error(`  - [${problem.code}] ${problem.message}`);
     return 1;
   }
 
   const version = spawnSync("opencode", ["--version"], { encoding: "utf8" });
   console.log(`OpenCode binary: ${(version.stdout ?? "").trim() || "(not on PATH)"}`);
 
-  const outcomes = REQUIRED_SUITES.map((name) => {
+  const outcomes = registry.required.map((name) => {
     const outcome = runSuite(name);
     const verdict = outcome.ok ? "PASS" : "FAIL";
     console.log(
@@ -209,7 +296,7 @@ function main(): number {
 }
 
 // Guarded so `tests/unit/tooling/opencode-runtime-gate.test.ts` can read the
-// lists without executing the gate.
+// lists and the validator without executing the gate.
 if (import.meta.main) {
-  process.exitCode = main();
+  process.exitCode = runGate();
 }

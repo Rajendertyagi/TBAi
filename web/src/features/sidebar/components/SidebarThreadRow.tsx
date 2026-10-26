@@ -44,8 +44,7 @@ import {
 } from "@/features/chat/state/conversationMutations";
 import { useChatTabsStore } from "@/features/chat/state/chatTabs";
 import { ThreadRunningDot } from "@/components/ui/thread-running-dot";
-import { useAuiState } from "@assistant-ui/react";
-import { formatRelativeTime } from "@/lib/date-format";
+import { ThreadLastMessageTime } from "@/components/ui/thread-last-message-time";
 
 export interface SidebarRowItem {
   remoteId: string;
@@ -64,7 +63,9 @@ const ROW_CLASS =
  * archive / delete per `historyConfig`) and a right-click menu (open in tab,
  * copy id). Rename uses a modal Dialog (not inline input) to avoid
  * blur/focus race conditions with the ContextMenu. A live running dot shows
- * while the thread is generating (runtime state, never persisted).
+ * while the thread is generating (runtime state, never persisted). The dot and
+ * the relative timestamp are runtime-derived presentation, composed through the
+ * shared `components/ui/` leaves that own the assistant-ui subscription.
  */
 export function SidebarThreadRow({
   item,
@@ -81,21 +82,6 @@ export function SidebarThreadRow({
   const activeKey = useChatTabsStore((s) => s.activeKey);
   const title = item.title ?? "Untitled";
   const removeConversation = useDeleteConversation();
-
-  const lastMessageAt = useAuiState((s) => {
-    try {
-      const items = s.threads?.threadItems ?? [];
-      const match =
-        items.find((t) => t.remoteId === item.remoteId) ??
-        items.find((t) => t.id === item.remoteId);
-      return match?.lastMessageAt;
-    } catch {
-      return undefined;
-    }
-  });
-
-  const effectiveDate = lastMessageAt ?? item.lastMessageAt;
-  const time = formatRelativeTime(effectiveDate);
 
   const isActive = activeKey === `chat:${item.remoteId}` || activeKey === `agent:${item.remoteId}`;
 
@@ -173,11 +159,11 @@ export function SidebarThreadRow({
             </button>
 
             <div className="relative flex shrink-0 items-center justify-end min-w-6">
-              {time && (
-                <span className="text-xs tabular-nums text-muted-foreground/60 transition-opacity duration-150 group-hover:opacity-0">
-                  {time}
-                </span>
-              )}
+              <ThreadLastMessageTime
+                remoteId={item.remoteId}
+                fallback={item.lastMessageAt}
+                className="text-xs tabular-nums text-muted-foreground/60 transition-opacity duration-150 group-hover:opacity-0"
+              />
               <div className="absolute inset-0 flex items-center justify-end opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>

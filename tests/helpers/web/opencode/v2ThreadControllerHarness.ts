@@ -467,7 +467,23 @@ export function createGeneration(
   };
 }
 
-export function createClient(generations: readonly FakeGeneration[]): FakeClient {
+/** How the fake transport behaves before it has an established stream. */
+export type FakeClientOptions = {
+  /**
+   * Accepts the first connection but never produces a byte.
+   *
+   * The pending connect rejects when its CONNECTION signal aborts, exactly as
+   * the real client's does, so the attempt's idle watchdog is the only thing
+   * that can end it. This is the state a test needs to prove silence is
+   * detected BEFORE the first stream byte, not only on an established stream.
+   */
+  readonly stallFirstConnect?: boolean;
+};
+
+export function createClient(
+  generations: readonly FakeGeneration[],
+  options: FakeClientOptions = {},
+): FakeClient {
   const signals: V2ConnectionSignals[] = [];
   const connects: Deferred<void>[] = [];
   let index = 0;
@@ -479,9 +495,21 @@ export function createClient(generations: readonly FakeGeneration[]): FakeClient
       signals.push(nextSignals);
       connects[index]?.resolve(undefined);
       const generation = generations[index];
+      const ordinal = index;
       index += 1;
       if (!generation) throw new Error("unexpected extra OpenCode connection");
       generation.bindSignals(nextSignals);
+      if (options.stallFirstConnect && ordinal === 0) {
+        // No byte, no generation: the connect stays open until the watchdog
+        // aborts the connection it was handed.
+        await new Promise<never>((_resolve, reject) => {
+          nextSignals.connectionSignal.addEventListener(
+            "abort",
+            () => reject(new Error("connection aborted before the first byte")),
+            { once: true },
+          );
+        });
+      }
       return generation;
     },
     get connectCount() {
