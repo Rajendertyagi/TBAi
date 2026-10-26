@@ -917,7 +917,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-driver failed" }
           }
           if (-not (Test-Path $driver)) { throw "tauri-driver not installed at $driver" }
-          Write-Output "tauri-driver: $(& $driver --version)"
+          # tauri-driver has no version flag (it exits 1 on one), so the probe is
+          # --help, which prints its banner and exits 0.
+          Write-Output "tauri-driver: $driver"
+          & $driver --help
+          if ($LASTEXITCODE -ne 0) { throw "tauri-driver --help exited $LASTEXITCODE" }
 
       # Windows WebDriver must match the WebView2 runtime that is actually
       # installed on the runner: a mismatched pair fails every session. The

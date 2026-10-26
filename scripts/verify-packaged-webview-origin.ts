@@ -335,30 +335,44 @@ function parseArgs(argv: readonly string[]): PackagedOptions | null {
 }
 
 /**
- * Asks the driver for its version before spawning it.
+ * Probes the driver binary before spawning it, so a missing binary becomes a
+ * recorded failure with the OS error instead of an asynchronous 'error' event
+ * racing the first request.
  *
- * A missing binary then becomes a recorded failure with the OS error instead of
- * an asynchronous 'error' event racing the first request.
+ * `tauri-driver` has no version flag — it treats one as an unknown argument and
+ * exits 1 ("Error: unused arguments left") — so the probe is `--help`, which
+ * `src/cli.rs` implements by printing the banner and exiting 0. The version is
+ * therefore recorded as null rather than invented.
  */
-function checkDriverBinary(binary: string): {
+export function checkDriverBinary(binary: string): {
   available: boolean;
   version: string | null;
+  helpLine: string | null;
   error: string | null;
 } {
-  const result = spawnSync(binary, ["--version"], {
+  const result = spawnSync(binary, ["--help"], {
     encoding: "utf8",
     windowsHide: true,
     timeout: 20_000,
   });
-  if (result.error) return { available: false, version: null, error: errorMessage(result.error) };
+  if (result.error) {
+    return { available: false, version: null, helpLine: null, error: errorMessage(result.error) };
+  }
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+  const helpLine =
+    output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? null;
   if (result.status !== 0) {
     return {
       available: false,
       version: null,
-      error: `${binary} --version exited ${result.status ?? "null"}: ${(result.stderr ?? "").trim()}`,
+      helpLine,
+      error: `${binary} --help exited ${result.status ?? "null"}: ${tailText(output, 500)}`,
     };
   }
-  return { available: true, version: (result.stdout ?? "").trim() || null, error: null };
+  return { available: true, version: null, helpLine, error: null };
 }
 
 async function waitForPortMirror(
@@ -477,6 +491,7 @@ async function main(): Promise<number> {
   };
   let appInstanceId: string | null = null;
   let driverVersion: string | null = null;
+  let driverHelpLine: string | null = null;
   let driverPort: number | null = null;
   let nativePort: number | null = null;
   let driverStop: ProcessStopResult = {
@@ -501,6 +516,7 @@ async function main(): Promise<number> {
     } else {
       const checked = checkDriverBinary(options.driverBinary);
       driverVersion = checked.version;
+      driverHelpLine = checked.helpLine;
       if (!checked.available) {
         driver.spawnError = checked.error ?? "the driver is not available";
       } else {
@@ -707,6 +723,7 @@ async function main(): Promise<number> {
       binary: options.driverBinary,
       nativeDriver: options.nativeDriver,
       version: driverVersion,
+      helpLine: driverHelpLine,
       port: driverPort,
       nativePort,
       pid: driverChild?.pid ?? null,

@@ -35,6 +35,7 @@ import {
   EXPECTED_PACKAGED_ORIGIN,
   type PackagedOriginInput,
   assessPackagedOrigin,
+  checkDriverBinary,
   parseExecuteResponse,
   parseSessionResponse,
   readOriginValue,
@@ -600,6 +601,16 @@ describe("the observation is wired into CI, narrowly", () => {
     expect(dev).toContain("if: always()");
   });
 
+  it("probes tauri-driver with the flag it implements, never a version flag", () => {
+    const install = stepBlock("Install tauri-driver");
+    if (install === null) throw new Error("the tauri-driver install step is missing");
+    // tauri-driver exits 1 on an unknown argument, so a --version probe fails
+    // the step before the driver is ever used. --help prints its banner, exit 0.
+    expect(install).toContain("$driver --help");
+    expect(install).toContain("$LASTEXITCODE");
+    expect(install).not.toContain("--version");
+  });
+
   it("provisions a driver that matches the installed WebView2 runtime", () => {
     const install = stepBlock("Install tauri-driver");
     expect(install).toContain("cargo install tauri-driver --locked");
@@ -638,6 +649,29 @@ describe("the observation is wired into CI, narrowly", () => {
       const base = entry.slice(entry.lastIndexOf("/") + 1);
       expect(base.includes(".")).toBe(true);
     }
+  });
+});
+
+describe("the driver probe", () => {
+  const SOURCE = fs.readFileSync(repoPath("scripts", "verify-packaged-webview-origin.ts"), "utf8");
+
+  it("never asks the driver for a version, which tauri-driver does not implement", () => {
+    expect(SOURCE).not.toContain('["--version"]');
+  });
+
+  it("treats a binary that runs as available and invents no version", () => {
+    const checked = checkDriverBinary(process.execPath);
+    expect(checked.available).toBe(true);
+    expect(checked.version).toBeNull();
+    expect(checked.helpLine?.trim().length ?? 0).toBeGreaterThan(0);
+    expect(checked.error).toBeNull();
+  });
+
+  it("reports a missing binary as unavailable, with the reason", () => {
+    const checked = checkDriverBinary(path.join(os.tmpdir(), "tbai-no-such-driver.exe"));
+    expect(checked.available).toBe(false);
+    expect(checked.version).toBeNull();
+    expect(checked.error).not.toBeNull();
   });
 });
 
