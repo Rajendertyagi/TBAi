@@ -663,14 +663,34 @@ jobs:
             --manifest="$RUNNER_TEMP/harness-manifest.json" \
             --out="$E2E_OUT/comparison.json"
 
+      # Playwright exits non-zero whenever a test fails, and this suite has known
+      # failures on BOTH revisions, so a leg's exit code cannot say whether the
+      # leg RAN. Completion is asserted from the comparison it produced instead:
+      # a leg that crashed leaves no ok comparison and no non-empty inventory.
       - name: Fail when the final leg did not complete
         if: always()
         shell: bash
+        env:
+          REPORT: ${{ env.E2E_OUT }}/comparison.json
         run: |
-          if [ "${{ steps.final_leg.outcome }}" != "success" ]; then
-            echo "The final revision's leg did not complete; see the comparison and logs." >&2
+          set -euo pipefail
+          if [ ! -s "$REPORT" ]; then
+            echo "the final leg produced no comparison at $REPORT" >&2
             exit 1
           fi
+          bun -e '
+            const report = await Bun.file(process.env.REPORT).json();
+            const final = report.final?.totals ?? {};
+            console.log(
+              `comparison: project=${report.project} ok=${report.ok} ` +
+                `final tests=${final.tests ?? 0} failed=${final.failed ?? "?"} ` +
+                `skipped=${final.skipped ?? "?"} specFiles=${final.specFiles ?? 0}`,
+            );
+            if (report.ok !== true || !((final.tests ?? 0) > 0)) {
+              console.error("the final leg did not complete");
+              process.exit(1);
+            }
+          '
 
       - name: Upload G5 comparison evidence
         if: always()

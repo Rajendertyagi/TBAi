@@ -626,6 +626,16 @@ describe("the observation is wired into CI, narrowly", () => {
     expect(driver).toContain("($version -split '\\.')[0]");
   });
 
+  it("decides the final leg completed from its comparison, not its exit code", () => {
+    const gate = stepBlock("Fail when the final leg did not complete");
+    if (gate === null) throw new Error("the final-leg gate is missing");
+    // Playwright exits non-zero for the known failing tests on BOTH revisions,
+    // so the leg's own outcome cannot distinguish "ran" from "crashed".
+    expect(gate).not.toContain("steps.final_leg.outcome");
+    expect(gate).toContain("comparison.json");
+    expect(gate).toContain("report.ok !== true");
+  });
+
   it("uploads exactly the five named files and never the data directory", () => {
     const upload = stepBlock("Upload WebView origin evidence");
     if (upload === null) throw new Error("the origin-evidence upload step is missing");
