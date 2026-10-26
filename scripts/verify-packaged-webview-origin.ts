@@ -375,6 +375,45 @@ export function checkDriverBinary(binary: string): {
   return { available: true, version: null, helpLine, error: null };
 }
 
+export type HostIntegrity = "low" | "medium" | "high" | "system" | "unknown";
+
+/**
+ * Reads the mandatory integrity level out of `whoami /groups` output.
+ *
+ * The level is recorded because the observation depends on it: WebView2 Runtime
+ * 150 and later ignores `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` when the host is
+ * elevated, and msedgedriver passes the `--remote-debugging-port` it attaches to
+ * through that variable (wry#1782, WebView2Feedback#5645). An elevated run
+ * therefore never opens the CDP endpoint, so the evidence has to say which level
+ * it was taken at instead of assuming the session timeout was the app's fault.
+ */
+export function parseIntegrityLevel(text: string): HostIntegrity {
+  const match = /Mandatory Label\\(\w+)(?: Mandatory Level)?/.exec(text);
+  if (match === null) return "unknown";
+  const level = match[1].toLowerCase();
+  return level === "low" || level === "medium" || level === "high" || level === "system"
+    ? level
+    : "unknown";
+}
+
+/** The current host's integrity level; `unknown` when it cannot be read. */
+function readHostIntegrity(): { level: HostIntegrity; error: string | null } {
+  const result = spawnSync("whoami", ["/groups"], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 15_000,
+  });
+  if (result.error) return { level: "unknown", error: errorMessage(result.error) };
+  const level = parseIntegrityLevel(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+  if (result.status !== 0) {
+    return { level, error: `whoami /groups exited ${result.status ?? "null"}` };
+  }
+  return {
+    level,
+    error: level === "unknown" ? "whoami /groups reported no mandatory label" : null,
+  };
+}
+
 async function waitForPortMirror(
   mirrorPath: string,
   timeoutMs: number,
@@ -449,6 +488,8 @@ async function main(): Promise<number> {
   const runId = `${new Date().toISOString()}-${os.hostname()}`;
   const evidencePath = path.join(options.outDir, "packaged.json");
   fs.rmSync(evidencePath, { force: true });
+  const hostIntegrity = readHostIntegrity();
+  const elevated = hostIntegrity.level === "high" || hostIntegrity.level === "system";
 
   const appExists = fs.existsSync(options.appPath);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-origin-packaged-"));
@@ -706,6 +747,12 @@ async function main(): Promise<number> {
   });
 
   const failures = [...assessment.failures];
+  if (elevated && assessment.stage === "session-create") {
+    failures.push(
+      "host: elevated, so WebView2 ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and the " +
+        "debugging port msedgedriver attaches to never opens (wry#1782); run this at medium integrity",
+    );
+  }
   if (driverStop.attempted && !driverStop.confirmed) {
     failures.push("teardown: the driver process tree did not terminate");
   }
@@ -719,6 +766,12 @@ async function main(): Promise<number> {
     generatedAt: new Date().toISOString(),
     expectedOrigin: EXPECTED_PACKAGED_ORIGIN,
     app: { path: options.appPath, exists: appExists, dataDir, logPath: appLogPath },
+    host: {
+      platform: process.platform,
+      integrity: hostIntegrity.level,
+      elevated,
+      integrityError: hostIntegrity.error,
+    },
     driver: {
       binary: options.driverBinary,
       nativeDriver: options.nativeDriver,

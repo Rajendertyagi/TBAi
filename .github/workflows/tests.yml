@@ -979,12 +979,36 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "EDGEDRIVER=$exe"
 
       # G1: the origin is read from the running packaged WebView, not assumed.
+      #
+      # The runner's shell is elevated, and WebView2 Runtime 150+ ignores
+      # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an elevated host. That variable is
+      # how msedgedriver hands the app the --remote-debugging-port it attaches to,
+      # so an elevated run leaves the CDP endpoint closed and session creation
+      # times out (wry#1782, WebView2Feedback#5645). Tauri's own Windows e2e job
+      # drives the suite at medium integrity for the same reason; packaged.json
+      # records the integrity level so the artifact shows it happened.
       - name: Observe the packaged WebView origin (G1)
         shell: pwsh
+        env:
+          G1_OUT: ${{ runner.temp }}\origin-evidence\packaged
         run: |
           $ErrorActionPreference = "Stop"
-          $out = Join-Path $env:RUNNER_TEMP "origin-evidence\packaged"
-          bun run verify:packaged-origin --app="TBAi-windows-x64-portable/TBAi.exe" --native-driver="$env:EDGEDRIVER" --out="$out"
+          $gsudo = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\gsudo.exe"
+          $sudo = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\sudo.exe"
+          if (-not (Test-Path $gsudo) -and -not (Test-Path $sudo)) {
+            winget install --id gerardog.gsudo --accept-source-agreements --accept-package-agreements --silent
+            # winget can report "already installed" with a non-zero code, so the
+            # install is judged by the binary it was supposed to produce.
+          }
+          $gsudo = if (Test-Path $gsudo) { $gsudo } else { $sudo }
+          if (-not (Test-Path $gsudo)) { throw "gsudo not found after winget install" }
+          # The de-elevated child needs to execute the portable app from the
+          # workspace and write its evidence, so both are opened up explicitly.
+          icacls "$env:GITHUB_WORKSPACE" /grant "Everyone:(OI)(CI)F" | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:G1_OUT | Out-Null
+          icacls "$env:G1_OUT" /grant "Everyone:(OI)(CI)F" | Out-Null
+          $app = (Resolve-Path "TBAi-windows-x64-portable/TBAi.exe").Path
+          & $gsudo --integrity Medium bun run verify:packaged-origin --app="$app" --native-driver="$env:EDGEDRIVER" --out="$env:G1_OUT"
           if ($LASTEXITCODE -ne 0) { throw "G1: the packaged WebView origin was not observed (exit $LASTEXITCODE)" }
 
       # G2: runs even when G1 failed, because the two observations are

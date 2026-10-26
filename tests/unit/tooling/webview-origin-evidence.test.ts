@@ -37,6 +37,7 @@ import {
   assessPackagedOrigin,
   checkDriverBinary,
   parseExecuteResponse,
+  parseIntegrityLevel,
   parseSessionResponse,
   readOriginValue,
   readProbeValue,
@@ -685,6 +686,64 @@ describe("the driver probe", () => {
     expect(checked.available).toBe(false);
     expect(checked.version).toBeNull();
     expect(checked.error).not.toBeNull();
+  });
+});
+
+describe("the host integrity the observation depends on", () => {
+  // Sample lines as `whoami /groups` prints them; the label column is padded.
+  const GROUP_LINES = [
+    "GROUP INFORMATION",
+    "-----------------",
+    "Mandatory Label\\Medium Mandatory Level                        Label  S-1-16-8192",
+  ].join("\r\n");
+
+  it("reads each mandatory level whoami can report", () => {
+    expect(parseIntegrityLevel(GROUP_LINES)).toBe("medium");
+    for (const level of ["Low", "High", "System"]) {
+      const text = `Mandatory Label\\${level} Mandatory Level    Label  S-1-16-0`;
+      expect(parseIntegrityLevel(text)).toBe(level.toLowerCase() as "low" | "high" | "system");
+    }
+  });
+
+  it("says unknown rather than guessing when no label is present", () => {
+    expect(parseIntegrityLevel("")).toBe("unknown");
+    expect(parseIntegrityLevel("GROUP INFORMATION\r\n-----------------")).toBe("unknown");
+    // An unrecognised level is not coerced into a known one.
+    expect(parseIntegrityLevel("Mandatory Label\\Untrusted Mandatory Level")).toBe("unknown");
+  });
+});
+
+describe("G1 runs where WebView2 honours the driver's debugging port", () => {
+  const WORKFLOW = fs.readFileSync(repoPath(".github", "workflows", "tests.yml"), "utf8");
+  const SOURCE = fs.readFileSync(repoPath("scripts", "verify-packaged-webview-origin.ts"), "utf8");
+
+  it("de-elevates the packaged observation before driving it", () => {
+    const lines = WORKFLOW.split(/\r?\n/);
+    const start = lines.findIndex(
+      (line) => line.trim() === "- name: Observe the packaged WebView origin (G1)",
+    );
+    if (start === -1) throw new Error("the G1 step is missing");
+    const block: string[] = [];
+    for (let index = start + 1; index < lines.length; index++) {
+      if (/^ {6}- name: /.test(lines[index])) break;
+      block.push(lines[index]);
+    }
+    const step = block.join("\n");
+    // WebView2 Runtime 150+ drops WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in an
+    // elevated host, and that variable carries the port msedgedriver attaches to.
+    expect(step).toContain("gerardog.gsudo");
+    expect(step).toContain("--integrity Medium");
+    expect(step).toContain('icacls "$env:GITHUB_WORKSPACE"');
+    // The observation itself must be the de-elevated command, not a sibling.
+    expect(step.indexOf("--integrity Medium")).toBeLessThan(step.indexOf("verify:packaged-origin"));
+    // An absolute app path, so the child does not depend on its working directory.
+    expect(step).toContain("(Resolve-Path");
+  });
+
+  it("records the integrity level, and names it when a session times out on an elevated host", () => {
+    expect(SOURCE).toContain("readHostIntegrity()");
+    expect(SOURCE).toContain("integrity: hostIntegrity.level");
+    expect(SOURCE).toContain('elevated && assessment.stage === "session-create"');
   });
 });
 
