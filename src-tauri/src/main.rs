@@ -9,6 +9,9 @@
 //    the per-launch `TBAI_INSTANCE_ID` and exposes `get_api_endpoint`.
 // 4. Unexpected sidecar exits trigger bounded recovery (max 3 restarts in 30s).
 //    The WebView is never navigated or reloaded during recovery or port change.
+// 5. In DEVELOPMENT the backend is owned by `beforeDevCommand`, not by this
+//    shell: there is no sidecar, and the shell attaches to `build.devUrl`
+//    instead (see `attach_dev_backend`). Packaged startup is unchanged.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -351,6 +354,96 @@ fn is_tray_left_click_up(event: &TrayIconEvent) -> bool {
     )
 }
 
+/// Port the development window is served from, per `build.devUrl`.
+///
+/// `devUrl` is the endpoint the window loads, so it — not `PORT`, not the port
+/// mirror — is the address this shell must attach to in development.
+fn dev_origin_port(app: &AppHandle) -> Option<u32> {
+    let url = app.config().build.dev_url.as_ref()?;
+    Some(u32::from(url.port_or_known_default()?))
+}
+
+/// Development: verify the backend that `beforeDevCommand` already started.
+///
+/// `tauri dev` waits for `build.devUrl` before it starts this process, so the
+/// backend `beforeDevCommand` launched already owns the dev port and the data
+/// directory. Spawning the packaged sidecar as well created a SECOND backend
+/// competing for the same port: it logged `startup_failed` (EADDRINUSE) into the
+/// same application log — both processes inherit `TBAI_LOG_FILE` — while the
+/// window kept loading the first backend. The shell then reported a failure its
+/// own window never exhibited, and the G2 observation could not tell which
+/// process the log line belonged to.
+///
+/// Ownership is decided by the Tauri CLI's own switch rather than an env var or
+/// a port probe: `custom-protocol` is enabled only for `tauri build`, so
+/// `tauri::is_dev()` is true for `tauri dev` and false for both release and
+/// `--debug` packaged builds. The named shell job, the sidecar lifecycle, crash
+/// recovery and the shutdown handshake therefore remain packaged-only.
+fn attach_dev_backend(app: &AppHandle) {
+    let owned: State<StartupOwned> = app.state();
+
+    let port = match dev_origin_port(app) {
+        Some(port) => port,
+        None => {
+            *owned.status.lock().expect("status lock") = "failed".to_string();
+            let _ = app.emit(
+                "backend-status",
+                serde_json::json!({
+                    "status": "failed",
+                    "reason": "build.devUrl names no port to attach to"
+                }),
+            );
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    *owned.verified.lock().expect("verified lock") = false;
+    *owned.verified_endpoint.lock().expect("endpoint lock") = None;
+    *owned.status.lock().expect("status lock") = "verifying".to_string();
+
+    let start = Instant::now();
+    while start.elapsed() < STARTUP_TIMEOUT {
+        if owned.is_quitting.load(Ordering::SeqCst) {
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+        // Only an answer carrying an instance id counts: a static page or a
+        // foreign server on the same port must not be mistaken for the backend.
+        if let Ok(instance_id) = fetch_instance(port) {
+            *owned.verified.lock().expect("verified lock") = true;
+            *owned.status.lock().expect("status lock") = "ready".to_string();
+            let endpoint = EndpointInfo {
+                port,
+                base_url: format!("http://127.0.0.1:{port}"),
+                instance_id,
+            };
+            *owned.verified_endpoint.lock().expect("endpoint lock") = Some(endpoint.clone());
+            if let Some(tray) = app.tray_by_id("main") {
+                let _ = tray.set_tooltip(format!("TBAi · port {port}").into());
+            }
+            let _ = app.emit("backend-ready", &endpoint);
+            let _ = app.emit(
+                "backend-status",
+                serde_json::json!({ "status": "ready", "endpoint": endpoint }),
+            );
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    *owned.status.lock().expect("status lock") = "failed".to_string();
+    let _ = app.emit(
+        "backend-status",
+        serde_json::json!({
+            "status": "failed",
+            "reason": format!("No TBAi backend answered the development port {port}")
+        }),
+    );
+    owned.is_starting.store(false, Ordering::SeqCst);
+}
+
 /// One backend startup attempt: starts Bun sidecar in background, polls until verified.
 fn attempt(app: &AppHandle) {
     let cfg: State<StartupConfig> = app.state();
@@ -361,6 +454,12 @@ fn attempt(app: &AppHandle) {
     }
     if owned.is_starting.swap(true, Ordering::SeqCst) {
         // Prevent concurrent attempt calls
+        return;
+    }
+
+    // Development never owns a backend process: `beforeDevCommand` does.
+    if tauri::is_dev() {
+        attach_dev_backend(app);
         return;
     }
 

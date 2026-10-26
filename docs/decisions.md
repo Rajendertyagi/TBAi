@@ -8076,3 +8076,82 @@ packaged-webview origin observation (G1/G2) and the live override-notice check
 in `docs/2026-10-20-opencode-runtime-remediation-plan.md` §8.3 and the Phase 8
 row in §15.5. Anyone who later adds Semgrep to CI must also add the result to
 the evidence it is claimed by; until then, the absence of a claim is accurate.
+
+## 2026-10-26 - Development owns the backend process, packaging owns the sidecar
+
+**Decision.** The Tauri shell spawns a backend process **only in a packaged
+build**. In development it attaches to the backend that `beforeDevCommand`
+already started, at the port `build.devUrl` names — it spawns no sidecar, writes
+no port mirror, and runs no crash recovery or stdin shutdown handshake, because
+it owns no child. The switch is `tauri::is_dev()` (in tauri 2.x:
+`!cfg!(feature = "custom-protocol")`), which is true for `tauri dev` and false
+for both release and `--debug` packaged builds, so packaged startup, recovery
+and teardown are byte-for-byte the behaviour that already shipped.
+
+Backend startup is attributed per process. `server.started` now logs `port` plus
+`instanceId`, and `server.startup_failed` logs `instanceId`; `instanceId` is the
+same value `GET /api/server/instance` returns. The G2 development-origin driver
+(`scripts/observe-dev-webview-origin.ts#attributeBackendLog`) groups those
+records by instance and accepts an observation only when the instance that
+answered the in-page API is the instance the log records as having started on
+the configured port. A `startup_failed` written by another process is reported
+as a non-fatal note.
+
+**Why.** `tauri dev` waits for `build.devUrl` to answer before it launches the
+app (the CLI exposes `--no-dev-server-wait` precisely because that is the
+default), so the `beforeDevCommand` backend was already listening on :3000 when
+the shell started. The shell then spawned the packaged `tbai-server` sidecar as
+well. That child inherits the parent environment — `PORT`, `DATA_DIR` and
+`TBAI_LOG_FILE` — so it bound toward the same port, hit `EADDRINUSE`, could not
+heal-scan (the port was explicit, not inferred), logged `startup_failed` into the
+*same* application log, and exited. The window kept loading the first backend the
+whole time. Two defects followed from that one ownership mistake:
+
+1. A launch that worked reported a failure, because the shell's verification
+   path was watching a process that had nothing to do with the page.
+2. The failure was written where a reader could not attribute it. The G2 check
+   read "does the log contain `startup_failed`" and concluded "the launched
+   backend failed", which was false about the frontend's backend and true only
+   about the redundant one. A false positive and a false negative at once.
+
+The fix is an ownership split, not a port change and not a suppression: exactly
+one process serves development, and the log says which process each record
+belongs to.
+
+**Alternatives rejected.**
+
+- *Clean port 3000 before `tauri dev` on the runner.* It makes the redundant
+  sidecar win the bind instead of losing it, so the window and the sidecar are
+  served by different processes on the same port depending on timing, and the
+  packaged-only G2 evidence would be produced by a development sidecar — the
+  opposite of what G2 claims to observe.
+- *Give the dev sidecar a different port.* That is a second backend on purpose,
+  with a second data directory and a second log writer, and it contradicts
+  `devUrl`.
+- *Detect dev by an env var or a port probe.* An env var is another piece of
+  ambient state that can be wrong (the sidecar inherited `PORT` in this very
+  bug), and a probe answers "is something listening", which is exactly the
+  question that must not decide ownership. The CLI's own build-time feature is
+  the one signal that cannot disagree with how the binary was produced.
+- *Keep spawning the sidecar in dev and ignore its `startup_failed`.* That keeps
+  a second backend alive in every development launch and hides the real signal
+  instead of removing the process that produces it.
+- *Teach the observation to ignore `startup_failed` lines.* The log genuinely did
+  contain a failed backend; the defect was attribution, not detection. Suppressing
+  the line would have left the redundant sidecar running and blinded the check to
+  a real failure of the intended backend.
+
+**Consequences.** Development and packaged runs now diverge in exactly one
+respect, decided in one place (`main.rs::attempt`), and the packaged path keeps
+its G2-lifetime guarantees untouched. The development path has no child, so
+`quit_owned` has nothing to handshake with and exits immediately. The cost is
+that development correctness now depends on `beforeDevCommand` succeeding, and a
+missing dev backend fails with `No TBAi backend answered the development port
+{port}` after the normal startup timeout rather than being masked by a sidecar.
+Shipping `--debug` packaged builds (which do not enable `custom-protocol`) still
+spawn the sidecar, so a debug build of the packaged app is still a real packaged
+app.
+
+Lifecycle records now carry `instanceId`; any future reader of the application
+log must join on it rather than on the presence of an event name. That is the
+durable rule, and `docs/logging.md` records it.

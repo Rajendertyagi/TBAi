@@ -486,6 +486,20 @@ Tauri 2 window (no native title bar, decorations:false)
   by `tauri.conf.json`; the `sidecar("tbai-server")` string in `main.rs` must match it
   exactly, because a mismatch fails at RUNTIME, not build time. The release workflow's
   smoke test is what catches that.
+- **Development owns no backend process; packaging does.** `tauri::is_dev()` decides one
+  thing at startup (`custom-protocol` is a build-only CLI feature, so `tauri dev` is dev and
+  both release and `--debug` builds are not): in development the shell attaches to the
+  backend `beforeDevCommand` already started at `build.devUrl`
+  (`main.rs::attach_dev_backend`) and spawns **no** sidecar; a packaged build spawns and
+  owns the sidecar exactly as before, with its named shell job, crash recovery and stdin
+  shutdown handshake. Two backends can no longer exist in one launch. Before this split,
+  `tauri dev` waited for the `beforeDevCommand` backend on :3000 and then spawned the
+  sidecar as well; the sidecar inherited the same `PORT`, `DATA_DIR` and `TBAI_LOG_FILE`,
+  failed with `EADDRINUSE` and logged `startup_failed` into the application's own log while
+  the window kept loading the first backend — a failure the window never exhibited, written
+  where a reader could not tell which process it belonged to. In development `PORT` is not
+  consulted: `build.devUrl` is the address the window loads and therefore the address that
+  must answer.
 - **The SPA ships as loose files, not embedded.** `build.frontendDist` points at
   `src-tauri/frontend-placeholder` (a ~1 KB stub), NOT `web/dist`. Tauri requires the key, but
   embedding 12 MB there was pure dead weight: the window is `visible: false` and the
