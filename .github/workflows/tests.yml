@@ -12,6 +12,7 @@ name: Verify
 #   opencode-runtime  the required real-binary OpenCode runtime suites (RT-007)
 #   e2e               Playwright history specs (browser + spawned server, slower)
 #   opencode-g3       override-notice evidence against a real managed server
+#   e2e-full          G5: the full non-live suite at two revisions, compared; dispatch-only
 #   e2e-big-pickle    live acceptance spec; dispatch-only, because it needs credentials
 #
 # Runs on every push to main and every PR, so suite feedback arrives on the
@@ -24,6 +25,18 @@ on:
         description: "Run the live Big Pickle Code-mode E2E (OpenCode free tier)"
         type: boolean
         default: false
+      e2e_full:
+        description: "Run the G5 two-revision E2E comparison (needs final_sha)"
+        type: boolean
+        default: false
+      final_sha:
+        description: "G5: the revision under test. No default; the baseline is its first parent."
+        type: string
+        required: false
+      harness_sha:
+        description: "G5: the commit holding the pinned harness. Defaults to final_sha."
+        type: string
+        required: false
   push:
     branches: [main, ci/tauri-e2e-verify]
   pull_request:
@@ -444,6 +457,229 @@ jobs:
           p2-tool-result-persistence.spec.ts
           phase-8-tabs-navigation.spec.ts
           opencode-v2-code-route.spec.ts
+
+  # G5 — the same full, non-live suite at two revisions, compared test identity by
+  # test identity.
+  #
+  # Dispatch-only, and deliberately not a per-push gate: it installs two
+  # worktrees, runs the suite in each, and takes hours. What it buys is the one
+  # thing a single green run cannot show — that nothing was REMOVED. A net count
+  # is never used: a deleted failing test and a fixed one look identical in the
+  # totals, so the comparison works on `spec::title` identities and blocks on
+  # `removedWhileFailing`, `unexplainedRemoval`, a new failure, or a settings
+  # divergence that is not pinned in the reviewed allowlist.
+  #
+  # The harness (runner, reporter config, settings dump, aggregate, compare,
+  # allowlist) is injected with `git show <harness>:<path> > <path>` so the index
+  # is never touched, then verified against `scripts/e2e-harness.manifest.json`
+  # before anything is compared. The baseline is the FINAL COMMIT'S FIRST PARENT,
+  # never a branch name.
+  e2e-full:
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e_full
+    runs-on: windows-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both legs are reported separately. A combined total would let one
+        # project's regression cancel the other's.
+        project: [chromium-headless, edge-headless]
+    env:
+      E2E_OUT: ${{ github.workspace }}/e2e-full/${{ matrix.project }}
+      # A Windows path, consumed by bun scripts that resolve it against the
+      # filesystem. `$PWD` inside Git Bash is a POSIX path (/d/a/...), and
+      # passing that through to a native binary is a conversion this job should
+      # not be relying on.
+      E2E_WORKSPACE: ${{ github.workspace }}
+    steps:
+      - name: Checkout the final revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.final_sha }}
+          path: final
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Resolve final, baseline and harness revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.final_sha }}" ]; then
+            echo "final_sha is required for the G5 comparison; refusing to guess a revision" >&2
+            exit 1
+          fi
+          cd final
+          final=$(git rev-parse HEAD)
+          # The baseline is the first parent, full stop. A merge base or a branch
+          # tip would compare against a tree the change never built on.
+          baseline=$(git rev-parse "${final}^1")
+          harness=$(git rev-parse "${{ inputs.harness_sha || inputs.final_sha }}")
+          {
+            echo "FINAL_SHA=${final}"
+            echo "BASELINE_SHA=${baseline}"
+            echo "HARNESS_SHA=${harness}"
+          } >> "$GITHUB_ENV"
+          git show "${harness}:scripts/e2e-harness.manifest.json" > "$RUNNER_TEMP/harness-manifest.json"
+          MANIFEST="$RUNNER_TEMP/harness-manifest.json" bun -e \
+            'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));for(const f of m.files)console.log(f.path)' \
+            > "$RUNNER_TEMP/harness-files.txt"
+
+      - name: Checkout the baseline revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BASELINE_SHA }}
+          path: baseline
+          fetch-depth: 0
+
+      # `> file` through `git show`, never `git checkout H -- file`: checkout
+      # STAGES the change, and the guard below rejects any staged entry.
+      - name: Inject the pinned harness into both worktrees
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in baseline final; do
+            while IFS= read -r file; do
+              mkdir -p "$(dirname "$dir/$file")"
+              git -C "$dir" show "${HARNESS_SHA}:${file}" > "$dir/$file"
+            done < "$RUNNER_TEMP/harness-files.txt"
+          done
+
+      - name: Verify harness injection (baseline)
+        shell: bash
+        run: |
+          bun baseline/scripts/compare-e2e-reports.ts --verify-injection \
+            --repo=baseline --revision="${BASELINE_SHA}" \
+            --manifest="$RUNNER_TEMP/harness-manifest.json" \
+            --out="$E2E_OUT/baseline.harness.json"
+
+      - name: Verify harness injection (final)
+        shell: bash
+        run: |
+          bun final/scripts/compare-e2e-reports.ts --verify-injection \
+            --repo=final --revision="${FINAL_SHA}" \
+            --manifest="$RUNNER_TEMP/harness-manifest.json" \
+            --out="$E2E_OUT/final.harness.json"
+
+      # Each revision installs from ITS OWN lockfile: the baseline must run the
+      # dependencies it shipped with, not the final revision's.
+      - name: Install baseline dependencies
+        working-directory: baseline
+        run: bun install --frozen-lockfile
+
+      - name: Install final dependencies
+        working-directory: final
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in baseline final; do
+            (cd "$dir/web" && bunx playwright install chromium msedge)
+          done
+
+      # The full non-live suite includes Code-mode specs that drive the REAL
+      # managed server. Without this binary they would pass by asserting the
+      # "CLI not found" surface instead of the runtime, in both legs, and the
+      # comparison would report a clean result for the wrong behaviour.
+      #
+      # Duplicated from .github/actions/install-opencode rather than referenced:
+      # this job checks out into `final/` and `baseline/`, so there is no
+      # repository tree at the workspace root for `uses: ./.github/actions/...`
+      # to resolve against.
+      - name: Install OpenCode CLI (pinned, integrity-checked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:OPENCODE_VERSION
+          $url = "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-$version.tgz"
+          $tgz = Join-Path $env:RUNNER_TEMP 'opencode-cli.tgz'
+          Invoke-WebRequest -Uri $url -OutFile $tgz
+          $sha = [System.Security.Cryptography.SHA512]::Create()
+          $actual = 'sha512-' + [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($tgz)))
+          if ($actual -ne $env:OPENCODE_CLI_SHA512) {
+            throw "opencode tarball integrity mismatch: expected $env:OPENCODE_CLI_SHA512 but downloaded $actual"
+          }
+          $unpack = Join-Path $env:RUNNER_TEMP 'opencode-cli'
+          Remove-Item $unpack -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $unpack | Out-Null
+          tar -xzf $tgz -C $unpack
+          $exe = Join-Path $unpack 'package/bin/opencode.exe'
+          if (-not (Test-Path $exe)) { throw "opencode.exe was not present in the $version tarball" }
+          (Join-Path $unpack 'package/bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $reported = (& $exe --version | Out-String).Trim()
+          Write-Output "opencode --version: $reported"
+          if ($reported -notmatch [regex]::Escape($version)) {
+            throw "expected opencode $version but the binary reported '$reported'"
+          }
+
+      # No positional argument: the full non-live scope is the runner's default
+      # discovery. `tests/e2e` as a positional would become `tests/e2e.spec.ts`
+      # and match nothing while exiting 0.
+      - name: Run the baseline leg
+        id: baseline_leg
+        continue-on-error: true
+        working-directory: baseline
+        env:
+          TBAI_E2E_JSON_DIR: ${{ env.E2E_OUT }}/baseline/${{ matrix.project }}
+        run: bun run test:e2e --project=${{ matrix.project }}
+
+      - name: Run the final leg
+        id: final_leg
+        if: always()
+        continue-on-error: true
+        working-directory: final
+        env:
+          TBAI_E2E_JSON_DIR: ${{ env.E2E_OUT }}/final/${{ matrix.project }}
+        run: bun run test:e2e --project=${{ matrix.project }}
+
+      - name: Record settings, aggregate and compare
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rev in baseline final; do
+            sha="${BASELINE_SHA}"
+            [ "$rev" = "final" ] && sha="${FINAL_SHA}"
+            bun "$rev/scripts/dump-playwright-settings.ts" --project=${{ matrix.project }} \
+              --revision="${sha}" --out="$E2E_OUT/$rev.settings.json"
+            bun "$rev/scripts/aggregate-e2e-reports.ts" \
+              --dir="$E2E_OUT/$rev/${{ matrix.project }}" \
+              --e2e-root="${E2E_WORKSPACE}/$rev/tests/e2e" \
+              --settings="$E2E_OUT/$rev.settings.json" \
+              --revision="${sha}" \
+              --out="$E2E_OUT/$rev.aggregate.json" \
+              || echo "aggregate reported a problem; the comparison will refuse this leg"
+          done
+          bun final/scripts/compare-e2e-reports.ts \
+            --baseline="$E2E_OUT/baseline.aggregate.json" \
+            --final="$E2E_OUT/final.aggregate.json" \
+            --baseline-harness="$E2E_OUT/baseline.harness.json" \
+            --final-harness="$E2E_OUT/final.harness.json" \
+            --manifest="$RUNNER_TEMP/harness-manifest.json" \
+            --out="$E2E_OUT/comparison.json"
+
+      - name: Fail when the final leg did not complete
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.final_leg.outcome }}" != "success" ]; then
+            echo "The final revision's leg did not complete; see the comparison and logs." >&2
+            exit 1
+          fi
+
+      - name: Upload G5 comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-e2e-full-${{ matrix.project }}
+          path: e2e-full/${{ matrix.project }}
+          if-no-files-found: warn
+          retention-days: 14
 
   # LIVE, opt-in acceptance for Code mode against the OpenCode free tier.
   #

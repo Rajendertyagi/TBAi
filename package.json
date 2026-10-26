@@ -31,6 +31,9 @@
     "test:opencode-runtime": "bun scripts/run-opencode-runtime-suites.ts",
     "test:opencode-g3": "bun scripts/run-g3-override-evidence.ts",
     "test:e2e": "bun scripts/run-e2e.ts",
+    "e2e:settings": "bun scripts/dump-playwright-settings.ts",
+    "e2e:aggregate": "bun scripts/aggregate-e2e-reports.ts",
+    "e2e:compare": "bun scripts/compare-e2e-reports.ts",
     "gen:icon": "bun run scripts/gen-icon.ts"
   },
   "devDependencies": {

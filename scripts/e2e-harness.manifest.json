@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "allowlist": {
+    "path": "scripts/e2e-removal-allowlist.json"
+  },
+  "files": [
+    {
+      "path": "scripts/aggregate-e2e-reports.ts",
+      "sha256": "72372ea8cc29538ca6f41eed7304b4df503f0ee55c5c8e2f7c146b5c7fd23fc3"
+    },
+    {
+      "path": "scripts/compare-e2e-reports.ts",
+      "sha256": "b86f721e4a97643ee7e7ad3f6ee06940058488bd05be3f872d98e1b181d41505"
+    },
+    {
+      "path": "scripts/dump-playwright-settings.ts",
+      "sha256": "94e26d0566f2cf4a2a7e69f551d0f3cc55119892842757df948a4581e9f93303"
+    },
+    {
+      "path": "scripts/e2e-removal-allowlist.json",
+      "sha256": "5f0a833c803e386edf742db141e47b40059a7758909b44aefb141f031880b3b6"
+    },
+    {
+      "path": "scripts/run-e2e.ts",
+      "sha256": "ebb4b58b409669635304b6aadc2c35c9058f40c104486366b9187a9b19ac9453"
+    },
+    {
+      "path": "web/playwright.json-reporter.config.ts",
+      "sha256": "f5edb6b0fad10b430851f356823f3dc541130a1da22c4ac6fdabb5802b5f4214"
+    }
+  ]
+}
