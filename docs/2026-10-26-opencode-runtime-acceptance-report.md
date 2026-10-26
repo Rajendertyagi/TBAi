@@ -1,6 +1,6 @@
 # OpenCode Runtime — Final Evidence and CI Remediation
 
-**Branch:** `ci/tauri-e2e-verify` · **HEAD under test:** `0458faa4e441aa90a369e12e6a8ee3446e59f66c` · **Date:** 2026-10-26
+**Branch:** `ci/tauri-e2e-verify` · **Code HEAD under test:** `0458faa4e441aa90a369e12e6a8ee3446e59f66c` · **Report started at:** `ab9406ae2c7d26f6982bc3fa0edb68b2d2508cb2` · **Date:** 2026-10-26
 
 ---
 
@@ -8,19 +8,27 @@
 
 ```
 Branch : ci/tauri-e2e-verify
-HEAD   : 0458faa4e441aa90a369e12e6a8ee3446e59f66c
+Code   : 0458faa4e441aa90a369e12e6a8ee3446e59f66c   (every job below ran this tree)
+Docs   : ab9406ae2c7d26f6982bc3fa0edb68b2d2508cb2   (this document's first committed form)
 ```
 
-Three commits carry the work, in the order they were pushed:
+Four commits carry the work, in the order they were pushed:
 
 | Commit | Subject | Touches |
 |---|---|---|
 | `e279daf` | `fix(tauri): development attaches to the beforeDevCommand backend instead of spawning a sidecar` | `src-tauri/src/main.rs`, `docs/architecture.md`, `docs/decisions.md` |
 | `0efbd11` | `fix(g2): attribute backend startup by instance, and log the instance id` | `src/server.ts`, `src/index.ts`, `scripts/observe-dev-webview-origin.ts`, its unit test, `docs/logging.md` |
 | `0458faa` | `refactor(g2): name the attribution's unconsumed lines for what they are` | the same script and test (`nonLogLines` → `otherLines`, comment corrected) |
+| `ab9406a` | `docs(opencode): correct the G2 root cause, record the ownership fix, and report the CI evidence` | this report, one ADR sentence |
 
 The task started from `ae41ff6`. No G1 implementation was changed, and no E2E spec,
 acceptance criterion, timeout or assertion was relaxed.
+
+This document was refined afterwards in docs-only commits. A docs-only commit cannot
+change what a job executes, so every claim below cites the run whose SHA it names rather
+than "the current head": the three runs that carry the code fix are `0efbd11`,
+`0458faa` and `ab9406a`, and a later edit to this file neither re-runs them nor inherits
+their conclusions.
 
 ---
 
@@ -34,20 +42,26 @@ acceptance criterion, timeout or assertion was relaxed.
 | 40332084934 | ae41ff6 | PASS | **FAIL** | PASS | **FAIL** | PASS | PASS | **FAIL** |
 | 40350649628 | 0efbd11 | **FAIL** (1 flaky test) | **PASS** | PASS | **PASS** | PASS | PASS | **FAIL** |
 | 40351287342 | 0458faa | **PASS** | **PASS** | PASS | **PASS** | **FAIL** | PASS | **FAIL** |
+| 40353996209 | ab9406a (docs-only) | **PASS** | **PASS** | PASS | **PASS** | **PASS** | PASS | **FAIL** |
 
 `e2e-full` (G5) and `e2e-big-pickle` are dispatch-only and were skipped in every run.
 
-The row that matters for this task is `0458faa`: the `tauri` job is fully green —
-Rust typecheck, Rust tests, `tauri build`, the packaged smoke test, G1 and G2 — and
-`verify` is green. The two red jobs are addressed in §5 to §7.
+The rows that matter for this task are `0efbd11`, `0458faa` and `ab9406a`: **G2 passed in
+all three**, G1 passed in all three, and the `tauri` job is fully green in all three —
+Rust typecheck, Rust tests, `tauri build`, the packaged smoke test, G1, G2 and both
+uploads. `verify` is green in two of the three; `opencode-g3` is green in two of the
+three. Both exceptions are addressed in §5 and §7.
 
 ### The `36f5f13` G2 "PASS" was a false positive
 
-G2 passed on `36f5f13` because the probe could only ask "does the application log
-contain `startup_failed`" — and at that revision it did not ask even that. The window
-and the API it observed were real, but the launch was simultaneously failing in a
-process the check could not name. That pass is the reason the check was investigated;
-it is **not** evidence that the development launch was healthy. See §3.
+At `36f5f13` the probe had no startup-failure signal at all: it checked the `tauri dev`
+process and the CDP observation. The origin and the API it read were genuine, but the
+job went green while the process the shell itself spawned was hitting `EADDRINUSE` on
+every retry — so no endpoint was ever verified by the shell, and the window was served
+by the other backend the launch started. A `tauri` job that passes is read as "the
+desktop launch works"; at `36f5f13` that reading was false. That pass is why the check
+was investigated, and it is **not** evidence that the development launch was healthy.
+See §3.
 
 ---
 
@@ -59,10 +73,11 @@ A single `tauri dev` launch started **two backends** and let one of them fail:
 
 1. `tauri.conf.json` sets `build.beforeDevCommand: "bun run dev"` and
    `build.devUrl: "http://localhost:3000"`. The Tauri CLI starts `beforeDevCommand`
-   and **waits for `devUrl` to answer before it launches the Rust app** — the CLI
-   exposes `--no-dev-server-wait` precisely because waiting is the default
-   (`bun node_modules/@tauri-apps/cli/tauri.js dev --help`, run locally).
-   So the `beforeDevCommand` backend bound :3000 first and owned it.
+   and **waits for `devUrl` to answer before it builds and launches the Rust app** —
+   `tauri dev` documents `--no-dev-server-wait` as "Skip waiting for the frontend dev
+   server to start before building the tauri application"
+   (<https://v2.tauri.app/reference/cli/#dev>; the flag exists only because waiting is
+   the default). So the `beforeDevCommand` backend bound :3000 first and owned it.
 2. The G2 driver forces `PORT=3000` into the `tauri dev` process, so the dev backend
    binds the port the window loads instead of self-healing upward. With an explicit
    `PORT`, `bindBootPort` treats the port as authoritative and does not scan
@@ -151,13 +166,15 @@ that exit code:
   and no teardown error was recorded;
 - the evidence file was written.
 
-G2 succeeded in **both** runs that carried the fix (`0efbd11` and `0458faa`), and G1
-succeeded in both. Artifact `tauri-webview-origin`:
+G2 succeeded in **all three** runs that carried the fix (`0efbd11`, `0458faa` and the
+docs commit `ab9406a`), and G1 succeeded in the same three. Artifact
+`tauri-webview-origin`:
 
 | Run | Artifact ID | Bytes |
 |---|---|---|
 | 40350649628 (`0efbd11`) | `12664382195` | 11,169 |
 | 40351287342 (`0458faa`) | `12664332072` | 11,244 |
+| 40353996209 (`ab9406a`) | `12666271026` | 11,144 |
 
 The artifact contents (`dev.json`, the sanitized logs) could **not** be downloaded from
 this environment: GitHub requires authentication for artifact zips and step logs
@@ -189,9 +206,10 @@ observation.
 
 ## 4. G1 evidence (accepted, unchanged)
 
-G1 was not touched. In both new runs (`0efbd11`, `0458faa`) the packaged observation
-step succeeded, together with the packaged build, the portable-folder assembly and the
-packaged smoke test. The accepted G1 evidence remains run `40294666676`, artifact
+G1 was not touched. In all three runs that carry the work (`0efbd11`, `0458faa`,
+`ab9406a`) the packaged observation step succeeded, together with the packaged build,
+the portable-folder assembly and the packaged smoke test. The accepted G1 evidence
+remains run `40294666676`, artifact
 `tauri-webview-origin` (ID `12638461295`): origin `http://app.localhost`, in-origin API
 `200`, instance `e760d3cb-e9b1-4282-b43d-838d51769d8c`, WebDriver session delete `200`,
 temporary root removed, both logs written. No G1 code changed.
@@ -206,6 +224,7 @@ temporary root removed, both logs written. No G1 code changed.
 | 40323271013, 40329107636, 40332084934 | PASS | both tests pass |
 | 40350649628 (`0efbd11`) | FAIL | **1** test: `memory-wiring.test.ts` "considers at most 50 candidates" **33,537 ms** vs 30 s; totals 5,026 pass / 64 skip / 1 fail |
 | 40351287342 (`0458faa`) | PASS | — |
+| 40353996209 (`ab9406a`) | PASS | — |
 
 Local evidence for the same test: ~1.3–1.4 s per run in three consecutive runs. The
 500-row `assembleContext` call is load-sensitive under full-suite runner load; it is
@@ -251,27 +270,29 @@ the same behaviour.
 
 **Disclosure:** the numbers above are from the original G5 dispatch run. Its report
 files live in that run's artifacts, which this environment cannot download (§7); the
-provenance claim was re-checked here with `git diff` against the head.
+provenance claim was re-checked here with `git diff` against the code head.
 
 ---
 
 ## 7. All unresolved findings and limitations
 
-### Unresolved — `opencode-g3` failed once, at the head commit
+### Unresolved — `opencode-g3` failed once in three runs
 
 Run 40351287342 (`0458faa`): the `Override-notice evidence (G3)` step exited 1. The
-same job passed in run 40350649628 (`0efbd11`), four minutes earlier, and in every
-earlier run of this branch. `git diff 0efbd11..0458faa --name-only` is exactly
-`scripts/observe-dev-webview-origin.ts` and its unit test; the G3 driver
-(`scripts/run-g3-override-evidence.ts`) imports neither, and no product source differs
-between the two runs. The job's own inputs were therefore identical and its outcomes
-differed — an intermittent failure.
+same job passed in run 40350649628 (`0efbd11`), four minutes earlier, and passed again
+in run 40353996209 (`ab9406a`). `git diff
+0efbd11..0458faa --name-only` is exactly `scripts/observe-dev-webview-origin.ts` and
+its unit test; the G3 driver (`scripts/run-g3-override-evidence.ts`) imports neither,
+and no product source differs between those runs. The job's own inputs were therefore
+identical and its outcomes differed — an intermittent failure, not a regression from
+this work.
 
-Its cause was **not observed**: step logs and the `g3-override-evidence` artifact
-(`12664081214`, 13,995 bytes vs 20,095 bytes in the passing run, which is consistent
-with the run stopping before both cases wrote evidence) require authentication to read.
-The failure is recorded as unresolved, not explained away. It is unrelated to the G2
-work by input identity, but it is red on the head and is not being called green.
+Its cause was **not observed**: step logs and the `g3-override-evidence` artifacts
+require authentication to read. The one observable difference is size —
+`12664081214` (failing run) is 13,995 bytes against 20,095 and 20,091 bytes in the two
+passing runs, which is consistent with the failing run stopping before both cases wrote
+their evidence. The failure is recorded as unresolved, not explained away, and it is
+not being called green: a red job occurred at a commit that carries this work.
 
 ### Unresolved — pre-existing E2E failures (out of scope)
 
@@ -295,8 +316,11 @@ No GitHub token is available in this environment: `gh` is not logged in, `GH_TOK
 `GITHUB_TOKEN` are unset, artifact zips answer `401`, and step logs are not
 downloadable. What *is* readable unauthenticated — run and job conclusions, per-step
 conclusions, artifact names/IDs/sizes, and check-run annotations — is quoted above with
-its run and artifact identifiers. The G1/G2 evidence *files* were not opened; their
-contents are asserted by the step exit codes and pinned by the unit tests.
+its run and artifact identifiers. The literal values quoted for G1 (§4) and for the
+`fa60060` launch (§3.1) were recorded when those artifacts were first inspected earlier
+in this work; they were **not** re-read for this revision, and the G2 `dev.json` for the
+three passing runs was never opened. Those passes rest on the step exit codes plus the
+unit tests that pin each assertion.
 
 ### Limitation — the Rust change was compiled only in CI
 
@@ -304,13 +328,13 @@ There is no Rust toolchain on this machine (`cargo`, `rustc` and `rustup` are ab
 no Visual Studio build tools). The `src-tauri` change could not be compiled or tested
 locally. It is verified by the CI steps `Type-check the Rust shell` (`cargo check
 --all-targets`), `Run Rust tests` (`cargo test`), `Build Tauri (compile, no bundle)`
-and `Smoke test the packaged desktop app`, all green in both runs that carry it.
+and `Smoke test the packaged desktop app`, all green in the three runs that carry it.
 
 ### Not executed — a re-run of `verify` at `36f5f13`
 
 Re-running a job and dispatching a workflow both require authentication, which is
-unavailable. The equivalent evidence is the complete `verify` run at `0efbd11` and
-`0458faa` on the same branch.
+unavailable. The equivalent evidence is the complete `verify` run at `0efbd11`,
+`0458faa` and `ab9406a` on the same branch.
 
 ### Not in scope — Semgrep
 
@@ -339,8 +363,8 @@ Every command below was run against `0458faa` and its real exit code is reported
 | `bun run test:quarantine` | exit 0 |
 
 The two local failures in the first full run were not captured with their names; the
-second full run of the identical tree was clean, and CI's `verify` at the head was
-clean. They are recorded here rather than omitted.
+second full run of the identical tree was clean, and CI's `verify` at `0458faa` and
+`ab9406a` was clean. They are recorded here rather than omitted.
 
 ### Tests that cover this work
 
@@ -365,22 +389,23 @@ clean. They are recorded here rather than omitted.
 ## 9. Verdict
 
 **G2: PASS.** The development window is served by the backend that owns the configured
-port, the failure attribution is per process, and the observation passed twice with the
-fix in place (`0efbd11`, `0458faa`) while G1 and the packaged smoke test stayed green in
-the same jobs. The previous HOLD rested on a misattributed failure; that attribution is
-corrected in §3 and the competing backend it described no longer exists in a
-development launch.
+port, the failure attribution is per process, and the observation passed three times with
+the fix in place (`0efbd11`, `0458faa`, `ab9406a`) while G1 and the packaged smoke test
+stayed green in the same jobs. The previous HOLD rested on a misattributed failure; that
+attribution is corrected in §3 and the competing backend it described no longer exists in
+a development launch.
 
 **Overall acceptance: HOLD**, for two reasons that are not the G2 defect:
 
-1. `opencode-g3` is red on the head commit once, with no observable cause, against
-   identical inputs that passed minutes earlier. A red job at the head is not a pass.
+1. `opencode-g3` failed in one of the three runs that carry this work (`0458faa`), with
+   no observable cause, against inputs identical to runs that passed immediately before
+   and after it. One red job at a commit carrying the work is not a pass.
 2. The two pre-existing E2E spec failures remain, as they did at the base commit, and
    were explicitly out of scope.
 
 Both are disclosed rather than absorbed, and neither is caused by this work. The
-`verify` flake is the third item: green at the head, red one commit earlier, with the
-known 30 s-budget test at 33.5 s.
+`verify` flake is the third item: green at `0458faa` and `ab9406a`, red at `0efbd11`,
+with the known 30 s-budget test at 33.5 s.
 
 What is **not** claimed: that the `e2e` job's per-spec failures were re-read for the new
 runs, that the G2 artifact's literal values were read back, or that `opencode-g3` is
