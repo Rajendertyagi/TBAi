@@ -88,6 +88,7 @@ function devInput(overrides: Partial<DevOriginInput> = {}): DevOriginInput {
       error: null,
     },
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
+    backendStartupFailed: false,
     ...overrides,
   };
 }
@@ -578,6 +579,20 @@ describe("G2 development origin: the failure matrix", () => {
       devInput({ probe: { status: null, body: null, error: "the expression threw: TypeError" } }),
     );
     expect(transport.stage).toBe("probe-api");
+  });
+
+  it("stops at dev-start when the launched backend failed to start (startup_failed)", () => {
+    const assessed = assessDevOrigin(devInput({ backendStartupFailed: true }));
+    expect(assessed.stage).toBe("dev-start");
+    expect(assessed.failures.join(" ")).toContain(
+      "the backend that beforeDevCommand spawned failed to start",
+    );
+  });
+
+  it("does not fail on the observation alone when the backend started cleanly", () => {
+    const assessed = assessDevOrigin(devInput({ backendStartupFailed: false }));
+    expect(assessed.failures).toEqual([]);
+    expect(assessed.ok).toBe(true);
   });
 });
 

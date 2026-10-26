@@ -297,6 +297,17 @@ export interface DevOriginInput {
     readonly body: string | null;
     readonly error: string | null;
   };
+  /**
+   * True when the application log (written by the backend that
+   * `beforeDevCommand` spawned) contains a `startup_failed` line.
+   *
+   * This is the signal that the backend failed to bind its port (EADDRINUSE)
+   * and exited before the observation could attribute the in-page API to it.
+   * A `startup_failed` log means the observed WebView/API belongs to a foreign
+   * server on the same port, not to the process this run launched, so the
+   * observation is not evidence of what it claims.
+   */
+  readonly backendStartupFailed: boolean;
 }
 
 export interface DevAssessment {
@@ -327,6 +338,12 @@ export function assessDevOrigin(input: DevOriginInput): DevAssessment {
   if (input.dev.exitedEarly) {
     devFailures.push(
       `tauri dev exited with ${input.dev.exitCode ?? "no code"} before the observation completed`,
+    );
+  }
+  if (input.backendStartupFailed) {
+    devFailures.push(
+      "the backend that beforeDevCommand spawned failed to start (startup_failed in the application log), " +
+        "so the observed WebView/API belongs to a foreign server on the same port, not to this launch",
     );
   }
 
@@ -716,6 +733,21 @@ async function main(): Promise<number> {
   }
 
   let tempRootRemoved = false;
+
+  // The application log is written by the backend that `beforeDevCommand`
+  // spawned, BEFORE the temporary root is removed. If that backend logged
+  // `startup_failed` (e.g. EADDRINUSE on the port `devUrl` names), the Tauri
+  // shell is still up but the API the WebView reached is NOT this run's
+  // backend — it is a foreign server on the same port. The observation must
+  // fail so it is not mistaken for evidence of the intended launch.
+  let appLogText = "";
+  try {
+    if (fs.existsSync(appLogPath)) appLogText = fs.readFileSync(appLogPath, "utf8");
+  } catch {
+    /* log read failure is recorded separately; an unreadable log is not a startup failure */
+  }
+  const backendStartupFailed = /startup_failed/.test(appLogText);
+
   try {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     tempRootRemoved = !fs.existsSync(tempRoot);
@@ -732,6 +764,7 @@ async function main(): Promise<number> {
     target: { url: target.url, webSocketUrl: target.webSocketUrl, seen: target.seen },
     evaluation,
     probe,
+    backendStartupFailed,
   });
 
   const failures = [...assessment.failures];
@@ -778,6 +811,8 @@ async function main(): Promise<number> {
     observations: {
       originMatchesConfigured: evaluation.origin !== null && evaluation.origin === configuredOrigin,
       inPageApiStatus: probe.status,
+      /** True when the application log records that the launched backend failed to start. */
+      backendStartupFailed,
     },
     assessment: { ok: assessment.ok && failures.length === 0, stage: assessment.stage, failures },
     teardown: { devStop, tempRootRemoved, errors: teardownErrors },
