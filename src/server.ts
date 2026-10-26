@@ -45,6 +45,7 @@ import { resolveConfiguredPort, writePortFile } from "./services/server-port";
 import {
   bindBootPort,
   getActiveServer,
+  getInstanceId,
   initListenerFetch,
   type BunServer,
 } from "./services/server-listener";
@@ -210,8 +211,15 @@ export async function startServer(port = resolveConfiguredPort().port) {
     const bound = bindBootPort(port);
     const server: BunServer = bound.server;
     port = bound.port;
+    // `instanceId` is this process's identity. It is what the Tauri shell
+    // verifies at /api/server/instance, and it is what makes a log line
+    // attributable: several launches can share one `TBAI_LOG_FILE` (dev and a
+    // competing backend did exactly that), so a reader must be able to say
+    // WHICH process logged `started` or `startup_failed`.
     logger.info("server", "started", {
       message: `http://localhost:${port} data=${DATA_DIR}`,
+      port,
+      instanceId: getInstanceId(),
     });
 
     // Mirror for the Tauri shell (reads the port file before spawning us).

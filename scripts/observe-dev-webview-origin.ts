@@ -271,6 +271,135 @@ export function parseEvaluateResponse(message: unknown): { value: unknown; error
   return { value: (inner as Record<string, unknown>).value ?? null, error: null };
 }
 
+/**
+ * One `server started` record from the application log.
+ *
+ * `instanceId` is the backend's own identity (`GET /api/server/instance`
+ * returns the same value), which is what makes the record attributable to a
+ * process rather than to "the log".
+ */
+export interface BackendBootRecord {
+  readonly instanceId: string;
+  readonly port: number | null;
+}
+
+/** One `startup_failed` record, with the failure text the backend logged. */
+export interface BackendFailureRecord {
+  readonly instanceId: string;
+  readonly reason: string;
+}
+
+/**
+ * What the application log says about backend startup, per instance.
+ *
+ * Several launches can write to ONE `TBAI_LOG_FILE`: the `beforeDevCommand`
+ * child inherits it, and so does anything else the launch starts. A reader
+ * therefore cannot treat "a `startup_failed` line exists" as "the backend this
+ * observation is about failed" — that was a real false positive. Attribution is
+ * by instance id, and entries that carry none are kept separately so they are
+ * visible instead of silently credited to somebody.
+ */
+export interface BackendLogAttribution {
+  readonly booted: readonly BackendBootRecord[];
+  readonly failed: readonly BackendFailureRecord[];
+  readonly unattributedFailures: readonly string[];
+  /** Lines that are not JSON log entries (a child's plain output, a stack frame). */
+  readonly nonLogLines: number;
+}
+
+/**
+ * Attribute the application log's startup records to the instances that wrote
+ * them. Pure, so the attribution rules are testable without a WebView.
+ *
+ * The logger's file sink writes one JSON object per line; anything else (a
+ * child's stderr, a Rust stack trace) is counted, not guessed at.
+ */
+export function attributeBackendLog(logText: string): BackendLogAttribution {
+  const booted: BackendBootRecord[] = [];
+  const failed: BackendFailureRecord[] = [];
+  const unattributedFailures: string[] = [];
+  let nonLogLines = 0;
+
+  for (const line of logText.split(/\r?\n/)) {
+    const text = line.trim();
+    if (text === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      nonLogLines += 1;
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") {
+      nonLogLines += 1;
+      continue;
+    }
+    const entry = parsed as Record<string, unknown>;
+    if (entry.scope !== "server" || typeof entry.event !== "string") {
+      nonLogLines += 1;
+      continue;
+    }
+    const instanceId = typeof entry.instanceId === "string" ? entry.instanceId.trim() : "";
+    if (entry.event === "started") {
+      if (instanceId === "") {
+        // A start with no identity cannot prove ownership of anything.
+        nonLogLines += 1;
+        continue;
+      }
+      const port =
+        typeof entry.port === "number" && Number.isInteger(entry.port) ? entry.port : null;
+      booted.push({ instanceId, port });
+      continue;
+    }
+    if (entry.event === "startup_failed") {
+      const reason =
+        typeof entry.message === "string" && entry.message.trim() !== ""
+          ? entry.message
+          : typeof entry.error === "string" && entry.error.trim() !== ""
+            ? entry.error
+            : "startup_failed (no reason logged)";
+      if (instanceId === "") {
+        unattributedFailures.push(reason);
+        continue;
+      }
+      failed.push({ instanceId, reason });
+    }
+  }
+
+  return { booted, failed, unattributedFailures, nonLogLines };
+}
+
+/** The port an origin string names, or null when it names none usable. */
+export function portOfOrigin(origin: string | null): number | null {
+  if (origin === null) return null;
+  try {
+    const url = new URL(origin);
+    const port = url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The instance id the in-page API answered with, or null when it answered with
+ * none. `null` means the observation has no owner to attribute anything to.
+ */
+export function instanceIdFromProbe(probe: {
+  readonly status: number | null;
+  readonly body: string | null;
+}): string | null {
+  if (probe.status !== 200 || probe.body === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(probe.body);
+    if (parsed === null || typeof parsed !== "object") return null;
+    const id = (parsed as Record<string, unknown>).instanceId;
+    return typeof id === "string" && id.trim() !== "" ? id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface DevOriginInput {
   readonly configuredDevUrl: string | null;
   readonly configurationError: string | null;
@@ -298,22 +427,28 @@ export interface DevOriginInput {
     readonly error: string | null;
   };
   /**
-   * True when the application log (written by the backend that
-   * `beforeDevCommand` spawned) contains a `startup_failed` line.
+   * Startup records from the application log, attributed per instance.
    *
-   * This is the signal that the backend failed to bind its port (EADDRINUSE)
-   * and exited before the observation could attribute the in-page API to it.
-   * A `startup_failed` log means the observed WebView/API belongs to a foreign
-   * server on the same port, not to the process this run launched, so the
-   * observation is not evidence of what it claims.
+   * The observation is evidence only when the instance that answered the
+   * in-page API is the instance the log records as having started on the
+   * configured port. A `startup_failed` written by a DIFFERENT process is
+   * reported as a note, never as this run's failure: that misattribution is
+   * exactly what made this check a false positive.
    */
-  readonly backendStartupFailed: boolean;
+  readonly backend: BackendLogAttribution;
 }
 
 export interface DevAssessment {
   readonly ok: boolean;
   readonly stage: DevStage | null;
   readonly failures: readonly string[];
+  /**
+   * Startup failures the log DID record, but not for the instance that served
+   * this WebView. They are reported, and they are deliberately not failures of
+   * this run: a shared log file must not turn one process's crash into another
+   * process's failed evidence.
+   */
+  readonly notes: readonly string[];
 }
 
 /**
@@ -333,6 +468,7 @@ export function assessDevOrigin(input: DevOriginInput): DevAssessment {
   if (!input.build.ok) buildFailures.push(input.build.error ?? "the web bundle was not built");
 
   const devFailures: string[] = [];
+  const notes: string[] = [];
   if (input.dev.spawnError !== null)
     devFailures.push(`tauri dev could not be started: ${input.dev.spawnError}`);
   if (input.dev.exitedEarly) {
@@ -340,11 +476,47 @@ export function assessDevOrigin(input: DevOriginInput): DevAssessment {
       `tauri dev exited with ${input.dev.exitCode ?? "no code"} before the observation completed`,
     );
   }
-  if (input.backendStartupFailed) {
-    devFailures.push(
-      "the backend that beforeDevCommand spawned failed to start (startup_failed in the application log), " +
-        "so the observed WebView/API belongs to a foreign server on the same port, not to this launch",
+
+  // Backend startup, attributed per instance. The answering instance is the
+  // only process whose start/failure says anything about THIS observation.
+  const expectedPort = portOfOrigin(configuredOrigin);
+  const observedInstanceId = instanceIdFromProbe(input.probe);
+  if (observedInstanceId !== null) {
+    const ownFailure = input.backend.failed.find(
+      (entry) => entry.instanceId === observedInstanceId,
     );
+    const ownBoot = input.backend.booted.find((entry) => entry.instanceId === observedInstanceId);
+    if (ownFailure !== undefined) {
+      devFailures.push(
+        `the development backend (instance ${observedInstanceId}) failed to start: ${ownFailure.reason}`,
+      );
+    } else if (ownBoot === undefined) {
+      const started =
+        input.backend.booted.length === 0
+          ? "no instance logged a successful start"
+          : `instances that started: ${input.backend.booted
+              .map((entry) => `${entry.instanceId} on ${entry.port ?? "an unrecorded port"}`)
+              .join(", ")}`;
+      devFailures.push(
+        `the application log records no successful start for instance ${observedInstanceId}, the process that answered GET /api/server/instance (${started}), ` +
+          `so the origin and the API cannot be attributed to this launch`,
+      );
+    } else if (expectedPort !== null && ownBoot.port !== expectedPort) {
+      devFailures.push(
+        `the development backend (instance ${observedInstanceId}) bound port ${
+          ownBoot.port ?? "(unrecorded)"
+        }, but the WebView is served from ${expectedPort}`,
+      );
+    }
+    for (const other of input.backend.failed) {
+      if (other.instanceId === observedInstanceId) continue;
+      notes.push(
+        `another process (instance ${other.instanceId}) logged startup_failed; it is not the process serving this WebView: ${other.reason}`,
+      );
+    }
+    for (const reason of input.backend.unattributedFailures) {
+      notes.push(`a startup_failed entry carried no instance id: ${reason}`);
+    }
   }
 
   const cdpFailures: string[] = [];
@@ -375,23 +547,12 @@ export function assessDevOrigin(input: DevOriginInput): DevAssessment {
     probeFailures.push(
       `the in-page GET /api/server/instance returned ${input.probe.status ?? "no status"}`,
     );
-  } else {
-    let instanceId: unknown = null;
-    try {
-      const parsed: unknown = JSON.parse(input.probe.body ?? "");
-      if (parsed !== null && typeof parsed === "object") {
-        instanceId = (parsed as Record<string, unknown>).instanceId;
-      }
-    } catch {
-      /* reported below */
-    }
-    if (typeof instanceId !== "string" || instanceId.length === 0) {
-      probeFailures.push(
-        `the in-page GET /api/server/instance returned no instanceId: ${JSON.stringify(
-          tailText(input.probe.body ?? "", 500),
-        )}`,
-      );
-    }
+  } else if (observedInstanceId === null) {
+    probeFailures.push(
+      `the in-page GET /api/server/instance returned no instanceId: ${JSON.stringify(
+        tailText(input.probe.body ?? "", 500),
+      )}`,
+    );
   }
 
   const stages: StageResult<DevStage>[] = [
@@ -402,7 +563,8 @@ export function assessDevOrigin(input: DevOriginInput): DevAssessment {
     { stage: "evaluate", failures: evaluateFailures },
     { stage: "probe-api", failures: probeFailures },
   ];
-  return sequentialStages(stages);
+  const summary = sequentialStages(stages);
+  return { ok: summary.ok, stage: summary.stage, failures: summary.failures, notes };
 }
 
 /**
@@ -734,19 +896,22 @@ async function main(): Promise<number> {
 
   let tempRootRemoved = false;
 
-  // The application log is written by the backend that `beforeDevCommand`
-  // spawned, BEFORE the temporary root is removed. If that backend logged
-  // `startup_failed` (e.g. EADDRINUSE on the port `devUrl` names), the Tauri
-  // shell is still up but the API the WebView reached is NOT this run's
-  // backend — it is a foreign server on the same port. The observation must
-  // fail so it is not mistaken for evidence of the intended launch.
+  // The application log is read BEFORE the temporary root is removed. Every
+  // process that inherits `TBAI_LOG_FILE` writes to it, so the startup records
+  // are attributable per instance rather than readable as a bare substring: a
+  // failure logged by one process must never be reported as another's. The
+  // instance that answered the in-page API is the only one that says anything
+  // about this observation.
   let appLogText = "";
   try {
     if (fs.existsSync(appLogPath)) appLogText = fs.readFileSync(appLogPath, "utf8");
-  } catch {
-    /* log read failure is recorded separately; an unreadable log is not a startup failure */
+  } catch (error) {
+    teardownErrors.push(
+      `reading the application log for attribution failed: ${errorMessage(error)}`,
+    );
   }
-  const backendStartupFailed = /startup_failed/.test(appLogText);
+  const backend = attributeBackendLog(appLogText);
+  const observedInstanceId = instanceIdFromProbe(probe);
 
   try {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -764,7 +929,7 @@ async function main(): Promise<number> {
     target: { url: target.url, webSocketUrl: target.webSocketUrl, seen: target.seen },
     evaluation,
     probe,
-    backendStartupFailed,
+    backend,
   });
 
   const failures = [...assessment.failures];
@@ -811,10 +976,29 @@ async function main(): Promise<number> {
     observations: {
       originMatchesConfigured: evaluation.origin !== null && evaluation.origin === configuredOrigin,
       inPageApiStatus: probe.status,
-      /** True when the application log records that the launched backend failed to start. */
-      backendStartupFailed,
+      /** The instance that answered the in-page API: the owner of this observation. */
+      observedInstanceId,
+      /**
+       * True only when the instance that served this WebView is the instance the
+       * log records as having failed to start.
+       */
+      backendStartupFailed:
+        observedInstanceId !== null &&
+        backend.failed.some((entry) => entry.instanceId === observedInstanceId),
+      /** Every startup record the log holds, attributed to the instance that wrote it. */
+      backendStartup: {
+        booted: backend.booted,
+        failed: backend.failed,
+        unattributedFailures: backend.unattributedFailures,
+        nonLogLines: backend.nonLogLines,
+      },
     },
-    assessment: { ok: assessment.ok && failures.length === 0, stage: assessment.stage, failures },
+    assessment: {
+      ok: assessment.ok && failures.length === 0,
+      stage: assessment.stage,
+      failures,
+      notes: assessment.notes,
+    },
     teardown: { devStop, tempRootRemoved, errors: teardownErrors },
     logs: {
       app: {
@@ -844,6 +1028,7 @@ async function main(): Promise<number> {
 
   const ok = evidence.assessment.ok && written.written;
   console.log(`[g2] ${ok ? "PASS" : "FAIL"} — ${evidencePath}`);
+  for (const note of assessment.notes) console.log(`[g2] note: ${note}`);
   if (!ok) {
     console.error(`[g2] stage: ${assessment.stage ?? "(teardown only)"}`);
     for (const failure of failures) console.error(`[g2]   ${failure}`);

@@ -45,15 +45,29 @@ import {
 import {
   type DevOriginInput,
   assessDevOrigin,
+  attributeBackendLog,
   buildDebugPortOverlay,
   headText,
+  instanceIdFromProbe,
   parseCdpTargets,
   parseEvaluateResponse,
+  portOfOrigin,
   readDevConfiguration,
   selectDevTarget,
   selectLaunchMarkers,
 } from "../../../scripts/observe-dev-webview-origin";
 import { repoPath } from "../../helpers/repo-root";
+
+/** One line exactly as the logger's file sink writes it. */
+function logLine(entry: Record<string, unknown>): string {
+  return JSON.stringify({
+    ts: 1761483600000,
+    time: "2026-10-26T12:00:00.000Z",
+    level: "info",
+    scope: "server",
+    ...entry,
+  });
+}
 
 function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOriginInput {
   return {
@@ -88,7 +102,12 @@ function devInput(overrides: Partial<DevOriginInput> = {}): DevOriginInput {
       error: null,
     },
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
-    backendStartupFailed: false,
+    backend: {
+      booted: [{ instanceId: "instance-a", port: 3000 }],
+      failed: [],
+      unattributedFailures: [],
+      nonLogLines: 0,
+    },
     ...overrides,
   };
 }
@@ -581,18 +600,152 @@ describe("G2 development origin: the failure matrix", () => {
     expect(transport.stage).toBe("probe-api");
   });
 
-  it("stops at dev-start when the launched backend failed to start (startup_failed)", () => {
-    const assessed = assessDevOrigin(devInput({ backendStartupFailed: true }));
-    expect(assessed.stage).toBe("dev-start");
-    expect(assessed.failures.join(" ")).toContain(
-      "the backend that beforeDevCommand spawned failed to start",
+  it("stops at dev-start when the development backend failed to start", () => {
+    const assessed = assessDevOrigin(
+      devInput({
+        backend: {
+          booted: [],
+          failed: [
+            { instanceId: "instance-a", reason: "Failed to start server. Is port 3000 in use?" },
+          ],
+          unattributedFailures: [],
+          nonLogLines: 0,
+        },
+      }),
     );
+    expect(assessed.stage).toBe("dev-start");
+    expect(assessed.failures.join(" ")).toContain("instance-a");
+    expect(assessed.failures.join(" ")).toContain("Is port 3000 in use?");
   });
 
-  it("does not fail on the observation alone when the backend started cleanly", () => {
-    const assessed = assessDevOrigin(devInput({ backendStartupFailed: false }));
+  it("never blames this launch for a failure another process logged", () => {
+    // The real condition: a second backend (the packaged sidecar) tried to bind
+    // the dev port and failed, while the process serving the WebView started
+    // cleanly. Shared log, two owners, one of them irrelevant to this evidence.
+    const assessed = assessDevOrigin(
+      devInput({
+        backend: {
+          booted: [{ instanceId: "instance-a", port: 3000 }],
+          failed: [{ instanceId: "instance-b", reason: "EADDRINUSE: port 3000" }],
+          unattributedFailures: [],
+          nonLogLines: 0,
+        },
+      }),
+    );
     expect(assessed.failures).toEqual([]);
     expect(assessed.ok).toBe(true);
+    expect(assessed.stage).toBeNull();
+    expect(assessed.notes.join(" ")).toContain("instance-b");
+  });
+
+  it("attributes a shared log file to the instance that answered before deciding", () => {
+    const shared = [
+      logLine({
+        event: "started",
+        message: "http://localhost:3000 data=C:\\tmp\\tbai-data",
+        port: 3000,
+        instanceId: "instance-a",
+      }),
+      logLine({
+        event: "startup_failed",
+        level: "error",
+        message: "Failed to start server. Is port 3000 in use?",
+        instanceId: "instance-b",
+        stack: "at bindBootPort\nat startServer",
+      }),
+      "error: The process cannot access the file because it is being used by another process.",
+    ].join("\n");
+    const assessed = assessDevOrigin(devInput({ backend: attributeBackendLog(shared) }));
+    expect(assessed.ok).toBe(true);
+    expect(assessed.notes.join(" ")).toContain("instance-b");
+    expect(assessed.notes.join(" ")).not.toContain("instance-a");
+  });
+
+  it("refuses the observation when the log has no start record for the answering instance", () => {
+    const assessed = assessDevOrigin(
+      devInput({
+        backend: { booted: [], failed: [], unattributedFailures: [], nonLogLines: 0 },
+      }),
+    );
+    expect(assessed.stage).toBe("dev-start");
+    expect(assessed.failures.join(" ")).toContain("no successful start for instance instance-a");
+  });
+
+  it("refuses the observation when the answering instance bound another port", () => {
+    const assessed = assessDevOrigin(
+      devInput({
+        backend: {
+          booted: [{ instanceId: "instance-a", port: 3001 }],
+          failed: [],
+          unattributedFailures: [],
+          nonLogLines: 0,
+        },
+      }),
+    );
+    expect(assessed.stage).toBe("dev-start");
+    expect(assessed.failures.join(" ")).toContain("bound port 3001");
+  });
+});
+
+describe("application-log attribution", () => {
+  it("groups started and failed records by the instance that wrote them", () => {
+    const text = [
+      logLine({
+        event: "started",
+        message: "http://localhost:3000 data=D:\\d",
+        port: 3000,
+        instanceId: "dev-1",
+      }),
+      logLine({
+        event: "startup_failed",
+        level: "error",
+        message: "EADDRINUSE: port 3000",
+        instanceId: "sidecar-2",
+      }),
+      "not a log line",
+    ].join("\n");
+    expect(attributeBackendLog(text)).toEqual({
+      booted: [{ instanceId: "dev-1", port: 3000 }],
+      failed: [{ instanceId: "sidecar-2", reason: "EADDRINUSE: port 3000" }],
+      unattributedFailures: [],
+      nonLogLines: 1,
+    });
+  });
+
+  it("keeps an unidentified failure visible instead of crediting it to somebody", () => {
+    const attribution = attributeBackendLog(
+      logLine({ event: "startup_failed", level: "error", message: "EADDRINUSE: port 3000" }),
+    );
+    expect(attribution.failed).toEqual([]);
+    expect(attribution.unattributedFailures).toEqual(["EADDRINUSE: port 3000"]);
+  });
+
+  it("ignores records that are not server lifecycle entries", () => {
+    const attribution = attributeBackendLog(
+      [
+        logLine({ scope: "http", event: "started", port: 3000, instanceId: "x" }),
+        logLine({ scope: "server", event: "started", port: 3000 }),
+        '{"half": ',
+      ].join("\n"),
+    );
+    expect(attribution.booted).toEqual([]);
+    expect(attribution.nonLogLines).toBe(3);
+  });
+
+  it("reads only an instance id from the in-page answer", () => {
+    const identity = { instanceId: "  instance-a  " };
+    expect(instanceIdFromProbe({ status: 200, body: JSON.stringify(identity) })).toBe("instance-a");
+    expect(instanceIdFromProbe({ status: 404, body: JSON.stringify(identity) })).toBeNull();
+    expect(instanceIdFromProbe({ status: 200, body: "{}" })).toBeNull();
+    expect(instanceIdFromProbe({ status: 200, body: "<html>not this app</html>" })).toBeNull();
+  });
+
+  it("reads the port an origin names, including a default", () => {
+    expect(portOfOrigin("http://localhost:3000")).toBe(3000);
+    expect(portOfOrigin("http://localhost")).toBe(80);
+    expect(portOfOrigin("https://localhost")).toBe(443);
+    expect(portOfOrigin("not an origin")).toBeNull();
+    expect(portOfOrigin(null)).toBeNull();
   });
 });
 

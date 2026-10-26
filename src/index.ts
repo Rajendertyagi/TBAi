@@ -1,5 +1,5 @@
 import { startServer, rollbackPartialStartup, handleProcessShutdown } from "./server";
-import { getActiveServer } from "./services/server-listener";
+import { getActiveServer, getInstanceId } from "./services/server-listener";
 import { installDesktopStdinShutdown } from "./services/desktop-stdin";
 import { resolveConfiguredPort } from "./services/server-port";
 import { installProcessErrorHandlers } from "./services/process-handlers";
@@ -51,7 +51,13 @@ installDesktopStdinShutdown({
 });
 
 startServer(PORT).catch((err) => {
-  logger.error("server", "startup_failed", { ...normalizeError(err) });
+  // `instanceId` attributes this failure to THIS process. Several launches can
+  // share one log file, so a reader must not infer that a failure belongs to
+  // the process it happens to be observing.
+  logger.error("server", "startup_failed", {
+    ...normalizeError(err),
+    instanceId: getInstanceId(),
+  });
   void rollbackPartialStartup().then(
     (result) => {
       if (result.ok) {
