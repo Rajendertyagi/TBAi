@@ -7,10 +7,10 @@
  * makes the negative case meaningful: with no shell-job join, the sidecar
  * survives a hard shell kill.
  */
-import fs from "node:fs";
 import path from "node:path";
 
 import { createShellJob } from "../../src/services/process-ownership.ts";
+import { writeRecordAtomically } from "../helpers/atomic-record.ts";
 
 const dir = process.env.TBAI_G2_DIR;
 if (!dir) {
@@ -31,7 +31,9 @@ const sidecar = Bun.spawn(["bun", sidecarScript], {
   stderr: "pipe",
 });
 
-fs.writeFileSync(
+// Published atomically: the reader polls for existence and then reads once, so
+// the file must never be visible before it is complete.
+writeRecordAtomically(
   path.join(dir, "shell.json"),
   JSON.stringify({ shellPid: process.pid, sidecarPid: sidecar.pid, jobName: job.name }),
 );

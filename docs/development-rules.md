@@ -185,6 +185,21 @@ Run them all with `bun run verify`.
   flake with its arithmetic, not as a diagnosis. Verify a suspected MCP
   regression by running the single file under `bun run test`'s own timeout,
   not bare.
+- **A handshake file is not readable just because it exists.** Measured
+  2026-10-26: `G2 Windows process ownership > hard-killing the shell kills the
+  sidecar and its detached descendant` in
+  `tests/integration/opencode/process-ownership.test.ts` failed **2 of 28**
+  isolated runs (and once inside a full `verify`, where the quarantine guard
+  reported it as an ordinary failure) on its *first* liveness assertion. The
+  cause is not timing: `writeFileSync` and `Bun.write` create and truncate the
+  destination **before** writing the bytes, and every reader in these fixtures
+  polls for existence and then reads once. A probe mirroring `startLifecycle`
+  saw the grandchild marker as **`""` in 3 of 40** starts, with the content
+  arriving moments later and the server answering. The fix publishes the record
+  atomically (`tests/helpers/atomic-record.ts`: sibling file, then rename), so
+  existence means completeness; afterwards **0 of 40** starts observed an empty
+  marker and **20 of 20** isolated runs passed. Any new handshake file needs the
+  same treatment - waiting longer would have hidden it, not fixed it.
 - **A test must not bind a port the application may be on.** On 2026-10-22
   `tests/integration/server/port-configurability.test.ts` restarted onto
   **3030**, which was held by a TBAi instance the maintainer was running

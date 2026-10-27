@@ -10,6 +10,8 @@
  */
 import { createServer } from "node:http";
 
+import { writeRecordAtomically } from "../helpers/atomic-record.ts";
+
 const marker = process.argv[2];
 if (!marker) {
   console.error("descendant-probe-server: marker path required");
@@ -23,7 +25,11 @@ const server = createServer((_req, res) => {
 server.listen(0, "127.0.0.1", () => {
   const address = server.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
-  void Bun.write(marker, `${process.pid}:${port}`);
+  // Published atomically: both readers (`process-ownership.test.ts` and
+  // `descendant-cleanup.test.ts`) poll for this file to exist and then read it
+  // once. MEASURED 2026-10-26: a plain write left it observable as "" in 3 of
+  // 40 starts, which broke the liveness assertion before any request was made.
+  writeRecordAtomically(marker, `${process.pid}:${port}`);
 });
 
 // Never exits on its own: the parent decides when this process dies.

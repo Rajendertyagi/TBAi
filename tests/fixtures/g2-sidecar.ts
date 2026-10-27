@@ -5,7 +5,6 @@
  * shell job. It spawns a detached grandchild to demonstrate that the backend's
  * own kill-on-close job covers children Bun's implicit binding would not.
  */
-import fs from "node:fs";
 import path from "node:path";
 
 import {
@@ -13,6 +12,7 @@ import {
   installBackendProcessJob,
   joinShellJob,
 } from "../../src/services/process-ownership.ts";
+import { writeRecordAtomically } from "../helpers/atomic-record.ts";
 
 const dir = process.env.TBAI_G2_DIR;
 if (!dir) {
@@ -26,7 +26,7 @@ if (process.env.TBAI_SKIP_SHELL_JOB !== "1") {
   try {
     joinShellJob(shellJobName);
   } catch (err) {
-    fs.writeFileSync(
+    writeRecordAtomically(
       path.join(dir, "sidecar-refused.json"),
       JSON.stringify({ message: err instanceof Error ? err.message : String(err) }),
     );
@@ -44,7 +44,9 @@ const grandchild = Bun.spawn(
   },
 );
 
-fs.writeFileSync(
+// Published atomically: `startLifecycle` waits for this file to EXIST and then
+// reads it once, so it must never be observable before every byte is there.
+writeRecordAtomically(
   path.join(dir, "sidecar.json"),
   JSON.stringify({
     sidecarPid: process.pid,
