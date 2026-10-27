@@ -26,6 +26,21 @@ export const OPENCODE_CONFIG = {
    */
   databasePathTimeoutMs: 5_000,
   /**
+   * Budget for the `--version` preflight that `resolveAndValidateManagedBinary`
+   * runs before anything is spawned.
+   *
+   * MEASURED: a warm `opencode --version` on the pinned binary answered in
+   * 96-262 ms over five runs. The budget used to be a literal 2,000 ms, which
+   * was enough locally and not enough on a loaded CI runner: a cold start of a
+   * large signed executable (first-run AV scan, cold page cache) exceeded it,
+   * and the timeout surfaced through the `/api/opencode/config` route as
+   * `opencode.config_read_error` - a configuration failure that was really a
+   * slow process launch. The bound is named here, documented with the
+   * measurement, and confined to the preflight: it is not the readiness budget
+   * (`startupTimeoutMs`) and not the database probe budget above.
+   */
+  versionProbeTimeoutMs: 10_000,
+  /**
    * Inclusive managed OpenCode version range.
    *
    * The 2.1 line was adopted on 2026-10-22 after checking every surface TBAi
@@ -106,6 +121,7 @@ export type OpenCodeConfig = {
   readonly readyPollMs: number;
   readonly readinessProbePath: string;
   readonly databasePathTimeoutMs: number;
+  readonly versionProbeTimeoutMs: number;
   readonly minimumVersion: string;
   readonly maximumVersionExclusive: string;
   readonly authUsername: string;

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { REPO_ROOT } from "../../helpers/repo-root";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
@@ -196,12 +196,28 @@ describe("managed OpenCode binary resolution", () => {
 
   it("times out and does not classify as missing when binary hangs", () => {
     const tmpDir = path.join(import.meta.dir, "__tmp_timeout_test__");
-    const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
     mkdirSync(tmpDir, { recursive: true });
     const cmdPath = path.join(tmpDir, "slow.cmd");
-    writeFileSync(cmdPath, "@ping -n 10 127.0.0.1 > nul\n@echo opencode 2.0.16\n");
+    // ~2 s of sleep, against an explicit 100 ms bound: the case proves the
+    // timeout path without waiting out the production budget.
+    writeFileSync(cmdPath, "@ping -n 3 127.0.0.1 > nul\n@echo opencode 2.0.16\n");
     try {
-      expect(() => detectOpenCodeVersion(cmdPath)).toThrow(/did not respond within 2000ms/);
+      const config = { ...OPENCODE_CONFIG, versionProbeTimeoutMs: 100 };
+      let error: unknown;
+      try {
+        detectOpenCodeVersion(cmdPath, config);
+      } catch (err) {
+        error = err;
+      }
+      // A hung binary is a probe failure, never "binary missing".
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(OpenCodeBinaryMissingError);
+      // The diagnostic names the phase, the configured bound and the binary:
+      // this failure used to read "did not respond within 2000ms" and surface
+      // through the config route as `opencode.config_read_error`.
+      const message = (error as Error).message;
+      expect(message).toContain("version preflight timed out after 100ms");
+      expect(message).toContain(cmdPath);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

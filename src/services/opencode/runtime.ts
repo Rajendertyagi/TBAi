@@ -97,7 +97,7 @@ export function detectOpenCodeVersion(
     result = Bun.spawnSync(cmd, {
       stdout: "pipe",
       stderr: "pipe",
-      timeout: 2000,
+      timeout: config.versionProbeTimeoutMs,
     });
   } catch (error) {
     // A resolved binary that cannot be launched is a probe/startup failure,
@@ -107,7 +107,13 @@ export function detectOpenCodeVersion(
     });
   }
   if (result.exitedDueToTimeout) {
-    throw new Error(`OpenCode binary did not respond within 2000ms: ${binaryPath}`);
+    // Name the phase, the bound and the binary: this used to be reported as a
+    // configuration-read failure, which sent operators looking at config files
+    // for what is a process-launch problem.
+    throw new Error(
+      `OpenCode version preflight timed out after ${config.versionProbeTimeoutMs}ms: ${binaryPath} did not answer --version. ` +
+        `The binary may still be cold-starting or blocked by a scanner; run it manually to confirm.`,
+    );
   }
   const output = new TextDecoder().decode(result.stdout);
   const version = parseOpenCodeVersion(output);
