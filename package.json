@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "dev": "bun run src/index.ts",
+    "dev:shell": "bun --preload ./scripts/dev-instance-preload.ts src/index.ts",
     "build": "bun run build:backend && bun run build:web",
     "build:backend": "bun build src/index.ts --compile --outfile dist/tbai-server",
     "build:web": "bun scripts/build-web.ts",

@@ -48,6 +48,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureFreshWebBuild } from "./lib/web-build";
+import { DEV_INSTANCE_FILE_NAME } from "./dev-launch-record";
 import {
   allocateFreePort,
   errorMessage,
@@ -401,6 +402,35 @@ export function instanceIdFromProbe(probe: {
     return typeof id === "string" && id.trim() !== "" ? id.trim() : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The identity the development launcher recorded for THIS run.
+ *
+ * Read from the same `<DATA_DIR>/dev-instance-id` the shell verifies against
+ * (`attach_dev_backend` in `src-tauri/src/main.rs`). "Some backend answered the
+ * dev port" is not the claim G2 makes; "the backend this launch started answered
+ * it" is, and only this record can establish it.
+ */
+export function readDevLaunchRecord(dataDir: string): {
+  readonly path: string;
+  readonly instanceId: string | null;
+  readonly error: string | null;
+} {
+  const file = path.join(dataDir, DEV_INSTANCE_FILE_NAME);
+  try {
+    const id = fs.readFileSync(file, "utf8").trim();
+    if (id === "") {
+      return { path: file, instanceId: null, error: `the launch record ${file} is empty` };
+    }
+    return { path: file, instanceId: id, error: null };
+  } catch (error) {
+    return {
+      path: file,
+      instanceId: null,
+      error: `no development launch record at ${file} (${errorMessage(error)}); the window was not started through \`bun run dev:shell\``,
+    };
   }
 }
 
@@ -916,6 +946,9 @@ async function main(): Promise<number> {
   }
   const backend = attributeBackendLog(appLogText);
   const observedInstanceId = instanceIdFromProbe(probe);
+  // Read while the temp root still exists: the launcher wrote this file into the
+  // DATA_DIR this run handed to `tauri dev`.
+  const launchRecord = readDevLaunchRecord(dataDir);
 
   try {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -937,6 +970,20 @@ async function main(): Promise<number> {
   });
 
   const failures = [...assessment.failures];
+  // Identity: the window must be attached to the backend THIS launch minted.
+  // Everything above attributes a backend; this asserts it is the right one, so
+  // a stale or foreign backend on the development port cannot pass as evidence.
+  if (launchRecord.error !== null) {
+    failures.push(`identity: ${launchRecord.error}`);
+  } else if (observedInstanceId === null) {
+    failures.push(
+      `identity: this launch minted instance ${launchRecord.instanceId}, but the in-page GET /api/server/instance returned no instance id`,
+    );
+  } else if (observedInstanceId !== launchRecord.instanceId) {
+    failures.push(
+      `identity: this launch minted instance ${launchRecord.instanceId}, but the WebView is attached to instance ${observedInstanceId} - a stale or foreign backend owns the development port`,
+    );
+  }
   if (devStop.attempted && !devStop.confirmed) {
     failures.push("teardown: the dev process tree did not terminate");
   }
@@ -967,6 +1014,13 @@ async function main(): Promise<number> {
       tauriCli: TAURI_CLI,
       configOverlay: overlayWritten,
       windowAdditionalBrowserArgs: debugArgs,
+      /** The per-launch identity the launcher recorded (`<DATA_DIR>/dev-instance-id`). */
+      devInstanceId: launchRecord.instanceId,
+      devInstanceIdFile: launchRecord.path,
+      devInstanceIdError: launchRecord.error,
+      /** True only when the identity the window talks to IS this launch's. */
+      devInstanceIdMatched:
+        launchRecord.instanceId !== null && launchRecord.instanceId === observedInstanceId,
     },
     cdp: {
       port: cdp.port,

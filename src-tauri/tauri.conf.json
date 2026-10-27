@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.tbai.app",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "bun run dev:shell",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "bun run build",
     "frontendDist": "app://localhost",

@@ -11,7 +11,10 @@
 //    The WebView is never navigated or reloaded during recovery or port change.
 // 5. In DEVELOPMENT the backend is owned by `beforeDevCommand`, not by this
 //    shell: there is no sidecar, and the shell attaches to `build.devUrl`
-//    instead (see `attach_dev_backend`). Packaged startup is unchanged.
+//    instead - but only after verifying that the backend answering there is the
+//    one this launch started, via the per-launch identity record
+//    (`<DATA_DIR>/dev-instance-id`, `attach_dev_backend`). Packaged startup is
+//    unchanged.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -363,6 +366,106 @@ fn dev_origin_port(app: &AppHandle) -> Option<u32> {
     Some(u32::from(url.port_or_known_default()?))
 }
 
+/// File name of the per-launch development identity record. Shared with
+/// `scripts/dev-launch-record.ts`, which writes it.
+const DEV_INSTANCE_FILE_NAME: &str = "dev-instance-id";
+
+/// Where the development launcher recorded this launch's backend identity.
+///
+/// `tauri dev` and `beforeDevCommand` are separate processes with their own
+/// working directories, so this path cannot be derived from `cwd`. Three
+/// sources, in order:
+///
+/// 1. `TBAI_DEV_INSTANCE_FILE` - an explicit path, used by tests.
+/// 2. `DATA_DIR` - the same override the backend honours, so an isolated data
+///    directory (including the G2 observation) moves both sides together.
+/// 3. The repository's own `data/` directory: `CARGO_MANIFEST_DIR` is
+///    `<repo>/src-tauri` at compile time, and the backend's default `DATA_DIR` is
+///    `<repo>/data` (`src/config/data-dir.ts`). Independent of `cwd`, which is
+///    the point.
+fn dev_instance_id_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("TBAI_DEV_INSTANCE_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    if let Ok(dir) = std::env::var("DATA_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir).join(DEV_INSTANCE_FILE_NAME);
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("data").join(DEV_INSTANCE_FILE_NAME))
+        .unwrap_or_else(|| PathBuf::from("data").join(DEV_INSTANCE_FILE_NAME))
+}
+
+/// Reads the identity this launch minted, or explains why it cannot be known.
+///
+/// A missing or empty record is NOT a race: the launcher writes it before the
+/// backend starts, so the file is absent only when development was started
+/// without the launcher.
+fn read_dev_instance_id(path: &Path) -> Result<String, String> {
+    let raw = std::fs::read_to_string(path).map_err(|err| {
+        format!(
+            "no development launch record at {} ({err}). Start the window through \
+             `tauri dev` (beforeDevCommand = `bun run dev:shell`), not a bare \
+             `bun run dev`; without a per-launch identity this shell cannot tell \
+             this launch's backend from a stale or foreign one.",
+            path.display()
+        )
+    })?;
+    let id = raw.trim();
+    if id.is_empty() {
+        return Err(format!(
+            "the development launch record {} is empty; this shell cannot verify \
+             which backend belongs to this launch",
+            path.display()
+        ));
+    }
+    Ok(id.to_string())
+}
+
+/// What the development backend answered, and what to do about it.
+#[derive(Debug, PartialEq, Eq)]
+enum DevAttachVerdict {
+    /// The backend this launch started answered: attach to it.
+    Attach,
+    /// Not observable yet (still booting, or mid-restart): poll again.
+    Retry(String),
+    /// Definitely NOT this launch: stop and report, because polling cannot fix it.
+    Reject(String),
+}
+
+/// The identity decision, pure so every outcome is testable without a window.
+///
+/// A wrong id, a 404 instance endpoint and an unusable answer from a *listening*
+/// port are all definite: the backend this launch started cannot bind a port
+/// another process already owns, so waiting out the startup budget would only
+/// delay an accurate error.
+fn classify_dev_instance(expected: &str, observed: Result<String, &'static str>) -> DevAttachVerdict {
+    match observed {
+        Ok(instance_id) if instance_id == expected => DevAttachVerdict::Attach,
+        Ok(instance_id) => DevAttachVerdict::Reject(format!(
+            "the server on the development port is not this launch's backend \
+             (expected instance {expected}, got {instance_id}). A stale backend from an \
+             earlier run, or another checkout's backend, owns the port; stop it and \
+             restart `tauri dev`."
+        )),
+        Err("no_listener") => DevAttachVerdict::Retry(
+            "nothing is listening on the development port yet".to_string(),
+        ),
+        Err("old_build_or_foreign") => DevAttachVerdict::Reject(
+            "the server on the development port has no instance endpoint: it is an \
+             old build or another application, not this launch's backend"
+                .to_string(),
+        ),
+        Err(other) => DevAttachVerdict::Retry(format!(
+            "the server on the development port answered unusably ({other})"
+        )),
+    }
+}
+
 /// Development: verify the backend that `beforeDevCommand` already started.
 ///
 /// `tauri dev` waits for `build.devUrl` before it starts this process, so the
@@ -379,6 +482,13 @@ fn dev_origin_port(app: &AppHandle) -> Option<u32> {
 /// `tauri::is_dev()` is true for `tauri dev` and false for both release and
 /// `--debug` packaged builds. The named shell job, the sidecar lifecycle, crash
 /// recovery and the shutdown handshake therefore remain packaged-only.
+///
+/// "The port answers" is not enough: a backend left over from an earlier run, or
+/// one belonging to another checkout, answers the same port. So the launcher
+/// (`bun run dev:shell`) mints an identity per launch, records it in
+/// `<DATA_DIR>/dev-instance-id` and hands it to the backend as
+/// `TBAI_INSTANCE_ID`; this function accepts only an exact match and reports a
+/// classified failure otherwise (see `classify_dev_instance`).
 fn attach_dev_backend(app: &AppHandle) {
     let owned: State<StartupOwned> = app.state();
 
@@ -402,33 +512,62 @@ fn attach_dev_backend(app: &AppHandle) {
     *owned.verified_endpoint.lock().expect("endpoint lock") = None;
     *owned.status.lock().expect("status lock") = "verifying".to_string();
 
+    // The identity this launch minted. Without it there is nothing to verify
+    // against, and attaching to whoever owns the port is exactly the bug this
+    // handshake exists to prevent.
+    let instance_file = dev_instance_id_path();
+    let expected = match read_dev_instance_id(&instance_file) {
+        Ok(instance_id) => instance_id,
+        Err(reason) => {
+            *owned.status.lock().expect("status lock") = "failed".to_string();
+            let _ = app.emit(
+                "backend-status",
+                serde_json::json!({ "status": "failed", "reason": reason }),
+            );
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
     let start = Instant::now();
+    let mut last_retry =
+        "nothing has been observed on the development port yet".to_string();
     while start.elapsed() < STARTUP_TIMEOUT {
         if owned.is_quitting.load(Ordering::SeqCst) {
             owned.is_starting.store(false, Ordering::SeqCst);
             return;
         }
-        // Only an answer carrying an instance id counts: a static page or a
-        // foreign server on the same port must not be mistaken for the backend.
-        if let Ok(instance_id) = fetch_instance(port) {
-            *owned.verified.lock().expect("verified lock") = true;
-            *owned.status.lock().expect("status lock") = "ready".to_string();
-            let endpoint = EndpointInfo {
-                port,
-                base_url: format!("http://127.0.0.1:{port}"),
-                instance_id,
-            };
-            *owned.verified_endpoint.lock().expect("endpoint lock") = Some(endpoint.clone());
-            if let Some(tray) = app.tray_by_id("main") {
-                let _ = tray.set_tooltip(format!("TBAi · port {port}").into());
+        match classify_dev_instance(&expected, fetch_instance(port)) {
+            DevAttachVerdict::Attach => {
+                *owned.verified.lock().expect("verified lock") = true;
+                *owned.status.lock().expect("status lock") = "ready".to_string();
+                let endpoint = EndpointInfo {
+                    port,
+                    base_url: format!("http://127.0.0.1:{port}"),
+                    instance_id: expected,
+                };
+                *owned.verified_endpoint.lock().expect("endpoint lock") = Some(endpoint.clone());
+                if let Some(tray) = app.tray_by_id("main") {
+                    let _ = tray.set_tooltip(format!("TBAi · port {port}").into());
+                }
+                let _ = app.emit("backend-ready", &endpoint);
+                let _ = app.emit(
+                    "backend-status",
+                    serde_json::json!({ "status": "ready", "endpoint": endpoint }),
+                );
+                owned.is_starting.store(false, Ordering::SeqCst);
+                return;
             }
-            let _ = app.emit("backend-ready", &endpoint);
-            let _ = app.emit(
-                "backend-status",
-                serde_json::json!({ "status": "ready", "endpoint": endpoint }),
-            );
-            owned.is_starting.store(false, Ordering::SeqCst);
-            return;
+            DevAttachVerdict::Reject(reason) => {
+                *owned.status.lock().expect("status lock") = "failed".to_string();
+                let _ = app.emit(
+                    "backend-status",
+                    serde_json::json!({ "status": "failed", "reason": reason }),
+                );
+                owned.is_starting.store(false, Ordering::SeqCst);
+                return;
+            }
+            DevAttachVerdict::Retry(reason) => last_retry = reason,
         }
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -438,7 +577,10 @@ fn attach_dev_backend(app: &AppHandle) {
         "backend-status",
         serde_json::json!({
             "status": "failed",
-            "reason": format!("No TBAi backend answered the development port {port}")
+            "reason": format!(
+                "No backend with this launch's identity ({expected}) answered the development port {port}: {last_retry} (record: {})",
+                instance_file.display()
+            )
         }),
     );
     owned.is_starting.store(false, Ordering::SeqCst);
@@ -1007,5 +1149,83 @@ mod tests {
     #[test]
     fn shutdown_production_timeout_is_three_seconds() {
         assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_millis(3000));
+    }
+
+    // --- development identity handshake ---
+    //
+    // Six cases: the exact match, the three definite refusals (foreign/stale id,
+    // no instance endpoint, no launch record), the two transient states, and the
+    // record's own format contract. Together they are the whole reason the shell
+    // can no longer attach to whatever happens to answer the dev port.
+
+    #[test]
+    fn dev_attach_accepts_the_instance_this_launch_minted() {
+        assert_eq!(
+            classify_dev_instance("launch-a", Ok("launch-a".to_string())),
+            DevAttachVerdict::Attach
+        );
+    }
+
+    #[test]
+    fn dev_attach_rejects_a_stale_or_foreign_backend() {
+        match classify_dev_instance("launch-a", Ok("launch-b".to_string())) {
+            DevAttachVerdict::Reject(reason) => {
+                assert!(reason.contains("launch-a"), "{reason}");
+                assert!(reason.contains("launch-b"), "{reason}");
+                assert!(reason.contains("not this launch"), "{reason}");
+            }
+            other => panic!("expected Reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_attach_rejects_a_server_without_an_instance_endpoint() {
+        match classify_dev_instance("launch-a", Err("old_build_or_foreign")) {
+            DevAttachVerdict::Reject(reason) => {
+                assert!(reason.contains("no instance endpoint"), "{reason}");
+            }
+            other => panic!("expected Reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_attach_retries_while_nothing_listens() {
+        assert!(matches!(
+            classify_dev_instance("launch-a", Err("no_listener")),
+            DevAttachVerdict::Retry(_)
+        ));
+    }
+
+    #[test]
+    fn dev_attach_retries_an_unusable_answer() {
+        assert!(matches!(
+            classify_dev_instance("launch-a", Err("bad_response")),
+            DevAttachVerdict::Retry(reason) if reason.contains("bad_response")
+        ));
+    }
+
+    #[test]
+    fn dev_launch_record_is_required_and_trimmed() {
+        let dir = std::env::temp_dir().join(format!("tbai-dev-instance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join(DEV_INSTANCE_FILE_NAME);
+        let path_text = file.display().to_string();
+
+        // No record: refused, and the message names the file and the launcher.
+        let missing = read_dev_instance_id(&file).expect_err("a missing record must be refused");
+        assert!(missing.contains(path_text.as_str()), "{missing}");
+        assert!(missing.contains("bun run dev:shell"), "{missing}");
+
+        // A written record is trimmed: the writer's trailing newline is not part
+        // of the identity.
+        std::fs::write(&file, "launch-a\n").expect("write record");
+        assert_eq!(read_dev_instance_id(&file).expect("record"), "launch-a");
+
+        // A blank record is refused rather than treated as an identity.
+        std::fs::write(&file, "   \n").expect("write blank record");
+        assert!(read_dev_instance_id(&file).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
