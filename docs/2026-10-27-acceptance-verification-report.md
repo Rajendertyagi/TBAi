@@ -1,8 +1,8 @@
 # Runtime robustness and acceptance re-certification - 2026-10-27
 
-**Branch:** `ci/tauri-e2e-verify` **Code HEAD:** `8bbe5a6d89c7f07e9f0038c649529c298f7e7b3e` (CI run 40491928882) **Date:** 2026-10-27
+**Branch:** `ci/tauri-e2e-verify` **Code HEAD:** `8bbe5a6d89c7f07e9f0038c649529c298f7e7b3e` (CI runs 40491928882 and 40498931974) **Date:** 2026-10-27
 
-**Verdict: PASS at `8bbe5a6`, for the scope stated in section 8.** CI run [40491928882](https://github.com/Rajendertyagi/TBAi/actions/runs/40491928882) at that SHA is green on all five required jobs: `verify`, `tauri`, `e2e`, `opencode-g3`, `opencode-runtime`. Every blocker from the independent review is root-caused, fixed, and covered by a test that fails without the fix; the two gaps the earlier HOLD named - the uncompiled Rust handshake and the absence of any CI run describing the tree - are both closed with artifacts, not assertions. What PASS does **not** mean is listed in section 8: three E2E spec files still fail locally and identically at baseline `5f85e53`, the G5 comparison artifact is at `dd51334`, and Semgrep is out of scope. This verdict edit itself changes no source, test, or configuration file.
+**Verdict: PASS at `8bbe5a6`, for the scope stated in section 8.** CI run [40491928882](https://github.com/Rajendertyagi/TBAi/actions/runs/40491928882) at that SHA is green on all five required jobs: `verify`, `tauri`, `e2e`, `opencode-g3`, `opencode-runtime`. Every blocker from the independent review is root-caused, fixed, and covered by a test that fails without the fix; the two gaps the earlier HOLD named - the uncompiled Rust handshake and the absence of any CI run describing the tree - are both closed with artifacts, not assertions. What PASS does **not** mean is listed in section 8: three E2E spec files still fail locally and identically at baseline `5f85e53`, and Semgrep is out of scope. The G5 comparison was re-issued at the certified SHA on 2026-10-27 - run [40498931974](https://github.com/Rajendertyagi/TBAi/actions/runs/40498931974), both projects `ok: true`, no test removed (section 5) - so no artifact now describes a revision other than the certified one. This verdict edit itself changes no source, test, or configuration file.
 
 ---
 
@@ -18,7 +18,7 @@ The work of this session is **committed and pushed** as 14 commits, one concern 
 | Commits | 14 | pushed to `origin/ci/tauri-e2e-verify`, no force-push |
 | Branch switches / resets / stashes / cleans | 0 | the only history rewrite was three local commits rewritten before the push, to strip a BOM PowerShell had added to their subjects |
 | After the first push | 2 more commits | `3ce8d8c` (the D3b test fix), `8bbe5a6` (the report as certified) |
-| After certification | 1 docs-only commit | the verdict edit carrying this PASS; it changes no source, test, or configuration file |
+| After certification | 4 docs-only commits | `b8ba7db` (the verdict edit carrying this PASS), `8fb8d64` (two stale lines in it corrected), `cd3356e` (the plan reconciliation), and this G5-evidence edit. None changes a source, test, or configuration file |
 
 Consequence: run 40491928882 at `8bbe5a6` describes the certified tree. Run 40480496977 at `7e79b30` describes everything except the D3b fix; section 7 reads both, and section 8 states the scope of the PASS.
 
@@ -138,23 +138,36 @@ G3's two cases were also re-run against the real binary with cleanup verified by
 
 ---
 
-## 5. G5 - inventory and comparison at HEAD
+## 5. G5 - inventory and comparison at the certified bytes
 
-Artifact `g5-e2e-full-chromium-headless` (`12636579995`) from run `40289523595` at `dd5133437f4497e8ebac993f008a9e40403e18c0`. Numbers below are read from `comparison.json` and `*.aggregate.json`, not from a summary. The comparison is at the revision that produced the artifact, **not** at `8bbe5a6` (section 10, residual item 1).
+Artifacts `g5-e2e-full-chromium-headless` and `g5-e2e-full-edge-headless` from run [40498931974](https://github.com/Rajendertyagi/TBAi/actions/runs/40498931974), dispatched with `e2e_full=true` and `final_sha=8bbe5a6d89c7f07e9f0038c649529c298f7e7b3e`. Every number below is read from the two `comparison.json` files, not from a summary. The job derives its baseline as the final commit's first parent, so the baseline is `3ce8d8c` (the F3 readiness fix).
 
-| | Baseline `2c444cc` | Final `7bd4975` |
-|---|---|---|
-| tests | 120 | 120 |
-| passed | 109 | 109 |
-| failed | 8 | 8 |
-| flaky | 0 | 0 |
-| skipped | 3 | 3 |
-| spec files | 39 | 39 |
-| digest | `ed0df068...1addaf42` | `ed0df068...1addaf42` |
+| | chromium `3ce8d8c` | chromium `8bbe5a6` | edge `3ce8d8c` | edge `8bbe5a6` |
+|---|---|---|---|---|
+| tests | 120 | 120 | 120 | 120 |
+| passed | 115 | 115 | 115 | 115 |
+| failed | 4 | 4 | 4 | 4 |
+| flaky | 0 | 0 | 0 | 0 |
+| skipped | 1 | 1 | 1 | 1 |
+| spec files | 39 | 39 | 39 | 39 |
+| digest | `ed0df068...1addaf42` | `ed0df068...1addaf42` | `9357dfa3...09c9a09cb3` | `9357dfa3...09c9a09cb3` |
 
-`ok: true` with `baselineOnlyFailures: []`, `finalOnlyFailures: []`, `removedWhileFailing: []`, `testsRemoved: []`, `settingsDivergence: []`.
+Both projects report `ok: true`, and `baselineOnlyFailures`, `finalOnlyFailures`, `removedWhileFailing`, `specsRemoved`, `testsRemoved`, `unexplainedRemoval`, `settingsDivergence` and `unexplainedDivergence` are all empty. The four failures common to both revisions are exactly the three spec files named in section 8's scope: `components/context-menu-spellcheck` (copy selected text), `core/phase-ua-d` D1, and both cases of `tools/tool-body-budget`.
 
-**This is "no regression in the specified comparison", not "E2E passes".** Eight cases fail at both revisions; three of them (`composer-bar`, `p2-live-runtime` A/D/E, `phase-8` delete-active) are fixed in this tree, and the two spec files that CI runs are green at both `7e79b30` and `8bbe5a6`. One case in that list, `virtualizer/scroll-anchoring-regressions` R2, did **not** fail in today's local full run; it is untouched by this work and its status is unchanged, not improved.
+**What this comparison covers, and what it does not.** It is `3ce8d8c` -> `8bbe5a6`, a one-commit delta (a test change plus this documentation), because the workflow fixes the baseline at `final^1`. It therefore certifies that the certified bytes removed no test, changed no settings and introduced no new failure relative to the revision they built on. It is **not** a comparison against the branch point, so it says nothing about the whole 15-commit code delta as a unit.
+
+The earlier comparison remains the record for that code delta: artifact `g5-e2e-full-chromium-headless` (`12636579995`) from run `40289523595` at `dd51334`, baseline `2c444cc` -> final `7bd4975`, **109 pass / 8 fail / 3 skip** at both revisions with an identical digest and `ok: true`. Comparing its failure list with today's names what changed between the two comparisons:
+
+| Case | `7bd4975` | `8bbe5a6` | Fix |
+|---|---|---|---|
+| `components/composer-bar` - send/stop share one slot | failed | **passes** | E3 (the false `reply_lost` verdict) |
+| `history/p2-live-runtime` A/D/E - streaming does not steal a scrolled-up position | failed | **passes** | E1 (the unconditional sticky arm) |
+| `history/phase-8-tabs-navigation` - deleting the active conversation | failed | **passes** | E2 (the `...` locator) |
+| `virtualizer/scroll-anchoring-regressions` R2 - append while scrolled up | failed | **passes** | E1 is the only scroll-position change in between; R2's spec was not re-run in isolation, so its pass is recorded rather than attributed to E1 |
+| `context-menu-spellcheck`, `phase-ua-d` D1, `tool-body-budget` x2 | failed | failed | none - pre-existing at `5f85e53` |
+
+**This is "no regression in the specified comparison", not "E2E passes".** Four cases still fail at both revisions, and they are the pre-existing set this report has never de-scoped. The `dd51334` artifact is kept for its inventory and its failure list, but it is no longer the comparison of record for the certified tree.
+
 
 ---
 
@@ -217,6 +230,12 @@ with the log sequence quoted in section 2 (D3b). That is root-caused and fixed i
 
 For contrast, the previous run [40360945274](https://github.com/Rajendertyagi/TBAi/actions/runs/40360945274) at `9120246` had `verify` green but `e2e` red on the two specs, no compiled Rust, and a G3 artifact whose `method` was still `taskkill /T /F`. Neither artifact describes the fixes it predates.
 
+### The G5 re-issue at the same SHA
+
+Run [40498931974](https://github.com/Rajendertyagi/TBAi/actions/runs/40498931974) was dispatched on 2026-10-27 with `e2e_full=true` and the full `final_sha`, and is green on every job it ran: `verify`, `tauri`, `e2e`, `opencode-g3`, `opencode-runtime`, and **both** `e2e-full` legs (chromium-headless 25m40s, edge-headless 26m10s). `e2e-big-pickle` was skipped because `live_opencode` was not requested, which is its documented dispatch-only behaviour. It therefore also re-runs the whole certification job set at the certified SHA, and its comparison artifacts are the ones section 5 reads.
+
+One earlier dispatch of the same work, run `40498782366`, was **invalid and cancelled**: it passed the abbreviated revision `8bbe5a6` as `final_sha`, and `actions/checkout` resolves `ref` as a branch or tag, so both G5 legs failed at checkout within seconds (`A branch or tag with the name '8bbe5a6' could not be found`). It produced no evidence, is recorded here rather than hidden, and the re-dispatch uses the 40-character SHA.
+
 ---
 
 ## 8. Criteria - passed, failed, unverified
@@ -232,16 +251,17 @@ For contrast, the previous run [40360945274](https://github.com/Rajendertyagi/TB
 | Full `verify` at the final tree | passed | 5041 pass / 66 skip / 0 fail (5107 tests, 378 files) three times; DOM 577 pass; quarantine OK |
 | Ordinary E2E suite | **failed on 3 pre-existing spec files** | identical at baseline `5f85e53`; not fixed here |
 | G3 both cases against the real binary | passed | CI job green at `7e79b30` and `8bbe5a6`, plus 2 local runs; artifact records `method: taskkill /F per recorded pid`, no survivors |
-| G5 comparison | passed as specified, **at `dd51334` not `8bbe5a6`** | identical failure sets and digest at both revisions of that comparison |
+| G5 comparison | **passed at the certified SHA** | run `40498931974`: both projects `ok: true`, 120 tests / 115 pass / 4 fail / 1 skip at baseline `3ce8d8c` and at `8bbe5a6`, identical digests, nothing removed (section 5) |
 | `e2e` job at `8bbe5a6` | **passed** | 7/7 spec files, including the two red at `9120246` |
 | CI green on the final bytes | **passed** | run 40491928882 at `8bbe5a6`: all five required jobs green; `verify` ran the whole chain (steps 12-16), `e2e` 7/7 |
+| Whole CI set re-run at the same SHA | **passed** | run 40498931974, dispatched only to re-issue G5: `verify`, `tauri`, `e2e`, `opencode-g3`, `opencode-runtime` and both `e2e-full` legs green; `e2e-big-pickle` skipped by dispatch policy |
 
 ### Scope of this PASS
 
 Three things are explicitly outside it, and none of them is a regression introduced here:
 
 1. **Three spec files fail locally on every run** (`tool-body-budget` x2, `phase-ua-d` D1, `context-menu-spellcheck`). They fail identically at baseline `5f85e53`; the CI `e2e` job does not run them, so CI cannot see them either way. Not fixed here, not de-scoped silently.
-2. **The G5 comparison artifact is at `dd51334`**, not `8bbe5a6`. It showed no divergence (`ok: true`, identical digests) between its own baseline and final revisions; it is not a statement about today's bytes. Re-issuing it at `8bbe5a6` is the first residual item in section 10.
+2. **The G5 comparison at the certified bytes is `3ce8d8c` -> `8bbe5a6`**, a one-commit delta, because the workflow fixes the baseline at `final^1`. It proves the certified bytes removed nothing and introduced no failure relative to that parent; the wider code delta is described by the `dd51334` comparison, which is kept for its inventory and failure list (section 5).
 3. **Semgrep is out of scope** per the 2026-10-26 ADR. No claim is made about it.
 
 The two gaps the earlier HOLD named are closed by artifacts: `cargo test` ran in the `tauri` job and passed, and the G2 artifact records `devInstanceIdMatched: true` with the identity it observed equal to the one this launch minted.
@@ -254,7 +274,7 @@ The two gaps the earlier HOLD named are closed by artifacts: `cargo test` ran in
 - **`mcp-v2` F3 no longer fails under load, but the load itself is a tool, not a gate.** The 8/10-before, 0/10-after evidence comes from a manual 2x-oversubscribed run; no CI job reproduces that load, so the fix is evidenced by measurement plus three clean full `verify` runs, not by a permanent stress gate.
 - **One early `verify` failure is unidentified.** A run early in the session exited non-zero with 5025 pass / 1 fail; the failing test's name was not captured and the log was overwritten by the next run. It never reproduced across the 15 completed runs logged before today's fix (`verify-run2` through `verify-run17`, excluding `verify-run6`, which aborted earlier at the lint gate) or in the three full runs after it. This is recorded as unresolved, not as "intermittent" and not as "harmless".
 - **Three spec files fail locally on every run** (`tool-body-budget` x2, `phase-ua-d` D1, `context-menu-spellcheck`) and fail identically at baseline `5f85e53`. Out of scope; not de-scoped silently.
-- **`virtualizer/scroll-anchoring-regressions` R2** fails in the G5 comparison and passed locally today. Untouched.
+- **`virtualizer/scroll-anchoring-regressions` R2** failed in the `dd51334` comparison and passes at both revisions of the certified one. It was not re-run in isolation, so its pass is recorded rather than attributed; E1 is the only scroll-position change in between.
 - **`run-start-scroll.spec.ts` remains `test.fixme`** with its stale docblock intact. Not changed here.
 - **One `verify` run exited non-zero on a Biome formatting diff** mid-session (the formatter disagreed with a hand-wrapped expression). Fixed by running the formatter, not by loosening a rule; all three final runs include the format check.
 - **Semgrep is out of scope** per the 2026-10-26 ADR. No claim is made about it.
@@ -264,7 +284,7 @@ The two gaps the earlier HOLD named are closed by artifacts: `cargo test` ran in
 
 ## 10. Residual items, carried forward (not blockers)
 
-1. Re-issue the G5 comparison at `8bbe5a6` so its artifact describes the certified bytes rather than `dd51334`. Today's claim is only "no regression in that comparison".
+1. **Done 2026-10-27** - the G5 comparison was re-issued at the certified SHA (run `40498931974`, section 5). Its baseline is that commit's first parent, so a comparison spanning the whole code delta still rests on the earlier `dd51334` artifact.
 2. The three pre-existing E2E spec files stay red until someone fixes them; they are outside this session's scope and identical at the baseline.
 3. The bounded MCP discovery window in section 9 needs a capability-ready signal the timer-driven reconnect can await, if a chat turn losing MCP tools for one turn is judged worth closing.
 4. Rotate the GitHub token pasted into this session's chat.
