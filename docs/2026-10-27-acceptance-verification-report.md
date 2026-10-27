@@ -17,9 +17,10 @@ The work of this session is **committed and pushed** as 14 commits, one concern 
 | Files in range | 29 | 1644 insertions, 115 deletions (includes this document) |
 | Commits | 14 | pushed to `origin/ci/tauri-e2e-verify`, no force-push |
 | Branch switches / resets / stashes / cleans | 0 | the only history rewrite was three local commits rewritten before the push, to strip a BOM PowerShell had added to their subjects |
-| After the first push | 2 more commits | `3ce8d8c` (the D3b test fix), `8bbe5a6` (this report) |
+| After the first push | 2 more commits | `3ce8d8c` (the D3b test fix), `8bbe5a6` (the report as certified) |
+| After certification | 1 docs-only commit | the verdict edit carrying this PASS; it changes no source, test, or configuration file |
 
-Consequence: CI run 40480496977 describes everything except the D3b fix. Section 7 reads that run job by job; section 8 says exactly which criterion remains open because of it.
+Consequence: run 40491928882 at `8bbe5a6` describes the certified tree. Run 40480496977 at `7e79b30` describes everything except the D3b fix; section 7 reads both, and section 8 states the scope of the PASS.
 
 ---
 
@@ -251,7 +252,7 @@ The two gaps the earlier HOLD named are closed by artifacts: `cargo test` ran in
 
 - **A chat turn issued inside the reconnect's discovery window sees no MCP tools.** `runConnect()` publishes `connected` after `client.connect()` and before `discoverCapabilities()`, and `getAiTools()` reads `conn.tools`, which is empty until discovery finishes. Measured 290 ms in CI and up to ~8 s on a 2x-oversubscribed runner. Closing it needs a capability-ready signal that the timer-driven reconnect path can await; publishing `connected` later does **not** close it, because `conn.tools` would still be empty. Left open deliberately, with the test waiting for the capability it asserts (D3b) instead of masking this.
 - **`mcp-v2` F3 no longer fails under load, but the load itself is a tool, not a gate.** The 8/10-before, 0/10-after evidence comes from a manual 2x-oversubscribed run; no CI job reproduces that load, so the fix is evidenced by measurement plus three clean full `verify` runs, not by a permanent stress gate.
-- **One early `verify` failure is unidentified.** A run early in the session exited non-zero with 5025 pass / 1 fail; the failing test's name was not captured and the log was overwritten by the next run. It never reproduced across the 15 completed runs logged before today's fix (`verify-run2` through `verify-run17`, excluding `verify-run6`, which aborted earlier at the lint gate) or in the two full runs after it. This is recorded as unresolved, not as "intermittent" and not as "harmless".
+- **One early `verify` failure is unidentified.** A run early in the session exited non-zero with 5025 pass / 1 fail; the failing test's name was not captured and the log was overwritten by the next run. It never reproduced across the 15 completed runs logged before today's fix (`verify-run2` through `verify-run17`, excluding `verify-run6`, which aborted earlier at the lint gate) or in the three full runs after it. This is recorded as unresolved, not as "intermittent" and not as "harmless".
 - **Three spec files fail locally on every run** (`tool-body-budget` x2, `phase-ua-d` D1, `context-menu-spellcheck`) and fail identically at baseline `5f85e53`. Out of scope; not de-scoped silently.
 - **`virtualizer/scroll-anchoring-regressions` R2** fails in the G5 comparison and passed locally today. Untouched.
 - **`run-start-scroll.spec.ts` remains `test.fixme`** with its stale docblock intact. Not changed here.
