@@ -98,6 +98,33 @@ const insert = (database: Database, id: string, content: string, createdAt: numb
     .run(id, content, createdAt, createdAt);
 };
 
+/**
+ * Seeds many rows inside ONE transaction.
+ *
+ * The default `journal_mode=delete` / `synchronous=2` pair commits (and fsyncs)
+ * per statement, so a few hundred individual inserts cost a real disk round-trip
+ * each: measured 1,307.7 ms for 500 rows on a local SSD, and 33-40 s on a loaded
+ * CI runner — which is what pushed the 50-candidate case past its 30 s budget.
+ * The same 500 rows inside a transaction measured 3.0 ms. Seeding is fixture
+ * setup, not the behaviour under test, so it must not be the thing that times
+ * out. Production reads are untouched.
+ */
+const seed = (
+  database: Database,
+  count: number,
+  row: (index: number) => { id: string; content: string; createdAt: number },
+): void => {
+  const statement = database.query(
+    "INSERT INTO memories (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
+  );
+  database.transaction(() => {
+    for (let index = 0; index < count; index += 1) {
+      const entry = row(index);
+      statement.run(entry.id, entry.content, entry.createdAt, entry.createdAt);
+    }
+  })();
+};
+
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 const provider: ProviderConfig = {
@@ -334,8 +361,11 @@ describe("Part 5.6-8: budget and both ceilings still apply", () => {
 
   it("considers at most 50 candidates however many the table holds", async () => {
     const database = makeDb();
-    for (let i = 0; i < 500; i += 1)
-      insert(database, `m${String(i).padStart(3, "0")}`, `body number ${i}`, T0 + i);
+    seed(database, 500, (i) => ({
+      id: `m${String(i).padStart(3, "0")}`,
+      content: `body number ${i}`,
+      createdAt: T0 + i,
+    }));
     const r = await assemble(seamOver(database));
     // The provider is asked for at most the ceiling...
     expect(r.diagnostics.memoryCandidateCount).toBeLessThanOrEqual(MEMORY_MAX_CANDIDATES);
