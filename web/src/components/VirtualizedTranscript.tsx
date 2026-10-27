@@ -282,9 +282,17 @@ export function VirtualizedTranscript({
   }, []);
 
   // Pre-paint run-start jump: when isRunning flips false -> true, jump to bottom.
+  //
+  // Only when the reader is already following the live edge. This used to arm
+  // `stickyRef` unconditionally, which overrode an explicit scroll-away: a
+  // reader parked several hundred pixels up was yanked to the end the instant a
+  // run started, and `stickyRef` then stayed armed so the ResizeObserver kept
+  // them there. Following is the reader's decision (the scroll/wheel/touch
+  // handlers above maintain it), so the run-start jump now defers to it and
+  // merely guarantees a just-sent message is not below the fold when they were
+  // already at the end.
   useLayoutEffect(() => {
-    if (isRunning && !prevIsRunningRef.current) {
-      stickyRef.current = true;
+    if (isRunning && !prevIsRunningRef.current && stickyRef.current) {
       if (rows.length > 0) {
         virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
       }
