@@ -174,8 +174,7 @@ function partToAssistantContent(
       status: { type: part.status === "streaming" ? "running" : "complete" },
     };
   if (part.kind === "step") return { type: "text", text: "", status: { type: "complete" } };
-  if (part.kind === "retry")
-    return { type: "text", text: part.value, status: { type: "complete" } };
+  if (part.kind === "retry") return { type: "text", text: "", status: { type: "complete" } };
   const sourceContent = message.source?.type === "assistant" ? message.source.content : [];
   const sourceTool = sourceContent.find(
     (content) => content.type === "tool" && `tool:${message.id}:${content.id}` === part.id,

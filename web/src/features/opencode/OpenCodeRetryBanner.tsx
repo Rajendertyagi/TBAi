@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { OPENCODE_RETRY_TICK_MS, formatRetryCountdown } from "./config";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
+import { cn } from "@/lib/utils";
+import { paper } from "@/components/assistant-ui/elements/surfaces";
 
 /**
  * The live engine retry, directly above the composer.
@@ -49,7 +51,14 @@ export function OpenCodeRetryBanner() {
       : "Retrying";
 
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground">
+    <div
+      data-slot="agent-status"
+      className={cn(
+        paper,
+        "inline-flex items-center gap-2 rounded-full py-1.5 ps-3.5 pe-3 text-xs text-muted-foreground shadow-xs animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200 motion-reduce:animate-none",
+      )}
+    >
+      <span className="size-1.5 shrink-0 rounded-full animate-pulse bg-amber-500 motion-reduce:animate-none" />
       <span role="status" className="sr-only">
         Retrying, attempt {retry.attempt}
       </span>

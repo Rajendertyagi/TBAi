@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { Check, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { paper } from "@/components/assistant-ui/elements/surfaces";
 import { OPENCODE_RECOVERY_NOTICE_MS } from "./config";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 
@@ -77,16 +79,28 @@ export function OpenCodeRecoveryNotice({
   return (
     <div
       role="status"
-      className="flex items-start justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+      data-slot="agent-status"
+      className={cn(
+        paper,
+        "inline-flex items-center gap-2 rounded-full py-1 ps-3.5 pe-1.5 text-xs text-muted-foreground shadow-xs animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200 motion-reduce:animate-none",
+      )}
     >
+      {activity === "running" ? (
+        <span
+          aria-hidden="true"
+          className="size-1.5 shrink-0 rounded-full animate-pulse bg-blue-500 dark:bg-blue-400 motion-reduce:animate-none"
+        />
+      ) : (
+        <Check aria-hidden="true" className="size-3 shrink-0 text-emerald-500" />
+      )}
       <span>{message}</span>
       <button
         type="button"
         aria-label="Dismiss session notice"
-        className="rounded-sm p-0.5 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex size-5 items-center justify-center rounded-full p-0.5 text-muted-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onClick={() => setHiddenFor(sessionId)}
       >
-        <X aria-hidden="true" className="size-3.5" />
+        <X aria-hidden="true" className="size-3" />
       </button>
     </div>
   );

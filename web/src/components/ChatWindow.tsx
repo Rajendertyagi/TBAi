@@ -105,7 +105,7 @@ function AssistantStatusPill() {
   if (!activity) return null;
 
   return (
-    <div className="flex items-center justify-start pb-2">
+    <div className="flex items-center justify-start pb-2 animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200 motion-reduce:animate-none">
       <AgentStatus {...activity} />
     </div>
   );

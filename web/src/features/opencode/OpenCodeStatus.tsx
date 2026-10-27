@@ -70,11 +70,9 @@ export function OpenCodeStatus({
   const errorDetail =
     state.load.type === "error"
       ? state.load.error.message
-      : state.execution.type === "error"
-        ? state.execution.error.message
-        : recoveryBlocked
-          ? state.revertRecovery.error.message
-          : null;
+      : recoveryBlocked
+        ? state.revertRecovery.error.message
+        : null;
   const retry = () => {
     // M17: the recovery rejection is CAUGHT. `reconcileStagedRevert` rejects
     // with a `V2ControllerError` when the recovery fails, and the controller

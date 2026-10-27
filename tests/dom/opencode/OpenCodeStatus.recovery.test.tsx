@@ -54,9 +54,9 @@ let _retryCalls = 0;
  * `revertRecovery` to `"none"`, and a literal-typed field would reject them.
  */
 const runtimeState: {
-  connection: { type: string; attempt: number };
+  connection: { type: string; attempt?: number; serverVersion?: string | null };
   load: { type: string; error?: { message: string } };
-  execution: { type: string };
+  execution: { type: string; error?: { message: string } };
   revertRecovery: { type: string; error?: { message: string } };
   session: {
     id: string;
@@ -274,6 +274,41 @@ describe("the status chip's manual recovery", () => {
       expect(reconnect).toBeDefined();
       expect(reconnect?.hasAttribute("disabled")).toBe(false);
     } finally {
+      unmount(mounted);
+    }
+  });
+
+  it("keeps the heart Connected and omits execution errors from the popover", async () => {
+    // Turn execution errors belong exclusively to the in-message chat error bubble,
+    // not the connection heart.
+    runtimeState.connection = { type: "connected", serverVersion: "2.1.2" };
+    runtimeState.load = { type: "ready" };
+    runtimeState.revertRecovery = { type: "none" };
+    runtimeState.execution = {
+      type: "error",
+      error: { message: "Free usage limit reached. Please connect a provider." },
+    };
+
+    const mounted = mount();
+    try {
+      // 1. Assert heart button itself does NOT carry destructive error styling
+      const button = mounted.container.querySelector("button");
+      expect(button).not.toBeNull();
+      const icon = button?.querySelector("svg");
+      expect(icon?.classList.contains("text-destructive")).toBe(false);
+
+      // 2. Open popover and assert label remains "Connected"
+      const content = await openPopover(mounted.container);
+      const label = [...content.querySelectorAll("span")].find(
+        (span) => span.textContent === "Connected",
+      );
+      expect(label).toBeDefined();
+
+      // 3. Execution error must not appear in the popover
+      expect(content.textContent ?? "").not.toContain("Free usage limit reached");
+      expect(content.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      runtimeState.execution = { type: "idle" };
       unmount(mounted);
     }
   });

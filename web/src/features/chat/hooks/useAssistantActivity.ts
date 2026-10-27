@@ -9,7 +9,7 @@ export interface AssistantActivity {
   elapsed?: string;
 }
 
-function getToolRunningLabel(toolName: string): string {
+export function getToolRunningLabel(toolName: string): string {
   const c = toolsConfig.copy.running;
   switch (toolName) {
     case "read":
@@ -24,6 +24,7 @@ function getToolRunningLabel(toolName: string): string {
       return c.editing;
     case "bash":
     case "execute":
+    case "shell":
       return c.running;
     case "glob":
     case "find_files":
@@ -57,12 +58,23 @@ export function useAssistantActivity(): AssistantActivity | null {
       return null;
     }
 
-    const parts = lastMessage.parts ?? [];
+    const msg = lastMessage as unknown as {
+      readonly content?: readonly unknown[];
+      readonly parts?: readonly unknown[];
+    };
+    const rawParts = msg.content ?? msg.parts;
+    const parts = Array.isArray(rawParts) ? rawParts : [];
 
-    // Scan for pending tool call (result === undefined)
-    const pendingTool = parts.find(
-      (p) => p.type === "tool-call" && (p as { result?: unknown }).result === undefined,
-    ) as { toolName: string; status?: { type: string } } | undefined;
+    // Scan for pending tool call (result === undefined) prioritizing the latest active tool
+    const pendingTool = [...parts]
+      .reverse()
+      .find(
+        (p) =>
+          Boolean(p) &&
+          typeof p === "object" &&
+          (p as { type?: unknown }).type === "tool-call" &&
+          (p as { result?: unknown }).result === undefined,
+      ) as { toolName: string; status?: { type: string } } | undefined;
 
     if (pendingTool) {
       const isRequiresAction = pendingTool.status?.type === "requires-action";
@@ -77,7 +89,10 @@ export function useAssistantActivity(): AssistantActivity | null {
     // Scan for running reasoning
     const runningReasoning = parts.find(
       (p) =>
-        p.type === "reasoning" && (p as { status?: { type: string } }).status?.type === "running",
+        Boolean(p) &&
+        typeof p === "object" &&
+        (p as { type?: unknown }).type === "reasoning" &&
+        (p as { status?: { type?: string } }).status?.type === "running",
     );
     if (runningReasoning) {
       return {
@@ -87,7 +102,13 @@ export function useAssistantActivity(): AssistantActivity | null {
     }
 
     // If text parts exist and no tool is pending: stop rendering
-    const hasText = parts.some((p) => p.type === "text" && (p as { text?: string }).text?.length);
+    const hasText = parts.some(
+      (p) =>
+        Boolean(p) &&
+        typeof p === "object" &&
+        (p as { type?: unknown }).type === "text" &&
+        Boolean((p as { text?: string }).text?.length),
+    );
     if (hasText) {
       return null;
     }
