@@ -44,9 +44,15 @@
  *
  * There is no filesystem sandbox. The app and its child run with the invoking
  * user's privileges, exactly as they do in production. Isolation comes from
- * `OPENCODE_CONFIG` plus per-run `DATA_DIR`/`WORKSPACE_DIR` and XDG roots, and
- * the evidence records the paths so the isolation is inspectable rather than
- * asserted.
+ * `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, per-run `DATA_DIR`/`WORKSPACE_DIR`
+ * and the XDG roots, and the evidence records every one of those paths so the
+ * isolation is inspectable rather than asserted.
+ *
+ * `OPENCODE_CONFIG_DIR` is part of that set because it is NOT derived from
+ * `XDG_CONFIG_HOME` inside `opencode serve`: a host shell that is itself hosted
+ * by OpenCode exports it, and it then wins over the XDG roots, which made the
+ * managed server read the host's global document ahead of the fixture (measured
+ * 2026-10-26; see `g3AppEnvironment`).
  *
  * Usage:
  *   bun run test:opencode-g3
@@ -444,6 +450,71 @@ export function specEnvironment(input: {
   };
 }
 
+/**
+ * The environment the TBAi process (and therefore its managed `opencode serve`
+ * child) runs with.
+ *
+ * ## Why the OpenCode config directory is set explicitly
+ *
+ * MEASURED on this machine, 2026-10-26: the host shell that starts the evidence
+ * run can itself be hosted by OpenCode, whose ambient environment carries
+ * `OPENCODE_CONFIG_DIR` (`D:\Coding\OpenCode\.config\opencode`). That variable
+ * **outranks** `XDG_CONFIG_HOME` inside `opencode serve`: with only `XDG_*`
+ * redirected, `GET /api/config` reported the host's global
+ * `D:\...\.config\opencode\opencode.json` FIRST — ahead of the fixture — and that
+ * file is JSONC, so the API correctly answered `malformed: true`, `editable:
+ * false`. Both G3 cases then failed on an assertion that had nothing to do with
+ * the fixture: the run's isolation claim ("the fixture is the only document
+ * read") was simply false.
+ *
+ * Verified by direct probe (three variants, one real 2.1.4 server each):
+ *
+ * | Redirected | Documents carrying permissions |
+ * |---|---|
+ * | `XDG_*` only | host global (9 rules) **and** fixture (2) → host wins |
+ * | `XDG_*` + `HOME`/`USERPROFILE` | unchanged → not a home-directory lookup |
+ * | `XDG_*` + `OPENCODE_CONFIG_DIR` | fixture only |
+ *
+ * So the run directs OpenCode's own config directory into its temp root. That is
+ * isolation of the harness, not a product behaviour: in production the managed
+ * server is SUPPOSED to read the user's real global config, and refusing to edit
+ * a JSONC file is the documented, tested behaviour of the reader.
+ *
+ * Exported so the unit test can hold this contract: an ambient OpenCode config
+ * directory must not be able to pull a host file into a run.
+ */
+export function g3AppEnvironment(input: {
+  readonly baseEnv: Readonly<Record<string, string | undefined>>;
+  readonly dataDir: string;
+  readonly workspaceDir: string;
+  readonly port: number;
+  readonly applicationLogPath: string;
+  readonly fixturePath: string;
+  readonly openCodeConfigDir: string;
+  readonly xdg: {
+    readonly config: string;
+    readonly data: string;
+    readonly cache: string;
+    readonly state: string;
+  };
+}): Record<string, string | undefined> {
+  return {
+    ...input.baseEnv,
+    DATA_DIR: input.dataDir,
+    WORKSPACE_DIR: input.workspaceDir,
+    PORT: String(input.port),
+    NODE_ENV: "production",
+    TBAI_LOG_FILE: input.applicationLogPath,
+    XDG_CONFIG_HOME: input.xdg.config,
+    XDG_DATA_HOME: input.xdg.data,
+    XDG_CACHE_HOME: input.xdg.cache,
+    XDG_STATE_HOME: input.xdg.state,
+    // Outranks XDG_CONFIG_HOME inside `opencode serve`; see the doc comment.
+    OPENCODE_CONFIG_DIR: input.openCodeConfigDir,
+    OPENCODE_CONFIG: input.fixturePath,
+  };
+}
+
 function runPlaywright(input: {
   readonly caseName: G3CaseName;
   readonly definition: G3CaseDefinition;
@@ -551,7 +622,12 @@ async function runCase(
     cache: path.join(tempRoot, "xdg-cache"),
     state: path.join(tempRoot, "xdg-state"),
   };
-  for (const dir of [dataDir, workspaceDir, ...Object.values(xdgDirs)]) {
+  // `OPENCODE_CONFIG_DIR` is the directory OpenCode resolves its global
+  // `opencode.json` from, and it outranks `XDG_CONFIG_HOME`. Keeping it inside
+  // the temp root is what makes "the fixture is the only config document" true
+  // (see `g3AppEnvironment`).
+  const openCodeConfigDir = path.join(xdgDirs.config, "opencode");
+  for (const dir of [dataDir, workspaceDir, ...Object.values(xdgDirs), openCodeConfigDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -602,19 +678,16 @@ async function runCase(
     appConsoleFd = fs.openSync(consoleLogPath, "a");
     app = spawn(process.execPath, [APP_ENTRY], {
       cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        DATA_DIR: dataDir,
-        WORKSPACE_DIR: workspaceDir,
-        PORT: String(port),
-        NODE_ENV: "production",
-        TBAI_LOG_FILE: applicationLogPath,
-        XDG_CONFIG_HOME: xdgDirs.config,
-        XDG_DATA_HOME: xdgDirs.data,
-        XDG_CACHE_HOME: xdgDirs.cache,
-        XDG_STATE_HOME: xdgDirs.state,
-        OPENCODE_CONFIG: fixturePath,
-      },
+      env: g3AppEnvironment({
+        baseEnv: process.env,
+        dataDir,
+        workspaceDir,
+        port,
+        applicationLogPath,
+        fixturePath,
+        openCodeConfigDir,
+        xdg: xdgDirs,
+      }),
       stdio: ["ignore", appConsoleFd, appConsoleFd],
       windowsHide: true,
     });
@@ -761,6 +834,12 @@ async function runCase(
       xdgDataHome: xdgDirs.data,
       xdgCacheHome: xdgDirs.cache,
       xdgStateHome: xdgDirs.state,
+      /**
+       * OpenCode's own config directory, redirected into the temp root. Without
+       * this an ambient `OPENCODE_CONFIG_DIR` on the host outranks
+       * `XDG_CONFIG_HOME` and the run reads the host's global document.
+       */
+      openCodeConfigDir,
       openCodeConfigEnv: fixturePath,
     },
     app: {

@@ -30,6 +30,7 @@ import {
   type G3AssessmentInput,
   assessG3Evidence,
   fixtureDocument,
+  g3AppEnvironment,
   hashBytes,
   hashFile,
   pathsReferToSameFile,
@@ -40,7 +41,9 @@ import {
 import {
   descendantsOf,
   parsePsProcessTable,
+  parseWindowsCreationDate,
   parseWindowsProcessTable,
+  survivorsOf,
 } from "../../../scripts/lib/process";
 import { openCodePermissionRuleSchema } from "../../../src/services/opencode/configDocument";
 import { openCodeConfigCopy } from "@web/features/opencode/configCopy.ts";
@@ -103,6 +106,43 @@ describe("G3 case definitions", () => {
 });
 
 describe("G3 environment contract", () => {
+  it("redirects OpenCode's own config directory, which outranks the XDG roots", () => {
+    // Measured on a real 2.1.4 server: an ambient `OPENCODE_CONFIG_DIR` wins
+    // over `XDG_CONFIG_HOME`, so with only the XDG roots redirected `/api/config`
+    // listed the HOST's global document first and the run reported that
+    // document's JSONC as malformed instead of the fixture. This is the
+    // regression guard for exactly that: the ambient value must not survive.
+    const environment = g3AppEnvironment({
+      baseEnv: {
+        PATH: "C:\\Windows",
+        OPENCODE_CONFIG_DIR: "C:\\host\\.config\\opencode",
+        OPENCODE_CONFIG: "C:\\host\\managed.json",
+      },
+      dataDir: "C:\\tmp\\g3\\data",
+      workspaceDir: "C:\\tmp\\g3\\workspace",
+      port: 1234,
+      applicationLogPath: "C:\\tmp\\g3\\tbai.log",
+      fixturePath: "C:\\tmp\\g3\\opencode.json",
+      openCodeConfigDir: "C:\\tmp\\g3\\xdg-config\\opencode",
+      xdg: {
+        config: "C:\\tmp\\g3\\xdg-config",
+        data: "C:\\tmp\\g3\\xdg-data",
+        cache: "C:\\tmp\\g3\\xdg-cache",
+        state: "C:\\tmp\\g3\\xdg-state",
+      },
+    });
+    expect(environment.OPENCODE_CONFIG_DIR).toBe("C:\\tmp\\g3\\xdg-config\\opencode");
+    expect(environment.OPENCODE_CONFIG).toBe("C:\\tmp\\g3\\opencode.json");
+    expect(environment.XDG_CONFIG_HOME).toBe("C:\\tmp\\g3\\xdg-config");
+    expect(environment.DATA_DIR).toBe("C:\\tmp\\g3\\data");
+    expect(environment.WORKSPACE_DIR).toBe("C:\\tmp\\g3\\workspace");
+    expect(environment.PORT).toBe("1234");
+    expect(environment.TBAI_LOG_FILE).toBe("C:\\tmp\\g3\\tbai.log");
+    // Unrelated host variables are still inherited: this redirects the config
+    // directory, it does not replace the process environment.
+    expect(environment.PATH).toBe("C:\\Windows");
+  });
+
   it("every G3 variable handed to the spec is read by the spec", () => {
     const environment = specEnvironment({
       caseName: "full",
@@ -193,6 +233,111 @@ describe("process tree", () => {
       { pid: 1, parentPid: 0 },
       { pid: 42, parentPid: 1 },
     ]);
+  });
+
+  it("reads a creation instant from both PowerShell serializations", () => {
+    // Windows PowerShell 5.1 emits the epoch form; PowerShell 7 emits ISO 8601.
+    expect(parseWindowsCreationDate("/Date(1761384561000)/")).toBe(1761384561000);
+    expect(parseWindowsCreationDate("2026-10-25T05:39:21.000Z")).toBe(1792906761000);
+    // Anything else is "cannot judge", never a wrong instant.
+    expect(parseWindowsCreationDate("")).toBeUndefined();
+    expect(parseWindowsCreationDate(null)).toBeUndefined();
+    expect(parseWindowsCreationDate("not a date")).toBeUndefined();
+  });
+
+  it("keeps a creation instant per process, and leaves it out when unreadable", () => {
+    expect(
+      parseWindowsProcessTable(
+        `[{"ProcessId":17836,"ParentProcessId":1,"CreationDate":"/Date(1761384561000)/"},` +
+          `{"ProcessId":18848,"ParentProcessId":17836,"CreationDate":"2026-10-25T05:39:21.000Z"},` +
+          `{"ProcessId":5,"ParentProcessId":0,"CreationDate":null}]`,
+      ),
+    ).toEqual([
+      { pid: 17836, parentPid: 1, createdAtMs: 1761384561000 },
+      { pid: 18848, parentPid: 17836, createdAtMs: 1792906761000 },
+      { pid: 5, parentPid: 0 },
+    ]);
+  });
+
+  it("derives a POSIX creation instant from etimes, and keeps rows without it", () => {
+    const now = 1_800_000_000_000;
+    expect(parsePsProcessTable("  42     1    10\n  43     1\n", now)).toEqual([
+      { pid: 42, parentPid: 1, createdAtMs: now - 10_000 },
+      // No `etimes` column: the parent link survives, and the recycled-id guard
+      // stays inert for the row instead of guessing an instant for it.
+      { pid: 43, parentPid: 1 },
+    ]);
+  });
+
+  it("does not follow an edge from a recycled parent id", () => {
+    // The measured case: pid 17836 was reused by the TBAi app, and pid 18848 -
+    // `MicrosoftEdgeUpdate`, created a DAY earlier - still carries it as
+    // ParentProcessId. Believing that edge failed a run whose server had stopped
+    // cleanly, and would have handed an unrelated process to the kill.
+    const dayMs = 24 * 60 * 60 * 1000;
+    const appCreated = 1_800_000_000_000;
+    const table = [
+      { pid: 17836, parentPid: 1, createdAtMs: appCreated },
+      { pid: 18848, parentPid: 17836, createdAtMs: appCreated - dayMs },
+      // The child the app really did start.
+      { pid: 22008, parentPid: 17836, createdAtMs: appCreated + 2_000 },
+    ];
+    expect(descendantsOf(17836, table)).toEqual([22008]);
+  });
+
+  it("keeps an edge whose times cannot be compared", () => {
+    // "Nothing to judge" is not "impossible": dropping such an edge would leave
+    // a real child running.
+    const table = [
+      { pid: 17836, parentPid: 1 },
+      { pid: 18848, parentPid: 17836, createdAtMs: 1_000 },
+      { pid: 22008, parentPid: 17836 },
+    ];
+    expect(descendantsOf(17836, table).sort((a, b) => a - b)).toEqual([18848, 22008]);
+  });
+
+  it("reports a real surviving child, so the stop can still fail", () => {
+    const stopStartedAtMs = 1_800_000_000_000;
+    const table = [
+      { pid: 17836, parentPid: 1, createdAtMs: stopStartedAtMs - 60_000 },
+      { pid: 22008, parentPid: 17836, createdAtMs: stopStartedAtMs - 59_000 },
+    ];
+    expect(survivorsOf([17836, 22008], table, stopStartedAtMs, () => true)).toEqual([17836, 22008]);
+    // A `ps etimes` instant can drift up to a second past the stop start for a
+    // process that really did survive; the slack keeps that from hiding it.
+    expect(
+      survivorsOf(
+        [22008],
+        [{ pid: 22008, parentPid: 17836, createdAtMs: stopStartedAtMs + 1_500 }],
+        stopStartedAtMs,
+        () => true,
+      ),
+    ).toEqual([22008]);
+  });
+
+  it("does not report a recycled pid as a survivor", () => {
+    const stopStartedAtMs = 1_800_000_000_000;
+    // Alive, but created after the stop began: the recorded process is gone and
+    // this is a different one wearing its pid.
+    expect(
+      survivorsOf(
+        [18848],
+        [{ pid: 18848, parentPid: 17836, createdAtMs: stopStartedAtMs + 5_000 }],
+        stopStartedAtMs,
+        () => true,
+      ),
+    ).toEqual([]);
+    // Alive and absent from a successful snapshot: it started after the
+    // snapshot, so it is not the process that was recorded.
+    expect(survivorsOf([18848], [], stopStartedAtMs, () => true)).toEqual([]);
+  });
+
+  it("falls back to plain liveness when the table could not be fetched", () => {
+    const stopStartedAtMs = 1_800_000_000_000;
+    // With no identity evidence, "alive" is the only answer available; claiming
+    // a confirmed stop on none would be the unsafe direction.
+    expect(survivorsOf([18848], null, stopStartedAtMs, () => true)).toEqual([18848]);
+    expect(survivorsOf([18848], null, stopStartedAtMs, () => false)).toEqual([]);
   });
 });
 
