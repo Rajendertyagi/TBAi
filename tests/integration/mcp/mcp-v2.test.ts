@@ -241,6 +241,17 @@ describe("F3 — unexpected session/transport loss", () => {
       // outcome=started" at fire time - that entry is the marker the delay
       // has elapsed and the connect attempt has begun, which removes the
       // load-dependent flake of waiting for a wall-clock window.
+      //
+      // Transport readiness is not capability readiness. `runConnect()` sets
+      // status "connected" immediately after `client.connect()` resolves and
+      // only then awaits discovery, which talks to a freshly spawned child; on
+      // a loaded runner that gap was 290 ms in CI. Reading `getAiTools()` the
+      // instant status flipped therefore observed an empty tool list while the
+      // reconnect itself was still succeeding: in CI the read happened at
+      // 47.902 s and beat that attempt's own `outcome=ok` line, which is only
+      // emitted after discovery. The loop waits for the tool this case needs,
+      // not for the transport flag.
+      let toolsReady = false;
       for (let i = 0; i < 80; i++) {
         const started = logger
           .getRecentEntries(cutoff)
@@ -252,9 +263,11 @@ describe("F3 — unexpected session/transport loss", () => {
               e.mcpServer === "v2-session-loss",
           );
         const st = mcpManager.getStatuses().find((s) => s.id === id);
-        if (started && st?.status === "connected") break;
+        toolsReady = st?.tools.some((t) => t.name === "echo") ?? false;
+        if (started && st?.status === "connected" && toolsReady) break;
         await new Promise((r) => setTimeout(r, 200));
       }
+      expect(toolsReady).toBe(true);
       const reconnectedConn = (mcpManager as any).connections.get(id);
       expect(reconnectedConn?.status).toBe("connected");
       expect(reconnectedConn?.lastConnectedAt).toBeGreaterThan(initialConnectedAt!);
