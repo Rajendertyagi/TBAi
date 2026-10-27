@@ -279,6 +279,33 @@ describe("probeOpenCodeInfo", () => {
     }
   });
 
+  it("reports not ready for an HTML 200 (the web app, not the API)", async () => {
+    // Measured on a real 2.1.4 server: `/global/health`, `/doc`, `/config` and
+    // `/readyz` all answer "200 text/html" with the SPA shell, even without the
+    // Basic credential. A status-only readiness check would therefore accept a
+    // server that will never answer an API call. Readiness requires the JSON
+    // `/api/info` shape, so an HTML 200 must classify as not_ready.
+    const fixture = startInfoFixture(
+      () =>
+        new Response("<!doctype html><html><title>OpenCode</title></html>", {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    );
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("not_ready");
+    } finally {
+      fixture.stop();
+    }
+  });
+
   it("reports not ready for an unsupported version", async () => {
     const fixture = startInfoFixture(() => Response.json({ version: UNSUPPORTED_VERSION }));
 

@@ -62,6 +62,37 @@ This is the distinction the contract exists to keep honest.
 - the published `docs/server.md` and `docs/cli.md` prose, for the reasons in
   the table above.
 
+### The HTTP surface, probed against a real 2.1.4 server
+
+The 2.1.4 build answers the API under `/api/*` and serves its own **web app**
+everywhere else. Probed on 2026-10-26 in a throwaway config home, with and
+without the Basic credential:
+
+| Request | Result on 2.1.4 |
+|---|---|
+| `GET /api/info` (authenticated) | `200 application/json` — `{version, pid, urls, paths, capabilities}` |
+| `GET /api/info` (no credential) | `401` — `{"_tag":"UnauthorizedError",…}` |
+| `GET /api/config` (authenticated) | `200 application/json` — the config document array |
+| `GET /api/config` (no credential) | `401` |
+| `GET /global/health`, `GET /doc`, `GET /config`, `GET /readyz` | `200 text/html` — the **SPA shell**, not API JSON |
+| `GET /api/server/instance` | `404` |
+
+Two consequences, both load-bearing:
+
+1. **`readinessProbePath` must stay `/api/info`.** The health/docs paths one
+   finds in upstream prose are not the V2 API on this build; `waitForHttpReady`
+   would poll an HTML page forever and fail with a misleading timeout.
+2. **A `200` is not readiness.** `/global/health` returns `200` with `text/html`
+   to an unauthenticated request, so a status-only check would accept the web
+   app. `probeOpenCodeInfo` requires a JSON body carrying an in-range `version`,
+   and an HTML `200` is asserted to classify as `not_ready`
+   (`tests/integration/opencode/serverManager.test.ts`, "reports not ready for
+   an HTML 200").
+
+`/api/server/instance` is TBAi's own route (the desktop shell's identity
+handshake), not an OpenCode route — the probe above confirms OpenCode does not
+serve it.
+
 **The one place the two surfaces differ in a way TBAi must handle.** The 2.1
 client gained a **declared 404** for 39 routes, exactly one of which is a route
 TBAi calls: `GET /api/permission/request`. The client's declaration changed;
