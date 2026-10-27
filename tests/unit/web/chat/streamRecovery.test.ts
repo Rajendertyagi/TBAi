@@ -121,7 +121,10 @@ describe("stream recovery — published state", () => {
       fetchImpl: async () => jsonResponse({ run: BASE }),
     });
     await resolveStreamRecovery("thread_b", "hello", {
-      fetchImpl: async () => jsonResponse({ run: { ...BASE, terminalKind: "completed" } }),
+      fetchImpl: async () =>
+        jsonResponse({
+          run: { ...BASE, terminalKind: "completed", finalizedAgeMs: 20_000 },
+        }),
     });
 
     const { byThread } = useStreamRecoveryStore.getState();
@@ -309,7 +312,14 @@ describe("stream recovery — a finished run is not an incident", () => {
     const { state } = await resolveStreamRecovery("thread_lost", "", {
       fetchImpl: async () =>
         jsonResponse({
-          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: false },
+          run: {
+            ...BASE,
+            status: "done",
+            terminalKind: "completed",
+            endsWithReply: false,
+            // Old enough that the browser-owned write has had its turn.
+            finalizedAgeMs: 20_000,
+          },
         }),
     });
 
@@ -322,7 +332,13 @@ describe("stream recovery — a finished run is not an incident", () => {
     await resolveStreamRecovery("thread_rec", "", {
       fetchImpl: async () =>
         jsonResponse({
-          run: { ...BASE, status: "done", terminalKind: "completed", endsWithReply: false },
+          run: {
+            ...BASE,
+            status: "done",
+            terminalKind: "completed",
+            endsWithReply: false,
+            finalizedAgeMs: 20_000,
+          },
         }),
     });
     expect(useStreamRecoveryStore.getState().byThread.thread_rec).toBeDefined();
@@ -346,6 +362,129 @@ describe("stream recovery — a finished run is not an incident", () => {
         }),
     });
     expect(useStreamRecoveryStore.getState().byThread.thread_old).toBeUndefined();
+  });
+
+  // ── The verdict may not be taken before the write that makes it true ────────
+  // MEASURED 2026-10-26: a read 4 ms after a completed run said "no reply", while
+  // the same conversation answered "reply present" 96 ms later. The reply is
+  // written by the browser, so a fresh finalize must not be read as a loss.
+  it("withholds the verdict while the browser is still writing the reply", async () => {
+    setRecheckDelaysForTests([5]);
+    let calls = 0;
+    const writing = async () => {
+      calls += 1;
+      // The first read lands inside the settlement window with no reply yet;
+      // the re-read sees the reply the browser has by then written.
+      return jsonResponse({
+        run:
+          calls === 1
+            ? {
+                ...BASE,
+                status: "done",
+                terminalKind: "completed",
+                endsWithReply: false,
+                finalizedAgeMs: 4,
+              }
+            : {
+                ...BASE,
+                status: "done",
+                terminalKind: "completed",
+                endsWithReply: true,
+                finalizedAgeMs: 120,
+              },
+      });
+    };
+
+    const { state } = await resolveStreamRecovery("thread_writing", "", { fetchImpl: writing });
+    expect(state.reason).toBe("reply_lost");
+    // Nothing is published: the absence is not evidence yet.
+    expect(useStreamRecoveryStore.getState().byThread.thread_writing).toBeUndefined();
+
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && calls < 2) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toBe(2);
+    // And the healthy re-read leaves the thread clean, which is the whole point:
+    // the strip must never appear over a reply that arrived.
+    expect(useStreamRecoveryStore.getState().byThread.thread_writing).toBeUndefined();
+  });
+
+  it("keeps asking inside the window, and reports the loss once it has passed", async () => {
+    // Withholding must delay the verdict, never suppress it. The ages here follow
+    // a real clock: the first two reads are inside the 5 s window, the third is
+    // past it, and that is when the loss is finally published.
+    setRecheckDelaysForTests([5, 10]);
+    const ages = [4, 100, 20_000];
+    let calls = 0;
+    await resolveStreamRecovery("thread_waits", "", {
+      fetchImpl: async () => {
+        const finalizedAgeMs = ages[Math.min(calls, ages.length - 1)];
+        calls += 1;
+        return jsonResponse({
+          run: {
+            ...BASE,
+            status: "done",
+            terminalKind: "completed",
+            endsWithReply: false,
+            finalizedAgeMs,
+          },
+        });
+      },
+    });
+    expect(useStreamRecoveryStore.getState().byThread.thread_waits).toBeUndefined();
+
+    const deadline = Date.now() + 3_000;
+    while (
+      Date.now() < deadline &&
+      useStreamRecoveryStore.getState().byThread.thread_waits === undefined
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const settled = useStreamRecoveryStore.getState().byThread.thread_waits;
+    expect(settled?.reason).toBe("reply_lost");
+    expect(settled?.canRetry).toBe(false);
+    expect(calls).toBe(3);
+  });
+
+  it("judges the loss immediately once the window has passed", async () => {
+    // The boundary is the window itself; at exactly 5 s the write has had its
+    // turn, so the verdict is published on the first read.
+    await resolveStreamRecovery("thread_boundary", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: {
+            ...BASE,
+            status: "done",
+            terminalKind: "completed",
+            endsWithReply: false,
+            finalizedAgeMs: 5_000,
+          },
+        }),
+    });
+    expect(useStreamRecoveryStore.getState().byThread.thread_boundary?.reason).toBe("reply_lost");
+  });
+
+  it("reports a failed run at once, however recently it finalized", async () => {
+    // Only a `completed` run has a reply being written elsewhere. A failure is
+    // the event the user must see, and waiting would be silence about it.
+    setRecheckDelaysForTests([5]);
+    await resolveStreamRecovery("thread_failed_fresh", "", {
+      fetchImpl: async () =>
+        jsonResponse({
+          run: {
+            ...BASE,
+            status: "error",
+            terminalKind: "failed",
+            endsWithReply: false,
+            finalizedAgeMs: 3,
+          },
+        }),
+    });
+    expect(useStreamRecoveryStore.getState().byThread.thread_failed_fresh?.reason).toBe(
+      "request_failed",
+    );
   });
 });
 

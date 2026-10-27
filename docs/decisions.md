@@ -8155,3 +8155,48 @@ app.
 Lifecycle records now carry `instanceId`; any future reader of the application
 log must join on it rather than on the presence of an event name. That is the
 durable rule, and `docs/logging.md` records it.
+
+## 2026-10-26 - A completed run's reply is judged lost only after its writer has had a turn
+
+**Decision.** `/api/chat/stream-status` can report `endsWithReply: false` for a
+`completed` run that is perfectly healthy, because the reply is written by the
+BROWSER (see `messageService.endsWithReply`). The client therefore withholds that
+verdict while the run is fresh: `resolveStreamRecovery` publishes no notice when
+the terminal kind is `completed` and `finalizedAgeMs` is below
+`REPLY_SETTLEMENT_MS` (5 s, in `web/src/features/chat/state/streamRecovery.ts`),
+and re-takes the verdict on the module's existing bounded re-read chain. Every
+other terminal kind - `failed`, `cancelled`, `interrupted` - is still published
+immediately, because their absent reply IS the event.
+
+**Why.** MEASURED 2026-10-26 on the E2E build: a status read taken **4 ms** after
+finalization returned `endsWithReply: false`; the same conversation returned
+`true` at **96 ms**, with the assistant message already in SQLite. The strip was
+therefore rendered over a healthy thread, and because that strip is inline in the
+composer it changed the layout - `composer-bar.spec.ts` caught it as a
+**291.64 px** Send/Stop displacement, not as the false alarm it was. Waiting does
+not weaken the feature: the same re-read chain that upgrades an unconfirmed crash
+verdict reports a genuinely lost reply once the window has passed, and
+`keeps asking inside the window, and reports the loss once it has passed` pins
+that.
+
+**Alternatives rejected.**
+
+- *Read `endsWithReply` only on a later thread load.* The poll at finalization is
+  legitimate - that is the moment the thread's id becomes remote, which is exactly
+  the "thread loaded" case - and no later load is guaranteed in the session.
+- *Publish, then clear on the next poll.* The strip is real composer UI: showing
+  it for a few hundred milliseconds still corrupts the layout and the reading, and
+  a healthy read schedules no further poll.
+- *Make the server wait for the browser's write before finalizing.* The server does
+  not own that write; ordering the two would need a claim protocol the design
+  deliberately avoids (`history_state` stays `pending` for healthy conversations).
+- *Judge from client state ("this client saw the reply").* The module's contract is
+  that the answer is never guessed locally; `finalizedAgeMs` is server-provided.
+- *Raise or retune an E2E timeout.* The assertion measured real geometry. The
+  failure was a product false alarm, not test timing.
+
+**Consequences.** A lost reply is reported a few seconds later in-session (first
+re-read 1.5 s; published once past the window, ~10 s) instead of instantly, while
+a thread opened much later reports it at once because `finalizedAgeMs` is then
+large. `REPLY_SETTLEMENT_MS` is a named constant with its measurement in the
+docblock; it is not a retry budget and it does not touch the Retry gate.
