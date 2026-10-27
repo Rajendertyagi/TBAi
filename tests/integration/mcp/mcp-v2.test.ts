@@ -187,17 +187,29 @@ describe("F3 — unexpected session/transport loss", () => {
       // 2. Kill the child process directly (simulating unexpected process crash / kill)
       process.kill(pid, "SIGTERM");
 
-      // 3. Wait for the manager to log the error transition.
+      // 3. Wait for the manager to observe the loss.
       //
       // The state machine is: onclose -> status "error" + the connect-error
-      // log + scheduleReconnect(id) (a 5s retry timer, one attempt). The
-      // reconnect handshake can complete FAST, so polling status alone races:
-      // it may see "connected" again before "error" is ever observed. The
-      // structured log entry is emitted synchronously inside onclose, BEFORE
-      // the timer is armed - it is the durable, deterministic marker of the
-      // intended error transition.
+      // log + scheduleReconnect(id) (a 5s retry timer, one attempt). Two things
+      // make a fixed 5s window wrong:
+      //
+      // - 5s IS the retry delay. A 50 x 100 ms window therefore expired at the
+      //   same instant the retry was due, so a close that took longer to be
+      //   detected than the delay left no observation time at all (measured
+      //   6-12 ms locally, but seconds under CI load: the 5,735 ms failure).
+      // - Status is only "error" until the reconnect completes, so polling the
+      //   log and reading status once afterwards is itself a race.
+      //
+      // So both markers are observed inside ONE deadline-bounded loop: the
+      // durable structured log entry (emitted synchronously inside onclose,
+      // before the timer is armed) and the "error" status with its message.
+      // The contract is unchanged - the transition must be observed - only the
+      // window is no longer coupled to the retry delay.
+      const observationDeadlineMs = 30_000;
+      const observationStartedAt = Date.now();
       let errorLogs: ReturnType<typeof logger.getRecentEntries> = [];
-      for (let i = 0; i < 50; i++) {
+      let errorStatus: ReturnType<typeof mcpManager.getStatuses>[number] | undefined;
+      while (Date.now() - observationStartedAt < observationDeadlineMs) {
         errorLogs = logger
           .getRecentEntries(cutoff)
           .filter(
@@ -207,16 +219,20 @@ describe("F3 — unexpected session/transport loss", () => {
               e.outcome === "error" &&
               e.mcpServer === "v2-session-loss",
           );
-        if (errorLogs.length >= 1) break;
-        await new Promise((r) => setTimeout(r, 100));
+        const current = mcpManager.getStatuses().find((s) => s.id === id);
+        if (current?.status === "error") errorStatus = current;
+        if (errorLogs.length >= 1 && errorStatus) break;
+        await new Promise((r) => setTimeout(r, 50));
       }
-      expect(errorLogs.length).toBeGreaterThanOrEqual(1);
+      expect(
+        errorLogs.length,
+        `no connect-error log within ${observationDeadlineMs} ms of the transport loss`,
+      ).toBeGreaterThanOrEqual(1);
       expect(errorLogs[0].message).toContain("Transport closed unexpectedly");
 
       // 3b. The onclose handler sets status "error" synchronously before
       // arming the timer, and "Transport closed unexpectedly" is its literal
       // message. Assert the state transition itself was observed.
-      const errorStatus = mcpManager.getStatuses().find((s) => s.id === id);
       expect(errorStatus?.status).toBe("error");
       expect(errorStatus?.error).toBe("Transport closed unexpectedly");
 
