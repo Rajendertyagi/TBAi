@@ -250,14 +250,18 @@ test("deleting the active conversation falls back safely; deleted id never activ
       timeout: 15000,
     });
 
-    // Scope to the "Recent" section to avoid matching the duplicated row in "Chats".
-    const row = page
+    // The accessible name belongs to the title button INSIDE the row, and the
+    // "…" trigger is not a sibling of that button — it lives in the row's
+    // trailing action div. So resolve the row container from the title, then
+    // take its last button (title, then the more-menu trigger).
+    const titleButton = page
       .locator("#sidebar-section-recent")
       .getByRole("button", { name: /p8-delete-active/i });
-    await expect(row).toBeVisible({ timeout: 10000 });
-    // Hover to reveal the "..." more-button, then open the menu and pick Delete.
+    await expect(titleButton).toBeVisible({ timeout: 10000 });
+    const row = titleButton.locator("xpath=..");
+    // Hover the row to reveal the "..." more-button, then open the menu and pick Delete.
     await row.hover();
-    await row.locator("xpath=following-sibling::button").first().click();
+    await row.getByRole("button").last().click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
 
     // The deleted id must never remain the active route.
