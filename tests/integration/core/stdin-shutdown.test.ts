@@ -77,15 +77,25 @@ describe("desktop stdin shutdown", () => {
     child.stdin.write('{"type":"shutdown"}\n');
     child.stdin.end();
 
+    // The contract being asserted is the one Rust enforces: the SIDECAR exits
+    // within 3,000 ms of the shutdown line (`SHUTDOWN_TIMEOUT` in main.rs). Time
+    // it to `child.exited`. Draining the pipes afterwards is a test-harness step
+    // that can block on the OS reaping buffers long after the process is gone —
+    // measuring across it charged that cost to the shutdown spine, which is what
+    // produced a 3,361 ms CI failure against a locally measured 13-17 ms.
     const code = await child.exited;
+    const exitElapsed = Date.now() - sentAt;
     const output = await readOutput(child);
-    const elapsed = Date.now() - sentAt;
+    const drainedElapsed = Date.now() - sentAt;
 
     expect(code).toBe(0);
     expect(output).toContain("STDIN_SHUTDOWN");
     expect(output).toContain("shutdown_complete");
     // Verified against Rust's 3,000 ms SHUTDOWN_TIMEOUT:
-    expect(elapsed).toBeLessThan(3000);
+    expect(
+      exitElapsed,
+      `child exit took ${exitElapsed} ms (pipe drain added ${drainedElapsed - exitElapsed} ms; Rust kills at 3000 ms)`,
+    ).toBeLessThan(3000);
     fs.rmSync(dir, { recursive: true, force: true });
   }, 40000);
 
@@ -104,13 +114,19 @@ describe("desktop stdin shutdown", () => {
     child.stdin.flush();
 
     const code = await child.exited;
+    const exitElapsed = Date.now() - sentAt;
     const output = await readOutput(child);
-    const elapsed = Date.now() - sentAt;
+    const drainedElapsed = Date.now() - sentAt;
 
     expect(code).toBe(0);
     expect(output).toContain("STDIN_SHUTDOWN");
     expect(output).toContain("shutdown_complete");
-    expect(elapsed).toBeLessThan(3000);
+    // Same contract and same timing rule as the case above: the child's exit,
+    // not the harness's post-exit pipe drain.
+    expect(
+      exitElapsed,
+      `child exit took ${exitElapsed} ms (pipe drain added ${drainedElapsed - exitElapsed} ms; Rust kills at 3000 ms)`,
+    ).toBeLessThan(3000);
     fs.rmSync(dir, { recursive: true, force: true });
   }, 40000);
 
