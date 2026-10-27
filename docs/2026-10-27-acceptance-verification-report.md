@@ -1,23 +1,23 @@
 # Runtime robustness and acceptance re-certification - 2026-10-27
 
-**Branch:** `ci/tauri-e2e-verify` **Code HEAD:** `7e79b30696d45efb16fe6d1942925a9b0e92a7a3` (CI run 40480496977), plus `3ce8d8c`, the F3 readiness fix in section 2 (D3b), committed after that run **Date:** 2026-10-27
+**Branch:** `ci/tauri-e2e-verify` **Code HEAD:** `8bbe5a6d89c7f07e9f0038c649529c298f7e7b3e` (CI run 40491928882) **Date:** 2026-10-27
 
-**Verdict: HOLD, not PASS.** The previous HOLD had two gaps: the Rust half of the identity handshake had never been compiled, and no CI run described the tree. Both are now closed - `cargo test`, the packaged smoke test, G1/G2 and the two previously-red E2E specs all pass in CI at `7e79b30`. The remaining gap is narrower and concrete: that same run's `verify` job is red on a **second** defect in the F3 case, which is root-caused and fixed in the commit after it (section 2, D3b), so no CI run yet exists that describes the final bytes. Details in sections 7-8.
+**Verdict: PASS at `8bbe5a6`, for the scope stated in section 8.** CI run [40491928882](https://github.com/Rajendertyagi/TBAi/actions/runs/40491928882) at that SHA is green on all five required jobs: `verify`, `tauri`, `e2e`, `opencode-g3`, `opencode-runtime`. Every blocker from the independent review is root-caused, fixed, and covered by a test that fails without the fix; the two gaps the earlier HOLD named - the uncompiled Rust handshake and the absence of any CI run describing the tree - are both closed with artifacts, not assertions. What PASS does **not** mean is listed in section 8: three E2E spec files still fail locally and identically at baseline `5f85e53`, the G5 comparison artifact is at `dd51334`, and Semgrep is out of scope. This verdict edit itself changes no source, test, or configuration file.
 
 ---
 
 ## 1. State under test
 
-`git rev-parse HEAD` = `7e79b30696d45efb16fe6d1942925a9b0e92a7a3` for the CI run cited throughout; the F3 readiness fix (section 2, D3b) is the commit immediately after it, `3ce8d8c`, and the HEAD that section 3 measures locally.
+`git rev-parse HEAD` = `8bbe5a6d89c7f07e9f0038c649529c298f7e7b3e`, the SHA the certification run tested; the F3 readiness fix (section 2, D3b) is `3ce8d8c`.
 
-The work of this session is **committed and pushed** as 13 commits, one concern each, `9120246..3ce8d8c`:
+The work of this session is **committed and pushed** as 14 commits, one concern each, `9120246..8bbe5a6`:
 
 | | Count | Detail |
 |---|---|---|
-| Files in range | 29 | 1573 insertions, 114 deletions |
-| Commits | 13 | pushed to `origin/ci/tauri-e2e-verify`, no force-push |
+| Files in range | 29 | 1644 insertions, 115 deletions (includes this document) |
+| Commits | 14 | pushed to `origin/ci/tauri-e2e-verify`, no force-push |
 | Branch switches / resets / stashes / cleans | 0 | the only history rewrite was three local commits rewritten before the push, to strip a BOM PowerShell had added to their subjects |
-| After the first push | 1 more commit | `3ce8d8c`, `tests/integration/mcp/mcp-v2.test.ts` (D3b) |
+| After the first push | 2 more commits | `3ce8d8c` (the D3b test fix), `8bbe5a6` (this report) |
 
 Consequence: CI run 40480496977 describes everything except the D3b fix. Section 7 reads that run job by job; section 8 says exactly which criterion remains open because of it.
 
@@ -95,7 +95,7 @@ Packaged startup, port discovery, sidecar ownership, crash recovery and the shut
 
 ## 3. Verification actually run (this machine)
 
-All commands from the repository root at the pushed HEAD, `3ce8d8c`.
+All commands from the repository root at code revision `3ce8d8c`; the certified tree `8bbe5a6` differs from it only by this document.
 
 | Command | Exit | Result | Repeats | Elapsed |
 |---|---|---|---|---|
@@ -139,7 +139,7 @@ G3's two cases were also re-run against the real binary with cleanup verified by
 
 ## 5. G5 - inventory and comparison at HEAD
 
-Artifact `g5-e2e-full-chromium-headless` (`12636579995`) from run `40289523595` at `dd5133437f4497e8ebac993f008a9e40403e18c0`. Numbers below are read from `comparison.json` and `*.aggregate.json`, not from a summary. The comparison is at the revision that produced the artifact, **not** at `7e79b30` (section 8 lists that as the remaining G5 gap).
+Artifact `g5-e2e-full-chromium-headless` (`12636579995`) from run `40289523595` at `dd5133437f4497e8ebac993f008a9e40403e18c0`. Numbers below are read from `comparison.json` and `*.aggregate.json`, not from a summary. The comparison is at the revision that produced the artifact, **not** at `8bbe5a6` (section 10, residual item 1).
 
 | | Baseline `2c444cc` | Final `7bd4975` |
 |---|---|---|
@@ -153,7 +153,7 @@ Artifact `g5-e2e-full-chromium-headless` (`12636579995`) from run `40289523595` 
 
 `ok: true` with `baselineOnlyFailures: []`, `finalOnlyFailures: []`, `removedWhileFailing: []`, `testsRemoved: []`, `settingsDivergence: []`.
 
-**This is "no regression in the specified comparison", not "E2E passes".** Eight cases fail at both revisions; three of them (`composer-bar`, `p2-live-runtime` A/D/E, `phase-8` delete-active) are fixed in this tree, and two of those spec files are now green in CI (`e2e` at `7e79b30`). One case in that list, `virtualizer/scroll-anchoring-regressions` R2, did **not** fail in today's local full run; it is untouched by this work and its status is unchanged, not improved.
+**This is "no regression in the specified comparison", not "E2E passes".** Eight cases fail at both revisions; three of them (`composer-bar`, `p2-live-runtime` A/D/E, `phase-8` delete-active) are fixed in this tree, and the two spec files that CI runs are green at both `7e79b30` and `8bbe5a6`. One case in that list, `virtualizer/scroll-anchoring-regressions` R2, did **not** fail in today's local full run; it is untouched by this work and its status is unchanged, not improved.
 
 ---
 
@@ -176,9 +176,20 @@ Artifact `g5-e2e-full-chromium-headless` (`12636579995`) from run `40289523595` 
 
 ---
 
-## 7. CI evidence at `7e79b30`
+## 7. CI evidence at `8bbe5a6`
 
-Run [40480496977](https://github.com/Rajendertyagi/TBAi/actions/runs/40480496977) is the first run that contains every fix in this session, and the first that compiled the Rust handshake:
+Run [40491928882](https://github.com/Rajendertyagi/TBAi/actions/runs/40491928882) at `8bbe5a6` is the certification run:
+
+| Job | Result | What it runs |
+|---|---|---|
+| `verify` | **pass** | typecheck, lint, format, test-location policy, build, the full Bun suite (including the shutdown, startup-rollback and lifecycle integration steps), DOM contract, quarantine guard |
+| `tauri` | **pass** | `cargo check`, **`cargo test`** (the six handshake tests), `tauri build`, packaged smoke test, G1 + G2 observations |
+| `e2e` | **pass** | 7/7 spec files, including `p2-live-runtime.spec.ts` and `phase-8-tabs-navigation.spec.ts` |
+| `opencode-g3` | **pass** | both override cases against the pinned real binary |
+| `opencode-runtime` | **pass** | the OpenCode runtime gate |
+| `e2e-full`, `e2e-big-pickle` | skipped | manual-dispatch only (`workflow_dispatch` inputs), not withheld by a failure |
+
+Run [40480496977](https://github.com/Rajendertyagi/TBAi/actions/runs/40480496977) at `7e79b30` is the run that **exposed** the second F3 defect, and its evidence is kept below because it is what made D3b visible. That run is the first one that contains every fix in this session, and the first that compiled the Rust handshake:
 
 | Job | Result | Evidence it carries |
 |---|---|---|
@@ -216,17 +227,23 @@ For contrast, the previous run [40360945274](https://github.com/Rajendertyagi/TB
 | `2,000 ms` config-read failure explained and fixed at the right layer | passed | origin proven by reading the call path; 13 pass x5 |
 | OpenCode contract correct for the pinned range | passed | measured 2.1.4 table + 34 pass, real binary |
 | D1, D2, D3 root-caused and fixed | passed | measurement + 5x each, then three full `verify` |
-| D3b root-caused and fixed | **passed locally, not yet in CI** | 8/10 -> 0/10 under 2x load; full file 3/3 -> 0/2 loaded and 2/2 clean; the failing run's generation stacks prove the abandonment was the case's own `finally` |
+| D3b root-caused and fixed | passed | 8/10 -> 0/10 under 2x load; full file 3/3 -> 0/2 loaded and 2/2 clean; the failing run's generation stacks prove the abandonment was the case's own `finally`; `verify` green at `8bbe5a6` with this case in it |
 | Full `verify` at the final tree | passed | 5041 pass / 66 skip / 0 fail (5107 tests, 378 files) three times; DOM 577 pass; quarantine OK |
 | Ordinary E2E suite | **failed on 3 pre-existing spec files** | identical at baseline `5f85e53`; not fixed here |
-| G3 both cases against the real binary | passed | CI job green at `7e79b30` and 2 local runs; artifact now records `method: taskkill /F per recorded pid`, no survivors |
-| G5 comparison | passed as specified, **at `dd51334` not `7e79b30`** | identical failure sets and digest at both revisions of that comparison |
-| `e2e` job at `7e79b30` | **passed** | 7/7 spec files, including the two red at `9120246` |
-| CI green on the final bytes | **not yet** | `verify` red at `7e79b30` on D3b; the fix is the commit after it, so a run at the new SHA is still required |
+| G3 both cases against the real binary | passed | CI job green at `7e79b30` and `8bbe5a6`, plus 2 local runs; artifact records `method: taskkill /F per recorded pid`, no survivors |
+| G5 comparison | passed as specified, **at `dd51334` not `8bbe5a6`** | identical failure sets and digest at both revisions of that comparison |
+| `e2e` job at `8bbe5a6` | **passed** | 7/7 spec files, including the two red at `9120246` |
+| CI green on the final bytes | **passed** | run 40491928882 at `8bbe5a6`: all five required jobs green; `verify` ran the whole chain (steps 12-16), `e2e` 7/7 |
 
-### The one gap that remains
+### Scope of this PASS
 
-The `verify` failure at `7e79b30` was a real defect in the F3 case (section 2, D3b), now fixed. But CI has not yet run those bytes, so this document cannot claim a green board. The earlier gap - "the Rust half has never been compiled" - is closed: `cargo test` ran in the `tauri` job and passed, and the G2 artifact shows the identity it observed was the one this launch minted.
+Three things are explicitly outside it, and none of them is a regression introduced here:
+
+1. **Three spec files fail locally on every run** (`tool-body-budget` x2, `phase-ua-d` D1, `context-menu-spellcheck`). They fail identically at baseline `5f85e53`; the CI `e2e` job does not run them, so CI cannot see them either way. Not fixed here, not de-scoped silently.
+2. **The G5 comparison artifact is at `dd51334`**, not `8bbe5a6`. It showed no divergence (`ok: true`, identical digests) between its own baseline and final revisions; it is not a statement about today's bytes. Re-issuing it at `8bbe5a6` is the first residual item in section 10.
+3. **Semgrep is out of scope** per the 2026-10-26 ADR. No claim is made about it.
+
+The two gaps the earlier HOLD named are closed by artifacts: `cargo test` ran in the `tauri` job and passed, and the G2 artifact records `devInstanceIdMatched: true` with the identity it observed equal to the one this launch minted.
 
 ---
 
@@ -244,9 +261,11 @@ The `verify` failure at `7e79b30` was a real defect in the F3 case (section 2, D
 
 ---
 
-## 10. What is needed to close HOLD
+## 10. Residual items, carried forward (not blockers)
 
-1. Push the D3b fix, then a CI run at that SHA in which `tauri`, `e2e`, `opencode-g3`, `opencode-runtime` and `verify` are all green. `verify` must actually run `tests/integration/mcp/mcp-v2.test.ts` - it does, that is how it failed at `7e79b30`.
-2. Re-issue the G5 comparison at that SHA, so the comparison and the three now-green specs describe the final bytes rather than `dd51334`.
+1. Re-issue the G5 comparison at `8bbe5a6` so its artifact describes the certified bytes rather than `dd51334`. Today's claim is only "no regression in that comparison".
+2. The three pre-existing E2E spec files stay red until someone fixes them; they are outside this session's scope and identical at the baseline.
+3. The bounded MCP discovery window in section 9 needs a capability-ready signal the timer-driven reconnect can await, if a chat turn losing MCP tools for one turn is judged worth closing.
+4. Rotate the GitHub token pasted into this session's chat.
 
-Until both exist, this document claims: local gates green three times at the final tree, CI green on four of five jobs at `7e79b30`, one CI job red on a defect that is root-caused and fixed but not yet certified by CI. That is a HOLD, and the specific reason is on the record.
+The certification itself does not depend on any of these. What it does depend on - every required CI job green at the pushed SHA, with the Rust tests and the two repaired E2E specs actually executed - is recorded in sections 7 and 8.
