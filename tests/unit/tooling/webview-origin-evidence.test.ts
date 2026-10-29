@@ -33,14 +33,20 @@ import {
 } from "../../../scripts/lib/webview-observation";
 import {
   EXPECTED_PACKAGED_ORIGIN,
+  type PackagedNavigation,
   type PackagedOriginInput,
+  type PageReadResult,
   assessPackagedOrigin,
+  awaitsNavigation,
   checkDriverBinary,
   parseExecuteResponse,
   parseIntegrityLevel,
   parseSessionResponse,
+  parseWindowHandles,
   readOriginValue,
   readProbeValue,
+  unloadedDocumentFailure,
+  waitForNavigation,
 } from "../../../scripts/verify-packaged-webview-origin";
 import {
   type DevOriginInput,
@@ -69,6 +75,22 @@ function logLine(entry: Record<string, unknown>): string {
   });
 }
 
+/**
+ * How a passing run reached the document: one read, no wait. Reachable only
+ * because the page had already left `about:blank` when it was asked.
+ */
+function navigatedOnce(overrides: Partial<PackagedNavigation> = {}): PackagedNavigation {
+  return {
+    attempts: 1,
+    elapsedMs: 12,
+    timeoutMs: 60_000,
+    timedOut: false,
+    windowHandles: null,
+    windowHandlesError: null,
+    ...overrides,
+  };
+}
+
 function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOriginInput {
   return {
     appPath: "C:\\portable\\TBAi.exe",
@@ -76,7 +98,12 @@ function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOr
     driver: { spawnError: null, exitCode: null },
     session: { id: "session-1", error: null },
     port: { value: 41234, error: null },
-    script: { origin: EXPECTED_PACKAGED_ORIGIN, error: null },
+    script: {
+      origin: EXPECTED_PACKAGED_ORIGIN,
+      href: "http://app.localhost/",
+      error: null,
+      navigation: navigatedOnce(),
+    },
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
     appInstanceId: "instance-a",
     ...overrides,
@@ -340,7 +367,14 @@ describe("G1 packaged origin: the failure matrix", () => {
 
   it("stops at executeScript when the WebView is not on the packaged origin", () => {
     const assessed = assessPackagedOrigin(
-      packagedInput({ script: { origin: "http://localhost:3000", error: null } }),
+      packagedInput({
+        script: {
+          origin: "http://localhost:3000",
+          href: "http://localhost:3000/",
+          error: null,
+          navigation: navigatedOnce(),
+        },
+      }),
     );
     expect(assessed.stage).toBe("executeScript");
     expect(assessed.failures.join(" ")).toContain("expected http://app.localhost");
@@ -381,12 +415,145 @@ describe("G1 packaged origin: the failure matrix", () => {
       packagedInput({
         session: { id: null, error: "the driver refused the session" },
         port: { value: null, error: null },
-        script: { origin: null, error: null },
+        script: { origin: null, href: null, error: null, navigation: navigatedOnce() },
       }),
     );
     expect(assessed.stage).toBe("session-create");
     // Without a session, "no port" and "no origin" were never observed.
     expect(assessed.failures).toEqual(["the driver refused the session"]);
+  });
+});
+
+describe("G1 packaged origin: the wait for the document", () => {
+  const blank = { origin: "null", href: "about:blank", title: "" };
+  const loaded = { origin: EXPECTED_PACKAGED_ORIGIN, href: "http://app.localhost/", title: "TBAi" };
+
+  function readerOf(reads: readonly unknown[]): () => Promise<PageReadResult> {
+    let index = 0;
+    return async () => {
+      const next = reads[Math.min(index++, reads.length - 1)];
+      if (typeof next === "string") return { read: null, error: next };
+      return { read: readOriginValue(next), error: null };
+    };
+  }
+
+  it("knows which documents have not loaded", () => {
+    expect(awaitsNavigation("about:blank")).toBe(true);
+    expect(awaitsNavigation("about:blank#x")).toBe(true);
+    expect(awaitsNavigation("")).toBe(true);
+    expect(awaitsNavigation(null)).toBe(true);
+    expect(awaitsNavigation("http://app.localhost/")).toBe(false);
+    expect(awaitsNavigation("http://localhost:3000/")).toBe(false);
+  });
+
+  it("re-reads a blank document instead of accepting it as the origin", async () => {
+    // The measured failing sequence (run 40871453744): the read returned
+    // about:blank, and the app navigated a moment later. One read captured the
+    // race; the wait must not.
+    const waited = await waitForNavigation(readerOf([blank, blank, loaded]), {
+      timeoutMs: 5_000,
+      pollMs: 1,
+    });
+    expect(waited.navigation.attempts).toBe(3);
+    expect(waited.navigation.timedOut).toBe(false);
+    expect(waited.read?.href).toBe("http://app.localhost/");
+
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        script: {
+          origin: waited.read?.origin ?? null,
+          href: waited.read?.href ?? null,
+          error: waited.error,
+          navigation: waited.navigation,
+        },
+      }),
+    );
+    expect(assessed.ok).toBe(true);
+  });
+
+  it("would have failed on the first blank read alone, which is why the wait exists", () => {
+    const single = assessPackagedOrigin(
+      packagedInput({
+        script: {
+          origin: blank.origin,
+          href: blank.href,
+          error: null,
+          navigation: navigatedOnce(),
+        },
+        probe: { status: null, body: null, error: null },
+      }),
+    );
+    expect(single.ok).toBe(false);
+    expect(single.stage).toBe("executeScript");
+    // Not reported as a wrong origin: "null" is what a blank document has.
+    expect(single.failures.join(" ")).not.toContain("expected http://app.localhost");
+  });
+
+  it("fails with the wait it made when the document never loads", async () => {
+    const waited = await waitForNavigation(readerOf([blank]), { timeoutMs: 40, pollMs: 5 });
+    expect(waited.navigation.timedOut).toBe(true);
+    expect(waited.navigation.attempts).toBeGreaterThan(1);
+
+    const message = unloadedDocumentFailure(waited.read?.href ?? null, waited.navigation);
+    expect(message).toContain("still on about:blank");
+    expect(message).toContain("40 ms");
+    expect(message).toContain(`${waited.navigation.attempts} reads`);
+
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        script: {
+          origin: waited.read?.origin ?? null,
+          href: waited.read?.href ?? null,
+          error: waited.error,
+          navigation: { ...waited.navigation, windowHandles: ["handle-1"] },
+        },
+        probe: { status: null, body: null, error: null },
+      }),
+    );
+    expect(assessed.stage).toBe("executeScript");
+    expect(assessed.failures.join(" ")).toContain("still on about:blank");
+    // The handle count is what rules out a session attached to another window.
+    expect(assessed.failures.join(" ")).toContain("1 window handle(s)");
+  });
+
+  it("stops waiting on a real origin, wrong or not, instead of burning the deadline", async () => {
+    const wrong = await waitForNavigation(
+      readerOf([
+        { origin: "http://localhost:3000", href: "http://localhost:3000/", title: "TBAi" },
+      ]),
+      { timeoutMs: 5_000, pollMs: 1 },
+    );
+    expect(wrong.navigation.attempts).toBe(1);
+    expect(wrong.navigation.timedOut).toBe(false);
+  });
+
+  it("stops on a read that failed instead of treating it as a slow load", async () => {
+    const failed = await waitForNavigation(
+      readerOf([blank, "the driver rejected the script: no such window"]),
+      { timeoutMs: 5_000, pollMs: 1 },
+    );
+    expect(failed.navigation.attempts).toBe(2);
+    expect(failed.navigation.timedOut).toBe(false);
+    expect(failed.error).toContain("no such window");
+
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        script: { origin: null, href: null, error: failed.error, navigation: failed.navigation },
+        probe: { status: null, body: null, error: null },
+      }),
+    );
+    expect(assessed.stage).toBe("executeScript");
+    expect(assessed.failures).toEqual([failed.error]);
+  });
+
+  it("reads the window-handle list the driver reports", () => {
+    expect(parseWindowHandles(JSON.stringify({ value: ["h1", "h2"] }))).toEqual({
+      handles: ["h1", "h2"],
+      error: null,
+    });
+    expect(parseWindowHandles(JSON.stringify({ value: [] }))).toEqual({ handles: [], error: null });
+    expect(parseWindowHandles(JSON.stringify({ value: "h1" })).error).toContain("no window list");
+    expect(parseWindowHandles("<html>nope</html>").error).toContain("no window list");
   });
 });
 

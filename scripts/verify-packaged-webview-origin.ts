@@ -23,9 +23,23 @@
  *
  *   1. `session-create` — the driver accepts a session for the packaged exe;
  *   2. `port-wait`     — the app's sidecar writes `<DATA_DIR>/port`;
- *   3. `executeScript` — `window.location.origin` in the page;
+ *   3. `executeScript` — `window.location.origin` in the page, read only once the
+ *                        document has left `about:blank` (see below);
  *   4. `fetch`         — `fetch()` of `/api/server/instance` executed INSIDE that
  *                        origin, recording status and body.
+ *
+ * ## Why step 3 waits
+ *
+ * WebView2 exposes the page target before Tauri commits the navigation to
+ * `app://localhost`, and the port mirror is written by the Bun sidecar as it
+ * boots — measured 2026-10-29: run 40871453744 read `href: about:blank` and
+ * `origin: "null"` while the same app answered `/api/server/instance` on
+ * `127.0.0.1`. A single read straight after `port-wait` is therefore a race
+ * against the document load, not an observation of the app. Step 3 polls until
+ * the document has a real URL, bounded by `NAVIGATION_TIMEOUT_MS`, and records
+ * how many reads it took. The acceptance test is unchanged: the origin that is
+ * assessed is still whatever the WebView reports, and it must equal
+ * `EXPECTED_PACKAGED_ORIGIN` exactly.
  *
  * The direct `127.0.0.1` probe is recorded as corroboration: when both reads
  * succeed, their instance IDs must agree, because a mismatch would mean the page
@@ -83,11 +97,42 @@ export const EXPECTED_PACKAGED_ORIGIN = "http://app.localhost";
 const DRIVER_READY_TIMEOUT_MS = 60_000;
 const PORT_MIRROR_TIMEOUT_MS = 120_000;
 const CDP_STEP_TIMEOUT_MS = 30_000;
+/**
+ * How long the WebView is given to leave `about:blank` once the sidecar has
+ * written its port. The port file is a backend fact, not a page fact; the
+ * document load follows it. Cold WebView2 start on a loaded runner is seconds,
+ * so this is headroom, not an expected wait.
+ */
+const NAVIGATION_TIMEOUT_MS = 60_000;
 const POLL_MS = 250;
 const LOG_TAIL_CHARS = 8_000;
 
 export const PACKAGED_STAGES = ["session-create", "port-wait", "executeScript", "fetch"] as const;
 export type PackagedStage = (typeof PACKAGED_STAGES)[number];
+
+/** `{ origin, href, title }` as read from the page, with nulls for anything missing. */
+export interface PageRead {
+  readonly origin: string | null;
+  readonly href: string | null;
+  readonly title: string | null;
+}
+
+/**
+ * What the wait for the document observed. Recorded so a red run distinguishes
+ * "the app never navigated" from "the driver was reading a page that had not
+ * loaded yet" — and, via `windowHandles`, from "the session was attached
+ * somewhere else".
+ */
+export interface PackagedNavigation {
+  readonly attempts: number;
+  readonly elapsedMs: number;
+  readonly timeoutMs: number;
+  /** True when the deadline ran out with the document still blank. */
+  readonly timedOut: boolean;
+  /** Window handles the driver reported while the document was still blank. */
+  readonly windowHandles: readonly string[] | null;
+  readonly windowHandlesError: string | null;
+}
 
 export interface PackagedOriginInput {
   readonly appPath: string;
@@ -99,7 +144,12 @@ export interface PackagedOriginInput {
   };
   readonly session: { readonly id: string | null; readonly error: string | null };
   readonly port: { readonly value: number | null; readonly error: string | null };
-  readonly script: { readonly origin: string | null; readonly error: string | null };
+  readonly script: {
+    readonly origin: string | null;
+    readonly href: string | null;
+    readonly error: string | null;
+    readonly navigation: PackagedNavigation;
+  };
   readonly probe: {
     readonly status: number | null;
     readonly body: string | null;
@@ -130,6 +180,54 @@ function instanceIdOf(text: string | null): string | null {
   const record = parseJsonObject(text);
   const value = record?.instanceId;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * True while the WebView is still showing the driver's blank placeholder rather
+ * than a document the app loaded.
+ *
+ * WebView2 exposes the page target before Tauri commits the navigation to
+ * `app://localhost`; the sidecar, meanwhile, writes its port as it boots. A read
+ * taken between those two moments sees `href: "about:blank"` and the opaque
+ * `origin: "null"` — a document that has not loaded, not an origin the app
+ * chose. Measured in run 40871453744.
+ */
+export function awaitsNavigation(href: string | null): boolean {
+  if (href === null) return true;
+  const trimmed = href.trim();
+  return trimmed.length === 0 || /^about:blank(?:[#?].*)?$/i.test(trimmed);
+}
+
+function describeWindowHandles(navigation: PackagedNavigation): string {
+  if (navigation.windowHandles !== null) {
+    const list =
+      navigation.windowHandles.length === 0 ? "none" : navigation.windowHandles.join(", ");
+    return `the driver reported ${navigation.windowHandles.length} window handle(s): ${list}`;
+  }
+  return `window handles could not be read${
+    navigation.windowHandlesError === null ? "" : `: ${navigation.windowHandlesError}`
+  }`;
+}
+
+/**
+ * Why a document that never loaded is not an origin, with the wait behind it.
+ *
+ * Names the window-handle count as well: if the session were attached to the
+ * wrong WebView, the driver would report more than the one configured window,
+ * and this line is where that would be visible.
+ */
+export function unloadedDocumentFailure(
+  href: string | null,
+  navigation: PackagedNavigation,
+): string {
+  const waited = navigation.timedOut
+    ? `for ${navigation.timeoutMs} ms (${navigation.attempts} reads)`
+    : `after ${navigation.attempts} read(s) over ${navigation.elapsedMs} ms`;
+  const state =
+    href === null
+      ? "returned no document URL"
+      : "was still on about:blank, so no app origin was observed";
+  return `the WebView ${state} ${waited}; ${describeWindowHandles(navigation)}`;
 }
 
 /**
@@ -166,6 +264,11 @@ export function assessPackagedOrigin(input: PackagedOriginInput): PackagedAssess
   const scriptFailures: string[] = [];
   if (input.script.error !== null) {
     scriptFailures.push(input.script.error);
+  } else if (awaitsNavigation(input.script.href)) {
+    // Before the origin checks: a blank document's `origin` is the string
+    // "null", and reporting that as a wrong origin would blame the app for a
+    // read that happened too early.
+    scriptFailures.push(unloadedDocumentFailure(input.script.href, input.script.navigation));
   } else if (input.script.origin === null) {
     scriptFailures.push("the WebView reported no origin");
   } else if (input.script.origin !== EXPECTED_PACKAGED_ORIGIN) {
@@ -268,11 +371,7 @@ export function parseExecuteResponse(text: string | null): {
 }
 
 /** `{ origin, href, title }` from the origin script, with nulls for anything missing. */
-export function readOriginValue(value: unknown): {
-  origin: string | null;
-  href: string | null;
-  title: string | null;
-} {
+export function readOriginValue(value: unknown): PageRead {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return { origin: null, href: null, title: null };
   }
@@ -281,6 +380,24 @@ export function readOriginValue(value: unknown): {
     origin: typeof record.origin === "string" ? record.origin : null,
     href: typeof record.href === "string" ? record.href : null,
     title: typeof record.title === "string" ? record.title : null,
+  };
+}
+
+/** The window handles from `GET /session/{id}/window/handles`. */
+export function parseWindowHandles(text: string | null): {
+  handles: string[] | null;
+  error: string | null;
+} {
+  const value = parseJsonObject(text)?.value;
+  if (!Array.isArray(value)) {
+    return {
+      handles: null,
+      error: `the driver returned no window list: ${JSON.stringify(tailText(text ?? "", 300))}`,
+    };
+  }
+  return {
+    handles: value.filter((handle): handle is string => typeof handle === "string"),
+    error: null,
   };
 }
 
@@ -302,6 +419,111 @@ export function readProbeValue(value: unknown): {
     body: typeof record.body === "string" ? record.body : null,
     error: null,
   };
+}
+
+/**
+ * One read of the page, or why it could not be taken.
+ *
+ * Deliberately not a discriminated union: the backend test project compiles
+ * with `strictNullChecks: false` (`tests/tsconfig.backend.json` states why), and
+ * without it TypeScript does not narrow a union, so `result.read` would be
+ * `PageRead | null` in one program and `PageRead` in the other.
+ */
+export type PageReadResult = {
+  readonly read: PageRead | null;
+  readonly error: string | null;
+};
+
+/**
+ * Reads the page until it has left `about:blank`, or the deadline passes.
+ *
+ * A read that did not happen stops the loop immediately: a driver or script
+ * failure is not a symptom of a document still loading, and continuing would
+ * only delay a precise diagnosis. A real — if wrong — origin also stops it: that
+ * is an answer, and rejecting it is the assessment's job, not the wait's.
+ */
+export async function waitForNavigation(
+  readPage: () => Promise<PageReadResult>,
+  options: { readonly timeoutMs?: number; readonly pollMs?: number } = {},
+): Promise<{
+  readonly read: PageRead | null;
+  readonly error: string | null;
+  readonly navigation: PackagedNavigation;
+}> {
+  const timeoutMs = options.timeoutMs ?? NAVIGATION_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? POLL_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let attempts = 0;
+  let read: PageRead | null = null;
+  let error: string | null = null;
+  let timedOut = false;
+  for (;;) {
+    attempts += 1;
+    const result = await readPage();
+    if (result.read === null) {
+      error = result.error ?? "the WebView read returned no value";
+      break;
+    }
+    read = result.read;
+    if (!awaitsNavigation(read.href)) break;
+    if (Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
+    await sleep(pollMs);
+  }
+  return {
+    read,
+    error,
+    navigation: {
+      attempts,
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs,
+      timedOut,
+      windowHandles: null,
+      windowHandlesError: null,
+    },
+  };
+}
+
+const ORIGIN_SCRIPT =
+  "return { origin: window.location.origin, href: window.location.href, title: document.title };";
+
+async function readPageFromDriver(
+  driverBaseUrl: string,
+  sessionId: string,
+): Promise<PageReadResult> {
+  const call = await httpJson(`${driverBaseUrl}/session/${sessionId}/execute/sync`, {
+    method: "POST",
+    body: { script: ORIGIN_SCRIPT, args: [] },
+    timeoutMs: CDP_STEP_TIMEOUT_MS,
+  });
+  if (call.status === null) {
+    return {
+      read: null,
+      error: `could not execute in the WebView: ${call.error ?? "unknown error"}`,
+    };
+  }
+  const executed = parseExecuteResponse(call.text);
+  if (executed.error !== null) return { read: null, error: executed.error };
+  return { read: readOriginValue(executed.value), error: null };
+}
+
+async function readWindowHandles(
+  driverBaseUrl: string,
+  sessionId: string,
+): Promise<{ handles: string[] | null; error: string | null }> {
+  const call = await httpJson(`${driverBaseUrl}/session/${sessionId}/window/handles`, {
+    timeoutMs: CDP_STEP_TIMEOUT_MS,
+  });
+  if (call.status === null) {
+    return {
+      handles: null,
+      error: `the window-handle request failed: ${call.error ?? "unknown error"}`,
+    };
+  }
+  return parseWindowHandles(call.text);
 }
 
 interface PackagedOptions {
@@ -525,6 +747,14 @@ async function main(): Promise<number> {
     title: null,
     error: null,
   };
+  const navigation = {
+    attempts: 0,
+    elapsedMs: 0,
+    timeoutMs: NAVIGATION_TIMEOUT_MS,
+    timedOut: false,
+    windowHandles: null as string[] | null,
+    windowHandlesError: null as string | null,
+  };
   const probe: { status: number | null; body: string | null; error: string | null } = {
     status: null,
     body: null,
@@ -611,54 +841,54 @@ async function main(): Promise<number> {
             });
             appInstanceId = instanceIdOf(direct.text);
 
-            const originCall = await httpJson(
-              `http://127.0.0.1:${driverPort}/session/${session.id}/execute/sync`,
-              {
-                method: "POST",
-                body: {
-                  script:
-                    "return { origin: window.location.origin, href: window.location.href, title: document.title };",
-                  args: [],
-                },
-                timeoutMs: CDP_STEP_TIMEOUT_MS,
-              },
+            const driverBaseUrl = `http://127.0.0.1:${driverPort}`;
+            const sessionId = session.id;
+            const waited = await waitForNavigation(() =>
+              readPageFromDriver(driverBaseUrl, sessionId),
             );
-            if (originCall.status === null) {
-              script.error = `could not execute in the WebView: ${originCall.error ?? "unknown error"}`;
-            } else {
-              const executed = parseExecuteResponse(originCall.text);
-              script.error = executed.error;
-              const read = readOriginValue(executed.value);
-              script.origin = read.origin;
-              script.href = read.href;
-              script.title = read.title;
+            script.error = waited.error;
+            if (waited.read !== null) {
+              script.origin = waited.read.origin;
+              script.href = waited.read.href;
+              script.title = waited.read.title;
             }
+            Object.assign(navigation, waited.navigation);
 
-            const apiUrl = `http://127.0.0.1:${port.value}/api/server/instance`;
-            const fetchCall = await httpJson(
-              `http://127.0.0.1:${driverPort}/session/${session.id}/execute/async`,
-              {
-                method: "POST",
-                body: {
-                  script:
-                    "const done = arguments[arguments.length - 1];" +
-                    `fetch(${JSON.stringify(apiUrl)})` +
-                    "  .then(async (response) => done({ status: response.status, body: await response.text() }))" +
-                    "  .catch((error) => done({ fetchError: String(error) }));",
-                  args: [],
-                },
-                timeoutMs: CDP_STEP_TIMEOUT_MS,
-              },
-            );
-            if (fetchCall.status === null) {
-              probe.error = `could not run the in-origin fetch: ${fetchCall.error ?? "unknown error"}`;
+            const loaded = script.error === null && !awaitsNavigation(script.href);
+            if (!loaded) {
+              // Nothing loaded, so there is no origin to ask from. Recording the
+              // handles is what separates "this page had not loaded" from "this
+              // session is looking at another window".
+              const handles = await readWindowHandles(driverBaseUrl, sessionId);
+              navigation.windowHandles = handles.handles;
+              navigation.windowHandlesError = handles.error;
             } else {
-              const executed = parseExecuteResponse(fetchCall.text);
-              probe.error = executed.error;
-              const read = readProbeValue(executed.value);
-              probe.status = read.status;
-              probe.body = read.body;
-              probe.error = read.error ?? probe.error;
+              const apiUrl = `http://127.0.0.1:${port.value}/api/server/instance`;
+              const fetchCall = await httpJson(
+                `${driverBaseUrl}/session/${sessionId}/execute/async`,
+                {
+                  method: "POST",
+                  body: {
+                    script:
+                      "const done = arguments[arguments.length - 1];" +
+                      `fetch(${JSON.stringify(apiUrl)})` +
+                      "  .then(async (response) => done({ status: response.status, body: await response.text() }))" +
+                      "  .catch((error) => done({ fetchError: String(error) }));",
+                    args: [],
+                  },
+                  timeoutMs: CDP_STEP_TIMEOUT_MS,
+                },
+              );
+              if (fetchCall.status === null) {
+                probe.error = `could not run the in-origin fetch: ${fetchCall.error ?? "unknown error"}`;
+              } else {
+                const executed = parseExecuteResponse(fetchCall.text);
+                probe.error = executed.error;
+                const read = readProbeValue(executed.value);
+                probe.status = read.status;
+                probe.body = read.body;
+                probe.error = read.error ?? probe.error;
+              }
             }
           }
         }
@@ -741,7 +971,12 @@ async function main(): Promise<number> {
     driver,
     session: { id: session.id, error: session.error },
     port,
-    script: { origin: script.origin, error: script.error },
+    script: {
+      origin: script.origin,
+      href: script.href,
+      error: script.error,
+      navigation,
+    },
     probe,
     appInstanceId,
   });
@@ -788,6 +1023,8 @@ async function main(): Promise<number> {
     },
     port,
     script,
+    /** How the origin was obtained: the wait for the document, and what it saw. */
+    navigation,
     probe,
     appInstanceId,
     observations: {
