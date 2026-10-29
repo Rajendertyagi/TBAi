@@ -1,16 +1,20 @@
-# Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 18)
+# Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 19)
 
 **Status:** IMPLEMENTED — S1, S2, S3, S5, S6, S7a are implemented and verified locally, and S7b is
 this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29**: `8f3f2d2` (2.2.0
-pin + turn-facts owner), `38b2d91` (this record), `a170def` (the transcript end-pin fix, §19.8). CI
-on `a170def` is run `40869474036`: **`verify`, `e2e`, `opencode-runtime` and `opencode-g3` green**;
-`e2e-full` and `e2e-big-pickle` skipped because they are dispatch-only (a skip is not a pass).
-The 2.2.0 pin now has runner evidence (§19.4 item 2). One item remains **open**: the `tauri` G1
-packaged-WebView job, which failed in that run at `verify:packaged-origin` with `stage: (teardown
-only)` — an unclassified flake, not attributed to this change (§19.8). See §19.
+pin + turn-facts owner), `38b2d91` (this record), `a170def` (the transcript end-pin fix, §19.8),
+`ec15de0` (the G1 observation wait, §19.9) and `3d90d6f` (the teardown classifier, §19.9). **The
+latest run, `40889992913` at `3d90d6f`, is green in every job a push runs** — `verify`, `e2e`,
+`opencode-runtime`, `opencode-g3` and `tauri`; `e2e-full` and `e2e-big-pickle` are skipped because
+they are dispatch-only (a skip is not a pass). The 2.2.0 pin has runner evidence (§19.4 item 2), the
+`e2e` job is green with both K-I4 and K-I8 (§19.8), and the `tauri` G1 step now carries a real
+observation of the packaged WebView origin from the runner (§19.9). The earlier red runs are kept as
+reported in §19.8, not rewritten. One thing this record still does **not** explain: the packaged-app
+smoke step's `packaged app did not become ready` at `8f3f2d2` (§19.8), which nothing here claims to
+have fixed. See §19.
 **Branch:** `ci/tauri-e2e-verify` — **Baseline commit:** `2804f94a0398e8606cd0f109e5694a87a5f5a1d1`
 (child of `2facd38`; §19.2)
-**Date:** 2026-10-28 (Rev 17 added 2026-10-29; Rev 18 added 2026-10-29)
+**Date:** 2026-10-28 (Rev 17 added 2026-10-29; Rev 18 added 2026-10-29; Rev 19 added 2026-10-29)
 **Owner:** Architecture / status-presentation + chat & OpenCode features
 **Governing docs:** `AGENTS.md` (file ownership, train freeze, test location), `docs/architectural-principles.md` (UI rule 4 — vendored-element adaptations)
 
@@ -1339,4 +1343,84 @@ passed; the failure is in the G1 origin observation — `verify:packaged-origin`
 task". That is a different step and a different symptom from `8f3f2d2`
 (`packaged app did not become ready (exited=False)`), and the job passed at `38b2d91`. It stays an
 open, unclassified flake; nothing here claims it fixed.
+
+### 19.9 The `tauri` G1 blocker: two observation defects, both fixed and observed (2026-10-29)
+
+**Rev 19 supersedes the "open flake" status in §19.8** for the G1 step only — §19.8's diagnosis of
+the `e2e` job stands unchanged, and the `8f3f2d2` smoke-step failure ("packaged app did not become
+ready") remains unclassified and untested here.
+
+**What run `40871453744` (commit `2ae81b0`) actually recorded.** `POST /session` returned 200 with a
+WebView2 capability set (`browserVersion 155.0.4283.62`, `goog:processID` present); the port mirror
+reported `3000`; the direct probe read an `instanceId`; the packaged build, the smoke test and G2 all
+passed. The page read in the same run was `{origin: "null", href: "about:blank", title: ""}`, and the
+in-origin fetch then failed with `TypeError: Failed to fetch`. The artifact at `38b2d91` had read
+`http://app.localhost` with probe 200 and a matching instance id, and the run at `a170def` observed
+the same and then failed at teardown. Neither `src-tauri/tauri.conf.json` nor `src-tauri/src/main.rs`
+changed across those commits: one configured `main` window, `frontendDist: "app://localhost"`, an
+`app` protocol handler, and no navigation call anywhere in Rust.
+
+**Two defects, one in the observation and one in its cleanup.**
+
+1. *The read raced the document load.* `tauri-driver` attaches to the WebView2 page target as soon as
+   it exists, which is before Tauri commits the navigation to `app://localhost`; the port mirror that
+   gates the script is written by the Bun sidecar as it boots, so it exists before the document does.
+   The script took exactly one `execute/sync` immediately after `port-wait`, so a read landing in that
+   window became the run's evidence — and the blank document's `origin` is the string `"null"`, which
+   the old code reported as an origin the app had chosen. That is an observation-script
+   synchronization defect, not an application-navigation one: the same build navigated in the runs
+   that read later. It is also not a wrong-window attachment — there is one window, and the fix now
+   records the driver's handle count on any failure so that hypothesis stays distinguishable.
+2. *A successful observation could still fail at cleanup.* `stopProcessTree` tolerated only
+   `taskkill` exit 128 ("process not found"). The windows-2025 runner also reports an already-exited
+   pid as exit 1 with `Reason: There is no running instance of the task.`, which is how `a170def`
+   failed after its observation had passed.
+
+**The fix (`ec15de0`, `3d90d6f`).** `executeScript` now polls the page until it has left
+`about:blank`, bounded by `NAVIGATION_TIMEOUT_MS` (60 s), and records `{attempts, elapsedMs,
+timeoutMs, timedOut}` as `navigation` in `packaged.json`. The loop stops on a real origin — right or
+wrong — and on a read that did not happen, because neither is a slow load; a wrong origin is still
+rejected by the unchanged exact-equality test against `EXPECTED_PACKAGED_ORIGIN`. When nothing loads,
+the run additionally records the driver's `window/handles`, and the failure names the wait and the
+handle count instead of reporting the blank page's `"null"` as a wrong origin. The in-origin fetch now
+runs only after a document loaded: a blank page has no origin to ask from, and the old path added a
+second, consequential "Failed to fetch" failure. `isTaskkillAlreadyGone` accepts the exit-1 form; the
+stop is still confirmed against a fresh process table, so a pid that really survived is still
+reported from `survivors`.
+
+**Local gates, `bun run verify` exit 0 at `ec15de0`+`3d90d6f`:** four-project `typecheck`; `biome ci
+--error-on-warnings` and `biome format .`; `test:locations`; `build`; `test` **5081 pass, 66 skip,
+0 fail — 5147 tests across 382 files (319.5 s)**; `test:shutdown` 1; `test:startup-rollback` 2;
+`test:lifecycle-integration` 3; `test:dom` **643 pass, 0 fail across 62 files**; `test:quarantine`.
+The tooling suites are **270 pass, 0 fail across 9 files**. The new guards were exercised against the
+defect: with the poll reduced to a single read, three of the new cases fail; restored, they pass.
+
+**The runner result — run `40889992913` at `3d90d6f`, all jobs green:** `verify`, `e2e`,
+`opencode-runtime`, `opencode-g3` and `tauri` succeeded; `e2e-full` and `e2e-big-pickle` stayed
+skipped (dispatch-only). The uploaded `packaged.json` records a real observation of the packaged
+WebView:
+
+| Field | Value |
+|---|---|
+| `script` | `origin: http://app.localhost`, `href: http://app.localhost/`, `title: TBAi` |
+| `navigation` | `attempts: 1`, `elapsedMs: 575`, `timedOut: false` |
+| `probe` | `status: 200`, body `{"instanceId":"88c09423-…"}` |
+| `appInstanceId` | `88c09423-…` — **equal to the in-origin read** |
+| `observations` | `originMatchesExpected: true`, `inOriginApiStatus: 200`, `instanceMatchesApp: true` |
+| `assessment` | `ok: true`, `stage: null`, `failures: []` |
+| `teardown` | `sessionDeleteStatus: 200`, `confirmed: true`, `survivors: []`, `errors: []` |
+| `host` | `integrity: medium`, `elevated: false` |
+
+G2 passed in the same run with `origin http://localhost:3000`, `targetsSeen ["page
+http://localhost:3000/"]` and a clean teardown of 12 recorded pids.
+
+**What that run does and does not prove.** It proves the new path end-to-end on a real runner: a real
+packaged WebView on the documented origin, a real in-origin API read agreeing with the app's own
+instance id, and a clean teardown. It does **not** prove the race was hit and survived — `attempts: 1`
+means the first read already found the loaded document, so this run would also have passed against
+the old code. The retry itself is proven by the deterministic test (blank, blank, loaded → 3 reads →
+`ok`), not by this run. The `tauri` job has now produced four distinct outcomes across five runs, so
+a single green is not a stability measurement; the change is justified by the artifact evidence plus
+the code-level test, and the next recurrence would name itself through `navigation` and the handle
+count.
 
