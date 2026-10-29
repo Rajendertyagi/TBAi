@@ -1,8 +1,9 @@
 # Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 17)
 
 **Status:** IMPLEMENTED — S1, S2, S3, S5, S6, S7a are implemented and verified locally, and S7b is
-this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29** (see §19.7 for the
-live-provider evidence added after the local verification). Two verification items remain **open**:
+this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29 as `8f3f2d2`** (the
+live-provider evidence in §19.7 was added just before that commit). Two verification items remain
+**open**:
 the 2.2.0-pin workflow has never run on GitHub Actions, and CI run `40527025056` failed the tauri G1
 packaged-WebView observation for an **unclassified** cause. No CI result is claimed for this
 commit. See §19.
