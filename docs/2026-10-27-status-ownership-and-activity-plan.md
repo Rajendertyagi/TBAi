@@ -1,4 +1,4 @@
-# Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 19)
+# Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 20)
 
 **Status:** IMPLEMENTED — S1, S2, S3, S5, S6, S7a are implemented and verified locally, and S7b is
 this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29**: `8f3f2d2` (2.2.0
@@ -14,7 +14,7 @@ smoke step's `packaged app did not become ready` at `8f3f2d2` (§19.8), which no
 have fixed. See §19.
 **Branch:** `ci/tauri-e2e-verify` — **Baseline commit:** `2804f94a0398e8606cd0f109e5694a87a5f5a1d1`
 (child of `2facd38`; §19.2)
-**Date:** 2026-10-28 (Rev 17 added 2026-10-29; Rev 18 added 2026-10-29; Rev 19 added 2026-10-29)
+**Date:** 2026-10-28 (Rev 17 added 2026-10-29; Rev 18 added 2026-10-29; Rev 19 added 2026-10-29; Rev 20 added 2026-10-29)
 **Owner:** Architecture / status-presentation + chat & OpenCode features
 **Governing docs:** `AGENTS.md` (file ownership, train freeze, test location), `docs/architectural-principles.md` (UI rule 4 — vendored-element adaptations)
 
@@ -1430,3 +1430,20 @@ across five runs before this change, so two greens are not a stability measureme
 justified by the artifact evidence plus the code-level test, and the next recurrence would name
 itself through `navigation` and the handle count.
 
+**Rev 20 (2026-10-29) — identity is required evidence, not corroboration.** Every run above recorded
+a direct `127.0.0.1` read whose `instanceId` equalled the in-origin one, but the `fetch` stage only
+made that comparison *when the direct read had produced an id*, so a run whose direct probe failed
+could pass on an in-origin 200 alone. An origin plus a 200 prove that a server answered from
+`http://app.localhost`; they do not prove it was the backend this launch started — the rule G2
+already enforces. The accepted rule is now: correct origin, in-origin `GET /api/server/instance`
+returning 200, a non-empty `instanceId` on **both** reads, and the two exactly equal. Missing,
+blank or unreadable evidence fails at `fetch` and is reported with the direct read's status or error;
+it is never described as a mismatch, because nothing was compared. `packaged.json` gains
+`directProbe {status, error}` and `observations.inOriginInstanceId`, and
+`observations.instanceMatchesApp` is `true` only when both ids were read and are equal.
+`tests/unit/tooling/webview-origin-evidence.test.ts` replaces the case that accepted a missing
+direct id, adds four cases (blank direct id, the direct read's reported cause, a whitespace
+in-origin id, and equality after trimming) and strengthens two. The guards were exercised against
+the defects: with the old lenient comparison three cases fail, and with an untrimmed id three fail.
+**Not yet observed on a runner** — this change is uncommitted, so no artifact carries `directProbe`
+yet; the next `tauri` run must show both ids present and equal in `packaged/packaged.json`.

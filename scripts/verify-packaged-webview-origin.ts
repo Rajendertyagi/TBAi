@@ -41,10 +41,24 @@
  * assessed is still whatever the WebView reports, and it must equal
  * `EXPECTED_PACKAGED_ORIGIN` exactly.
  *
- * The direct `127.0.0.1` probe is recorded as corroboration: when both reads
- * succeed, their instance IDs must agree, because a mismatch would mean the page
- * reached a different server than the one the app launched. A missing direct
- * probe is recorded, not failed: it weakens corroboration but contradicts nothing.
+ * ## Identity is required evidence, not corroboration
+ *
+ * The direct `127.0.0.1` probe reads the instance id of the backend the packaged
+ * app launched, and that id is what makes the in-origin answer attributable. An
+ * origin plus a 200 prove only that SOME server answered from the app's origin;
+ * they do not prove the page reached the server this launch started. So the
+ * `fetch` stage passes only when all four hold:
+ *
+ *   - the WebView's origin is exactly `EXPECTED_PACKAGED_ORIGIN`;
+ *   - the in-origin `GET /api/server/instance` returned 200;
+ *   - both that response and the direct read carried a non-empty `instanceId`;
+ *   - the two ids are equal.
+ *
+ * A missing direct id fails the run and is reported as missing evidence — with
+ * the direct read's status or error as its cause — never as a mismatch, because
+ * nothing was compared. The same rule the development observation (G2) already
+ * enforces applies here: "a backend answered" is not "the backend this launch
+ * started answered".
  *
  * ## Evidence on every path
  *
@@ -155,8 +169,17 @@ export interface PackagedOriginInput {
     readonly body: string | null;
     readonly error: string | null;
   };
-  /** The app's own instance id, read directly from `127.0.0.1` (corroboration). */
+  /**
+   * The app's own instance id, read directly from `127.0.0.1`. Required
+   * evidence: without it the in-origin answer cannot be attributed to the
+   * backend this launch started.
+   */
   readonly appInstanceId: string | null;
+  /** How that direct read went, so an absent id is reported with its cause. */
+  readonly directProbe: {
+    readonly status: number | null;
+    readonly error: string | null;
+  };
 }
 
 export interface PackagedAssessment {
@@ -176,10 +199,29 @@ function parseJsonObject(text: string | null): Record<string, unknown> | null {
   }
 }
 
+/**
+ * A usable instance id: trimmed, and blank counts as absent.
+ *
+ * Identity is never a whitespace string, so `"   "` is malformed evidence
+ * rather than an id that happens not to match.
+ */
+function normalizeInstanceId(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function instanceIdOf(text: string | null): string | null {
-  const record = parseJsonObject(text);
-  const value = record?.instanceId;
-  return typeof value === "string" && value.length > 0 ? value : null;
+  const value = parseJsonObject(text)?.instanceId;
+  return typeof value === "string" ? normalizeInstanceId(value) : null;
+}
+
+/** Why the direct `127.0.0.1` read produced no instance id. */
+function describeDirectProbe(directProbe: PackagedOriginInput["directProbe"]): string {
+  if (directProbe.error !== null) return `the direct read failed: ${directProbe.error}`;
+  if (directProbe.status === null) return "the direct read was not attempted";
+  if (directProbe.status !== 200) return `the direct read returned ${directProbe.status}`;
+  return "the direct response carried no usable instanceId";
 }
 
 /**
@@ -285,17 +327,24 @@ export function assessPackagedOrigin(input: PackagedOriginInput): PackagedAssess
       `the in-origin GET /api/server/instance returned ${input.probe.status ?? "no status"}`,
     );
   } else {
-    const instanceId = instanceIdOf(input.probe.body);
-    if (instanceId === null) {
+    const inOriginInstanceId = instanceIdOf(input.probe.body);
+    const appInstanceId = normalizeInstanceId(input.appInstanceId);
+    if (inOriginInstanceId === null) {
       probeFailures.push(
         `the in-origin GET /api/server/instance returned no instanceId: ${JSON.stringify(
           tailText(input.probe.body ?? "", 500),
         )}`,
       );
-    } else if (input.appInstanceId !== null && input.appInstanceId !== instanceId) {
+    } else if (appInstanceId === null) {
       probeFailures.push(
-        "the in-origin read reached a different server than the app launched " +
-          `(${instanceId} vs ${input.appInstanceId})`,
+        `the app's own instance id was not read from 127.0.0.1 (${describeDirectProbe(
+          input.directProbe,
+        )}), so the in-origin read cannot be attributed to the launched backend`,
+      );
+    } else if (inOriginInstanceId !== appInstanceId) {
+      probeFailures.push(
+        "identity verification failed: the in-origin read reached a different server than the " +
+          `app launched (${inOriginInstanceId} vs ${appInstanceId})`,
       );
     }
   }
@@ -760,6 +809,10 @@ async function main(): Promise<number> {
     body: null,
     error: null,
   };
+  const directProbe: { status: number | null; error: string | null } = {
+    status: null,
+    error: null,
+  };
   let appInstanceId: string | null = null;
   let driverVersion: string | null = null;
   let driverHelpLine: string | null = null;
@@ -839,6 +892,8 @@ async function main(): Promise<number> {
             const direct = await httpJson(`http://127.0.0.1:${port.value}/api/server/instance`, {
               timeoutMs: CDP_STEP_TIMEOUT_MS,
             });
+            directProbe.status = direct.status;
+            directProbe.error = direct.status === null ? (direct.error ?? "no response") : null;
             appInstanceId = instanceIdOf(direct.text);
 
             const driverBaseUrl = `http://127.0.0.1:${driverPort}`;
@@ -978,6 +1033,7 @@ async function main(): Promise<number> {
       navigation,
     },
     probe,
+    directProbe,
     appInstanceId,
   });
 
@@ -994,6 +1050,7 @@ async function main(): Promise<number> {
   if (!tempRootRemoved) failures.push("teardown: the temporary root was not removed");
   for (const error of teardownErrors) failures.push(`teardown: ${error}`);
 
+  const inOriginInstanceId = instanceIdOf(probe.body);
   const evidence = {
     schemaVersion: 1 as const,
     kind: "packaged" as const,
@@ -1026,13 +1083,16 @@ async function main(): Promise<number> {
     /** How the origin was obtained: the wait for the document, and what it saw. */
     navigation,
     probe,
+    /** How the direct read of the launched app's own identity went. */
+    directProbe,
     appInstanceId,
     observations: {
       originMatchesExpected: script.origin === EXPECTED_PACKAGED_ORIGIN,
       inOriginApiStatus: probe.status,
-      /** Null when corroboration was unavailable; a mismatch is a failure instead. */
-      instanceMatchesApp:
-        appInstanceId === null ? null : instanceIdOf(probe.body) === appInstanceId,
+      /** The id the in-origin read returned. */
+      inOriginInstanceId,
+      /** True only when both ids were read and are equal; missing evidence fails. */
+      instanceMatchesApp: appInstanceId !== null && inOriginInstanceId === appInstanceId,
     },
     assessment: { ok: assessment.ok && failures.length === 0, stage: assessment.stage, failures },
     teardown: { sessionDeleteStatus, driverStop, tempRootRemoved, errors: teardownErrors },

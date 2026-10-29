@@ -12,8 +12,11 @@
  *      is the first one that actually failed;
  *   3. a packaged origin other than the documented `http://app.localhost` fails,
  *      and the constant cannot drift from `docs/architecture.md`;
- *   4. the uploaded artifact set is the five named files — never a data directory;
- *   5. a sanitized log cannot carry a credential-shaped value.
+ *   4. a packaged observation passes ONLY when the in-origin instance id was
+ *      read, the direct `127.0.0.1` read produced one, and the two are equal —
+ *      a missing id fails closed instead of weakening the claim;
+ *   5. the uploaded artifact set is the five named files — never a data directory;
+ *   6. a sanitized log cannot carry a credential-shaped value.
  *
  * The WebDriver and CDP payload parsers are exercised with real payload shapes,
  * so a protocol response that stops being understood fails a test rather than
@@ -105,6 +108,7 @@ function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOr
       navigation: navigatedOnce(),
     },
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
+    directProbe: { status: 200, error: null },
     appInstanceId: "instance-a",
     ...overrides,
   };
@@ -392,6 +396,16 @@ describe("G1 packaged origin: the failure matrix", () => {
     expect(noInstance.stage).toBe("fetch");
     expect(noInstance.failures.join(" ")).toContain("no instanceId");
 
+    // A whitespace id is malformed evidence, not an id that failed to match.
+    const blankInstance = assessPackagedOrigin(
+      packagedInput({
+        probe: { status: 200, body: JSON.stringify({ instanceId: "   " }), error: null },
+      }),
+    );
+    expect(blankInstance.stage).toBe("fetch");
+    expect(blankInstance.failures.join(" ")).toContain("no instanceId");
+    expect(blankInstance.failures.join(" ")).not.toContain("different server");
+
     const transport = assessPackagedOrigin(
       packagedInput({ probe: { status: null, body: null, error: "TypeError: Failed to fetch" } }),
     );
@@ -401,13 +415,68 @@ describe("G1 packaged origin: the failure matrix", () => {
   it("fails when the in-origin read reached a different server", () => {
     const assessed = assessPackagedOrigin(packagedInput({ appInstanceId: "instance-b" }));
     expect(assessed.stage).toBe("fetch");
-    expect(assessed.failures.join(" ")).toContain("different server");
+    expect(assessed.ok).toBe(false);
+    const failures = assessed.failures.join(" ");
+    expect(failures).toContain("identity verification failed");
+    expect(failures).toContain("different server");
+    // Both ids are named, so a mismatch is diagnosable from the artifact alone.
+    expect(failures).toContain("instance-a");
+    expect(failures).toContain("instance-b");
   });
 
-  it("records a missing app-instance read as absent corroboration, not a failure", () => {
-    const assessed = assessPackagedOrigin(packagedInput({ appInstanceId: null }));
-    expect(assessed.failures).toEqual([]);
-    expect(assessed.ok).toBe(true);
+  it("compares the ids exactly after trimming, so padding is not a difference", () => {
+    // Both sides are JSON string values from their own server; surrounding
+    // whitespace is not identity. Only an actual difference may fail.
+    const padded = assessPackagedOrigin(packagedInput({ appInstanceId: "  instance-a\t" }));
+    expect(padded.failures).toEqual([]);
+    expect(padded.ok).toBe(true);
+  });
+
+  it("fails when the app's own instance id was never read", () => {
+    // The old rule passed here: an in-origin 200 was accepted even though the
+    // page's answer could not be attributed to the backend this launch started.
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        appInstanceId: null,
+        directProbe: { status: null, error: "connect ECONNREFUSED 127.0.0.1:41234" },
+      }),
+    );
+    expect(assessed.stage).toBe("fetch");
+    expect(assessed.ok).toBe(false);
+    const failures = assessed.failures.join(" ");
+    expect(failures).toContain("was not read from 127.0.0.1");
+    expect(failures).toContain("ECONNREFUSED");
+    // Nothing was compared, so reporting a mismatch would be a false diagnosis.
+    expect(failures).not.toContain("different server");
+  });
+
+  it("treats a blank app-instance id as missing evidence, not as a mismatch", () => {
+    for (const blank of ["", "   "]) {
+      const assessed = assessPackagedOrigin(
+        packagedInput({ appInstanceId: blank, directProbe: { status: 200, error: null } }),
+      );
+      expect(assessed.stage).toBe("fetch");
+      expect(assessed.ok).toBe(false);
+      expect(assessed.failures.join(" ")).toContain("was not read from 127.0.0.1");
+      expect(assessed.failures.join(" ")).not.toContain("different server");
+    }
+  });
+
+  it("names why the direct read produced no instance id", () => {
+    const nonOk = assessPackagedOrigin(
+      packagedInput({ appInstanceId: null, directProbe: { status: 503, error: null } }),
+    );
+    expect(nonOk.failures.join(" ")).toContain("returned 503");
+
+    const unreadable = assessPackagedOrigin(
+      packagedInput({ appInstanceId: null, directProbe: { status: 200, error: null } }),
+    );
+    expect(unreadable.failures.join(" ")).toContain("no usable instanceId");
+
+    const notAttempted = assessPackagedOrigin(
+      packagedInput({ appInstanceId: null, directProbe: { status: null, error: null } }),
+    );
+    expect(notAttempted.failures.join(" ")).toContain("not attempted");
   });
 
   it("stops at the first failed stage instead of reporting consequences as evidence", () => {
