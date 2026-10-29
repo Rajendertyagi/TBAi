@@ -60,8 +60,12 @@ export function AgentStatus({
       {elapsed !== undefined && state !== "done" && state !== "failed" && (
         <span className={cn(mono, "text-muted-foreground tabular-nums")}>{elapsed}</span>
       )}
+      {/* The default trailing icons are decorative, so they stay hidden. A
+          caller-supplied node can be an interactive control (the recovery
+          notice's dismiss), and an aria-hidden wrapper would remove it from
+          assistive technology while leaving it focusable. */}
       <span
-        aria-hidden
+        aria-hidden={trailing === undefined ? true : undefined}
         data-slot="agent-status-trailing"
         className="text-muted-foreground flex size-6 items-center justify-center rounded-full"
       >

@@ -20,9 +20,9 @@ import {
 } from "@/services/opencode/ownership.ts";
 
 const SUPPORTED_VERSION = "2.0.15";
-const CURRENT_SUPPORTED_VERSION = "2.1.2";
+const CURRENT_SUPPORTED_VERSION = "2.2.0";
 const UNSUPPORTED_VERSION = "2.0.14";
-const UPPER_BOUND_VERSION = "2.2.0";
+const UPPER_BOUND_VERSION = "2.2.1";
 const FIXTURE_PASSWORD = "opencode-readiness-fixture-password";
 const FIXTURE_AUTHORIZATION = `Basic ${Buffer.from(
   `${OPENCODE_CONFIG.authUsername}:${FIXTURE_PASSWORD}`,
@@ -194,7 +194,7 @@ describe("probeOpenCodeInfo", () => {
     }
   });
 
-  it("accepts a 2.1.2 server info response within the approved range", async () => {
+  it("accepts a 2.2.0 server info response within the approved range", async () => {
     const fixture = startInfoFixture(() => Response.json({ version: CURRENT_SUPPORTED_VERSION }));
 
     try {
@@ -323,7 +323,7 @@ describe("probeOpenCodeInfo", () => {
     }
   });
 
-  it("reports not ready at the 2.2.0 upper bound", async () => {
+  it("reports not ready past the 2.2.0 ceiling", async () => {
     const fixture = startInfoFixture(() => Response.json({ version: UPPER_BOUND_VERSION }));
 
     try {

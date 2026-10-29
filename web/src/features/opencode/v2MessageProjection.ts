@@ -156,11 +156,19 @@ export function toV2PromptPayloadFromHistory(message: SessionMessageUser): V2Pro
 
 type AssistantContent = Exclude<ThreadMessageLike["content"], string>[number];
 
+/**
+ * Projects one V2 part, or `null` when the part is not user-facing content.
+ *
+ * Retry and step parts are internal transcript markers: their `value` is
+ * machine wording ("retry 3") and their state is already carried by the typed
+ * message/execution status. Projecting them as empty text parts put an empty
+ * assistant bubble on screen, and projecting the value would print debug copy.
+ */
 function partToAssistantContent(
   part: V2MessagePartState,
   message: V2MessageState,
   permissions: readonly V2PermissionView[],
-): AssistantContent {
+): AssistantContent | null {
   if (part.kind === "text")
     return {
       type: "text",
@@ -173,8 +181,7 @@ function partToAssistantContent(
       text: part.value,
       status: { type: part.status === "streaming" ? "running" : "complete" },
     };
-  if (part.kind === "step") return { type: "text", text: "", status: { type: "complete" } };
-  if (part.kind === "retry") return { type: "text", text: "", status: { type: "complete" } };
+  if (part.kind === "step" || part.kind === "retry") return null;
   const sourceContent = message.source?.type === "assistant" ? message.source.content : [];
   const sourceTool = sourceContent.find(
     (content) => content.type === "tool" && `tool:${message.id}:${content.id}` === part.id,
@@ -269,6 +276,7 @@ function messageToAssistant(
   const openCodeParts = openCodePartsForMessage(message);
   const content = message.parts.flatMap((part) => {
     const projected = partToAssistantContent(part, message, permissions);
+    if (projected === null) return [];
     return Array.isArray(projected) ? projected : [projected];
   });
   const pendingPatches = pendingPatchMap(permissions);

@@ -33,8 +33,9 @@
  * ## The excluded suites, and why
  *
  * `EXCLUDED_SUITES` is not a suppression list; each entry names what would have
- * to change to admit it. Both exclusions come from measurements of the pinned
- * 2.1.2 binary on windows-latest, not from an assumption about CI time.
+ * to change to admit it. One exclusion is a missing credential; the other is a
+ * measurement of a real binary, updated when the 2.2.0 pin was measured locally.
+ * Neither comes from an assumption about CI time.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -75,7 +76,7 @@ export const EXCLUDED_SUITES: Readonly<Record<string, string>> = {
   "opencode-context-meter-runtime":
     "needs a real provider credential, which the isolated runner deliberately does not have; live acceptance coverage stays dispatch-only",
   "opencode-native-compaction-conformance":
-    "3 of 8 cases fail against the pinned 2.1.2 binary on a clean windows-latest runner (RT-013); re-admit once its assertions match 2.1.2",
+    "3 of 8 cases failed against 2.1.2 on a clean windows-latest runner (RT-013); all 8 passed against 2.2.0 locally on 2026-10-28, but that has no runner behind it yet, so re-admit after the 2.2.0 pin runs green on CI",
 };
 
 type SuiteOutcome = {

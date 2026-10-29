@@ -51,30 +51,44 @@ describe("OpenCodeView loading surface", () => {
     expect(source).toContain("setReusedExistingSession(data.reusedExistingSession)");
   });
 
-  it("renders the retry banner and restoration notice in aboveComposerExtra only", () => {
-    const start = source.indexOf("aboveComposerExtra={");
-    const end = source.indexOf("belowComposerExtra", start);
+  it("supplies the composer extras split into status, interactive and below (S7a)", () => {
+    const start = source.indexOf("composerExtras={{");
     expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const block = source.slice(start, end);
 
-    // Both new surfaces are composed in the existing slot - no new page, route,
-    // dialog, or ChatWindow slot.
-    expect(block).toContain("<OpenCodeRecoveryNotice");
-    expect(block).toContain("<OpenCodeRetryBanner />");
-    // The banner is closest to the composer, so it comes last.
-    expect(block.indexOf("<OpenCodeRecoveryNotice")).toBeLessThan(
-      block.indexOf("<OpenCodeRetryBanner"),
+    // The mixed slot API is gone: status presentations, interactive content and
+    // the heart are separate concerns, and only that split keeps a status pill
+    // out of the interactive area's flow.
+    expect(source).not.toContain("aboveComposerExtra");
+    expect(source).not.toContain("belowComposerExtra");
+
+    // Interactive content: the question dock, at its natural height.
+    expect(source).toContain("interactive: <OpenCodeQuestions />");
+
+    // Status region: exactly the primary and the restoration notice.
+    const statusStart = source.indexOf("status: (", start);
+    const statusEnd = source.indexOf("below:", statusStart);
+    expect(statusStart).toBeGreaterThan(start);
+    expect(statusEnd).toBeGreaterThan(statusStart);
+    const statusBlock = source.slice(statusStart, statusEnd);
+    expect(statusBlock).toContain("<OpenCodeRecoveryNotice");
+    expect(statusBlock).toContain("<OpenCodePrimaryStatus />");
+    // The primary renders first so it owns the top line when the row wraps.
+    expect(statusBlock.indexOf("<OpenCodePrimaryStatus")).toBeLessThan(
+      statusBlock.indexOf("<OpenCodeRecoveryNotice"),
     );
     // The notice is keyed by session and told whether this was a verified reuse.
-    expect(block).toContain("key={sessionId}");
-    expect(block).toContain("reusedExistingSession={reusedExistingSession}");
+    expect(statusBlock).toContain("key={sessionId}");
+    expect(statusBlock).toContain("reusedExistingSession={reusedExistingSession}");
 
-    // Rendered exactly once, in that slot.
-    expect(source.match(/<OpenCodeRetryBanner/g)?.length).toBe(1);
+    // Below row: the connection heart, outside the reserved status row.
+    expect(source).toContain("below: <OpenCodeStatus compact onReconnect={reconnect} />");
+
+    // Rendered exactly once each, and the deleted banner is gone.
+    expect(source.match(/<OpenCodePrimaryStatus/g)?.length).toBe(1);
     expect(source.match(/<OpenCodeRecoveryNotice/g)?.length).toBe(1);
-    // No assistant-ui retry/status primitive was added for this: neither surface
-    // is an assistant-ui element.
-    expect(block).not.toContain("ErrorPrimitive");
+    expect(source).not.toContain("OpenCodeRetryBanner");
+    // No assistant-ui retry/status primitive was added for this: neither
+    // surface is an assistant-ui element.
+    expect(statusBlock).not.toContain("ErrorPrimitive");
   });
 });

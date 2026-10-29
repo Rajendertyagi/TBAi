@@ -164,8 +164,11 @@ test.describe("Code model chip — native default binding", () => {
       // The model id as the session actually carries it, asserted with a
       // RETRYING matcher. Hydration is asynchronous, so a one-shot read here
       // samples the pre-hydration label and fails a build that works.
+      // The chip renders the model's own name, which is the LAST path segment:
+      // a provider prefix can itself contain slashes (`openrouter/particle-ai/
+      // particle-1`), so the second segment is not the name.
       const boundId = bound.nativeModel!;
-      const boundName = boundId.split("/")[1]!;
+      const boundName = boundId.split("/").at(-1)!;
       await expect(modelChip(page)).toHaveText(new RegExp(boundName, "i"), {
         timeout: LIVE_TIMEOUT_MS,
       });
@@ -173,7 +176,9 @@ test.describe("Code model chip — native default binding", () => {
       console.log(`[chip] text after hydration: ${JSON.stringify(settled)}`);
 
       // The displayed model must be the one the session is actually bound to.
-      expect(settled).toContain(boundName);
+      // Case-insensitive because the chip display-cases the name ("Particle-1"
+      // for `particle-1`); the identity, not the casing, is the claim.
+      expect(settled?.toLowerCase()).toContain(boundName.toLowerCase());
 
       // 4. Observing the native model must NOT have become a stored preference.
       expect(await readStoredModel(request, conversationId)).toBeNull();

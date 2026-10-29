@@ -41,37 +41,38 @@ export const OPENCODE_CONFIG = {
    */
   versionProbeTimeoutMs: 10_000,
   /**
-   * Inclusive managed OpenCode version range.
+   * Supported managed OpenCode range, `>=2.0.15 <2.2.1`.
    *
-   * The 2.1 line was adopted on 2026-10-22 after checking every surface TBAi
-   * uses against the upstream source at `v2.1.0`, `v2.1.1` and `v2.1.2`:
+   * 2.2.0 was adopted on 2026-10-28 after checking the surfaces TBAi uses
+   * against the published `@opencode/client@2.2.0` typings and the installed
+   * `opencode v2.2.0` binary:
    *
-   * - **No route was removed.** The client gained three (the experimental
-   *   voice session, the external integration connect and `vcs/init`), none of
-   *   which TBAi calls. All 18 client methods TBAi calls exist on the same
-   *   routes with the same success statuses.
-   * - **No event type was removed.** The 2.1 line added `session.archived`
-   *   and `session.unarchived`.
-   * - **The types TBAi imports are compatible.** The ids became branded
-   *   aliases (`PermissionID`, `SessionID`, `SessionMessageID`, `FormID`),
-   *   and every one of them is `= string`, so there is no runtime change; the
-   *   only shape change is an OPTIONAL `ServerInfo.capabilities`.
-   * - **The auth contract is unchanged.** The server still reads
-   *   `OPENCODE_PASSWORD` first and falls back to `OPENCODE_SERVER_PASSWORD`.
+   * - **No route was removed.** The generated client declaration only gained
+   *   routes (plugin.gui, generate.image/decisions, voice.models,
+   *   mcp.client.token, file.watch/unwatch, experimental.media,
+   *   debug.heapDump, usage.limits). The two removed declaration lines are the
+   *   type-import line and the old `event.subscribe` signature, which gained
+   *   an OPTIONAL type filter and still streams the whole union when called
+   *   with no options - the way TBAi calls it.
+   * - **No event type was removed.** The `V2Event` union is unchanged.
+   * - **The imported types are unchanged**, except two OPTIONAL additions:
+   *   `ModelInfo.type?` and `ServerInfo.hostname?`.
+   * - **The auth contract is unchanged** (`OPENCODE_PASSWORD` first, then the
+   *   legacy `OPENCODE_SERVER_PASSWORD`).
    *
-   * The difference TBAi can observe: 39 routes gained a DECLARED 404, and
-   * exactly ONE of them is a route TBAi calls - `GET /api/permission/request`.
-   * A declared status makes the client throw a TAGGED error for it; an
-   * undeclared one makes it throw `ClientError("UnexpectedStatus")`. Every
-   * other route TBAi calls is unchanged, and the server's own behaviour for
-   * the one that changed did not - only the client's declaration of it.
+   * **Why the ceiling is 2.2.1 rather than the next minor.** A ceiling one
+   * version past the audited release admits exactly 2.2.0. TBAi calls these
+   * routes by name and reads the event union, so each newer release has to be
+   * checked against the same list before it is admitted; `<2.3.0` would
+   * silently authorize 2.2.1 and everything after it.
    *
-   * The range's lower half is unchanged too, so a 2.0.x server is still
-   * supported. That direction was checked as well: the 2.1.2 client against a
-   * real 2.0.22 server passes the same real-server suites.
+   * The lower half is unchanged: 2.0.15 through 2.1.x remain supported. That
+   * direction was checked when 2.1 landed - the 2.1.2 client against a real
+   * 2.0.22 server passes the same real-server suites. The 2.1.x audit trail
+   * (declared 404s, branded id aliases) is in `docs/decisions.md`.
    */
   minimumVersion: "2.0.15",
-  maximumVersionExclusive: "2.2.0",
+  maximumVersionExclusive: "2.2.1",
   /** Default HTTP Basic username expected by OpenCode V2. */
   authUsername: "opencode",
   /**
@@ -110,7 +111,7 @@ export const OPENCODE_CONFIG = {
   serverHomeDir: path.join(DATA_DIR, "opencode-home"),
   /** User-facing error when the `opencode` binary cannot be found on PATH. */
   binaryMissingError:
-    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15–2.1.x executable or install `opencode` on PATH, then reload.",
+    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15–2.2.0 executable or install `opencode` on PATH, then reload.",
 } as const;
 
 export type OpenCodeConfig = {

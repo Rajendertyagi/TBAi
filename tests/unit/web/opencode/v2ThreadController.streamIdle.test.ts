@@ -14,9 +14,9 @@ import {
 /**
  * RT-008: a silent stream is a failed stream, and silence is measured in BYTES.
  *
- * The pinned OpenCode 2.1.2 server sends an SSE keepalive comment every 15
- * seconds, so an idle-but-healthy stream is silent in EVENTS for as long as
- * nobody is working. The idle watchdog therefore listens for raw transport
+ * The 2.1.2 server, the binary this interval was measured on, sends an SSE
+ * keepalive comment every 15 seconds, so an idle-but-healthy stream is silent
+ * in EVENTS for as long as nobody is working. The idle watchdog therefore listens for raw transport
  * activity (`onActivity`), and its threshold is two missed heartbeats.
  *
  * Both directions are pinned here:

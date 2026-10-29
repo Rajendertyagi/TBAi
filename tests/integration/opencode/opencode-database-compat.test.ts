@@ -1,5 +1,5 @@
 /**
- * Database compatibility for the supported OpenCode binary (2.1.2), executed
+ * Database compatibility for the pinned OpenCode binary, executed
  * against a real server rather than inferred from source.
  *
  * ## What this proves
@@ -21,9 +21,9 @@
  *
  * ## Scope
  *
- * The user's current target is 2.1.2 only. The advertised 2.0.x range is NOT
- * exercised here and remains unverified; this suite never claims cross-version
- * recovery it did not observe.
+ * This suite exercises the one binary the harness resolves (the CI pin, 2.2.0).
+ * The advertised 2.0.x range is NOT exercised here and remains unverified;
+ * this suite never claims cross-version recovery it did not observe.
  *
  * ## Process safety
  *
@@ -96,7 +96,7 @@ interface StoreSnapshot {
 const SOURCE_DB_FILE = "opencode-source.db";
 const COPY_DB_FILE = "opencode-copy.db";
 
-describeRuntime("real OpenCode: a 2.1.2 store round-trips through a copy", () => {
+describeRuntime("real OpenCode: a store round-trips through a copy", () => {
   let isolation: RuntimeIsolation;
   let stub: StubProvider;
   let sourceServer: RuntimeOpenCodeServer | undefined;
@@ -195,7 +195,7 @@ describeRuntime("real OpenCode: a 2.1.2 store round-trips through a copy", () =>
     );
   }, 180_000);
 
-  it("reopens the copy on 2.1.2 with the same id, history, and no destructive migration", async () => {
+  it("reopens the copy on the same binary with the same id, history, and no destructive migration", async () => {
     copyServer = await startRuntimeOpenCodeServer(
       undefined,
       { XDG_DATA_HOME: dataHome(), OPENCODE_DB: copyDb },

@@ -11,6 +11,15 @@
  *
  * The runtime's connection state is the fact. It is set by the one component
  * that knows whether a retry is scheduled, and it carries the attempt number.
+ *
+ * ## THE CONTRACT THIS PINS NOW
+ *
+ * The chip owns TRANSPORT AND RECOVERY HEALTH only. A run, a cancellation, an
+ * engine retry and a history refresh all leave a connected transport connected
+ * — those are the primary pill's facts. The four cases that used to assert the
+ * old heart contract ("load/run in flight = working", "retry = retrying") were
+ * rewritten in S3; the heart's contract changed by design, not by accident, and
+ * the cases remain to hold the new one.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -82,17 +91,18 @@ describe("the OpenCode status chip's presentation", () => {
     expect(shown.label).toBe("Disconnected");
   });
 
-  it("shows a load in flight as working", () => {
+  it("keeps a load in flight off the heart: a refresh is not a connection state", () => {
     const shown = view({ load: { type: "loading" } });
 
-    expect(shown.presentation).toBe("working");
-    expect(shown.label).toBe("Working");
+    expect(shown.presentation).toBe("idle");
+    expect(shown.label).toBe("Connected");
   });
 
-  it("shows a run in flight as working", () => {
+  it("keeps a run in flight off the heart: turn status belongs to the primary", () => {
     const shown = view({ running: true });
 
-    expect(shown.presentation).toBe("working");
+    expect(shown.presentation).toBe("idle");
+    expect(shown.label).toBe("Connected");
   });
 
   it("shows a blocked recovery as an error with the manual control", () => {
@@ -111,30 +121,65 @@ describe("the OpenCode status chip's presentation", () => {
   });
 });
 
+describe("the status chip's health predicate", () => {
+  it("stays Connected while a cancelling execution runs on a connected transport", () => {
+    // §2: health has no `!cancelled` term. The primary owns "Stopping…"; the
+    // heart reporting Disconnected at the same moment would be a second answer
+    // to one fact.
+    const shown = view({ cancelled: true });
+
+    expect(shown.presentation).toBe("idle");
+    expect(shown.label).toBe("Connected");
+  });
+
+  it("is Disconnected for waiting-for-server even while cancelling", () => {
+    const shown = view({
+      cancelled: true,
+      connection: { type: "waiting-for-server" },
+    });
+
+    expect(shown.presentation).toBe("off");
+    expect(shown.label).toBe("Disconnected");
+  });
+
+  it("is Disconnected for a closed transport even while cancelling", () => {
+    // §2b: `off` is driven solely by the CONNECTION, never by the execution.
+    const shown = view({ cancelled: true, connection: { type: "closed" } });
+
+    expect(shown.presentation).toBe("off");
+    expect(shown.label).toBe("Disconnected");
+  });
+
+  it("keeps a reconciling load Connected", () => {
+    const shown = view({ load: { type: "reconciling" } });
+
+    expect(shown.presentation).toBe("idle");
+    expect(shown.label).toBe("Connected");
+  });
+});
+
 describe("the status chip's live engine retry", () => {
-  it("shows a scheduled engine retry as retrying, with the engine's attempt number", () => {
+  it("keeps a scheduled engine retry off the heart: the primary owns the countdown", () => {
     const shown = view({ retry: { attempt: 2 } });
 
-    expect(shown.presentation).toBe("retrying");
-    expect(shown.label).toBe("Retrying (attempt 2)");
-    // The engine's attempt counter is not the transport's; the chip must not
+    expect(shown.presentation).toBe("idle");
+    expect(shown.label).toBe("Connected");
+    // The engine's attempt counter is not the transport's; the chip must never
     // present it as progress toward the reconnect budget.
     expect(shown.attempt).toBeNull();
   });
 
-  it("wins over the working predicate, including a client execution flag", () => {
-    // The retry branch sits before the whole "loading/reconciling/working"
-    // predicate, so neither an ordinary refresh nor a stale client-side run
-    // flag can hide a wait the server has confirmed.
+  it("stays Connected when a retry coincides with a refresh and a run", () => {
     const loading = view({ retry: { attempt: 1 }, load: { type: "loading" } });
-    expect(loading.presentation).toBe("retrying");
+    expect(loading.presentation).toBe("idle");
+    expect(loading.label).toBe("Connected");
 
     const running = view({ retry: { attempt: 2 }, running: true });
-    expect(running.presentation).toBe("retrying");
-    expect(running.label).toBe("Retrying (attempt 2)");
+    expect(running.presentation).toBe("idle");
+    expect(running.label).toBe("Connected");
   });
 
-  it("loses to a reconnect: a countdown during a transport retry would contradict the wire", () => {
+  it("still loses to a reconnect: the wire, not the turn, is the fact", () => {
     const shown = view({
       retry: { attempt: 2 },
       connection: { type: "reconnecting", attempt: 4 },
@@ -145,7 +190,7 @@ describe("the status chip's live engine retry", () => {
     expect(shown.attempt).toBe(4);
   });
 
-  it("loses to a terminal failure, which is what the reader must see", () => {
+  it("still loses to a terminal failure, which is what the reader must see", () => {
     const shown = view({
       retry: { attempt: 2 },
       connection: { type: "failed", attempt: 10 },
@@ -156,7 +201,7 @@ describe("the status chip's live engine retry", () => {
     expect(shown.canReconnect).toBe(true);
   });
 
-  it("loses to a failed load: an error is reported, not a wait", () => {
+  it("still loses to a failed load: an error is reported, not a wait", () => {
     const shown = view({
       retry: { attempt: 2 },
       load: { type: "error", error: { message: "history read failed" } },

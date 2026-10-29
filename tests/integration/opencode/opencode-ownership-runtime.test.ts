@@ -1,5 +1,6 @@
 /**
- * G2 acceptance against a real OpenCode 2.1.2 server and an isolated database.
+ * G2 acceptance against a real OpenCode server (the resolved binary) and an
+ * isolated database.
  *
  * Opt-in, exactly like the other runtime suites:
  *

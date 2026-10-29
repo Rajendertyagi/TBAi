@@ -100,45 +100,75 @@ export function shouldShowSessionTimeline({
   return mode === "agent";
 }
 
+/**
+ * The composer's opaque extras.
+ *
+ * `ChatWindow` stays engine-neutral: it renders these nodes without knowing
+ * which engine produced them, so nothing under `features/opencode/` or
+ * `features/chat/` is imported here.
+ */
+export interface ComposerExtras {
+  /**
+   * Transient status presentations, rendered INSIDE the reserved status row
+   * (which holds its height whether or not anything is showing). Direct: the
+   * pill. Code: the primary status and the restoration notice.
+   */
+  status?: ReactNode;
+  /**
+   * Interactive content (questions / forms), rendered ABOVE the reserved row at
+   * its natural height. Never constrained to the status row: a form is content,
+   * not a label, and pinning it to a pill's height would clip it.
+   */
+  interactive?: ReactNode;
+  /**
+   * Below-composer row content (agent mode only): the connection heart and any
+   * display-only chips. Its own constant-height row, outside the reserved row;
+   * the heart's popover is an out-of-flow overlay.
+   */
+  below?: ReactNode;
+}
+
+/**
+ * The Direct status pill.
+ *
+ * It renders into the reserved status row, so the marker rides on the pill
+ * itself rather than on a wrapper that would add its own flow box.
+ */
 function AssistantStatusPill() {
   const activity = useAssistantActivity();
   if (!activity) return null;
 
   return (
-    <div className="flex items-center justify-start pb-2 animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200 motion-reduce:animate-none">
-      <AgentStatus {...activity} />
-    </div>
+    <AgentStatus
+      data-primary-status
+      {...activity}
+      className="min-w-0 max-w-full shrink animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200 motion-reduce:animate-none"
+    />
   );
 }
 
 export function ChatWindow({
   isDraft = false,
   mode = "chat",
-  aboveComposerExtra,
-  belowComposerExtra,
+  composerExtras,
 }: {
   /** chat = TBAi chat; agent = OpenCode Code mode (separate runtime). */
   mode?: "chat" | "agent";
   isDraft?: boolean;
   /**
-   * Opaque node rendered in the composer folder, directly ABOVE the composer
-   * box. Same contract and the same reason as {@link belowComposerExtra}: kept
-   * opaque so this file stays free of engine-specific imports, with the owner
-   * (e.g. OpenCodeView) supplying whatever belongs there.
+   * Opaque content for the composer folder, split by concern:
    *
-   * Above rather than below because the surfaces that belong here are things
-   * the reader must act on before composing — the Code-mode question dock is
-   * the current owner. The transcript viewport is `flex-1` and the folder is
-   * auto-height, so a node placed here shrinks the transcript rather than
-   * covering it, and no measured height or floating panel is needed.
+   * - `interactive` (questions, forms) keeps its natural height above the
+   *   status row;
+   * - `status` renders inside a CONSTANT-height reserved row between the
+   *   interactive content and the composer, so a transient status appearing or
+   *   disappearing cannot resize the folder and move the transcript/composer;
+   * - `below` occupies the existing agent-mode chip row under the composer.
+   *
+   * The split is what makes layout stability structural rather than something
+   * each caller has to remember.
    */
-  aboveComposerExtra?: ReactNode;
-  /**
-   * Opaque node rendered in the composer folder row (agent mode only).
-   * Kept opaque so this file stays free of engine-specific imports —
-   * the owner (e.g. OpenCodeView) supplies whatever belongs there.
-   */
-  belowComposerExtra?: ReactNode;
+  composerExtras?: ComposerExtras;
 }) {
   // Single composer instance for the whole app: one tag, one live mount,
   // identical size/features everywhere. Identity is structural, never
@@ -178,23 +208,7 @@ export function ChatWindow({
   // every mounted row, so a fresh function per render re-renders the list.
   const renderRow = useCallback<
     NonNullable<React.ComponentProps<typeof ThreadPrimitive.Row>["children"]>
-  >(
-    (info) => {
-      switch (info.type) {
-        case "message":
-          return info.message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />;
-        case "part":
-          return <AssistantPart part={info.part}>{info.children}</AssistantPart>;
-        case "turn-end":
-          // TBAi renders no turn footer; the action bar already lives on the
-          // message. Returning null keeps the row from adding an empty cell.
-          return null;
-        default:
-          return null;
-      }
-    },
-    [mode],
-  );
+  >((info) => <ChatRow info={info} mode={mode} />, [mode]);
 
   return (
     <ThreadPrimitive.Root className="relative flex h-full min-h-0 flex-col">
@@ -241,11 +255,37 @@ export function ChatWindow({
           />
 
           <div className="relative z-10 mx-auto w-full max-w-3xl px-4 pb-4 bg-background">
-            <AssistantStatusPill />
-            {/* In flow, between the transcript and the composer, so the
-                viewport's `flex-1` absorbs the height and the last rows stay
-                reachable. No absolute positioning, no measurement. */}
-            {aboveComposerExtra ? <div className="pt-2">{aboveComposerExtra}</div> : null}
+            {/* Interactive content sits ABOVE the reserved row and keeps its
+                natural height: a question form is content, and clipping it to a
+                status pill's height would make it unusable. Its own add/remove
+                flow height is intentional, not a status jump. */}
+            {composerExtras?.interactive ? (
+              <div data-composer-interactive className="pt-2">
+                {composerExtras.interactive}
+              </div>
+            ) : null}
+            {/* The reserved status row. It is ALWAYS mounted and its one-line
+                height is fixed by `--status-reserved-height`, so a status pill
+                appearing, disappearing or changing label cannot resize the
+                composer folder — which is what used to move the transcript and
+                composer. `flex-wrap` lets the primary and the restoration
+                notice coexist as sibling pills and wrap to a second line only
+                when the row is too narrow to hold both; `gap-2` is also the
+                wrapped line-gap. Every `AgentStatus` pill is 38px tall because
+                its trailing wrapper is always a `size-6` box (6 + 24 + 6 + 2
+                border), so one line is 38+8(pb)=46px and two lines are
+                38+8(gap)+38+8(pb)=92px. Both numbers are asserted by the
+                geometry spec.
+                The Direct pill renders here only in chat mode: Code mode's
+                primary is supplied by its own runtime owner through `status`,
+                and composing both would report one turn twice. */}
+            <div
+              data-status-row
+              className="flex flex-wrap items-center gap-2 min-w-0 overflow-x-clip pb-2 min-h-[var(--status-reserved-height)]"
+            >
+              {mode === "chat" ? <AssistantStatusPill /> : null}
+              {composerExtras?.status ?? null}
+            </div>
             {composer}
             {showScopePicker && (
               <div className="px-1 pt-1">
@@ -255,20 +295,130 @@ export function ChatWindow({
             {/* Agent (Code) mode: display-only workspace chip — the OpenCode
                 session's working directory is set at session-create time and
                 cannot be re-rooted mid-session. Reuses the same static chip
-                as bound Direct threads. An optional owner-supplied node
-                (e.g. the Code-mode status heart) shares the row. */}
+                as bound Direct threads. The connection heart shares this
+                constant-height row; it is deliberately OUTSIDE the reserved
+                status row, and its popover is an out-of-flow overlay. */}
             {showAgentScopeChip && (
-              <div className="flex items-center gap-1 px-1 pt-1">
+              <div data-composer-below className="flex items-center gap-1 px-1 pt-1">
                 <div className="min-w-0 flex-1">
                   <WelcomeScopePicker editable={false} />
                 </div>
-                {belowComposerExtra}
+                {composerExtras?.below}
               </div>
             )}
           </div>
         </>
       )}
     </ThreadPrimitive.Root>
+  );
+}
+
+/** One row's render info, as `ThreadPrimitive.Row` passes it. */
+type ThreadRowInfo = Parameters<
+  NonNullable<React.ComponentProps<typeof ThreadPrimitive.Row>["children"]>
+>[0];
+
+/**
+ * Renders one assistant-ui thread row using TBAi's own components.
+ *
+ * Exported so the DOM suite can mount the REAL row composition — this switch
+ * together with `selectTranscriptRows` — under a real runtime. A virtualizer
+ * needs measurable scroll geometry that a DOM test cannot provide; the rows it
+ * feeds are the part whose behaviour is asserted.
+ *
+ * `mode` is the owning engine, never re-derived from tool names.
+ *
+ * ## Why the assistant cases do not render `AssistantMessage`
+ *
+ * Core 0.3.30 emits a `message` row only for a non-assistant message or an
+ * assistant message the composer is editing; every other assistant message
+ * becomes `part` rows (and a part-less one becomes no rows at all). So
+ * `AssistantMessage`, which owns the error card, the action bar and the
+ * timeline, never mounted for the messages a reader actually sees — a failed
+ * turn carried `status: { type: "incomplete", reason: "error" }` and showed
+ * nothing. The chrome is therefore rendered from the row that owns it: the
+ * first part row (timeline), the last part row (error + footer), and the
+ * `turn-end` row for a part-less message, whose scopes all resolve through the
+ * library's own `MessageByIdProvider`.
+ */
+export function ChatRow({ info, mode }: { info: ThreadRowInfo; mode: "chat" | "agent" }) {
+  switch (info.type) {
+    case "message":
+      return info.message.role === "user" ? <UserMessage /> : <AssistantMessage mode={mode} />;
+    case "part":
+      return (
+        <AssistantPartRow part={info.part} indices={info.row.indices} mode={mode}>
+          {info.children}
+        </AssistantPartRow>
+      );
+    case "turn-end":
+      return <PartlessAssistantTail />;
+    default:
+      return null;
+  }
+}
+
+/**
+ * One part row: the part itself plus the message-level chrome the row owns.
+ *
+ * The timeline goes on the FIRST row because it summarizes the whole turn and
+ * has always sat above the parts; the error card and footer go on the LAST row
+ * because they close the message. Exactly one row can satisfy each condition
+ * (`indices` partition the message's parts), so neither duplicates across
+ * rows, and a one-row message owns both.
+ */
+function AssistantPartRow({
+  part,
+  indices,
+  mode,
+  children,
+}: {
+  part: Parameters<typeof AssistantPart>[0]["part"];
+  indices: readonly number[];
+  mode: "chat" | "agent";
+  children?: ReactNode;
+}) {
+  const partCount = useAuiState((s) => s.message.parts.length);
+  const isFirstRow = Math.min(...indices) === 0;
+  const isLastRow = Math.max(...indices) === partCount - 1;
+
+  return (
+    <>
+      {isFirstRow && shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
+      <AssistantPart part={part}>{children}</AssistantPart>
+      {isLastRow ? <AssistantMessageTail /> : null}
+    </>
+  );
+}
+
+/**
+ * The turn-end row's chrome, for the one message shape that has no rows of its
+ * own.
+ *
+ * Both engines can produce an assistant message with `content: []` and an error
+ * status — the AI SDK converter appends one when the last message is not an
+ * assistant, and the OpenCode projection does the same when no assistant
+ * message can be named. Such a message yields no part rows, so its error would
+ * otherwise have nowhere to render. Every other assistant message renders its
+ * tail from its last part row (or, while editing, from its `message` row), so
+ * this is deliberately narrow: it must not fire for those, or the card would
+ * appear twice.
+ */
+function PartlessAssistantTail() {
+  const ownedElsewhere = useAuiState(
+    (s) =>
+      s.message.role !== "assistant" || s.message.composer.isEditing || s.message.parts.length > 0,
+  );
+  return ownedElsewhere ? null : <AssistantMessageTail />;
+}
+
+/** The closing chrome of an assistant message: its error, then its footer. */
+function AssistantMessageTail() {
+  return (
+    <>
+      <AssistantError />
+      <AssistantTurnFooter />
+    </>
   );
 }
 
@@ -332,6 +482,57 @@ const groupedBy = groupPartByType<TChatGroupKey>({
 });
 
 function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
+  return (
+    <MessagePrimitive.Root className="flex animate-in flex-col items-start fade-in-0 slide-in-from-bottom-1 duration-200">
+      {/* No single assistant bubble. Each node below owns its own surface, so a
+          reasoning panel, a tool group and a paragraph read as separate blocks
+          instead of one nested stack. `max-w-[85%]` is carried over from the old
+          bubble so the column width is unchanged — only the shared background
+          and padding are gone. */}
+      <div className="flex w-full max-w-[85%] min-w-0 flex-col gap-2 text-sm text-foreground">
+        {/* One-line summary of the turn's tool work, above the parts.
+            Upstream's guidance is to silence the per-part tool renderers so the
+            steps are not shown twice. This app deliberately does NOT: it has
+            real per-tool UIs (`part.toolUI`, `AutoOpenToolGroup`, a terminal
+            block for shell calls) that carry output a verb/chip row cannot, and
+            dropping them would delete working capability to avoid a cosmetic
+            overlap. So the timeline is a COLLAPSED summary and the detailed
+            cards stay below it — summary on top, detail underneath, which is the
+            same shape as any log viewer. It renders nothing for a message with no
+            tool calls, so ordinary replies are untouched.
+
+            AGENT MODE ONLY. "N steps · M files changed" is the OpenCode
+            session's vocabulary, and only that runtime produces the data it
+            counts: OpenCode's `edit` / `write` results carry per-file line counts
+            in `state.metadata.files[]`, while the Direct engine's
+            `write_file` / `edit_file` results carry none (`{ path, bytes,
+            created }`, `{ path, occurrences, diff }`) — so on the Direct surface
+            the count is structurally always 0 and the line reads as a bug. See
+            {@link shouldShowSessionTimeline}. */}
+        {shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
+        {/* `GroupedParts` takes a render FUNCTION, so the shared part renderer is
+            passed as a reference — the same one the virtualized row renderer
+            uses, so an assistant part is rendered by one implementation. */}
+        <MessagePrimitive.GroupedParts groupBy={groupedBy}>
+          {AssistantPartSlot}
+        </MessagePrimitive.GroupedParts>
+        <AssistantError />
+      </div>
+
+      <AssistantTurnFooter />
+    </MessagePrimitive.Root>
+  );
+}
+
+/**
+ * The message's closing footer: copy/regenerate, the live streaming timer and
+ * the provenance chips.
+ *
+ * Every value is read from the message scope, so the footer renders the same
+ * from an editing message's `message` row and from the last part row of an
+ * ordinary assistant message — the row that mounts it is the only difference.
+ */
+function AssistantTurnFooter() {
   const timing = useMessageTiming();
   const createdAt = useAuiState((s) => s.message.createdAt);
   // Live-stream detection must ALSO require a running thread: restored
@@ -408,93 +609,56 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   if (thinking) metadataChips.push(`thinking:${thinking}`);
 
   return (
-    <MessagePrimitive.Root className="flex animate-in flex-col items-start fade-in-0 slide-in-from-bottom-1 duration-200">
-      {/* No single assistant bubble. Each node below owns its own surface, so a
-          reasoning panel, a tool group and a paragraph read as separate blocks
-          instead of one nested stack. `max-w-[85%]` is carried over from the old
-          bubble so the column width is unchanged — only the shared background
-          and padding are gone. */}
-      <div className="flex w-full max-w-[85%] min-w-0 flex-col gap-2 text-sm text-foreground">
-        {/* One-line summary of the turn's tool work, above the parts.
-            Upstream's guidance is to silence the per-part tool renderers so the
-            steps are not shown twice. This app deliberately does NOT: it has
-            real per-tool UIs (`part.toolUI`, `AutoOpenToolGroup`, a terminal
-            block for shell calls) that carry output a verb/chip row cannot, and
-            dropping them would delete working capability to avoid a cosmetic
-            overlap. So the timeline is a COLLAPSED summary and the detailed
-            cards stay below it — summary on top, detail underneath, which is the
-            same shape as any log viewer. It renders nothing for a message with no
-            tool calls, so ordinary replies are untouched.
-
-            AGENT MODE ONLY. "N steps · M files changed" is the OpenCode
-            session's vocabulary, and only that runtime produces the data it
-            counts: OpenCode's `edit` / `write` results carry per-file line counts
-            in `state.metadata.files[]`, while the Direct engine's
-            `write_file` / `edit_file` results carry none (`{ path, bytes,
-            created }`, `{ path, occurrences, diff }`) — so on the Direct surface
-            the count is structurally always 0 and the line reads as a bug. See
-            {@link shouldShowSessionTimeline}. */}
-        {shouldShowSessionTimeline({ mode }) ? <SessionTimeline /> : null}
-        {/* `GroupedParts` takes a render FUNCTION, so the shared part renderer is
-            passed as a reference — the same one the virtualized row renderer
-            uses, so an assistant part is rendered by one implementation. */}
-        <MessagePrimitive.GroupedParts groupBy={groupedBy}>
-          {AssistantPartSlot}
-        </MessagePrimitive.GroupedParts>
-        <AssistantError />
+    <div
+      className={cn(
+        "mt-1.5 flex items-center gap-1.5 min-h-6",
+        isStreaming ? "opacity-100" : "opacity-80 hover:opacity-100",
+      )}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <div className="flex items-center gap-0.5">
+        <TurnCopyButton />
+        <ActionBarPrimitive.Reload asChild>
+          <TooltipIconButton tooltip="Regenerate response" side="bottom">
+            <RefreshCw className="size-3.5" />
+          </TooltipIconButton>
+        </ActionBarPrimitive.Reload>
       </div>
 
-      <div
-        className={cn(
-          "mt-1.5 flex items-center gap-1.5 min-h-6",
-          isStreaming ? "opacity-100" : "opacity-80 hover:opacity-100",
-        )}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        <div className="flex items-center gap-0.5">
-          <TurnCopyButton />
-          <ActionBarPrimitive.Reload asChild>
-            <TooltipIconButton tooltip="Regenerate response" side="bottom">
-              <RefreshCw className="size-3.5" />
-            </TooltipIconButton>
-          </ActionBarPrimitive.Reload>
+      {isStreaming && (
+        <div className="flex items-center gap-1.5 ml-1">
+          <Loader2 className="size-3 animate-spin text-muted-foreground" />
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {liveDuration || "0.0s"}
+          </span>
         </div>
+      )}
 
-        {isStreaming && (
-          <div className="flex items-center gap-1.5 ml-1">
-            <Loader2 className="size-3 animate-spin text-muted-foreground" />
-            <span className="text-[11px] tabular-nums text-muted-foreground">
-              {liveDuration || "0.0s"}
-            </span>
-          </div>
-        )}
-
-        {!isStreaming && hasMetadata && (
-          <div className="ml-auto flex items-center gap-1">
+      {!isStreaming && hasMetadata && (
+        <div className="ml-auto flex items-center gap-1">
+          <span
+            className={cn(
+              "text-[11px] tabular-nums text-muted-foreground transition-opacity hover:text-foreground",
+              showTimestamp && "text-foreground",
+            )}
+            title={displayLabel}
+          >
+            {displayLabel}
+          </span>
+          {metadataChips.map((chip, i) => (
             <span
-              className={cn(
-                "text-[11px] tabular-nums text-muted-foreground transition-opacity hover:text-foreground",
-                showTimestamp && "text-foreground",
-              )}
-              title={displayLabel}
+              // biome-ignore lint/suspicious/noArrayIndexKey: the chips are a fixed set of slots (total, provider, model, thinking) pushed in a constant order and never reordered or removed, so position IS the identity. A content key would collide whenever two slots hold the same string.
+              key={i}
+              className="text-[10px] tabular-nums text-muted-foreground/70"
+              title={chip}
             >
-              {displayLabel}
+              {chip}
             </span>
-            {metadataChips.map((chip, i) => (
-              <span
-                // biome-ignore lint/suspicious/noArrayIndexKey: the chips are a fixed set of slots (total, provider, model, thinking) pushed in a constant order and never reordered or removed, so position IS the identity. A content key would collide whenever two slots hold the same string.
-                key={i}
-                className="text-[10px] tabular-nums text-muted-foreground/70"
-                title={chip}
-              >
-                {chip}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    </MessagePrimitive.Root>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

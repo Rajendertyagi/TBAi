@@ -8200,3 +8200,109 @@ re-read 1.5 s; published once past the window, ~10 s) instead of instantly, whil
 a thread opened much later reports it at once because `finalizedAgeMs` is then
 large. `REPLY_SETTLEMENT_MS` is a named constant with its measurement in the
 docblock; it is not a retry budget and it does not touch the Retry gate.
+
+## 2026-10-28 - OpenCode 2.2.0 is supported: the ceiling is the audited release
+
+**Decision.** `@opencode/client` moves from 2.1.2 to 2.2.0 in both
+`package.json` and `web/package.json` (the `bun.lock` entry and its
+`@opencode/protocol` / `@opencode/schema` pair move with it), and the managed
+range becomes `>=2.0.15 <2.2.1`. The minimum stays `2.0.15`; the ceiling is
+`2.2.1`, so **2.2.0 is the only version the change adds**.
+
+**Why.** The installed binary on this machine reports `opencode v2.2.0`
+(`D:\Coding\OpenCode\opencode.exe`). The `>=2.0.15 <2.2.0` gate rejected it
+before any request was made, which surfaced as seven failures in
+`tests/unit/opencode/codeViewSessionBoundary.test.ts` - every case that reaches
+`POST /api/opencode/session` answered 500 with `Unsupported OpenCode version
+2.2.0`, while the four cases that never spawn a server passed.
+
+**Compatibility check, against the published typings.** Comparing
+`@opencode/client@2.2.0` with 2.1.2:
+
+- **No route was removed.** The generated client only gained `plugin.gui`,
+  `generate.image` / `generate.decisions`, `voice.models`, `mcp.client.token`,
+  `file.watch` / `file.unwatch`, `experimental.media`, `debug.heapDump` and
+  `usage.limits`. The diff of `promise/generated/client.d.ts` removes exactly
+  two lines: the type-import line (superseded by a longer one) and the old
+  `event.subscribe` signature, which gained an OPTIONAL `types` filter and
+  still yields the whole `V2Event` union when called with no options - the way
+  `v2Client.ts` calls it.
+- **No event type was removed.** The `V2Event` union is byte-identical.
+- **The types TBAi imports are compatible.** `SessionInfo`,
+  `SessionMessageInfo`, `PermissionRequest`, `FormInfo`, `V2Event`,
+  `SessionInboxItem`, `TokenUsageInfo` and `SessionMessagesResponse` are
+  identical; the only changes are two OPTIONAL fields, `ModelInfo.type?` and
+  `ServerInfo.hostname?`.
+- **No source change was needed.** `bun run typecheck` (backend, tests, web) is
+  clean against 2.2.0 with the same code that compiled against 2.1.2.
+
+**Why the ceiling is the audited release and not the next minor.** TBAi calls
+these routes by name and reads the event union, so each new release has to be
+checked against the same lists before it is admitted. A blanket `<2.3.0` would
+silently authorize 2.2.1 and every release after it; `<2.2.1` admits exactly
+what was checked. Moving the ceiling is a one-line change accompanied by the
+same evidence this entry cites.
+
+**Verified against the real 2.2.0 binary.** `bun run test:opencode-runtime`
+required suites, all `0 skip`: `opencode-database-compat` (2),
+`opencode-ownership-runtime` (2), `opencode-retry-restart` (3),
+`opencode-retry-runtime` (3), `opencode-runtime-auth` (14),
+`opencode-session-idempotency-runtime` (5), `opencode-stub-provider-spike` (8)
+- **37 cases, 0 fail, 0 skip**, exit 0, against `OpenCode binary: opencode
+v2.2.0`. The Code view's session boundary went from **4 pass / 7 fail** (gate
+refusal) to **11 pass / 0 fail**.
+
+**Alternatives rejected.**
+
+- *Remove the version check.* The gate is what makes a 2.2.x route or event
+  removal a startup error instead of a runtime surprise.
+- *Move the ceiling to 2.3.0.* It accepts future 2.2.x patch releases that were
+  never checked, which is the failure mode the gate exists to prevent.
+- *Keep the client at 2.1.2 against a 2.2.0 server.* That is an untested
+  pairing in both directions; the client is the component that declares the
+  routes and statuses TBAi relies on, so it moves with the server.
+- *Delete or skip the seven session-boundary cases.* They were the evidence
+  that the two sides disagreed.
+
+**Consequences.** `@opencode/client` 2.2.0 and the range `>=2.0.15 <2.2.1`
+are in both manifests, the canonical lockfile and `src/config/opencode.ts`.
+The CI binary pin moved to 2.2.0 in a follow-up change on the same day:
+`OPENCODE_VERSION` is 2.2.0 and `OPENCODE_CLI_SHA512` is the registry's own
+`dist.integrity` for that tarball, not a locally recomputed value, and the
+composite action's integrity check and version assertion are unchanged. **That
+pin has not yet run on a CI runner.** It was verified locally - the downloaded
+tarball hashes to the pinned integrity, contains `package/bin/opencode.exe`
+(the path the action requires), and that binary reports `opencode v2.2.0` -
+and every required real-binary suite plus the session boundary was run against
+it locally. GitHub Actions has not executed the updated pin.
+`opencode-native-compaction-conformance` therefore stays excluded until the
+2.2.0 pin runs green on CI, even though all 8 of its cases passed locally
+against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
+
+## Recovery notice on the shared AgentStatus (S5, 2026-10-29)
+
+- **Decision:** the verified session-restoration notice renders on the vendored
+  `AgentStatus` element with a short visible label ("Session restored"), its
+  confirmed sentence in the notice's own `role="status"` region, and the dismiss
+  control supplied through `AgentStatus`'s `trailing` slot.
+  `data-restoration-notice` stays on the notice wrapper and remains its only
+  selector.
+- **Reason:** one pill anatomy for every status surface. The plan's §18.4
+  requires a documented choice before re-skinning; option (a) - shorten the copy,
+  add the live region, keep the full sentence reachable - is the one taken,
+  because the element truncates labels at `max-w-44` (the old sentence would have
+  been silently cut) and it has no live region.
+- **Trailing slot:** the vendored trailing wrapper was unconditionally
+  `aria-hidden`. A caller-supplied dismiss button there would be focusable but
+  invisible to assistive technology, so the wrapper is now hidden only when the
+  default decorative icon is rendered. The default rendering is unchanged.
+- **Alternatives rejected:**
+  - keep the hand-built notice as an exception (§18.4(b)) - duplicates the pill
+    anatomy the unified status work exists to remove;
+  - put the full sentence in the pill label - permanently truncated;
+  - render the dismiss button outside the trailing slot - leaves the hidden
+    wrapper defect in place for the next caller.
+- **Consequences:** the visible pill no longer shows the confirmed detail; that
+  detail is announced politely once, and it never repeats the active-turn pill's
+  label. Both surfaces keep their own markers (`data-primary-status`,
+  `data-restoration-notice`).

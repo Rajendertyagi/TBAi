@@ -35,11 +35,12 @@ const AUTH_FIXTURE_PASSWORD = "opencode-runtime-auth-fixture-password";
 const AUTH_REPLACEMENT_PASSWORD = "opencode-runtime-replacement-password";
 const AUTH_REPLACEMENT_ENV_VAR = "TBai_OPENCODE_TEST_REPLACEMENT_PASSWORD";
 const SUPPORTED_LOWER_BOUND_VERSION = "2.0.15";
-/** The newest published 2.x, and the version CI pins. */
-const SUPPORTED_CLIENT_VERSION = "2.1.2";
+/** The audited target: the version both manifests pin and the installed binary reports. */
+const SUPPORTED_CLIENT_VERSION = "2.2.0";
 const BELOW_LOWER_BOUND_VERSION = "2.0.14";
 const UNSUPPORTED_VERSION = "2.0.14";
-const UPPER_BOUND_VERSION = "2.2.0";
+/** One patch past the audited target: outside the range by design, not by accident. */
+const UPPER_BOUND_VERSION = "2.2.1";
 
 type AuthInvariantResult = {
   readonly basicHeaderMatches: boolean;
@@ -250,9 +251,18 @@ describe("OpenCode managed version range", () => {
     expect(parseOpenCodeVersion("not-a-version")).toBeNull();
   });
 
-  it("accepts the audited lower bound and current client release", () => {
+  it("accepts the audited lower bound and the 2.2.0 client release", () => {
     expect(isSupportedOpenCodeVersion(SUPPORTED_LOWER_BOUND_VERSION)).toBe(true);
     expect(isSupportedOpenCodeVersion(SUPPORTED_CLIENT_VERSION)).toBe(true);
+  });
+
+  it("admits 2.2.0 and rejects the first version past the ceiling", () => {
+    // The range is closed deliberately at the audited release: a newer 2.2.x
+    // has to be checked against the same route and event lists before the
+    // ceiling moves, so <2.2.1 is the whole authorized surface, not a step up.
+    expect(isSupportedOpenCodeVersion("2.2.0")).toBe(true);
+    expect(isSupportedOpenCodeVersion("2.2.1")).toBe(false);
+    expect(isSupportedOpenCodeVersion("2.3.0")).toBe(false);
   });
 
   it("accepts the whole 2.1 line, which was checked against the upstream source", () => {
@@ -263,7 +273,7 @@ describe("OpenCode managed version range", () => {
       expect(isSupportedOpenCodeVersion(version)).toBe(true);
   });
 
-  it("rejects the below-range fixture and the 2.2.0 upper bound", () => {
+  it("rejects the below-range fixture and the upper bound", () => {
     expect(isSupportedOpenCodeVersion(BELOW_LOWER_BOUND_VERSION)).toBe(false);
     expect(isSupportedOpenCodeVersion(UNSUPPORTED_VERSION)).toBe(false);
     expect(isSupportedOpenCodeVersion(UPPER_BOUND_VERSION)).toBe(false);

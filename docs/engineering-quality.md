@@ -200,7 +200,7 @@ either — each one carries the condition that would admit it:
 | Suite | Why it is not required |
 | --- | --- |
 | `opencode-context-meter-runtime` | needs a real provider credential, which the isolated runner does not have; live acceptance coverage stays dispatch-only (`e2e-big-pickle`) |
-| `opencode-native-compaction-conformance` | 3 of its 8 cases fail against the pinned 2.1.2 binary on a clean runner (finding RT-013); re-admit once its assertions match 2.1.2 |
+| `opencode-native-compaction-conformance` | 3 of its 8 cases failed against the 2.1.2 binary on a clean windows-latest runner (finding RT-013); all 8 passed locally against 2.2.0 on 2026-10-28, but that has no runner behind it yet, so re-admit once the 2.2.0 pin runs green on CI |
 
 `tests/unit/tooling/opencode-runtime-gate.test.ts` guards this gate. It reads the
 lists and the discovery function **from the script itself** (a copy of the lists in

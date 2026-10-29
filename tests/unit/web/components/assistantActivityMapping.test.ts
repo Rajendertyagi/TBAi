@@ -1,8 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import { toolsConfig } from "@web/config/tools";
-import { getToolRunningLabel } from "@web/features/chat/hooks/useAssistantActivity";
+import { toolActivityLabel } from "@web/features/chat/toolActivityLabel";
 
-describe("useAssistantActivity mappings", () => {
+describe("Direct tool activity label mappings", () => {
   it("has valid running tool verbs in toolsConfig", () => {
     const c = toolsConfig.copy.running;
     expect(c.reading).toBe("Reading…");
@@ -18,19 +18,17 @@ describe("useAssistantActivity mappings", () => {
     expect(c.runningSubagent).toBe("Running subagent…");
   });
 
-  it("maps command running tools including shell and bash to Running…", () => {
-    expect(getToolRunningLabel("shell")).toBe("Running…");
-    expect(getToolRunningLabel("bash")).toBe("Running…");
-    expect(getToolRunningLabel("execute")).toBe("Running…");
+  it("maps command running tools including run_command and bash to Running…", () => {
+    expect(toolActivityLabel("run_command")).toBe("Running…");
+    expect(toolActivityLabel("bash")).toBe("Running…");
   });
 
   it("maps file writing and editing tools to Writing… and Editing…", () => {
-    expect(getToolRunningLabel("write")).toBe("Writing…");
-    expect(getToolRunningLabel("write_file")).toBe("Writing…");
-    expect(getToolRunningLabel("edit")).toBe("Editing…");
-    expect(getToolRunningLabel("edit_file")).toBe("Editing…");
-    expect(getToolRunningLabel("patch")).toBe("Editing…");
-    expect(getToolRunningLabel("read")).toBe("Reading…");
-    expect(getToolRunningLabel("read_file")).toBe("Reading…");
+    expect(toolActivityLabel("write")).toBe("Writing…");
+    expect(toolActivityLabel("write_file")).toBe("Writing…");
+    expect(toolActivityLabel("edit")).toBe("Editing…");
+    expect(toolActivityLabel("edit_file")).toBe("Editing…");
+    expect(toolActivityLabel("read")).toBe("Reading…");
+    expect(toolActivityLabel("read_file")).toBe("Reading…");
   });
 });

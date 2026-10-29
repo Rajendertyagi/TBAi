@@ -117,9 +117,15 @@ test("Code route admits a first prompt and restores its session history", async 
       await expect(page.getByText(LIVE_PROMPT, { exact: true })).toBeVisible({
         timeout: ROUTE_TIMEOUT_MS,
       });
+      // "The turn is under way": either it is still running (the composer's
+      // Stop control is mounted) or it has already answered (the assistant
+      // action appears). The connection heart is deliberately not used - since
+      // the status-ownership change it reports transport health only, so a
+      // healthy turn reads "Connected" and only a scheduled reconnect reads
+      // "Working".
       await Promise.race([
         page
-          .getByRole("button", { name: "OpenCode status: Working" })
+          .getByRole("button", { name: "Stop generating" })
           .waitFor({ timeout: SERVER_TIMEOUT_MS }),
         page
           .getByRole("button", { name: "Regenerate response" })

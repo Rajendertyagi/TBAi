@@ -234,10 +234,10 @@ describe("createOpenCodeV2Client", () => {
   });
 
   it("reports keepalive-only traffic as activity, so silence means bytes", async () => {
-    // The pinned 2.1.2 server keeps an idle stream alive with a bare SSE
-    // comment every 15 seconds. Those chunks carry no event but they are the
-    // proof the connection is alive, so the client must report them as
-    // activity or an idle session is indistinguishable from a dead one.
+    // The 2.1.2 server, where this was measured, keeps an idle stream alive
+    // with a bare SSE comment every 15 seconds. Those chunks carry no event but
+    // they are the proof the connection is alive, so the client must report
+    // them as activity or an idle session is indistinguishable from a dead one.
     const fixture = makeFixture();
     const client = createOpenCodeV2Client(SCOPE, ABSOLUTE_ORIGIN, {
       fetch: fixture.fetch,

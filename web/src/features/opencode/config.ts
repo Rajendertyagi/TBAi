@@ -40,11 +40,11 @@ export const OPENCODE_V2_READY_TIMEOUT_MS = 20_000;
  * How long the event stream may be completely silent before it is considered
  * dead and reconnected.
  *
- * The pinned OpenCode 2.1.2 server sends an SSE keepalive comment every 15
- * seconds on `/api/event`, and the official client reports every chunk - so
- * 30 seconds is two missed heartbeats, measured against the exact binary
- * rather than a neighbouring version. Silence, not "no events": an idle
- * session legitimately delivers no events for hours.
+ * The 2.1.2 server - the binary this interval was measured on - sends an SSE
+ * keepalive comment every 15 seconds on `/api/event`, and the official client
+ * reports every chunk, so 30 seconds is two missed heartbeats. The 2.2.0 pin
+ * has not been re-measured for this interval. Silence, not "no events": an
+ * idle session legitimately delivers no events for hours.
  *
  * It must stay ABOVE `OPENCODE_V2_READY_TIMEOUT_MS`. A stream that is merely
  * quiet during a slow hydration must not be torn down while the caller still

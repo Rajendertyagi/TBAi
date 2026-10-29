@@ -13,9 +13,6 @@ const HEARTS: Record<StatusPresentation, { Icon: typeof HeartHandshake; classNam
   error: { Icon: HeartCrack, className: "text-destructive" },
   off: { Icon: HeartOff, className: "text-muted-foreground/60" },
   working: { Icon: HeartPulse, className: "text-amber-500 animate-pulse" },
-  // The same heart as a working run: only the LABEL separates an engine retry
-  // from a transport reconnect, and the label is what a reader reads.
-  retrying: { Icon: HeartPulse, className: "text-amber-500 animate-pulse" },
   idle: { Icon: HeartHandshake, className: "text-muted-foreground" },
 };
 

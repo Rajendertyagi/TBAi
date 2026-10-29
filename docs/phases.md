@@ -6,7 +6,7 @@ This file records active implementation phases only. Completed migration reports
 
 | Phase | Scope | Status | Evidence / remaining acceptance |
 |---|---|---|---|
-| V2 client boundary | Official `@opencode/client@2.1.2` in backend and browser; managed server constrained to `>=2.0.15 <2.2.0` | Complete | Package manifests and canonical root lockfile; proxy/auth boundary unchanged |
+| V2 client boundary | Official `@opencode/client@2.2.0` in backend and browser; managed server constrained to `>=2.0.15 <2.2.1` | Complete | Package manifests and canonical root lockfile; proxy/auth boundary unchanged. The CI binary pin moved to 2.2.0 on 2026-10-28 and has not yet run on a runner |
 | V2 runtime | Native client, external-store controller, event reduction, history, tools, permissions, forms, cancellation | Complete | Focused native/OpenCode suite and Code-route Playwright. The runtime-remediation audit (`docs/2026-10-20-opencode-runtime-remediation-plan.md`) closed 30 findings across Phases 0-7 and completed Phase 8 at `8bbe5a6` (CI run `40491928882`, all five required jobs green); see the **Runtime remediation** row below |
 | Permission UX | Allow-once and deny flows | Complete | Live terminal success and interrupted execution verified |
 | Form UX | Create, reply, cancel lifecycle | In progress | Real question creation remains blocked by the upstream permission gate; no synthetic form result is claimed. The per-question state leak and the dead step-change focus move were closed in Phase 7 (`tests/dom/opencode/V2FormCard.focus.test.tsx`) |

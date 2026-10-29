@@ -93,7 +93,26 @@ test.describe("native V2 permission approval against the real server", () => {
 
       // The turn fails for a provider reason, so the runtime must surface the
       // failure and must NOT offer a decision the server never requested.
-      await expect(page.getByRole("button", { name: "OpenCode status: Error" })).toBeVisible({
+      //
+      // The surface that carries a turn failure is NOT the connection heart any
+      // more: since the status-ownership change the heart reports transport
+      // health only, so it stays "Connected" while a turn fails. The turn's own
+      // failure belongs to the transcript. (That card is absent for THIS failure
+      // today - the turn ends with an empty assistant message and no detail.
+      // The gap is pre-existing and recorded in
+      // `docs/2026-10-27-status-ownership-and-activity-plan.md` §19.6; asserting
+      // a card that does not exist would be a lie, and skipping would hide it.)
+      //
+      // Wait for the turn to actually run and then end. The send control is the
+      // in-progress signal: it swaps to Stop for the whole of `thread.isRunning`,
+      // so checking it first is what stops this from passing before the turn
+      // ever started.
+      const turnRunning = page.getByRole("button", { name: "Stop generating" });
+      await turnRunning.waitFor({ state: "visible", timeout: LIVE_TIMEOUT_MS });
+      await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
+        timeout: LIVE_TIMEOUT_MS,
+      });
+      await expect(page.getByRole("button", { name: "OpenCode status: Connected" })).toBeVisible({
         timeout: LIVE_TIMEOUT_MS,
       });
       // Both gate spellings are checked, so an option-backed gate could not slip

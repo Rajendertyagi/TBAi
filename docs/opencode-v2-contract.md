@@ -23,19 +23,30 @@ recorded here rather than resolved silently.
 
 | Thing | Version | Where it is pinned |
 |---|---|---|
-| Official client (`@opencode/client`) | **2.1.2** | `package.json` and `web/package.json` |
-| Managed server, supported range | **`>=2.0.15 <2.2.0`** | `src/config/opencode.ts` |
-| CI's pinned server binary | **2.1.2** | the CI workflow, with npm's `dist.integrity` re-verified |
-| Upstream source read for this work | **2.0.32** (an audit-time local checkout; the pinned, tested surface is the **2.1.2** release above) | `packages/cli/src/env.ts`, `packages/opencode/src/server/…` |
+| Official client (`@opencode/client`) | **2.2.0** | `package.json` and `web/package.json` |
+| Managed server, supported range | **`>=2.0.15 <2.2.1`** | `src/config/opencode.ts` |
+| CI's pinned server binary | **2.2.0** (pinned 2026-10-28; **not yet exercised on a runner**) | the CI workflow, with npm's `dist.integrity` re-verified |
+| Upstream source read for this work | **2.0.32** (an audit-time local checkout; the pinned, tested surface is the **2.2.0** release above) | `packages/cli/src/env.ts`, `packages/opencode/src/server/…` |
 
 The supported range's **lower half is unchanged**, so a 2.0.x server is still
-supported. That direction was checked too: the 2.1.2 client against a real,
-integrity-verified **2.0.22** server passes the same real-server suites.
+supported. That direction was checked when 2.1 landed: the 2.1.2 client against
+a real, integrity-verified **2.0.22** server passes the same real-server suites.
 
-Every surface TBAi uses was compared at `v2.1.0`, `v2.1.1` and `v2.1.2` - all
-three are identical on every surface TBAi touches: **no route removed**, **no
-event type removed**, and the imported types compatible (the ids became
-branded aliases, every one of them `= string`).
+The **ceiling is the audited release, not the next minor**: `>=2.0.15 <2.2.1`
+admits exactly 2.2.0 at the top. TBAi calls these routes by name and reads the
+event union, so a newer release has to be checked against the same lists before
+the ceiling moves; a blanket `<2.3.0` would silently authorize 2.2.1 and later.
+
+**2.2.0 was adopted on 2026-10-28.** Comparing the published
+`@opencode/client@2.2.0` typings with 2.1.2: **no route was removed** (the
+generated client only gained `plugin.gui`, `generate.image`/`decisions`,
+`voice.models`, `mcp.client.token`, `file.watch`/`unwatch`,
+`experimental.media`, `debug.heapDump` and `usage.limits`; the two removed
+declaration lines are the type-import line and the old `event.subscribe`
+signature, which gained an OPTIONAL type filter), **no `V2Event` member was
+removed**, and the imported types are unchanged apart from two OPTIONAL fields
+(`ModelInfo.type?`, `ServerInfo.hostname?`). The 2.1.x detail - declared 404s
+and branded id aliases - is unchanged and still applies.
 
 ## Documented versus empirically verified
 
@@ -50,6 +61,13 @@ This is the distinction the contract exists to keep honest.
 - the auth proxy,
 - the runtime authentication,
 - the first-send draft handoff.
+
+**Re-verified on 2026-10-28 against a real 2.2.0 server** (`opencode v2.2.0`,
+`@opencode/client@2.2.0`): the seven required real-binary suites (37 cases, 0
+skip) and the Code view's session boundary (11 cases) all pass; typecheck is
+clean with no source change. The CI workflow now pins 2.2.0 and verifies the
+tarball against the registry's own `dist.integrity`, but the updated pin has
+**not yet run on a runner**: GitHub Actions has not executed it at this commit.
 
 **Verified against the upstream SOURCE but not against a live server:**
 

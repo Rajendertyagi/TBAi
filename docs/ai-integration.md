@@ -39,7 +39,7 @@ Key points:
 
 ## OpenCode V2 Code surface
 
-Code mode uses the official `@opencode/client@2.1.2` behind
+Code mode uses the official `@opencode/client@2.2.0` behind
 `web/src/features/opencode/v2Client.ts`. The client is scoped to the
 backend-minted session and directory, subscribes before hydration, and exposes
 only generation-bound operations. `v2ThreadController.ts` owns the domain state and
@@ -51,7 +51,8 @@ ownership contract is `features/opencode/sync/ownership.md`.
 `v2RuntimeStore.ts` projects that state into
 assistant-ui's external-store repository; OpenCode wire formats never cross into
 `ChatWindow` or generic chat state. The managed server compatibility gate is
-`>=2.0.15 <2.2.0`.
+`>=2.0.15 <2.2.1` — the ceiling is the audited 2.2.0 release, not the next
+minor, so a newer version has to be re-checked before it is admitted.
 
 ### Native V2 model-switch verification
 

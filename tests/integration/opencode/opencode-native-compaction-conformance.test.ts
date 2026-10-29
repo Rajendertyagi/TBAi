@@ -80,7 +80,7 @@ interface CompactionRecord {
   error?: unknown;
 }
 
-describeRuntime("real OpenCode 2.0.22: native compaction conformance", () => {
+describeRuntime("real OpenCode: native compaction conformance", () => {
   let stub: StubProvider;
   let server: RuntimeOpenCodeServer;
   let isolation: RuntimeIsolation;

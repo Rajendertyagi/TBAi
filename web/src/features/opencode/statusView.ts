@@ -38,7 +38,7 @@ export type LoadState =
   | { readonly type: "error"; readonly error: { readonly message: string } };
 
 /** How the chip presents itself. */
-export type StatusPresentation = "error" | "off" | "working" | "retrying" | "idle";
+export type StatusPresentation = "error" | "off" | "working" | "idle";
 
 /** What the chip shows, derived from the runtime's own state. */
 export interface StatusView {
@@ -68,25 +68,53 @@ export interface StatusView {
 }
 
 /**
+ * Whether the transport is healthy.
+ *
+ * This is the plan's health predicate and it is deliberately narrow: the heart
+ * and the primary both read it, so "the heart is idle" and "the primary may
+ * present" are one decision rather than two that can drift apart. It says
+ * nothing about a turn: a cancelling execution, a live engine retry, a running
+ * tool and a load refresh all leave it true.
+ *
+ * @param args - The runtime's connection and load state, and whether the staged
+ * recovery is blocked.
+ * @returns True when the runtime is connected, has no load error and no blocked
+ * recovery.
+ */
+export function isConnectionHealthy(args: {
+  readonly connection: ConnectionState;
+  readonly load: LoadState;
+  readonly recoveryBlocked: boolean;
+}): boolean {
+  return (
+    args.connection.type === "connected" && args.load.type !== "error" && !args.recoveryBlocked
+  );
+}
+
+/**
  * Derives what the status chip shows from the runtime's state.
  *
- * The precedence is deliberate:
+ * The chip owns TRANSPORT AND RECOVERY HEALTH only. The precedence is:
  *
  * 1. A terminal failure is an error, and it offers the manual control.
  * 2. An automatic reconnect is NOT an error. The runtime sets `load: error`
  *    while it waits for its next attempt, so the load state is only consulted
  *    once the connection state says the runtime is neither reconnecting nor
  *    connected.
- * 3. A runtime that is not connected is "off".
- * 4. An engine retry is "retrying". It comes AFTER terminal failure, recovery
- *    and load errors, and after disconnection — those are more urgent — and
- *    BEFORE a load or run in flight, so an ordinary refresh (`load: loading`)
- *    cannot hide a live retry.
- * 5. A load or a run in flight is "working".
- * 6. Otherwise the runtime is connected and idle.
+ * 3. A blocked recovery or a failed load is an error.
+ * 4. A runtime that is not connected is "off".
+ * 5. Otherwise the runtime is connected and idle — even while a run, a
+ *    cancellation, an engine retry or a history refresh is in flight. Those
+ *    belong to the primary status pill, and a chip that pulsed for them would
+ *    report one fact in two places.
  *
- * @param args - The runtime's connection and load state, whether the run is in
- * flight, the live engine retry, and the reconnect budget.
+ * `running`, `cancelled` and `retry` remain part of the input so the caller
+ * states the full runtime snapshot and so a regression that reintroduces
+ * turn-level coupling has an input to read: the unit suite proves each of the
+ * three is ignored here.
+ *
+ * @param args - The runtime's connection and load state, the live turn facts
+ * (accepted but not consulted), and the reconnect budget.
  * @returns What the chip shows.
  */
 export function statusView(args: {
@@ -98,7 +126,7 @@ export function statusView(args: {
   readonly retry: { readonly attempt: number } | null;
   readonly maxAttempts: number;
 }): StatusView {
-  const { connection, load, running, cancelled, recoveryBlocked, retry, maxAttempts } = args;
+  const { connection, load, recoveryBlocked, maxAttempts } = args;
   if (connection.type === "reconnecting") {
     return {
       presentation: "working",
@@ -135,30 +163,10 @@ export function statusView(args: {
       failed: false,
     };
   }
-  if (connection.type !== "connected" || cancelled) {
+  if (!isConnectionHealthy({ connection, load, recoveryBlocked })) {
     return {
       presentation: "off",
       label: "Disconnected",
-      attempt: null,
-      canReconnect: false,
-      failed: false,
-    };
-  }
-  if (retry) {
-    return {
-      presentation: "retrying",
-      label: `Retrying (attempt ${retry.attempt})`,
-      // The reconnect attempt stays its own field: this is the engine's retry,
-      // not a transport reconnect, and the two must never be read as one.
-      attempt: null,
-      canReconnect: false,
-      failed: false,
-    };
-  }
-  if (load.type === "loading" || load.type === "reconciling" || running) {
-    return {
-      presentation: "working",
-      label: "Working",
       attempt: null,
       canReconnect: false,
       failed: false,

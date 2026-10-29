@@ -162,7 +162,7 @@ describeRuntime("real OpenCode: a retryable provider failure produces a live ret
     "x-opencode-directory": isolation.homeDir,
   });
 
-  it("runs the pinned 2.1.2 binary in its own isolated store", async () => {
+  it("runs the pinned binary in its own isolated store", async () => {
     const info = await server.json<{ version?: string }>("/api/info");
     // The conclusion is only meaningful for the binary that produced it.
     console.log(`[retry-runtime] opencode version under test: ${info.version}`);

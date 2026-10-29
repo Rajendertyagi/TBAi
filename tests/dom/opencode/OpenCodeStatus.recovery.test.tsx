@@ -313,6 +313,76 @@ describe("the status chip's manual recovery", () => {
     }
   });
 
+  it("keeps the heart 'Connected' while an execution is cancelling", async () => {
+    // Cancellation is TURN state, owned by the primary status. The heart reads
+    // transport/recovery health only, so a connected transport stays Connected
+    // while the turn is stopping - the coupling that rendered "Disconnected"
+    // here was removed with S3.
+    runtimeState.connection = { type: "connected", serverVersion: "2.2.0" };
+    runtimeState.load = { type: "ready" };
+    runtimeState.revertRecovery = { type: "none" };
+    runtimeState.execution = { type: "cancelling" };
+
+    const mounted = mount();
+    try {
+      const content = await openPopover(mounted.container);
+
+      const label = [...content.querySelectorAll("span")].find(
+        (span) => span.textContent === "Connected",
+      );
+      expect(label).toBeDefined();
+      expect(content.textContent ?? "").not.toContain("Disconnected");
+    } finally {
+      restoreBlockedRevert();
+      runtimeState.execution = { type: "idle" };
+      unmount(mounted);
+    }
+  });
+
+  it("reads 'Disconnected' when the server is not yet reached, even mid-cancel", async () => {
+    // The `off` presentation is driven SOLELY by `connection.type !== "connected"`;
+    // a cancellation cannot mask a transport that never connected.
+    runtimeState.connection = { type: "waiting-for-server" };
+    runtimeState.load = { type: "loading" };
+    runtimeState.revertRecovery = { type: "none" };
+    runtimeState.execution = { type: "cancelling" };
+
+    const mounted = mount();
+    try {
+      const content = await openPopover(mounted.container);
+
+      const label = [...content.querySelectorAll("span")].find(
+        (span) => span.textContent === "Disconnected",
+      );
+      expect(label).toBeDefined();
+    } finally {
+      restoreBlockedRevert();
+      runtimeState.execution = { type: "idle" };
+      unmount(mounted);
+    }
+  });
+
+  it("reads 'Disconnected' on a closed connection, even mid-cancel", async () => {
+    runtimeState.connection = { type: "closed" };
+    runtimeState.load = { type: "ready" };
+    runtimeState.revertRecovery = { type: "none" };
+    runtimeState.execution = { type: "cancelling" };
+
+    const mounted = mount();
+    try {
+      const content = await openPopover(mounted.container);
+
+      const label = [...content.querySelectorAll("span")].find(
+        (span) => span.textContent === "Disconnected",
+      );
+      expect(label).toBeDefined();
+    } finally {
+      restoreBlockedRevert();
+      runtimeState.execution = { type: "idle" };
+      unmount(mounted);
+    }
+  });
+
   it("reports a session archived in OpenCode", async () => {
     // The archive arrives as `session.archived` and is carried on the session
     // as `time.archived`. This case proves the chip SAYS so, so a reader who

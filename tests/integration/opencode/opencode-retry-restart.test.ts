@@ -4,8 +4,8 @@
  *
  * ## What this proves
  *
- * A real 2.1.2 child is killed mid-retry and a second 2.1.2 child is started
- * against the same isolated store. The suite then observes:
+ * A real child is killed mid-retry and a second child is started against the
+ * same isolated store. The suite then observes:
  *
  * 1. Before the kill: `session.active` is `{ type: "running" }`, a live
  *    `session.retry.scheduled` carries an absolute epoch-ms `at`, and the

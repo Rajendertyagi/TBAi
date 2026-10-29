@@ -23,7 +23,14 @@ export const LIVE_MODEL = "agnes/agnes-3.0-flash";
 /** The file the edit-approval spec seeds and then asks a model to change. */
 export const TARGET_FILE = "probe-target.md";
 
-/** Creates a disposable Code-mode conversation in its own throwaway workspace. */
+/**
+ * Creates a disposable Code-mode conversation in its own throwaway workspace.
+ *
+ * The model is the only selection made here. A variant is deliberately NOT set:
+ * the provider decides whether one exists, and asking for one it does not
+ * declare fails the turn before the model is called
+ * (`SessionRunnerModel.VariantUnavailableError`).
+ */
 export async function createCodeConversation(
   request: APIRequestContext,
   model: string = LIVE_MODEL,
@@ -35,7 +42,6 @@ export async function createCodeConversation(
       engine: "opencode",
       opencodeAgent: "build",
       opencodeModel: model,
-      opencodeVariant: "high",
     },
   });
   expect(response.ok()).toBe(true);

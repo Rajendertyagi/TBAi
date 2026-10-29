@@ -26,7 +26,7 @@ import { OpenCodeStatus } from "./OpenCodeStatus";
 import { OpenCodePermissions } from "./OpenCodePermissions";
 import { OpenCodeQuestions } from "./OpenCodeQuestions";
 import { OpenCodeRecoveryNotice } from "./OpenCodeRecoveryNotice";
-import { OpenCodeRetryBanner } from "./OpenCodeRetryBanner";
+import { OpenCodePrimaryStatus } from "./OpenCodePrimaryStatus";
 import { OpenCodeSessionRow } from "./OpenCodeSessionRow";
 
 /**
@@ -317,18 +317,26 @@ function AgentRuntime({
             <div className="min-h-0 flex-1">
               <ChatWindow
                 mode="agent"
-                aboveComposerExtra={
-                  <>
-                    <OpenCodeQuestions />
-                    <OpenCodeRecoveryNotice
-                      key={sessionId}
-                      reusedExistingSession={reusedExistingSession}
-                      sessionId={sessionId}
-                    />
-                    <OpenCodeRetryBanner />
-                  </>
-                }
-                belowComposerExtra={<OpenCodeStatus compact onReconnect={reconnect} />}
+                composerExtras={{
+                  // Interactive: natural height, above the reserved row.
+                  interactive: <OpenCodeQuestions />,
+                  // Status: transient presentations only — the primary owns the
+                  // active turn, the notice states what the reuse verified.
+                  // Primary first so it occupies the top line when the row wraps.
+                  status: (
+                    <>
+                      <OpenCodePrimaryStatus />
+                      <OpenCodeRecoveryNotice
+                        key={sessionId}
+                        reusedExistingSession={reusedExistingSession}
+                        sessionId={sessionId}
+                      />
+                    </>
+                  ),
+                  // The connection heart keeps its own constant-height row
+                  // outside the reserved status row; its popover is an overlay.
+                  below: <OpenCodeStatus compact onReconnect={reconnect} />,
+                }}
               />
             </div>
           </div>

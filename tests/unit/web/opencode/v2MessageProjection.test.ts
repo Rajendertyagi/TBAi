@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionMessageInfo } from "@opencode/client";
 import { createInitialV2ThreadState } from "@web/features/opencode/v2Events.ts";
+import type { V2MessageState } from "@web/features/opencode/v2Types.ts";
 import { projectV2History } from "@web/features/opencode/v2History.ts";
 import { deriveV2ToolCallId } from "@web/features/opencode/v2Permissions.ts";
 import { projectV2RepositoryItems } from "@web/features/opencode/v2MessageProjection.ts";
@@ -534,5 +535,232 @@ describe("the gate reads what the projection wrote", () => {
 
   it("hands the gate nothing when the permission carries no patch", () => {
     expect(readBack([{ ...editPermission({}), metadata: undefined }])).toBeNull();
+  });
+});
+
+/**
+ * The execution error's detail stays on the MESSAGE.
+ *
+ * S3 removes turn status from the connection heart. The detail it used to show
+ * in a popover must not be removed with it: `projectV2RepositoryItems` already
+ * attaches the failure to the assistant message's `status`, and that message is
+ * what the transcript renders. This case pins the DATA half of that contract.
+ *
+ * The PRESENTATION half is currently blocked and tracked separately: the row
+ * selector (`createThreadRowsSelector`, core 0.3.30) emits only part rows for
+ * assistant messages, so `ChatWindow`'s `AssistantMessage` - which owns the
+ * `AssistantError` bubble - is never mounted for them. See the S3 report.
+ */
+describe("an execution error is carried on the assistant message", () => {
+  const USER_ID = "msg_exec_error_user";
+  const ASSISTANT_ID = "msg_exec_error_assistant";
+  const DETAIL = "Free usage limit reached. Please connect a provider.";
+
+  function errorState() {
+    const initial = createInitialV2ThreadState(SESSION_ID);
+    return {
+      ...initial,
+      messages: {
+        [USER_ID]: {
+          id: USER_ID,
+          parentId: null,
+          role: "user" as const,
+          createdAt: 1,
+          parts: [
+            {
+              kind: "text" as const,
+              id: `text:${USER_ID}:0`,
+              order: 0,
+              value: "hi",
+              status: "complete" as const,
+            },
+          ],
+          source: null,
+        },
+        [ASSISTANT_ID]: {
+          id: ASSISTANT_ID,
+          parentId: USER_ID,
+          role: "assistant" as const,
+          createdAt: 2,
+          parts: [
+            {
+              kind: "text" as const,
+              id: `text:${ASSISTANT_ID}:0`,
+              order: 0,
+              value: "I could not complete the request.",
+              status: "complete" as const,
+            },
+          ],
+          source: null,
+        },
+      },
+      messageOrder: [USER_ID, ASSISTANT_ID],
+      execution: {
+        type: "error" as const,
+        userMessageId: USER_ID,
+        assistantMessageId: ASSISTANT_ID,
+        error: { kind: "server" as const, message: DETAIL },
+      },
+    };
+  }
+
+  it("attaches the formatted failure to the named assistant message", () => {
+    const items = projectV2RepositoryItems(errorState());
+    const assistant = items.find((item) => item.message.id === ASSISTANT_ID);
+    const status = assistant?.message.status;
+
+    expect(status).toMatchObject({
+      type: "incomplete",
+      reason: "error",
+    });
+    // The reader's detail survives the formatting rather than being replaced by
+    // a generic "an error occurred".
+    const detail = status && "error" in status ? String(status.error) : "";
+    expect(detail).toContain(DETAIL);
+  });
+});
+
+describe("retry and step parts never become visible content", () => {
+  const USER_ID = "msg_internal_user";
+  const ASSISTANT_ID = "msg_internal_assistant";
+  const DETAIL = "Free usage limit reached. Please connect a provider.";
+
+  /**
+   * A user prompt plus one assistant message carrying exactly these parts.
+   *
+   * The parts are contextually typed by the state's own union, so a fixture
+   * cannot drift into a shape the reducer could never produce.
+   */
+  function stateWith(parts: V2MessageState["parts"]) {
+    const initial = createInitialV2ThreadState(SESSION_ID);
+    return {
+      ...initial,
+      messages: {
+        [USER_ID]: {
+          id: USER_ID,
+          parentId: null,
+          role: "user" as const,
+          createdAt: 1,
+          parts: [
+            {
+              kind: "text" as const,
+              id: `text:${USER_ID}:0`,
+              order: 0,
+              value: "fix the build",
+              status: "complete" as const,
+            },
+          ],
+          source: null,
+        },
+        [ASSISTANT_ID]: {
+          id: ASSISTANT_ID,
+          parentId: USER_ID,
+          role: "assistant" as const,
+          createdAt: 2,
+          parts,
+          source: null,
+        },
+      },
+      messageOrder: [USER_ID, ASSISTANT_ID],
+    };
+  }
+
+  function assistantContent(state: ReturnType<typeof stateWith>) {
+    const items = projectV2RepositoryItems(state);
+    const assistant = items.find((item) => item.message.id === ASSISTANT_ID);
+    expect(assistant).toBeDefined();
+    // `ThreadMessageLike.content` also admits a plain string for simple text
+    // messages; a projected assistant turn is always a part array, so state and
+    // check that rather than casting the union away.
+    const content = assistant!.message.content;
+    if (!Array.isArray(content)) {
+      throw new Error("projected assistant content must be an array of parts");
+    }
+    return content;
+  }
+
+  it("[text, retry] projects the text without an empty retry part", () => {
+    const content = assistantContent(
+      stateWith([
+        {
+          kind: "text",
+          id: `text:${ASSISTANT_ID}:0`,
+          order: 0,
+          value: "Here is the fix.",
+          status: "complete",
+        },
+        { kind: "retry", id: `retry:${ASSISTANT_ID}`, order: 1, value: "retry 3" },
+      ]),
+    );
+
+    expect(content).toEqual([
+      { type: "text", text: "Here is the fix.", status: { type: "complete" } },
+    ]);
+    // The internal attempt wording never reaches a renderer.
+    expect(JSON.stringify(content)).not.toContain("retry 3");
+    expect(content.some((part) => part.type === "text" && part.text === "")).toBe(false);
+  });
+
+  it("[retry, step] projects to empty content rather than a bubble", () => {
+    const state = stateWith([
+      { kind: "retry", id: `retry:${ASSISTANT_ID}`, order: 0, value: "retry 2" },
+      { kind: "step", id: `step:${ASSISTANT_ID}:1`, order: 1, status: "started" },
+    ]);
+
+    expect(assistantContent(state)).toEqual([]);
+    // The message itself still exists, in order: dropping the parts is not
+    // dropping the turn (its status and its errors ride on the message).
+    expect(projectV2RepositoryItems(state).map((item) => item.message.id)).toEqual([
+      USER_ID,
+      ASSISTANT_ID,
+    ]);
+  });
+
+  it("keeps a typed execution error on a step-only assistant message", () => {
+    const state = stateWith([
+      { kind: "step", id: `step:${ASSISTANT_ID}:1`, order: 0, status: "error" },
+    ]);
+    const items = projectV2RepositoryItems({
+      ...state,
+      execution: {
+        type: "error",
+        userMessageId: USER_ID,
+        assistantMessageId: ASSISTANT_ID,
+        error: { kind: "server", message: DETAIL },
+      },
+    });
+    const assistant = items.find((item) => item.message.id === ASSISTANT_ID);
+    const status = assistant?.message.status;
+
+    expect(assistant?.message.content).toEqual([]);
+    expect(status).toMatchObject({ type: "incomplete", reason: "error" });
+    const detail = status && "error" in status ? String(status.error) : "";
+    expect(detail).toContain(DETAIL);
+  });
+
+  it("leaves ordinary text and reasoning parts unchanged", () => {
+    const content = assistantContent(
+      stateWith([
+        {
+          kind: "reasoning",
+          id: `reasoning:${ASSISTANT_ID}:0`,
+          order: 0,
+          value: "planning",
+          status: "complete",
+        },
+        {
+          kind: "text",
+          id: `text:${ASSISTANT_ID}:1`,
+          order: 1,
+          value: "Done.",
+          status: "complete",
+        },
+      ]),
+    );
+
+    expect(content).toEqual([
+      { type: "reasoning", text: "planning", status: { type: "complete" } },
+      { type: "text", text: "Done.", status: { type: "complete" } },
+    ]);
   });
 });

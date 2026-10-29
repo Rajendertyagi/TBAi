@@ -124,9 +124,9 @@ describe("every real-binary runtime suite is classified", () => {
       expect(reason.length).toBeGreaterThanOrEqual(40);
       // A reason is only useful if it says what would have to change to admit
       // the suite. Both current entries do ("needs a real provider credential",
-      // "re-admit once its assertions match 2.1.2"); an entry that decays to
-      // "flaky" is a suppression, not a classification. The vocabulary below is
-      // a floor that catches that decay, not a proof that a reason is sound —
+      // "re-admit after the 2.2.0 pin runs green on CI"); an entry that decays
+      // to "flaky" is a suppression, not a classification. The vocabulary below
+      // is a floor that catches that decay, not a proof that a reason is sound —
       // the soundness itself is the measurement cited in the reason.
       expect(reason).toMatch(/\b(needs|because|until|once|re-admit|fail[a-z]*)\b/i);
     }
@@ -340,8 +340,11 @@ describe("the opencode-runtime CI job actually runs the gate", () => {
   });
 
   it("names the binary version it measured in the workflow env", async () => {
+    // 2.2.0 is the audited target both manifests pin as `@opencode/client`;
+    // moving this literal is the same decision as moving that pin, because the
+    // job's evidence only covers the binary it actually installs.
     const text = normalizeNewlines(await workflow());
-    expect(text).toMatch(/OPENCODE_VERSION:\s*"2\.1\.2"/);
+    expect(text).toMatch(/OPENCODE_VERSION:\s*"2\.2\.0"/);
   });
 
   it("is listed in the header comment that enumerates the jobs", async () => {

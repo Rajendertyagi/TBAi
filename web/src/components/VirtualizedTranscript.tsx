@@ -111,8 +111,13 @@ const ESTIMATED_ROW_SIZE_PX = 320;
  * list re-renders only when rows actually appear, disappear, regroup or a turn
  * completes. Reasoning runs coalesce into one row, matching what
  * `MessagePrimitive.GroupedParts` does for the non-virtualized renderer.
+ *
+ * Exported so the DOM suite can reproduce the app's actual row composition — the
+ * same selector, not a hand-shaped one — under a real runtime. A virtualizer
+ * needs measurable geometry, which a DOM test does not have; the rows it would
+ * feed are the part that matters.
  */
-const selectRows = createThreadRowsSelector({
+export const selectTranscriptRows = createThreadRowsSelector({
   groupBy: groupPartByType({ reasoning: ["group-reasoning"] }),
 });
 
@@ -184,7 +189,7 @@ export function VirtualizedTranscript({
   const contentRef = useRef<HTMLDivElement | null>(null);
   const stickyRef = useRef(true);
 
-  const rows = useAuiState(selectRows);
+  const rows = useAuiState(selectTranscriptRows);
   const isRunning = useAuiState((s) => s.thread.isRunning);
   const prevIsRunningRef = useRef(isRunning);
 

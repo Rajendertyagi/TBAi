@@ -23,7 +23,7 @@ The OpenCode subsystem is an **isolated feature** (`src/services/opencode/` back
 - **HEAD:** `b1c48a483b2455687d8de9735068d296ebc96d8d`
 - **Working tree:** Clean (as of 2026-10-19)
 - **Verification:** `bun run verify` exit 0 (4309 pass / 43 skip / 0 fail, 319 files, 4352 tests, 333.04s); `bun run typecheck` exit 0; lint + format:check clean.
-- **OpenCode CLI version:** 2.1.2 (supported range: 2.0.15–2.2.0)
+- **OpenCode CLI version:** 2.2.0 (supported range: 2.0.15–2.2.0; the ceiling is the audited release, `>=2.0.15 <2.2.1`)
 - **Client:** `@opencode/client` (official V2 client)
 - **GitHub Actions:** Run 39160063675 completed with success (all 3 jobs: verify, e2e, tauri).
 

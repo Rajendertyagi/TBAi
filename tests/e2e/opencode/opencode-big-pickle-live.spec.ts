@@ -90,9 +90,15 @@ test("real Big Pickle stream through the Code surface", async ({ page, request }
     expect(admitted.ok(), `prompt must be admitted (got ${admitted.status()})`).toBe(true);
     const admittedAt = Date.now() - startedAt;
 
-    const working = page.getByRole("button", { name: "OpenCode status: Working" });
-    await working.waitFor({ state: "visible", timeout: LIVE_TIMEOUT_MS });
-    const workingAt = Date.now() - startedAt;
+    // The turn-in-progress signal is the composer's Stop control, not the
+    // connection heart. Since the status-ownership change the heart reports
+    // TRANSPORT health only, so a healthy active turn reads "Connected" and
+    // only a scheduled reconnect ever reads "Working" (see `statusView.ts`);
+    // the Stop button is mounted for the whole of `thread.isRunning`, which is
+    // exactly the fact this step needs.
+    const running = page.getByRole("button", { name: "Stop generating" });
+    await running.waitFor({ state: "visible", timeout: LIVE_TIMEOUT_MS });
+    const runningAt = Date.now() - startedAt;
 
     const scroller = page.locator('[data-testid="virtual-transcript-scroller"]');
     await scroller.waitFor({ state: "visible", timeout: LIVE_TIMEOUT_MS });
@@ -126,7 +132,7 @@ test("real Big Pickle stream through the Code surface", async ({ page, request }
         samples.push({ ms: Date.now() - startedAt, chars });
         lastChars = chars;
       }
-      if (/pickle-ok/i.test(text) && (await working.count()) === 0) break;
+      if (/pickle-ok/i.test(text) && (await running.count()) === 0) break;
       await page.waitForTimeout(100);
     }
     const finishedAt = Date.now() - startedAt;
@@ -155,7 +161,7 @@ test("real Big Pickle stream through the Code surface", async ({ page, request }
     await page.screenshot({ path: testInfo.outputPath("big-pickle.png") });
 
     console.log(
-      `[big-pickle] admitted=${admittedAt}ms working=${workingAt}ms finished=${finishedAt}ms`,
+      `[big-pickle] admitted=${admittedAt}ms running=${runningAt}ms finished=${finishedAt}ms`,
     );
     console.log(`[big-pickle] growth samples: ${JSON.stringify(samples)}`);
     console.log(`[big-pickle] server answer chars: ${serverAnswer.length}`);
