@@ -1,15 +1,16 @@
-# Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 17)
+# Primary Status Ownership, Typed Activity Detection & Turn-Error Separation — Plan & Implementation Record (Rev 18)
 
 **Status:** IMPLEMENTED — S1, S2, S3, S5, S6, S7a are implemented and verified locally, and S7b is
-this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29 as `8f3f2d2`** (the
-live-provider evidence in §19.7 was added just before that commit). Two verification items remain
-**open**:
-the 2.2.0-pin workflow has never run on GitHub Actions, and CI run `40527025056` failed the tauri G1
-packaged-WebView observation for an **unclassified** cause. No CI result is claimed for this
-commit. See §19.
+this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29**: `8f3f2d2` (2.2.0
+pin + turn-facts owner), `38b2d91` (this record), `a170def` (the transcript end-pin fix, §19.8). CI
+on `a170def` is run `40869474036`: **`verify`, `e2e`, `opencode-runtime` and `opencode-g3` green**;
+`e2e-full` and `e2e-big-pickle` skipped because they are dispatch-only (a skip is not a pass).
+The 2.2.0 pin now has runner evidence (§19.4 item 2). One item remains **open**: the `tauri` G1
+packaged-WebView job, which failed in that run at `verify:packaged-origin` with `stage: (teardown
+only)` — an unclassified flake, not attributed to this change (§19.8). See §19.
 **Branch:** `ci/tauri-e2e-verify` — **Baseline commit:** `2804f94a0398e8606cd0f109e5694a87a5f5a1d1`
 (child of `2facd38`; §19.2)
-**Date:** 2026-10-28 (Rev 17 added 2026-10-29)
+**Date:** 2026-10-28 (Rev 17 added 2026-10-29; Rev 18 added 2026-10-29)
 **Owner:** Architecture / status-presentation + chat & OpenCode features
 **Governing docs:** `AGENTS.md` (file ownership, train freeze, test location), `docs/architectural-principles.md` (UI rule 4 — vendored-element adaptations)
 
@@ -1324,7 +1325,18 @@ runner ran the file in **6.8 s** at `38b2d91`. It is local-environmental and pre
 attributed to this change, and is not papered over by raising a timeout or loosening the
 `loadEarlier` poll.
 
-**No CI result is claimed for these two fixes.** They were uncommitted when this was written. Only a
-real run of the workflow on a commit that contains them can turn the `e2e` job green, and until that
-exists the job is red as reported above.
+**A CI run now exists for these fixes — run `40869474036` at `a170def` — and the `e2e` job is
+green:** `spec files ok: 7, failed: 0`, with `p2-history-load-recovery` **9 passed (47.5 s)**
+including both K-I4 and K-I8, `p2-direct-history-window` 1, `p2-paging` **2 passed (5.9 s)**,
+`p2-live-runtime` 4, `p2-tool-result-persistence` 3, `phase-8-tabs-navigation` 8 and
+`opencode-v2-code-route` 1. `verify`, `opencode-runtime` and `opencode-g3` are green in the same run;
+`e2e-full` and `e2e-big-pickle` stayed skipped. The runner's 5.9 s on `p2-paging` is the parity the
+local-hang paragraph above was measuring against.
+
+**`tauri` failed in that same run, and this change is not what failed.** The packaged-app smoke step
+passed; the failure is in the G1 origin observation — `verify:packaged-origin` exited 1 with
+`[g1] stage: (teardown only)` and a teardown `taskkill` that reported "no running instance of the
+task". That is a different step and a different symptom from `8f3f2d2`
+(`packaged app did not become ready (exited=False)`), and the job passed at `38b2d91`. It stays an
+open, unclassified flake; nothing here claims it fixed.
 
