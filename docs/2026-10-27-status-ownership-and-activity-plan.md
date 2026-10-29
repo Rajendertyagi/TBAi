@@ -1031,6 +1031,9 @@ pass; `test:startup-rollback` 2 pass; `test:lifecycle-integration` 3 pass; `test
 1. **CI has not run this change.** `2804f94` is the last commit CI saw, and its run `40527025056`
    failed only the `tauri` G1 packaged-WebView step for an **unclassified** cause (§14). No
    full-CI certification is claimed for this tree or for that commit.
+   **Superseded 2026-10-29, not rewritten:** the change was pushed and CI ran on it twice
+   (`40857768051` at `8f3f2d2`, `40857787405` at `38b2d91`). Both runs are red in `e2e`, and the
+   cause, the two fixes and the remaining gap are §19.8. The `tauri` flake named above is unchanged.
 2. **The 2.2.0 `OPENCODE_VERSION` pin has never executed on a GitHub Actions runner.** The
    committed workflow still pins 2.1.2. Everything checkable off a runner was checked on
    2026-10-29: the workflow's `OPENCODE_CLI_SHA512` constant, npm's `dist.integrity` for
@@ -1039,6 +1042,11 @@ pass; `test:startup-rollback` 2 pass; `test:lifecycle-integration` 3 pass; `test
    the installed binary reports `opencode v2.2.0`; and the two workflow tooling guards
    (`opencode-runtime-gate`, `verify-script`) pass 47/47 (84 assertions, exit 0). Running the pin
    itself needs a push, which this change did not make.
+   **Superseded 2026-10-29, not rewritten:** the pin was pushed and executed on a runner in both
+   post-push runs — `40857768051` at `8f3f2d2` and `40857787405` at `38b2d91`. Each log records
+   `OPENCODE_VERSION: 2.2.0`, `Unpacked opencode 2.2.0 from the npm registry (sha512 verified).`,
+   `opencode --version: opencode v2.2.0`, and then **`7/7 required runtime suites passed`**. That
+   is the first runner evidence behind the pin; it does not cover the excluded suite (item 4).
 3. **Live acceptance suites were not run, apart from the credential-free case in §19.5 — and the
    earlier "six" was wrong.** There are **seven**
    `tests/e2e/opencode/*-live.spec.ts` files. **Five need a real model** (and therefore a provider
@@ -1062,6 +1070,12 @@ pass; `test:startup-rollback` 2 pass; `test:lifecycle-integration` 3 pass; `test
    **8 pass, 0 fail, 24 assertions, exit 0**, covering automatic compaction, a second automatic
    compaction in the same session, manual compact, the event-stream lifecycle (120.8 s), durability
    and meter recovery. A local pass is not the CI run the exclusion names, so the exclusion stays.
+   **The exclusion's own stated precondition is now met (2026-10-29).** Its reason in
+   `scripts/run-opencode-runtime-suites.ts` says "re-admit after the 2.2.0 pin runs green on CI", and
+   the pin has now run green on a runner (item 2). The suite is still excluded, so nothing on CI has
+   executed it, and removing the entry adds a suite to the required set — a deliberate change with
+   its own runner observation, not a fold-in. It stays excluded in this diff and is flagged as
+   ready for re-admission; the reason string is left as written rather than half-corrected.
 
 ### 19.5 The credential-free live case, run locally (2026-10-29)
 
@@ -1218,4 +1232,99 @@ and `readOpenCodeConfigDocument` reports `editable: false` because it re-seriali
 the override there is no provider, so no model, so no gate. That is a pre-existing limitation of
 TBAi's config writer (JSONC is not editable), not something this change introduced, and it is
 reported rather than worked around.
+
+### 19.8 The red `e2e` job after the push: two different natures (2026-10-29)
+
+**What CI actually reported.** The push produced two runs — `40857768051` at `8f3f2d2` and
+`40857787405` at `38b2d91`. Both are red in `e2e` and green in `verify`, `opencode-runtime` and
+`opencode-g3`; `e2e-full` and `e2e-big-pickle` are skipped (dispatch-only, and a skip is not a
+pass). Each `e2e` job ends `spec files ok: 6, failed: 1`, and in both runs the one failing case is
+the same, at the same line:
+
+```
+1) … p2-history-load-recovery.spec.ts:536:2 › K-I8: after a successful load, an outage
+   re-issues NO request and keeps the messages
+   Error: expect(locator).toBeVisible() failed … element(s) not found
+     > 110 |   await expect(page.getByText(text)).toBeVisible({ timeout: 30_000 });
+       at expectTipLoaded (…p2-history-load-recovery.spec.ts:110:37)
+       at …p2-history-load-recovery.spec.ts:573:12
+```
+
+Line 573 is the **oldest** seeded message. `K-I4` — the revisit case, and the one this session's
+instrumented runs caught failing — passed in both CI runs.
+
+`tauri` is a separate signal and is **not** claimed: it failed at `8f3f2d2` inside the packaged-app
+smoke step with `packaged app did not become ready (exited=False)` — the same unclassified class as
+`2804f94` (§14) — and passed at `38b2d91`, whose diff is documentation only. Nothing in this change
+touches that job; it stays an open flake.
+
+**K-I8 asserted that the whole conversation fits one window.** The transcript is virtualized, so only
+the mounted window is in the DOM. K-I8 asked for the newest and the oldest seeded row to be visible
+at the same time, which holds only while the whole seeded conversation fits the 1280×720 default.
+The per-message chrome committed in `8f3f2d2` (`SessionTimeline` on the first part row, error card
+and copy/regenerate footer on the last) made 12-message conversations taller than that window, and
+the assertion — not the transcript — broke. Control, run at the base commit with nothing from this
+change applied: the same spec is **9 passed** at the default viewport and **8 passed, 1 failed** at a
+480 px viewport, the single failure being K-I8. The assertion encoded viewport fit; shrinking the
+window reproduces it without any product change.
+
+The fix asserts the claim the case is actually about: the newest message is visible, then a **real
+wheel gesture** scrolls to the top (`scrollTop === 0`, polled) and the oldest message is asserted
+there. This is the pattern already used by `p2-direct-history-window.spec.ts:160-199`
+(hover the scroller centre, `mouse.wheel`, poll), not a new mechanism. The comment at the call site
+records why the two-visibility form was wrong.
+
+**K-I4 was the real regression, and a green CI run is not evidence it is gone.** Locally the same
+spec failed K-I4 in **3 of 3** runs at this change while passing 9/9 at `2804f94`. It passed in both
+CI runs because the defect is a measurement-timing race, and a runner's timing is not this machine's.
+Instrumenting the virtualizer showed the sequence: while rows are re-measured after a re-entry the
+virtualizer issues its own corrective scrolls, one of which moves the offset **up**; the code read
+that as a reader's upward gesture and disarmed the sticky pin; the next correction was then applied
+unguarded, to a stale target. Measured on the failing path: `top 147` while the live end was `396`
+— 249 px short of the newest message, with the newest rows unmounted, and no later write re-asserting
+the end.
+
+`web/src/components/VirtualizedTranscript.tsx` now holds two invariants:
+
+1. `scrollToFn` refuses any write whose **target** is above the live end while the pin is armed. The
+   guard tests the target, not the current position: a correction the component already applied is
+   not a reader's intent.
+2. `writtenTopRef` records the offset this component wrote (`max(0, scrollHeight - clientHeight)`,
+   the clamp-safe end offset); a scroll event landing on that offset is our own write and does not
+   disarm stickiness. Reader disarming still requires a real upward movement with the height and
+   client size unchanged.
+
+Nothing else was touched: `estimateSize` is unchanged (its own comment forbids tuning it to paper
+over measurement churn), no retry, timer or extra settle delay was added, and the assertion that the
+pin holds was not relaxed. The rationale lives in the file, at the ref.
+
+**Local evidence on the fixed tree.** These are the numbers this record is allowed to cite:
+
+| Run | Result |
+|---|---|
+| `bun run test:e2e --project=chromium-headless p2-history-load-recovery.spec.ts` | **9 passed (46.0 s)**, exit 0 (base `2804f94`: 9 passed, 45.2 s) |
+| the 10 virtualizer/scroll guard files (`initial-scroll-range`, `mouse-activation`, `run-start-scroll`, `scroll-anchoring-regressions` R1–R4, `scroll-to-latest`, `status-layout-stability`, `transcript-header-contract`, `virtual-end-distance`, `p2-measurements`, `p2-streaming`) | `spec files ok: 10, failed: 0` — **20 passed, 0 failed, 1 skipped**, exit 0. The skip is `run-start-scroll.spec.ts:134`, skipped by design. |
+
+`scroll-anchoring-regressions` is the guard for the code that changed: R1–R4 still pass, including
+R2 (an append while the reader is scrolled up does not move the read position) and R4 (measurements
+survive a thread switch and a remount, and come back current).
+
+**Repository-wide gates on this tree, `bun run verify` exit 0:** four-project `typecheck`; `biome ci
+--error-on-warnings` and `biome format .` over **1062 files**, no fixes applied; `test:locations` OK;
+`build` OK; `test` **5071 pass, 66 skip, 0 fail — 5137 tests across 381 files (322.4 s)**;
+`test:shutdown` 1 pass; `test:startup-rollback` 2 pass; `test:lifecycle-integration` 3 pass;
+`test:dom` **643 pass, 0 fail across 62 files**; `test:quarantine` OK. The unit/integration and DOM
+totals are unchanged from §19.3 — this change adds no test case; it repairs one product invariant
+and corrects one assertion that was never measuring the claim it named.
+
+**`p2-paging` hangs locally and that is not this change.** In this environment it reaches the 600 s
+test timeout with the "load earlier" control disabled and Playwright reporting an element detached
+from the DOM. It does the same at the base commit `2804f94` (1 passed in 10.1 min), while the CI
+runner ran the file in **6.8 s** at `38b2d91`. It is local-environmental and pre-existing, is not
+attributed to this change, and is not papered over by raising a timeout or loosening the
+`loadEarlier` poll.
+
+**No CI result is claimed for these two fixes.** They were uncommitted when this was written. Only a
+real run of the workflow on a commit that contains them can turn the `e2e` job green, and until that
+exists the job is red as reported above.
 

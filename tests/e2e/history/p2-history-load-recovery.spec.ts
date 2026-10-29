@@ -569,7 +569,33 @@ test.describe("P2: failed history load recovers on SPA re-entry", () => {
       await expect(page.getByTestId("history-load-failed")).toHaveCount(0);
 
       // And the user's messages are still there throughout.
+      //
+      // The transcript is VIRTUALIZED: only rows inside the mounted window are
+      // in the DOM. The oldest message is therefore asserted by scrolling to
+      // it, which is what proves the runtime still holds it - "the whole
+      // conversation is rendered at once" is not the claim and is not true.
+      // This assertion previously passed only because the seeded conversation
+      // happened to fit one 1280x720 window; the assertion, not the transcript,
+      // is what that depended on (it fails at the base commit too, with a
+      // 480px-tall viewport).
       await expectTipLoaded(page, `rec-${tag}-a-11`);
+
+      // Scrolling up is a real user gesture, and the height comes from measured
+      // rows, so one wheel delta only lands partway up.
+      const scroller = page.locator('[data-testid="virtual-transcript-scroller"]');
+      const box = await scroller.boundingBox();
+      if (!box) throw new Error("the virtualized transcript has no box");
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await expect
+        .poll(
+          async () => {
+            await page.mouse.wheel(0, -20_000);
+            await page.waitForTimeout(120);
+            return scroller.evaluate((el) => el.scrollTop);
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(0);
       await expectTipLoaded(page, `rec-${tag}-a-0`);
     } finally {
       await page.unroute(WINDOW_ROUTE).catch(() => undefined);

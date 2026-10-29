@@ -188,6 +188,17 @@ export function VirtualizedTranscript({
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const stickyRef = useRef(true);
+  /**
+   * The offset this component last wrote itself, or null when the position is
+   * the reader's. The "did the reader scroll up" inference below compares
+   * positions, and the virtualizer's own corrections also move the offset
+   * upwards while rows are being re-measured. Counting those as a reader
+   * gesture disarmed the pin, and the next correction was then applied
+   * unguarded, leaving the transcript short of the latest message (measured:
+   * 249px above the end on a 12-message conversation, newest rows unmounted,
+   * scroll-to-latest showing). A position we wrote is not evidence of intent.
+   */
+  const writtenTopRef = useRef<number | null>(null);
 
   const rows = useAuiState(selectTranscriptRows);
   const isRunning = useAuiState((s) => s.thread.isRunning);
@@ -208,18 +219,20 @@ export function VirtualizedTranscript({
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: SCROLL_END_THRESHOLD_PX,
-    // Measurement guard: suppresses virtualizer scroll corrections from pulling
-    // away from the live bottom while stickyRef is armed.
+    // Measurement guard: while the reader is pinned to the live edge, a
+    // correction that would END below that edge is exactly the "pull away from
+    // the bottom" this guard exists to stop. Testing the TARGET alone — rather
+    // than "is the element at the end right now" — is what makes it hold while
+    // rows are being measured: the scroll height changes under the element
+    // during that window, so a correction computed from the previous, larger
+    // total must not be applied just because the element is momentarily short
+    // of an edge that is itself still moving.
     scrollToFn: (offset, { adjustments = 0, behavior }, instance) => {
       const el = instance.scrollElement;
       if (!el) return;
       const top = offset + adjustments;
-      if (stickyRef.current) {
-        const maxScroll = el.scrollHeight - el.clientHeight;
-        if (maxScroll - el.scrollTop <= 4 && top < maxScroll) {
-          return;
-        }
-      }
+      if (stickyRef.current && top < el.scrollHeight - el.clientHeight) return;
+      writtenTopRef.current = top;
       el.scrollTo({ top, ...(behavior && { behavior }) });
     },
   });
@@ -235,9 +248,12 @@ export function VirtualizedTranscript({
 
     const onScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+      const written = writtenTopRef.current;
+      const movedByUs = written !== null && Math.abs(el.scrollTop - written) <= 1;
       if (atBottom) {
         stickyRef.current = true;
       } else if (
+        !movedByUs &&
         el.scrollTop < lastScrollTop &&
         el.scrollHeight === lastScrollHeight &&
         Math.abs(el.clientHeight - lastClientHeight) <= 1
@@ -278,6 +294,8 @@ export function VirtualizedTranscript({
 
     const observer = new ResizeObserver(() => {
       if (stickyRef.current) {
+        // The assignment clamps to the maximum offset for this height.
+        writtenTopRef.current = Math.max(0, el.scrollHeight - el.clientHeight);
         el.scrollTop = el.scrollHeight;
       }
     });
@@ -304,6 +322,7 @@ export function VirtualizedTranscript({
       requestAnimationFrame(() => {
         const el = scrollerRef.current;
         if (el && stickyRef.current) {
+          writtenTopRef.current = Math.max(0, el.scrollHeight - el.clientHeight);
           el.scrollTop = el.scrollHeight;
         }
       });
