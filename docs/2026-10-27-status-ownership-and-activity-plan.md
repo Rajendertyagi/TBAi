@@ -3,10 +3,10 @@
 **Status:** IMPLEMENTED — S1, S2, S3, S5, S6, S7a are implemented and verified locally, and S7b is
 this document. **Committed and pushed to `ci/tauri-e2e-verify` on 2026-10-29**: `8f3f2d2` (2.2.0
 pin + turn-facts owner), `38b2d91` (this record), `a170def` (the transcript end-pin fix, §19.8),
-`ec15de0` (the G1 observation wait, §19.9) and `3d90d6f` (the teardown classifier, §19.9). **The
-latest run, `40889992913` at `3d90d6f`, is green in every job a push runs** — `verify`, `e2e`,
-`opencode-runtime`, `opencode-g3` and `tauri`; `e2e-full` and `e2e-big-pickle` are skipped because
-they are dispatch-only (a skip is not a pass). The 2.2.0 pin has runner evidence (§19.4 item 2), the
+`ec15de0` (the G1 observation wait, §19.9) and `3d90d6f` (the teardown classifier, §19.9). **Runs
+`40889992913` (`3d90d6f`) and `40892621675` (`7bef5ab`) are green in every job a push runs** —
+`verify`, `e2e`, `opencode-runtime`, `opencode-g3` and `tauri`; `e2e-full` and `e2e-big-pickle` are
+skipped because they are dispatch-only (a skip is not a pass). The 2.2.0 pin has runner evidence (§19.4 item 2), the
 `e2e` job is green with both K-I4 and K-I8 (§19.8), and the `tauri` G1 step now carries a real
 observation of the packaged WebView origin from the runner (§19.9). The earlier red runs are kept as
 reported in §19.8, not rewritten. One thing this record still does **not** explain: the packaged-app
@@ -1414,13 +1414,19 @@ WebView:
 G2 passed in the same run with `origin http://localhost:3000`, `targetsSeen ["page
 http://localhost:3000/"]` and a clean teardown of 12 recorded pids.
 
-**What that run does and does not prove.** It proves the new path end-to-end on a real runner: a real
+**A second run repeats it.** The docs-only commit `7bef5ab` produced run `40892621675`, also green in
+every push job, and its artifact records the same observation — `origin http://app.localhost`,
+`href http://app.localhost/`, `title TBAi`, `navigation {attempts: 1, elapsedMs: 174, timedOut:
+false}`, probe 200 with an instance id equal to `appInstanceId`, `assessment.ok: true`, teardown
+`confirmed: true` with no errors.
+
+**What those runs do and do not prove.** They prove the new path end-to-end on a real runner: a real
 packaged WebView on the documented origin, a real in-origin API read agreeing with the app's own
-instance id, and a clean teardown. It does **not** prove the race was hit and survived — `attempts: 1`
-means the first read already found the loaded document, so this run would also have passed against
-the old code. The retry itself is proven by the deterministic test (blank, blank, loaded → 3 reads →
-`ok`), not by this run. The `tauri` job has now produced four distinct outcomes across five runs, so
-a single green is not a stability measurement; the change is justified by the artifact evidence plus
-the code-level test, and the next recurrence would name itself through `navigation` and the handle
-count.
+instance id, and a clean teardown. They do **not** prove the race was hit and survived — both report
+`attempts: 1`, so the first read already found the loaded document and either run would also have
+passed against the old code. The retry itself is proven by the deterministic test (blank, blank,
+loaded → 3 reads → `ok`), not by these runs. The `tauri` job has produced four distinct outcomes
+across five runs before this change, so two greens are not a stability measurement; the change is
+justified by the artifact evidence plus the code-level test, and the next recurrence would name
+itself through `navigation` and the handle count.
 
