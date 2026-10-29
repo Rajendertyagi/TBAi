@@ -281,6 +281,27 @@ export interface ProcessStopResult {
 }
 
 /**
+ * Whether a failed `taskkill` means the pid was already gone.
+ *
+ * Windows answers 128 ("process not found") when the pid is not in the table,
+ * and exit 1 with `ERROR: The process with PID <n> could not be terminated.` /
+ * `Reason: There is no running instance of the task.` when the pid exited
+ * between the snapshot and the kill — measured on the windows-2025 runner, run
+ * 40869474036, where recording that as a cleanup failure failed a run whose
+ * observation had succeeded.
+ *
+ * Tolerating the text form cannot hide a survivor: `stopProcessTree` confirms
+ * the stop against a fresh process table, so a pid that really survived is
+ * reported from `survivors`, not from taskkill's complaint. The text is matched
+ * for reporting only, never as the confirmation.
+ */
+export function isTaskkillAlreadyGone(status: number | null, stderr: string): boolean {
+  if (status === 128) return true;
+  if (status !== 1) return false;
+  return stderr.toLowerCase().includes("no running instance of the task");
+}
+
+/**
  * Stops `pid` and every descendant recorded before the stop, then confirms each
  * pid is gone. Never throws: a failure to stop is returned, so a caller's
  * evidence records it instead of dying before it can be written.
@@ -312,8 +333,9 @@ export function stopProcessTree(pid: number, graceMs: number = STOP_GRACE_MS): P
         encoding: "utf8",
         windowsHide: true,
       });
-      // 128 is "process not found", which is success when the pid already exited.
-      if (result.status !== 0 && result.status !== 128) {
+      // A pid that already exited is success: Windows reports that as 128
+      // ("not found") or, on newer builds, 1 with "no running instance".
+      if (result.status !== 0 && !isTaskkillAlreadyGone(result.status, result.stderr ?? "")) {
         errors.push(
           `taskkill /F /PID ${target} exited ${result.status ?? "null"}: ${(result.stderr ?? "").trim()}`,
         );
