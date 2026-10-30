@@ -900,6 +900,9 @@ export async function executeDirectStream(
                 reasoningLevel: reasoning,
               },
               contextStateForUi(state),
+              // The same clock behind the logged `durationMs`, so the footer's
+              // duration and the server's own turn time are one measurement.
+              { startedAt: chatStartedAt },
             ),
         }),
       );

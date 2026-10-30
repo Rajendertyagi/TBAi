@@ -104,15 +104,27 @@ export interface ChatFinishUsage {
 }
 
 /**
- * Message metadata for `toUIMessageStream({ messageMetadata })`.
+ * The wall-clock span of one Direct turn, measured by the route itself.
  *
- * Pure (exported for unit tests): on the `finish` part it attaches the
- * provider-reported `totalUsage` as `usage` — this is what the frontend's
- * `useThreadTokenUsage()` reads for the context ring. The existing `custom`
- * ids (provider/model/reasoning + modelId on finish-step) are preserved
- * verbatim on every event; nothing else is added and the chat protocol is
- * untouched.
+ * Persisted with the answer because the frontend's streaming timing is an
+ * in-memory vendor value: it is measured from the first streamed chunk and is
+ * gone after a reload, which is why the footer used to fall back to the
+ * save-time clock.
  */
+export interface ChatTurnClock {
+  /** Epoch ms when the route began handling this request. */
+  readonly startedAt: number;
+  /** Clock, injectable for tests. */
+  readonly now?: () => number;
+}
+
+/** What `custom.turnTiming` carries once the turn has finished. */
+export interface ChatTurnTiming {
+  readonly startedAt: number;
+  readonly endedAt: number;
+  readonly durationMs: number;
+}
+
 /**
  * The CURRENT model-visible context for the turn that just completed.
  *
@@ -161,17 +173,41 @@ export interface ChatContextState {
   };
 }
 
+/**
+ * Message metadata for `toUIMessageStream({ messageMetadata })`.
+ *
+ * Pure (exported for unit tests). Every event preserves the `custom` ids
+ * (provider/model/reasoning) and, when the route supplies a turn clock, adds
+ * `turnStartedAt` so the footer can count from the real request start rather
+ * than from the moment the answer's row mounted.
+ *
+ * On the `finish` part it attaches the provider-reported `totalUsage` as
+ * `usage` — this is what the frontend's `useThreadTokenUsage()` reads for the
+ * context ring — and closes the turn record as `turnTiming`.
+ */
 export function buildChatMessageMetadata(
   part: { type: string; totalUsage?: ChatFinishUsage },
   custom: Record<string, string>,
   contextState?: ChatContextState,
+  turn?: ChatTurnClock,
 ): Record<string, unknown> {
-  if (part.type === "finish" && part.totalUsage) {
+  const enriched: Record<string, unknown> = { ...custom };
+  if (turn) enriched.turnStartedAt = turn.startedAt;
+
+  if (part.type === "finish") {
+    if (turn) {
+      const endedAt = (turn.now ?? Date.now)();
+      enriched.turnTiming = {
+        startedAt: turn.startedAt,
+        endedAt,
+        durationMs: Math.max(0, endedAt - turn.startedAt),
+      } satisfies ChatTurnTiming;
+    }
     return {
-      custom,
-      usage: part.totalUsage,
+      custom: enriched,
+      ...(part.totalUsage ? { usage: part.totalUsage } : {}),
       ...(contextState ? { context: contextState } : {}),
     };
   }
-  return { custom };
+  return { custom: enriched };
 }

@@ -111,7 +111,58 @@ describe("native V2 live tool projection", () => {
 
     const [item] = projectV2RepositoryItems(state);
     expect(item?.message.metadata?.custom).toEqual({
+      turnStartedAt: 1,
+      agent: "build",
+      providerId: "test-provider",
+      modelId: "test-model",
       opencode: { parts: source.content },
+    });
+  });
+
+  it("projects the turn record the footer renders from the assistant record", () => {
+    const source: SessionMessageInfo = {
+      id: MESSAGE_ID,
+      type: "assistant",
+      agent: "build",
+      model: { id: "test-model", providerID: "test-provider" },
+      time: { created: 1_000, completed: 91_000 },
+      tokens: { input: 3000, output: 660, reasoning: 0, cache: { read: 0, write: 0 } },
+      content: [{ type: "text", text: "done" }],
+    };
+    const initial = createInitialV2ThreadState(SESSION_ID);
+    const state = {
+      ...initial,
+      messages: {
+        [MESSAGE_ID]: {
+          id: MESSAGE_ID,
+          parentId: null,
+          role: "assistant" as const,
+          createdAt: 1_000,
+          parts: [
+            {
+              kind: "text" as const,
+              id: `text:${MESSAGE_ID}:0`,
+              order: 0,
+              value: "done",
+              status: "complete" as const,
+            },
+          ],
+          source,
+        },
+      },
+      messageOrder: [MESSAGE_ID],
+    };
+
+    const [item] = projectV2RepositoryItems(state);
+    // Reloading re-runs this projection over the same record, so the duration
+    // and the token count are reproduced rather than inferred from a clock.
+    expect(item?.message.metadata?.custom).toMatchObject({
+      turnStartedAt: 1_000,
+      turnTiming: { startedAt: 1_000, endedAt: 91_000, durationMs: 90_000 },
+      usage: { inputTokens: 3000, outputTokens: 660, totalTokens: 3660 },
+      agent: "build",
+      providerId: "test-provider",
+      modelId: "test-model",
     });
   });
 

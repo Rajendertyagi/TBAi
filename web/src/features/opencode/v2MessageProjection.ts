@@ -1,5 +1,9 @@
 import type { AppendMessage, ThreadMessageLike } from "@assistant-ui/react";
-import type { SessionMessageUser, SessionPromptInput } from "@opencode/client";
+import type {
+  SessionMessageAssistant,
+  SessionMessageUser,
+  SessionPromptInput,
+} from "@opencode/client";
 import {
   deriveV2ToolCallId,
   projectV2Permission,
@@ -7,6 +11,7 @@ import {
   type V2PermissionView,
 } from "./v2Permissions";
 import type { V2MessagePartState, V2MessageState, V2ThreadState } from "./v2Types";
+import { toTokenUsage } from "./contextTokens";
 
 import { patchFromToolMetadata } from "@/lib/tool-patch";
 import {
@@ -268,11 +273,43 @@ function openCodePartsForMessage(message: V2MessageState): readonly unknown[] {
   });
 }
 
+/**
+ * The footer's turn record, derived from the assistant message OpenCode
+ * already persists.
+ *
+ * Code mode needs no extra persistence for this: `time.created` is written
+ * before the first chunk, `time.completed` when the turn ends, and `tokens`
+ * carries the final usage. Reloading the transcript re-runs this projection
+ * over the same records, so the duration and the token count come back
+ * identical instead of falling back to a clock.
+ */
+function assistantTurnFields(info: SessionMessageAssistant): Record<string, unknown> {
+  const usage = toTokenUsage(info.tokens);
+  const { created, completed } = info.time;
+  return {
+    turnStartedAt: created,
+    ...(completed === undefined
+      ? {}
+      : {
+          turnTiming: {
+            startedAt: created,
+            endedAt: completed,
+            durationMs: Math.max(0, completed - created),
+          },
+        }),
+    ...(usage === undefined ? {} : { usage }),
+    agent: info.agent,
+    providerId: info.model.providerID,
+    modelId: info.model.id,
+  };
+}
+
 function messageToAssistant(
   message: V2MessageState,
   permissions: readonly V2PermissionView[],
 ): ThreadMessageLike | null {
   if (message.role === "record") return null;
+  const source = message.source?.type === "assistant" ? message.source : null;
   const openCodeParts = openCodePartsForMessage(message);
   const content = message.parts.flatMap((part) => {
     const projected = partToAssistantContent(part, message, permissions);
@@ -285,19 +322,24 @@ function messageToAssistant(
     role: message.role,
     content,
     createdAt: new Date(message.createdAt),
-    ...(message.role === "assistant" && openCodeParts.length > 0
+    ...(message.role === "assistant" && (source !== null || openCodeParts.length > 0)
       ? {
           metadata: {
             custom: {
-              opencode: {
-                parts: openCodeParts,
-                // The change a pending permission is asking to be allowed, keyed
-                // by the tool call it belongs to. The renderer reads it from here
-                // for the same reason it reads `parts` from here: this is TBAi's
-                // own metadata, so nothing has to be bolted onto assistant-ui's
-                // tool-part type, which has no slot for it.
-                ...(Object.keys(pendingPatches).length > 0 ? { pendingPatches } : {}),
-              },
+              ...(source === null ? {} : assistantTurnFields(source)),
+              ...(openCodeParts.length === 0
+                ? {}
+                : {
+                    opencode: {
+                      parts: openCodeParts,
+                      // The change a pending permission is asking to be allowed, keyed
+                      // by the tool call it belongs to. The renderer reads it from here
+                      // for the same reason it reads `parts` from here: this is TBAi's
+                      // own metadata, so nothing has to be bolted onto assistant-ui's
+                      // tool-part type, which has no slot for it.
+                      ...(Object.keys(pendingPatches).length > 0 ? { pendingPatches } : {}),
+                    },
+                  }),
             },
           },
         }

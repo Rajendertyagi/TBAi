@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   ActionBarPrimitive,
@@ -7,10 +7,9 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAuiState,
-  useMessageTiming,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
-import { AlertCircle, Check, Copy, RefreshCw, Loader2 } from "lucide-react";
+import { AlertCircle, RefreshCw, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownText } from "./assistant-ui/elements/markdown-text";
 import { SessionTimeline } from "./assistant-ui/elements/session-timeline";
@@ -32,7 +31,8 @@ import { CodeDiff } from "./assistant-ui/elements/code-diff";
 import { patchToCodeDiffs } from "../lib/patch-to-diffs";
 import { toolsConfig } from "../config/tools";
 import { prettyToolName } from "./assistant-ui/rendering-glue";
-import { TooltipIconButton } from "./assistant-ui/elements/tooltip-icon-button";
+import { MessageActions, MessageCopyAction } from "./assistant-ui/elements/message-actions";
+import { messageActionsConfig } from "../config/messageActions";
 import { ScrollPill } from "./ScrollPill";
 import { VirtualizedTranscript } from "./VirtualizedTranscript";
 import { DirectViewportBridge } from "../features/chat/history/DirectViewportBridge";
@@ -42,6 +42,11 @@ import { DIRECT_COMPACT_DATA_NAME } from "../features/chat/compactCommand";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "../features/chat/components/WelcomeScreen";
 import { WelcomeScopePicker } from "../features/chat/components/WelcomeScopePicker";
+import {
+  ComposerDock,
+  useComposerInset,
+  useComposerReserve,
+} from "../features/chat/components/ComposerDock";
 import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { chatErrorCopy, classifyChatError } from "../lib/transport-errors";
 
@@ -199,6 +204,13 @@ export function ChatWindow({
   const showAgentScopeChip = mode === "agent";
   const composer = <Composer isWelcomeDraft={showWelcome} isCodeSurface={isCodeSurface} />;
 
+  // The composer overlay's measured height, published by `ComposerDock` through
+  // the thread viewport store. The pill sits on this number (the dock's top
+  // edge); the transcript reserves this PLUS the tail gap, so the newest line
+  // keeps clear air above the fade band instead of ending inside it.
+  const composerInset = useComposerInset();
+  const composerReserve = useComposerReserve();
+
   // The row renderer for the virtualized timeline. It switches on assistant-ui's
   // own row type, so the timeline decides only WHICH rows are mounted, never
   // what a row looks like — every case reuses an existing component, and the
@@ -238,7 +250,22 @@ export function ChatWindow({
             //
             // Horizontal padding is untouched - it affects scrollWidth, not the
             // vertical geometry this corrects.
-            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 mt-6 mb-4"
+            //
+            // No bottom margin: the composer is now an OVERLAY (`ComposerDock`)
+            // positioned against the bottom of this column, and the scrollport
+            // must reach that same bottom edge. A `mb-4` would leave a 16px band
+            // the scrollport could not enter, and the transcript's live end would
+            // sit that far above the dock. The bottom spacing the margin used to
+            // provide now lives in the dock's own padding, inside the measured
+            // reserve.
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 mt-6"
+            // The overlay's measured height plus the tail gap.
+            // `paddingEnd` is virtualizer-aware: it is part of
+            // `getTotalSize()`, so the total-size container grows by exactly the
+            // reserve and `scrollHeight === getTotalSize()` still holds. CSS
+            // padding on the scrollport would break that invariant (see the
+            // header note in `VirtualizedTranscript`).
+            paddingEnd={composerReserve}
             renderRow={renderRow}
             // The scroll-to-latest control lives INSIDE the transcript, next to
             // the paging control: it reads the virtualizer through context, and
@@ -251,10 +278,10 @@ export function ChatWindow({
                 <DirectViewportBridge />
               </>
             }
-            overlay={<ScrollPill />}
+            overlay={<ScrollPill bottomOffset={composerInset} />}
           />
 
-          <div className="relative z-10 mx-auto w-full max-w-3xl px-4 pb-4 bg-background">
+          <ComposerDock>
             {/* Interactive content sits ABOVE the reserved row and keeps its
                 natural height: a question form is content, and clipping it to a
                 status pill's height would make it unusable. Its own add/remove
@@ -306,7 +333,7 @@ export function ChatWindow({
                 {composerExtras?.below}
               </div>
             )}
-          </div>
+          </ComposerDock>
         </>
       )}
     </ThreadPrimitive.Root>
@@ -422,17 +449,6 @@ function AssistantMessageTail() {
   );
 }
 
-function TurnCopyButton() {
-  const isCopied = useAuiState((s) => s.message.isCopied);
-  return (
-    <ActionBarPrimitive.Copy asChild>
-      <TooltipIconButton tooltip={isCopied ? "Copied!" : "Copy message"} side="bottom">
-        {isCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      </TooltipIconButton>
-    </ActionBarPrimitive.Copy>
-  );
-}
-
 function UserMessage() {
   const createdAt = useAuiState((s) => s.message.createdAt);
   const timeStr =
@@ -447,7 +463,7 @@ function UserMessage() {
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
         {timeStr && <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>}
-        <TurnCopyButton />
+        <MessageCopyAction />
       </div>
     </MessagePrimitive.Root>
   );
@@ -524,47 +540,166 @@ function AssistantMessage({ mode }: { mode: "chat" | "agent" }) {
   );
 }
 
+const SENT_AT_TIME = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
+const SENT_AT_DATE_AND_TIME = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/** Today shows the clock alone; older turns also name the day. */
+function formatSentAt(epochMs: number): string {
+  const sentAt = new Date(epochMs);
+  const isToday = sentAt.toDateString() === new Date().toDateString();
+  return (isToday ? SENT_AT_TIME : SENT_AT_DATE_AND_TIME).format(sentAt);
+}
+
+const TOKEN_THOUSAND = 1_000;
+const TOKEN_MILLION = 1_000_000;
+
+/** `4660` -> `4.7k`, `1_240_000` -> `1.2M`. */
+function compactTokenCount(total: number): string {
+  if (total >= TOKEN_MILLION) return `${(total / TOKEN_MILLION).toFixed(1)}M`;
+  if (total >= TOKEN_THOUSAND) return `${(total / TOKEN_THOUSAND).toFixed(1)}k`;
+  return String(total);
+}
+
 /**
- * The message's closing footer: copy/regenerate, the live streaming timer and
- * the provenance chips.
+ * `google` -> `Google`. The first letter only, so a configured name that already
+ * carries its own capitalisation — `OpenRouter`, `Ollama` — is left alone.
+ */
+function capitalizeFirst(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** `-`, `_` and whitespace all read as word breaks in a model id. */
+const MODEL_NAME_BREAK = /[-_\s]+/;
+
+/**
+ * A model id written as a name: `gemini-3.5-flash-lite` -> `Gemini 3.5 Flash Lite`.
  *
- * Every value is read from the message scope, so the footer renders the same
- * from an editing message's `message` row and from the last part row of an
- * ordinary assistant message — the row that mounts it is the only difference.
+ * Used only when the provider configuration carries no `label` for the model,
+ * which is the normal case: Gemini's discovery endpoint reports no display name,
+ * so every Gemini turn would otherwise read as a raw slug. The untouched id stays
+ * in the segment's `title`, because the id is the fact and this is its reading
+ * form.
+ */
+function formatModelName(id: string): string {
+  return id
+    .split(MODEL_NAME_BREAK)
+    .filter((word) => word.length > 0)
+    .map(capitalizeFirst)
+    .join(" ");
+}
+
+/** Footer metadata as both engines write it. */
+interface AssistantFooterCustom {
+  usage?: { totalTokens?: number };
+  modelId?: string;
+  providerId?: string;
+  reasoningLevel?: string;
+  agent?: string;
+  turnStartedAt?: number;
+  turnTiming?: { startedAt: number; endedAt: number; durationMs: number };
+}
+
+/**
+ * The message's closing footer.
+ *
+ * One line, in reading order: what answered (model details), how (agent, Code
+ * only), how long it took, and when it was sent — then the token count and the
+ * copy/regenerate actions. Everything flows in that order at one type size;
+ * nothing is pushed to the trailing edge, so the end of the line is the end of
+ * the reading, not a separate right-hand column.
+ *
+ * ## Both times, always
+ *
+ * The duration and the sent-at clock used to share one slot with a hover swap:
+ * the duration while the vendor's in-memory timing survived, the stored clock
+ * after a reload. The consumer sees one number that silently changes meaning.
+ * Now both are rendered, always, and both come from the same place: the
+ * server's turn record.
+ *
+ *  - `custom.turnStartedAt` is written on the stream's `start` event (Direct)
+ *    or taken from the assistant record's `time.created` (Code). The live
+ *    count is `now - turnStartedAt`, so it is anchored to the request, not to
+ *    the moment the footer mounted — a new part remounting the last row cannot
+ *    restart it.
+ *  - `custom.turnTiming` is closed on `finish` (Direct) or from
+ *    `time.completed` (Code), so the settled duration is the same number
+ *    before and after a reload.
+ *
+ * An answer recorded before the turn clock existed has neither, and then this
+ * footer shows no duration and no clock. That is deliberate: the only time the
+ * runtime can supply for restored Direct history is `createdAt`, which it
+ * assigns when the page loads, so a fallback to it would print the current time
+ * as the send time — the exact confusion being fixed here.
+ *
+ * The vendor's `useMessageTiming` is deliberately not read: it is measured from
+ * the first streamed chunk, lives in memory only, and its converter overwrites
+ * stored metadata while a turn is live.
  */
 function AssistantTurnFooter() {
-  const timing = useMessageTiming();
-  const createdAt = useAuiState((s) => s.message.createdAt);
-  // Live-stream detection must ALSO require a running thread: restored
-  // messages carry no timing data (it is never persisted), so timing-only
-  // detection sticks every reloaded message in "streaming" forever (ticking
-  // timer, hidden provenance footer). Gating on thread.isRunning keeps live
-  // streams live while letting settled history settle.
-  const threadIsRunning = useAuiState((s) => s.thread.isRunning);
+  // Liveness is PER MESSAGE, not per thread.
+  //
+  // `message.status.type === "running"` is the runtime's own answer, and both
+  // engines maintain it in the same place: the external-store core derives an
+  // auto status as `isLast && isRunning` (core `runtime/utils/auto-status.ts`),
+  // which is what backs Direct (`useChatRuntime`) and Code (the OpenCode
+  // projection) alike. The previous predicate paired a per-message signal
+  // (`timing`, never persisted) with `thread.isRunning`, so every restored or
+  // completed message looked live for as long as any turn was streaming — a
+  // spinner on all history, and the provenance row hidden behind it.
+  const isRunningMessage = useAuiState((s) => s.message.status?.type === "running");
   const custom = useAuiState(
     (s) =>
       (s.message.role === "assistant"
-        ? (s.message.metadata?.custom as
-            | {
-                usage?: { totalTokens?: number };
-                modelId?: string;
-                providerId?: string;
-                reasoningLevel?: string;
-              }
-            | undefined)
+        ? (s.message.metadata?.custom as AssistantFooterCustom | undefined)
         : undefined) ?? undefined,
   );
-  // Provider display names for the provenance chips (server stores ids).
+  // The footer is a reading surface and the server stores ids, so display names
+  // come from the same provider configuration the composer reads.
   const providers = useSettingsStore((s) => s.providers);
+  const provider = custom?.providerId
+    ? providers.find((p) => p.id === custom.providerId)
+    : undefined;
 
   const total = custom?.usage?.totalTokens;
   const modelId = custom?.modelId;
-  const providerName = custom?.providerId
-    ? (providers.find((p) => p.id === custom.providerId)?.name ?? custom.providerId)
+  const providerName = provider
+    ? capitalizeFirst(provider.name)
+    : custom?.providerId
+      ? capitalizeFirst(custom.providerId)
+      : undefined;
+  // A configured label wins. Otherwise the id is written as a name, because a
+  // slug is a storage key, not something a reader should be shown.
+  const modelName = modelId
+    ? (provider?.models?.find((m) => m.id === modelId)?.label ?? formatModelName(modelId))
     : undefined;
   const thinking =
     custom?.reasoningLevel && custom.reasoningLevel !== "off" ? custom.reasoningLevel : undefined;
-  const isStreaming = timing?.totalStreamTime == null && threadIsRunning;
+  const agent = custom?.agent;
+
+  // A running message whose turn record is already closed (the stream finished
+  // while the thread settles) shows the settled duration, not a live count.
+  const settledDurationMs = custom?.turnTiming?.durationMs;
+  const liveAnchor =
+    settledDurationMs === undefined && isRunningMessage ? custom?.turnStartedAt : undefined;
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (liveAnchor === undefined) return;
+    // Seed immediately: the first interval tick is a full second away, and the
+    // clock would otherwise stand still for that second.
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), messageActionsConfig.liveTickMs);
+    return () => clearInterval(interval);
+  }, [liveAnchor]);
+
   // Routed through `formatDuration`, the one owner of how a span is written.
   //
   // These two used to format inline with `(ms / 1000).toFixed(1)`, which is the
@@ -572,92 +707,113 @@ function AssistantTurnFooter() {
   // rendered `299.0s` in this footer while the tool badge on the same card read
   // `4m 59s`. Two spellings of the same fact on one screen, one of them
   // unreadable. Caught by looking at a live subagent capture, not by a test.
-  const durationSec =
-    !isStreaming && timing?.totalStreamTime != null
-      ? formatDuration(timing.totalStreamTime)
-      : undefined;
-  const timeStr =
-    createdAt instanceof Date
-      ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      : undefined;
+  const durationLabel =
+    settledDurationMs === undefined
+      ? liveAnchor === undefined
+        ? undefined
+        : formatDuration(Math.max(0, now - liveAnchor))
+      : formatDuration(settledDurationMs);
 
-  const [liveMs, setLiveMs] = useState(0);
-  useEffect(() => {
-    if (!isStreaming) {
-      setLiveMs(0);
-      return;
-    }
-    const interval = setInterval(() => setLiveMs((m) => m + 1000), 1000);
-    return () => clearInterval(interval);
-  }, [isStreaming]);
-  const liveDuration = isStreaming && liveMs > 0 ? formatDuration(liveMs) : undefined;
+  // When the turn was sent — from the persisted turn record, and nothing else.
+  //
+  // `message.createdAt` is deliberately NOT a fallback. On a restored Direct
+  // history the runtime assigns it at import time, because the history window
+  // carries `{ id, parent_id, format, content }` and no timestamp of its own;
+  // printing it would put the moment the page loaded on every old answer as if
+  // it were when the turn was sent. That is the "refresh shows the current time"
+  // confusion this footer exists to remove, so an answer recorded before the
+  // turn clock shows no clock rather than a fabricated one.
+  const sentAt = custom?.turnTiming?.startedAt ?? custom?.turnStartedAt;
 
-  const [hovered, setHovered] = useState(false);
-  const showTimestamp = hovered && !!timeStr;
-
-  const handleMouseEnter = () => setHovered(true);
-  const handleMouseLeave = () => setHovered(false);
-
-  const primaryLabel = liveDuration || durationSec || timeStr;
-  const displayLabel = showTimestamp && timeStr ? timeStr : (primaryLabel ?? "");
-
-  const hasMetadata = total != null || modelId != null || providerName != null;
-  const metadataChips = [];
-  if (total != null) metadataChips.push(`${total}t`);
-  if (providerName) metadataChips.push(providerName);
-  if (modelId) metadataChips.push(modelId);
-  if (thinking) metadataChips.push(`thinking:${thinking}`);
+  const separators = messageActionsConfig.footer;
+  const segments: { key: string; node: ReactNode }[] = [];
+  if (providerName || modelName || thinking) {
+    segments.push({
+      key: "model",
+      node: (
+        <span
+          data-slot="message-model"
+          className="min-w-0 truncate text-muted-foreground"
+          title={modelId}
+        >
+          {providerName ? <span className="text-muted-foreground/70">{providerName} </span> : null}
+          {modelName}
+          {thinking ? <span className="text-muted-foreground/70"> thinking:{thinking}</span> : null}
+        </span>
+      ),
+    });
+  }
+  if (agent) {
+    segments.push({
+      key: "agent",
+      node: (
+        <span data-slot="message-agent" className="text-muted-foreground">
+          {agent}
+        </span>
+      ),
+    });
+  }
+  if (durationLabel !== undefined) {
+    segments.push({
+      key: "duration",
+      node: (
+        <span
+          data-slot={liveAnchor === undefined ? "turn-duration" : "live-turn"}
+          className="flex items-center gap-1 tabular-nums text-muted-foreground"
+        >
+          {liveAnchor === undefined ? null : <Loader2 className="size-3 animate-spin" />}
+          {durationLabel}
+        </span>
+      ),
+    });
+  }
+  if (sentAt !== undefined) {
+    segments.push({
+      key: "sent-at",
+      node: (
+        <span data-slot="message-sent-at" className="text-muted-foreground">
+          {formatSentAt(sentAt)}
+        </span>
+      ),
+    });
+  }
+  if (total != null) {
+    segments.push({
+      key: "tokens",
+      node: (
+        <span
+          data-slot="message-tokens"
+          className="tabular-nums text-muted-foreground/70"
+          title={separators.tokensTitle(total)}
+        >
+          {compactTokenCount(total)} {separators.tokenSuffix}
+        </span>
+      ),
+    });
+  }
 
   return (
     <div
+      data-slot="turn-footer"
       className={cn(
-        "mt-1.5 flex items-center gap-1.5 min-h-6",
-        isStreaming ? "opacity-100" : "opacity-80 hover:opacity-100",
+        "mt-1.5 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs",
+        liveAnchor === undefined ? "opacity-80 hover:opacity-100" : "opacity-100",
       )}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
     >
-      <div className="flex items-center gap-0.5">
-        <TurnCopyButton />
-        <ActionBarPrimitive.Reload asChild>
-          <TooltipIconButton tooltip="Regenerate response" side="bottom">
-            <RefreshCw className="size-3.5" />
-          </TooltipIconButton>
-        </ActionBarPrimitive.Reload>
-      </div>
-
-      {isStreaming && (
-        <div className="flex items-center gap-1.5 ml-1">
-          <Loader2 className="size-3 animate-spin text-muted-foreground" />
-          <span className="text-[11px] tabular-nums text-muted-foreground">
-            {liveDuration || "0.0s"}
-          </span>
-        </div>
-      )}
-
-      {!isStreaming && hasMetadata && (
-        <div className="ml-auto flex items-center gap-1">
-          <span
-            className={cn(
-              "text-[11px] tabular-nums text-muted-foreground transition-opacity hover:text-foreground",
-              showTimestamp && "text-foreground",
-            )}
-            title={displayLabel}
-          >
-            {displayLabel}
-          </span>
-          {metadataChips.map((chip, i) => (
-            <span
-              // biome-ignore lint/suspicious/noArrayIndexKey: the chips are a fixed set of slots (total, provider, model, thinking) pushed in a constant order and never reordered or removed, so position IS the identity. A content key would collide whenever two slots hold the same string.
-              key={i}
-              className="text-[10px] tabular-nums text-muted-foreground/70"
-              title={chip}
-            >
-              {chip}
+      {/* Every segment in reading order, separated uniformly, then the actions —
+          nothing is pinned to the trailing edge, so the line reads left to right
+          all the way through. */}
+      {segments.map((segment, index) => (
+        <Fragment key={segment.key}>
+          {index > 0 ? (
+            <span aria-hidden className="text-muted-foreground/70">
+              {separators.separator}
             </span>
-          ))}
-        </div>
-      )}
+          ) : null}
+          {segment.node}
+        </Fragment>
+      ))}
+      <MessageActions />
     </div>
   );
 }

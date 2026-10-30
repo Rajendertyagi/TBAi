@@ -27,14 +27,21 @@ beforeAll(async () => {
 });
 
 describe("the message footer does not format its own duration", () => {
-  it("routes the completed duration through the shared formatter", () => {
-    expect(source).toContain("formatDuration(timing.totalStreamTime)");
+  it("routes the settled duration through the shared formatter", () => {
+    // The settled span comes from the server's turn record (`custom.turnTiming`),
+    // which is what makes it survive a reload; how it is written is still the one
+    // formatter's business. Matched with slack for whitespace so a formatter
+    // re-wrap cannot fail a contract that never changed.
+    expect(source).toMatch(/formatDuration\(\s*settledDurationMs\s*\)/);
   });
 
   it("routes the live ticking duration through it too", () => {
     // The tick is the one that grows without bound during a long turn, so it is
-    // the one that reads `299.0s` if it formats itself.
-    expect(source).toContain("formatDuration(liveMs)");
+    // the one that reads `299.0s` if it formats itself. It counts from the
+    // server's start stamp, so it never restarts at zero when the row remounts.
+    expect(source).toMatch(
+      /formatDuration\(\s*Math\.max\(\s*0\s*,\s*now\s*-\s*liveAnchor\s*\)\s*\)/,
+    );
   });
 
   it("has no inline seconds conversion left", () => {

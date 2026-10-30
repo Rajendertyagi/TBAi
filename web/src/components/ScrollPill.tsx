@@ -35,8 +35,13 @@ export function unseenCount(total: number, lastSeen: number): number {
  * re-reads it on the message count and on a short interval while there is
  * anything to show. That keeps the pill's own state minimal — it never owns
  * scroll state, it only reports the library's.
+ *
+ * `bottomOffset` is the composer overlay's measured height: the pill clears the
+ * dock, so it can never sit behind the composer or on top of the text the reader
+ * is trying to return to. It is a runtime `style` because it is a measured
+ * geometry value, not a fixed design constant.
  */
-export function ScrollPill() {
+export function ScrollPill({ bottomOffset }: { readonly bottomOffset: number }) {
   const virtualizer = useTranscriptVirtualizer();
   const count = useAuiState((s) => s.thread.messages.length);
   const [atEnd, setAtEnd] = useState(true);
@@ -64,7 +69,17 @@ export function ScrollPill() {
       tooltip="Scroll to bottom"
       side="top"
       onClick={() => scrollTranscriptToEnd(virtualizer)}
-      className="absolute bottom-24 right-6 h-8 w-auto gap-1.5 rounded-full border-none px-3 py-1 text-xs glass-surface shadow-floating"
+      // `-translate-y-3` is the gap above the dock; the offset itself is the
+      // measured overlay height (see the doc comment).
+      //
+      // `z-10` is required, not cosmetic: the transcript's content container is
+      // `position: relative` and comes AFTER this control in DOM order, so at
+      // equal stacking it paints over the pill and the pill is unclickable while
+      // looking perfectly visible. That was measured — `elementFromPoint` at the
+      // pill's centre resolved to a transcript paragraph. The composer footer is
+      // also `z-10` and comes later, so it still wins where they could overlap.
+      style={{ bottom: bottomOffset }}
+      className="absolute right-6 z-10 -translate-y-3 h-8 w-auto gap-1.5 rounded-full border-none px-3 py-1 text-xs glass-surface shadow-floating"
     >
       <ArrowDown />
       {unseen > 0 ? <span>{unseen > 1 ? `${unseen} new` : "New"}</span> : null}

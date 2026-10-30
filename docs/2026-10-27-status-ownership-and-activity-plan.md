@@ -1445,5 +1445,10 @@ it is never described as a mismatch, because nothing was compared. `packaged.jso
 direct id, adds four cases (blank direct id, the direct read's reported cause, a whitespace
 in-origin id, and equality after trimming) and strengthens two. The guards were exercised against
 the defects: with the old lenient comparison three cases fail, and with an untrimmed id three fail.
-**Not yet observed on a runner** — this change is uncommitted, so no artifact carries `directProbe`
-yet; the next `tauri` run must show both ids present and equal in `packaged/packaged.json`.
+**Observed on a runner (2026-10-29, commit `b440e20`, run `40904866839`).** The `tauri` job passed
+and its G1 step passed with it; `packaged/packaged.json` carries `directProbe {"status": 200,
+"error": null}`, a non-empty `appInstanceId`, `observations.inOriginInstanceId` equal to it,
+`observations.instanceMatchesApp: true`, and `assessment {ok: true, stage: null, failures: []}` — at
+the expected origin `http://app.localhost`, observed at medium integrity, with teardown confirmed.
+G2 passed in the same job with its own `devInstanceIdMatched: true`. The artifact is
+`tauri-webview-origin` on that run.

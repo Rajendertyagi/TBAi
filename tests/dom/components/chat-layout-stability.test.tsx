@@ -422,6 +422,64 @@ describe("status changes never remount the surrounding surface", () => {
   });
 });
 
+// ── the composer is an overlay above the transcript, not a sibling below it ──
+
+/**
+ * The floating composer's structure.
+ *
+ * The pixels are measured in `composer-overlay-follow.spec.ts` (the scrollport
+ * reaches the dock's bottom edge; the transcript's end sits at the dock's top
+ * edge; an append while pinned stays pinned). What can be asserted WITHOUT a
+ * layout engine is the arrangement that makes those pixels possible:
+ *
+ * - the measured footer is OUT OF FLOW and bottom-pinned, so it cannot take
+ *   height away from the `flex-1` transcript the way the old in-flow column did;
+ * - the row's folder is still one node, so the geometry spec's
+ *   `row.parentElement` measurement still names the column that owns the row;
+ * - the band does not intercept pointers, because it spans the full width over
+ *   the transcript.
+ */
+describe("the composer dock is an out-of-flow overlay around the column", () => {
+  const FOOTER = "[data-composer-footer]";
+  const FADE = "[data-composer-fade]";
+  const DOCK = "[data-composer-dock]";
+
+  it("mounts one measured footer, out of flow and pinned to the bottom", async () => {
+    const { container } = await mount({ mode: "chat" });
+
+    const footer = one(container, FOOTER);
+    expect(footer.className).toContain("absolute");
+    expect(footer.className).toContain("bottom-0");
+    // `sticky` would stay in flow and `fixed` would escape the chat column;
+    // either would change what the measurement means.
+    expect(footer.className).not.toContain("sticky");
+    expect(footer.className).not.toContain("fixed");
+  });
+
+  it("keeps the dock as the row's folder and the composer's container", async () => {
+    const { container } = await mount({ mode: "chat" });
+
+    const dock = one(container, DOCK);
+    expect(one(container, ROW).parentElement).toBe(dock);
+    expect(dock.querySelector('[data-testid="composer"]')).not.toBeNull();
+  });
+
+  it("layers the fade band above the dock without swallowing its clicks", async () => {
+    const { container } = await mount({ mode: "chat" });
+
+    const footer = one(container, FOOTER);
+    const fade = one(container, FADE);
+    const dock = one(container, DOCK);
+    // The band covers the transcript's last line while it scrolls under the
+    // dock; transparent to pointers so a click reaches the transcript.
+    expect(fade.parentElement).toBe(footer);
+    expect(fade.className).toContain("pointer-events-none");
+    expect(footer.className).toContain("pointer-events-none");
+    expect(dock.className).toContain("pointer-events-auto");
+    expect(precedes(fade, dock)).toBe(true);
+  });
+});
+
 // ── the pinned height is one value, in one place ────────────────────────────
 
 describe("the reserved-row height has a single source", () => {

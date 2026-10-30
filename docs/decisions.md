@@ -8306,3 +8306,181 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
   detail is announced politely once, and it never repeats the active-turn pill's
   label. Both surfaces keep their own markers (`data-primary-status`,
   `data-restoration-notice`).
+
+## Assistant message footer: per-message liveness, vendored action row (2026-10-29)
+
+- **Decision:** the assistant turn footer decides "live" from the message, not
+  the thread: `s.message.status.type === "running"` (ANDed with an unfinished
+  `metadata.timing` stream, where the engine records one). Copy and regenerate
+  render through a vendored `message-actions` element
+  (`web/src/components/assistant-ui/elements/message-actions.tsx`) built on
+  `ActionBarPrimitive.Root`/`Copy`/`Reload`, and the provenance row sits
+  immediately after that action row instead of on the far edge.
+- **Reason:** the previous predicate was
+  `timing?.totalStreamTime == null && thread.isRunning` - a per-MESSAGE signal
+  that is never persisted, ANDed with a per-THREAD boolean. While any turn
+  streamed, every restored or completed answer rendered the live spinner and
+  hid its provenance row behind the same gate. Both engines hit it: Direct
+  answers restored from history carry no `metadata.timing`, and the OpenCode
+  projection never writes it. `message.status` is the runtime's own per-message
+  answer, and both engines derive it in the same place (the external-store
+  core's auto status, `isLast && isRunning`). The provenance row was pushed to
+  the trailing edge with `ml-auto`, a screen-width from the message it
+  describes.
+- **Alternatives rejected:**
+  - keep the thread-level flag and special-case each engine - two predicates
+    for one fact, and the flag is exactly what was wrong;
+  - `thread.isRunning && message.isLast` written by hand - a copy of the auto
+    status rule that the runtime already applies, and it would drift;
+  - vendored row with `autohide="not-last"` as the demo shows - the action bar
+    returns `null` for non-last messages, so the shared line would shift
+    sideways whenever the pointer crossed a past message;
+  - keep the hand-rolled copy/regenerate pair - it duplicated the element's
+    composition and kept user-facing copy in `ChatWindow.tsx`.
+- **Consequences:** `TurnCopyButton` is deleted; user rows use the element's
+  `MessageCopyAction`. Reader-facing copy and the live-tick interval live in
+  `web/src/config/messageActions.ts`. `ActionBarPrimitive.FeedbackPositive`,
+  `FeedbackNegative` and `ExportMarkdown` exist in the installed train but are
+  deliberately unused: feedback has no persistence contract in this app and the
+  more-menu has no items. `tests/dom/components/assistant-turn-footer.test.tsx`
+  pins the per-message liveness in both lanes and the provenance row's
+  position; all four cases fail against the old predicate.
+
+## Assistant footer: a server-measured turn record, both times, actions last (2026-10-30)
+
+- **Decision:** the assistant footer renders one line in reading order — model
+  details, agent (Code only), the turn's duration, when the turn was sent, then
+  the token count and the copy/regenerate actions. Everything is one flowing
+  line, separated uniformly and set at one type size (`text-2xs` declared once on
+  the footer root); nothing is pinned to the trailing edge, so on a wide window
+  the actions still read directly after the clock. Model details are written as
+  names: the provider name gets its first letter capitalised, and a model shows
+  its configured `label` when one exists and otherwise its id written as a name
+  (`gemini-3.5-flash-lite` → `Gemini 3.5 Flash Lite`), with the untouched id kept
+  in the segment's `title`. The duration and the sent-at time both come from a
+  turn record the engine measures, persisted inside the existing message metadata
+  as `custom.turnStartedAt` and `custom.turnTiming`:
+  - Direct: `buildChatMessageMetadata` stamps `turnStartedAt` from the route's
+    `chatStartedAt` on the stream's `start` event and closes `turnTiming` on
+    `finish`.
+  - Code: the projection derives the same fields from the assistant record's
+    `time.created` / `time.completed`, and per-message usage from `tokens`.
+  The token chip is explicitly per-turn (`39.2k tok`).
+- **Reason:** the footer's duration was the vendor's `useMessageTiming`, which
+  lives in memory only, starts at the first streamed chunk, and is never
+  persisted. After a reload it disappeared and the same slot silently showed
+  `createdAt` — which restored Direct history does not carry, so the runtime
+  fills it at import time and every old answer displayed the moment the page
+  loaded. Measured against the server's own log, two turns logged
+  `durationMs=1065` and `5131` while the footer showed `0.2s` for both. The
+  live counter was mount-local (`useState` + `setInterval`), so it restarted
+  whenever a new part remounted the last row. Code mode wrote no timing at
+  all. One slot carried three different readings, and no conversation-scale
+  token number existed.
+- **Alternatives rejected:**
+  - pinning tokens and actions to the right edge with `ml-auto` — tried and
+    rejected in review: it breaks the reading order the footer is meant to have,
+    and the token chip ended up a size smaller than the rest of the line;
+  - humanising the model id by title-casing every word of the raw string —
+    wrong for ids like `gpt-4o-mini`; a configured label is the only
+    authoritative display name, and the id-as-name form is the fallback;
+  - writing the vendor `metadata.timing` slot — the AI SDK converter overwrites
+    stored timing with the in-memory stream value while a turn is live
+    (`convertMessage.js` spreads live timing after stored metadata), so the
+    number would change after refresh in the other direction; its required
+    `totalChunks`/`tokensPerSecond` are client-stream concepts the server
+    cannot truthfully fill;
+  - measure on the client (component timers, `performance.now()` on mount) —
+    that is the defect being fixed: remounts reset it and a reload loses it;
+  - a new database column — the message metadata JSON already transports and
+    persists `custom`, so no schema or migration is involved;
+  - add a conversation total to the footer — the per-turn chip is already
+    ambiguous; conversation scope belongs to the context ring, which owns the
+    conversation-scale numbers.
+- **Consequences:** no dependency change (the assistant-ui train stays frozen)
+  and no migration. Messages recorded before this change show neither a
+  duration nor a clock. A clock is deliberately NOT taken from
+  `message.createdAt`: the bounded history window returns
+  `{ id, parent_id, format, content }` and no timestamp, so the runtime stamps
+  restored messages with the import time, and a fallback would print the moment
+  the page loaded as the send time — the reported "current time after refresh"
+  defect. Giving pre-existing rows their real time is a separate change: it
+  needs a timestamp on the window contract and in the Direct row decoder.
+  `tests/unit/core/chat-message-metadata.test.ts` pins the turn record's shape,
+  `tests/unit/web/opencode/v2MessageProjection.test.ts` pins the Code
+  projection, `tests/unit/web/tools/duration-ownership.test.ts` pins the single
+  duration formatter, and `tests/dom/components/assistant-turn-footer.test.tsx`
+  pins the row order (with no `ml-auto` anywhere in the line), the anchored live
+  count in both lanes, the absence of a fabricated clock on legacy rows, the
+  display names (configured label first, id-as-name otherwise), and the single
+  type size across every text-bearing node.
+
+## Floating composer: a measured footer feeds the virtualizer's `paddingEnd` (2026-10-30)
+
+- **Decision:** the composer is an OVERLAY the transcript scrolls under.
+  `web/src/features/chat/components/ComposerDock.tsx` renders
+  `ThreadPrimitive.ViewportFooter` — absolutely positioned, bottom-pinned,
+  `pointer-events-none` — containing a 48px fade band (`from-background
+  to-transparent`) and the opaque dock (`pointer-events-auto`, the same
+  `mx-auto max-w-3xl px-4 pb-4` column the composer used to occupy). The
+  reserved status row, the composer, the scope chips and the opaque extras stay
+  inside the dock unchanged. The scrollport loses its `mb-4` so it reaches the
+  same bottom edge as the footer.
+- **The reserve carries a gap:** `paddingEnd` is the measured footer height
+  PLUS `COMPOSER_TAIL_GAP_PX` (32px, `useComposerReserve()`). Reserving exactly
+  the overlay's height put the newest line on the band's top edge, so a line
+  any taller than measured — or a follow glide trailing the live edge — ended
+  up inside the fade and then behind the dock. With the gap, the band dissolves
+  empty space at rest and only covers text the reader has scrolled under it.
+  The gap is the remainder of the reference geometry this mirrors: an 80px tail
+  inset measured from the input box, 48px of which is the ramp that already
+  lives inside our footer.
+- **How the reserve travels:** the footer's height is measured by the library
+  (`useSizeHandle` → `registerContentInset` → thread viewport store
+  `height.inset`) and read back with `useThreadViewport` behind
+  `useComposerInset()`. `ChatWindow` passes it to `VirtualizedTranscript` as
+  `paddingEnd`, which forwards it as BOTH `paddingEnd` and `scrollPaddingEnd`
+  (the last-row `align:"end"` target is `maxOffset - paddingEnd +
+  scrollPaddingEnd`, so a mismatch stops a run-start jump short of the end). The
+  scroll-to-latest pill is positioned from the same number instead of a
+  hardcoded `bottom-24`.
+- **Reason:** the composer was the transcript viewport's in-flow flex sibling, so
+  the transcript ended at a hard edge directly above it and the last line stopped
+  well clear of the box. `paddingEnd` is the one mechanism that reserves space
+  WITHOUT breaking `scrollHeight === getTotalSize()`, the coordinate-space
+  invariant `virtual-end-distance.spec.ts` asserts: the reserve is inside
+  `getTotalSize()`, so the total-size container grows with it. CSS padding on a
+  scroll container is part of its scrollable overflow and is invisible to
+  `getTotalSize()`, which would make `resizeItem`'s `wasAtEnd` and `isAtEnd`
+  disagree by exactly the reserve.
+- **Alternatives rejected:**
+  - `paddingBottom` on the scroller, or a spacer div inside the total-size
+    container — both reintroduce that divergence, which is the defect the header
+    note in `VirtualizedTranscript.tsx` exists to prevent;
+  - a hardcoded reserve constant — the dock changes height at runtime (a top
+    row, extra text lines, a question form, a wrapping status row); a constant
+    leaves either a dead band or text hidden under the dock;
+  - a custom `ResizeObserver` plus a CSS-variable channel in `ChatWindow` — the
+    library already owns this exact measurement; a second observer is a
+    competing implementation;
+  - `sticky bottom-0` inside `ThreadPrimitive.Viewport` — this surface has no
+    `Viewport` (virtualization removes it) and sticky stays in flow, so its
+    height joins `scrollHeight`;
+  - a fixed reserve with no re-anchor — a growing composer moved the virtual end
+    away from the reader; the layout-effect re-anchor in
+    `VirtualizedTranscript` corrects it only while `stickyRef` is set, so a
+    reader parked in history keeps their position.
+- **Consequences:** no dependency change (the assistant-ui train stays frozen)
+  and no schema change. Measured 2026-10-30, chromium-headless, 40-message seed:
+  footer-top minus last-row-bottom = 32px (the tail gap) with a 48px fade band,
+  and `distanceFromEnd` = 0 before and after a 491px append. Negative controls: `paddingEnd={0}` puts the end
+  inside the dock (fails); a zero tail gap measures a 0px clearance and fails the
+  24px guard; a 24px band fails the 40px ramp guard; disabling the component's pin observer leaves
+  the reader 390px from the end after the append; disabling `followOnAppend`
+  with that observer active still passes — so on this path the component's own
+  `ResizeObserver` pin, not the library option, is what holds the reader, and
+  `composer-overlay-follow.spec.ts` records that rather than claiming otherwise.
+  Guards: `tests/e2e/virtualizer/composer-overlay-follow.spec.ts` (geometry +
+  settled pinning) and three structure cases in
+  `tests/dom/components/chat-layout-stability.test.tsx` (out-of-flow footer,
+  dock as the row's folder, pointer-events across the band).

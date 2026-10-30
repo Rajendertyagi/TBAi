@@ -140,6 +140,19 @@ export type VirtualizedTranscriptProps = {
    * transcript's virtualizer through context.
    */
   readonly overlay?: ReactNode;
+  /**
+   * Height of an overlay that covers the bottom of the scrollport (the floating
+   * composer), in pixels. Passed to the virtualizer as BOTH `paddingEnd` and
+   * `scrollPaddingEnd`, which is the only way this reserve works without
+   * breaking the coordinate-space invariant documented in the component body:
+   * the reserve is inside `getTotalSize()`, so the total-size container grows
+   * with it and `scrollHeight === getTotalSize()` keeps holding.
+   *
+   * It is a PROP — not measured here — because the measuring belongs to the
+   * library primitive that owns it (`ThreadPrimitive.ViewportFooter`), and a
+   * second observer in this component would be a competing implementation.
+   */
+  readonly paddingEnd?: number;
   readonly className?: string;
 };
 
@@ -183,6 +196,7 @@ export function VirtualizedTranscript({
   renderRow,
   header,
   overlay,
+  paddingEnd = 0,
   className,
 }: VirtualizedTranscriptProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -219,6 +233,17 @@ export function VirtualizedTranscript({
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: SCROLL_END_THRESHOLD_PX,
+    // The overlay reserve. `paddingEnd` extends the virtual list past the last
+    // row, so the last row can be scrolled clear of the composer while
+    // `getTotalSize()` still describes the whole scrollable space.
+    //
+    // `scrollPaddingEnd` MUST match it. `scrollToIndex(last, { align: "end" })`
+    // targets `getMaxScrollOffset() - paddingEnd + scrollPaddingEnd`
+    // (virtual-core `getOffsetForIndex`), so a mismatch would stop the last-row
+    // jump short of the end by exactly the difference — which is the run-start
+    // path below.
+    paddingEnd,
+    scrollPaddingEnd: paddingEnd,
     // Measurement guard: while the reader is pinned to the live edge, a
     // correction that would END below that edge is exactly the "pull away from
     // the bottom" this guard exists to stop. Testing the TARGET alone — rather
@@ -334,6 +359,37 @@ export function VirtualizedTranscript({
   useLayoutEffect(() => {
     virtualizer.scrollToEnd();
   }, [virtualizer]);
+
+  /**
+   * Re-anchor when the overlay reserve changes.
+   *
+   * `paddingEnd` is a measured value, and it changes while the transcript is
+   * open: the composer grows a top row or extra text lines, a question form
+   * mounts, the status row wraps to two lines. Growing the reserve moves the
+   * virtual end further from the element's maximum offset — the content did not
+   * move, but the reader's distance from the live end changed — so a pinned
+   * reader would drift away from the end by exactly the growth and the library
+   * would then treat them as having scrolled up. Shrinking it would leave the
+   * browser to clamp, which lands short of the end.
+   *
+   * This is a re-anchor, not a pin: it acts ONLY when the reader was already
+   * following the live edge (`stickyRef`, maintained by the scroll/wheel/touch
+   * handlers above), so a reader parked in history keeps their position — the
+   * reserve sits entirely below the last row and cannot move content they are
+   * looking at. It runs in a LAYOUT effect so the correction is committed in
+   * the same frame as the reserve change and never paints as a jump.
+   */
+  const appliedPaddingEndRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const previous = appliedPaddingEndRef.current;
+    appliedPaddingEndRef.current = paddingEnd;
+    if (previous === null || previous === paddingEnd) return;
+    const el = scrollerRef.current;
+    if (!el || !stickyRef.current) return;
+    const top = Math.max(0, el.scrollHeight - el.clientHeight);
+    writtenTopRef.current = top;
+    el.scrollTop = top;
+  }, [paddingEnd]);
 
   const items = virtualizer.getVirtualItems();
 
