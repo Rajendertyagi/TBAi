@@ -28,11 +28,14 @@ import os from "node:os";
 import path from "node:path";
 
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
-import { allocateLoopbackPort } from "@/services/opencode/serverManager.ts";
 import { existingDatabaseFiles } from "@/services/opencode/ownership.ts";
 import { findProcessesUsingFiles } from "@/services/process-ownership.ts";
 import { resolveManagedBinary } from "@/services/opencode/runtime.ts";
-import { runtimeAuthHeaders, runtimeUnavailableReason } from "../../harness/opencodeRuntimeHarness";
+import {
+  allocateTestLoopbackPort,
+  runtimeAuthHeaders,
+  runtimeUnavailableReason,
+} from "../../harness/opencodeRuntimeHarness";
 import { REPO_ROOT } from "../../helpers/repo-root";
 
 const describeG2 =
@@ -245,17 +248,20 @@ describeG2("G2 real-server database ownership", () => {
   it("refuses when a foreign OpenCode already holds the database, and leaves it running", async () => {
     const binary = resolveManagedBinary(OPENCODE_CONFIG).path;
     const isolation = createIsolation("foreign");
-    const foreignPort = allocateLoopbackPort();
-    const foreign = Bun.spawn([binary, "serve", "--port", String(foreignPort)], {
-      cwd: isolation.homeDir,
-      env: {
-        ...isolatedEnv(isolation, binary, path.join(isolation.root, "unused")),
-        OPENCODE_PASSWORD: FOREIGN_PASSWORD,
-        OPENCODE_SERVER_PASSWORD: FOREIGN_PASSWORD,
+    const foreignPort = allocateTestLoopbackPort();
+    const foreign = Bun.spawn(
+      [binary, "serve", "--port", String(foreignPort), "--hostname", "127.0.0.1"],
+      {
+        cwd: isolation.homeDir,
+        env: {
+          ...isolatedEnv(isolation, binary, path.join(isolation.root, "unused")),
+          OPENCODE_PASSWORD: FOREIGN_PASSWORD,
+          OPENCODE_SERVER_PASSWORD: FOREIGN_PASSWORD,
+        },
+        stdout: "ignore",
+        stderr: "ignore",
       },
-      stdout: "ignore",
-      stderr: "ignore",
-    });
+    );
     const runDir = path.join(isolation.root, "managed");
     const foreignUrl = `http://127.0.0.1:${foreignPort}`;
     try {

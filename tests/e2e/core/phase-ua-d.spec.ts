@@ -265,11 +265,9 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
     });
 
     // Wait for the folder list to actually LOAD before asserting anything about
-    // its highlight. `FolderConversationRow` renders `noConversations` whenever
-    // `items.length === 0` and never consults `isLoading`, so a fetch still in
-    // flight is indistinguishable from an empty folder. On a slow machine the
-    // highlight assertions below ran inside that window and failed for a reason
-    // that had nothing to do with the highlight.
+    // its highlight. The fetch is asynchronous, and while it is in flight the
+    // folder shows skeletons rather than rows, so an assertion made in that
+    // window fails for a reason that has nothing to do with the highlight.
     //
     // This waits for the row to EXIST; it does not relax any later assertion.
     const titleButton = page.getByRole("button", { name: exactTitle, exact: true });
@@ -278,28 +276,26 @@ test("D2 Direct folder chat: + presets folder, seeded history resumes, highlight
     // Folder highlight. The invariant is IDENTITY: the row for THIS conversation
     // is highlighted, and nothing else is.
     //
-    // The count is asserted, not dodged. A project conversation legitimately
-    // renders in two independent sidebar sections — under its folder, and in the
-    // un-scoped Chats list — and both apply `bg-sidebar-accent` when active.
-    // Measured on a clean full load (see the probe numbers in the commit that
-    // introduced this): 2 accented rows, both carrying this conversation's
-    // title, neither nested in the other. So `toHaveCount(1)` asserted a shape
-    // the product never had; the correct number is 2, and pinning it means a
-    // regression that duplicates or drops a section fails loudly instead of
-    // sliding through a `>= 1`.
+    // The count is asserted, not dodged. A project conversation renders exactly
+    // ONCE — under its folder. The unscoped `Chats` section that used to mirror
+    // it was removed with the sidebar redesign (every conversation now appears
+    // exactly once), which is why the expected number is 1 where it used to be
+    // 2. Pinning it means a regression that duplicates the row — a returned
+    // global list, or a folder echoing another folder's chats — fails loudly
+    // instead of sliding through a `>= 1`.
     //
     // Matching the exact per-run title (not the loose /ua-d D2 /i pattern) is
     // what stops a row left behind by an earlier run from satisfying this.
-    const activeRow = page.locator("div.bg-sidebar-accent").filter({
+    const activeRow = page.locator("div[data-active].sidebar-row-surface").filter({
       has: page.getByRole("button", { name: exactTitle, exact: true }),
     });
-    const allAccented = page.locator("div.bg-sidebar-accent");
+    const allAccented = page.locator("div[data-active].sidebar-row-surface");
     await expect(allAccented.first()).toBeVisible({ timeout: 15000 });
-    // Exactly the two sections that are supposed to mirror this conversation.
-    await expect(allAccented).toHaveCount(2);
-    // …and every highlighted row IS this conversation: no stale row from an
+    // Exactly one row: this conversation, inside its folder.
+    await expect(allAccented).toHaveCount(1);
+    // …and the highlighted row IS this conversation: no stale row from an
     // earlier run, and no unrelated conversation that happens to be open.
-    await expect(activeRow).toHaveCount(2);
+    await expect(activeRow).toHaveCount(1);
     // …and it is the right one to click: this title is bound to THIS id.
     await titleButton.first().click();
     await expect(page).toHaveURL(new RegExp(`#/chat/${convId}$`));

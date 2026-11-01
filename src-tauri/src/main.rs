@@ -186,7 +186,11 @@ fn handle_asset_request(request: &tauri::http::Request<Vec<u8>>) -> tauri::http:
     let path_raw = request.uri().path();
     let decoded_path = percent_decode(path_raw);
     let trimmed = decoded_path.trim_start_matches('/');
-    let rel_str = if trimmed.is_empty() { "index.html" } else { trimmed };
+    let rel_str = if trimmed.is_empty() {
+        "index.html"
+    } else {
+        trimmed
+    };
 
     // Baseline security check: reject traversal and illegal characters
     if rel_str.contains("..") || rel_str.contains(':') || rel_str.contains('\0') {
@@ -443,7 +447,10 @@ enum DevAttachVerdict {
 /// port are all definite: the backend this launch started cannot bind a port
 /// another process already owns, so waiting out the startup budget would only
 /// delay an accurate error.
-fn classify_dev_instance(expected: &str, observed: Result<String, &'static str>) -> DevAttachVerdict {
+fn classify_dev_instance(
+    expected: &str,
+    observed: Result<String, &'static str>,
+) -> DevAttachVerdict {
     match observed {
         Ok(instance_id) if instance_id == expected => DevAttachVerdict::Attach,
         Ok(instance_id) => DevAttachVerdict::Reject(format!(
@@ -452,9 +459,9 @@ fn classify_dev_instance(expected: &str, observed: Result<String, &'static str>)
              earlier run, or another checkout's backend, owns the port; stop it and \
              restart `tauri dev`."
         )),
-        Err("no_listener") => DevAttachVerdict::Retry(
-            "nothing is listening on the development port yet".to_string(),
-        ),
+        Err("no_listener") => {
+            DevAttachVerdict::Retry("nothing is listening on the development port yet".to_string())
+        }
         Err("old_build_or_foreign") => DevAttachVerdict::Reject(
             "the server on the development port has no instance endpoint: it is an \
              old build or another application, not this launch's backend"
@@ -530,8 +537,7 @@ fn attach_dev_backend(app: &AppHandle) {
     };
 
     let start = Instant::now();
-    let mut last_retry =
-        "nothing has been observed on the development port yet".to_string();
+    let mut last_retry = "nothing has been observed on the development port yet".to_string();
     while start.elapsed() < STARTUP_TIMEOUT {
         if owned.is_quitting.load(Ordering::SeqCst) {
             owned.is_starting.store(false, Ordering::SeqCst);
@@ -722,7 +728,10 @@ fn attempt(app: &AppHandle) {
                     }
                 }
                 CommandEvent::Terminated(payload) => {
-                    let note = format!("exited (code {:?}, signal {:?})", payload.code, payload.signal);
+                    let note = format!(
+                        "exited (code {:?}, signal {:?})",
+                        payload.code, payload.signal
+                    );
                     eprintln!("[server] sidecar {note}");
                     if let Some(owned) = app_handle.try_state::<StartupOwned>() {
                         // Recorded before the quit check: the graceful handshake
@@ -736,7 +745,8 @@ fn attempt(app: &AppHandle) {
                         *owned.verified_endpoint.lock().expect("endpoint lock") = None;
 
                         let mut count = owned.crash_count.lock().expect("crash count lock");
-                        let mut window_start = owned.crash_window_start.lock().expect("window lock");
+                        let mut window_start =
+                            owned.crash_window_start.lock().expect("window lock");
                         if window_start.elapsed() > Duration::from_secs(30) {
                             *window_start = Instant::now();
                             *count = 1;
@@ -838,13 +848,23 @@ fn attempt(app: &AppHandle) {
 #[tauri::command]
 fn get_api_endpoint(app: AppHandle) -> Result<EndpointInfo, String> {
     let owned = app.state::<StartupOwned>();
-    if let Some(endpoint) = owned.verified_endpoint.lock().expect("endpoint lock").clone() {
+    if let Some(endpoint) = owned
+        .verified_endpoint
+        .lock()
+        .expect("endpoint lock")
+        .clone()
+    {
         return Ok(endpoint);
     }
     let start = Instant::now();
     while start.elapsed() < STARTUP_TIMEOUT {
         std::thread::sleep(Duration::from_millis(100));
-        if let Some(endpoint) = owned.verified_endpoint.lock().expect("endpoint lock").clone() {
+        if let Some(endpoint) = owned
+            .verified_endpoint
+            .lock()
+            .expect("endpoint lock")
+            .clone()
+        {
             return Ok(endpoint);
         }
         let status = owned.status.lock().expect("status lock").clone();
@@ -913,7 +933,9 @@ fn main() {
         )
         .setup(|app| {
             let data_dir = resolve_data_dir();
-            app.manage(StartupConfig { data_dir: data_dir.clone() });
+            app.manage(StartupConfig {
+                data_dir: data_dir.clone(),
+            });
             app.manage(StartupOwned {
                 lock: Mutex::new(None),
                 child: Mutex::new(None),
@@ -1057,15 +1079,27 @@ mod tests {
     #[test]
     fn percent_decode_handles_basic_and_escaped() {
         assert_eq!(percent_decode("hello%20world"), "hello world");
-        assert_eq!(percent_decode("assets/app%2Bicon.png"), "assets/app+icon.png");
+        assert_eq!(
+            percent_decode("assets/app%2Bicon.png"),
+            "assets/app+icon.png"
+        );
         assert_eq!(percent_decode("/plain/path"), "/plain/path");
     }
 
     #[test]
     fn mime_type_mapping() {
-        assert_eq!(get_mime_type(Path::new("index.html")), "text/html; charset=utf-8");
-        assert_eq!(get_mime_type(Path::new("app.js")), "application/javascript; charset=utf-8");
-        assert_eq!(get_mime_type(Path::new("app.css")), "text/css; charset=utf-8");
+        assert_eq!(
+            get_mime_type(Path::new("index.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            get_mime_type(Path::new("app.js")),
+            "application/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            get_mime_type(Path::new("app.css")),
+            "text/css; charset=utf-8"
+        );
         assert_eq!(get_mime_type(Path::new("logo.svg")), "image/svg+xml");
         assert_eq!(get_mime_type(Path::new("icon.png")), "image/png");
         assert_eq!(get_mime_type(Path::new("font.woff2")), "font/woff2");

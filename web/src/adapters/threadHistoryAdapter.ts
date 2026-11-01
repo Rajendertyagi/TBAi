@@ -18,6 +18,7 @@ import {
 } from "../features/chat/history/useDirectHistoryWindow";
 import type { WindowController } from "../features/chat/history/windowController";
 import { apiFetch } from "../lib/platform";
+import { notifyConversationMutations } from "../features/chat/state/conversationMutations";
 import { logger } from "../lib/logger";
 
 /**
@@ -191,6 +192,7 @@ export function createThreadHistoryAdapter(
     if (!res.ok) {
       throw new Error(`Failed to persist message (${res.status})`);
     }
+    notifyConversationMutations();
   };
 
   const baseAdapter: ThreadHistoryAdapter = {

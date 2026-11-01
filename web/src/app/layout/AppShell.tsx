@@ -12,6 +12,7 @@ import { StatusBar } from "../../components/StatusBar";
 import { ActivityBar } from "../../components/ActivityBar";
 import { TabStrip } from "../../components/TabStrip";
 import { LeftEdgeChrome } from "../../components/LeftEdgeChrome";
+import { CommandPalette } from "../../components/CommandPalette";
 import { RightEdgeChrome } from "../../components/RightEdgeChrome";
 import { WindowControls } from "../../components/WindowControls";
 import { ChromeShortcuts } from "../../components/ChromeShortcuts";
@@ -20,6 +21,7 @@ import { TabUrlSync } from "../TabUrlSync";
 import { RouteObserver } from "../RouteObserver";
 import { isTauri } from "../../lib/platform";
 import { syncChromeVars } from "../../lib/chrome-vars";
+import { chatColumnWidth } from "../../config/chat";
 import { useDesktopLayout } from "../../features/desktop/state/desktopLayout";
 import { useAvailabilityStore } from "../../features/availability/availabilityStore";
 import { registerAvailabilityRecovery } from "../../features/availability/recovery";
@@ -72,6 +74,7 @@ export function AppShell() {
   const sidebarVisible = useDesktopLayout((s) => s.sidebarVisible);
   const statusBarVisible = useDesktopLayout((s) => s.statusBarVisible);
   const sidebarWidth = useDesktopLayout((s) => s.sidebarWidth);
+  const chatWidth = useDesktopLayout((s) => s.chatWidth);
   const searchOpen = useDesktopLayout((s) => s.searchOpen);
 
   const active = useChatTabsStore(activeTab);
@@ -115,10 +118,16 @@ export function AppShell() {
   const captionStrip = isTauri();
 
   // Publish chrome geometry as CSS variables (single source of truth = the
-  // token layer in `lib/window-chrome.ts` via `syncChromeVars`).
+  // token layer in `lib/window-chrome.ts` / `config/chat.ts` via
+  // `syncChromeVars`).
   useEffect(() => {
-    syncChromeVars({ sidebarWidth, searchOpen, captionStrip });
-  }, [sidebarWidth, searchOpen, captionStrip]);
+    syncChromeVars({
+      sidebarWidth,
+      chatColumnWidth: chatColumnWidth(chatWidth),
+      searchOpen,
+      captionStrip,
+    });
+  }, [sidebarWidth, chatWidth, searchOpen, captionStrip]);
 
   // Global backend availability (Phase 3): exactly one readiness poller for
   // the whole app lifetime, plus the single coordinated recovery listener.
@@ -171,6 +180,7 @@ export function AppShell() {
         </div>
 
         {statusBarVisible && <StatusBar />}
+        <CommandPalette />
 
         {/* Corner overlays — rendered in BOTH web + desktop (codeg pattern). Only
             the caption buttons self-null in the browser. */}

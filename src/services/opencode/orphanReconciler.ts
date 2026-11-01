@@ -6,6 +6,7 @@ import {
   type OpenCodeOrphanRecord,
 } from "../storage/opencodeSessionOrphans";
 import { createOpenCodeClient, type OpenCodeClient } from "./client";
+import { createManagedFallbackTransport } from "./connectionState";
 import { openCodeServerManager } from "./serverManager";
 import {
   fetchOpenCodeSession,
@@ -222,6 +223,12 @@ export interface OpenCodeOrphanReconcileReport {
   unresolved: number;
   /** Rows left because no managed server was running to probe against. */
   skippedNoServer: number;
+  /**
+   * Rows whose session belongs to another service (an adopted origin). They are
+   * never probed or removed through the managed server: the adopted service
+   * owns that history and its database (H3/B3).
+   */
+  skippedOtherService: number;
 }
 
 export interface StartOrphanReconciliationOptions {
@@ -416,6 +423,7 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
     expiredAbsent: 0,
     unresolved: 0,
     skippedNoServer: 0,
+    skippedOtherService: 0,
   };
 
   // Resolved once per pass, and only when a row actually needs a remote
@@ -471,9 +479,21 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         continue;
       }
 
-      // A remote answer is required from here on. Without a running server,
-      // leave the row untouched rather than starting one from a background
-      // task (boot must not depend on OpenCode).
+      // A remote answer is required from here on — but only from the service
+      // that owns this history. An adopted-bound row is left untouched rather
+      // than probed through the managed server, whose 404 would say nothing
+      // about the adopted service's session.
+      if (record.serviceOwner !== undefined && record.serviceOwner !== "managed") {
+        report.skippedOtherService += 1;
+        logger.debug("opencode", "opencode.orphan_reconcile_other_service", {
+          conversationId: record.conversationId,
+          phase: record.phase,
+        });
+        continue;
+      }
+
+      // Without a running server, leave the row untouched rather than starting
+      // one from a background task (boot must not depend on OpenCode).
       const url = await runningBaseUrl();
       if (url === null) {
         report.skippedNoServer += 1;
@@ -795,5 +815,12 @@ export const openCodeOrphanReconcilerDeps: OpenCodeOrphanReconcilerDeps = {
   isCreateInFlight: isOpenCodeSessionCreateInFlight,
   getRunningBaseUrl: async () =>
     openCodeServerManager.isRunning() ? openCodeServerManager.ensureBaseUrl() : null,
-  createClient: (baseUrl, directory) => createOpenCodeClient(baseUrl, { directory }),
+  // Reconciliation is managed-only (`getRunningBaseUrl` above), so the
+  // credential is the managed one. The client still requires a transport; a
+  // raw header record is never handed to it.
+  createClient: (baseUrl, directory) =>
+    createOpenCodeClient(baseUrl, {
+      directory,
+      transport: createManagedFallbackTransport(baseUrl),
+    }),
 };

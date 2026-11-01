@@ -3,17 +3,20 @@ import { join } from "node:path";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
 
 /**
- * Unit C (write path) — a permission rule is addressed by POSITION plus a
- * re-checked identity.
+ * The permission write route is refused before it reads or writes.
  *
- * A configuration can carry the same `(action, resource)` pair twice. OpenCode
- * resolves the array last-match-wins, so the LAST of them is the one in
- * force; editing the first would change a rule that never decides anything
- * while the page reported success.
+ * This file used to pin the route's position-plus-identity semantics — a
+ * configuration can carry the same `(action, resource)` pair twice, and only
+ * the file position tells them apart. Those semantics now live in
+ * `tests/unit/opencode/configDocument.test.ts`, where `setOpenCodePermissionEffectAt`
+ * and its siblings are exercised directly.
  *
- * These tests pin the write path's behaviour for that case. The page's own
- * duplicate-row affordance is a separate decision (G7) and is not covered
- * here.
+ * At the HTTP boundary there is nothing left to address: the managed service
+ * has no TBAi-owned configuration root (§9.3(1)), so the route refuses every
+ * write before resolving a target. What is worth proving here is that the
+ * refusal is total — no read, no write, no fixture request — because a route
+ * that partially ran before refusing is exactly how a stale base or a leaked
+ * credential would reach disk or the wire.
  */
 
 const CONFIG_DIRECTORY = process.env.DATA_DIR ?? "";
@@ -32,10 +35,13 @@ const CONFIG_TEXT = `${JSON.stringify(
   2,
 )}\n`;
 
+let fixtureRequests = 0;
+
 const fixtureServer = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
   fetch(request) {
+    fixtureRequests += 1;
     const url = new URL(request.url);
     if (url.pathname === "/api/config") {
       return Response.json([
@@ -61,9 +67,12 @@ async function rulesOnDisk(): Promise<Array<{ action: string; resource: string; 
   return parsed.permissions;
 }
 
-async function putEffect(body: Record<string, unknown>): Promise<Response> {
+async function write(
+  method: "POST" | "DELETE" | "PUT",
+  body: Record<string, unknown>,
+): Promise<Response> {
   return openCodeApp.request("http://localhost/config/permissions", {
-    method: "PUT",
+    method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -71,6 +80,7 @@ async function putEffect(body: Record<string, unknown>): Promise<Response> {
 
 beforeEach(async () => {
   await Bun.write(CONFIG_PATH, CONFIG_TEXT);
+  fixtureRequests = 0;
 });
 
 afterAll(() => {
@@ -79,55 +89,39 @@ afterAll(() => {
     originalEnsureBaseUrl;
 });
 
-describe("PUT /api/opencode/config/permissions", () => {
-  it("changes the rule at the position it was addressed by", async () => {
-    const response = await putEffect({
+describe("every permission write is refused before the document is read", () => {
+  it("refuses a positional edit and leaves the file byte-identical", async () => {
+    const response = await write("PUT", {
       index: 1,
       action: "question",
       resource: "*",
       effect: "allow",
     });
 
-    expect(response.status).toBe(200);
-    const rules = await rulesOnDisk();
-    // The SECOND of the two identical rules changed; the first did not.
-    expect(rules[0]?.effect).toBe("ask");
-    expect(rules[1]?.effect).toBe("allow");
-    expect(rules[2]?.effect).toBe("ask");
+    expect(response.status).toBe(409);
+    expect(fixtureRequests).toBe(0);
+    expect(await rulesOnDisk()).toEqual([
+      { action: "question", resource: "*", effect: "ask" },
+      { action: "question", resource: "*", effect: "deny" },
+      { action: "shell", resource: "*", effect: "ask" },
+    ]);
   });
 
-  it("refuses an ambiguous pair rather than applying it to an arbitrary match", async () => {
-    const response = await putEffect({ action: "question", resource: "*", effect: "allow" });
-
-    expect(response.status).toBe(422);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain("ambiguous");
-    // Nothing was written.
-    expect((await rulesOnDisk())[0]?.effect).toBe("ask");
-    expect((await rulesOnDisk())[1]?.effect).toBe("deny");
-  });
-
-  it("refuses a position whose rule is not the one the caller read", async () => {
-    const response = await putEffect({
-      index: 2,
+  it("refuses an identity-only edit, an add and a removal", async () => {
+    const edited = await write("PUT", { action: "question", resource: "*", effect: "allow" });
+    const added = await write("POST", { action: "shell", resource: "*", effect: "deny" });
+    const removed = await write("DELETE", {
+      index: 0,
       action: "question",
       resource: "*",
-      effect: "allow",
+      effect: "ask",
     });
 
-    expect(response.status).toBe(422);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain("changed on disk");
-    expect((await rulesOnDisk())[2]?.effect).toBe("ask");
-  });
-
-  it("still edits a unique pair addressed without a position", async () => {
-    const response = await putEffect({ action: "shell", resource: "*", effect: "deny" });
-
-    expect(response.status).toBe(200);
-    const rules = await rulesOnDisk();
-    expect(rules[2]?.effect).toBe("deny");
-    expect(rules[0]?.effect).toBe("ask");
-    expect(rules[1]?.effect).toBe("deny");
+    expect(edited.status).toBe(409);
+    expect(added.status).toBe(409);
+    expect(removed.status).toBe(409);
+    // Not even the read that precedes a transform reached the service.
+    expect(fixtureRequests).toBe(0);
+    expect((await rulesOnDisk())[0]?.effect).toBe("ask");
   });
 });

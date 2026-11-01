@@ -108,10 +108,34 @@
      in a component. */
   --status-reserved-height: 46px;
 
+  /* Sidebar rows: ONE height and ONE radius for every folder and conversation
+     row. The folder connector is drawn from this height, so a row that changed
+     its own height would leave the elbow pointing at empty space. */
+  --sidebar-row-height: 30px;
+  --sidebar-row-radius: 8px;
+
+  /* A conversation row's two states, as tokens: a soft accent under the pointer,
+     the full accent for the OPEN conversation, and a softer one for a
+     list-closing row (Show more). They used to be one value, so the open row
+     became indistinguishable from the row being hovered. */
+  --sidebar-row-hover: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+  --sidebar-row-hover-soft: color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+  --sidebar-row-active: color-mix(in srgb, var(--sidebar-accent) 90%, var(--foreground) 10%);
+
+  /* Centred chat column. Declared here as the pre-mount default: `syncChromeVars`
+     republishes it from `CHAT_WIDTHS.comfortable` on the first effect. The two
+     literals are pinned by tests/unit/web/chat-width.test.ts, so they cannot
+     drift apart. */
+  --chat-column-width: 768px;
+
   color-scheme: light;
 }
 
 .dark {
+  --sidebar-row-hover: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+  --sidebar-row-hover-soft: color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+  --sidebar-row-active: color-mix(in srgb, var(--sidebar-accent) 85%, white 15%);
+
   /* Dark scale adopts codeg`s neutral-dark relationships verbatim (oklch):
      card/muted/accent step down from the background; borders/inputs are
      translucent white so they adapt to any surface. Only --background stays
@@ -235,6 +259,104 @@
 }
 @utility text-3xs {
   font-size: 0.625rem; /* 10px @100% */
+}
+
+/* The sidebar folder tile. Geometry and type metrics are fixed here so the
+   component supplies only the two colours, which are the folder's own data
+   (theme-independent, read back out of storage). */
+@utility folder-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+  background-color: var(--folder-tile-bg);
+  color: var(--folder-tile-fg);
+}
+
+/* A folder's conversation rows: the 18px indent plus the ONE hairline and
+   elbow that ties them to the folder above. Drawn once per block, not per row —
+   a per-row left border doubles the line and draws a second elbow for every
+   conversation. The hairline stops at the LAST row's centre, which is why the
+   geometry is derived from `--sidebar-row-height` instead of a literal. */
+@utility sidebar-folder-children {
+  position: relative;
+  padding-left: 18px;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 0;
+    bottom: var(--sidebar-row-height);
+    border-left: 1px solid var(--sidebar-border);
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    bottom: calc(var(--sidebar-row-height) / 2);
+    width: 11px;
+    height: calc(var(--sidebar-row-height) / 2);
+    border-left: 1px solid var(--sidebar-border);
+    border-bottom: 1px solid var(--sidebar-border);
+    border-bottom-left-radius: 4px;
+  }
+}
+
+/* Separator between folder blocks — never before the first, never after the
+   last. One rule, so the spacing and the hairline cannot drift apart. */
+@utility sidebar-folder-block {
+  & + & {
+    margin-top: 3px;
+    padding-top: 7px;
+    border-top: 1px solid var(--sidebar-border);
+  }
+}
+
+/* A conversation row's two states live in one rule on purpose: `data-active`
+   marks the open conversation at the full accent, everything else lifts to the
+   softer accent under the pointer. Two separate utilities could be ordered (or
+   re-spelled) so that hover and active became identical again — which is the
+   defect this replaces. */
+@utility sidebar-row-surface {
+  position: relative;
+
+  &:not([data-active]):hover {
+    background-color: var(--sidebar-row-hover);
+  }
+
+  &[data-active],
+  &[data-active]:hover {
+    background-color: var(--sidebar-accent);
+  }
+
+  &[data-active]::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 9999px;
+    background-color: var(--primary);
+  }
+}
+
+/* The running indicator: a success dot with a translucent halo, legible on a
+   plain row and on the active row's accent alike. */
+@utility thread-running-dot {
+  border-radius: 9999px;
+  background-color: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 22%, transparent);
 }
 
 /* The see-through surface treatment, as ONE reusable utility.

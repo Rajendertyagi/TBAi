@@ -110,9 +110,9 @@ test("(a) folder + button opens /chat/new with the folder preset in scope", asyn
 
     // The "+" (new-conversation) button is revealed on hover of the folder
     // header row. It has title + aria-label "New chat" (sidebarConfig.copy).
-    // Every folder row renders its own "+" (opacity-revealed, so all of them
-    // are in the DOM and "visible" to Playwright) — scope the lookup to THIS
-    // folder's row or .first() may click a leftover folder's button.
+    // Every folder row renders its own "+", but the trailing slot keeps it
+    // `hidden` until that row is hovered — so scope the lookup to THIS folder's
+    // row; .first() could otherwise reach a leftover folder's button.
     const headerRow = page.locator("div.group", { has: folderHeader }).first();
     await headerRow.hover();
     // Title is copy.newChat ("New Chat", capital C) — the tabstrip's
@@ -147,24 +147,20 @@ test("(b) New Project dialog shows Direct/Code switch and routes engine-correct"
   const folder = await createFolder(page);
   let convId: string | null = null;
   try {
-    // The NewProjectChatDialog is a standalone component (web/src/components/
-    // NewProjectChatDialog.tsx) with a folder picker + EnginePicker (Direct /
-    // OpenCode switch) + create+route. In the current build it is NOT wired
-    // to any visible trigger — grep shows no import outside its own file, and
-    // the "New Project Chat" copy string in sidebarConfig is referenced by no
-    // component. So this spec fails on the trigger lookup with the explicit
-    // message below (a build-wiring gap, not a spec flaw).
+    // The NewProjectChatDialog (folder picker + EnginePicker + create+route) is
+    // reached from the Folders section header's single `+` menu. That menu
+    // replaced the two icons that used to sit at the header's right edge, so
+    // the entry point is now a MENU ITEM, not a button of its own.
     await page.goto(`${BASE}#/`);
     await waitShell(page);
 
-    const trigger = page.getByRole("button", { name: /new project/i });
-    const hasTrigger = await trigger.count();
-    expect(
-      hasTrigger,
-      'no "New Project Chat" trigger found — NewProjectChatDialog is not wired to any UI in this build',
-    ).toBeGreaterThan(0);
+    const addMenu = page.getByRole("button", { name: "Add to section" });
+    await expect(addMenu).toBeVisible({ timeout: 10000 });
+    await addMenu.click();
 
-    await trigger.first().click();
+    const trigger = page.getByRole("menuitem", { name: "New Project Chat" });
+    await expect(trigger).toBeVisible({ timeout: 5000 });
+    await trigger.click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible({ timeout: 10000 });
@@ -241,8 +237,8 @@ test("(c) a folder conversation opened via /code/<id> highlights in its folder",
 
     // The runtime lists threads across all workspaces, so the conversation
     // title shows up in the sidebar's Folders section (as a folder-bound
-    // project row), not in Chats/Recent. Wait for it to render under its
-    // folder header, highlighted (active row gets `bg-sidebar-accent`).
+    // project row), not in Chats. Wait for it to render under its
+    // folder header, highlighted (the active row carries `data-active`).
     // Note: CodeShell is "focused chrome only" and intentionally does NOT
     // render the chat Sidebar on /code/<id> — so the highlight assertion is
     // only meaningful when the sidebar is visible. If the row is not found
@@ -255,9 +251,9 @@ test("(c) a folder conversation opened via /code/<id> highlights in its folder",
       .catch(() => false);
 
     if (rowVisible) {
-      // The active row carries `bg-sidebar-accent`. Confirm the highlight
+      // The active row carries `data-active`. Confirm the highlight
       // actually landed on this conversation's row.
-      const activeRow = page.locator("div.bg-sidebar-accent").filter({
+      const activeRow = page.locator("div[data-active].sidebar-row-surface").filter({
         has: page.getByRole("button", { name: /ua-a code conv/i }),
       });
       await expect(

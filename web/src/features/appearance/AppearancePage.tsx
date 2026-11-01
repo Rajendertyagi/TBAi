@@ -1,13 +1,15 @@
-import { Palette, SpellCheck2 } from "lucide-react";
+import { Palette, SlidersHorizontal, SpellCheck2 } from "lucide-react";
 import { SettingRow, SettingsPage, SettingsSection } from "../../components/shared/settings";
 import { Switch } from "../../components/ui/switch";
 import { ThemeToggle } from "./ThemeToggle";
 import { useTheme } from "../../components/theme-provider";
 import { ThemePicker } from "./ThemePicker";
 import { useDesktopLayout } from "../desktop/state/desktopLayout";
+import { CHAT_WIDTHS, CHAT_WIDTH_ORDER, DEFAULT_CHAT_WIDTH } from "../../config/chat";
+import { cn } from "../../lib/utils";
 
 /**
- * Appearance settings (`/appearance`): theme and display.
+ * Appearance settings (`/appearance`): theme, chat layout and typing.
  * Theme state itself stays in ThemeProvider; this page is the UI surface.
  *
  * Colour is two independent decisions — a light/dark mode, and one palette per
@@ -20,6 +22,8 @@ import { useDesktopLayout } from "../desktop/state/desktopLayout";
 export function AppearancePage() {
   const spellCheck = useDesktopLayout((s) => s.spellCheck);
   const setSpellCheck = useDesktopLayout((s) => s.setSpellCheck);
+  const chatWidth = useDesktopLayout((s) => s.chatWidth);
+  const setChatWidth = useDesktopLayout((s) => s.setChatWidth);
   const { themeIds, setThemeId } = useTheme();
 
   return (
@@ -64,6 +68,47 @@ export function AppearancePage() {
           Colour palettes from OpenChamber (MIT, Copyright (c) 2025 Bohdan Triapitsyn). Classic is
           TBAi's own.
         </p>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Chat layout"
+        icon={SlidersHorizontal}
+        description="How wide the conversation column is. Messages, the composer and the welcome screen share one column, so they always line up."
+      >
+        <SettingRow
+          label="Chat width"
+          description={`Narrow fits more lines on screen; wide gives code and tables more room. ${CHAT_WIDTHS[DEFAULT_CHAT_WIDTH].label} is the default.`}
+          control={
+            <div
+              role="group"
+              aria-label="Chat width"
+              className="inline-flex w-fit rounded-lg border border-border bg-card/40 p-0.5"
+            >
+              {CHAT_WIDTH_ORDER.map((width) => {
+                const selected = chatWidth === width;
+                return (
+                  <button
+                    key={width}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setChatWidth(width)}
+                    className={cn(
+                      "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                      selected
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {CHAT_WIDTHS[width].label}
+                    <span className="ml-1 text-3xs tabular-nums text-muted-foreground">
+                      {CHAT_WIDTHS[width].px}px
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          }
+        />
       </SettingsSection>
 
       <SettingsSection

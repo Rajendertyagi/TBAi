@@ -12,6 +12,7 @@ import {
   type SidebarSectionId,
   type SidebarSortMode,
 } from "../../../config/sidebar";
+import { DEFAULT_CHAT_WIDTH, isChatWidth, type ChatWidth } from "../../../config/chat";
 import { moveSectionInOrder, normalizeSectionOrder } from "./sidebarSections";
 
 /**
@@ -32,14 +33,14 @@ interface DesktopLayoutState {
   statusBarVisible: boolean;
   /** Conversation sidebar width in px (user-resizable, clamped). */
   sidebarWidth: number;
+  /** Centred chat column width (transcript + composer + welcome). */
+  chatWidth: ChatWidth;
   /** Thread sort for the sidebar lists. */
   sidebarSort: SidebarSortMode;
   /** Top-to-bottom sidebar section order (always a full permutation). */
   sectionOrder: readonly SidebarSectionId[];
   /** Per-section collapsed flags. Absent = expanded. */
   sectionCollapsed: SidebarSectionCollapsed;
-  /** Whether the Recent section renders. */
-  showRecent: boolean;
   /** Whether archived conversations are shown in the sidebar lists. */
   showCompleted: boolean;
   /**
@@ -73,11 +74,11 @@ interface DesktopLayoutState {
   setSidebar: (v: boolean) => void;
   setStatusBar: (v: boolean) => void;
   setSidebarWidth: (w: number) => void;
+  setChatWidth: (w: ChatWidth) => void;
   setSidebarSort: (sort: SidebarSortMode) => void;
   moveSection: (id: SidebarSectionId, delta: number) => void;
   setSectionCollapsed: (id: SidebarSectionId, collapsed: boolean) => void;
   setAllSectionsCollapsed: (collapsed: boolean) => void;
-  setShowRecent: (v: boolean) => void;
   setShowCompleted: (v: boolean) => void;
   setSpellCheck: (v: boolean) => void;
   /** Record a keystroke; `searchQuery` settles after the debounce. */
@@ -93,10 +94,10 @@ interface PersistedLayout {
   sidebarVisible: boolean;
   statusBarVisible: boolean;
   sidebarWidth: number;
+  chatWidth: ChatWidth;
   sidebarSort: SidebarSortMode;
   sectionOrder: readonly SidebarSectionId[];
   sectionCollapsed: SidebarSectionCollapsed;
-  showRecent: boolean;
   showCompleted: boolean;
   spellCheck: boolean;
 }
@@ -121,10 +122,10 @@ function defaultPersisted(): PersistedLayout {
     sidebarVisible: true,
     statusBarVisible: true,
     sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+    chatWidth: DEFAULT_CHAT_WIDTH,
     sidebarSort: sidebarConfig.defaultSort,
     sectionOrder: sidebarConfig.defaultSectionOrder,
     sectionCollapsed: {},
-    showRecent: sidebarConfig.showRecentByDefault,
     showCompleted: false,
     // Matches the platform default for a textarea, so adding the setting
     // changes nothing until the user turns it off.
@@ -136,8 +137,14 @@ function isSortMode(value: unknown): value is SidebarSortMode {
   return value === "updated" || value === "created";
 }
 
-/** Merge an unknown persisted payload over defaults, field by field. */
-function migratePersisted(persisted: unknown): DesktopLayoutState {
+/**
+ * Merge an unknown persisted payload over defaults, field by field.
+ *
+ * Exported for the migration test: a payload written before a preference
+ * existed must load with that preference's default instead of resetting the
+ * whole layout.
+ */
+export function migratePersisted(persisted: unknown): DesktopLayoutState {
   const defaults = defaultPersisted();
   const transient = {
     searchInput: "",
@@ -162,13 +169,13 @@ function migratePersisted(persisted: unknown): DesktopLayoutState {
       typeof p.sidebarWidth === "number" && Number.isFinite(p.sidebarWidth)
         ? clamp(p.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
         : defaults.sidebarWidth,
+    chatWidth: isChatWidth(p.chatWidth) ? p.chatWidth : defaults.chatWidth,
     sidebarSort: isSortMode(p.sidebarSort) ? p.sidebarSort : defaults.sidebarSort,
     sectionOrder: normalizeSectionOrder(p.sectionOrder),
     sectionCollapsed:
       typeof p.sectionCollapsed === "object" && p.sectionCollapsed !== null
         ? (p.sectionCollapsed as SidebarSectionCollapsed)
         : defaults.sectionCollapsed,
-    showRecent: typeof p.showRecent === "boolean" ? p.showRecent : defaults.showRecent,
     showCompleted: typeof p.showCompleted === "boolean" ? p.showCompleted : defaults.showCompleted,
     spellCheck: typeof p.spellCheck === "boolean" ? p.spellCheck : defaults.spellCheck,
   } as DesktopLayoutState;
@@ -187,6 +194,7 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
       setSidebar: (v) => set({ sidebarVisible: v }),
       setStatusBar: (v) => set({ statusBarVisible: v }),
       setSidebarWidth: (w) => set({ sidebarWidth: clamp(w, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
+      setChatWidth: (w) => set({ chatWidth: w }),
       setSidebarSort: (sort) => set({ sidebarSort: sort }),
       // Reorder through the shared pure helper so the store and the sidebar
       // cannot drift on edge cases (out-of-range delta, unknown id). The helper
@@ -207,7 +215,6 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
           for (const id of s.sectionOrder) next[id] = collapsed;
           return { sectionCollapsed: next };
         }),
-      setShowRecent: (v) => set({ showRecent: v }),
       setShowCompleted: (v) => set({ showCompleted: v }),
       setSpellCheck: (v) => set({ spellCheck: v }),
       setSearchInput: (q) => {
@@ -241,10 +248,10 @@ export const useDesktopLayout = create<DesktopLayoutState>()(
         sidebarVisible: s.sidebarVisible,
         statusBarVisible: s.statusBarVisible,
         sidebarWidth: s.sidebarWidth,
+        chatWidth: s.chatWidth,
         sidebarSort: s.sidebarSort,
         sectionOrder: s.sectionOrder,
         sectionCollapsed: s.sectionCollapsed,
-        showRecent: s.showRecent,
         showCompleted: s.showCompleted,
         spellCheck: s.spellCheck,
       }),

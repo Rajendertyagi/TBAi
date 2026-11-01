@@ -45,6 +45,9 @@ export interface OpenCodePermissionRow {
   readonly index: number;
 }
 
+/** Why the backend refuses a configuration write, when it does. */
+export type OpenCodeConfigWriteRefusalReason = "adopted_g4_unproven" | "managed_root_not_owned";
+
 /** The server's answer for `GET /api/opencode/config`. */
 export interface OpenCodeConfigSnapshot {
   /** The document TBAi reads and edits. */
@@ -59,6 +62,8 @@ export interface OpenCodeConfigSnapshot {
   readonly permissions: readonly unknown[] | null;
   /** Whether a write is permitted at all. */
   readonly editable: boolean;
+  /** Why a write is refused, or null when one is permitted. */
+  readonly writeDisabledReason: OpenCodeConfigWriteRefusalReason | null;
 }
 
 /** Raised when the config boundary refuses or fails, carrying its message. */
@@ -155,6 +160,11 @@ export async function fetchOpenCodeConfig(): Promise<OpenCodeConfigSnapshot> {
     // with the file index attached.
     permissions: Array.isArray(record.permissions) ? record.permissions : null,
     editable: record.editable === true,
+    writeDisabledReason:
+      record.writeDisabledReason === "adopted_g4_unproven" ||
+      record.writeDisabledReason === "managed_root_not_owned"
+        ? record.writeDisabledReason
+        : null,
   };
 }
 

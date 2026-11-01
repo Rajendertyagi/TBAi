@@ -54,6 +54,7 @@ mod imp {
             let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION =
                 unsafe { std::mem::zeroed() };
             information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
             let ok = unsafe {
                 SetInformationJobObject(
                     handle,
@@ -107,8 +108,7 @@ mod imp {
                 )
             };
             ok != 0
-                && information.BasicLimitInformation.LimitFlags
-                    & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                && information.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                     != 0
         }
     }

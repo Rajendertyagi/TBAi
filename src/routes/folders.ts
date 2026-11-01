@@ -166,6 +166,19 @@ app.get("/:id", async (c) => {
   }
 });
 
+app.patch("/reorder", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    if (!Array.isArray(body.ids)) {
+      return c.json({ error: "ids must be an array of folder IDs" }, 400);
+    }
+    await folderService.reorder(body.ids.map(String));
+    return c.json({ success: true });
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
 app.patch("/:id", async (c) => {
   try {
     const id = c.req.param("id");
@@ -264,6 +277,16 @@ app.patch("/:id/links/:linkId", async (c) => {
 app.delete("/:id/links/:linkId", async (c) => {
   try {
     await folderLinkService.delete(c.req.param("linkId"));
+    return c.json({ success: true });
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
+app.post("/:id/reveal", async (c) => {
+  try {
+    const ok = await folderService.revealInExplorer(c.req.param("id"));
+    if (!ok) return c.json({ error: "Folder not found" }, 404);
     return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);

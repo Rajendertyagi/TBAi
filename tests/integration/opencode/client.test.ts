@@ -6,6 +6,9 @@ import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 
 const fixturePassword = "opencode-client-test-password";
 const clientModuleUrl = pathToFileURL(path.join(REPO_ROOT, "src/services/opencode/client.ts")).href;
+const connectionStateModuleUrl = pathToFileURL(
+  path.join(REPO_ROOT, "src/services/opencode/connectionState.ts"),
+).href;
 const fixtureServerInfo = {
   version: "2.0.15",
   pid: 1,
@@ -56,7 +59,12 @@ async function runIsolatedClient(baseUrl: string, directory?: string | null): Pr
   const options = directory === undefined ? "{}" : `{ directory: ${JSON.stringify(directory)} }`;
   const script = `
     const { createOpenCodeClient } = await import(${JSON.stringify(clientModuleUrl)});
-    const client = createOpenCodeClient(${JSON.stringify(baseUrl)}, ${options});
+    const { createManagedFallbackTransport } = await import(${JSON.stringify(connectionStateModuleUrl)});
+    const baseUrl = ${JSON.stringify(baseUrl)};
+    const client = createOpenCodeClient(baseUrl, {
+      ...${options},
+      transport: createManagedFallbackTransport(baseUrl),
+    });
     await client.server.info();
   `;
   const child = Bun.spawn([process.execPath, "-e", script], {

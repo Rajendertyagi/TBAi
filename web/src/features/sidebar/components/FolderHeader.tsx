@@ -1,18 +1,9 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
+import { ChevronRight, MoreVertical, Plus } from "lucide-react";
 import { isPlainEnter } from "@/lib/ime";
 import { ROUTES } from "@/config/navigation";
-import {
-  ChevronRight,
-  FolderClosed,
-  FolderOpen,
-  Link2,
-  MoreVertical,
-  Palette,
-  Pencil,
-  SquarePen,
-  Trash2,
-} from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -23,6 +14,16 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,48 +48,36 @@ import { sidebarConfig } from "@/config/sidebar";
 import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
 import type { Folder } from "@/types";
+import { FolderTile } from "./FolderTile";
+import { buildFolderMenuEntries } from "../lib/menu-actions";
+import { renderFolderMenu } from "./menu-kit";
 
 const ROW_CLASS =
-  "group flex h-8 w-full items-center gap-1.5 rounded-full pl-2 pr-1 text-sm transition-colors duration-150 hover:bg-sidebar-accent";
-
-/** Predefined folder colors (codeg parity). */
-const FOLDER_COLORS = [
-  "#ef4444",
-  "#f97316",
-  "#eab308",
-  "#22c55e",
-  "#14b8a6",
-  "#06b6d4",
-  "#3b82f6",
-  "#6366f1",
-  "#8b5cf6",
-  "#a855f7",
-  "#ec4899",
-  "#f43f5e",
-];
+  "group flex h-[var(--sidebar-row-height)] w-full items-center gap-1 rounded-[var(--sidebar-row-radius)] pl-2 pr-1 text-sm transition-colors duration-150 hover:bg-[var(--sidebar-row-hover)]";
 
 /**
- * The sentinel a folder carries when the user has not picked one.
+ * The trailing slot is a FIXED width. The count and the two actions share it,
+ * so swapping between them never reflows the folder name — the title's box is
+ * identical whether the pointer is over the row or not.
  *
- * Named because it was previously written out three times — in the write, in
- * the swatch, and in the "is this the default?" comparison — and the comparison
- * is what makes a typo silent: a near-miss literal still renders a plausible
- * swatch and simply never matches, so the checkmark quietly stops appearing.
- *
- * A literal on purpose. This is the colour VALUE the user sees and stores, not
- * presentation, so it must stay independent of the theme's `muted-foreground`;
- * otherwise picking "Default" would repaint itself with whatever the active
- * theme happens to use.
+ * Reveal is `group-hover` / `group-focus-within`, plus always-on for touch
+ * (`hover: none`), because a hover-only control is unreachable there.
  */
-const DEFAULT_FOLDER_COLOR = "#6b7280";
+const TRAILING_SLOT_CLASS =
+  "relative flex h-6 w-11 shrink-0 items-center justify-end gap-0.5 text-2xs tabular-nums text-muted-foreground";
+const TRAILING_ACTIONS_CLASS =
+  "absolute inset-0 flex items-center justify-end gap-0.5 opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto";
+const TRAILING_COUNT_CLASS =
+  "pr-1 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0 [@media(hover:none)]:opacity-0";
+const ACTION_BUTTON_CLASS =
+  "flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/90 outline-none transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
 
 /**
- * Folder header row in the sidebar's "Folders" section (codeg parity):
- * expand/collapse toggle, folder icon + alias/name label, hover-revealed
- * "+" (new conversation) and "⋯" (context menu) buttons. Context menu
- * provides: new conversation, manage links, set alias, set color, remove.
+ * Folder header row in the sidebar's "Folders" section: a colour letter tile,
+ * the bold alias/name, the conversation count, and — on hover — the `+`/`⋯`
+ * actions that replace the count in place.
  *
- * Geometry matches `SidebarNavButton` (h-8, rounded-full, muted icon + label).
+ * Context menu: new conversation, manage links, set alias, set color, remove.
  */
 export function FolderHeader({
   folder,
@@ -111,6 +100,7 @@ export function FolderHeader({
   const [removeOpen, setRemoveOpen] = useState(false);
 
   const label = folder.alias || folder.name;
+  const count = folder.conversationCount ?? 0;
 
   // New folder chat goes through the unified draft: the folder is preset as
   // the draft scope and the user picks the engine (Direct/Code) in the one
@@ -138,6 +128,29 @@ export function FolderHeader({
     setRemoveOpen(false);
   }, [folder.id, removeFolder]);
 
+  const handleOpenInExplorer = useCallback(() => {
+    void fetch(`/api/folders/${encodeURIComponent(folder.id)}/reveal`, { method: "POST" })
+      .then((res) => {
+        if (!res.ok) throw new Error(copy.openInExplorerFailed);
+      })
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : copy.openInExplorerFailed);
+      });
+  }, [folder.id]);
+
+  // The ⋯ button and the right-click render this same list (see menu-kit).
+  const menuEntries = buildFolderMenuEntries({
+    color: folder.color,
+    canOpenInExplorer: true,
+    onNewChat: () => void handleNewConversation(),
+    onRename: handleOpenAlias,
+    onPickColor: (color) => void updateFolder(folder.id, { color }),
+    onManageLinks: () => onManageLinks(folder),
+    onOpenInExplorer: handleOpenInExplorer,
+    onCopyPath: () => void navigator.clipboard?.writeText(folder.path),
+    onRemove: () => setRemoveOpen(true),
+  });
+
   return (
     <>
       <ContextMenu>
@@ -147,20 +160,10 @@ export function FolderHeader({
               type="button"
               onClick={() => onToggle(folder.id)}
               aria-expanded={expanded}
-              className="flex min-w-0 flex-1 items-center gap-1.5 outline-none"
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left outline-none cursor-pointer"
             >
-              {expanded ? (
-                <FolderOpen
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-              ) : (
-                <FolderClosed
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-              )}
-              <span className="min-w-0 flex-1 truncate text-sm text-sidebar-foreground">
+              <FolderTile label={label} color={folder.color} />
+              <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold text-sidebar-foreground capitalize">
                 {label}
               </span>
               <ChevronRight
@@ -170,103 +173,70 @@ export function FolderHeader({
                 }`}
               />
             </button>
-            <button
-              type="button"
-              onClick={() => void handleNewConversation()}
-              title={copy.newChat}
-              aria-label={copy.newChat}
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/90 opacity-0 transition-opacity duration-150 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <SquarePen className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                const rect = e.currentTarget.getBoundingClientRect();
-                e.currentTarget.dispatchEvent(
-                  new MouseEvent("contextmenu", {
-                    bubbles: true,
-                    cancelable: true,
-                    button: 2,
-                    clientX: rect.left,
-                    clientY: rect.bottom,
-                  }),
-                );
-              }}
-              title="More options"
-              aria-label="More options"
-              aria-haspopup="menu"
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/90 opacity-0 transition-opacity duration-150 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-            >
-              <MoreVertical className="size-3.5" />
-            </button>
+            <div className={TRAILING_SLOT_CLASS}>
+              {count > 0 && <span className={TRAILING_COUNT_CLASS}>{count}</span>}
+              <div className={TRAILING_ACTIONS_CLASS}>
+                <button
+                  type="button"
+                  onClick={() => void handleNewConversation()}
+                  title={copy.newChat}
+                  aria-label={copy.newChat}
+                  className={ACTION_BUTTON_CLASS}
+                >
+                  <Plus className="size-3.5" />
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => e.stopPropagation()}
+                      title={copy.moreOptions}
+                      aria-label={copy.moreOptions}
+                      className={ACTION_BUTTON_CLASS}
+                    >
+                      <MoreVertical className="size-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="right" className="z-50 min-w-44">
+                    {renderFolderMenu(
+                      {
+                        Item: DropdownMenuItem,
+                        Separator: DropdownMenuSeparator,
+                        Sub: DropdownMenuSub,
+                        SubTrigger: DropdownMenuSubTrigger,
+                        SubContent: DropdownMenuSubContent,
+                      },
+                      menuEntries,
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => void handleNewConversation()}>
-            <SquarePen className="size-4" />
-            {copy.newChat}
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => onManageLinks(folder)}>
-            <Link2 className="size-4" />
-            Manage links
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={handleOpenAlias}>
-            <Pencil className="size-4" />
-            Set alias
-          </ContextMenuItem>
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <Palette className="size-4" />
-              Set color
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="min-w-[12rem] p-2">
-              <ContextMenuItem
-                onSelect={() => void updateFolder(folder.id, { color: DEFAULT_FOLDER_COLOR })}
-                className="gap-2"
-              >
-                <span
-                  aria-hidden
-                  className="size-4 shrink-0 rounded border border-border bg-[#6b7280]"
-                />
-                <span className="min-w-0 flex-1 truncate">Default</span>
-                {folder.color === DEFAULT_FOLDER_COLOR && (
-                  <span className="text-xs text-muted-foreground">✓</span>
-                )}
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <div className="grid grid-cols-6 gap-1">
-                {FOLDER_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    title={color}
-                    aria-label={color}
-                    onClick={() => void updateFolder(folder.id, { color })}
-                    className="size-5 cursor-pointer rounded-sm outline-none ring-offset-1 ring-offset-popover transition-[box-shadow,transform] duration-100 hover:scale-110 data-[active]:ring-2 data-[active]:ring-foreground/60"
-                    data-active={folder.color === color ? "" : undefined}
-                    style={{ backgroundColor: color }}
-                  />
-                ))}
-              </div>
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-          <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onSelect={() => setRemoveOpen(true)}>
-            <Trash2 className="size-4" />
-            Remove from workspace
-          </ContextMenuItem>
+          {renderFolderMenu(
+            {
+              Item: ContextMenuItem,
+              Separator: ContextMenuSeparator,
+              Sub: ContextMenuSub,
+              SubTrigger: ContextMenuSubTrigger,
+              SubContent: ContextMenuSubContent,
+            },
+            menuEntries,
+          )}
         </ContextMenuContent>
       </ContextMenu>
 
-      {/* Alias dialog */}
+      {/* Rename dialog: sets the sidebar display name; the folder on disk keeps
+          its own name, which is what the description says plainly. */}
       <Dialog open={aliasOpen} onOpenChange={setAliasOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Set alias</DialogTitle>
+            <DialogTitle>{copy.renameFolderTitle}</DialogTitle>
             <DialogDescription>
-              A display name shown in the sidebar. Leave blank to use the folder name.
+              A display name shown in the sidebar. The folder on disk is not renamed. Leave blank to
+              use the folder name.
             </DialogDescription>
           </DialogHeader>
           <Input

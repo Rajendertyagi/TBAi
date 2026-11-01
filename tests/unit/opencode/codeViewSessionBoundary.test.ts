@@ -151,6 +151,9 @@ beforeEach(() => {
     }),
     resolveOpenCodeModelRef: async (value: string) =>
       value === STORED_MODEL_ID ? { providerID: "openrouter", modelID: STORED_MODEL_ID } : null,
+    // The seam reads the default from its per-service client, not from the
+    // managed catalogue (H3/B3).
+    fetchDefaultModel: async () => serverDefault ?? undefined,
   }));
 
   serverSessions = new Map();

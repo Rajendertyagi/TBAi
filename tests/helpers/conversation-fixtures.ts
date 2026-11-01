@@ -40,6 +40,7 @@ export type ConversationCreateInput = Pick<
   | "workspaceMode"
   | "workspaceFolderId"
   | "opencodeSessionId"
+  | "opencodeServiceOwner"
   | "opencodeAgent"
   | "opencodeModel"
   | "opencodeVariant"
@@ -78,6 +79,7 @@ export function conversationInput(
     workspaceMode: "simple",
     workspaceFolderId: null,
     opencodeSessionId: null,
+    opencodeServiceOwner: null,
     opencodeAgent: null,
     opencodeModel: null,
     opencodeVariant: null,

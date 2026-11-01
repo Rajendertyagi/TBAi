@@ -298,6 +298,10 @@ addColumnIfNotExists("conversations", "workspace_folder_id", "TEXT");
 // Kept separate from normal chat messages; TBAi owns the conversation, OpenCode
 // owns its session/events. Null until Code mode is first opened.
 addColumnIfNotExists("conversations", "opencode_session_id", "TEXT");
+// Which service owns the bound session's history: `managed` or `adopted:<origin>`
+// (H3/B3). Null on a bound row is a legacy managed binding. Metadata only: no
+// adopted-service history or credential is ever copied into TBAi's database.
+addColumnIfNotExists("conversations", "opencode_service_owner", "TEXT");
 // Engine selection (Direct chat vs OpenCode agent mode) and the OpenCode
 // agent/model chosen at creation. Nullable: legacy conversations are Direct and
 // carry no OpenCode selection.
@@ -310,6 +314,8 @@ addColumnIfNotExists("conversations", "opencode_variant", "TEXT");
 // Per-conversation Auto Approval shield (Phase 6D-B). 0 = manual (ask), 1 = auto
 // (accept once). Fail-closed: absent rows read manual.
 addColumnIfNotExists("conversations", "opencode_auto_approve", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfNotExists("conversations", "last_read_at", "INTEGER");
+addColumnIfNotExists("conversations", "last_message_at", "INTEGER");
 
 // Durable idempotency for draft materialization (Task 3). The client sends a
 // `clientRequestId` with a draft POST; a server restart between the row commit

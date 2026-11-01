@@ -44,11 +44,6 @@ const GUARDED_SITES: ReadonlyArray<{ file: string; helper: string; why: string }
     why: "renames a chat",
   },
   {
-    file: "web/src/features/sidebar/components/FolderConversationRow.tsx",
-    helper: "isPlainEnter",
-    why: "renames a conversation",
-  },
-  {
     file: "web/src/features/sidebar/components/FolderHeader.tsx",
     helper: "isPlainEnter",
     why: "renames a folder",

@@ -24,8 +24,6 @@ import { SidebarSectionOrderControl } from "@/features/sidebar/components/Sideba
  */
 export function SidebarViewMenu() {
   const copy = sidebarConfig.copy;
-  const showRecent = useDesktopLayout((s) => s.showRecent);
-  const setShowRecent = useDesktopLayout((s) => s.setShowRecent);
   const showCompleted = useDesktopLayout((s) => s.showCompleted);
   const setShowCompleted = useDesktopLayout((s) => s.setShowCompleted);
   const sidebarSort = useDesktopLayout((s) => s.sidebarSort);
@@ -50,13 +48,6 @@ export function SidebarViewMenu() {
             {copy.listOptions}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
-            <DropdownMenuCheckboxItem
-              checked={showRecent}
-              onCheckedChange={setShowRecent}
-              onSelect={(event) => event.preventDefault()}
-            >
-              {copy.showRecent}
-            </DropdownMenuCheckboxItem>
             <DropdownMenuCheckboxItem
               checked={showCompleted}
               onCheckedChange={setShowCompleted}

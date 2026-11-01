@@ -17,6 +17,34 @@ export const OPENCODE_CONFIG = {
   startupTimeoutMs: 30_000,
   /** Interval between HTTP readiness probes while the managed server starts. */
   readyPollMs: 250,
+  /**
+   * Address the managed child must bind to. Measured across every build in the
+   * matrix documented on `minimumVersion` below: `--hostname 127.0.0.1` binds
+   * only the loopback interface, so the managed HTTP server is never exposed on
+   * a LAN or external interface even when the machine has one.
+   */
+  managedBindHostname: "127.0.0.1",
+  /**
+   * The `--port` value that asks the kernel for a free ephemeral port.
+   *
+   * Kernel assignment removes the allocate-then-release race: the child binds
+   * the port itself and reports the address it actually got. Measured across
+   * every build in the matrix on `minimumVersion`: `--port 0` binds a free
+   * loopback port and prints `server listening on http://127.0.0.1:<port>`.
+   */
+  kernelAssignedPort: "0",
+  /**
+   * Phrase the managed child prints immediately before the URL it is listening
+   * on. Measured identical across every build in the `minimumVersion` matrix:
+   * `server listening on http://127.0.0.1:<port>`.
+   */
+  listeningAnnouncementPrefix: "server listening on",
+  /**
+   * Bound for one pending stdout line inspected for that announcement. A line
+   * longer than this is not an announcement and is dropped rather than split,
+   * so a secret printed inside it is never retained as a truncated fragment.
+   */
+  listeningLineMaxBytes: 4_096,
   /** OpenCode V2 authenticated readiness endpoint. */
   readinessProbePath: "/api/info",
   /**
@@ -41,38 +69,36 @@ export const OPENCODE_CONFIG = {
    */
   versionProbeTimeoutMs: 10_000,
   /**
-   * Supported managed OpenCode range, `>=2.0.15 <2.2.1`.
+   * Budget for one `GET /api/config` read against the installed service.
    *
-   * 2.2.0 was adopted on 2026-10-28 after checking the surfaces TBAi uses
-   * against the published `@opencode/client@2.2.0` typings and the installed
-   * `opencode v2.2.0` binary:
+   * The read is loopback HTTP plus small local file reads, so a slower answer
+   * means the service is not answering rather than that the document is large.
+   * The bound is applied through the captured transport's signal, so a read
+   * that outlives it is ABORTED rather than left pending behind a browser
+   * request that has already gone away.
+   */
+  configReadTimeoutMs: 10_000,
+  /**
+   * Oldest OpenCode build whose essential API TBAi has actually checked.
    *
-   * - **No route was removed.** The generated client declaration only gained
-   *   routes (plugin.gui, generate.image/decisions, voice.models,
-   *   mcp.client.token, file.watch/unwatch, experimental.media,
-   *   debug.heapDump, usage.limits). The two removed declaration lines are the
-   *   type-import line and the old `event.subscribe` signature, which gained
-   *   an OPTIONAL type filter and still streams the whole union when called
-   *   with no options - the way TBAi calls it.
-   * - **No event type was removed.** The `V2Event` union is unchanged.
-   * - **The imported types are unchanged**, except two OPTIONAL additions:
-   *   `ModelInfo.type?` and `ServerInfo.hostname?`.
-   * - **The auth contract is unchanged** (`OPENCODE_PASSWORD` first, then the
-   *   legacy `OPENCODE_SERVER_PASSWORD`).
+   * This is an **evidence floor**, not a product preference: 2.0.15 is the
+   * oldest release TBAi has measured, and below it the routes TBAi calls are
+   * unknown rather than merely older. There is deliberately **no upper
+   * bound** (B7, owner-approved 2026-10-31): a newer stable release is not
+   * refused for being newer. Prerelease builds are refused (D2), and the
+   * capability routes are probed after readiness so acceptance rests on what
+   * the running build actually serves (`compatibility.ts`).
    *
-   * **Why the ceiling is 2.2.1 rather than the next minor.** A ceiling one
-   * version past the audited release admits exactly 2.2.0. TBAi calls these
-   * routes by name and reads the event union, so each newer release has to be
-   * checked against the same list before it is admitted; `<2.3.0` would
-   * silently authorize 2.2.1 and everything after it.
-   *
-   * The lower half is unchanged: 2.0.15 through 2.1.x remain supported. That
-   * direction was checked when 2.1 landed - the 2.1.2 client against a real
-   * 2.0.22 server passes the same real-server suites. The 2.1.x audit trail
-   * (declared 404s, branded id aliases) is in `docs/decisions.md`.
+   * MEASURED MATRIX (2026-10-31): 2.0.15, 2.1.0, 2.1.4, 2.2.0, 2.2.1, 2.2.2,
+   * 2.2.3, 2.2.4 and 2.2.5, each from its own official npm artifact extracted
+   * to a disposable root. Every one announced a kernel-assigned loopback URL,
+   * bound only 127.0.0.1 (OS socket table), answered 401 unauthenticated and
+   * 200 authenticated on `/api/info`, and served all six probed capability
+   * routes with the expected content type. That is why the floor stays at
+   * 2.0.15 and no ceiling exists: the acceptance decision rests on the live
+   * capability probe, not on a number.
    */
   minimumVersion: "2.0.15",
-  maximumVersionExclusive: "2.2.1",
   /** Default HTTP Basic username expected by OpenCode V2. */
   authUsername: "opencode",
   /**
@@ -103,6 +129,57 @@ export const OPENCODE_CONFIG = {
   authPasswordChildEnvVars: ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"] as const,
   /** Graceful shutdown window before SIGKILL. */
   shutdownTimeoutMs: 5_000,
+  /**
+   * Budget for reading and parsing one registration record (§2.4.1). Local file
+   * I/O against a record of a few hundred bytes; a slower read would not yield
+   * an adoptable candidate within the client's own probe default.
+   */
+  registrationReadTimeoutMs: 2_000,
+  /**
+   * Maximum registration size, applied to the **bytes actually read** from the
+   * opened handle (§2.4). A record is hundreds of bytes; 64 KiB refuses a
+   * non-record without rejecting legitimate formatting and bounds the
+   * synchronous parse.
+   */
+  registrationFileMaxBytes: 65_536,
+  /** Directory under the state root that holds the registration record (§2.2). */
+  registrationStateDirName: "opencode",
+  /** Environment variable that relocates the state root (the client's own fallback). */
+  registrationStateHomeEnvVar: "XDG_STATE_HOME",
+  /** State root relative to the home directory when the variable is unset. */
+  registrationFallbackStateSegments: [".local", "state"] as const,
+  /**
+   * Released channels share this filename, in the client's own `filename()`
+   * selection (`latest`, `beta`, `next`). TBAi adds no beta-specific search.
+   */
+  registrationDefaultFilename: "service.json",
+  /** Prefix for a channel that maps to its own file (`service-<channel>.json`). */
+  registrationChannelFilenamePrefix: "service-",
+  /** One loopback probe against an already-running adopted service (§6.5). */
+  discoveryProbeTimeoutMs: 5_000,
+  /** Revalidation cadence for an adopted service, to detect a lost service. */
+  adoptionRevalidateIntervalMs: 30_000,
+  /**
+   * Bounded probes that must ALL fail to reach the adopted service before its
+   * loss is CONFIRMED (§1.5.1 row 6). One failure is a transient network
+   * condition and preserves a working target; a confirmed loss clears it and
+   * falls back to the managed service (D3). Policy, not a measurement: the
+   * number only has to be defensible as "more than a single blip".
+   */
+  adoptedLossConfirmAttempts: 2,
+  /** Pause between those confirming probes. */
+  adoptedLossRetryDelayMs: 250,
+  /**
+   * Time between SIGTERM and the SIGKILL decision for a managed child stop.
+   * Part of the shared stop completion's worst case (§1.9.3.2, §6.5).
+   */
+  opencodeChildStopGraceMs: 5_000,
+  /**
+   * Time allowed after SIGKILL before the per-child stop resolves
+   * `{ok:false, reason:"termination_unconfirmed"}`. It bounds the wait and
+   * explicitly does not claim the process is gone (§6.5).
+   */
+  opencodeChildStopKillMs: 5_000,
   /** Consecutive unexpected-exit restarts before giving up. */
   maxRestartAttempts: 3,
   /** Max bytes of child stdout/stderr retained per stream for exit diagnostics. */
@@ -111,7 +188,7 @@ export const OPENCODE_CONFIG = {
   serverHomeDir: path.join(DATA_DIR, "opencode-home"),
   /** User-facing error when the `opencode` binary cannot be found on PATH. */
   binaryMissingError:
-    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15–2.2.0 executable or install `opencode` on PATH, then reload.",
+    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15 or newer stable executable or install `opencode` on PATH, then reload.",
 } as const;
 
 export type OpenCodeConfig = {
@@ -120,16 +197,33 @@ export type OpenCodeConfig = {
   readonly proxyPathPrefix: string;
   readonly startupTimeoutMs: number;
   readonly readyPollMs: number;
+  readonly managedBindHostname: string;
+  readonly kernelAssignedPort: string;
+  readonly listeningAnnouncementPrefix: string;
+  readonly listeningLineMaxBytes: number;
   readonly readinessProbePath: string;
   readonly databasePathTimeoutMs: number;
   readonly versionProbeTimeoutMs: number;
+  readonly configReadTimeoutMs: number;
   readonly minimumVersion: string;
-  readonly maximumVersionExclusive: string;
   readonly authUsername: string;
   readonly authPasswordEnvVar: string;
   readonly authPasswordLegacyEnvVar: string;
   readonly authPasswordChildEnvVars: readonly string[];
   readonly shutdownTimeoutMs: number;
+  readonly registrationReadTimeoutMs: number;
+  readonly registrationFileMaxBytes: number;
+  readonly registrationStateDirName: string;
+  readonly registrationStateHomeEnvVar: string;
+  readonly registrationFallbackStateSegments: readonly string[];
+  readonly registrationDefaultFilename: string;
+  readonly registrationChannelFilenamePrefix: string;
+  readonly discoveryProbeTimeoutMs: number;
+  readonly adoptionRevalidateIntervalMs: number;
+  readonly adoptedLossConfirmAttempts: number;
+  readonly adoptedLossRetryDelayMs: number;
+  readonly opencodeChildStopGraceMs: number;
+  readonly opencodeChildStopKillMs: number;
   readonly maxRestartAttempts: number;
   readonly diagnosticTailBytes: number;
   readonly serverHomeDir: string;

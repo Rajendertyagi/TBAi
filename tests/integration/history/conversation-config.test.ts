@@ -309,6 +309,13 @@ describe("conversation status lifecycle (regular/archived)", () => {
     // it and splits regular from archived itself.
     const all = await appFetch("/api/conversations?status=all&limit=5");
     expect(all.status).toBe(200);
+    const allData = (await all.json()) as { threads: unknown[]; total?: number };
+    // `threads` is one page; `total` describes the whole filtered set. The
+    // sidebar's section badge reads `total`, so a page-sized number here would
+    // make every badge lie as soon as a list scrolls past its first page.
+    expect(allData.threads.length).toBeLessThanOrEqual(5);
+    const expectedTotal = (await conversationService.list({ limit: 1000 })).threads.length;
+    expect(allData.total).toBe(expectedTotal);
   });
 
   it("rejects an unrecognised ?status= instead of silently ignoring it", async () => {

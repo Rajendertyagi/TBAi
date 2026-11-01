@@ -51,12 +51,7 @@ export function AgentStatus({
         />
       )}
       <span className="sr-only">{state}</span>
-      <span
-        key={label}
-        className="fade-in blur-in-[2px] animate-in max-w-44 truncate text-xs duration-300 motion-reduce:animate-none"
-      >
-        {label}
-      </span>
+      <span className="max-w-44 truncate text-xs">{label}</span>
       {elapsed !== undefined && state !== "done" && state !== "failed" && (
         <span className={cn(mono, "text-muted-foreground tabular-nums")}>{elapsed}</span>
       )}

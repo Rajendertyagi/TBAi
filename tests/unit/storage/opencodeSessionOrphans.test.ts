@@ -1466,3 +1466,107 @@ describe("opencodeOrphanService — delete markers (RT-011)", () => {
     expect(rowFor("conv-1", "ses_a").phase).toBe("delete");
   });
 });
+
+/**
+ * H3/B3 — the journal says which service owns a row.
+ *
+ * A session id has the same shape on every service, so a recovery record that
+ * does not name its service cannot be acted on safely: the managed reconciler
+ * would probe an adopted service's session through the managed server. These
+ * cases pin the persisted attribution and its first-writer rule.
+ */
+describe("opencodeOrphanService — service ownership (H3/B3)", () => {
+  const ADOPTED = "adopted:http://127.0.0.1:51234";
+
+  function rowFor(conversationId = "conv-1", sessionId = "ses_a"): Record<string, unknown> {
+    return db
+      .query("SELECT * FROM opencode_session_orphans WHERE conversation_id = ? AND session_id = ?")
+      .get(conversationId, sessionId) as Record<string, unknown>;
+  }
+
+  it("persists the owner written before the create", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: ADOPTED,
+    });
+
+    expect(rowFor().service_owner).toBe(ADOPTED);
+  });
+
+  it("keeps the FIRST attribution when a retried create names another service", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: ADOPTED,
+    });
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: "managed",
+    });
+
+    expect(rowFor().service_owner).toBe(ADOPTED);
+  });
+
+  it("carries the owner through orphan promotion and the read surface", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: ADOPTED,
+    });
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: ADOPTED,
+    });
+
+    expect(rowFor().service_owner).toBe(ADOPTED);
+    const [record] = await opencodeOrphanService.listUnresolvedOrphans();
+    expect(record.serviceOwner).toBe(ADOPTED);
+  });
+
+  it("fills the owner on promotion when the intent could not attribute it", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: ADOPTED,
+    });
+
+    expect(rowFor().service_owner).toBe(ADOPTED);
+  });
+
+  it("persists the owner on a deletion marker and never re-homes it on re-affirmation", async () => {
+    await opencodeOrphanService.recordDeletionIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      serviceOwner: ADOPTED,
+    });
+    expect(rowFor().service_owner).toBe(ADOPTED);
+
+    await opencodeOrphanService.retainDeletionAfterFailedRemoval({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      at: Date.now(),
+      serviceOwner: "managed",
+    });
+
+    expect(rowFor().service_owner).toBe(ADOPTED);
+    expect(rowFor().phase).toBe("delete");
+  });
+
+  it("leaves a legacy row unowned, which the reconciler reads as managed", async () => {
+    await opencodeOrphanService.recordCreateIntent({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+
+    expect(rowFor().service_owner).toBeNull();
+    const [record] = await opencodeOrphanService.listUnresolvedOrphans();
+    expect(record.serviceOwner).toBeUndefined();
+  });
+});

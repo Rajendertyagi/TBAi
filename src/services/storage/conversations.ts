@@ -36,12 +36,15 @@ interface ConversationRow {
   workspace_mode: string;
   workspace_folder_id: string | null;
   opencode_session_id: string | null;
+  opencode_service_owner: string | null;
   engine: string | null;
   opencode_agent: string | null;
   opencode_model: string | null;
   opencode_variant: string | null;
   opencode_auto_approve: number | null;
   client_request_id: string | null;
+  last_read_at: number | null;
+  last_message_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -73,6 +76,12 @@ export interface ConversationListOptions {
 export interface ConversationListResult {
   threads: Conversation[];
   nextCursor?: string;
+  /**
+   * Rows matching the query across all pages. `threads` is one page; the
+   * sidebar's section badge needs the filtered total, and recomputing it
+   * client-side from a page would understate it.
+   */
+  total: number;
 }
 
 function mapConversation(row: ConversationRow): Conversation {
@@ -88,12 +97,15 @@ function mapConversation(row: ConversationRow): Conversation {
     workspaceMode: (row.workspace_mode as WorkspaceMode) ?? "simple",
     workspaceFolderId: row.workspace_folder_id ?? null,
     opencodeSessionId: row.opencode_session_id ?? null,
+    opencodeServiceOwner: row.opencode_service_owner ?? null,
     engine: (row.engine as "direct" | "opencode") ?? "direct",
     opencodeAgent: row.opencode_agent ?? null,
     opencodeModel: row.opencode_model ?? null,
     opencodeVariant: row.opencode_variant ?? null,
     opencodeAutoApprove: row.opencode_auto_approve === 1,
     clientRequestId: row.client_request_id ?? null,
+    lastReadAt: row.last_read_at ? new Date(row.last_read_at) : null,
+    lastMessageAt: row.last_message_at ? new Date(row.last_message_at) : null,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
@@ -126,6 +138,7 @@ export const conversationService = {
       | "workspaceMode"
       | "workspaceFolderId"
       | "opencodeSessionId"
+      | "opencodeServiceOwner"
       | "engine"
       | "opencodeAgent"
       | "opencodeModel"
@@ -150,7 +163,7 @@ export const conversationService = {
     }
 
     db.run(
-      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, client_request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, opencode_service_owner, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, client_request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         data.title,
@@ -161,6 +174,7 @@ export const conversationService = {
         workspaceMode,
         workspaceFolderId,
         data.opencodeSessionId ?? null,
+        data.opencodeServiceOwner ?? null,
         data.engine ?? "direct",
         data.opencodeAgent ?? null,
         data.opencodeModel ?? null,
@@ -281,7 +295,7 @@ export const conversationService = {
     const total = totalRow?.c ?? 0;
     const threads = rows.map(mapConversation);
     const nextCursor = offset + limit < total ? String(offset + limit) : undefined;
-    return { threads, nextCursor };
+    return { threads, nextCursor, total };
   },
 
   async get(id: string): Promise<Conversation | null> {
@@ -340,11 +354,13 @@ export const conversationService = {
         | "workspaceMode"
         | "workspaceFolderId"
         | "opencodeSessionId"
+        | "opencodeServiceOwner"
         | "engine"
         | "opencodeAgent"
         | "opencodeModel"
         | "opencodeVariant"
         | "opencodeAutoApprove"
+        | "lastReadAt"
       >
     >,
   ): Promise<Conversation> {
@@ -393,6 +409,10 @@ export const conversationService = {
       updates.push("opencode_session_id = ?");
       values.push(data.opencodeSessionId);
     }
+    if (data.opencodeServiceOwner !== undefined) {
+      updates.push("opencode_service_owner = ?");
+      values.push(data.opencodeServiceOwner);
+    }
     if (data.engine !== undefined) {
       updates.push("engine = ?");
       values.push(data.engine);
@@ -412,6 +432,10 @@ export const conversationService = {
     if (data.opencodeAutoApprove !== undefined) {
       updates.push("opencode_auto_approve = ?");
       values.push(data.opencodeAutoApprove === true ? 1 : 0);
+    }
+    if (data.lastReadAt !== undefined) {
+      updates.push("last_read_at = ?");
+      values.push(data.lastReadAt ? data.lastReadAt.getTime() : null);
     }
 
     updates.push("updated_at = ?");
@@ -438,7 +462,7 @@ export const conversationService = {
     return (
       db.run(
         `UPDATE conversations
-            SET opencode_session_id = NULL, updated_at = ?
+            SET opencode_session_id = NULL, opencode_service_owner = NULL, updated_at = ?
           WHERE id = ? AND opencode_session_id = ?`,
         [Date.now(), id, expectedSessionId],
       ).changes > 0

@@ -295,7 +295,8 @@ export function TabStrip() {
   };
 
   const copyLink = (tab: Tab) => {
-    void navigator.clipboard?.writeText(urlForTab(tab));
+    const fullUrl = `${window.location.origin}${window.location.pathname}#${urlForTab(tab)}`;
+    void navigator.clipboard?.writeText(fullUrl);
   };
 
   return (

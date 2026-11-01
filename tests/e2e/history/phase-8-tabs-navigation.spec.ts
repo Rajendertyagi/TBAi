@@ -92,11 +92,11 @@ test("opening the same conversation through two paths yields ONE tab", async ({ 
       timeout: 15000,
     });
 
-    // The conversation row renders in the "Recent" sidebar section (its
-    // lastMessageAt is newest). Use a scoped locator to avoid matching the
-    // duplicated row in the "Chats" section.
+    // The conversation row renders in the "Chats" sidebar section (it is a
+    // simple chat, so it belongs to no folder). Scoped to the section so the
+    // locator cannot drift onto another surface that repeats the title.
     const row = page
-      .locator("#sidebar-section-recent")
+      .locator("#sidebar-section-chats")
       .getByRole("button", { name: /p8-dup-conv/i });
     await expect(row).toBeVisible({ timeout: 10000 });
     await row.click();
@@ -255,7 +255,7 @@ test("deleting the active conversation falls back safely; deleted id never activ
     // trailing action div. So resolve the row container from the title, then
     // take its last button (title, then the more-menu trigger).
     const titleButton = page
-      .locator("#sidebar-section-recent")
+      .locator("#sidebar-section-chats")
       .getByRole("button", { name: /p8-delete-active/i });
     await expect(titleButton).toBeVisible({ timeout: 10000 });
     const row = titleButton.locator("xpath=..");
@@ -263,6 +263,9 @@ test("deleting the active conversation falls back safely; deleted id never activ
     await row.hover();
     await row.getByRole("button").last().click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
+    // The menu label ends in an ellipsis because it opens a confirmation; the
+    // delete itself only happens on the dialog's own button.
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
 
     // The deleted id must never remain the active route.
     await page.waitForURL((url) => !url.toString().includes(doomed), { timeout: 15000 });

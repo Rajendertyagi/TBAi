@@ -41,6 +41,7 @@ import {
   startOrphanReconciliation,
   stopOrphanReconciliation,
 } from "./services/opencode/orphanReconciler";
+import { startOpenCodeRuntime, stopOpenCodeRevalidation } from "./services/opencode/startup";
 import { resolveConfiguredPort, writePortFile } from "./services/server-port";
 import {
   bindBootPort,
@@ -194,6 +195,16 @@ export async function startServer(port = resolveConfiguredPort().port) {
     // clears rows that are provably bound, and remote probes wait for a pass
     // that runs while Code mode already has the server up.
     startOrphanReconciliation({ deps: openCodeOrphanReconcilerDeps });
+
+    // Adopt-first runtime selection (H5/B2): one attempt runs during boot and
+    // is deliberately not awaited — probing a candidate is bounded network work
+    // that must not delay the bind. Adoption settles in one of three ways: an
+    // adopted service, an eagerly started managed child (so Code mode has a
+    // runtime without waiting for a first request), or a reported start failure
+    // that a later request retries through the manager.
+    void startOpenCodeRuntime().catch((err: unknown) => {
+      logger.warn("opencode", "opencode.startup_failed", { ...normalizeError(err) });
+    });
 
     // Transport backstop: Bun kills connections idle for 10s by default, which
     // murders quiet streams (a thinking model, a long tool run). 240s covers
@@ -357,6 +368,7 @@ export async function rollbackPartialStartup(): Promise<StartupRollbackResult> {
 
   // OpenCode child: shutdown() returns early when never started.
   try {
+    stopOpenCodeRevalidation();
     await openCodeServerManager.shutdown();
   } catch (err) {
     logger.warn("opencode", "shutdown_opencode_failed", { ...normalizeError(err) });
@@ -506,6 +518,11 @@ async function runShutdown(
   }
 
   try {
+    // The loop only watches an ADOPTED service; clearing it before the managed
+    // shutdown is bookkeeping, so it cannot fire a probe into a teardown.
+    if (stopOpenCodeRevalidation()) {
+      logger.info("opencode", "opencode.revalidation_stopped", { signal: "shutdown" });
+    }
     await openCodeServerManager.shutdown();
   } catch (err) {
     logger.warn("opencode", "shutdown_opencode_failed", { ...normalizeError(err) });

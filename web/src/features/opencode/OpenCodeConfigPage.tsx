@@ -44,6 +44,8 @@ import {
   type OpenCodePermissionRule,
 } from "./openCodeConfig";
 import { findPermissionOverride, type PermissionRuleLike } from "./permissionOverrides";
+import { openCodeCapabilitySupported } from "./runtimeStatus";
+import { useOpenCodeRuntimeStatus } from "./useOpenCodeRuntimeStatus";
 import { cn } from "@/lib/utils";
 
 /**
@@ -285,6 +287,13 @@ export function OpenCodeConfigPage() {
   >({ kind: "idle" });
   const [removingIndex, setRemovingIndex] = useState<number | null>(null);
 
+  // The service this page edits. An adopted service may not serve the
+  // configuration route (B7 optional capability); the snapshot decides that,
+  // and the read below is skipped when it positively reports the route absent.
+  const runtime = useOpenCodeRuntimeStatus();
+  const configUnavailable =
+    runtime.status?.mode === "adopted" && !openCodeCapabilitySupported(runtime.status, "config");
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -299,8 +308,22 @@ export function OpenCodeConfigPage() {
   }, []);
 
   useEffect(() => {
+    // A mode already known to lack the route never reads: the notice below is
+    // the answer. When the status arrives AFTER this effect ran (its read is
+    // asynchronous), that first read is superseded by the effect below.
+    if (configUnavailable) return;
     void load();
-  }, [load]);
+  }, [configUnavailable, load]);
+
+  // The notice replaces a failed read rather than joining it: when the service
+  // has no configuration route, "could not read" is noise about a request the
+  // page should not have made.
+  useEffect(() => {
+    if (!configUnavailable) return;
+    setSnapshot(null);
+    setLoadError(null);
+    setLoading(false);
+  }, [configUnavailable]);
 
   const rules = useMemo(() => toPermissionRules(snapshot?.permissions ?? null), [snapshot]);
   /**
@@ -425,7 +448,7 @@ export function OpenCodeConfigPage() {
           size="sm"
           variant="secondary"
           onClick={() => void load()}
-          disabled={loading || saving}
+          disabled={loading || saving || configUnavailable}
         >
           {loading ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -436,6 +459,7 @@ export function OpenCodeConfigPage() {
         </Button>
       }
     >
+      {configUnavailable && <SettingsError>{openCodeConfigCopy.unavailable.adopted}</SettingsError>}
       {loadError && <SettingsError>{loadError}</SettingsError>}
 
       {!snapshot && loading && (
@@ -444,6 +468,11 @@ export function OpenCodeConfigPage() {
 
       {snapshot && (
         <>
+          {snapshot.writeDisabledReason !== null && (
+            <SettingsError>
+              {openCodeConfigCopy.states.writesDisabled[snapshot.writeDisabledReason]}
+            </SettingsError>
+          )}
           <SettingsSection
             title={openCodeConfigCopy.sections.source}
             icon={FileJson}

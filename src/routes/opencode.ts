@@ -10,13 +10,12 @@ import {
 } from "../services/opencode/sessions";
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
 import { getOpenCodeCommandFeed } from "../services/opencode/commands";
+import { OpenCodeHistoryBoundaryError } from "../services/opencode/historyBoundary";
 import {
   OpenCodeBinaryMissingError,
-  openCodeServerManager,
   stripOpenCodeProxyPrefix,
 } from "../services/opencode/serverManager";
 import {
-  getOpenCodeAuthHeaders,
   getOpenCodeDirectoryHeaders,
   OPENCODE_DIRECTORY_HEADER,
 } from "../services/opencode/runtime";
@@ -41,6 +40,18 @@ import {
   redactOpenCodeConfigDocument,
   redactOpenCodeConfigText,
 } from "../services/opencode/configRedaction";
+import {
+  OpenCodeConfigWriteDisabledError,
+  type OpenCodeConfigWriteRefusalReason,
+  assertOpenCodeConfigWriteAllowed,
+  openCodeConfigWriteRefusal,
+} from "../services/opencode/configWritePolicy";
+import { readConnectionState } from "../services/opencode/connectionState";
+import { OpenCodeRedirectRefusedError, type OpenCodeTransport } from "../services/opencode/http";
+import {
+  describeOpenCodeRuntime,
+  resolveOpenCodeRuntimeTarget,
+} from "../services/opencode/runtimeTarget";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
 import { openCodeSessionActivitySchema } from "../lib/validation";
@@ -55,13 +66,15 @@ const app = new Hono();
  * Maps OpenCode failures to a message + status. A missing CLI binary is a 503
  * with an actionable message (the user can install it); a journal outage is a
  * 503 because the session was deliberately NOT created and retrying is safe; a
- * wrong-engine caller is a 422 (the row, not the server, is at fault);
- * everything else is a generic 500 so internals never leak to the browser.
+ * wrong-engine caller is a 422 (the row, not the server, is at fault); a
+ * history that belongs to a different service is a 409 — retrying changes
+ * nothing until the service does; everything else is a generic 500 so
+ * internals never leak to the browser.
  */
 function openCodeError(
   err: unknown,
   fallback: string,
-): { message: string; status: 503 | 422 | 500 } {
+): { message: string; status: 503 | 502 | 422 | 409 | 500 } {
   if (err instanceof OpenCodeBinaryMissingError) {
     return { message: err.message, status: 503 };
   }
@@ -70,8 +83,21 @@ function openCodeError(
     // conversation or session id; the retry is safe because nothing was made.
     return { message: err.message, status: 503 };
   }
+  if (err instanceof OpenCodeRedirectRefusedError) {
+    // The refusal carries only the status; the Location header is never read,
+    // so no redirect target can reach a log, an error body or the browser.
+    return { message: err.message, status: 502 };
+  }
   if (err instanceof EngineMismatchError) {
     return { message: err.message, status: 422 };
+  }
+  if (err instanceof OpenCodeHistoryBoundaryError) {
+    // The conversation's session is owned by a service that is not the one in
+    // use. The message names service kinds, never a credential or session id.
+    return {
+      message: err.message,
+      status: err.refusal === "adopted_unavailable" ? 503 : 409,
+    };
   }
   return { message: fallback, status: 500 };
 }
@@ -213,15 +239,36 @@ const permissionEffectSchema = z.object({
   index: z.number().int().min(0).optional(),
 });
 
-/** Returns the managed server's base URL plus its auth headers. */
+/**
+ * The service-wide target for configuration reads and writes.
+ *
+ * It is the runtime's installed target, not "the managed server": an adopted
+ * service owns its own document, and reading it with TBAi's managed password
+ * would be both wrong and unauthorized. Writes remain refused by
+ * {@link applyPermissionChange}'s G4 gate.
+ */
 async function configServerTarget(): Promise<{
   baseUrl: string;
-  headers: Record<string, string>;
+  transport: OpenCodeTransport;
 }> {
+  const target = await resolveOpenCodeRuntimeTarget();
   return {
-    baseUrl: await openCodeServerManager.ensureBaseUrl(),
-    headers: getOpenCodeAuthHeaders(),
+    baseUrl: target.baseUrl,
+    transport: target.transport,
   };
+}
+
+/**
+ * The refusal the installed runtime's write path would raise, or `null` when a
+ * write is permitted.
+ *
+ * Derived from the same policy function the writer uses, so the read projection
+ * below cannot offer editing on a runtime whose write would be refused.
+ */
+function configWriteRefusalForRuntime(): OpenCodeConfigWriteRefusalReason | null {
+  return openCodeConfigWriteRefusal({
+    mode: readConnectionState().target.mode === "adopted" ? "adopted" : "managed",
+  });
 }
 
 /**
@@ -236,12 +283,21 @@ async function configServerTarget(): Promise<{
  * Returns the Hono response so each route is a single call plus its own error
  * mapping — a duplicated read-refuse-write sequence is how the three operations
  * would drift apart.
+ *
+ * Every write is refused here, before this function reads or writes anything:
+ * an adopted service because G4 is unproven, and the managed service because
+ * the child runs with the user's own configuration environment and therefore
+ * has no TBAi-owned root to contain a write (§9.3(1)).
  */
 async function applyPermissionChange(
   transform: (current: unknown) => unknown,
+  signal: AbortSignal,
 ): Promise<Response | { readonly path: string; readonly changed: boolean }> {
+  assertOpenCodeConfigWriteAllowed({
+    mode: readConnectionState().target.mode === "adopted" ? "adopted" : "managed",
+  });
   const target = await configServerTarget();
-  const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
+  const document = await readOpenCodeConfigDocument(target, { signal });
   if (document.malformed) {
     throw new OpenCodeConfigUnreadableError(
       "OpenCode configuration is not valid JSON; refusing to write",
@@ -262,19 +318,23 @@ async function applyPermissionChange(
 app.get("/config", async (c) => {
   try {
     const target = await configServerTarget();
-    const document = await readOpenCodeConfigDocument(target.baseUrl, target.headers);
-    // The response is a REDACTED projection. The file on disk keeps its real
-    // values, and the write path below still reads the real text, so the
-    // preservation guarantee is untouched — only what leaves the server is
-    // masked.
+    const document = await readOpenCodeConfigDocument(target, { signal: c.req.raw.signal });
+    // The response is a REDACTED projection; the file on disk keeps its real
+    // values, and nothing here writes to it.
     const redacted = redactOpenCodeConfigDocument(document.doc);
+    // Reads stay available; edits do not. `editable` is "a write is permitted
+    // at all", not "the document parsed", so it is false for every runtime
+    // whose writer would refuse — and the reason travels with it rather than
+    // being discovered from a failed save.
+    const writeDisabledReason = configWriteRefusalForRuntime();
     return c.json({
       path: document.path,
       discoveredPaths: document.discoveredPaths,
       raw: redactOpenCodeConfigText(document.raw),
       malformed: document.malformed,
       permissions: redacted.permissions ?? null,
-      editable: !document.malformed,
+      editable: !document.malformed && writeDisabledReason === null,
+      writeDisabledReason,
     });
   } catch (err) {
     logger.error("opencode", "opencode.config_read_error", { ...classifyError(err) });
@@ -303,8 +363,9 @@ app.post("/config/permissions", async (c) => {
   }
   const { action, resource, effect } = parsed.data;
   try {
-    const result = await applyPermissionChange((current) =>
-      appendOpenCodePermissionRule(current, { action, resource, effect }),
+    const result = await applyPermissionChange(
+      (current) => appendOpenCodePermissionRule(current, { action, resource, effect }),
+      c.req.raw.signal,
     );
     return c.json(result);
   } catch (err) {
@@ -314,6 +375,9 @@ app.post("/config/permissions", async (c) => {
       resource,
       effect,
     });
+    if (err instanceof OpenCodeConfigWriteDisabledError) {
+      return c.json({ error: err.message }, 409);
+    }
     if (err instanceof OpenCodeConfigUnreadableError) {
       return c.json({ error: err.message }, 422);
     }
@@ -346,8 +410,9 @@ app.delete("/config/permissions", async (c) => {
   }
   const { index, action, resource, effect } = parsed.data;
   try {
-    const result = await applyPermissionChange((current) =>
-      removeOpenCodePermissionRule(current, index, { action, resource, effect }),
+    const result = await applyPermissionChange(
+      (current) => removeOpenCodePermissionRule(current, index, { action, resource, effect }),
+      c.req.raw.signal,
     );
     return c.json(result);
   } catch (err) {
@@ -358,6 +423,9 @@ app.delete("/config/permissions", async (c) => {
       resource,
       effect,
     });
+    if (err instanceof OpenCodeConfigWriteDisabledError) {
+      return c.json({ error: err.message }, 409);
+    }
     if (err instanceof OpenCodeConfigUnreadableError) {
       return c.json({ error: err.message }, 422);
     }
@@ -376,10 +444,12 @@ app.put("/config/permissions", async (c) => {
   }
   const { action, resource, effect, index } = parsed.data;
   try {
-    const result = await applyPermissionChange((current) =>
-      index === undefined
-        ? setOpenCodePermissionEffect(current, { action, resource }, effect)
-        : setOpenCodePermissionEffectAt(current, index, { action, resource }, effect),
+    const result = await applyPermissionChange(
+      (current) =>
+        index === undefined
+          ? setOpenCodePermissionEffect(current, { action, resource }, effect)
+          : setOpenCodePermissionEffectAt(current, index, { action, resource }, effect),
+      c.req.raw.signal,
     );
     return c.json(result);
   } catch (err) {
@@ -389,6 +459,9 @@ app.put("/config/permissions", async (c) => {
       resource,
       effect,
     });
+    if (err instanceof OpenCodeConfigWriteDisabledError) {
+      return c.json({ error: err.message }, 409);
+    }
     if (err instanceof OpenCodeConfigUnreadableError) {
       return c.json({ error: err.message }, 422);
     }
@@ -419,10 +492,22 @@ app.get("/commands", async (c) => {
 });
 
 /**
+ * Which kind of OpenCode service backs Code mode (D1/H5), and what an adopted
+ * one proved about itself (B7).
+ *
+ * This is a read of the installed target, never a probe: asking the browser
+ * for status must not start a managed process or contact an adopted one. The
+ * payload is deliberately small — the origin, the password, the registration
+ * path and the probe bodies stay in the backend (§4.2).
+ */
+app.get("/status", (c) => c.json(describeOpenCodeRuntime()));
+
+/**
  * Live capability discovery for the unified new-chat picker. Returns the agents
- * and models the managed OpenCode server exposes. Starts the server on first
- * call (via the server manager) and queries its discovery endpoints. No input is
- * accepted — discovery is server-driven, so there is nothing to Zod-validate.
+ * and models the ACTIVE OpenCode service exposes (managed or adopted, D1/H5).
+ * Starts the managed server on first call when nothing is installed, and
+ * queries its discovery endpoints. No input is accepted — discovery is
+ * server-driven, so there is nothing to Zod-validate.
  */
 app.get("/capabilities", async (c) => {
   try {
@@ -451,14 +536,15 @@ app.get("/capabilities", async (c) => {
 app.all("*", async (c) => {
   const startMs = Date.now();
   const requestId = getRequestContext()?.requestId;
-  let baseUrl: string;
+  let target: Awaited<ReturnType<typeof resolveOpenCodeRuntimeTarget>>;
   try {
-    baseUrl = await openCodeServerManager.ensureBaseUrl();
+    target = await resolveOpenCodeRuntimeTarget();
   } catch (err) {
     logger.error("opencode", "opencode.proxy_unavailable", { ...classifyError(err) });
     const mapped = openCodeError(err, "OpenCode server unavailable");
     return c.json({ error: mapped.message }, mapped.status);
   }
+  const baseUrl = target.baseUrl;
   const targetPath = stripOpenCodeProxyPrefix(c.req.path);
   const upstreamPath =
     targetPath === "/api" || targetPath.startsWith("/api/") ? targetPath : `/api${targetPath}`;
@@ -551,9 +637,10 @@ app.all("*", async (c) => {
   // TBAi-internal session header (which is a selector, not an instruction).
   headers.delete(OPENCODE_SESSION_HEADER);
   headers.delete(OPENCODE_DIRECTORY_HEADER);
-  for (const [key, value] of Object.entries(getOpenCodeAuthHeaders())) {
-    headers.set(key, value);
-  }
+  // The captured target's transport injects its own credential and refuses a
+  // redirect. There is no branch that sets a credential header here: the proxy
+  // always goes through the transport, so it cannot forward a caller's
+  // Authorization or pair the target's credential with another origin.
   if (authorization.directory) {
     for (const [key, value] of Object.entries(
       getOpenCodeDirectoryHeaders(authorization.directory),
@@ -562,15 +649,26 @@ app.all("*", async (c) => {
     }
   }
 
-  const init: RequestInit = { method, headers, redirect: "manual" };
+  const init: RequestInit = { method, headers };
   if (method !== "GET" && method !== "HEAD") {
     init.body = c.req.raw.body ?? undefined;
   }
 
   let upstream: Response;
   try {
-    upstream = await fetch(url, init);
+    upstream = await target.transport(url, init);
   } catch (err) {
+    if (err instanceof OpenCodeRedirectRefusedError) {
+      // The refusal carries only the status; the Location header is never read,
+      // so no redirect target can reach the browser.
+      logger.warn("opencode", "proxy.redirect_refused", {
+        requestId,
+        method,
+        pathname: url.pathname,
+        status: err.status,
+      });
+      return c.json({ error: "OpenCode refused a redirect" }, 502);
+    }
     logger.error("opencode", "proxy.upstream_fetch_failed", {
       requestId,
       ocSession: sessionId,

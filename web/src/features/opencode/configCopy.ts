@@ -92,7 +92,7 @@ export const openCodeConfigCopy = {
   page: {
     title: "OpenCode Configuration",
     description:
-      "The real OpenCode configuration the managed Code server reads. Editing here changes that file — OpenCode stays the source of truth.",
+      "The real OpenCode configuration the Code server reads. Editing here changes that file — OpenCode stays the source of truth.",
   },
   sections: {
     source: "Configuration source",
@@ -183,7 +183,28 @@ export const openCodeConfigCopy = {
     loading: "Reading the OpenCode configuration…",
     error: "Could not read the OpenCode configuration.",
     malformed:
-      "This configuration file is not valid JSON, so it is shown read-only. Fix the file by hand to make it editable again.",
+      "This configuration file is not valid JSON, so it is shown read-only. Fix the file by hand; OpenCode cannot load it until it parses.",
+    /**
+     * Why the page is read-only. Each reason is a fact about the runtime, not a
+     * fault the reader caused, so it reads as an explanation rather than an
+     * error with a next step that does not exist.
+     */
+    writesDisabled: {
+      adopted_g4_unproven:
+        "This OpenCode service was already running, so its configuration is shown read-only. TBAi does not write to a service it did not start.",
+      managed_root_not_owned:
+        "This file belongs to your own OpenCode installation, so it is shown read-only and TBAi does not edit it. What you see here is what OpenCode is actually using.",
+    },
+  },
+  /**
+   * B7 graceful degradation. Adoption admits a stable service that lacks an
+   * OPTIONAL route; the configuration page is the surface backed by the first
+   * such route. Stated as a fact about the service, not as an error the reader
+   * caused.
+   */
+  unavailable: {
+    adopted:
+      "This OpenCode service does not serve its configuration API, so there is nothing to read or edit here. OpenCode still applies its own configuration.",
   },
   labels: {
     action: "Action",

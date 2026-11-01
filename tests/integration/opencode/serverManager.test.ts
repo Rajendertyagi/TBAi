@@ -3,26 +3,35 @@ import type { Subprocess } from "bun";
 import {
   buildOpenCodeServeArgs,
   stripOpenCodeProxyPrefix,
-  allocateLoopbackPort,
   probeOpenCodeInfo,
   waitForHttpReady,
   appendTail,
   OpenCodeProcessExitedError,
   OpenCodeReadinessTimeoutError,
   OpenCodeReadinessCancelledError,
+  OpenCodeListeningTimeoutError,
   OpenCodeServerManager,
 } from "@/services/opencode/serverManager.ts";
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "@/config/opencode.ts";
 import { getOpenCodeAuthHeaders, isSupportedOpenCodeVersion } from "@/services/opencode/runtime.ts";
 import {
+  OpenCodeCapabilityRefusedError,
+  OPENCODE_CAPABILITY_PROBES,
+} from "@/services/opencode/compatibility.ts";
+import {
   OpenCodeDatabaseBusyError,
   type OpenCodeDatabaseLease,
 } from "@/services/opencode/ownership.ts";
+import { OpenCodeListeningMissingError } from "@/services/opencode/listening.ts";
+import { allocateTestLoopbackPort } from "../../harness/opencodeRuntimeHarness";
 
 const SUPPORTED_VERSION = "2.0.15";
 const CURRENT_SUPPORTED_VERSION = "2.2.0";
 const UNSUPPORTED_VERSION = "2.0.14";
-const UPPER_BOUND_VERSION = "2.2.1";
+/** A stable release newer than the old ceiling; B7 admits it. */
+const NEWER_STABLE_VERSION = "2.2.1";
+/** D2: a prerelease is refused even inside the numeric range. */
+const PRERELEASE_VERSION = "2.2.1-beta.1";
 const FIXTURE_PASSWORD = "opencode-readiness-fixture-password";
 const FIXTURE_AUTHORIZATION = `Basic ${Buffer.from(
   `${OPENCODE_CONFIG.authUsername}:${FIXTURE_PASSWORD}`,
@@ -41,54 +50,79 @@ const NO_DATABASE_LEASE: OpenCodeDatabaseLease = {
 };
 
 describe("buildOpenCodeServeArgs", () => {
-  it("builds the argv for a given port", () => {
-    expect(buildOpenCodeServeArgs(4173)).toEqual([
+  it("asks the kernel for a port and binds loopback only", () => {
+    // `--port 0` removes the allocate-then-release race: the child binds the
+    // port and announces it. `--hostname 127.0.0.1` keeps the server off every
+    // non-loopback interface.
+    expect(buildOpenCodeServeArgs()).toEqual([
       OPENCODE_CONFIG.binaryName,
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
   });
 
   it("uses an explicit managed binary when provided", () => {
-    expect(buildOpenCodeServeArgs(4173, FAKE_MANAGED_BINARY)).toEqual([
+    expect(buildOpenCodeServeArgs(FAKE_MANAGED_BINARY)).toEqual([
       FAKE_MANAGED_BINARY,
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
   });
 
   it("wraps .cmd launchers with cmd /c on Windows", () => {
     if (process.platform !== "win32") return;
-    expect(buildOpenCodeServeArgs(4173, "opencode.cmd")).toEqual([
+    expect(buildOpenCodeServeArgs("opencode.cmd")).toEqual([
       "cmd",
       "/c",
       "opencode.cmd",
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
     // Paths with spaces are preserved as a single argument.
-    expect(buildOpenCodeServeArgs(4173, "C:\\path with spaces\\opencode.cmd")).toEqual([
+    expect(buildOpenCodeServeArgs("C:\\path with spaces\\opencode.cmd")).toEqual([
       "cmd",
       "/c",
       "C:\\path with spaces\\opencode.cmd",
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
     // Non-.cmd binaries are not wrapped.
-    expect(buildOpenCodeServeArgs(4173, "opencode.exe")).toEqual([
+    expect(buildOpenCodeServeArgs("opencode.exe")).toEqual([
       "opencode.exe",
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
   });
-  it("handles edge ports (0 and max)", () => {
-    expect(buildOpenCodeServeArgs(0)).toEqual([OPENCODE_CONFIG.binaryName, "serve", "--port", "0"]);
-    expect(buildOpenCodeServeArgs(65535)[3]).toBe("65535");
+
+  it("derives both values from the injected config", () => {
+    const config = {
+      ...OPENCODE_CONFIG,
+      kernelAssignedPort: "0",
+      managedBindHostname: "127.0.0.1",
+    };
+    expect(buildOpenCodeServeArgs(FAKE_MANAGED_BINARY, config)).toEqual([
+      FAKE_MANAGED_BINARY,
+      "serve",
+      "--port",
+      "0",
+      "--hostname",
+      "127.0.0.1",
+    ]);
   });
 });
 
@@ -101,15 +135,6 @@ describe("stripOpenCodeProxyPrefix", () => {
   it("leaves non-prefixed paths untouched", () => {
     expect(stripOpenCodeProxyPrefix("/session")).toBe("/session");
     expect(stripOpenCodeProxyPrefix("/api/other/x")).toBe("/api/other/x");
-  });
-});
-
-describe("allocateLoopbackPort", () => {
-  it("returns a valid TCP port number", () => {
-    const port = allocateLoopbackPort();
-    expect(Number.isInteger(port)).toBe(true);
-    expect(port).toBeGreaterThan(0);
-    expect(port).toBeLessThan(65536);
   });
 });
 
@@ -160,7 +185,7 @@ function listenOn(port: number): () => void {
 
 /** A port that is allocated then released, so nothing is listening on it. */
 function freePort(): number {
-  return allocateLoopbackPort();
+  return allocateTestLoopbackPort();
 }
 
 describe("probeOpenCodeInfo", () => {
@@ -323,8 +348,27 @@ describe("probeOpenCodeInfo", () => {
     }
   });
 
-  it("reports not ready past the 2.2.0 ceiling", async () => {
-    const fixture = startInfoFixture(() => Response.json({ version: UPPER_BOUND_VERSION }));
+  it("reports ready for a stable release newer than any measured build (B7: no ceiling)", async () => {
+    // There is no upper bound: a newer stable build is admitted by version and
+    // must then prove its essential routes on the live service (`compatibility.ts`).
+    const fixture = startInfoFixture(() => Response.json({ version: NEWER_STABLE_VERSION }));
+
+    try {
+      const outcome = await probeOpenCodeInfo(
+        fixture.baseUrl,
+        OPENCODE_CONFIG.readinessProbePath,
+        1_000,
+        AUTHENTICATED_READINESS.authHeaders,
+        AUTHENTICATED_READINESS.isSupportedVersion,
+      );
+      expect(outcome).toBe("ready");
+    } finally {
+      fixture.stop();
+    }
+  });
+
+  it("reports not ready for a prerelease build (D2: stable releases only)", async () => {
+    const fixture = startInfoFixture(() => Response.json({ version: PRERELEASE_VERSION }));
 
     try {
       const outcome = await probeOpenCodeInfo(
@@ -345,7 +389,7 @@ describe("waitForHttpReady", () => {
   const neverExits = new Promise<number>(() => {});
 
   it("resolves once the server is reachable", async () => {
-    const port = allocateLoopbackPort();
+    const port = allocateTestLoopbackPort();
     const stop = listenOn(port);
     try {
       await expect(
@@ -414,7 +458,7 @@ describe("waitForHttpReady", () => {
   });
 
   it("resolves after the server comes up mid-wait", async () => {
-    const port = allocateLoopbackPort();
+    const port = allocateTestLoopbackPort();
     let stop: () => void = () => {};
     const timer = setTimeout(() => {
       stop = listenOn(port);
@@ -444,7 +488,7 @@ describe("waitForHttpReady", () => {
     // on top of a slow probe — otherwise readiness would lag behind the server
     // by one interval per attempt. Here the first probe is deliberately slower
     // than `pollMs`; readiness must still resolve as soon as it answers.
-    const port = allocateLoopbackPort();
+    const port = allocateTestLoopbackPort();
     let first = true;
     const server = Bun.serve({
       port,
@@ -508,56 +552,120 @@ describe("waitForHttpReady", () => {
   });
 });
 
-/** A ReadableStream that delivers the given chunks then closes. */
-function streamFrom(chunks: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
-      controller.close();
-    },
-  });
+/** A pipe the fake child controls; `stalled` starts keep it open on purpose. */
+class StringStream {
+  readonly stream: ReadableStream<Uint8Array>;
+  private controller!: ReadableStreamDefaultController<Uint8Array>;
+  private readonly encoder = new TextEncoder();
+  private closed = false;
+
+  constructor() {
+    this.stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this.controller = controller;
+      },
+    });
+  }
+
+  push(text: string): void {
+    if (this.closed) return;
+    this.controller.enqueue(this.encoder.encode(text));
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      this.controller.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }
 
-/** A controllable fake child: real HTTP server (ready) or none (never ready). */
+/**
+ * How one fake child behaves during startup.
+ *
+ * - `ready`       binds a loopback server, announces its kernel-assigned port,
+ *                 and answers readiness plus the capability routes;
+ * - `not-ready`   announces and binds, but `/api/info` never becomes ready;
+ * - `stalled`     stays alive without announcing anything (listening timeout);
+ * - `missing`     its output ends without an announcement.
+ */
+type FakeStartupMode = "ready" | "not-ready" | "stalled" | "missing";
+
+/** Which capability routes the `ready` fake actually serves. */
+type FakeCapabilityMode = "all" | "missing-session" | "missing-command";
+
+const SESSION_ROUTE = "/api/session";
+const COMMAND_ROUTE = "/api/command";
+const CAPABILITY_ROUTES = new Set(OPENCODE_CAPABILITY_PROBES.map((probe) => probe.path));
+const EVENT_ROUTE =
+  OPENCODE_CAPABILITY_PROBES.find((probe) => probe.expectsEventStream)?.path ?? "/api/event";
+
+interface FakeChildOptions {
+  readonly mode: FakeStartupMode;
+  readonly capabilities: FakeCapabilityMode;
+  readonly readinessVersion: string;
+  readonly stdoutChunks: readonly string[];
+  readonly stderrChunks: readonly string[];
+  readonly serial: number;
+  readonly expectedAuthorization: string;
+}
+
+/**
+ * A controllable fake child.
+ *
+ * A `ready`/`not-ready` child binds its own ephemeral port and announces it on
+ * stdout exactly as the real binary does, which is what the manager now reads.
+ * The announcement is built after the bind, so the fake proves the production
+ * path follows the child's address instead of a pre-allocated one.
+ */
 class FakeChild {
   public readonly pid: number;
   public readonly exited: Promise<number>;
   public readonly stdout: ReadableStream<Uint8Array>;
   public readonly stderr: ReadableStream<Uint8Array>;
+  /** Every pathname requested of this child, in order. */
+  public readonly requests: string[] = [];
   public readonly killCalls: string[] = [];
+  /** The port the child bound, or null when it has no server. */
+  public readonly port: number | null;
+  private readonly outflux = new StringStream();
+  private readonly errflux = new StringStream();
   private resolveExit!: (code: number) => void;
   private server: ReturnType<typeof Bun.serve> | null = null;
 
-  constructor(
-    port: number,
-    mode: "ready" | "never",
-    stdoutChunks: string[],
-    stderrChunks: string[],
-    serial: number,
-    expectedAuthorization: string,
-  ) {
-    this.pid = 4000 + serial;
-    if (mode === "ready") {
+  constructor(options: FakeChildOptions) {
+    this.pid = 4000 + options.serial;
+    if (options.mode === "ready" || options.mode === "not-ready") {
       this.server = Bun.serve({
-        port,
+        port: 0,
         hostname: "127.0.0.1",
-        fetch(request) {
-          if (new URL(request.url).pathname !== OPENCODE_CONFIG.readinessProbePath) {
-            return new Response("not found", { status: 404 });
-          }
-          if (request.headers.get("authorization") !== expectedAuthorization) {
-            return new Response("unauthorized", { status: 401 });
-          }
-          return Response.json({ version: SUPPORTED_VERSION });
-        },
+        fetch: (request) => this.handle(request, options),
       });
+      this.port = this.server.port ?? null;
+    } else {
+      this.port = null;
     }
+
+    for (const chunk of options.stdoutChunks) this.outflux.push(chunk);
+    if (this.port !== null) {
+      this.outflux.push(`server listening on http://127.0.0.1:${this.port}\n`);
+    }
+    for (const chunk of options.stderrChunks) this.errflux.push(chunk);
+    // `stalled` keeps stdout open so the start fails on the timeout rather than
+    // on an end-of-output that would be a different defect.
+    if (options.mode !== "stalled") {
+      this.outflux.close();
+      this.errflux.close();
+    }
+
+    this.stdout = this.outflux.stream;
+    this.stderr = this.errflux.stream;
     this.exited = new Promise<number>((resolve) => {
       this.resolveExit = resolve;
     });
-    this.stdout = streamFrom(stdoutChunks);
-    this.stderr = streamFrom(stderrChunks);
   }
 
   exitWith(code: number): void {
@@ -566,6 +674,9 @@ class FakeChild {
 
   stop(): void {
     this.server?.stop(true);
+    this.server = null;
+    this.outflux.close();
+    this.errflux.close();
   }
 
   kill(signal: string): void {
@@ -573,7 +684,36 @@ class FakeChild {
     // A real SIGKILL terminates the child, which resolves `exited`. The fake
     // must do the same or production code that waits for the exit after a kill
     // would hang for the whole shutdown budget.
-    if (signal === "SIGKILL") this.exitWith(1);
+    if (signal === "SIGKILL") {
+      this.stop();
+      this.exitWith(1);
+    }
+  }
+
+  private handle(request: Request, options: FakeChildOptions): Response {
+    const pathname = new URL(request.url).pathname;
+    this.requests.push(pathname);
+    if (request.headers.get("authorization") !== options.expectedAuthorization) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    if (pathname === OPENCODE_CONFIG.readinessProbePath) {
+      return options.mode === "not-ready"
+        ? new Response("starting", { status: 503 })
+        : Response.json({ version: options.readinessVersion });
+    }
+    if (pathname === SESSION_ROUTE && options.capabilities === "missing-session") {
+      return new Response("not found", { status: 404 });
+    }
+    if (pathname === COMMAND_ROUTE && options.capabilities === "missing-command") {
+      return new Response("not found", { status: 404 });
+    }
+    if (pathname === EVENT_ROUTE) {
+      return new Response("event: ping\n\n", {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    if (CAPABILITY_ROUTES.has(pathname)) return Response.json({});
+    return new Response("not found", { status: 404 });
   }
 }
 
@@ -581,7 +721,9 @@ class FakeChild {
 class FakeOpenCodeServerManager extends OpenCodeServerManager {
   public createChildCalls = 0;
   public children: FakeChild[] = [];
-  public serveMode: "ready" | "never" = "ready";
+  public mode: FakeStartupMode = "ready";
+  public capabilities: FakeCapabilityMode = "all";
+  public readinessVersion = SUPPORTED_VERSION;
   public stdoutChunks: string[] = [];
   public stderrChunks: string[] = [];
   public lastBinaryPath: string | null = null;
@@ -600,17 +742,18 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
     return FAKE_MANAGED_BINARY;
   }
 
-  protected createChild(port: number, binaryPath: string = FAKE_MANAGED_BINARY): Subprocess {
+  protected createChild(binaryPath: string = FAKE_MANAGED_BINARY): Subprocess {
     this.createChildCalls += 1;
     this.lastBinaryPath = binaryPath;
-    const child = new FakeChild(
-      port,
-      this.serveMode,
-      this.stdoutChunks,
-      this.stderrChunks,
-      this.createChildCalls,
-      getOpenCodeAuthHeaders(this.testConfig).Authorization,
-    );
+    const child = new FakeChild({
+      mode: this.mode,
+      capabilities: this.capabilities,
+      readinessVersion: this.readinessVersion,
+      stdoutChunks: this.stdoutChunks,
+      stderrChunks: this.stderrChunks,
+      serial: this.createChildCalls,
+      expectedAuthorization: getOpenCodeAuthHeaders(this.testConfig).Authorization,
+    });
     this.children.push(child);
     return child as unknown as Subprocess;
   }
@@ -625,6 +768,12 @@ class FakeOpenCodeServerManager extends OpenCodeServerManager {
     const child = this.children[this.children.length - 1];
     if (!child) throw new Error("no child spawned");
     return child;
+  }
+
+  /** The bounded tails the manager retained for the newest child. */
+  readDiagnostics(): { stdout: string; stderr: string } | undefined {
+    const child = this.children[this.children.length - 1];
+    return child === undefined ? undefined : this.diagnosticsFor(child as unknown as Subprocess);
   }
 
   exitLastChild(code: number): void {
@@ -753,16 +902,120 @@ describe("appendTail", () => {
   });
 });
 
+describe("OpenCodeServerManager managed startup", () => {
+  it("uses the kernel-assigned port the child itself announced", async () => {
+    // `--port 0` plus the child's own announcement is the fix for the
+    // allocate-then-release race: the manager must use this child's address,
+    // never a number it picked before the spawn.
+    const mgr = newFakeManager();
+    try {
+      const baseUrl = await mgr.ensureBaseUrl();
+      expect(mgr.lastChild.port).not.toBeNull();
+      expect(baseUrl).toBe(`http://127.0.0.1:${mgr.lastChild.port}`);
+    } finally {
+      mgr.stopFake();
+    }
+  });
+
+  it("redacts a server-generated password from retained diagnostics", async () => {
+    const secret = "tbai-secret-that-must-not-be-retained";
+    const mgr = newFakeManager();
+    mgr.stdoutChunks = [`server password ${secret}\n`];
+    try {
+      await mgr.ensureBaseUrl();
+      await until(
+        () => mgr.readDiagnostics()?.stdout.includes("server password [redacted]") ?? false,
+      );
+      const stdout = mgr.readDiagnostics()?.stdout ?? "";
+      expect(stdout).toContain("server password [redacted]");
+      expect(stdout).not.toContain(secret);
+    } finally {
+      mgr.stopFake();
+    }
+  });
+
+  it("refuses a build that does not serve an essential capability", async () => {
+    const mgr = newFakeManager({
+      ...OPENCODE_CONFIG,
+      opencodeChildStopGraceMs: 10,
+      opencodeChildStopKillMs: 10,
+    });
+    mgr.capabilities = "missing-session";
+    try {
+      let failure: unknown;
+      try {
+        await mgr.ensureBaseUrl();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(OpenCodeCapabilityRefusedError);
+      expect((failure as OpenCodeCapabilityRefusedError).missingEssential).toEqual(["session"]);
+      await until(() => mgr.lastChild.killCalls.includes("SIGKILL"));
+    } finally {
+      mgr.stopFake();
+    }
+  });
+
+  it("starts when only an optional capability route is absent", async () => {
+    const mgr = newFakeManager();
+    mgr.capabilities = "missing-command";
+    try {
+      const baseUrl = await mgr.ensureBaseUrl();
+      expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      // The routes were actually probed on the child, not inferred from a number.
+      expect(mgr.lastChild.requests).toContain("/api/session");
+      expect(mgr.lastChild.requests).toContain("/api/event");
+      expect(mgr.lastChild.requests).toContain("/api/command");
+    } finally {
+      mgr.stopFake();
+    }
+  });
+});
+
 describe("OpenCodeServerManager lifecycle", () => {
   it("kills the child on readiness timeout (no orphan)", async () => {
     const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       startupTimeoutMs: 100,
       readyPollMs: 5,
+      opencodeChildStopGraceMs: 10,
+      opencodeChildStopKillMs: 10,
     });
-    mgr.serveMode = "never";
+    // The child announces and binds but never answers readiness.
+    mgr.mode = "not-ready";
     await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeReadinessTimeoutError);
+    await until(() => mgr.lastChild.killCalls.includes("SIGKILL"));
     expect(mgr.lastChild.killCalls).toContain("SIGKILL");
+    expect(mgr.createChildCalls).toBe(1);
+    mgr.stopFake();
+  });
+
+  it("kills the child when it never announces a listening URL", async () => {
+    const mgr = newFakeManager({
+      ...OPENCODE_CONFIG,
+      startupTimeoutMs: 120,
+      readyPollMs: 5,
+      opencodeChildStopGraceMs: 10,
+      opencodeChildStopKillMs: 10,
+    });
+    mgr.mode = "stalled";
+    await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeListeningTimeoutError);
+    await until(() => mgr.lastChild.killCalls.includes("SIGKILL"));
+    expect(mgr.createChildCalls).toBe(1);
+    mgr.stopFake();
+  });
+
+  it("fails when the child's output ends without an announcement", async () => {
+    const mgr = newFakeManager({
+      ...OPENCODE_CONFIG,
+      startupTimeoutMs: 5_000,
+      readyPollMs: 5,
+      opencodeChildStopGraceMs: 10,
+      opencodeChildStopKillMs: 10,
+    });
+    mgr.mode = "missing";
+    await expect(mgr.ensureBaseUrl()).rejects.toBeInstanceOf(OpenCodeListeningMissingError);
+    await until(() => mgr.lastChild.killCalls.includes("SIGKILL"));
     expect(mgr.createChildCalls).toBe(1);
     mgr.stopFake();
   });
@@ -773,8 +1026,10 @@ describe("OpenCodeServerManager lifecycle", () => {
       maxRestartAttempts: 3,
       startupTimeoutMs: 5000,
       readyPollMs: 5,
+      opencodeChildStopGraceMs: 10,
+      opencodeChildStopKillMs: 10,
     });
-    mgr.serveMode = "never";
+    mgr.mode = "stalled";
     const p = mgr.ensureBaseUrl();
     await Bun.sleep(20);
     mgr.exitLastChild(58);
@@ -793,8 +1048,10 @@ describe("OpenCodeServerManager lifecycle", () => {
       maxRestartAttempts: 2,
       startupTimeoutMs: 5000,
       readyPollMs: 5,
+      opencodeChildStopGraceMs: 10,
+      opencodeChildStopKillMs: 10,
     });
-    mgr.serveMode = "never";
+    mgr.mode = "stalled";
     const p = mgr.ensureBaseUrl();
     await Bun.sleep(20);
     mgr.exitLastChild(58);
@@ -829,7 +1086,8 @@ describe("OpenCodeServerManager lifecycle", () => {
   it("shutdown sends SIGTERM then SIGKILL and suppresses restart", async () => {
     const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
-      shutdownTimeoutMs: 30,
+      opencodeChildStopGraceMs: 30,
+      opencodeChildStopKillMs: 30,
     });
     await mgr.ensureBaseUrl();
     await mgr.shutdown();

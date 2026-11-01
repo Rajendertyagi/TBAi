@@ -844,8 +844,22 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
       // the occupancy. The last step of a turn supersedes its earlier steps, and
       // the last turn supersedes earlier turns - which is exactly OpenChamber's
       // "newest assistant response that reported tokens".
+      const endMsg = getMessage(next, event.data.assistantMessageID);
+      const endSource = endMsg.source;
+      const finalSource =
+        endSource?.type === "assistant"
+          ? {
+              ...endSource,
+              tokens: event.data.tokens ?? endSource.tokens,
+              cost: event.data.cost ?? endSource.cost,
+              time: { ...endSource.time, completed: Date.now() },
+            }
+          : endSource;
+      const finalNext =
+        finalSource !== endSource ? withMessage(next, { ...endMsg, source: finalSource }) : next;
+
       return {
-        ...next,
+        ...finalNext,
         usage,
         occupancyTokens,
         ...(event.data.tokens
@@ -928,17 +942,42 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false)
         event.created,
       );
     }
-    case "session.step.started":
+    case "session.step.started": {
+      const existingMessage = getMessage(state, event.data.assistantMessageID);
+      const existingSource = existingMessage.source;
+      const updatedSource =
+        existingSource?.type === "assistant"
+          ? {
+              ...existingSource,
+              agent: event.data.agent,
+              model: event.data.model,
+              time: { ...existingSource.time, created: event.data.started },
+            }
+          : {
+              id: event.data.assistantMessageID,
+              sessionID: event.data.sessionID,
+              type: "assistant" as const,
+              agent: event.data.agent,
+              model: event.data.model,
+              content: [],
+              time: { created: event.data.started },
+            };
+      const messageWithSource: V2MessageState = {
+        ...existingMessage,
+        source: updatedSource,
+      };
+      const stateWithSource = withMessage(state, messageWithSource);
       return applyAssistantEvent(
-        withActivity(withRetryCleared(state), "running"),
+        withActivity(withRetryCleared(stateWithSource), "running"),
         event.data.assistantMessageID,
         {
           kind: "step",
           id: `step:${event.data.assistantMessageID}:${event.id}`,
-          order: state.messages[event.data.assistantMessageID]?.parts.length ?? 0,
+          order: stateWithSource.messages[event.data.assistantMessageID]?.parts.length ?? 0,
           status: "started",
         },
       );
+    }
     default:
       return state;
   }

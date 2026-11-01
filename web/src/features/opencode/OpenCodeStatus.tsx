@@ -6,7 +6,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { OPENCODE_V2_MAX_RECONNECT_ATTEMPTS } from "./config";
 import { pendingSetNotice } from "./auxiliaryNotice";
+import { OPENCODE_UNAVAILABLE_NOTICE, runtimeStatusView } from "./runtimeStatus";
 import { statusView, type StatusPresentation } from "./statusView";
+import { useOpenCodeRuntimeStatus } from "./useOpenCodeRuntimeStatus";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 
 const HEARTS: Record<StatusPresentation, { Icon: typeof HeartHandshake; className: string }> = {
@@ -27,6 +29,14 @@ export function OpenCodeStatus({
   onReconnect?: () => void;
 }) {
   const extras = useOptionalV2RuntimeExtras();
+  // Which service the backend is bound to (§4.2). Read here because the chip is
+  // the Code surface's one always-present status affordance; the read never
+  // starts a service, so opening Code mode cannot spawn anything as a side
+  // effect of rendering it. The connection type is the refresh key: a runtime
+  // that just CONNECTED proves the backend installed a target (the lazily
+  // started managed service), which the mount-time read could not have seen.
+  const runtime = useOpenCodeRuntimeStatus(true, extras?.state.connection.type ?? "absent");
+  const runtimeView = runtime.status ? runtimeStatusView(runtime.status) : null;
   // The heavier `onReconnect` rebuild is the fallback for the case where there
   // is no native runtime to ask (no controller). Keep it reachable: render the
   // chip with a terminal-failed presentation so the reader can trigger it.
@@ -70,6 +80,14 @@ export function OpenCodeStatus({
       : recoveryBlocked
         ? state.revertRecovery.error.message
         : null;
+  // The plan's single actionable state (§4.1). It needs BOTH facts: the backend
+  // reports no installed target, AND the runtime has actually failed. Unresolved
+  // alone is the managed service's lazy-start window, and showing "not
+  // available" there would call a service unavailable before anything tried it.
+  const unavailableNotice =
+    runtimeView?.unresolved === true && view.presentation === "error"
+      ? OPENCODE_UNAVAILABLE_NOTICE
+      : null;
   const retry = () => {
     // M17: the recovery rejection is CAUGHT. `reconcileStagedRevert` rejects
     // with a `V2ControllerError` when the recovery fails, and the controller
@@ -117,6 +135,10 @@ export function OpenCodeStatus({
         </div>
         <dl className="mt-2 space-y-1.5">
           <div>
+            <dt className="text-xs text-muted-foreground">Runtime</dt>
+            <dd className="text-xs">{runtimeView?.label ?? "–"}</dd>
+          </div>
+          <div>
             <dt className="text-xs text-muted-foreground">Working directory</dt>
             <dd className="break-all font-mono text-xs">
               {state.session?.location.directory ?? "–"}
@@ -129,12 +151,23 @@ export function OpenCodeStatus({
             </dd>
           </div>
         </dl>
+        {runtimeView?.detail && (
+          <p className="mt-2 text-xs text-muted-foreground">{runtimeView.detail}</p>
+        )}
         {archived && <p className="mt-2 text-xs text-muted-foreground">{ARCHIVED_NOTICE}</p>}
         {pendingNotice && <p className="mt-2 text-xs text-muted-foreground">{pendingNotice}</p>}
-        {errorDetail && !view.failed && (
+        {unavailableNotice ? (
           <p role="alert" className="mt-2 text-xs text-destructive">
-            {errorDetail}
+            {unavailableNotice}
+            {errorDetail ? ` ${errorDetail}` : ""}
           </p>
+        ) : (
+          errorDetail &&
+          !view.failed && (
+            <p role="alert" className="mt-2 text-xs text-destructive">
+              {errorDetail}
+            </p>
+          )
         )}
         <Button
           type="button"

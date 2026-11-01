@@ -3,12 +3,18 @@ import { OpenCodeError, toOpenCodeError } from "./errors";
 import { conversationService } from "../storage";
 import { opencodeOrphanService } from "../storage/opencodeSessionOrphans";
 import { resolveConversationWorkspace } from "../workspace";
-import { openCodeServerManager } from "./serverManager";
+import { resolveOpenCodeServiceAccess } from "./serviceAccess";
+import { serializeHistoryOwner } from "./historyBoundary";
 import { resolveOpenCodeModelRef } from "./capabilities";
 import { fetchServerDefaultModel, pickSessionModel, resolveStoredModel } from "./sessionModel";
 import { logger } from "../../lib/logger";
 import { classifyError } from "../../lib/errors";
 import { generateId } from "../../lib/utils";
+import {
+  extractSessionId,
+  lazyCapabilityRegistry,
+  validateSessionStructure,
+} from "./compatibility";
 
 /** OpenCode `ModelRef` shape accepted by `session.create` / `defaultModel`. */
 type ModelRef = { id: string; providerID: string; variant?: string };
@@ -212,7 +218,7 @@ const SESSION_NOT_FOUND_STATUS = 404;
  * Shared with the orphan reconciler rather than copied there: this is the one
  * implementation of "is this session present, and is the answer about THIS id?".
  *
- * @param client - Client bound to the managed server's base URL.
+ * @param client - Client bound to the service that owns the session (managed or adopted).
  * @param sessionId - The persisted OpenCode session id to look up.
  * @returns The session id + directory, or null when the server has no such session.
  * @throws {OpenCodeError} When absence could not be established either way.
@@ -278,8 +284,10 @@ async function assignSessionModelIfMissing(
   boundModel: string | null,
 ): Promise<void> {
   try {
-    const storedModel = await resolveStoredModel(storedModelId);
-    const serverDefault = await fetchServerDefaultModel();
+    // Both lookups go through THIS service's client: an adopted session must be
+    // repaired from the service that owns it, never from the managed one.
+    const storedModel = await resolveStoredModel(storedModelId, client);
+    const serverDefault = await fetchServerDefaultModel(client);
     const target = pickSessionModel({ boundModel, storedModel, serverDefault });
     if (!target) return;
     await client.session.switchModel({
@@ -301,14 +309,15 @@ async function assignSessionModelIfMissing(
 }
 
 /**
- * Liveness probe for a stored session id: does the managed server still know
- * this session? The id is only a pointer — the server restarts independently,
- * so a persisted id may reference a session that no longer exists.
+ * Liveness probe for a stored session id: does the service that owns it still
+ * know this session? The id is only a pointer — a server restarts
+ * independently, so a persisted id may reference a session that no longer
+ * exists.
  *
  * A thin predicate over `fetchOpenCodeSession`, so the V2 liveness rules live
  * in exactly one place.
  *
- * @param client - Client bound to the managed server's base URL.
+ * @param client - Client bound to the service that owns the session (managed or adopted).
  * @param sessionId - The persisted OpenCode session id to verify.
  * @returns True when the server still has the session.
  * @throws {OpenCodeError} When lookup fails for a reason other than missing session.
@@ -458,8 +467,11 @@ export async function terminateSessionForConversationDeletion(input: {
   try {
     const directory =
       input.directory ?? (await resolveConversationWorkspace(input.conversationId)).dir;
-    const baseUrl = await openCodeServerManager.ensureBaseUrl();
-    const client = createOpenCodeClient(baseUrl, { directory });
+    const access = await resolveOpenCodeServiceAccess(conversation);
+    const client = createOpenCodeClient(access.baseUrl, {
+      directory,
+      transport: access.transport,
+    });
     try {
       await client.session.interrupt({ sessionID: input.expectedSessionId });
     } catch (err) {
@@ -492,6 +504,7 @@ async function requireCreateIntent(
   conversationId: string,
   sessionId: string,
   locationDirectory: string,
+  serviceOwner: string,
 ): Promise<void> {
   let open: boolean;
   try {
@@ -499,6 +512,7 @@ async function requireCreateIntent(
       conversationId,
       sessionId,
       locationDirectory,
+      serviceOwner,
     });
   } catch (error) {
     logger.error("opencode", "opencode.session_intent_record_failed", {
@@ -630,6 +644,8 @@ async function recordOrphan(input: {
   conversationId: string;
   sessionId: string;
   locationDirectory?: string;
+  /** Persisted service key, so recovery can tell which service owns this row. */
+  serviceOwner: string;
   persistError: unknown;
   cleanupError?: unknown;
   verificationError?: unknown;
@@ -648,6 +664,7 @@ async function recordOrphan(input: {
       conversationId: input.conversationId,
       sessionId: input.sessionId,
       locationDirectory: input.locationDirectory,
+      serviceOwner: input.serviceOwner,
       lateCreateRisk: input.duplicateCreatePossible,
       persistErrorCategory: persistCategory,
       cleanupErrorCategory: cleanupCategory,
@@ -732,8 +749,14 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
 
   const resolved = await resolveConversationWorkspace(conversationId);
   const directory = resolved.dir;
-  const baseUrl = await openCodeServerManager.ensureBaseUrl();
-  const client = createOpenCodeClient(baseUrl, { directory });
+  // H3/B3: the service is decided by the binding, not by whatever is handy.
+  // An adopted-bound conversation is refused here before any managed work.
+  const access = await resolveOpenCodeServiceAccess(conversation);
+  const serviceOwner = serializeHistoryOwner(access.owner);
+  const client = createOpenCodeClient(access.baseUrl, {
+    directory,
+    transport: access.transport,
+  });
   if (conversation.opencodeSessionId) {
     const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
     if (live) {
@@ -777,7 +800,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     params.agent = conversation.opencodeAgent;
   }
   if (conversation.opencodeModel) {
-    const modelRef = await resolveOpenCodeModelRef(conversation.opencodeModel);
+    const modelRef = await resolveOpenCodeModelRef(conversation.opencodeModel, client);
     if (modelRef) {
       params.model = { id: modelRef.modelID, providerID: modelRef.providerID };
       // The thinking level (variant) is baked into the session's model config
@@ -808,8 +831,8 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     // never created is not.
     try {
       const target = pickSessionModel({
-        storedModel: await resolveStoredModel(conversation.opencodeModel),
-        serverDefault: await fetchServerDefaultModel(),
+        storedModel: await resolveStoredModel(conversation.opencodeModel, client),
+        serverDefault: await fetchServerDefaultModel(client),
       });
       if (target) params.model = { id: target.id, providerID: target.providerID };
     } catch (error) {
@@ -831,7 +854,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     // if this process dies before it ever sees a response. A journal failure
     // throws here, so `session.create` is never reached without a durable
     // handle (fail-closed).
-    await requireCreateIntent(conversationId, sessionId, directory);
+    await requireCreateIntent(conversationId, sessionId, directory, serviceOwner);
 
     const { directory: createdDirectory, duplicateCreatePossible } = await createOrAdoptSession();
 
@@ -839,10 +862,16 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     // the only thing that binds it to TBAi. A failure here must never leave
     // the session orphaned with no handle, and must never report success.
     try {
-      await conversationService.update(conversationId, { opencodeSessionId: sessionId });
+      // The pointer and the owning service are one UPDATE, so a binding can
+      // never exist without the key that says which history it addresses.
+      await conversationService.update(conversationId, {
+        opencodeSessionId: sessionId,
+        opencodeServiceOwner: serviceOwner,
+      });
       // Bound. A single-attempt intent has served its purpose; a retried one
       // keeps its risk because the first request may still commit.
       await settleBoundIntent(conversationId, sessionId, duplicateCreatePossible);
+      lazyCapabilityRegistry.recordCapability("session.create", true);
     } catch (persistError) {
       // A thrown update is not proof the pointer is absent — it may have
       // committed before a later step failed. Verify before acting.
@@ -869,6 +898,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
           conversationId,
           sessionId,
           locationDirectory: createdDirectory,
+          serviceOwner,
           persistError,
           verificationError: verification.error,
           duplicateCreatePossible,
@@ -919,6 +949,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
           conversationId,
           sessionId,
           locationDirectory: createdDirectory,
+          serviceOwner,
           persistError,
           cleanupError,
           duplicateCreatePossible,
@@ -992,7 +1023,14 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     const attempt = async (): Promise<string> => {
       responseMismatch = false;
       const session = await client.session.create(params);
-      const responseId = typeof session?.id === "string" ? session.id : "";
+      const responseId =
+        extractSessionId(session) ?? (typeof session?.id === "string" ? session.id : "");
+      if (!validateSessionStructure(session)) {
+        throw new OpenCodeError(
+          "malformed",
+          "OpenCode session create returned an invalid session structure",
+        );
+      }
       if (responseId.length === 0) {
         // The response proves the call returned, not what it created. Treat it
         // as ambiguous and let the exact-id probe decide.
@@ -1130,10 +1168,12 @@ export type OpenCodeSessionActivity = "running" | "not-running" | "unknown";
  * a caller cannot use this endpoint to probe a session it does not own. The
  * pairing guard throws; a failed activity read itself degrades to `unknown`.
  *
- * Note on server start: this path calls `ensureBaseUrl()` like every other
- * session read, so it may start the managed server. That side effect is
- * accepted and deliberate — the read has nothing to answer otherwise — and it
- * still never creates an OpenCode *session* (the P7 decision).
+ * Note on server start: this path resolves the conversation's service owner
+ * (H3/B3). A managed conversation may start TBAi's managed server, which is
+ * accepted and deliberate — the read has nothing to answer otherwise; an
+ * adopted binding is addressed at the adopted origin and never starts a
+ * managed process. Either way it never creates an OpenCode *session* (the P7
+ * decision).
  *
  * @param conversationId - TBAi conversation that must own the session.
  * @param sessionId - The OpenCode session id to check.
@@ -1150,8 +1190,11 @@ export async function getOpenCodeSessionActivity(
   }
   try {
     const resolved = await resolveConversationWorkspace(conversationId);
-    const baseUrl = await openCodeServerManager.ensureBaseUrl();
-    const client = createOpenCodeClient(baseUrl, { directory: resolved.dir });
+    const access = await resolveOpenCodeServiceAccess(conversation);
+    const client = createOpenCodeClient(access.baseUrl, {
+      directory: resolved.dir,
+      transport: access.transport,
+    });
     const active = await client.session.active();
     // Only the requested entry is read. The map itself never leaves this
     // function — not in the return value and not in a log line.
@@ -1192,8 +1235,11 @@ export async function terminateOpenCodeSession(
   }
   try {
     const resolved = await resolveConversationWorkspace(conversationId);
-    const baseUrl = await openCodeServerManager.ensureBaseUrl();
-    const client = createOpenCodeClient(baseUrl, { directory: resolved.dir });
+    const access = await resolveOpenCodeServiceAccess(conversation);
+    const client = createOpenCodeClient(access.baseUrl, {
+      directory: resolved.dir,
+      transport: access.transport,
+    });
     // Interrupt first, then remove: stop live work before dropping the session
     // out from under it. Each step is individually best-effort — an idle run
     // has nothing to interrupt and a restarted server has nothing to remove.
@@ -1225,6 +1271,7 @@ export async function terminateOpenCodeSession(
       });
       return { terminated: false, reason: "remote-removal-failed" };
     }
+    lazyCapabilityRegistry.recordCapability("session.delete", true);
   } catch (err) {
     logger.warn("opencode", "opencode.session_terminate_failed", {
       conversationId,
@@ -1250,7 +1297,12 @@ export async function terminateOpenCodeSession(
       ...classifyError(error),
     });
   }
-  await conversationService.update(conversationId, { opencodeSessionId: null });
+  // The pointer and the service key describe one binding, so both clear
+  // together. A surviving key would claim a history that no longer exists.
+  await conversationService.update(conversationId, {
+    opencodeSessionId: null,
+    opencodeServiceOwner: null,
+  });
   logger.info("opencode", "opencode.session_terminate", {
     conversationId,
     sessionId,

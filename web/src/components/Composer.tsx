@@ -415,6 +415,13 @@ function Composer({
 
   return (
     <ComposerContextMenu>
+      <ComposerAlerts
+        codeSendError={codeSendError}
+        compactError={compactError}
+        recovery={recovery}
+        retrying={retrying}
+        onRetry={retryInterruptedRun}
+      />
       {/* The trigger-popover root groups the `/` declaration below and owns the
           shared input plugin registry. It renders nothing itself. */}
       <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -437,7 +444,7 @@ function Composer({
           onSubmit={handleComposerSubmit}
           className={cn(
             "relative flex flex-col",
-            "rounded-xl border border-border/50 bg-card shadow-floating",
+            "rounded-xl border border-border/40 bg-card shadow-xs",
             "transition-shadow duration-200 ease-in-out",
             "focus-within:ring-1 focus-within:ring-ring",
           )}
@@ -708,13 +715,6 @@ function Composer({
                 </TooltipProvider>
               </AuiIf>
             </div>
-            <ComposerAlerts
-              codeSendError={codeSendError}
-              compactError={compactError}
-              recovery={recovery}
-              retrying={retrying}
-              onRetry={retryInterruptedRun}
-            />
           </div>
         </ComposerPrimitive.Root>
       </ComposerPrimitive.Unstable_TriggerPopoverRoot>

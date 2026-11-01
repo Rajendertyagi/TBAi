@@ -66,6 +66,13 @@ function install() {
       modelId === "agnes/agnes-3.0-flash"
         ? { providerID: "agnes", modelID: "agnes-3.0-flash" }
         : null,
+    // The seam reads the default from the client it already holds (H3/B3), so
+    // the stub must mirror that surface or the default would silently vanish.
+    fetchDefaultModel: async () => ({
+      providerID: "openrouter",
+      modelID: "perceptron/perceptron-mk1.5",
+      name: "Perceptron Mk1.5",
+    }),
   }));
   mock.module("@/services/opencode/client", () => ({
     ...realOpenCodeClient,
@@ -137,6 +144,7 @@ describe("the adopt seam — a bound session with no model", () => {
     mock.module("@/services/opencode/capabilities", () => ({
       getOpenCodeCapabilities: async () => ({ agents: [], models: [], defaultModel: null }),
       resolveOpenCodeModelRef: async () => null,
+      fetchDefaultModel: async () => undefined,
     }));
     storedConversation = { ...storedConversation, opencodeModel: "gone/vanished" };
     await ensureOpenCodeSession("conv-1");
@@ -205,6 +213,7 @@ describe("the create seam — a conversation with no stored choice", () => {
     mock.module("@/services/opencode/capabilities", () => ({
       getOpenCodeCapabilities: async () => ({ agents: [], models: [], defaultModel: null }),
       resolveOpenCodeModelRef: async () => null,
+      fetchDefaultModel: async () => undefined,
     }));
     storedConversation = { ...storedConversation, opencodeSessionId: null };
     await ensureOpenCodeSession("conv-1");
@@ -235,6 +244,9 @@ describe("the create seam — a conversation with no stored choice", () => {
         throw new Error("catalogue unavailable (503)");
       },
       resolveOpenCodeModelRef: async () => {
+        throw new Error("catalogue unavailable (503)");
+      },
+      fetchDefaultModel: async () => {
         throw new Error("catalogue unavailable (503)");
       },
     }));

@@ -1130,6 +1130,64 @@ describe("runOrphanReconciliationOnce — scope and bounds", () => {
   });
 });
 
+/**
+ * H3/B3 — the reconciler acts only on history the service it can reach owns.
+ *
+ * The journal row names its service. A row owned by an adopted service is
+ * skipped outright: the managed server's answer about a same-shaped session id
+ * says nothing about the adopted service's history, and probing or removing it
+ * would be acting on another service's data.
+ */
+describe("runOrphanReconciliationOnce — service ownership (H3/B3)", () => {
+  const ADOPTED = "adopted:http://127.0.0.1:51234";
+
+  it("never probes an adopted service's row through the managed server", async () => {
+    const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
+    h.state.remote.add("ses_orphan0001");
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({
+      scanned: 1,
+      skippedOtherService: 1,
+      removed: 0,
+      absent: 0,
+      lateRisk: 0,
+    });
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.createClientCalls).toBe(0);
+    expect(h.state.clears).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("skips an adopted delete marker, so the managed server never removes it", async () => {
+    const h = makeHarness({ rows: [record({ phase: "delete", serviceOwner: ADOPTED })] });
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, skippedOtherService: 1, removed: 0 });
+    expect(h.state.getCalls).toHaveLength(0);
+    expect(h.state.removeCalls).toHaveLength(0);
+    expect(h.state.deletedSettles).toHaveLength(0);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("still reconciles a managed row (non-vacuity)", async () => {
+    const h = makeHarness({
+      rows: [record({ serviceOwner: "managed", phase: "intent", lateCreateRisk: false })],
+    });
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, skippedOtherService: 0, absent: 1 });
+    expect(h.state.getCalls).toEqual(["ses_orphan0001"]);
+  });
+});
+
 describe("orphan reconciliation lifecycle", () => {
   it("starts once, runs an immediate tick, and stops idempotently", async () => {
     const h = makeHarness();

@@ -26,6 +26,9 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 
 const fixturePassword = "opencode-status-test-password";
 const clientModuleUrl = pathToFileURL(path.join(REPO_ROOT, "src/services/opencode/client.ts")).href;
+const connectionStateModuleUrl = pathToFileURL(
+  path.join(REPO_ROOT, "src/services/opencode/connectionState.ts"),
+).href;
 
 const MISSING = "ses_definitely_not_here";
 const PRESENT = "ses_present";
@@ -78,8 +81,13 @@ async function probeInIsolation(baseUrl: string): Promise<Probe> {
   const script = `
     const { createOpenCodeClient, lastStatusForSessionLookup } =
       await import(${JSON.stringify(clientModuleUrl)});
+    const { createManagedFallbackTransport } =
+      await import(${JSON.stringify(connectionStateModuleUrl)});
     const ids = ${JSON.stringify([MISSING, PRESENT, UNPARSEABLE, NEVER_QUERIED])};
-    const client = createOpenCodeClient(${JSON.stringify(baseUrl)});
+    const baseUrl = ${JSON.stringify(baseUrl)};
+    const client = createOpenCodeClient(baseUrl, {
+      transport: createManagedFallbackTransport(baseUrl),
+    });
     const results = {};
     for (const id of ids) {
       if (id === ${JSON.stringify(NEVER_QUERIED)}) continue;

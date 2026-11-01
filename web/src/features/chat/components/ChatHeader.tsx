@@ -12,6 +12,7 @@ import {
   Pencil,
   SquarePen,
   Trash2,
+  Folder,
 } from "lucide-react";
 import { chatHeaderConfig } from "@/config/sidebar";
 import { historyConfig } from "@/config/history";
@@ -108,7 +109,7 @@ export function ChatHeader({ threadId }: { threadId: string }) {
         return;
       }
       setRootHref("/workspace");
-      setRootName(copy.temporaryWorkspace);
+      setRootName(copy.workspaceFallback || "Chats");
     })();
     return () => {
       cancelled = true;
@@ -249,9 +250,10 @@ export function ChatHeader({ threadId }: { threadId: string }) {
           type="button"
           onClick={() => navigate(rootHref)}
           title={rootName}
-          className="shrink-0 truncate rounded text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex shrink-0 items-center gap-1.5 truncate rounded text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
-          {rootName}
+          <Folder aria-hidden="true" className="size-3.5 shrink-0 text-primary/80" />
+          <span className="truncate">{rootName}</span>
         </button>
         <ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/50" />
         {/* Title absorbs remaining width and takes the ellipsis; the root

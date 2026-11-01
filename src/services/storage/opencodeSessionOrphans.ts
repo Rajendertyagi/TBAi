@@ -62,6 +62,12 @@ export interface OpenCodeOrphanRecord {
   lastSeenAt: Date;
   /** Directory the session was created (or intended) in, when known. */
   locationDirectory?: string;
+  /**
+   * Which service owns this session's history: `managed`, `adopted:<origin>`,
+   * or absent for a legacy managed row. Recovery acts only on rows whose owner
+   * is the service it is allowed to talk to (H3/B3).
+   */
+  serviceOwner?: string;
   /** Failure classification of the persistence attempt that started this. */
   persistErrorCategory?: ErrorCategory;
   /**
@@ -103,6 +109,7 @@ interface OrphanRow {
   last_seen_at: number;
   phase: string | null;
   location_directory: string | null;
+  service_owner: string | null;
   persist_error_category: string | null;
   cleanup_error_category: string | null;
   resolved_at: number | null;
@@ -143,6 +150,7 @@ function mapOrphanRow(row: OrphanRow): OpenCodeOrphanRecord {
     firstSeenAt: new Date(row.first_seen_at),
     lastSeenAt: new Date(row.last_seen_at),
     locationDirectory: row.location_directory ?? undefined,
+    serviceOwner: row.service_owner ?? undefined,
     persistErrorCategory: (row.persist_error_category as ErrorCategory | null) ?? undefined,
     cleanupErrorCategory: (row.cleanup_error_category as ErrorCategory | null) ?? undefined,
     resolvedAt: row.resolved_at !== null ? new Date(row.resolved_at) : null,
@@ -172,13 +180,14 @@ export const opencodeOrphanService = {
     conversationId: string;
     sessionId: string;
     locationDirectory?: string;
+    serviceOwner?: string;
   }): Promise<boolean> {
     const now = Date.now();
     const result = db.run(
       `INSERT INTO opencode_session_orphans
          (conversation_id, session_id, first_seen_at, last_seen_at, phase,
-          location_directory, late_create_risk)
-       VALUES (?, ?, ?, ?, 'intent', ?, 1)
+          location_directory, service_owner, late_create_risk)
+       VALUES (?, ?, ?, ?, 'intent', ?, ?, 1)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
          phase = CASE
@@ -189,6 +198,12 @@ export const opencodeOrphanService = {
          location_directory = COALESCE(
            opencode_session_orphans.location_directory,
            excluded.location_directory
+         ),
+         -- The first writer names the owning service; a later retry cannot
+         -- re-home an id that is already attributed.
+         service_owner = COALESCE(
+           opencode_session_orphans.service_owner,
+           excluded.service_owner
          ),
          -- A delete marker is sticky and a nonzero risk is preserved EXACTLY
          -- (a legacy/hand-edited -1 is still risk-bearing). Only a delete row
@@ -201,7 +216,14 @@ export const opencodeOrphanService = {
          END,
          first_absent_at = NULL
        WHERE opencode_session_orphans.resolved_at IS NULL`,
-      [input.conversationId, input.sessionId, now, now, input.locationDirectory ?? null],
+      [
+        input.conversationId,
+        input.sessionId,
+        now,
+        now,
+        input.locationDirectory ?? null,
+        input.serviceOwner ?? null,
+      ],
     );
     return result.changes > 0;
   },
@@ -231,6 +253,7 @@ export const opencodeOrphanService = {
     conversationId: string;
     sessionId: string;
     locationDirectory?: string;
+    serviceOwner?: string;
     persistErrorCategory?: ErrorCategory;
     cleanupErrorCategory?: ErrorCategory;
     lateCreateRisk?: boolean;
@@ -243,9 +266,9 @@ export const opencodeOrphanService = {
     const result = db.run(
       `INSERT INTO opencode_session_orphans
          (conversation_id, session_id, first_seen_at, last_seen_at, phase,
-          location_directory, persist_error_category, cleanup_error_category,
-          late_create_risk, first_absent_at)
-       VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?, COALESCE(?, 0), NULL)
+          location_directory, service_owner, persist_error_category,
+          cleanup_error_category, late_create_risk, first_absent_at)
+       VALUES (?, ?, ?, ?, 'orphan', ?, ?, ?, ?, COALESCE(?, 0), NULL)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          last_seen_at = excluded.last_seen_at,
          phase = CASE
@@ -255,6 +278,12 @@ export const opencodeOrphanService = {
          location_directory = COALESCE(
            opencode_session_orphans.location_directory,
            excluded.location_directory
+         ),
+         -- The intent usually attributed the row already; COALESCE keeps the
+         -- first attribution and fills it in when the intent could not.
+         service_owner = COALESCE(
+           opencode_session_orphans.service_owner,
+           excluded.service_owner
          ),
          persist_error_category = COALESCE(
            opencode_session_orphans.persist_error_category,
@@ -283,6 +312,7 @@ export const opencodeOrphanService = {
         now,
         now,
         input.locationDirectory ?? null,
+        input.serviceOwner ?? null,
         input.persistErrorCategory ?? null,
         input.cleanupErrorCategory ?? null,
         risk,
@@ -571,13 +601,14 @@ export const opencodeOrphanService = {
     conversationId: string;
     sessionId: string;
     locationDirectory?: string | null;
+    serviceOwner?: string;
   }): Promise<boolean> {
     const now = Date.now();
     const result = db.run(
       `INSERT INTO opencode_session_orphans
          (conversation_id, session_id, first_seen_at, last_seen_at, phase,
-          location_directory, late_create_risk, first_absent_at)
-       VALUES (?, ?, ?, ?, 'delete', ?, 1, NULL)
+          location_directory, service_owner, late_create_risk, first_absent_at)
+       VALUES (?, ?, ?, ?, 'delete', ?, ?, 1, NULL)
        ON CONFLICT(conversation_id, session_id) DO UPDATE SET
          first_seen_at = excluded.first_seen_at,
          last_seen_at = excluded.last_seen_at,
@@ -585,6 +616,12 @@ export const opencodeOrphanService = {
          location_directory = COALESCE(
            opencode_session_orphans.location_directory,
            excluded.location_directory
+         ),
+         -- Same first-attribution rule as the create writers: the service that
+         -- owned the session when the deletion began is not re-homed by a retry.
+         service_owner = COALESCE(
+           opencode_session_orphans.service_owner,
+           excluded.service_owner
          ),
          late_create_risk = CASE
            WHEN opencode_session_orphans.phase = 'delete'
@@ -594,7 +631,14 @@ export const opencodeOrphanService = {
          END,
          first_absent_at = NULL,
          resolved_at = NULL`,
-      [input.conversationId, input.sessionId, now, now, input.locationDirectory ?? null],
+      [
+        input.conversationId,
+        input.sessionId,
+        now,
+        now,
+        input.locationDirectory ?? null,
+        input.serviceOwner ?? null,
+      ],
     );
     return result.changes > 0;
   },
@@ -614,6 +658,7 @@ export const opencodeOrphanService = {
     sessionId: string;
     at: number;
     locationDirectory?: string | null;
+    serviceOwner?: string;
   }): Promise<boolean> {
     const result = db.run(
       `UPDATE opencode_session_orphans
@@ -622,6 +667,7 @@ export const opencodeOrphanService = {
                 opencode_session_orphans.location_directory,
                 ?
               ),
+              service_owner = COALESCE(opencode_session_orphans.service_owner, ?),
               late_create_risk = CASE
                 WHEN opencode_session_orphans.late_create_risk <> 0
                   THEN opencode_session_orphans.late_create_risk
@@ -631,7 +677,13 @@ export const opencodeOrphanService = {
               last_checked_at = ?
         WHERE conversation_id = ? AND session_id = ?
           AND resolved_at IS NULL`,
-      [input.locationDirectory ?? null, input.at, input.conversationId, input.sessionId],
+      [
+        input.locationDirectory ?? null,
+        input.serviceOwner ?? null,
+        input.at,
+        input.conversationId,
+        input.sessionId,
+      ],
     );
     return result.changes > 0;
   },

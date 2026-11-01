@@ -62,15 +62,13 @@ describe("rail entry for Archived is present", () => {
   });
 });
 
-describe("sidebar section ids are exactly folders/chats/recent", () => {
-  it("SIDEBAR_SECTION_IDS has exactly the three known sections, in order", () => {
-    expect([...SIDEBAR_SECTION_IDS]).toEqual(["folders", "chats", "recent"]);
+describe("sidebar section ids are exactly folders/chats", () => {
+  it("SIDEBAR_SECTION_IDS has exactly the two known sections, in order", () => {
+    expect([...SIDEBAR_SECTION_IDS]).toEqual(["folders", "chats"]);
   });
 
-  it("the SidebarSectionId type is a union of exactly those three", () => {
-    expect(sidebarConfigSource).toMatch(
-      /export type SidebarSectionId = "folders" \| "chats" \| "recent"/,
-    );
+  it("the SidebarSectionId type is a union of exactly those two", () => {
+    expect(sidebarConfigSource).toMatch(/export type SidebarSectionId = "folders" \| "chats"/);
   });
 });
 
@@ -81,20 +79,28 @@ describe("normalizeSectionOrder drops unknown ids, dedupes, and re-adds missing"
       "some-removed-section",
       "folders",
     ]) as readonly SidebarSectionId[];
-    // Unknown entry dropped; known entries preserved in their relative order;
-    // omitted `recent` appended in default order.
-    expect(result).toEqual(["chats", "folders", "recent"]);
+    // Unknown entry dropped; both known entries preserved in their relative order.
+    expect(result).toEqual(["chats", "folders"]);
+  });
+
+  it("drops a retired id instead of re-appending it", () => {
+    // `recent` was a real section id before the sidebar redesign. A user who
+    // persisted it must end up with the two current sections, in their saved
+    // relative order — the retired id is unknown to `SIDEBAR_SECTION_IDS`, so it
+    // is dropped, not appended back.
+    const result = normalizeSectionOrder(["recent", "chats", "folders"]);
+    expect(result).toEqual(["chats", "folders"]);
   });
 
   it("dedupes repeated ids", () => {
     const result = normalizeSectionOrder(["folders", "chats", "chats"]);
-    expect(result).toEqual(["folders", "chats", "recent"]);
+    expect(result).toEqual(["folders", "chats"]);
   });
 
   it("returns the default order for a non-array value", () => {
-    expect(normalizeSectionOrder("not-an-array")).toEqual(["folders", "chats", "recent"]);
-    expect(normalizeSectionOrder(null)).toEqual(["folders", "chats", "recent"]);
-    expect(normalizeSectionOrder(undefined)).toEqual(["folders", "chats", "recent"]);
+    expect(normalizeSectionOrder("not-an-array")).toEqual(["folders", "chats"]);
+    expect(normalizeSectionOrder(null)).toEqual(["folders", "chats"]);
+    expect(normalizeSectionOrder(undefined)).toEqual(["folders", "chats"]);
   });
 
   it("returns a full permutation even when the persisted array is empty", () => {
@@ -103,9 +109,10 @@ describe("normalizeSectionOrder drops unknown ids, dedupes, and re-adds missing"
     expect(result).toHaveLength(SIDEBAR_SECTION_IDS.length);
   });
 
-  it("appends newly-added sections in default order for existing users", () => {
-    // A user whose persisted order predates `recent` gets it appended.
-    const result = normalizeSectionOrder(["folders", "chats"]);
-    expect(result).toEqual(["folders", "chats", "recent"]);
+  it("appends an omitted section in default order", () => {
+    // The "newly-added section appears for existing users" invariant, still
+    // exercised by the two-section model.
+    const result = normalizeSectionOrder(["chats"]);
+    expect(result).toEqual(["chats", "folders"]);
   });
 });

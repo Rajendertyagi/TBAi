@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { db } from "../db";
 import { generateId } from "../lib/utils";
 import { canonicalizeRoot } from "../services/tools";
+import { deriveFolderColor } from "../lib/folder-colors";
 import type { SQLQueryBindings } from "bun:sqlite";
 import type { Folder, FolderLink, FolderGroup } from "../types";
 
@@ -44,6 +45,14 @@ interface FolderRow {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+  /**
+   * Regular (non-archived) project chats in this folder.
+   *
+   * Archived rows are excluded on purpose: the sidebar shows this as the
+   * folder's count and uses it to say how many more chats are hidden behind
+   * "Show more". Counting archived rows made both numbers larger than the list
+   * could ever produce, so the tail row never disappeared.
+   */
   conversation_count: number;
 }
 
@@ -174,7 +183,7 @@ export const folderService = {
     const canonical = canonicalizeRoot(trimmed);
     const existing = db
       .query<FolderRow & { conversation_count: number }, SQLQueryBindings[]>(
-        "SELECT *, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = folders.id AND c.workspace_mode = 'project') AS conversation_count FROM folders WHERE path = ?",
+        "SELECT *, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = folders.id AND c.workspace_mode = 'project' AND c.status = 'regular') AS conversation_count FROM folders WHERE path = ?",
       )
       .get(canonical);
 
@@ -217,7 +226,7 @@ export const folderService = {
         name,
         canonical,
         input.alias ?? null,
-        input.color ?? "#6b7280",
+        input.color ?? deriveFolderColor(id),
         input.groupId ?? null,
         nextSortOrder(),
         now,
@@ -228,10 +237,49 @@ export const folderService = {
     return (await this.get(id))!;
   },
 
+  async revealPath(targetPath: string): Promise<boolean> {
+    if (process.platform === "win32") {
+      Bun.spawn(["explorer.exe", targetPath], { stdio: ["ignore", "ignore", "ignore"] }).unref();
+      return true;
+    }
+    if (process.platform === "darwin") {
+      Bun.spawn(["open", targetPath], { stdio: ["ignore", "ignore", "ignore"] }).unref();
+      return true;
+    }
+    Bun.spawn(["xdg-open", targetPath], { stdio: ["ignore", "ignore", "ignore"] }).unref();
+    return true;
+  },
+
+  async revealInExplorer(id: string): Promise<boolean> {
+    const folder = await this.get(id);
+    if (!folder) return false;
+    return this.revealPath(folder.path);
+  },
+
+  async reorder(orderedIds: string[]): Promise<void> {
+    const allFolders = await this.listAll();
+    const allMap = new Map(allFolders.map((f) => [f.id, f]));
+    const fullOrder: string[] = [];
+
+    for (const id of orderedIds) {
+      if (allMap.has(id)) fullOrder.push(id);
+    }
+    for (const f of allFolders) {
+      if (!orderedIds.includes(f.id)) fullOrder.push(f.id);
+    }
+
+    const now = Date.now();
+    db.transaction(() => {
+      fullOrder.forEach((id, index) => {
+        db.run("UPDATE folders SET sort_order = ?, updated_at = ? WHERE id = ?", [index, now, id]);
+      });
+    })();
+  },
+
   async listAll(): Promise<Folder[]> {
     const rows = db
       .query<FolderRow & { conversation_count: number }, SQLQueryBindings[]>(
-        `SELECT f.*, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = f.id AND c.workspace_mode = 'project') AS conversation_count
+        `SELECT f.*, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = f.id AND c.workspace_mode = 'project' AND c.status = 'regular') AS conversation_count
          FROM folders f WHERE f.deleted_at IS NULL ORDER BY f.sort_order ASC, f.created_at ASC`,
       )
       .all() as (FolderRow & { conversation_count: number })[];
@@ -242,7 +290,7 @@ export const folderService = {
   async listOpen(): Promise<Folder[]> {
     const rows = db
       .query<FolderRow & { conversation_count: number }, SQLQueryBindings[]>(
-        `SELECT f.*, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = f.id AND c.workspace_mode = 'project') AS conversation_count
+        `SELECT f.*, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = f.id AND c.workspace_mode = 'project' AND c.status = 'regular') AS conversation_count
          FROM folders f WHERE f.deleted_at IS NULL AND f.kind != 'chat' AND f.is_open = 1 ORDER BY f.sort_order ASC, f.created_at ASC`,
       )
       .all() as (FolderRow & { conversation_count: number })[];
@@ -252,7 +300,7 @@ export const folderService = {
   async get(id: string): Promise<Folder | null> {
     const row = db
       .query<FolderRow & { conversation_count: number }, SQLQueryBindings[]>(
-        `SELECT f.*, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = f.id AND c.workspace_mode = 'project') AS conversation_count
+        `SELECT f.*, (SELECT COUNT(*) FROM conversations c WHERE c.workspace_folder_id = f.id AND c.workspace_mode = 'project' AND c.status = 'regular') AS conversation_count
          FROM folders f WHERE f.id = ? AND f.deleted_at IS NULL`,
       )
       .get(id) as (FolderRow & { conversation_count: number }) | undefined;

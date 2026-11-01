@@ -20,6 +20,7 @@ import {
 } from "../lib/validation";
 import { isContentlessAssistantMessage } from "../lib/message-persistence-policy";
 import { folderService } from "../services/folders";
+import { resolveConversationWorkspace } from "../services/workspace";
 import { storageError } from "./shared";
 
 const app = new Hono();
@@ -498,6 +499,7 @@ app.delete("/api/conversations/:id", async (c) => {
         entry: {
           engine: conv.engine,
           opencodeSessionId: conv.opencodeSessionId ?? null,
+          opencodeServiceOwner: conv.opencodeServiceOwner ?? null,
         },
       });
       if (outcome.kind === "conflict") {
@@ -545,6 +547,21 @@ app.delete("/api/conversations/:id", async (c) => {
       ...(conv ? { engine: conv.engine ?? "direct" } : {}),
     });
     return c.json({ success: true, deleted });
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
+app.post("/api/conversations/:id/reveal", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const workspace = await resolveConversationWorkspace(id);
+    if (!workspace?.dir) {
+      return c.json({ error: "Workspace directory not found" }, 404);
+    }
+    const ok = await folderService.revealPath(workspace.dir);
+    if (!ok) return c.json({ error: "Failed to reveal directory" }, 500);
+    return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);
   }

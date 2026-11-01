@@ -225,7 +225,7 @@ export function ChatWindow({
   return (
     <ThreadPrimitive.Root className="relative flex h-full min-h-0 flex-col">
       {showWelcome ? (
-        <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6 pb-4">
+        <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto py-6 pb-4">
           <WelcomeScreen composer={composer} />
         </ThreadPrimitive.Viewport>
       ) : (
@@ -258,7 +258,14 @@ export function ChatWindow({
             // sit that far above the dock. The bottom spacing the margin used to
             // provide now lives in the dock's own padding, inside the measured
             // reserve.
-            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 mt-6"
+            // Horizontal geometry is the chat column: `mx-auto max-w-[…]` caps
+            // the scrollport at `--chat-column-width` and centres it, while the
+            // inner `px-4` gutter is unchanged. The composer dock caps the same
+            // width with the same inner gutter, so the text and the box it is
+            // typed into share one left edge. Horizontal only — the vertical
+            // invariant above (margin, not padding; `scrollHeight ===
+            // getTotalSize()`) is untouched.
+            className="mx-auto w-full min-h-0 max-w-[var(--chat-column-width)] flex-1 overflow-y-auto overflow-x-hidden px-4 mt-6"
             // The overlay's measured height plus the tail gap.
             // `paddingEnd` is virtualizer-aware: it is part of
             // `getTotalSize()`, so the total-size container grows by exactly the

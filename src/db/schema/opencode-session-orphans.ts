@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS opencode_session_orphans (
   last_seen_at            INTEGER NOT NULL,
   phase                   TEXT NOT NULL DEFAULT 'orphan',
   location_directory      TEXT,
+  service_owner           TEXT,
   persist_error_category  TEXT,
   cleanup_error_category  TEXT,
   resolved_at             INTEGER,
@@ -94,6 +95,10 @@ export function applyOpenCodeOrphanSchema(db: Database): void {
   // additions are nullable/defaulted, so existing rows remain valid.
   addColumnIfMissing(db, "phase", "TEXT NOT NULL DEFAULT 'orphan'");
   addColumnIfMissing(db, "location_directory", "TEXT");
+  // Which service owns the session this row names: `managed` or
+  // `adopted:<origin>` (H3/B3). NULL is a legacy managed row. The reconciler
+  // must never probe an adopted service's session through the managed server.
+  addColumnIfMissing(db, "service_owner", "TEXT");
   // A pre-existing intent predates late-create tracking; defaulting it to 1 is
   // the conservative read (its create may have been ambiguous), so the
   // reconciler will not clear it on a bare 404.

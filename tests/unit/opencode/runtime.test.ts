@@ -7,6 +7,7 @@ import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import {
   OpenCodeBinaryMissingError,
   UnsupportedOpenCodeVersionError,
+  classifyOpenCodeVersion,
   detectOpenCodeVersion,
   isSupportedOpenCodeVersion,
   parseOpenCodeVersion,
@@ -39,8 +40,12 @@ const SUPPORTED_LOWER_BOUND_VERSION = "2.0.15";
 const SUPPORTED_CLIENT_VERSION = "2.2.0";
 const BELOW_LOWER_BOUND_VERSION = "2.0.14";
 const UNSUPPORTED_VERSION = "2.0.14";
-/** One patch past the audited target: outside the range by design, not by accident. */
-const UPPER_BOUND_VERSION = "2.2.1";
+/** A stable release newer than anything TBAi has measured. Admitted by B7. */
+const NEWER_STABLE_VERSION = "2.4.0";
+/** A prerelease is refused by D2 even when its core version is in range. */
+const PRERELEASE_VERSION = "2.2.6-beta.1";
+/** Build metadata is not a channel marker and does not make a build unstable. */
+const BUILD_METADATA_VERSION = "2.2.6+sha.abc123";
 
 type AuthInvariantResult = {
   readonly basicHeaderMatches: boolean;
@@ -178,20 +183,24 @@ describe("managed OpenCode binary resolution", () => {
   it("wraps .cmd launchers with cmd /c in buildOpenCodeServeArgs", () => {
     // On Windows, .cmd files cannot be spawned directly.
     if (process.platform !== "win32") return;
-    expect(buildOpenCodeServeArgs(4173, "opencode.cmd")).toEqual([
+    expect(buildOpenCodeServeArgs("opencode.cmd")).toEqual([
       "cmd",
       "/c",
       "opencode.cmd",
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
     // Non-.cmd binaries are not wrapped.
-    expect(buildOpenCodeServeArgs(4173, "opencode.exe")).toEqual([
+    expect(buildOpenCodeServeArgs("opencode.exe")).toEqual([
       "opencode.exe",
       "serve",
       "--port",
-      "4173",
+      "0",
+      "--hostname",
+      "127.0.0.1",
     ]);
   });
 
@@ -256,13 +265,28 @@ describe("OpenCode managed version range", () => {
     expect(isSupportedOpenCodeVersion(SUPPORTED_CLIENT_VERSION)).toBe(true);
   });
 
-  it("admits 2.2.0 and rejects the first version past the ceiling", () => {
-    // The range is closed deliberately at the audited release: a newer 2.2.x
-    // has to be checked against the same route and event lists before the
-    // ceiling moves, so <2.2.1 is the whole authorized surface, not a step up.
-    expect(isSupportedOpenCodeVersion("2.2.0")).toBe(true);
-    expect(isSupportedOpenCodeVersion("2.2.1")).toBe(false);
-    expect(isSupportedOpenCodeVersion("2.3.0")).toBe(false);
+  it("admits a newer stable release instead of refusing it for being newer (B7)", () => {
+    // The former `<2.2.1` ceiling refused a release TBAi had not audited. B7
+    // replaces that with capability evidence: a stable build is admitted by
+    // name and then has to serve the essential routes before a start is
+    // handed out.
+    expect(isSupportedOpenCodeVersion("2.2.1")).toBe(true);
+    expect(isSupportedOpenCodeVersion("2.3.0")).toBe(true);
+    expect(isSupportedOpenCodeVersion(NEWER_STABLE_VERSION)).toBe(true);
+    expect(isSupportedOpenCodeVersion(BUILD_METADATA_VERSION)).toBe(true);
+  });
+
+  it("refuses a prerelease and names the reason (D2)", () => {
+    expect(isSupportedOpenCodeVersion(PRERELEASE_VERSION)).toBe(false);
+    expect(classifyOpenCodeVersion(PRERELEASE_VERSION)).toBe("prerelease");
+    expect(classifyOpenCodeVersion("3.0.0-nightly.20261031")).toBe("prerelease");
+  });
+
+  it("refuses a version below the evidence floor and malformed output", () => {
+    expect(classifyOpenCodeVersion(BELOW_LOWER_BOUND_VERSION)).toBe("below_minimum");
+    expect(classifyOpenCodeVersion("2.0.0")).toBe("below_minimum");
+    expect(classifyOpenCodeVersion("not-a-version")).toBe("malformed");
+    expect(classifyOpenCodeVersion("")).toBe("malformed");
   });
 
   it("accepts the whole 2.1 line, which was checked against the upstream source", () => {
@@ -273,10 +297,9 @@ describe("OpenCode managed version range", () => {
       expect(isSupportedOpenCodeVersion(version)).toBe(true);
   });
 
-  it("rejects the below-range fixture and the upper bound", () => {
+  it("rejects the below-range fixtures", () => {
     expect(isSupportedOpenCodeVersion(BELOW_LOWER_BOUND_VERSION)).toBe(false);
     expect(isSupportedOpenCodeVersion(UNSUPPORTED_VERSION)).toBe(false);
-    expect(isSupportedOpenCodeVersion(UPPER_BOUND_VERSION)).toBe(false);
   });
 });
 

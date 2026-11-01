@@ -3,16 +3,19 @@ import { join } from "node:path";
 import { openCodeServerManager } from "@/services/opencode/serverManager.ts";
 
 /**
- * Unit B — the configuration route returns a REDACTED projection, and the
- * write path still works on the real file.
+ * Unit B — the configuration route returns a REDACTED, read-only projection.
  *
- * Two guarantees are proved here, and they are opposite in direction:
+ * Three guarantees are proved here:
  *
  * 1. **Nothing secret leaves the server.** The response carries no
  *    credential at any depth, including inside the native-JSON text.
- * 2. **The file is untouched by the redaction.** A rule edit still writes the
- *    real document, with every credential intact, because the write path reads
- *    the file and never the projection.
+ * 2. **The document is not writable in either mode.** The managed child
+ *    inherits TBAi's environment, so the file it reports is the user's own
+ *    OpenCode document, outside any TBAi-owned root (§9.3(1)); the projection
+ *    says so (`editable: false`, `writeDisabledReason`) instead of letting the
+ *    page offer a save that must fail.
+ * 3. **A refused write leaves the file byte-identical**, credentials included:
+ *    the refusal happens before the document is read.
  */
 
 const SECRET = "sk-do-not-leak-me";
@@ -110,6 +113,22 @@ describe("GET /api/opencode/config", () => {
     expect(body.raw).toContain("opencode.ai/config.json");
   });
 
+  it("reports the document as read-only with the managed refusal reason", async () => {
+    const response = await openCodeApp.request("http://localhost/config");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      path: string;
+      editable: boolean;
+      writeDisabledReason: string | null;
+    };
+    // The fixture runs with an unresolved target, which is treated as managed.
+    expect(body.editable).toBe(false);
+    expect(body.writeDisabledReason).toBe("managed_root_not_owned");
+    // The projection still names the document it read; refusing the write does
+    // not refuse the read.
+    expect(body.path).toBe(CONFIG_PATH);
+  });
+
   it("still reports the permission rules the page edits", async () => {
     const response = await openCodeApp.request("http://localhost/config");
     const body = (await response.json()) as { permissions: unknown };
@@ -132,8 +151,8 @@ describe("GET /api/opencode/config", () => {
   });
 });
 
-describe("the permission write path", () => {
-  it("writes the real file, with every credential intact", async () => {
+describe("the permission write path is refused", () => {
+  it("answers 409 and leaves the real file byte-identical, credentials included", async () => {
     const before = await Bun.file(CONFIG_PATH).text();
 
     const response = await openCodeApp.request("http://localhost/config/permissions", {
@@ -141,21 +160,20 @@ describe("the permission write path", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "question", resource: "*", effect: "allow" }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(409);
 
+    // Nothing was written: the document is the user's own and there is no
+    // TBAi-owned root to contain a write (§9.3(1)), so the redaction path is
+    // never re-serialised to disk. The credential survives because the file is
+    // untouched, not because a write preserved it.
     const after = await Bun.file(CONFIG_PATH).text();
+    expect(after).toBe(before);
     const parsed = JSON.parse(after) as {
       providers: Record<string, { settings: { apiKey: string } }>;
       mcp: { servers: Record<string, { oauth: { client_secret: string } }> };
       permissions: Array<{ action: string; effect: string }>;
     };
-
-    // The credential is on disk, unchanged — the redaction never touched it.
     expect(parsed.providers.openrouter?.settings.apiKey).toBe(SECRET);
     expect(parsed.mcp.servers.github?.oauth.client_secret).toBe(SECRET);
-    // And the rule really changed.
-    expect(parsed.permissions[0]?.effect).toBe("allow");
-    // Everything else is byte-identical.
-    expect(JSON.parse(before).providers).toEqual(parsed.providers);
   });
 });

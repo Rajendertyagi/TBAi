@@ -240,7 +240,9 @@ export async function startRuntimeOpenCodeServer(
 
   const port = await allocateRuntimePort();
   const password = RUNTIME_PASSWORD;
-  const child = spawn([binary, "serve", "--port", String(port)], {
+  // Loopback is explicit here too: a test server must never be reachable from
+  // another interface, and this mirrors `buildOpenCodeServeArgs`.
+  const child = spawn([binary, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
     cwd: workingDirectory,
     stdout: "pipe",
     stderr: "pipe",
@@ -341,13 +343,18 @@ async function waitForRuntimeReady(input: {
   throw new Error(`OpenCode never became ready (last status ${lastStatus})`);
 }
 
-/** Bind :0 to learn a free loopback port, then release it. */
-function allocateRuntimePort(): Promise<number> {
+/** Bind :0 to learn a free loopback port, then release it. Test-only. */
+export function allocateTestLoopbackPort(): number {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
   const port = server.port;
   server.stop(true);
-  if (!port) throw new Error("Failed to allocate a loopback port for the runtime test");
-  return Promise.resolve(port);
+  if (!port) throw new Error("Failed to allocate a loopback port for the test");
+  return port;
+}
+
+/** Bind :0 to learn a free loopback port, then release it. */
+function allocateRuntimePort(): Promise<number> {
+  return Promise.resolve(allocateTestLoopbackPort());
 }
 
 /**

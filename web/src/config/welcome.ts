@@ -117,7 +117,10 @@ const TIPS = [
 
 export const welcomeConfig: WelcomeConfig = {
   layout: {
-    columnMaxWidthClass: "max-w-3xl",
+    // Same column as the transcript and the composer: one width setting moves
+    // all three together, and the inner `px-4` gutter is kept so the empty
+    // state's text sits on the same left edge as a sent message.
+    columnMaxWidthClass: "max-w-[var(--chat-column-width)]",
     columnPaddingClass: "px-4",
     columnGapClass: "gap-6",
     heroTitleClass: "text-2xl font-semibold tracking-tight text-foreground",

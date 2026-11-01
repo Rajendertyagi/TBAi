@@ -21,7 +21,7 @@
 
 import { createOpenCodeClient } from "./client";
 import { toOpenCodeError } from "./errors";
-import { openCodeServerManager } from "./serverManager";
+import { resolveOpenCodeRuntimeTarget } from "./runtimeTarget";
 
 /** The raw command feed the managed server reports. */
 export type OpenCodeCommandFeed = Awaited<
@@ -29,7 +29,7 @@ export type OpenCodeCommandFeed = Awaited<
 >;
 
 /**
- * Reads the command feed from the managed server.
+ * Reads the command feed from the active server (managed or adopted, D1/H5).
  *
  * No directory is passed, for the same reason the model and agent catalogues
  * are read without one: the command feed is the install's own set, and it has
@@ -39,8 +39,8 @@ export type OpenCodeCommandFeed = Awaited<
  * @throws {OpenCodeError} When the server is unreachable or answers badly.
  */
 export async function getOpenCodeCommandFeed(): Promise<OpenCodeCommandFeed> {
-  const baseUrl = await openCodeServerManager.ensureBaseUrl();
-  const client = createOpenCodeClient(baseUrl);
+  const target = await resolveOpenCodeRuntimeTarget();
+  const client = createOpenCodeClient(target.baseUrl, { transport: target.transport });
   try {
     return await client.command.list();
   } catch (err) {

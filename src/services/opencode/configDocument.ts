@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { z } from "zod";
+import { OPENCODE_CONFIG } from "../../config/opencode";
 import { logger } from "../../lib/logger";
+import type { OpenCodeTransport } from "./http";
 
 /** Joins a directory and a file name using the host's path separator. */
 const joinPath = join;
@@ -129,19 +131,60 @@ export function selectConfigDocument(
 }
 
 /**
- * Reads the live configuration from the managed server and picks the document
- * TBAi will edit.
+ * The installed service one config read is bound to.
  *
- * @param baseUrl - The managed server's base URL.
- * @param headers - Auth headers for the server's HTTP Basic gate.
+ * The transport is REQUIRED, not optional. It owns both the credential and the
+ * origin, so this module cannot construct an authenticated read out of a base
+ * URL plus headers — the shape that previously allowed the managed password to
+ * be paired with whichever origin the caller supplied. There is deliberately no
+ * fallback to `globalThis.fetch`: a config read either goes through the
+ * captured, origin-bound transport or it does not happen.
+ */
+export interface OpenCodeConfigReadTarget {
+  /** Canonical, slash-free origin of the installed service. */
+  readonly baseUrl: string;
+  /** The transport captured with that target; it injects the credential and refuses redirects. */
+  readonly transport: OpenCodeTransport;
+}
+
+/** Cancellation and budget for one config read. */
+export interface OpenCodeConfigReadOptions {
+  /** Caller cancellation — the inbound HTTP request's own signal. */
+  readonly signal?: AbortSignal;
+  /** Overrides {@link OPENCODE_CONFIG.configReadTimeoutMs}; tests only. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Reads the live configuration from the installed service and picks the
+ * document TBAi will edit.
+ *
+ * The request goes through the captured transport, so it carries exactly the
+ * target's credential, is bound to that one origin, and refuses every redirect
+ * before a body is read. The read is bounded by
+ * {@link OPENCODE_CONFIG.configReadTimeoutMs} and by the caller's signal, so an
+ * abandoned request cannot leave an upstream read pending.
+ *
+ * @param target - The installed service's origin and its captured transport.
+ * @param options - Cancellation signal and a test-only timeout override.
  * @returns The discovered document, including its raw text.
+ * @throws {OpenCodeConfigUnreadableError} When the server reports no readable document.
  * @throws {OpenCodeConfigNotFoundError} When the server reports no document.
+ * @throws {OpenCodeRedirectRefusedError} For any 3xx; its `Location` is never read.
  */
 export async function readOpenCodeConfigDocument(
-  baseUrl: string,
-  headers: Record<string, string>,
+  target: OpenCodeConfigReadTarget,
+  options: OpenCodeConfigReadOptions = {},
 ): Promise<OpenCodeConfigDocument> {
-  const response = await fetch(new URL("/api/config", baseUrl), { headers });
+  // The TYPE makes the transport mandatory, and this runtime guard keeps the
+  // same contract for an untyped caller: no request is attempted without one.
+  if (typeof target.transport !== "function") {
+    throw new TypeError("readOpenCodeConfigDocument requires a captured OpenCode transport");
+  }
+  const timeoutMs = options.timeoutMs ?? OPENCODE_CONFIG.configReadTimeoutMs;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const response = await target.transport(new URL("/api/config", target.baseUrl), { signal });
   if (!response.ok) {
     throw new OpenCodeConfigUnreadableError(`OpenCode config read failed (${response.status})`);
   }

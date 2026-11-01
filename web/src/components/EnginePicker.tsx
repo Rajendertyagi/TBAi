@@ -1,12 +1,11 @@
 import { welcomeConfig } from "@/config/welcome";
 import { cn } from "@/lib/utils";
 import type { WelcomeEngine } from "@/features/chat/state/welcomeEngine";
+import { ENGINES } from "@/config/engines";
 
 /**
- * Controlled Direct/OpenCode pill switch. Presentational only — the caller
- * owns the value (welcome draft store, dialog-local state, …). Shared by the
- * welcome draft picker and every creation flow that must offer an engine
- * choice, so engine selection looks and behaves identically everywhere.
+ * Controlled Direct/OpenCode pill switch with Paseo-style engine identity icons.
+ * Shared by the welcome draft picker and every creation flow that offers an engine choice.
  */
 export function EnginePicker({
   value,
@@ -26,6 +25,8 @@ export function EnginePicker({
       <div className="inline-flex items-center gap-1 rounded-full border border-border/50 bg-muted/50 p-1">
         {options.map((opt) => {
           const active = value === opt.id;
+          const visual = ENGINES[opt.id];
+          const Icon = visual.icon;
           return (
             <button
               key={opt.id}
@@ -35,13 +36,14 @@ export function EnginePicker({
                 if (!active) onChange(opt.id);
               }}
               className={cn(
-                "rounded-full px-4 py-1.5 text-sm transition-colors outline-none",
+                "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-colors outline-none",
                 "focus-visible:ring-1 focus-visible:ring-ring",
                 active
                   ? "bg-background font-medium text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
+              <Icon aria-hidden className={cn("size-3.5 shrink-0", visual.badgeClass)} />
               {opt.label}
             </button>
           );

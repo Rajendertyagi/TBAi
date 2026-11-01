@@ -48,6 +48,7 @@ interface FoldersState {
   createGroup: (name: string, color?: string) => Promise<void>;
   updateGroup: (id: string, data: { name?: string; color?: string }) => Promise<void>;
   deleteGroup: (id: string) => Promise<void>;
+  reorderFolders: (ids: string[]) => Promise<void>;
   setFolderGroup: (folderId: string, groupId: string | null) => Promise<void>;
   listLinks: (folderId: string) => Promise<FolderLink[]>;
   registerLink: (folderId: string, name: string, targetPath: string) => Promise<void>;
@@ -178,6 +179,25 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
       body: JSON.stringify(data),
     });
     await get().loadGroups();
+  },
+
+  reorderFolders: async (ids: string[]) => {
+    // Optimistic reorder
+    const current = get().folders;
+    const map = new Map(current.map((f) => [f.id, f]));
+    const next: Folder[] = [];
+    for (const id of ids) {
+      const f = map.get(id);
+      if (f) next.push(f);
+    }
+    for (const f of current) {
+      if (!ids.includes(f.id)) next.push(f);
+    }
+    set({ folders: next });
+    await apiJson("/api/folders/reorder", {
+      method: "PATCH",
+      body: JSON.stringify({ ids }),
+    });
   },
 
   deleteGroup: async (id) => {

@@ -48,6 +48,7 @@ interface ConfigSnapshot {
   raw: string;
   malformed: boolean;
   editable: boolean;
+  writeDisabledReason: string | null;
   permissions: Rule[] | null;
 }
 
@@ -103,7 +104,12 @@ test.describe("override notice against the real managed server", () => {
     const snapshot = (await response.json()) as ConfigSnapshot;
 
     expect(snapshot.malformed).toBe(false);
-    expect(snapshot.editable).toBe(true);
+    // The notice is a READ projection; it says nothing about writability. The
+    // driver runs a managed server, whose document belongs to the user's own
+    // installation, so the page reports it read-only — asserted here so a
+    // policy change cannot pass silently.
+    expect(snapshot.editable).toBe(false);
+    expect(snapshot.writeDisabledReason).toBe("managed_root_not_owned");
     expect(sameFile(snapshot.path, fixturePath)).toBe(true);
     expect(snapshot.permissions).toEqual(fixtureDocument.permissions);
     expect(snapshot.discoveredPaths.some((entry) => sameFile(entry, fixturePath))).toBe(true);

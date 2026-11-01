@@ -171,6 +171,12 @@ export interface Conversation {
   workspaceFolderId?: string | null;
   /** OpenCode session id bound to this conversation for Code mode; null if unused. */
   opencodeSessionId?: string | null;
+  /**
+   * Which service owns that session's history: `managed` or `adopted:<origin>`.
+   * Null on a bound row means managed (adoption postdates those rows). See
+   * `services/opencode/historyBoundary.ts`.
+   */
+  opencodeServiceOwner?: string | null;
   /** Engine that owns this conversation: Direct chat or OpenCode agent mode. */
   engine?: "direct" | "opencode";
   /** OpenCode agent id chosen at creation (OpenCode engine only). */
@@ -190,6 +196,8 @@ export interface Conversation {
    * resolves to this existing row instead of minting a duplicate.
    */
   clientRequestId?: string | null;
+  lastReadAt?: Date | null;
+  lastMessageAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

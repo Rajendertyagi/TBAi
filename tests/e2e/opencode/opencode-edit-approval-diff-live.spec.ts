@@ -22,19 +22,21 @@ import {
  * builds it from server state. So the only way to see the gate render a diff is
  * to make the server ask for one.
  *
- * `edit` is normally configured to `allow`, so the spec sets that one rule to
- * `ask` and puts it back. It goes through TBAi's own permission API rather than
- * editing the config file: the config path is XDG-resolved on the host, so a spec
- * that hardcoded or discovered it would be a second source of truth for a file
- * the app already knows how to edit safely. The previous effect is read back
- * from the API and restored in `finally`, so a failure mid-test still puts the
- * user's configuration the way it was.
+ * `edit` is normally configured to `allow`, so this environment must supply an
+ * `edit/*` rule already set to `ask`. The spec CANNOT arm it any more: the app
+ * refuses every configuration write (the managed document belongs to the user's
+ * own installation, §9.3(1)), so the previous version — which PUT a rule and
+ * restored it in `finally` — no longer applies and is gone.
+ *
+ * Requiring the rule from the environment is a precondition, not a setup step
+ * this spec is responsible for, and it is stated in the skip message. It also
+ * means the spec never mutates the maintainer's configuration.
  */
 
 interface ConfigSnapshot {
   /** The document the server selected as the writable one, and its rules. */
   permissions?: { action: string; resource: string; effect: string }[] | null;
-  /** False when the selected document cannot be parsed; writes will be refused. */
+  /** False when the selected document cannot be parsed; writes would be refused. */
   editable?: boolean;
 }
 
@@ -50,11 +52,13 @@ interface ConfigSnapshot {
  *
  *   - **no OpenCode server at all** (`GET` does not answer) → skip. The feature
  *     genuinely does not exist in that environment; there is nothing to assert.
- *   - **the server is there but the config is not editable**, or carries no
+ *   - **the server is there but the config is unreadable**, or carries no
  *     `edit`/`*` rule → **fail**. That is a regression in the permissions API, or
- *     a config the app can no longer write — precisely the machinery this spec
- *     depends on, and exactly what a silent skip would have hidden.
- *   - **the write is refused** → **fail**, for the same reason.
+ *     a config the server can no longer report — precisely the machinery this
+ *     spec depends on, and exactly what a silent skip would have hidden.
+ *   - **the rule is not `ask`** → skip, with the reason stated: the app will not
+ *     arm it, so the environment has to. This is the one precondition the spec
+ *     cannot satisfy by itself, and it says so instead of mutating the file.
  *
  * An earlier version returned `null` for all three and skipped on any of them,
  * which is how this spec could report green on a run where it had tested nothing.
@@ -70,25 +74,15 @@ async function readEditState(request: APIRequestContext): Promise<ConfigState> {
   // No server, or the route is absent because OpenCode is not running here.
   if (!response.ok()) return { kind: "no-server" };
   const snapshot = (await response.json()) as ConfigSnapshot;
-  if (snapshot.editable !== true) {
-    return { kind: "broken", reason: "the OpenCode config is not editable" };
+  if (!Array.isArray(snapshot.permissions)) {
+    return { kind: "broken", reason: "the OpenCode config reports no permission rules" };
   }
-  for (const rule of snapshot.permissions ?? []) {
+  for (const rule of snapshot.permissions) {
     if (rule.action === "edit" && rule.resource === "*") {
       return { kind: "readable", effect: rule.effect };
     }
   }
   return { kind: "broken", reason: "the config has no edit/* rule to arm" };
-}
-
-async function setEditEffect(
-  request: APIRequestContext,
-  effect: "allow" | "ask",
-): Promise<boolean> {
-  const response = await request.put("/api/opencode/config/permissions", {
-    data: { action: "edit", resource: "*", effect },
-  });
-  return response.ok();
 }
 
 test.describe("edit approval shows the resulting change (live)", () => {
@@ -108,10 +102,11 @@ test.describe("edit approval shows the resulting change (live)", () => {
         }`,
       );
     }
-    const previous = state.effect;
-
-    const armed = await setEditEffect(request, "ask");
-    expect(armed, "the edit permission could not be set to ask").toBe(true);
+    // The rule has to be `ask` before the prompt; the app refuses to arm it.
+    test.skip(
+      state.effect !== "ask",
+      `the edit/* rule is "${state.effect}", and the app no longer writes configuration; start the app with edit/* set to ask to run this spec`,
+    );
 
     const conversationId = await createCodeConversation(request);
     // The file has to exist. A prompt asking a model to edit a missing file
@@ -153,9 +148,6 @@ test.describe("edit approval shows the resulting change (live)", () => {
       // that is going to change".
       await expect(page.getByText("Replace with:")).toHaveCount(0);
     } finally {
-      if (previous === "allow" || previous === "ask") {
-        await setEditEffect(request, previous);
-      }
       await deleteCodeConversation(request, conversationId);
     }
   });

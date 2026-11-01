@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { join } from "node:path";
+import type { OpenCodeTransport } from "@/services/opencode/http.ts";
 import {
   OpenCodeConfigUnreadableError,
   selectConfigDocument,
@@ -606,48 +607,49 @@ describe("removeOpenCodePermissionRule", () => {
 });
 
 describe("readOpenCodeConfigDocument", () => {
-  function stubServer(payload: unknown, ok = true) {
-    return (input: string | URL | Request) => {
-      void input;
-      return Promise.resolve(
-        new Response(JSON.stringify(payload), {
-          status: ok ? 200 : 500,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
-    };
+  /**
+   * A transport that answers with one fixed JSON body.
+   *
+   * The reader REQUIRES a transport by design, so the test supplies one instead
+   * of replacing `globalThis.fetch`. Origin binding and redirect refusal are
+   * covered by the transport suite and the config-route integration tests.
+   */
+  function stubTransport(payload: unknown, ok = true): OpenCodeTransport {
+    const respond = async () =>
+      new Response(JSON.stringify(payload), {
+        status: ok ? 200 : 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    return Object.assign(respond, { preconnect: () => undefined });
+  }
+
+  /** Reads through a stub transport bound to an inert loopback origin. */
+  function read(payload: unknown, ok = true) {
+    return readOpenCodeConfigDocument({
+      baseUrl: "http://127.0.0.1:1",
+      transport: stubTransport(payload, ok),
+    });
   }
 
   it("reports a malformed file as malformed rather than parsing past it", async () => {
-    const original = globalThis.fetch;
     const path = `${Bun.env.TEMP ?? "."}/tbai-bad-${Date.now()}.json`;
     await Bun.write(path, "{ this is not json");
-    globalThis.fetch = stubServer([
-      {
-        type: "document",
-        path,
-        info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
-      },
-    ]) as typeof fetch;
     try {
-      const doc = await readOpenCodeConfigDocument("http://127.0.0.1:1", {});
+      const doc = await read([
+        {
+          type: "document",
+          path,
+          info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
+        },
+      ]);
       expect(doc.malformed).toBe(true);
     } finally {
-      globalThis.fetch = original;
       await Bun.file(path).delete();
     }
   });
 
   it("throws a typed error when the server answers non-200", async () => {
-    const original = globalThis.fetch;
-    globalThis.fetch = stubServer({}, false) as typeof fetch;
-    try {
-      await expect(readOpenCodeConfigDocument("http://127.0.0.1:1", {})).rejects.toThrow(
-        OpenCodeConfigUnreadableError,
-      );
-    } finally {
-      globalThis.fetch = original;
-    }
+    await expect(read({}, false)).rejects.toThrow(OpenCodeConfigUnreadableError);
   });
 
   it("reports the broken global config instead of falling through to another file", async () => {
@@ -657,25 +659,22 @@ describe("readOpenCodeConfigDocument", () => {
     // that is not the policy — while the file actually breaking OpenCode went
     // unmentioned. The `directory` entry is the only place the real path is
     // knowable, because it is XDG-resolved on the host.
-    const original = globalThis.fetch;
     const dir = `${Bun.env.TEMP ?? "."}/tbai-cfgdir-${Date.now()}`;
     await Bun.write(`${dir}/opencode.json`, "{ malformed probe");
     const healthy = `${Bun.env.TEMP ?? "."}/tbai-healthy-${Date.now()}.json`;
     await Bun.write(healthy, JSON.stringify({ plugins: ["-opencode.browser"] }, null, 2));
-    globalThis.fetch = stubServer([
-      // Exactly what the live server returned with the global config broken.
-      { type: "directory", path: dir },
-      { type: "document", path: healthy, info: { plugins: ["-opencode.browser"] } },
-    ]) as typeof fetch;
     try {
-      const doc = await readOpenCodeConfigDocument("http://127.0.0.1:1", {});
+      const doc = await read([
+        // Exactly what the live server returned with the global config broken.
+        { type: "directory", path: dir },
+        { type: "document", path: healthy, info: { plugins: ["-opencode.browser"] } },
+      ]);
       expect(doc.malformed).toBe(true);
       // Compared against a host-normalized path, because the reported path uses
       // the platform separator (it sits beside the server's own paths in the UI).
       expect(doc.path).toBe(join(dir, "opencode.json"));
       expect(doc.path).not.toBe(healthy);
     } finally {
-      globalThis.fetch = original;
       await Bun.file(join(dir, "opencode.json")).delete();
       await Bun.file(healthy).delete();
     }
@@ -685,16 +684,13 @@ describe("readOpenCodeConfigDocument", () => {
     // OpenCode accepts JSONC, and `JSON.parse` does not. Editing such a file
     // with a JSON serializer would delete the user's comments on the first
     // save, so it is reported read-only instead.
-    const original = globalThis.fetch;
     const dir = `${Bun.env.TEMP ?? "."}/tbai-jsonc-${Date.now()}`;
     await Bun.write(`${dir}/opencode.jsonc`, '{\n  // keep me\n  "shell": "powershell"\n}');
-    globalThis.fetch = stubServer([{ type: "directory", path: dir }]) as typeof fetch;
     try {
-      const doc = await readOpenCodeConfigDocument("http://127.0.0.1:1", {});
+      const doc = await read([{ type: "directory", path: dir }]);
       expect(doc.malformed).toBe(true);
       expect(doc.raw).toContain("keep me");
     } finally {
-      globalThis.fetch = original;
       await Bun.file(`${dir}/opencode.jsonc`).delete();
     }
   });
@@ -702,24 +698,21 @@ describe("readOpenCodeConfigDocument", () => {
   it("does not treat a healthy global config as malformed", async () => {
     // The guard above must not fire on a good file, or the page would be
     // permanently read-only for a correct configuration.
-    const original = globalThis.fetch;
     const dir = `${Bun.env.TEMP ?? "."}/tbai-good-${Date.now()}`;
     const good = `${dir}/opencode.json`;
     await Bun.write(good, JSON.stringify({ permissions: [] }, null, 2));
-    globalThis.fetch = stubServer([
-      { type: "directory", path: dir },
-      {
-        type: "document",
-        path: good,
-        info: { permissions: [] },
-      },
-    ]) as typeof fetch;
     try {
-      const doc = await readOpenCodeConfigDocument("http://127.0.0.1:1", {});
+      const doc = await read([
+        { type: "directory", path: dir },
+        {
+          type: "document",
+          path: good,
+          info: { permissions: [] },
+        },
+      ]);
       expect(doc.malformed).toBe(false);
       expect(doc.path).toBe(good);
     } finally {
-      globalThis.fetch = original;
       await Bun.file(good).delete();
     }
   });
@@ -728,7 +721,6 @@ describe("readOpenCodeConfigDocument", () => {
     // The guard above must not turn "no permissions key" into "malformed": an
     // absent key is a legitimate document, and the later document carrying the
     // rules is still the right thing to edit.
-    const original = globalThis.fetch;
     const first = `${Bun.env.TEMP ?? "."}/tbai-first-${Date.now()}.json`;
     const second = `${Bun.env.TEMP ?? "."}/tbai-second-${Date.now()}.json`;
     await Bun.write(first, JSON.stringify({ shell: "powershell" }, null, 2));
@@ -740,20 +732,18 @@ describe("readOpenCodeConfigDocument", () => {
         2,
       ),
     );
-    globalThis.fetch = stubServer([
-      { type: "document", path: first, info: { shell: "powershell" } },
-      {
-        type: "document",
-        path: second,
-        info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
-      },
-    ]) as typeof fetch;
     try {
-      const doc = await readOpenCodeConfigDocument("http://127.0.0.1:1", {});
+      const doc = await read([
+        { type: "document", path: first, info: { shell: "powershell" } },
+        {
+          type: "document",
+          path: second,
+          info: { permissions: [{ action: "question", resource: "*", effect: "ask" }] },
+        },
+      ]);
       expect(doc.malformed).toBe(false);
       expect(doc.path).toBe(second);
     } finally {
-      globalThis.fetch = original;
       await Bun.file(first).delete();
       await Bun.file(second).delete();
     }

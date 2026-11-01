@@ -133,6 +133,53 @@ describe("fetchOpenCodeConfig", () => {
     );
   });
 
+  it("carries the write refusal alongside the read", async () => {
+    await withFetch(
+      (async () =>
+        new Response(
+          JSON.stringify({
+            path: "C:/cfg/opencode.json",
+            discoveredPaths: ["C:/cfg/opencode.json"],
+            raw: "{}",
+            malformed: false,
+            editable: false,
+            writeDisabledReason: "managed_root_not_owned",
+            permissions: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )) as unknown as typeof fetch,
+      async () => {
+        const snapshot = await fetchOpenCodeConfig();
+        expect(snapshot.editable).toBe(false);
+        expect(snapshot.writeDisabledReason).toBe("managed_root_not_owned");
+      },
+    );
+  });
+
+  it("treats an unknown write refusal as no refusal", async () => {
+    // The page must not invent a reason it cannot explain. An unrecognised
+    // value falls back to null instead of being rendered as a raw string.
+    await withFetch(
+      (async () =>
+        new Response(
+          JSON.stringify({
+            path: "C:/cfg/opencode.json",
+            discoveredPaths: [],
+            raw: "{}",
+            malformed: false,
+            editable: true,
+            writeDisabledReason: "something_else",
+            permissions: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )) as unknown as typeof fetch,
+      async () => {
+        const snapshot = await fetchOpenCodeConfig();
+        expect(snapshot.writeDisabledReason).toBeNull();
+      },
+    );
+  });
+
   it("surfaces the server's own error message on a refusal", async () => {
     await withFetch(
       (async () =>

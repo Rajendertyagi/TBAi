@@ -146,6 +146,13 @@ mock.module("@web/features/opencode/v2RuntimeExtras.ts", () => ({
       : null,
 }));
 
+// The runtime-status read is not this test's subject: answered as "no status"
+// so the chip renders exactly what these cases were written against, and no
+// request leaves the DOM test.
+mock.module("@web/features/opencode/useOpenCodeRuntimeStatus.ts", () => ({
+  useOpenCodeRuntimeStatus: () => ({ status: null, error: null }),
+}));
+
 // ── the component, imported AFTER the mock is registered ───────────────────
 
 const { OpenCodeStatus } = await import("@web/features/opencode/OpenCodeStatus.tsx");

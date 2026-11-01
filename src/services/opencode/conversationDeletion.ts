@@ -30,6 +30,12 @@ import { terminateSessionForConversationDeletion } from "./sessions";
 export interface OpenCodeDeletionEntry {
   engine: string | null;
   opencodeSessionId: string | null;
+  /**
+   * The service that owned the session at entry (H3/B3). The durable delete
+   * marker carries it so a later reconciler never probes this session through
+   * the other service.
+   */
+  opencodeServiceOwner: string | null;
 }
 
 export type SessionCleanup = "removed" | "retained" | "none";
@@ -68,6 +74,9 @@ export async function deleteOpenCodeConversation(input: {
         conversationId,
         sessionId: expectedSessionId,
         locationDirectory: directory,
+        // The entry snapshot's owner, not a fresh read: the marker must name
+        // the service the request observed, even if the row is rebound now.
+        serviceOwner: entry.opencodeServiceOwner ?? undefined,
       });
     } catch (error) {
       logger.error("opencode", "opencode.conversation_delete_arm_failed", {
@@ -155,6 +164,7 @@ export async function deleteOpenCodeConversation(input: {
       sessionId: expectedSessionId,
       at: Date.now(),
       locationDirectory: directory,
+      serviceOwner: entry.opencodeServiceOwner ?? undefined,
     });
   } catch (error) {
     logger.error("opencode", "opencode.conversation_delete_retain_failed", {

@@ -184,6 +184,61 @@ describe("conversation workspace fields", () => {
     // Simple chats now get a hidden kind='chat' folder, so workspaceFolderId is set.
     expect(created.workspaceFolderId).toBeTruthy();
   });
+
+  it("conversationCount counts regular project chats only", async () => {
+    // A directory of its own: `openFolder` returns the EXISTING row for a path
+    // that is already registered, and earlier cases in this file register
+    // `browseDir`, so reusing it would inherit their project chats and turn
+    // these absolute counts into baselines.
+    const countDir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-count-"));
+    const folder = await folderService.openFolder({ path: countDir });
+    const createProjectChat = async (title: string) =>
+      (
+        await appFetch("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            workspaceMode: "project",
+            workspaceFolderId: folder.id,
+          }),
+        })
+      ).json();
+    const setStatus = (id: string, status: "regular" | "archived") =>
+      appFetch(`/api/conversations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+
+    const first = await createProjectChat("Count one");
+    await createProjectChat("Count two");
+    expect((await folderService.get(folder.id))?.conversationCount).toBe(2);
+
+    // Archiving removes the row from the badge. The sidebar derives its
+    // "Show N more" tail row from this number, so an archived row that
+    // still counted would promise rows the list never returns.
+    const archived = await (await setStatus(first.id, "archived")).json();
+    expect(archived.status).toBe("archived");
+    expect((await folderService.get(folder.id))?.conversationCount).toBe(1);
+
+    // Unarchiving puts it back — the count is derived, not a stored tally.
+    await setStatus(first.id, "regular");
+    expect((await folderService.get(folder.id))?.conversationCount).toBe(2);
+
+    // A chat that lives in the folder but is NOT project mode never counts:
+    // the folder list itself is scoped to `workspace_mode = 'project'`.
+    await (
+      await appFetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Simple in folder", workspaceFolderId: folder.id }),
+      })
+    ).json();
+    expect((await folderService.get(folder.id))?.conversationCount).toBe(2);
+
+    await folderService.remove(folder.id);
+  });
 });
 
 beforeEach(async () => {

@@ -6,30 +6,29 @@ import { readFileSync } from "node:fs";
  * OpenCode server.
  *
  * Nothing here is mocked. The page reads the real `GET /api/config` from the
- * managed server, and every save writes the real configuration file that server
- * reports. There is no LLM model in this spec, and none is needed — the whole
- * feature is a config surface, so the config endpoints are the real boundary.
+ * managed server, and the assertions read the real file that server reports.
  *
- * The one rule this spec must never break: the protected `deny` rules in the
- * user's configuration survive every edit. They are read back from the file
- * after each write, and the spec restores the original effect in `afterEach` so
- * a failed run cannot leave the maintainer's policy altered.
+ * ## The document is READ-ONLY, and that is the property under test
  *
- * ## This spec MUTATES a shared real file, so it is not parallel-safe across projects
+ * The managed child runs with the host environment unchanged, so the
+ * permissions document it reports is the user's own OpenCode configuration —
+ * not a file TBAi created (§9.3(1)). TBAi therefore refuses every write to it.
+ * This spec proves that on the real machine:
  *
- * The configuration is one file on the machine, shared by every browser project
- * in a run. Each test reads the effect it is about to change and restores it
- * afterwards, which is correct for a serial run and self-healing for a
- * staggered one, but two projects can still interleave a write. The assertions
- * therefore read the FILE rather than trusting the page's message, and a save
- * that legitimately changed nothing is accepted as success. Running it against
- * the isolated e2e server would prove nothing, because that server has no
- * managed OpenCode config to read — hence `TBAI_E2E_LIVE=1` plus a base URL.
+ *   - the page shows the document the server actually reads;
+ *   - every real rule is listed in order, including the protected denies;
+ *   - the page says it is read-only and offers no enabled edit control;
+ *   - a direct write request is refused with 409 and the file is byte-identical
+ *     afterwards, so a refused write never touches the maintainer's policy.
+ *
+ * It no longer mutates the file. An earlier revision changed a rule and
+ * restored it in `afterEach`; that capability is disabled by policy, and a
+ * spec that mutates a shared real file is a risk this surface does not need.
  */
 
 const CONFIG_URL = "/#/opencode-config";
 
-/** One rule the user's configuration protects, asserted after every write. */
+/** One rule the user's configuration protects, asserted to render as Deny. */
 const PROTECTED_RULES = [
   "**/config/RULES.md",
   "**/config/opencode.json",
@@ -43,6 +42,7 @@ interface ConfigSnapshot {
   raw: string;
   malformed: boolean;
   editable: boolean;
+  writeDisabledReason: string | null;
   permissions: Array<{ action: string; resource: string; effect: string }> | null;
 }
 
@@ -52,45 +52,11 @@ async function readConfig(request: import("@playwright/test").APIRequestContext)
   return (await response.json()) as ConfigSnapshot;
 }
 
-/**
- * The configuration FILE, read from disk.
- *
- * The HTTP response is a **redacted** projection: every credential in it is
- * masked, so it can no longer prove that a credential survived a save. The
- * file is the thing that holds the real value, so the credential assertion
- * reads the file.
- */
-function readConfigFile(path: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-}
-
-/** The effect currently on disk for one (action, resource) pair. */
-function effectOf(config: ConfigSnapshot, action: string, resource: string): string | undefined {
-  return config.permissions?.find((rule) => rule.action === action && rule.resource === resource)
-    ?.effect;
-}
+/** The state the page is expected to report for the managed service. */
+const MANAGED_READ_ONLY_NOTICE = /your own OpenCode installation/i;
 
 test.describe("OpenCode Configuration against the real managed server", () => {
   test.slow();
-
-  let originalQuestionEffect: string | undefined;
-  let hadQuestionRule = false;
-
-  test.beforeEach(async ({ request }) => {
-    const config = await readConfig(request);
-    originalQuestionEffect = effectOf(config, "question", "*");
-    hadQuestionRule = originalQuestionEffect !== undefined;
-  });
-
-  test.afterEach(async ({ request }) => {
-    // Always put the question rule back the way it was found, so a failure
-    // mid-edit cannot leave the maintainer's gating changed.
-    if (!hadQuestionRule) return;
-    const response = await request.put("/api/opencode/config/permissions", {
-      data: { action: "question", resource: "*", effect: originalQuestionEffect },
-    });
-    expect(response.ok()).toBe(true);
-  });
 
   test("the page shows the configuration the server actually reads", async ({ page, request }) => {
     const config = await readConfig(request);
@@ -138,105 +104,46 @@ test.describe("OpenCode Configuration against the real managed server", () => {
     }
   });
 
-  test("changing one effect writes the file and preserves every other rule", async ({
+  test("the page reports the document as read-only and disables every control", async ({
     page,
     request,
   }) => {
-    const before = await readConfig(request);
-    const target = before.permissions?.find((r) => r.action === "question");
-    test.skip(!target, "This configuration has no question rule to edit.");
+    const config = await readConfig(request);
+    // This is the APP's answer, not the spec's assumption. If the policy ever
+    // changes, this assertion fails here rather than silently asserting
+    // read-only behaviour that no longer holds.
+    expect(config.editable).toBe(false);
+    expect(config.writeDisabledReason).toBe("managed_root_not_owned");
 
-    const next = target!.effect === "allow" ? "ask" : "allow";
     await page.goto(CONFIG_URL);
     const main = page.getByRole("main");
-
-    // The rule's identity is (action, resource) — never the row index.
-    const trigger = main.getByRole("combobox", {
-      name: `question ${target!.resource} effect`,
-    });
-    await expect(trigger).toBeVisible({ timeout: 30_000 });
-    await expect(trigger).toHaveText(new RegExp(`^${target!.effect === "ask" ? "Ask" : "Allow"}`));
-
-    // A change that has not been saved must not have touched the file.
-    await trigger.click();
-    await page
-      .getByRole("option", { name: new RegExp(`^${next === "allow" ? "Allow" : "Ask"}`) })
-      .click();
-
-    const midFlight = await readConfig(request);
-    expect(effectOf(midFlight, "question", target!.resource)).toBe(target!.effect);
-
-    // Dirty state, then an explicit Save.
-    await expect(main.getByText("Unsaved change")).toBeVisible();
-    await main.getByRole("button", { name: "Save", exact: true }).click();
-    // Either success message is correct, and which one appears is not this
-    // test's business: a run of the OTHER browser project against the same real
-    // config file can leave the rule already at the target effect, in which case
-    // the save is an honest no-op and says so. Asserting the file instead (see
-    // below) is what actually proves the change landed.
-    await expect(
-      main.getByText(/Saved to the OpenCode configuration\.|Already set to this effect\./),
-    ).toBeVisible({ timeout: 30_000 });
-
-    // The write landed.
-    const after = await readConfig(request);
-    expect(effectOf(after, "question", target!.resource)).toBe(next);
-
-    // And nothing else moved: same length, same order, same effects.
-    expect(after.permissions).toHaveLength(before.permissions!.length);
-    after.permissions?.forEach((rule, index) => {
-      const original = before.permissions![index];
-      expect(rule.action).toBe(original.action);
-      expect(rule.resource).toBe(original.resource);
-      if (rule.action !== "question") {
-        expect(rule.effect).toBe(original.effect);
-      }
-    });
+    await expect(main.getByText(MANAGED_READ_ONLY_NOTICE)).toBeVisible({ timeout: 30_000 });
+    await expect(main.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    // The first rule's selector is rendered but inert. Located by its file row
+    // (the rule at index 0), which is what the page names it by.
+    const first = config.permissions?.[0];
+    if (first) {
+      await expect(
+        main.getByRole("combobox", { name: `${first.action} ${first.resource} effect (rule 1)` }),
+      ).toBeDisabled();
+    }
   });
 
-  test("the protected deny rules and unknown fields survive a save", async ({ page, request }) => {
+  test("a write request is refused and the real file is byte-identical afterwards", async ({
+    request,
+  }) => {
     const before = await readConfig(request);
-    const question = before.permissions?.find((r) => r.action === "question");
-    test.skip(!question, "This configuration has no question rule to edit.");
+    const beforeText = readFileSync(before.path, "utf8");
 
-    const beforeParsed = readConfigFile(before.path);
-    const beforeKeys = Object.keys(beforeParsed);
-    const beforeProviders = JSON.stringify(beforeParsed.providers ?? null);
-
-    await page.goto(CONFIG_URL);
-    const main = page.getByRole("main");
-    const trigger = main.getByRole("combobox", {
-      name: `question ${question!.resource} effect`,
+    const response = await request.put("/api/opencode/config/permissions", {
+      data: { action: "question", resource: "*", effect: "allow" },
     });
-    await trigger.click();
-    await page
-      .getByRole("option", {
-        name: new RegExp(`^${question!.effect === "allow" ? "Ask" : "Allow"}`),
-      })
-      .click();
-    await main.getByRole("button", { name: "Save", exact: true }).click();
-    // Same reasoning as the test above: a no-op save is a legitimate outcome
-    // when the rule already holds the target effect, so the file is the thing
-    // asserted on, not which message the page chose to show.
-    await expect(
-      main.getByText(/Saved to the OpenCode configuration\.|Already set to this effect\./),
-    ).toBeVisible({ timeout: 30_000 });
+    expect(response.status()).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("user's own");
 
-    const afterParsed = readConfigFile((await readConfig(request)).path);
-
-    // Every top-level key the file had is still there — including any field
-    // this page does not model.
-    expect(Object.keys(afterParsed)).toEqual(beforeKeys);
-    // Credentials and every provider block are byte-identical.
-    expect(JSON.stringify(afterParsed.providers ?? null)).toBe(beforeProviders);
-    // The four protected denies are still denies.
-    for (const resource of PROTECTED_RULES) {
-      const rule = (afterParsed.permissions as Array<Record<string, string>>).find(
-        (r) => r.resource === resource,
-      );
-      if (!rule) continue;
-      expect(rule.effect).toBe("deny");
-    }
+    // The maintainer's policy is untouched — the whole point of the refusal.
+    expect(readFileSync(before.path, "utf8")).toBe(beforeText);
   });
 
   test("a malformed configuration is read-only and no write happens", async ({ page, request }) => {

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { formatRelativeTime } from "@/lib/date-format";
 
@@ -32,6 +33,17 @@ export function ThreadLastMessageTime({
       return undefined;
     }
   });
+
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    // Tick every 30 seconds so "just now" transitions to "1m ago", etc.,
+    // isolated entirely inside this leaf without re-rendering the sidebar list.
+    const interval = setInterval(() => {
+      setTick((t) => (t + 1) % 1_000_000);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const label = formatRelativeTime(live ?? fallback);
   if (!label) return null;

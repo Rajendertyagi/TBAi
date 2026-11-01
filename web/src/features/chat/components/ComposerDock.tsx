@@ -103,11 +103,11 @@ export function ComposerDock({ children }: { readonly children: ReactNode }) {
       <div
         data-composer-fade
         aria-hidden="true"
-        className="pointer-events-none h-12 w-full shrink-0 bg-linear-to-t from-background to-transparent"
+        className="pointer-events-none absolute inset-0 w-full bg-linear-to-t from-background via-background/85 to-transparent"
       />
       <div
         data-composer-dock
-        className="pointer-events-auto relative mx-auto w-full max-w-3xl bg-background px-4 pb-4"
+        className="pointer-events-auto relative mx-auto w-full max-w-[var(--chat-column-width)] px-4 pb-4"
       >
         {children}
       </div>

@@ -220,3 +220,16 @@ export async function setAutostartEnabled(on: boolean): Promise<void> {
   if (on) await enable();
   else await disable();
 }
+
+/**
+ * Opens a directory in the OS file manager via the official Tauri opener
+ * plugin. Returns false in the browser, which has no way to reach the desktop
+ * — callers gate the menu item on `isTauri()` so this is an invariant, not a
+ * silent no-op the user can trigger.
+ */
+export async function openFolderInExplorer(path: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { openPath } = await import("@tauri-apps/plugin-opener");
+  await openPath(path);
+  return true;
+}

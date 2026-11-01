@@ -84,7 +84,11 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
           className={cn("min-w-0 cursor-default gap-0.5 px-1.5 opacity-60 hover:bg-transparent")}
           onClick={(e) => e.preventDefault()}
         >
-          <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+          {boundMode === "simple" ? (
+            <MessageSquare aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+          )}
           <span className="max-w-[8.75rem] truncate">{boundName}</span>
         </Button>
       </div>
@@ -109,7 +113,11 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
             aria-label={`${copy.folderTitle}: ${currentName}`}
             className={cn("min-w-0 gap-0.5 px-1.5")}
           >
-            <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+            {isChatMode ? (
+              <MessageSquare aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+            ) : (
+              <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+            )}
             <span className="max-w-[8.75rem] truncate">{currentName}</span>
             <ChevronDown aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/60" />
           </Button>

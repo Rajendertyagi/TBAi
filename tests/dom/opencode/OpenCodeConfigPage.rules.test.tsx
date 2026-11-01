@@ -47,6 +47,14 @@ mock.module("@web/features/opencode/openCodeConfig.ts", () => ({
   fetchOpenCodeConfig: async () => ({ ...SNAPSHOT, permissions: [...permissions] }),
 }));
 
+// The page reads the backend's runtime mode to know whether a CONFIG route
+// exists at all. Not this test's subject: answered as "no status", so the page
+// behaves exactly as it did before the row existed and no request leaves the
+// DOM test.
+mock.module("@web/features/opencode/useOpenCodeRuntimeStatus.ts", () => ({
+  useOpenCodeRuntimeStatus: () => ({ status: null, error: null }),
+}));
+
 const { OpenCodeConfigPage } = await import("@web/features/opencode/OpenCodeConfigPage.tsx");
 
 async function mount(): Promise<{ root: Root; container: HTMLElement }> {

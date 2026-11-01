@@ -26,6 +26,7 @@
  */
 
 import type { OpenCodeDefaultModel } from "./capabilities";
+import type { OpenCodeClient } from "./client";
 
 /** A model reference in the shape OpenCode's session API accepts. */
 export interface SessionModelRef {
@@ -86,15 +87,19 @@ export function pickSessionModel(input: PickSessionModelInput): SessionModelRef 
  * leaving the session pointed at a model the server no longer has.
  *
  * @param storedModelId - The conversation's persisted model value, if any.
+ * @param client - The client for the service that owns this history (H3/B3).
+ *   Without it the lookup would go to the managed server, which may be a
+ *   different service entirely and would be started just to answer.
  * @returns The resolved reference, or null when there is no usable choice.
  */
 export async function resolveStoredModel(
   storedModelId: string | null | undefined,
+  client?: OpenCodeClient,
 ): Promise<StoredModelRef | null> {
   if (!storedModelId) return null;
   try {
     const { resolveOpenCodeModelRef } = await import("./capabilities");
-    return await resolveOpenCodeModelRef(storedModelId);
+    return await resolveOpenCodeModelRef(storedModelId, client);
   } catch {
     // M11: a catalogue that cannot be read means "no usable choice", not a
     // failure. The reader's stored value is still their choice; it simply
@@ -110,10 +115,20 @@ export async function resolveStoredModel(
  * Tolerant by construction: a server that cannot be asked yields `null`, which
  * is the honest "there is no default" answer and leaves the session unbound.
  *
+ * @param client - The client for the service that owns this history (H3/B3).
+ *   When supplied, the default is read from THAT service. Without it the
+ *   managed, server-wide catalogue answers, which is correct only for a
+ *   conversation TBAi manages itself.
  * @returns The default model descriptor, or null.
  */
-export async function fetchServerDefaultModel(): Promise<OpenCodeDefaultModel | null> {
+export async function fetchServerDefaultModel(
+  client?: OpenCodeClient,
+): Promise<OpenCodeDefaultModel | null> {
   try {
+    if (client) {
+      const { fetchDefaultModel } = await import("./capabilities");
+      return (await fetchDefaultModel(client)) ?? null;
+    }
     const { getOpenCodeCapabilities } = await import("./capabilities");
     const capabilities = await getOpenCodeCapabilities();
     return capabilities.defaultModel ?? null;

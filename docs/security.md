@@ -165,9 +165,15 @@ approval. OpenCode permissions remain owned by the separate OpenCode boundary.
   `settings` / `headers` / `body`, MCP `environment` / `headers` / OAuth client
   secrets, plugin and LSP environment values, and any key that names a
   credential. The `{env:VAR}` and `{file:path}` substitution forms are masked
-  whole, because the reference itself names the secret. The file on disk keeps
-  its real values, and the write path reads the file — so the preservation
-  guarantee is untouched.
+  whole, because the reference itself names the secret.
+- **The configuration document is read-only in both modes.** TBAi does not write
+  it. An adopted service is refused because G4 is unproven; the managed service
+  is refused because its child inherits TBAi's own environment, so the document
+  OpenCode reports is the user's ordinary configuration file, outside any
+  TBAi-owned root. `GET /api/opencode/config` says so (`editable: false`,
+  `writeDisabledReason`) and every write route answers 409 before the document
+  is read — no request reaches the service and no file changes. The rationale
+  and guards are in `docs/decisions.md` (2026-10-31).
 - **Events are scope-checked.** An event that names a different workspace in its
   official `location` is not applied to the view.
 - **CORS trusts only TBAi's own pages.** The packaged desktop webview

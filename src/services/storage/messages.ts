@@ -498,6 +498,13 @@ export function upsertStoredSync(conversationId: string, entry: StoredMessageEnt
     ],
   );
 
+  // Bump both updated_at (for list ordering) and last_message_at (for the relative timestamp)
+  db.run("UPDATE conversations SET updated_at = ?, last_message_at = ? WHERE id = ?", [
+    now,
+    now,
+    conversationId,
+  ]);
+
   // Auto-title: name the conversation from the first user message text.
   // Only fires when title_source is NULL (new thread) or explicitly 'auto';
   // user-assigned titles are never overwritten by scheduler or chat runs.

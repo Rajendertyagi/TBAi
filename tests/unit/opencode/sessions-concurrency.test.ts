@@ -80,7 +80,7 @@ mock.module("@/services/opencode/client", () => ({
     // unbound and this file keeps asserting only what it is about: the create
     // dedup. Not recorded in the create counter, which must stay exact.
     agent: { list: async () => ({ data: [] }) },
-    model: { list: async () => ({ data: [] }) },
+    model: { list: async () => ({ data: [] }), default: async () => ({ data: null }) },
   }),
 }));
 

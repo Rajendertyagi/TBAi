@@ -8484,3 +8484,323 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
   settled pinning) and three structure cases in
   `tests/dom/components/chat-layout-stability.test.tsx` (out-of-flow footer,
   dock as the row's folder, pointer-events across the band).
+
+## Chat column width is one setting shared by three surfaces (2026-10-30)
+
+- **Decision:** `web/src/config/chat.ts` owns the three widths (Narrow 640 /
+  Comfortable 768 / Wide 1024, default Comfortable) and the Appearance page
+  writes the preference to `useDesktopLayout.chatWidth`. `AppShell` publishes it
+  through `syncChromeVars` as `--chat-column-width`, and the transcript
+  scroller, the composer dock and the welcome column all size themselves with
+  `max-w-[var(--chat-column-width)]`. Comfortable is 768px because that is
+  `max-w-3xl`, the width the composer had before the setting existed - the
+  default therefore ships without moving anyone's layout.
+- **Reason:** only the composer was capped, so the message text and the box it
+  was typed into began at different x positions at every viewport wider than
+  the cap. One variable for all three surfaces makes the shared left and right
+  edge a property of the design, not of three matching literals.
+- **Why the scroller and not the pane:** the transcript's rows are absolutely
+  positioned inside the shortlist's total-size container and take
+  `width: 100%` of its padding box, so capping the CONTENT would leave the rows
+  measuring a box nobody had capped. The scrollport itself is capped instead,
+  which keeps the vertical invariant untouched: `scrollHeight === getTotalSize()`
+  still holds because nothing is added to the scrollable overflow - only the
+  horizontal extent of the element changes. Accepted trade-off: the scrollbar
+  sits at the column's right edge rather than the pane's.
+- **`:root` still declares the width:** components can paint before the layout
+  effect that calls `syncChromeVars` has run, and a missing variable would let
+  the column collapse. CSS cannot read a TS constant, so the two literals are
+  pinned against each other by `tests/unit/web/chat-width.test.ts`, the same
+  technique as the disclosure-duration guard.
+- **Alternatives rejected:**
+  - a per-surface prop with a width argument - three call sites that can drift
+    instead of one variable;
+  - padding on the pane - changes the gutter, not the column, so the text and
+    the box would still not share an edge;
+  - a CSS-only `@media` breakpoint - the setting has to survive restarts and be
+    chosen explicitly, and a viewport cannot express "narrow".
+- **Guards:** `tests/unit/web/chat-width.test.ts` (setting table, the migration
+  path for payloads written before the preference existed, the `:root` pin) and
+  `tests/dom/desktop/chrome-vars.test.ts` (the variable is written for every
+  setting, and the variables that existed before it are not displaced).
+
+## Sidebar: two sections, one row geometry, and a folder tile that carries its colour (2026-10-30)
+
+- **Decision:** the sidebar renders exactly `folders` and `chats`. A project
+  chat appears once, under its folder; every other chat appears once, in
+  `chats`. The former `recent` section is gone, along with `showRecent` and its
+  section config. Rows share one height and one radius
+  (`--sidebar-row-height: 30px`, `--sidebar-row-radius: 8px`); folder children
+  are indented 18px behind a hairline connector whose vertical run is derived
+  from that row height, and folder blocks are separated by a hairline. A folder
+  is identified by an 18px tile filled with its colour and lettered with the
+  first character of its alias-or-name; the letter colour is whichever of white
+  and near-black has the higher WCAG contrast against that fill.
+- **Reason:** Recent repeated what the scoped lists already showed, and the
+  duplicate row made "which one is active" ambiguous (the browser suite pinned
+  two highlighted rows for one project chat). The grey folder glyph ignored the
+  colour the user had chosen, so two folders looked identical; a coloured tile
+  answers "which folder is this" at a glance without a legend. A single row
+  geometry is what lets the connector terminate exactly at the last row's
+  centre instead of guessing.
+- **The folder count is regular-only:** `src/services/folders.ts` excludes
+  archived rows from `conversation_count`. That number is now both the folder
+  badge and the remainder in "Show N more", so counting archived rows would
+  promise rows the scoped list never returns.
+- **Migration:** a persisted `recent` entry is dropped by
+  `normalizeSectionOrder` like any unknown id, and `migratePersisted` defaults
+  `chatWidth` field-by-field, so neither a retired section nor a missing
+  preference resets the rest of the layout.
+- **Alternatives rejected:**
+  - keeping Recent as a "latest" mirror of the scoped lists - the duplication
+    is the defect;
+  - a second row component for folder children - it was the same row with a
+    different menu, which is how the two implementations drifted;
+  - deriving the letter colour from the palette index - the palette contains
+    light yellows and greens where white fails contrast, and the set is
+    user-editable.
+- **Guards:** `tests/unit/web/sidebar/folder-tile.test.ts` (contrast choice for
+  every palette entry, letter selection including non-ASCII and empty names),
+  `tests/unit/web/sidebar/archivedRouteGuard.test.ts` and
+  `tests/unit/core/sidebar-sections.test.ts` (two ids; retired ids dropped, not
+  re-appended), `tests/integration/workspace/workspace.test.ts`
+  (`conversationCount` follows archive/unarchive and ignores simple chats), and
+  `tests/e2e/core/phase-ua-d.spec.ts` (one accented row for one active project
+  chat, where it used to assert two).
+
+## Sidebar row menus: one action list behind both entry points (2026-10-31)
+
+- **Decision:** `web/src/features/sidebar/lib/menu-actions.tsx` builds the menu
+  for a row, once per row type, and `components/menu-kit.tsx` renders that list
+  into both Radix surfaces — the `⋯` `DropdownMenu` and the row's
+  `ContextMenu`. Order and grouping follow the approved mockup. A chat row is
+  `Open in new tab, Rename…` | `Copy chat ID, Archive` | `Delete…`; a folder row
+  is `New chat in this folder, Rename folder…, Set color, Manage links…` |
+  `Open folder in Explorer, Copy folder path` | `Remove from workspace`.
+- **Reason:** the two entry points had drifted because each was written
+  separately. The archived row's `⋯` list was missing `Copy chat ID`, the folder
+  `⋯` faked a right click by dispatching a synthetic `contextmenu` event, and
+  its labels and separators differed from the right-click list. Rendering both
+  surfaces from one builder makes a divergence impossible rather than a
+  convention, and the parity test fails if either surface stops using it.
+- **Explorer is desktop-only and omitted, not disabled:** the item appears only
+  when `isTauri()` is true; the browser has no file manager to open, and an
+  entry that cannot act is a promise the app cannot keep. Parity holds within
+  each environment because both surfaces read the same `canOpenInExplorer`.
+- **`Delete…` means a follow-up step:** the item opens an `AlertDialog`
+  (menu label `Delete…`, confirm action `Delete`), and `Rename…` opens the alias
+  dialog. The unicode ellipsis is the promise that a dialog exists.
+- **Mockup deviation:** the copy says `Set color` (US spelling) to match the
+  rest of the app's strings, where the mockup writes `Set colour`. The folder
+  settings page keeps its older `Set alias…` entry point; it is a different
+  surface and was not part of this change.
+- **Sub-trigger affordance:** `web/src/components/ui/context-menu.tsx` now uses
+  the same `ChevronRight` icon as the dropdown primitive instead of a text `▸`,
+  so the colour submenu looks and reads the same from either entry point.
+- **Guards:** `tests/unit/web/sidebar/sidebar-menu-parity.test.ts` (labels,
+  order and groups for both builders; feature switches remove their item;
+  Explorer omitted without a desktop shell; source guards that both surfaces
+  render the shared list and neither file hand-writes an item),
+  `tests/e2e/history/phase-8-tabs-navigation.spec.ts` (delete now confirms), and
+  the active-row locators in `tests/e2e/core/phase-ua-a.spec.ts` /
+  `phase-ua-d.spec.ts`, which moved from the retired `.bg-sidebar-accent` class
+  to `div[data-active].sidebar-row-surface`.
+
+## Managed OpenCode startup: kernel-assigned port, announced by the child (2026-10-31)
+
+- **Decision:** the managed child is started as
+  `opencode serve --port 0 --hostname 127.0.0.1`, and the port TBAi uses is the
+  one the child itself announces on stdout (`server listening on
+  http://127.0.0.1:<port>`). The previous allocate-then-release probe is gone.
+- **Reason:** probing for a free port and then handing that number to a child is
+  a race — the port can be taken between release and bind. Kernel assignment
+  removes the window: the child binds what it is given and reports the result.
+  `--hostname 127.0.0.1` makes the bind interface explicit instead of relying on
+  the child's default, so the managed server is loopback-only on any machine
+  with a LAN interface.
+- **The announcement is untrusted input.** `src/services/opencode/listening.ts`
+  accepts only `http`, host exactly `127.0.0.1`, and a nonzero TCP port; it
+  refuses other hosts, external addresses, a missing/zero/out-of-range port,
+  and paths or queries. It handles split chunks, several announcements, lines
+  before and after the URL, duplicate identical announcements, conflicting
+  ports (first delivered wins, later ones refused), an early exit, an absent
+  announcement, and a startup timeout; unterminated over-long lines are dropped
+  rather than retained. The line is redacted before it may reach diagnostics.
+- **Measured (disposable official artifacts, OS socket table, not argv):**
+  2.0.15, 2.1.0, 2.1.4, 2.2.0, 2.2.1, 2.2.2, 2.2.3, 2.2.4 and 2.2.5 each
+  announced a kernel-assigned `127.0.0.1` URL and showed exactly one LISTENING
+  socket on `127.0.0.1:<port>` — no wildcard listener. `/api/info` answered 401
+  without credentials and 200 with Basic auth on every build.
+- **Guards:** `tests/unit/opencode/listening.test.ts` (validation, parsing,
+  chunking and discovery) and `tests/integration/opencode/serverManager.test.ts`
+  (announced port equality, redaction, listening timeout, missing announcement,
+  readiness budget).
+
+## B7: stable releases are admitted by capability, not by a version ceiling (2026-10-31)
+
+- **Decision:** there is no upper version bound for the managed or adopted
+  service. Any **stable** release at or above the 2.0.15 evidence floor is
+  admitted; prereleases, nightlies and malformed versions are refused (D2).
+  After readiness, `session` and `events` are probed as essential and
+  `config`/`agent`/`model`/`command` as optional. A missing essential route
+  refuses the start (`OpenCodeCapabilityRefusedError`); a missing optional route
+  degrades only that feature.
+- **Reason:** the former `>=2.0.15 <2.2.1` ceiling refused a stable release for
+  a reason that was never a measured incompatibility. The honest question is
+  what the running build serves, and a route probe answers it directly. The
+  floor is evidence, not preference: below 2.0.15 no build has been measured,
+  and it remains adoptable — the probe decides, with the below-floor status
+  recorded.
+- **Measured:** the nine builds above all serve all six probed routes with the
+  expected content types (`/api/event` as `text/event-stream`, the rest JSON),
+  including the 2.2.1–2.2.5 releases the old ceiling excluded. Route presence
+  is not a proof of end-to-end prompt compatibility; that stays E1/B5 evidence.
+- **Guards:** `tests/unit/opencode/compatibility.test.ts` (2.4.0/99.0.0
+  admitted, older stable adoptable with `belowCheckedFloor`, prerelease
+  refused, malformed refused, missing essential vs optional, unknown essential),
+  plus the managed refusal/degradation cases in
+  `tests/integration/opencode/serverManager.test.ts`.
+
+## The managed service's configuration document is read, not written (2026-10-31)
+
+- **Decision:** TBAi no longer writes the permissions document for **either**
+  mode. The adopted refusal (G4 unproven) is unchanged; the managed service now
+  refuses too, with its own reason, `managed_root_not_owned`.
+  `GET /api/opencode/config` reports `editable: false` plus
+  `writeDisabledReason`, and every write route answers 409 before any document
+  is read, so no request reaches the service and no file changes. Reads —
+  including the rule list and the redacted native text — stay available.
+- **Reason:** the managed child is spawned with the inherited environment
+  (`cwd: serverHomeDir`, `env: { ...process.env, ...authEnv }`), so OpenCode
+  discovers and reports **the user's own ordinary configuration file**. Plan
+  §9.3(1) defines the managed root as "the config directory TBAi passes in that
+  child's environment"; TBAi passes none, so there is no TBAi-owned root, and a
+  writer that targeted the server-reported document would edit the owner's
+  real file. Writing outside TBAi-owned roots is exactly what G4 forbids.
+- **What was measured:** `OPENCODE_CONFIG_CONTENT` is merged in-process above
+  the discovered documents (content second-to-last, managed settings last, the
+  content entry having no path), and v1 `permission` is normalized into v2
+  `permissions`. That makes it a viable place for *managed* opinions later, but
+  it does not create an owned file, does not help an adopted service, and does
+  not satisfy D5 or close G4 — it is not a substitute for the write path.
+- **Rejected alternative:** pointing the child at a TBAi-owned config root
+  would silently drop the user's providers, models and auth, which is a product
+  behavior change this task does not authorize.
+- **Guards:** `tests/unit/opencode/configWritePolicy.test.ts` (both modes,
+  including that `g4Verified: true` cannot enable managed),
+  `tests/integration/opencode/opencode-config-adopted-write.test.ts`
+  (PUT/POST/DELETE 409, zero fixture requests),
+  `tests/integration/opencode/config-transport.test.ts` and
+  `tests/integration/opencode/transport-redirect.test.ts` (refusal precedes the
+  document read; no HTTP request; no file write),
+  `tests/integration/opencode/opencode-config-redaction.test.ts`
+  (file byte-identical, credentials included),
+  `tests/integration/opencode/opencode-config-permission-identity.test.ts`
+  (all write methods refused before the read),
+  `tests/unit/web/opencode/openCodeConfig.test.ts` (the reason survives
+  parsing, unknown reasons degrade to `null`), and the live spec
+  `tests/e2e/opencode/opencode-config-live.spec.ts`, which is now read-only and
+  asserts the on-screen notice.
+
+## G4: the filesystem primitives, measured (2026-10-31)
+
+- **Decision:** G4 stays **BLOCKED**. No configuration writer is enabled for
+  any mode. What changed is the evidence: the candidate primitives are measured
+  on this machine (Windows 10.0.26300, one NTFS volume, disposable root under
+  `D:\Temp`, no OpenCode process, no owner file), and the guard in
+  `src/services/opencode/configWritePolicy.ts` now refuses the two identity
+  cases that a path-string check cannot see.
+- **No conditional-replacement primitive exists in the runtime.**
+  `fs.replaceFile` and `fs.renameat2` are `undefined`; `Bun.ffi` is
+  `undefined`, so `ReplaceFileW` / `MoveFileExW` / `SetFileInformationByHandle`
+  cannot be reached from this runtime at all, and all three are **by name**
+  even if they could be: they would replace whatever occupies the destination
+  at call time, not the object that was inspected and approved a moment
+  earlier. `SetFileInformationByHandle`'s `FILE_RENAME_INFO` takes a destination
+  name relative to a directory handle and offers no "same object as inspected"
+  predicate. There is therefore no way to satisfy Priority F's requirement
+  ("the destination must be exactly the object inspected immediately before
+  replacement"), and replacement is not implemented.
+- **Hard links are real and now detectable.** `fs.link` created a link whose
+  `stat` reported the same `dev`/`ino` as the original and `nlink` 2 (3 after a
+  second link); the link stayed readable after the original name was unlinked,
+  and a recreated file at the original name reported `nlink` 1. A reparse
+  attribute never sees this, so the guard's leaf check reads `nlink` from
+  `lstat` and refuses `hard_link` — a document reachable by another name
+  outside the root is a boundary violation even when the link lives inside it.
+- **8.3 aliases cannot be exercised on this volume.** `Get-Item .ShortName` is
+  empty here, i.e. 8.3 generation is disabled, so a real alias cannot be
+  created to test against. The guard now canonicalizes every existing component
+  (`realpath`, which on Windows is `GetFinalPathNameByHandle`) and refuses a
+  component whose canonical name differs from the approved spelling
+  (`short_name_alias`), plus a component that canonicalizes outside the root.
+  The rule is unit-tested through a deterministic resolver seam; the **runtime
+  alias subcase remains unverified on this machine** and must be re-run on a
+  volume with 8.3 names before it can be called PASS.
+- **Reparse points and creation.** A directory junction was created without
+  elevation, `lstat` reports it as a symbolic link, and its `realpath` resolves
+  outside the root — so the walk's existing refusal is behavioural, not
+  theoretical. A directory symbolic link creation is `EPERM` here (it needs
+  Developer Mode or elevation, both out of scope), so that subcase stays
+  BLOCKED. `fs.open(…, "wx")` on an existing file is `EEXIST` and `fs.link`
+  onto an existing name is `EEXIST` (create-only holds), but Node/Bun expose no
+  `openat`: a directory can be opened as an fd, yet a child cannot be created
+  *through* that handle, so parent identity cannot anchor creation. Safe
+  creation is therefore **not implemented** either; the guard refuses any
+  existing leaf (`replace_unverified`) and never overwrites an unexpected file.
+- **Residual G4 blockers, unchanged:** source-temp identity cannot be anchored
+  to the open file object; the check-to-open race remains for any by-name open;
+  ACL inheritance was measured on one NTFS volume only; crash durability has no
+  directory-sync path (EPERM); and the 8.3 runtime subcase is unmeasured here.
+  Configuration writes stay disabled; the JS gate precedes every write route
+  and the writer is unreachable in production.
+- **Guards:** `tests/unit/opencode/configWritePolicy.test.ts` — alias leaf,
+  aliased root, canonical escape, hard-linked leaf, and an ordinary existing
+  leaf control (proved able to fail: with the two new refusals disabled the
+  alias and hard-link cases fail, with them restored the file is 42/42).
+
+## Acceptance evidence: LB1 and LB5 are executable, the rest stay blocked (2026-10-31)
+
+- **Decision:** the evidence-record contract is now code that can reject a
+  record, instead of prose that a tester could satisfy by omission.
+  `tests/helpers/opencodeEvidenceRecord.ts` validates one legacy-database
+  observation and returns either `pass` with the composite key or `rejected`
+  with the exact fields that are incomplete. LB5 is a refusal inside the same
+  validator: a record tagged `shim` is rejected as build evidence.
+- **What LB1 rejects:** a missing version, run kind, isolation root, package
+  name/digest, executable path/digest, package member, registration path or
+  written flag, service-image PID, any process-tree field, and any observation
+  field (target file, operation, requested access, disposition, timestamp). A
+  record keyed on the executable digest alone, an unlabelled `digest`, an empty
+  `packageIntegrity`, and package fields on a `bare executable` record are all
+  rejected. The service-image link must resolve through the recorded tree and
+  its image path **and** digest must equal the extracted executable's, which is
+  what refuses an attribution pointed at the launcher.
+- **LB4's runtime half already exists** and is cited rather than duplicated:
+  `tests/integration/opencode/startup-orchestration.test.ts` asserts that a
+  `registration_missing` adoption outcome starts the managed service
+  (`status: "managed"`), and the disposable e2e server logs show the same
+  `opencode.startup_managed_fallback` / `reason: registration_missing` event.
+- **B5, LB2, LB3, LB6, LB7 stay BLOCKED.** They need a process-level file-I/O
+  event tied to the service's own PID. Measured here: an unprivileged ETW
+  session (`logman start … -p Microsoft-Windows-Kernel-File -ets`) is refused
+  with "Access is denied. Try running this command as an administrator." — no
+  session is created. Procmon and Sysinternals `handle` require the same
+  elevation, and file-level observation (a directory listing or Restart
+  Manager's in-use list) does not prove a `CreateFile` by a specific PID, so it
+  is not substituted. No test in this change claims any of them.
+- **BT10 / UNKNOWN-1 status after today's probe:** a directory junction is
+  creatable unelevated and is visible to `lstat`; a directory symbolic link is
+  `EPERM` here, so that subcase stays BLOCKED; hard links are real and are now
+  refused by `nlink`; 8.3 aliases cannot be created on this volume, so the
+  alias subcase is unverified at runtime and refused by canonicalization
+  wherever aliases do exist; source-temp identity has no anchoring API; the
+  check-to-open and post-validation races are unchanged.
+- **CT8 / CT9 remain NOT IMPLEMENTED**, because both require a commit path and
+  a source-identity proof that G4 still does not have.
+- **Guards:** `tests/integration/opencode/legacy-db-compat.test.ts` — 30 cases:
+  composite key, two-packages-one-executable, executable-only rejection,
+  unlabelled digest, bare-package confusion, empty integrity, unresolved tree,
+  cyclic tree, launcher attribution, digest mismatch, a table asserting every
+  required part rejects, and the LB5 shim refusal. The shim and digest
+  comparisons were disabled once to watch their cases fail, then restored.

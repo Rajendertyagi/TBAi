@@ -90,6 +90,8 @@ prompt.txt
 # them would add hundreds of near-duplicate binaries that never match on a
 # re-run.
 .openchamber/
+.perch/
+.commandcode/
 
 # Visual QA evidence, not shipped documentation. `docs/tool-ui-atlas.html` is a
 # design-review page whose value is in comparing screenshots against mockups, and

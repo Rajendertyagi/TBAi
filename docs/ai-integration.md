@@ -50,9 +50,13 @@ admission registry, the history read and the optimistic prompt record. The
 ownership contract is `features/opencode/sync/ownership.md`.
 `v2RuntimeStore.ts` projects that state into
 assistant-ui's external-store repository; OpenCode wire formats never cross into
-`ChatWindow` or generic chat state. The managed server compatibility gate is
-`>=2.0.15 <2.2.1` — the ceiling is the audited 2.2.0 release, not the next
-minor, so a newer version has to be re-checked before it is admitted.
+`ChatWindow` or generic chat state. The managed server admission gate is
+**any stable release at or above 2.0.15, with no upper bound** (B7): 2.0.15 is
+the oldest build whose API TBAi has measured, prereleases are refused, and
+after readiness the running build's essential capability routes are probed —
+a missing essential route refuses the start, while a missing optional route
+degrades only that feature. A newer stable release is therefore never refused
+merely for being newer; it is admitted on what it actually serves.
 
 ### Native V2 model-switch verification
 

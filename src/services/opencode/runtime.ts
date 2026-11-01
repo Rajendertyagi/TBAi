@@ -13,15 +13,20 @@ export class OpenCodeBinaryMissingError extends Error {
   }
 }
 
-/** Thrown when a managed binary reports an unsupported OpenCode version. */
+/** Why a reported version is refused. `supported` is never a refusal. */
+export type OpenCodeVersionRefusal = "below_minimum" | "prerelease" | "malformed";
+
+/** Thrown when a managed binary reports a version TBAi refuses to start. */
 export class UnsupportedOpenCodeVersionError extends Error {
   constructor(
     readonly version: string,
     readonly minimumVersion: string,
-    readonly maximumVersionExclusive: string,
+    readonly reason: OpenCodeVersionRefusal,
   ) {
     super(
-      `Unsupported OpenCode version ${version}; managed OpenCode requires >=${minimumVersion} <${maximumVersionExclusive}`,
+      reason === "prerelease"
+        ? `Unsupported OpenCode version ${version}; only officially released stable builds are supported, and this one is a prerelease. Install a stable OpenCode ${minimumVersion} or newer.`
+        : `Unsupported OpenCode version ${version}; managed OpenCode requires a stable build at or above ${minimumVersion}.`,
     );
     this.name = "UnsupportedOpenCodeVersionError";
   }
@@ -72,16 +77,77 @@ function compareOpenCodeVersions(left: string, right: string): number | null {
   return 0;
 }
 
-/** True when the parsed version is inside the configured managed range. */
+/** Why a reported version is accepted or refused (B7 + D2). */
+export type OpenCodeVersionSupport = "supported" | OpenCodeVersionRefusal;
+
+/**
+ * Classifies a reported version for the managed gate (B7).
+ *
+ * Accepting is a decision about **evidence**, not about recency:
+ *
+ *  - malformed output is never a version;
+ *  - a prerelease build is refused (D2: stable releases only);
+ *  - a build below {@link OpenCodeConfig.minimumVersion} is below the oldest
+ *    surface TBAi has measured, so the routes are unknown rather than new;
+ *  - everything else, including a stable release newer than any TBAi has
+ *    seen, is admitted by name — the running build then has to serve the
+ *    essential capability routes (`compatibility.ts`) before a managed start
+ *    is handed out.
+ *
+ * There is deliberately no upper version bound here.
+ */
+export function classifyOpenCodeVersion(
+  version: string,
+  config: OpenCodeConfig = OPENCODE_CONFIG,
+): OpenCodeVersionSupport {
+  const parsed = parseOpenCodeVersion(version);
+  if (parsed === null) return "malformed";
+  if (!isStableReleaseVersion(parsed)) return "prerelease";
+  const lowerBound = compareOpenCodeVersions(parsed, config.minimumVersion);
+  return lowerBound !== null && lowerBound >= 0 ? "supported" : "below_minimum";
+}
+
+/** True when the reported version is a stable build at or above the floor. */
 export function isSupportedOpenCodeVersion(
   version: string,
   config: OpenCodeConfig = OPENCODE_CONFIG,
 ): boolean {
+  return classifyOpenCodeVersion(version, config) === "supported";
+}
+
+/**
+ * True when a parsed version is at or above the configured minimum.
+ *
+ * This is the FLOOR half of the managed range and is used where the ceiling
+ * does not apply: adoption (B7) admits any newer STABLE release and decides
+ * compatibility from capability probes instead of the managed numeric gate.
+ * The floor stays because it is the oldest build whose essential API TBAi has
+ * checked; below it the essential endpoints are not merely new, they are
+ * unknown.
+ *
+ * A malformed version is not "at least" anything, so it answers false.
+ */
+export function isOpenCodeVersionAtLeast(
+  version: string,
+  minimum: string = OPENCODE_CONFIG.minimumVersion,
+): boolean {
   const parsed = parseOpenCodeVersion(version);
   if (!parsed) return false;
-  const lowerBound = compareOpenCodeVersions(parsed, config.minimumVersion);
-  const upperBound = compareOpenCodeVersions(parsed, config.maximumVersionExclusive);
-  return lowerBound !== null && upperBound !== null && lowerBound >= 0 && upperBound < 0;
+  const lowerBound = compareOpenCodeVersions(parsed, minimum);
+  return lowerBound !== null && lowerBound >= 0;
+}
+
+/**
+ * D2 (2026-10-31): adoption is restricted to officially released stable
+ * builds. A prerelease suffix is evidence a build *is* unstable, so it is
+ * refused; the same numeric version reported by a stable and a beta build
+ * remains indistinguishable and is the documented limitation (BT12).
+ *
+ * Build metadata (`+sha`) is not a channel marker and is ignored.
+ */
+export function isStableReleaseVersion(version: string): boolean {
+  const withoutBuildMetadata = version.split("+", 1)[0] ?? version;
+  return !withoutBuildMetadata.includes("-");
 }
 
 /** Runs the CLI version preflight and returns its exact version. */
@@ -120,12 +186,9 @@ export function detectOpenCodeVersion(
   if (!version) {
     throw new Error(`OpenCode binary did not report a valid version: ${binaryPath}`);
   }
-  if (!isSupportedOpenCodeVersion(version, config)) {
-    throw new UnsupportedOpenCodeVersionError(
-      version,
-      config.minimumVersion,
-      config.maximumVersionExclusive,
-    );
+  const support = classifyOpenCodeVersion(version, config);
+  if (support !== "supported") {
+    throw new UnsupportedOpenCodeVersionError(version, config.minimumVersion, support);
   }
   return version;
 }
@@ -167,13 +230,31 @@ export function getOpenCodeAuthMetadata(config: OpenCodeConfig = OPENCODE_CONFIG
   return { source: authSource ?? "generated", configured: authSource === "environment" };
 }
 
-/** Builds the backend-only OpenCode HTTP Basic header. */
+/**
+ * Builds the one OpenCode HTTP Basic header value for a password.
+ *
+ * This is the ONLY constructor of the credential-bearing header in the
+ * repository. Every path that sends an OpenCode credential — the bounded
+ * transport, the discovery probe, the proxy, the client and adoption — calls
+ * this helper, so no second base64 expression can drift (§1.4, TT6).
+ *
+ * @param password - Non-empty credential password.
+ * @param config - Configuration supplying the HTTP Basic username.
+ * @returns A single-entry header record.
+ */
+export function buildOpenCodeBasicAuthHeader(
+  password: string,
+  config: OpenCodeConfig = OPENCODE_CONFIG,
+): Record<string, string> {
+  const credentials = Buffer.from(`${config.authUsername}:${password}`).toString("base64");
+  return { Authorization: `Basic ${credentials}` };
+}
+
+/** Builds the backend-only OpenCode HTTP Basic header for the managed password. */
 export function getOpenCodeAuthHeaders(
   config: OpenCodeConfig = OPENCODE_CONFIG,
 ): Record<string, string> {
-  const password = getOpenCodeAuthPassword(config);
-  const credentials = Buffer.from(`${config.authUsername}:${password}`).toString("base64");
-  return { Authorization: `Basic ${credentials}` };
+  return buildOpenCodeBasicAuthHeader(getOpenCodeAuthPassword(config), config);
 }
 
 /** The header the managed server reads a request's working directory from. */
