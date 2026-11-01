@@ -86,7 +86,7 @@ describeRuntime("B7 — Mutation capabilities on disposable OpenCode instance", 
     expect(validateSessionListResponse(sessions)).toBe(true);
     const list = Array.isArray(sessions)
       ? sessions
-      : (sessions as { data?: unknown[] }).data ?? [];
+      : ((sessions as { data?: unknown[] }).data ?? []);
     expect(list.some((s) => (s as { id: string }).id === createdSessionId)).toBe(true);
   });
 
@@ -163,8 +163,10 @@ describeRuntime("B7 — Mutation capabilities on disposable OpenCode instance", 
     expect(lazyRegistry.getCached("session.delete")).toBe(true);
 
     // Verify session is no longer in the list
-    const sessions = await server.json<{ data?: { id: string }[] } | { id: string }[]>("/api/session");
-    const list = Array.isArray(sessions) ? sessions : sessions.data ?? [];
+    const sessions = await server.json<{ data?: { id: string }[] } | { id: string }[]>(
+      "/api/session",
+    );
+    const list = Array.isArray(sessions) ? sessions : (sessions.data ?? []);
     expect(list.some((s) => s.id === createdSessionId)).toBe(false);
   });
 });

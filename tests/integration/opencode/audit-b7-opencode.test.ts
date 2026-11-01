@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import fs from "node:fs";
 import { OPENCODE_CONFIG } from "@/config/opencode.ts";
 import {
   createRuntimeIsolation,
@@ -62,12 +61,8 @@ describeRuntime("B7 Audit — Live OpenCode API Behavior & Replay Semantics", ()
 
     await reader2.cancel();
     controller2.abort();
-
-    fs.writeFileSync(
-      "audit-event-log.json",
-      JSON.stringify({ text1, text2 }, null, 2),
-      "utf8",
-    );
+    expect(text1.length).toBeGreaterThan(0);
+    expect(text2.length).toBeGreaterThan(0);
   });
 
   it("inspects empty session list response shape", async () => {
@@ -76,7 +71,7 @@ describeRuntime("B7 Audit — Live OpenCode API Behavior & Replay Semantics", ()
     });
     expect(res.status).toBe(200);
     const json = await res.json();
-    fs.writeFileSync("audit-session-list.json", JSON.stringify(json, null, 2), "utf8");
+    expect(json).toBeDefined();
   });
 
   it("inspects message list response shape for a fresh session", async () => {
@@ -94,7 +89,7 @@ describeRuntime("B7 Audit — Live OpenCode API Behavior & Replay Semantics", ()
     });
     expect(msgRes.status).toBe(200);
     const msgJson = await msgRes.json();
-    fs.writeFileSync("audit-message-list.json", JSON.stringify(msgJson, null, 2), "utf8");
+    expect(msgJson).toBeDefined();
 
     // Cleanup session
     await fetch(`${server.baseUrl}/api/session/${sessionId}`, {

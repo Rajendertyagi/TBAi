@@ -62,6 +62,8 @@ const SUITE_TIMEOUT_MS = 120_000;
 
 /** Suites that must pass on every PR, in run order. */
 export const REQUIRED_SUITES = [
+  "audit-b7-opencode",
+  "compatibility-disposable-mutation",
   "opencode-database-compat",
   "opencode-ownership-runtime",
   "opencode-retry-restart",
@@ -91,7 +93,9 @@ type Counts = { pass: number; fail: number; skip: number };
 /** Parses bun's per-file summary lines (" 7 pass", " 0 fail", " 1 skip"). */
 export function parseCounts(output: string): Counts {
   const counts: Counts = { pass: 0, fail: 0, skip: 0 };
-  for (const line of output.split(/\r?\n/)) {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence stripping
+  const stripped = output.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+  for (const line of stripped.split(/\r?\n/)) {
     const match = /^\s*(\d+)\s+(pass|fail|skip(?:ped)?)\s*$/.exec(line);
     if (!match) continue;
     const kind = match[2];
@@ -116,7 +120,7 @@ function runSuite(name: string): SuiteOutcome {
     {
       cwd: REPO_ROOT,
       encoding: "utf8",
-      env: { ...process.env, [RUNTIME_ENV_FLAG]: "1" },
+      env: { ...process.env, [RUNTIME_ENV_FLAG]: "1", NO_COLOR: "1" },
     },
   );
   const elapsedMs = Date.now() - startedAt;
