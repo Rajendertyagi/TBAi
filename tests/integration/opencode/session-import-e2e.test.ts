@@ -693,10 +693,9 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
 
         // Verify index enforcement
         expect(() => {
-          disposableDb.run(`
-            INSERT INTO conversations (id, title, engine, opencode_session_id, opencode_service_owner)
-            VALUES ('c3', 'Duplicate', 'opencode', 'ses_legacy_1', 'local');
-          `);
+          disposableDb.run(
+            "INSERT INTO conversations (id, title, engine, opencode_session_id, opencode_service_owner) VALUES ('c3', 'Duplicate', 'opencode', 'ses_legacy_1', 'local')",
+          );
         }).toThrow();
 
         disposableDb.close();
