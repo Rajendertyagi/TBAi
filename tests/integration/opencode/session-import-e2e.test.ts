@@ -1,9 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Hono } from "hono";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import openCodeApp from "@/routes/opencode.ts";
 import { applyOpenCodeSessionImportMigration, db } from "@/db/index.ts";
 import { conversationService } from "@/services/storage/conversations.ts";
@@ -654,11 +651,8 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
 
   describe("2. Migration and data integrity", () => {
     it("Verifies migration runs cleanly on disposable SQLite databases", () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-migration-test-"));
-      const tempDbPath = path.join(tempDir, "disposable.db");
-
+      const disposableDb = new Database(":memory:");
       try {
-        const disposableDb = new Database(tempDbPath);
         disposableDb.run(`
           CREATE TABLE conversations (
             id TEXT PRIMARY KEY,
@@ -707,20 +701,13 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
 
         disposableDb.close();
       } finally {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          // ignore Windows temp file locking
-        }
+        // :memory: database automatically cleaned up on close
       }
     });
 
     it("Fails non-destructively when preflight duplicate audit detects conflicting session bindings", () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tbai-dup-audit-test-"));
-      const tempDbPath = path.join(tempDir, "dup.db");
-
+      const disposableDb = new Database(":memory:");
       try {
-        const disposableDb = new Database(tempDbPath);
         disposableDb.run(`
           CREATE TABLE conversations (
             id TEXT PRIMARY KEY,
@@ -750,11 +737,7 @@ describe("Stage 5: End-to-end integration, performance, and data integrity verif
 
         disposableDb.close();
       } finally {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          // ignore Windows temp file locking
-        }
+        // :memory: database automatically cleaned up on close
       }
     });
   });
