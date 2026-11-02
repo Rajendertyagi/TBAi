@@ -765,6 +765,172 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
   });
 });
 
+describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
+  it("reconcilePromptSubmission walks cursor pages and finds prompt on later page", async () => {
+    const mockClient = {
+      session: {
+        inbox: { list: async () => ({ data: [] }) },
+      },
+      message: {
+        list: async (args: any) => {
+          if (!args.cursor) {
+            return { data: [{ id: "other" }], cursor: { next: "c1" } };
+          }
+          return { data: [{ id: "target_prm" }], cursor: {} };
+        },
+      },
+    } as any;
+    const res = await reconcilePromptSubmission(mockClient, "ses_1", "target_prm");
+    expect(res.found).toBe(true);
+    expect(res.location).toBe("messages");
+  });
+
+  it("reconcilePromptSubmission stops on cursor cycle", async () => {
+    const mockClient = {
+      session: { inbox: { list: async () => ({ data: [] }) } },
+      message: {
+        list: async () => ({ data: [{ id: "other" }], cursor: { next: "c1" } }),
+      },
+    } as any;
+    const res = await reconcilePromptSubmission(mockClient, "ses_1", "missing");
+    expect(res.found).toBe(false);
+  });
+
+  it("shared-existing cancellation reports outcome_unknown when prompt already delivered", async () => {
+    const conv = await conversationService.create({
+      title: "Shared",
+      providerId: "opencode",
+      engine: "opencode",
+      workspaceMode: "project",
+      workspaceFolderId: "wf_123",
+    });
+    db.run(
+      "INSERT OR REPLACE INTO folders (id, name, path, kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["wf_123", "Test Repo", process.cwd(), "regular", Date.now(), Date.now()],
+    );
+    const job = schedulerStore.create(
+      sampleOpenCodeJob({
+        opencodeSessionStrategy: "existing_conversation",
+        conversationId: conv.id,
+        workspacePath: process.cwd(),
+        timeoutSeconds: 10,
+      }),
+      db,
+    );
+    const run = schedulerStore.claimRun(job, "occ_cancel_delivered", "req_cancel", db, {
+      opencodePromptId: "prm_cancel",
+      opencodeSessionId: "mock_ses",
+    })!;
+
+    let cancelCalled = false;
+    mockOpenCodeClient = {
+      session: {
+        prompt: async () => ({}),
+        wait: async () => ({}),
+        inbox: {
+          cancel: async () => {
+            cancelCalled = true;
+          },
+          list: async () => ({ data: [] }),
+        },
+      },
+      message: {
+        list: async () => ({ data: [{ id: "prm_cancel", type: "user" }] }),
+      },
+    };
+
+    const controller = new AbortController();
+    const waitPromise = new Promise<void>((resolve) => {
+      setTimeout(() => controller.abort(), 10);
+    });
+    mockOpenCodeClient = {
+      ...mockOpenCodeClient,
+      session: {
+        ...mockOpenCodeClient.session,
+        wait: async (_args: any, opts: any) => {
+          return new Promise((resolve) => {
+            const onAbort = () => resolve({});
+            if (opts?.signal?.aborted) return resolve({});
+            opts?.signal?.addEventListener("abort", onAbort, { once: true });
+          });
+        },
+      },
+    };
+    void waitPromise;
+    const res = await executeOpenCodeScheduledTurn({
+      job,
+      run,
+      conversationId: conv.id,
+      parentSignal: controller.signal,
+    });
+    expect(res.ok).toBe(false);
+    const completed = schedulerStore.getRun(run.id, db)!;
+    expect(completed.turnOutcome).toBe("outcome_unknown");
+  });
+
+  it("shared-existing cancellation reports cancelled when prompt removed", async () => {
+    const conv = await conversationService.create({
+      title: "Shared2",
+      providerId: "opencode",
+      engine: "opencode",
+      workspaceMode: "project",
+      workspaceFolderId: "wf_123",
+    });
+    const job = schedulerStore.create(
+      sampleOpenCodeJob({
+        opencodeSessionStrategy: "existing_conversation",
+        conversationId: conv.id,
+        workspacePath: process.cwd(),
+        timeoutSeconds: 10,
+      }),
+      db,
+    );
+    const run = schedulerStore.claimRun(job, "occ_cancel_removed", "req_cancel2", db, {
+      opencodePromptId: "prm_cancel2",
+      opencodeSessionId: "mock_ses",
+    })!;
+
+    mockOpenCodeClient = {
+      session: {
+        prompt: async () => ({}),
+        wait: async () => ({}),
+        inbox: {
+          cancel: async () => ({}),
+          list: async () => ({ data: [] }),
+        },
+      },
+      message: {
+        list: async () => ({ data: [] }),
+      },
+    };
+
+    const controller = new AbortController();
+    mockOpenCodeClient = {
+      ...mockOpenCodeClient,
+      session: {
+        ...mockOpenCodeClient.session,
+        wait: async (_args: any, opts: any) => {
+          return new Promise((resolve) => {
+            const onAbort = () => resolve({});
+            if (opts?.signal?.aborted) return resolve({});
+            opts?.signal?.addEventListener("abort", onAbort, { once: true });
+            setTimeout(() => controller.abort(), 10);
+          });
+        },
+      },
+    };
+    const res = await executeOpenCodeScheduledTurn({
+      job,
+      run,
+      conversationId: conv.id,
+      parentSignal: controller.signal,
+    });
+    expect(res.ok).toBe(false);
+    const completed = schedulerStore.getRun(run.id, db)!;
+    expect(completed.status).toBe("cancelled");
+  });
+});
+
 describe("OpenCode Scheduler Store & Persistence", () => {
   beforeEach(() => {
     db.run("DELETE FROM scheduler_runs");
