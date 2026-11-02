@@ -57,7 +57,8 @@ export async function cancelOpenCodePrompt(input: {
       const resolved = await resolveConversationWorkspace(conv.id);
       directory = resolved.dir;
     } catch {
-      directory = conv.opencodeDirectory ?? undefined;
+      // Fail closed: do not fall back to stale metadata.
+      return false;
     }
     const client = createOpenCodeClient(access.baseUrl, {
       directory,
@@ -95,16 +96,18 @@ export async function reconcilePromptSubmission(
     }
 
     // Cursor-aware message retrieval: walk pages until the prompt is found or
-    // there are no more pages.
+    // there are no more pages. OpenCode 2.2.0 forbids combining cursor with
+    // order, so order is only sent on the first (cursor-less) request.
     let cursor: string | undefined;
     const seen = new Set<string>();
     for (let page = 0; page < 100; page++) {
-      const msgResp: any = await client.message.list({
-        sessionID: sessionId,
-        order: "asc",
-        cursor,
-        limit: 100,
-      });
+      const params: any = { sessionID: sessionId, limit: 100 };
+      if (cursor) {
+        params.cursor = cursor;
+      } else {
+        params.order = "asc";
+      }
+      const msgResp: any = await client.message.list(params);
       const messages = msgResp?.data ?? msgResp?.messages ?? [];
       if (messages.some((msg: any) => msg.id === promptId)) {
         return { found: true, location: "messages" };
@@ -238,7 +241,8 @@ export async function executeOpenCodeScheduledTurn(
     const resolved = await resolveConversationWorkspace(conversationId);
     directory = resolved.dir;
   } catch {
-    directory = conv?.opencodeDirectory ?? undefined;
+    // Fail closed: do not fall back to stale metadata.
+    throw new Error("Conversation workspace could not be resolved");
   }
   const client = createOpenCodeClient(access.baseUrl, {
     directory,
@@ -465,11 +469,44 @@ export async function executeOpenCodeScheduledTurn(
 
   // 4. Inspect message history for prompt -> idle turn boundary
   try {
-    const listResp = await client.message.list({
-      sessionID: sessionId,
-      order: "asc",
-    });
-    const messages = listResp.data ?? [];
+    // Cursor-aware retrieval: collect all pages (respecting cursor rules).
+    const allMessages: any[] = [];
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    let truncated = false;
+    for (let page = 0; page < 100; page++) {
+      const params: any = { sessionID: sessionId, limit: 100 };
+      if (cursor) {
+        params.cursor = cursor;
+      } else {
+        params.order = "asc";
+      }
+      const listResp: any = await client.message.list(params);
+      const pageMsgs = listResp?.data ?? listResp?.messages ?? [];
+      allMessages.push(...pageMsgs);
+      const next = listResp?.cursor?.next;
+      if (page === 99 && next && !seen.has(next)) {
+        truncated = true;
+      }
+      if (!next || seen.has(next)) break;
+      seen.add(next);
+      cursor = next;
+      if (pageMsgs.length === 0) break;
+    }
+    if (truncated) {
+      const durationMs = Date.now() - started;
+      const errorMsg = "Could not retrieve complete message history for turn inspection.";
+      schedulerStore.updateRun(run.id, {
+        status: "failed",
+        turnOutcome: "outcome_unknown",
+        error: errorMsg,
+        completedAt: Date.now(),
+        durationMs,
+      });
+      schedulerStore.update(job.id, { lastRunAt: Date.now() });
+      return { ok: false, text: "", error: errorMsg, retryable: false };
+    }
+    const messages = allMessages;
 
     const promptIdx = messages.findIndex((m: any) => m.type === "user" && m.id === promptId);
     if (promptIdx === -1) {

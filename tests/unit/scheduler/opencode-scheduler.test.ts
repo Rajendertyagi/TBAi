@@ -509,6 +509,10 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
   beforeEach(async () => {
     db.run("DELETE FROM scheduler_runs");
     db.run("DELETE FROM scheduler_jobs");
+    db.run(
+      "INSERT OR REPLACE INTO folders (id, name, path, kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["wf_123", "Test Repo", process.cwd(), "regular", Date.now(), Date.now()],
+    );
     testConv = await conversationService.create({
       title: "Scheduled Test Conversation",
       providerId: "opencode",
