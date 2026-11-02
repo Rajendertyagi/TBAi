@@ -18,11 +18,13 @@
  * leaf below the services that orchestrate it.
  */
 
+import fs from "node:fs";
 import { db } from "../../db";
 import { generateId } from "../../lib/utils";
 import type { SQLQueryBindings } from "bun:sqlite";
 import type { Conversation, ConversationStatus, WorkspaceMode } from "../../types";
-import { createChatWorkspace } from "../workspace";
+import { chatWorkspaceDir, createChatWorkspace } from "../workspace";
+import { canonicalizeServiceOwner } from "../opencode/historyBoundary";
 
 interface ConversationRow {
   id: string;
@@ -37,6 +39,8 @@ interface ConversationRow {
   workspace_folder_id: string | null;
   opencode_session_id: string | null;
   opencode_service_owner: string | null;
+  opencode_directory: string | null;
+  opencode_imported: number | null;
   engine: string | null;
   opencode_agent: string | null;
   opencode_model: string | null;
@@ -98,6 +102,8 @@ function mapConversation(row: ConversationRow): Conversation {
     workspaceFolderId: row.workspace_folder_id ?? null,
     opencodeSessionId: row.opencode_session_id ?? null,
     opencodeServiceOwner: row.opencode_service_owner ?? null,
+    opencodeDirectory: row.opencode_directory ?? null,
+    opencodeImported: row.opencode_imported === 1,
     engine: (row.engine as "direct" | "opencode") ?? "direct",
     opencodeAgent: row.opencode_agent ?? null,
     opencodeModel: row.opencode_model ?? null,
@@ -139,6 +145,8 @@ export const conversationService = {
       | "workspaceFolderId"
       | "opencodeSessionId"
       | "opencodeServiceOwner"
+      | "opencodeDirectory"
+      | "opencodeImported"
       | "engine"
       | "opencodeAgent"
       | "opencodeModel"
@@ -162,29 +170,47 @@ export const conversationService = {
       workspaceFolderId = folderId;
     }
 
-    db.run(
-      "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, opencode_service_owner, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, client_request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [
-        id,
-        data.title,
-        data.providerId || null,
-        data.modelId ?? null,
-        data.reasoningLevel ?? null,
-        data.systemPrompt || null,
-        workspaceMode,
-        workspaceFolderId,
-        data.opencodeSessionId ?? null,
-        data.opencodeServiceOwner ?? null,
-        data.engine ?? "direct",
-        data.opencodeAgent ?? null,
-        data.opencodeModel ?? null,
-        data.opencodeVariant ?? null,
-        data.opencodeAutoApprove === true ? 1 : 0,
-        data.clientRequestId ?? null,
-        now,
-        now,
-      ],
-    );
+    try {
+      db.run(
+        "INSERT INTO conversations (id, title, provider_id, model_id, reasoning_level, system_prompt, status, workspace_mode, workspace_folder_id, opencode_session_id, opencode_service_owner, opencode_directory, opencode_imported, engine, opencode_agent, opencode_model, opencode_variant, opencode_auto_approve, client_request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'regular', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          id,
+          data.title,
+          data.providerId || null,
+          data.modelId ?? null,
+          data.reasoningLevel ?? null,
+          data.systemPrompt || null,
+          workspaceMode,
+          workspaceFolderId,
+          data.opencodeSessionId ?? null,
+          data.opencodeServiceOwner ?? null,
+          data.opencodeDirectory ?? null,
+          data.opencodeImported === true ? 1 : 0,
+          data.engine ?? "direct",
+          data.opencodeAgent ?? null,
+          data.opencodeModel ?? null,
+          data.opencodeVariant ?? null,
+          data.opencodeAutoApprove === true ? 1 : 0,
+          data.clientRequestId ?? null,
+          now,
+          now,
+        ],
+      );
+    } catch (insertErr) {
+      if (workspaceMode !== "project" && workspaceFolderId) {
+        try {
+          db.run("DELETE FROM folders WHERE id = ?", [workspaceFolderId]);
+          const dir = chatWorkspaceDir(id);
+          if (fs.existsSync(dir)) {
+            fs.rmSync(dir, { recursive: true, force: true });
+          }
+        } catch {
+          // best-effort cleanup
+        }
+      }
+      throw insertErr;
+    }
+
     const created = await this.get(id);
     if (!created) throw new Error("Failed to create conversation");
     return created;
@@ -211,20 +237,73 @@ export const conversationService = {
   },
 
   /**
+   * Look up the conversation that owns an OpenCode session under a specific service owner scope.
+   *
+   * @param serviceOwner - The owner of the OpenCode service (`local` or `remote:<origin>`).
+   * @param sessionId - The OpenCode session id.
+   * @returns The owning conversation, or `null` when no row matches.
+   */
+  async findByOpenCodeSession(
+    serviceOwner: string,
+    sessionId: string,
+  ): Promise<Conversation | null> {
+    if (!sessionId) return null;
+    const normalizedOwner = canonicalizeServiceOwner(serviceOwner);
+    const row = db
+      .query<ConversationRow, SQLQueryBindings[]>(
+        `SELECT * FROM conversations
+         WHERE opencode_session_id = ?
+           AND opencode_service_owner = ?
+         LIMIT 1`,
+      )
+      .get(sessionId, normalizedOwner);
+    if (row) return mapConversation(row);
+
+    const candidates = db
+      .query<ConversationRow, SQLQueryBindings[]>(
+        `SELECT * FROM conversations
+         WHERE opencode_session_id = ?`,
+      )
+      .all(sessionId);
+
+    for (const cand of candidates) {
+      if (canonicalizeServiceOwner(cand.opencode_service_owner) === normalizedOwner) {
+        return mapConversation(cand);
+      }
+    }
+    return null;
+  },
+
+  /**
+   * List all OpenCode session IDs bound to conversations for a specific service owner scope.
+   *
+   * @param serviceOwner - The service owner (`local` or `remote:<origin>`).
+   * @returns A Set of known session IDs for deduplication during discovery.
+   */
+  async listImportedOpenCodeSessionIds(serviceOwner: string): Promise<Set<string>> {
+    const normalizedOwner = canonicalizeServiceOwner(serviceOwner);
+    const rows = db
+      .query<
+        { opencode_session_id: string; opencode_service_owner: string | null },
+        SQLQueryBindings[]
+      >(
+        `SELECT opencode_session_id, opencode_service_owner FROM conversations
+         WHERE opencode_session_id IS NOT NULL`,
+      )
+      .all();
+    const set = new Set<string>();
+    for (const r of rows) {
+      if (canonicalizeServiceOwner(r.opencode_service_owner) === normalizedOwner) {
+        set.add(r.opencode_session_id);
+      }
+    }
+    return set;
+  },
+
+  /**
    * Look up the conversation that owns an OpenCode session.
    *
-   * This is the **missing link** in the workspace-authorization chain
-   * `OpenCode session id → conversation → folder → absolute directory`. The
-   * proxy needs it to resolve the session a browser request names into the
-   * one directory the request is allowed to address; without it the proxy
-   * would have to trust the caller's directory, which is exactly the
-   * disclosure the chain exists to prevent.
-   *
-   * The session id is a **selector**, not an authority: the directory that
-   * comes back is always resolved from the `folders` table through
-   * `resolveConversationWorkspace`, never from the session id itself.
-   *
-   * @param sessionId - The managed OpenCode session id.
+   * @param sessionId - The OpenCode session id.
    * @returns The owning conversation, or `null` when no row carries the id.
    */
   async findByOpenCodeSessionId(sessionId: string): Promise<Conversation | null> {
@@ -355,6 +434,8 @@ export const conversationService = {
         | "workspaceFolderId"
         | "opencodeSessionId"
         | "opencodeServiceOwner"
+        | "opencodeDirectory"
+        | "opencodeImported"
         | "engine"
         | "opencodeAgent"
         | "opencodeModel"
@@ -413,6 +494,14 @@ export const conversationService = {
       updates.push("opencode_service_owner = ?");
       values.push(data.opencodeServiceOwner);
     }
+    if (data.opencodeDirectory !== undefined) {
+      updates.push("opencode_directory = ?");
+      values.push(data.opencodeDirectory);
+    }
+    if (data.opencodeImported !== undefined) {
+      updates.push("opencode_imported = ?");
+      values.push(data.opencodeImported === true ? 1 : 0);
+    }
     if (data.engine !== undefined) {
       updates.push("engine = ?");
       values.push(data.engine);
@@ -462,7 +551,7 @@ export const conversationService = {
     return (
       db.run(
         `UPDATE conversations
-            SET opencode_session_id = NULL, opencode_service_owner = NULL, updated_at = ?
+            SET opencode_session_id = NULL, opencode_service_owner = NULL, opencode_directory = NULL, opencode_imported = 0, updated_at = ?
           WHERE id = ? AND opencode_session_id = ?`,
         [Date.now(), id, expectedSessionId],
       ).changes > 0

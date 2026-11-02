@@ -1,10 +1,16 @@
 import { createOpenCodeClient, lastStatusForSessionLookup, type OpenCodeClient } from "./client";
-import { OpenCodeError, toOpenCodeError } from "./errors";
+import {
+  OpenCodeDirectoryUnavailableError,
+  OpenCodeError,
+  OpenCodeImportedSessionMissingError,
+  toOpenCodeError,
+} from "./errors";
 import { conversationService } from "../storage";
 import { opencodeOrphanService } from "../storage/opencodeSessionOrphans";
 import { resolveConversationWorkspace } from "../workspace";
 import { resolveOpenCodeServiceAccess } from "./serviceAccess";
 import { serializeHistoryOwner } from "./historyBoundary";
+import { isCompatibleServiceOwner } from "./historyBoundary";
 import { resolveOpenCodeModelRef } from "./capabilities";
 import { fetchServerDefaultModel, pickSessionModel, resolveStoredModel } from "./sessionModel";
 import { logger } from "../../lib/logger";
@@ -466,7 +472,9 @@ export async function terminateSessionForConversationDeletion(input: {
 
   try {
     const directory =
-      input.directory ?? (await resolveConversationWorkspace(input.conversationId)).dir;
+      input.directory ??
+      conversation.opencodeDirectory ??
+      (await resolveConversationWorkspace(input.conversationId)).dir;
     const access = await resolveOpenCodeServiceAccess(conversation);
     const client = createOpenCodeClient(access.baseUrl, {
       directory,
@@ -747,19 +755,42 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     throw new EngineMismatchError(conversationId, conversation.engine ?? "direct");
   }
 
-  const resolved = await resolveConversationWorkspace(conversationId);
-  const directory = resolved.dir;
+  let directory: string | null = conversation.opencodeDirectory ?? null;
+  if (!directory && !conversation.opencodeImported) {
+    const resolved = await resolveConversationWorkspace(conversationId);
+    directory = resolved.dir;
+  }
   // H3/B3: the service is decided by the binding, not by whatever is handy.
   // An adopted-bound conversation is refused here before any managed work.
   const access = await resolveOpenCodeServiceAccess(conversation);
   const serviceOwner = serializeHistoryOwner(access.owner);
   const client = createOpenCodeClient(access.baseUrl, {
-    directory,
+    directory: directory ?? undefined,
     transport: access.transport,
   });
   if (conversation.opencodeSessionId) {
     const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
     if (live) {
+      const updates: Record<string, unknown> = {};
+      if (live.directory && live.directory !== conversation.opencodeDirectory) {
+        updates.opencodeDirectory = live.directory;
+      }
+      if (
+        conversation.opencodeServiceOwner !== serviceOwner &&
+        isCompatibleServiceOwner(conversation.opencodeServiceOwner, serviceOwner)
+      ) {
+        updates.opencodeServiceOwner = serviceOwner;
+      }
+      if (Object.keys(updates).length > 0) {
+        await conversationService.update(conversationId, updates);
+      }
+      if (!live.directory && !conversation.opencodeDirectory && conversation.opencodeImported) {
+        throw new OpenCodeDirectoryUnavailableError(
+          conversationId,
+          "",
+          "Imported OpenCode session has no recorded working directory and cannot fall back to a hidden chat workspace",
+        );
+      }
       // A live session that carries no model cannot select one, and a turn sent
       // to it does nothing. This is reached by sessions bound before the server
       // default was ever consulted, so it is a real lifecycle state and not a
@@ -774,6 +805,10 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
       );
       return { sessionId: live.id, directory: live.directory, reusedExistingSession: true };
     }
+    // Remote session not found:
+    if (conversation.opencodeImported) {
+      throw new OpenCodeImportedSessionMissingError(conversationId, conversation.opencodeSessionId);
+    }
     // Stale pointer (e.g. server restarted since the session was stored):
     // fall through and recreate rather than handing out a dead id.
     logger.warn("opencode", "opencode.session_stale", {
@@ -781,6 +816,20 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
       sessionId: conversation.opencodeSessionId,
     });
   }
+
+  // An imported conversation must NEVER silently create a new session
+  if (conversation.opencodeImported) {
+    throw new OpenCodeImportedSessionMissingError(
+      conversationId,
+      conversation.opencodeSessionId ?? "",
+    );
+  }
+
+  if (!directory) {
+    const resolved = await resolveConversationWorkspace(conversationId);
+    directory = resolved.dir;
+  }
+  const sessionDirectory: string = directory;
 
   // `session.create` posts to `POST /api/session` and accepts a flat
   // `{ id?, location: { directory }, agent?, model? }` body — `location.directory`
@@ -794,7 +843,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
   // TBAi's hands BEFORE the request, so a crash after the server commits the
   // session but before any response is durable is still recoverable.
   const sessionId = `${SESSION_ID_PREFIX}${generateId()}`;
-  const params: SessionCreateParams = { id: sessionId, location: { directory } };
+  const params: SessionCreateParams = { id: sessionId, location: { directory: sessionDirectory } };
 
   if (conversation.opencodeAgent) {
     params.agent = conversation.opencodeAgent;
@@ -1049,7 +1098,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
         );
       }
       // Prefer the V2 response's authoritative location over the submitted path.
-      return asDirectory(session.location?.directory) ?? directory;
+      return asDirectory(session.location?.directory) ?? sessionDirectory;
     };
 
     try {
@@ -1088,7 +1137,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
           persistErrorCategory: classifyError(failure).category,
         });
         return {
-          directory: probe.directory ?? directory,
+          directory: probe.directory ?? sessionDirectory,
           duplicateCreatePossible: false,
         };
       }
@@ -1128,7 +1177,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
             attempt: "retry",
           });
           return {
-            directory: retryProbe.directory ?? directory,
+            directory: retryProbe.directory ?? sessionDirectory,
             // Either attempt may have produced the session; the first is not
             // provably finished, so a removal must not discard the intent.
             duplicateCreatePossible: true,
@@ -1189,10 +1238,11 @@ export async function getOpenCodeSessionActivity(
     throw new OpenCodeSessionMismatchError(conversationId, sessionId);
   }
   try {
-    const resolved = await resolveConversationWorkspace(conversationId);
+    const directory =
+      conversation.opencodeDirectory ?? (await resolveConversationWorkspace(conversationId)).dir;
     const access = await resolveOpenCodeServiceAccess(conversation);
     const client = createOpenCodeClient(access.baseUrl, {
-      directory: resolved.dir,
+      directory,
       transport: access.transport,
     });
     const active = await client.session.active();
@@ -1234,10 +1284,11 @@ export async function terminateOpenCodeSession(
     return { terminated: false };
   }
   try {
-    const resolved = await resolveConversationWorkspace(conversationId);
+    const directory =
+      conversation.opencodeDirectory ?? (await resolveConversationWorkspace(conversationId)).dir;
     const access = await resolveOpenCodeServiceAccess(conversation);
     const client = createOpenCodeClient(access.baseUrl, {
-      directory: resolved.dir,
+      directory,
       transport: access.transport,
     });
     // Interrupt first, then remove: stop live work before dropping the session
@@ -1309,4 +1360,55 @@ export async function terminateOpenCodeSession(
     journal,
   });
   return { terminated: true };
+}
+
+/**
+ * Authoritatively reconciles the persisted directory of an OpenCode session.
+ * Fetches the session from the owning service via `session.get`, updates SQLite
+ * `opencode_directory` if it changed, and returns the confirmed session binding.
+ *
+ * For imported sessions that are not found on the remote server, raises
+ * `OpenCodeImportedSessionMissingError`.
+ */
+export async function reconcileOpenCodeSessionDirectory(
+  conversationId: string,
+): Promise<{ sessionId: string; directory: string | null }> {
+  const conversation = await conversationService.get(conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation not found: ${conversationId}`);
+  }
+  if (conversation.engine !== "opencode") {
+    throw new EngineMismatchError(conversationId, conversation.engine ?? "direct");
+  }
+  if (!conversation.opencodeSessionId) {
+    throw new Error(`Conversation ${conversationId} has no bound OpenCode session`);
+  }
+
+  const access = await resolveOpenCodeServiceAccess(conversation);
+  const client = createOpenCodeClient(access.baseUrl, {
+    directory: conversation.opencodeDirectory ?? undefined,
+    transport: access.transport,
+  });
+
+  const live = await fetchOpenCodeSession(client, conversation.opencodeSessionId);
+  if (!live) {
+    if (conversation.opencodeImported) {
+      throw new OpenCodeImportedSessionMissingError(conversationId, conversation.opencodeSessionId);
+    }
+    throw new OpenCodeError(
+      "session_not_found",
+      `Session not found: ${conversation.opencodeSessionId}`,
+    );
+  }
+
+  if (live.directory && live.directory !== conversation.opencodeDirectory) {
+    await conversationService.update(conversationId, {
+      opencodeDirectory: live.directory,
+    });
+  }
+
+  return {
+    sessionId: live.id,
+    directory: live.directory ?? conversation.opencodeDirectory ?? null,
+  };
 }

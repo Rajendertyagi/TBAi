@@ -79,26 +79,13 @@ export const OPENCODE_CONFIG = {
    */
   configReadTimeoutMs: 10_000,
   /**
-   * Oldest OpenCode build whose essential API TBAi has actually checked.
+   * Authoritative minimum OpenCode version supported by TBAi.
    *
-   * This is an **evidence floor**, not a product preference: 2.0.15 is the
-   * oldest release TBAi has measured, and below it the routes TBAi calls are
-   * unknown rather than merely older. There is deliberately **no upper
-   * bound** (B7, owner-approved 2026-10-31): a newer stable release is not
-   * refused for being newer. Prerelease builds are refused (D2), and the
-   * capability routes are probed after readiness so acceptance rests on what
-   * the running build actually serves (`compatibility.ts`).
-   *
-   * MEASURED MATRIX (2026-10-31): 2.0.15, 2.1.0, 2.1.4, 2.2.0, 2.2.1, 2.2.2,
-   * 2.2.3, 2.2.4 and 2.2.5, each from its own official npm artifact extracted
-   * to a disposable root. Every one announced a kernel-assigned loopback URL,
-   * bound only 127.0.0.1 (OS socket table), answered 401 unauthenticated and
-   * 200 authenticated on `/api/info`, and served all six probed capability
-   * routes with the expected content type. That is why the floor stays at
-   * 2.0.15 and no ceiling exists: the acceptance decision rests on the live
-   * capability probe, not on a number.
+   * Approved compatibility policy: OpenCode 2.2.0 and newer stable releases only.
+   * Releases below 2.2.0, prereleases, and malformed versions are rejected.
+   * There is no upper version limit for stable releases.
    */
-  minimumVersion: "2.0.15",
+  minimumVersion: "2.2.0",
   /** Default HTTP Basic username expected by OpenCode V2. */
   authUsername: "opencode",
   /**
@@ -127,6 +114,12 @@ export const OPENCODE_CONFIG = {
   authPasswordLegacyEnvVar: "OPENCODE_SERVER_PASSWORD",
   /** Both names are set to one value so server and client can never disagree. */
   authPasswordChildEnvVars: ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"] as const,
+  /** Explicit adopted server endpoint URL override (e.g. "http://127.0.0.1:56873"). */
+  serverUrlEnvVar: "OPENCODE_URL",
+  /** Explicit adopted server host override. */
+  serverHostEnvVar: "OPENCODE_HOST",
+  /** Explicit adopted server port override. */
+  serverPortEnvVar: "OPENCODE_PORT",
   /** Graceful shutdown window before SIGKILL. */
   shutdownTimeoutMs: 5_000,
   /**
@@ -182,13 +175,15 @@ export const OPENCODE_CONFIG = {
   opencodeChildStopKillMs: 5_000,
   /** Consecutive unexpected-exit restarts before giving up. */
   maxRestartAttempts: 3,
+  /** Time a managed process must run continuously after readiness to reset the restart budget. */
+  stabilityPeriodMs: 5_000,
   /** Max bytes of child stdout/stderr retained per stream for exit diagnostics. */
   diagnosticTailBytes: 4_096,
   /** Neutral working directory for the shared server process (never a user workspace). */
   serverHomeDir: path.join(DATA_DIR, "opencode-home"),
   /** User-facing error when the `opencode` binary cannot be found on PATH. */
   binaryMissingError:
-    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.0.15 or newer stable executable or install `opencode` on PATH, then reload.",
+    "OpenCode CLI not found. Set OPENCODE_BINARY to an OpenCode 2.2.0 or newer stable executable or install `opencode` on PATH, then reload.",
 } as const;
 
 export type OpenCodeConfig = {
@@ -210,6 +205,9 @@ export type OpenCodeConfig = {
   readonly authPasswordEnvVar: string;
   readonly authPasswordLegacyEnvVar: string;
   readonly authPasswordChildEnvVars: readonly string[];
+  readonly serverUrlEnvVar: string;
+  readonly serverHostEnvVar: string;
+  readonly serverPortEnvVar: string;
   readonly shutdownTimeoutMs: number;
   readonly registrationReadTimeoutMs: number;
   readonly registrationFileMaxBytes: number;
@@ -225,6 +223,7 @@ export type OpenCodeConfig = {
   readonly opencodeChildStopGraceMs: number;
   readonly opencodeChildStopKillMs: number;
   readonly maxRestartAttempts: number;
+  readonly stabilityPeriodMs: number;
   readonly diagnosticTailBytes: number;
   readonly serverHomeDir: string;
   readonly binaryMissingError: string;

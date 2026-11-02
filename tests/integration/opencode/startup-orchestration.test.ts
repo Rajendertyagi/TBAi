@@ -398,10 +398,8 @@ describe("B7 — the version strategy at the startup boundary", () => {
     }
   });
 
-  it("adopts a stable build below the evidence floor when its capabilities answer", async () => {
-    // B7: the floor is an evidence boundary, not a proven incompatibility, so
-    // an unmeasured stable build is probed and admitted on capability.
-    const fake = startFakeOpenCode({ version: "2.0.14" });
+  it("refuses an adopted service below 2.2.0 and falls back to the managed service", async () => {
+    const fake = startFakeOpenCode({ version: "2.1.4" });
     try {
       const starts = newStarts();
       const outcome = await startOpenCodeRuntime({
@@ -411,33 +409,14 @@ describe("B7 — the version strategy at the startup boundary", () => {
         startManaged: managedStart(starts),
       });
 
-      expect(outcome.status).toBe("adopted");
-      if (outcome.status === "adopted") expect(outcome.capabilities.version).toBe("2.0.14");
-      expect(starts.count).toBe(0);
-      expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: fake.origin });
-    } finally {
-      fake.stop();
-    }
-  });
-
-  it("falls back to the managed service when a below-floor build lacks an essential route", async () => {
-    const fake = startFakeOpenCode({ version: "2.0.14", missingRoutes: ["/api/session"] });
-    try {
-      const starts = newStarts();
-      const outcome = await startOpenCodeRuntime({
-        config: FAST_CONFIG,
-        disabled: false,
-        registrationPath: writeRegistration("old-degraded.json", registrationFor(fake.origin)),
-        startManaged: managedStart(starts),
-      });
-
       expect(outcome).toEqual({
         status: "managed",
-        reason: "probe_capability_missing",
+        reason: "probe_version_unsupported",
         baseUrl: MANAGED_URL,
       });
       expect(starts.count).toBe(1);
-      expect(fake.requests).toContain("/api/session");
+      expect(fake.requests).not.toContain("/api/session");
+      expect(readConnectionState().target.mode).toBe("managed");
     } finally {
       fake.stop();
     }

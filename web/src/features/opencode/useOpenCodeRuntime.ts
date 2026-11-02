@@ -3,7 +3,10 @@ import { createOpenCodeV2Client } from "./v2Client";
 import { createV2ThreadController } from "./v2ThreadController";
 import { useV2AssistantRuntime } from "./v2Runtime";
 import { useOpenCodeAuxiliaryResync } from "./useOpenCodeAuxiliaryResync";
-import { fetchOpenCodeSessionActivity } from "./sessionBootstrap";
+import {
+  fetchOpenCodeSessionActivity,
+  reconcileOpenCodeSessionDirectory,
+} from "./sessionBootstrap";
 import { getApiBaseUrl } from "../../lib/platform";
 
 /** Builds the native OpenCode V2 runtime for one bootstrapped session. */
@@ -31,7 +34,12 @@ export function useOpenCodeRuntime(
         client,
         undefined,
         conversationId
-          ? { conversationId, fetchActivity: fetchOpenCodeSessionActivity }
+          ? {
+              conversationId,
+              fetchActivity: fetchOpenCodeSessionActivity,
+              reconcileDirectory: ({ conversationId }) =>
+                reconcileOpenCodeSessionDirectory(conversationId),
+            }
           : undefined,
       ),
     [client, conversationId],

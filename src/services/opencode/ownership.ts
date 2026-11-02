@@ -12,6 +12,7 @@
  * - a path that cannot be resolved refuses startup;
  * - a mutex held by another TBAi backend refuses startup;
  * - a foreign process holding the database refuses startup;
+ * - a foreign OpenCode server process running against the same database refuses startup;
  * - a Restart Manager query that cannot be answered refuses startup;
  * - after readiness, any holder other than the managed child refuses startup
  *   and terminates the child.
@@ -21,8 +22,10 @@
  * plan rather than papered over.
  */
 import { spawn } from "bun";
+import { dlopen, ptr } from "bun:ffi";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { OPENCODE_CONFIG } from "../../config/opencode";
@@ -184,6 +187,40 @@ async function readStream(
   return new Response(stream).text();
 }
 
+/** Enumerates running processes on Windows to find any OpenCode process. */
+export function defaultFindRunningOpenCodePids(ignored: readonly number[]): number[] {
+  if (process.platform !== "win32") return [];
+  try {
+    const k = dlopen("kernel32.dll", {
+      CreateToolhelp32Snapshot: { args: ["u32", "u32"], returns: "ptr" },
+      Process32FirstW: { args: ["ptr", "ptr"], returns: "i32" },
+      Process32NextW: { args: ["ptr", "ptr"], returns: "i32" },
+      CloseHandle: { args: ["ptr"], returns: "i32" },
+    });
+    const snap = k.symbols.CreateToolhelp32Snapshot(2, 0); // TH32CS_SNAPPROCESS = 2
+    if (snap === null || snap === 0n) return [];
+    const buf = Buffer.alloc(568);
+    buf.writeUInt32LE(568, 0);
+    const ignoredSet = new Set(ignored);
+    const pids: number[] = [];
+    let ok = k.symbols.Process32FirstW(snap, ptr(buf));
+    while (ok !== 0) {
+      const pid = buf.readUInt32LE(8);
+      if (pid > 0 && !ignoredSet.has(pid)) {
+        const name = buf.toString("utf16le", 44, 564).split("\0")[0].toLowerCase();
+        if (name === "opencode.exe" || name === "opencode") {
+          pids.push(pid);
+        }
+      }
+      ok = k.symbols.Process32NextW(snap, ptr(buf));
+    }
+    k.symbols.CloseHandle(snap);
+    return pids;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * The database-ownership policy, with injectable OS dependencies so the
  * decision table is unit-testable without touching a real database.
@@ -206,6 +243,7 @@ export interface OpenCodeDatabaseOwnershipDeps {
   readonly pid: number;
   resolveDatabasePath(binary: string, cwd: string, timeoutMs: number): Promise<string>;
   findProcessesUsingFiles(files: readonly string[]): number[];
+  findRunningOpenCodePids?(ignored: readonly number[]): number[];
   acquireMutex(name: string): NamedMutexLease | null;
   releaseMutex(lease: NamedMutexLease): void;
 }
@@ -215,6 +253,7 @@ const defaultDeps: OpenCodeDatabaseOwnershipDeps = {
   pid: process.pid,
   resolveDatabasePath: resolveOpenCodeDatabasePath,
   findProcessesUsingFiles,
+  findRunningOpenCodePids: defaultFindRunningOpenCodePids,
   acquireMutex: acquireNamedMutex,
   releaseMutex: releaseNamedMutex,
 };
@@ -276,7 +315,7 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
         throw new OpenCodeDatabaseBusyError({
           dbPath,
           pids,
-          reason: "a process already holds the database",
+          reason: "a process already holds or shares the database",
         });
       }
       this.lease = { mutex, dbPath };
@@ -309,6 +348,27 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
         `Cannot query OpenCode database holders: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+
+    // Process enumeration guard: if dbPath matches default OpenCode database,
+    // verify no foreign OpenCode server process other than childPid is running.
+    const defaultDb = path
+      .resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
+      .toLowerCase();
+    const localAppDb = process.env.LOCALAPPDATA
+      ? path.resolve(process.env.LOCALAPPDATA, "opencode", "opencode.db").toLowerCase()
+      : null;
+    const normalizedDb = path.resolve(dbPath).toLowerCase();
+
+    if (
+      (normalizedDb === defaultDb || (localAppDb && normalizedDb === localAppDb)) &&
+      this.deps.findRunningOpenCodePids
+    ) {
+      const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid, childPid]);
+      for (const pid of runningOpenCodePids) {
+        if (!pids.includes(pid)) pids.push(pid);
+      }
+    }
+
     const foreign = foreignProcessIds(pids, [this.deps.pid, childPid]);
     if (foreign.length > 0) {
       throw new OpenCodeDatabaseBusyError({
@@ -330,15 +390,37 @@ export class OpenCodeDatabaseOwnership implements OpenCodeDatabaseLease {
 
   private foreignHolders(dbPath: string): number[] {
     const files = existingDatabaseFiles(dbPath);
-    if (files.length === 0) return [];
-    let pids: number[];
-    try {
-      pids = this.deps.findProcessesUsingFiles(files);
-    } catch (err) {
-      throw new OpenCodeDatabaseCheckError(
-        `Cannot query OpenCode database holders: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    let pids: number[] = [];
+    if (files.length > 0) {
+      try {
+        pids = this.deps.findProcessesUsingFiles(files);
+      } catch (err) {
+        throw new OpenCodeDatabaseCheckError(
+          `Cannot query OpenCode database holders: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
+
+    // Process enumeration guard: if dbPath matches default OpenCode database,
+    // verify no foreign OpenCode server process is already running.
+    const defaultDb = path
+      .resolve(os.homedir(), ".local", "share", "opencode", "opencode.db")
+      .toLowerCase();
+    const localAppDb = process.env.LOCALAPPDATA
+      ? path.resolve(process.env.LOCALAPPDATA, "opencode", "opencode.db").toLowerCase()
+      : null;
+    const normalizedDb = path.resolve(dbPath).toLowerCase();
+
+    if (
+      (normalizedDb === defaultDb || (localAppDb && normalizedDb === localAppDb)) &&
+      this.deps.findRunningOpenCodePids
+    ) {
+      const runningOpenCodePids = this.deps.findRunningOpenCodePids([this.deps.pid]);
+      for (const pid of runningOpenCodePids) {
+        if (!pids.includes(pid)) pids.push(pid);
+      }
+    }
+
     return foreignProcessIds(pids, [this.deps.pid]);
   }
 }

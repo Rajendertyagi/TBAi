@@ -1,20 +1,10 @@
 /**
  * Resolves the service a history operation may use, and refuses when the
- * conversation's history lives on a different one (H3/B3, §4.3).
+ * conversation's history lives on a different scope (local vs remote).
  *
  * This is the single place that answers "which service owns this conversation's
  * OpenCode session, and may it be touched?". Callers receive one access value;
- * they never branch on managed-versus-adopted themselves (§5.1 of the plan).
- *
- * Two invariants matter more than the shape:
- *
- *  - **An adopted-bound conversation never reaches the managed manager.** Not
- *    to reuse a cached child, not to start one, and therefore never to acquire
- *    the managed database lease. When its adopted service is not installed the
- *    operation is refused; the managed service is not a stand-in.
- *  - **A managed-bound conversation never reaches an adopted service.** The
- *    adopted service keeps its own history and its own database; a managed
- *    session is not looked up, resumed or re-created there.
+ * they never branch on managed-versus-adopted themselves.
  */
 import type { Conversation } from "../../types";
 import {
@@ -29,7 +19,7 @@ import {
   assertSameHistoryOwner,
   describeHistoryOwner,
   historyOwnerFromTarget,
-  MANAGED_HISTORY_OWNER,
+  LOCAL_OWNER,
   OpenCodeHistoryBoundaryError,
   readConversationHistoryOwner,
   type OpenCodeHistoryOwner,
@@ -45,11 +35,6 @@ export type OpenCodeServiceAccess = Readonly<{
    * The bounded transport captured with the target. It carries the credential
    * for exactly this origin, so a caller cannot pair one service's credential
    * with another service's address.
-   *
-   * REQUIRED. The legacy managed path — a start that returned without
-   * publishing a target — still receives a real transport built from the
-   * managed credential ({@link createManagedFallbackTransport}), so no caller
-   * has to fall back to a header record.
    */
   readonly transport: OpenCodeTransport;
 }>;
@@ -68,14 +53,11 @@ function captureInstalledAccess(owner: OpenCodeHistoryOwner): OpenCodeServiceAcc
  * Resolves the service a conversation's history may be read or written
  * through, or refuses.
  *
- * Ordering is the contract: the installed target is consulted first, so an
- * adopted-bound conversation is refused before any managed startup work runs.
- * The managed start happens only for a conversation with no binding, or one
- * whose binding is the managed service — the legacy path that existed before
- * adoption.
+ * Ordering is the contract: the installed target is consulted first.
+ * A remote-bound conversation is refused before any local managed startup work runs.
  *
- * @throws {OpenCodeHistoryBoundaryError} when the binding names another service,
- *   or when it names an adopted service that is not installed.
+ * @throws {OpenCodeHistoryBoundaryError} when the binding names another service scope,
+ *   or when it names a remote service that is not installed.
  * @throws {OpenCodeNotReadyError} after shutdown.
  */
 export async function resolveOpenCodeServiceAccess(
@@ -94,10 +76,10 @@ export async function resolveOpenCodeServiceAccess(
     return captureInstalledAccess(active);
   }
 
-  // Nothing is installed. An adopted-bound conversation is refused BEFORE the
+  // Nothing is installed. A remote-bound conversation is refused BEFORE the
   // managed manager is asked for anything, so a fallback or startup race can
-  // never start a managed child for history that lives elsewhere.
-  if (recorded?.kind === "adopted") {
+  // never start a managed child for history that lives on a remote server.
+  if (recorded?.kind === "remote") {
     throw new OpenCodeHistoryBoundaryError(
       "adopted_unavailable",
       conversation.id,
@@ -118,11 +100,10 @@ export async function resolveOpenCodeServiceAccess(
     return captureInstalledAccess(active);
   }
 
-  // Legacy managed access: the URL came from the manager, which owns the one
-  // managed credential. No target was published, so the transport is built
-  // directly from that credential and still refuses any other origin.
+  // Fallback managed access: the URL came from the manager, which owns the one
+  // managed credential.
   return Object.freeze({
-    owner: MANAGED_HISTORY_OWNER,
+    owner: LOCAL_OWNER,
     baseUrl,
     transport: createManagedFallbackTransport(baseUrl),
   });

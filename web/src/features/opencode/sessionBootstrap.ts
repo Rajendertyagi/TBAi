@@ -193,3 +193,40 @@ export async function fetchOpenCodeSessionActivity(input: {
 export function clearAllBootstraps(): void {
   inFlightBootstraps.clear();
 }
+
+export const OPENCODE_RECONCILE_DIRECTORY_PATH = "/api/opencode/session/reconcile-directory";
+
+/**
+ * Reconciles the persisted directory for an OpenCode session after an external move.
+ */
+export async function reconcileOpenCodeSessionDirectory(
+  conversationId: string,
+): Promise<{ sessionId: string; directory: string | null }> {
+  const convId = typeof conversationId === "string" ? conversationId.trim() : "";
+  if (!convId) {
+    throw new Error("conversationId is required");
+  }
+
+  const res = await apiFetch(OPENCODE_RECONCILE_DIRECTORY_PATH, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: convId }),
+  });
+
+  const data = (await res.json().catch(() => ({}))) as {
+    sessionId?: string;
+    directory?: string | null;
+    error?: string;
+  };
+
+  if (!res.ok || !data.sessionId) {
+    throw new Error(
+      data.error || `Failed to reconcile OpenCode session directory: HTTP ${res.status}`,
+    );
+  }
+
+  return {
+    sessionId: data.sessionId,
+    directory: data.directory ?? null,
+  };
+}

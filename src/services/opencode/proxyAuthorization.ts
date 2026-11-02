@@ -17,25 +17,20 @@
  * OpenCode session id  →  conversation  →  folder  →  absolute directory
  * ```
  *
- * - `conversationService.findByOpenCodeSessionId` resolves the session id to
- *   the conversation that owns it.
- * - `resolveConversationWorkspace` is **the** workspace authority: it reads
- *   the conversation, resolves the registered folder, and returns the absolute
- *   directory. It is the same function that roots the session in the first
- *   place (`services/opencode/sessions.ts`), so the proxy and the session can
- *   never disagree about where a conversation lives.
+ * - `conversationService.findByOpenCodeSession` resolves the session id under
+ *   the active service owner to the conversation that owns it.
+ * - `resolveOpenCodeSessionDirectory` is **the** workspace authority: for imported
+ *   conversations it returns the server-confirmed `opencodeDirectory`; for native
+ *   TBAi conversations it resolves the registered folder.
  *
  * ## WHAT A SESSION ID IS, AND IS NOT
  *
  * A session id is a **selector** over workspaces this database already knows
  * about, not an authority over an arbitrary path. The directory always comes
- * from the `folders` table; a session id can never name a path. In this
- * single-user local application every conversation in the database belongs to
+ * from the server-authorized state; a session id can never name an arbitrary path.
+ * In this single-user local application every conversation in the database belongs to
  * the user, so the boundary being enforced is the *server's* authority over
  * *which* directory, not a multi-tenant ACL.
- *
- * The authorization unit is therefore the **workspace** (a folder), not the
- * conversation: one project folder may host several conversations.
  *
  * ## WHY A DISAGREEMENT IS REFUSED
  *
@@ -46,7 +41,7 @@
  */
 
 import { conversationService } from "../storage/conversations";
-import { resolveConversationWorkspace } from "../workspace";
+import { resolveOpenCodeSessionDirectory } from "./workspace";
 import { OPENCODE_SESSION_HEADER, type OpenCodeProxyRoute } from "./proxyRoutes";
 
 export { OPENCODE_SESSION_HEADER };
@@ -84,6 +79,7 @@ export interface OpenCodeProxyAuthorization {
  * @param route - The matched allowlist route, which carries the scope class.
  * @param parameters - The path parameters the route matched.
  * @param sessionHeader - The `x-tbai-session` header the browser sent, if any.
+ * @param serviceOwner - The canonical owner of the active OpenCode service.
  * @returns The directory to scope the upstream request to (`null` for a
  *   globally scoped route) and the session id it was authorized against.
  * @throws OpenCodeProxyRefusalError when the request cannot be authorized:
@@ -94,8 +90,9 @@ export async function authorizeOpenCodeProxyRequest(input: {
   readonly route: OpenCodeProxyRoute;
   readonly parameters: Readonly<Record<string, string>>;
   readonly sessionHeader: string | null;
+  readonly serviceOwner?: string | null;
 }): Promise<OpenCodeProxyAuthorization> {
-  const { route, parameters, sessionHeader } = input;
+  const { route, parameters, sessionHeader, serviceOwner } = input;
 
   // Class A: upstream reads no location and returns no workspace-scoped data.
   // There is nothing to authorize, and no directory is sent — sending one
@@ -119,23 +116,25 @@ export async function authorizeOpenCodeProxyRequest(input: {
     throw new OpenCodeProxyRefusalError(403, "The request does not name an OpenCode session");
   }
 
-  const conversation = await conversationService.findByOpenCodeSessionId(sessionId);
+  const normalizedOwner = serviceOwner || "managed";
+  const conversation = await conversationService.findByOpenCodeSession(normalizedOwner, sessionId);
   if (!conversation) {
     throw new OpenCodeProxyRefusalError(403, "The OpenCode session is not known to this server");
   }
 
   let directory: string;
   try {
-    const workspace = await resolveConversationWorkspace(conversation.id);
-    directory = workspace.dir;
-  } catch {
+    directory = await resolveOpenCodeSessionDirectory(conversation);
+  } catch (err) {
     // A conversation whose folder is gone, or whose workspace cannot be
     // resolved, has no directory to scope the request to. The request is
     // refused rather than forwarded unscoped, which would let upstream fall
     // back to its own working directory.
     throw new OpenCodeProxyRefusalError(
       403,
-      "The workspace for this OpenCode session could not be resolved",
+      err instanceof Error
+        ? err.message
+        : "The workspace for this OpenCode session could not be resolved",
     );
   }
 

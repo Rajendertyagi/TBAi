@@ -224,12 +224,21 @@ Becomes:
 - `engine === "direct"` → unchanged.
 - `engine === "opencode"`:
   - `dedicated_thread` → `conversationService.create({ title, providerId,
-    engine: "opencode", workspaceMode })` (the engine column already exists
-    on `conversations`); the session is **not** created here — it is
-    created lazily at first prompt by `ensureOpenCodeSession`, exactly as
-    the interactive chat route does. This keeps the adapter's failure
-    surface small (a job whose OpenCode server is down still creates the
-    conversation row; the *run* records the failure with retry semantics).
+    engine: "opencode", workspaceMode,
+    opencodeServiceOwner: serializeHistoryOwner(access.owner) })`
+    (the engine column already exists on `conversations`).
+    **Owner binding (new, §4f):** store the serialized owner of the
+    service access the run will later resolve — read from
+    `resolveOpenCodeServiceAccess` for a blank conversation (the active
+    target), never a guessed literal. Under B7's profile model
+    (`serviceProfile.ts`), an unbound owner makes
+    `ensureOpenCodeSession`'s boundary check refuse the first run with
+    `OpenCodeHistoryBoundaryError`. The session is **not** created
+    here — it is created lazily at first prompt by
+    `ensureOpenCodeSession`, exactly as the interactive chat route
+    does. This keeps the adapter's failure surface small (a job whose
+    OpenCode server is down still creates the conversation row; the
+    *run* records the failure with retry semantics).
   - `existing_thread` → validate the target conversation exists, is not
     archived, and (new check) has `engine === "opencode"`; otherwise the
     run fails fast with a clear error. This is the one validation that
@@ -326,10 +335,22 @@ New `checkEngine` / extended `checkProvider`:
   frontend capability); agent is optional.
 - `existing_thread` conversation list filters to conversations matching
   the chosen engine (Direct list stays as-is for Direct).
-- **§3.12 self-limiting fields:** one "Stop after" line in the schedule
-  section — an optional run-count input and an optional expiry date,
+- **§3.12 self-limiting fields:** one "Stop after" line in the
+  schedule section — an optional run-count input and an optional expiry date,
   both blank by default (cron jobs only; a once job has no UI for
   them since `execAt` is its terminal bound).
+- **Service-profile note (§4f):** OpenCode service access now carries a
+  *profile id* (`serviceProfile.ts`, B7); `opencode_service_owner` on a
+  conversation row is the serialized form of that owner (`managed` /
+  `adopted:<origin>` / `profile:<id>`). The OpenCode execution path must
+  only ever resolve its owner through `resolveOpenCodeServiceAccess`
+  and `serializeHistoryOwner(access.owner)` — never invent owner strings.
+  If a dedicated OpenCode thread is created without storing the owner,
+  its first `ensureOpenCodeSession` refuses with
+  `OpenCodeHistoryBoundaryError` (boundary check); the create step in
+  Task 4 therefore stores
+  `opencodeServiceOwner: serializeHistoryOwner(access.owner)` read from
+  the same service access the run will later resolve.
 - `JobListItem` / `JobDetail` / run rows show an engine badge; OpenCode
   run rows link to their conversation (the session transcript); a
   "N of M runs" chip on `JobListItem` when `maxRuns` is set.
@@ -448,9 +469,20 @@ before it).
 - `schedulerValidation.ts`: `checkExistingThread` gains the
   engine-mismatch check (§3.4) **and** the folder-mismatch check
   (§4d.2 D: an existing thread's folder ≠ the job's `workspaceFolderId`
-  → 422); `checkProvider` gains the `checkEngine` split (§3.7).
+  → 422) **and** the imported-target refusal (§4f.2: an
+  `existing_thread` target with `opencodeImported = 1` → 422 "imported
+  sessions are not schedulable targets"); `checkProvider` gains the
+  `checkEngine` split (§3.7).
+- **Owner binding on create (§4f.2, new):** the dedicated OpenCode
+  create passes
+  `opencodeServiceOwner: serializeHistoryOwner(access.owner)` —
+  asserted by a test that the created row's owner equals the
+  serialized active target's owner (managed and profile-qualified
+  cases).
 - **Test:** OpenCode job + `existing_thread` at a Direct conversation
-  → engine-mismatch at save; OpenCode job + `dedicated_thread` →
+  → engine-mismatch at save; an `existing_thread` target with
+  `opencodeImported = 1` → 422 "imported sessions are not schedulable"
+  (§4f.2); OpenCode job + `dedicated_thread` →
   created row carries `engine: "opencode"` + the folder (when set) or
   a temp chat folder (when unset); a job whose `workspaceFolderId`
   points at a deleted folder → run-time `ScheduleTargetGoneError`;
@@ -495,7 +527,9 @@ before it).
   text, `provider_id` = `"opencode"`); server-not-ready → retry up to
   `maxRetries` then `failed` (retryable classification asserted);
   permission wait → cron: next slot retries, once: terminal `failed`;
-  cancellation → `cancelled` + interrupt attempted.
+  cancellation → `cancelled` + interrupt attempted;
+  **§4f.2:** `OpenCodeHistoryBoundaryError` → terminal `failed` for
+  both cron and once (no retry), run's `error` names the refusal kind.
 - Commit.
 
 ### Task 7 — API surface: routes + AI tools + validation wiring
@@ -1275,4 +1309,85 @@ task's tests. End-to-end before "done":
    conversation is archived between save and fire → run fails
    terminal (`ScheduleTargetGoneError`), job marked `failed`, no
    retry, timer cleared.
-9. The full scheduler + opencode test suites, real numbers.
+9. **Service-owner continuity (§4f):** create an OpenCode dedicated
+   job while the runtime is bound to a profile-qualified service →
+   the conversation row's `opencode_service_owner` matches the
+   serialized active owner; a later `ensureOpenCodeSession` on that
+   row does not refuse with `OpenCodeHistoryBoundaryError`.
+10. The full scheduler + opencode test suites, real numbers.
+
+---
+
+## 4f. B7 service-profile model — what the scheduler plan must respect (new)
+
+Studied on disk against the B7 working tree (2026-11-02):
+`src/services/opencode/serviceProfile.ts`, `historyBoundary.ts`,
+`serviceAccess.ts`, `sessions.ts`.
+
+### 4f.1 What B7 changed that touches scheduled OpenCode runs
+
+- **Owner keys now carry a profile.** `opencode_service_owner` is
+  serialized as `managed`, `adopted:<origin>`, or `profile:<id>`
+  (`serviceProfile.ts`, `historyBoundary.ts`). `serializeHistoryOwner`
+  remains the only writer of that string; `resolveOpenCodeServiceAccess`
+  remains the only reader-side resolver.
+- **`ensureOpenCodeSession` is owner-authoritative.** Before any
+  session work it resolves the conversation's owner through
+  `resolveOpenCodeServiceAccess` and refuses a cross-service binding
+  (`OpenCodeHistoryBoundaryError`). A conversation row created with
+  *no* owner (or a guessed one) is not "auto-fixed" — it is either
+  refused or, under the new managed→adopted continuity rule
+  (`serviceAccess.ts`, `isManagedToAdoptedContinuity`), allowed to
+  verify the remote session only.
+- **Imported rows are session-pinned.** Rows with
+  `opencode_imported = 1` + `opencode_directory` never fall back to
+  `resolveConversationWorkspace`, never silently create a replacement
+  session (`OpenCodeImportedSessionMissingError` instead), and their
+  directory is the server-confirmed one.
+
+### 4f.2 Consequences for the scheduler plan (the corrections)
+
+1. **Task 4 (conversation create) must bind the owner.** The
+   dedicated-thread OpenCode create stores
+   `opencodeServiceOwner: serializeHistoryOwner(access.owner)` from the
+   service access the run will later resolve (§3.4, amended above). This
+   is a one-line addition, but without it the first scheduled run on a
+   profile-qualified service is refused by the boundary check.
+2. **`existing_thread` engine check is unchanged, owner check is
+   free.** `checkExistingThread`'s new `engine === "opencode"`
+   validation stays; no new owner validation is needed at save time,
+   because the owner travels *on the row* and is verified at run time
+   by `resolveOpenCodeServiceAccess`. A job saved against a thread whose
+   owner later becomes unavailable fails the run with
+   `OpenCodeHistoryBoundaryError` (`adopted_unavailable`), classified
+   as **non-retryable** — the service is gone, retrying cannot install
+   it.
+3. **Scheduled runs must never target imported conversations.** An
+   `existing_thread` job whose target row has `opencode_imported = 1`
+   is a *read-attached* session: sending a scheduled prompt into it
+   would mix unattended execution with a session TBAi does not own the
+   lifecycle of (its directory may vanish, its session must not be
+   recreated). `checkExistingThread` gains a third check:
+   `opencodeImported === true` → 422 "imported sessions are not
+   schedulable targets" (V1). Imported sessions remain fully viewable
+   in TBAi; they are just not scheduler targets.
+4. **Retry classification table (Task 6) gains one row:**
+   `OpenCodeHistoryBoundaryError` → terminal (not retryable), for both
+   once and cron jobs. Rationale: the refusal means "this conversation's
+   history lives on a service that is not installed", and no amount of
+   retrying installs it.
+
+### 4f.3 What B7 did NOT change (no plan edits needed)
+
+- `resolveOpenCodeServiceAccess`'s signature and refusal semantics are
+  unchanged; the plan's §3.5 step 1 still reads
+  `{ baseUrl, transport, owner }` as before.
+- `ensureOpenCodeSession(conversationId)` still returns
+  `{ sessionId, directory, reusedExistingSession }` — the shape
+  `schedulerPrompt.ts` (Task 5) is written against.
+- The permission polling surface (`session.permission.list` on the
+  proxy allowlist) is unchanged — §3.11's permission-wait rule still
+  applies verbatim.
+- Database-ownership and adoption machinery (`ownership.ts`,
+  `adoption.ts`) is server-lifecycle only; a scheduled run never
+  starts or stops the service, so those changes are invisible to it.

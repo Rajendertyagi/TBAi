@@ -1,4 +1,6 @@
 import type { OpenCodeServiceCapabilities } from "./compatibility";
+import { DEFAULT_PROFILE_ID } from "./serviceProfile";
+import { hasExplicitServerConfig } from "./registration";
 import {
   captureOpenCodeRequestContext,
   createManagedFallbackTransport,
@@ -48,6 +50,8 @@ import { openCodeServerManager } from "./serverManager";
 /** The service current server-wide calls must use. Immutable. */
 export interface OpenCodeRuntimeTarget {
   readonly mode: "managed" | "adopted";
+  /** Unique target identity when installed. */
+  readonly targetId?: number;
   /** Canonical, slash-free origin. */
   readonly baseUrl: string;
   /**
@@ -57,6 +61,7 @@ export interface OpenCodeRuntimeTarget {
   readonly transport: OpenCodeTransport;
   /** What adoption proved about an adopted service (B7); null when not assessed. */
   readonly capabilities: OpenCodeServiceCapabilities | null;
+  readonly profileId?: string;
 }
 
 /** What the UI may learn about the runtime: a mode, never a credential. */
@@ -75,9 +80,11 @@ function captureInstalled(target: OpenCodeTarget & { mode: "managed" | "adopted"
   const context = captureOpenCodeRequestContext();
   return Object.freeze<OpenCodeRuntimeTarget>({
     mode: target.mode,
+    targetId: target.targetId,
     baseUrl: context.baseUrl,
     transport: context.transport,
     capabilities: target.mode === "adopted" ? target.capabilities : null,
+    profileId: target.profileId ?? context.profileId,
   });
 }
 
@@ -98,6 +105,12 @@ export async function resolveOpenCodeRuntimeTarget(
   const installed = readConnectionState().target;
   if (installed.mode !== "unresolved") return captureInstalled(installed);
 
+  if (hasExplicitServerConfig(process.env)) {
+    throw new OpenCodeNotReadyError(
+      "Configured explicit OpenCode server is not available; managed fallback is disabled when explicit server is specified",
+    );
+  }
+
   const ensureManaged = options.ensureManaged ?? (() => openCodeServerManager.ensureBaseUrl());
   const baseUrl = await ensureManaged();
 
@@ -111,6 +124,7 @@ export async function resolveOpenCodeRuntimeTarget(
     baseUrl,
     transport: createManagedFallbackTransport(baseUrl),
     capabilities: null,
+    profileId: DEFAULT_PROFILE_ID,
   });
 }
 

@@ -100,6 +100,8 @@ export interface OpenCodeOrphanRecord {
   firstAbsentAt: Date | null;
   /** Last probe completed by the reconciler; `null` until one runs. */
   lastCheckedAt: Date | null;
+  /** When this row is deferred until; null or absent if ready to process. */
+  deferredUntil?: Date | null;
 }
 
 interface OrphanRow {
@@ -116,6 +118,7 @@ interface OrphanRow {
   late_create_risk: number | null;
   first_absent_at: number | null;
   last_checked_at: number | null;
+  deferred_until: number | null;
 }
 
 /**
@@ -159,6 +162,7 @@ function mapOrphanRow(row: OrphanRow): OpenCodeOrphanRecord {
     lateCreateRisk: row.late_create_risk !== 0,
     firstAbsentAt: row.first_absent_at !== null ? new Date(row.first_absent_at) : null,
     lastCheckedAt: row.last_checked_at !== null ? new Date(row.last_checked_at) : null,
+    deferredUntil: row.deferred_until !== null ? new Date(row.deferred_until) : null,
   };
 }
 
@@ -755,6 +759,24 @@ export const opencodeOrphanService = {
   },
 
   /**
+   * Defers an unresolved row until `untilMs` without modifying last_checked_at or first_absent_at.
+   * This prevents skipped records from starving the reconciliation scan.
+   */
+  async deferOrphanedSession(
+    conversationId: string,
+    sessionId: string,
+    untilMs: number,
+  ): Promise<boolean> {
+    const result = db.run(
+      `UPDATE opencode_session_orphans
+          SET deferred_until = ?
+        WHERE conversation_id = ? AND session_id = ? AND resolved_at IS NULL`,
+      [untilMs, conversationId, sessionId],
+    );
+    return result.changes > 0;
+  },
+
+  /**
    * Unresolved records (both phases), least-recently-examined first. The read
    * side of the journal: a reconciler lists these, acts on each against the
    * live server, then clears the row when the outcome is proven.
@@ -766,16 +788,20 @@ export const opencodeOrphanService = {
    *
    * @param limit - Bounded scan; `undefined` for the whole backlog.
    */
-  async listUnresolvedOrphans(limit?: number): Promise<OpenCodeOrphanRecord[]> {
+  async listUnresolvedOrphans(
+    limit?: number,
+    nowMs: number = Date.now(),
+  ): Promise<OpenCodeOrphanRecord[]> {
     const rows = db
       .query<OrphanRow, SQLQueryBindings[]>(
         `SELECT * FROM opencode_session_orphans
          WHERE resolved_at IS NULL
+           AND (deferred_until IS NULL OR deferred_until <= ?)
          ORDER BY COALESCE(last_checked_at, first_seen_at) ASC,
                   first_seen_at ASC, conversation_id ASC, session_id ASC
          ${limit !== undefined ? "LIMIT ?" : ""}`,
       )
-      .all(...(limit !== undefined ? [limit] : []));
+      .all(...[nowMs, ...(limit !== undefined ? [limit] : [])]);
     return rows.map(mapOrphanRow);
   },
 

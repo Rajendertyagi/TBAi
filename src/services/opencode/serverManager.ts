@@ -36,6 +36,7 @@ import {
 import {
   OpenCodeAttemptSupersededError,
   OpenCodeNotReadyError,
+  clearManagedTarget,
   installManagedTarget,
   isAttemptActive,
   readShutdownState,
@@ -491,6 +492,9 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   private readonly childStops = new WeakMap<Subprocess, Promise<OpenCodeShutdownResult>>();
   /** The child an installed managed target names, or null when none is installed. */
   private publishedChild: Subprocess | null = null;
+  private publishedTargetId: number | null = null;
+  private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
+  private inRestart = false;
   private nextStartId = 1;
 
   constructor(
@@ -516,6 +520,17 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
    *
    * @returns Milliseconds since readiness, or null when not ready.
    */
+  /** Resets the consecutive restart counter to allow fresh start attempts. */
+  resetRestartBudget(): void {
+    this.restartAttempts = 0;
+  }
+
+  /** Explicitly recovers the managed server after restart exhaustion. */
+  async recoverManagedServer(): Promise<string> {
+    this.resetRestartBudget();
+    return this.ensureBaseUrl();
+  }
+
   msSinceReady(): number | null {
     return this.readyAtMs === null ? null : Date.now() - this.readyAtMs;
   }
@@ -550,7 +565,10 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     // `installManagedTarget` refuses after shutdown. Publishing before this
     // caller returns is what makes the address it receives a usable binding.
     if (handle.deliverable() && this.publishedChild !== handle.child()) {
-      installManagedTarget({ baseUrl, password: getOpenCodeAuthPassword(this.config) });
+      this.publishedTargetId = installManagedTarget({
+        baseUrl,
+        password: getOpenCodeAuthPassword(this.config),
+      });
       lazyCapabilityRegistry.bindToService(baseUrl);
       this.publishedChild = handle.child();
     }
@@ -583,7 +601,11 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
       this.requestChildCleanup(handle.child(), { cause: "attempt", requester: attempt });
       throw this.attemptRefusal(attempt);
     }
-    installManagedTarget({ baseUrl, password: getOpenCodeAuthPassword(this.config), attempt });
+    this.publishedTargetId = installManagedTarget({
+      baseUrl,
+      password: getOpenCodeAuthPassword(this.config),
+      attempt,
+    });
     lazyCapabilityRegistry.bindToService(baseUrl);
     this.publishedChild = handle.child();
     handle.release();
@@ -604,6 +626,18 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
   acquireManagedStart(attempt: AdoptionAttempt | null = null): ManagedStartHandle {
     if (this.stopping) throw new Error("OpenCode server is shutting down");
     if (attempt !== null && !isAttemptActive(attempt)) throw this.attemptRefusal(attempt);
+    if (attempt !== null) {
+      this.restartAttempts = 0;
+    } else if (
+      !this.inRestart &&
+      this.child === null &&
+      this.currentStartId === null &&
+      this.restartAttempts >= this.config.maxRestartAttempts
+    ) {
+      throw new OpenCodeNotReadyError(
+        `OpenCode restart retry limit (${this.config.maxRestartAttempts}) exhausted; explicit recovery required`,
+      );
+    }
 
     const current =
       this.currentStartId === null ? undefined : this.startRecords.get(this.currentStartId);
@@ -981,9 +1015,22 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     // catalogue (rather than just a URL) use this to tell "still starting"
     // from "genuinely empty", instead of guessing with their own heuristic.
     if (this.child === child) this.readyAtMs = Date.now();
-    // A successful start resets the restart budget: only consecutive failed
-    // restarts count toward maxRestartAttempts.
-    this.restartAttempts = 0;
+    if (this.stabilityTimer !== null) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    const stabilityMs = this.config.stabilityPeriodMs ?? 5_000;
+    if (stabilityMs <= 0) {
+      this.restartAttempts = 0;
+    } else {
+      this.stabilityTimer = setTimeout(() => {
+        this.stabilityTimer = null;
+        if (this.child === child && !this.stopping) {
+          logger.info("opencode", "opencode.stable", { port: target.port, pid: child.pid });
+          this.restartAttempts = 0;
+        }
+      }, stabilityMs);
+    }
     logger.info("opencode", "opencode.spawn", { port: target.port, pid: child.pid });
     this.settleFulfilled(record, baseUrl);
   }
@@ -1176,6 +1223,10 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     }
 
     if (this.child === child) {
+      if (this.stabilityTimer !== null) {
+        clearTimeout(this.stabilityTimer);
+        this.stabilityTimer = null;
+      }
       this.child = null;
       this.port = null;
       this.readyAtMs = null;
@@ -1184,7 +1235,13 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     if (record !== undefined && this.readyPromise === record.deferred.promise) {
       this.readyPromise = null;
     }
-    if (this.publishedChild === child) this.publishedChild = null;
+    if (this.publishedChild === child) {
+      if (this.publishedTargetId !== null) {
+        clearManagedTarget(this.publishedTargetId);
+        this.publishedTargetId = null;
+      }
+      this.publishedChild = null;
+    }
 
     if (this.shutdownBegun() || intentionallyStopped) return;
     // A newer reservation already owns recovery; do not create a competing start.
@@ -1192,21 +1249,26 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     if (this.restartAttempts >= this.config.maxRestartAttempts) return;
 
     this.restartAttempts += 1;
+    this.inRestart = true;
     logger.info("opencode", "opencode.restart", {
       attempt: this.restartAttempts,
       maxAttempts: this.config.maxRestartAttempts,
       port,
     });
-    void this.ensureBaseUrl().catch((err: unknown) => {
-      // Shutdown may have intervened mid-restart; that is not a restart failure.
-      if (this.shutdownBegun()) return;
-      logger.error("opencode", "opencode.restart_failed", {
-        message: err instanceof Error ? err.message : String(err),
-        attempt: this.restartAttempts,
-        maxAttempts: this.config.maxRestartAttempts,
-        port,
+    void this.ensureBaseUrl()
+      .catch((err: unknown) => {
+        // Shutdown may have intervened mid-restart; that is not a restart failure.
+        if (this.shutdownBegun()) return;
+        logger.error("opencode", "opencode.restart_failed", {
+          message: err instanceof Error ? err.message : String(err),
+          attempt: this.restartAttempts,
+          maxAttempts: this.config.maxRestartAttempts,
+          port,
+        });
+      })
+      .finally(() => {
+        this.inRestart = false;
       });
-    });
   }
 
   /** Waiters that count against C1: unreleased and belonging to a live attempt. */
@@ -1421,6 +1483,10 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
    */
   clearPublishedTarget(): void {
     const child = this.publishedChild;
+    if (this.publishedTargetId !== null) {
+      clearManagedTarget(this.publishedTargetId);
+      this.publishedTargetId = null;
+    }
     this.publishedChild = null;
     if (child === null) return;
     const obligation = this.pendingCleanup.get(child);
@@ -1441,6 +1507,11 @@ export class OpenCodeServerManager implements ManagedChildStopProvider {
     }
     this.currentStartId = null;
     this.readyPromise = null;
+    if (this.stabilityTimer !== null) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    this.publishedTargetId = null;
     this.publishedChild = null;
   }
 

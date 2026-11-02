@@ -190,6 +190,8 @@ export async function deleteOpenCodeConversation(input: {
 
 async function resolveDirectory(conversationId: string): Promise<string | null> {
   try {
+    const conv = await conversationService.get(conversationId);
+    if (conv?.opencodeDirectory) return conv.opencodeDirectory;
     const resolved = await resolveConversationWorkspace(conversationId);
     return resolved.dir;
   } catch (error) {

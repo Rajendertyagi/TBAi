@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import type { OpenCodeClient } from "@/services/opencode/client";
+import { installAdoptedTarget, clearTarget } from "@/services/opencode/connectionState";
+import type { OpenCodeTransport } from "@/services/opencode/http";
 import { OpenCodeError } from "@/services/opencode/errors";
 import type { OpenCodeOrphanRecord } from "@/services/storage/opencodeSessionOrphans";
 import {
@@ -115,6 +117,9 @@ function makeHarness(options: HarnessOptions = {}) {
     touches: [] as Array<{ conversationId: string; sessionId: string; at: number }>,
     listLimits: [] as number[],
     conversationReads: 0,
+    defers: [] as Array<{ conversationId: string; sessionId: string; untilMs: number }>,
+    clientTransports: [] as Array<OpenCodeTransport | undefined>,
+    clientBaseUrls: [] as string[],
   };
 
   const client = {
@@ -278,8 +283,14 @@ function makeHarness(options: HarnessOptions = {}) {
     isCreateInFlight: (conversationId, sessionId) =>
       state.inFlightKeys.has(`${conversationId}\u0000${sessionId}`),
     getRunningBaseUrl: async () => state.runningUrl,
-    createClient: () => {
+    defer: async (conversationId, sessionId, untilMs) => {
+      state.defers.push({ conversationId, sessionId, untilMs });
+      return true;
+    },
+    createClient: (baseUrl, _directory, transport) => {
       state.createClientCalls += 1;
+      state.clientBaseUrls.push(baseUrl);
+      state.clientTransports.push(transport);
       return client;
     },
   };
@@ -1139,7 +1150,7 @@ describe("runOrphanReconciliationOnce — scope and bounds", () => {
  * would be acting on another service's data.
  */
 describe("runOrphanReconciliationOnce — service ownership (H3/B3)", () => {
-  const ADOPTED = "adopted:http://127.0.0.1:51234";
+  const ADOPTED = "remote:http://127.0.0.1:51234";
 
   it("never probes an adopted service's row through the managed server", async () => {
     const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
@@ -1185,6 +1196,40 @@ describe("runOrphanReconciliationOnce — service ownership (H3/B3)", () => {
 
     expect(report).toMatchObject({ scanned: 1, skippedOtherService: 0, absent: 1 });
     expect(h.state.getCalls).toEqual(["ses_orphan0001"]);
+  });
+
+  it("defers an adopted row when the adopted service is unavailable without touching lastCheckedAt", async () => {
+    const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
+    start(h.deps);
+
+    const report = await runOrphanReconciliationOnce();
+
+    expect(report).toMatchObject({ scanned: 1, skippedOtherService: 1 });
+    expect(h.state.defers).toEqual([
+      { conversationId: "conv-1", sessionId: "ses_orphan0001", untilMs: NOW + 60_000 },
+    ]);
+    expect(h.state.rows[0]?.lastCheckedAt).toBeNull();
+  });
+
+  it("reconciles an adopted row when matching adopted target is installed using captured transport", async () => {
+    const h = makeHarness({ rows: [record({ serviceOwner: ADOPTED })] });
+    installAdoptedTarget({
+      origin: "http://127.0.0.1:51234",
+      password: "test-adopted-password",
+      profileId: "explicit:http://127.0.0.1:51234",
+    });
+
+    try {
+      start(h.deps);
+      const report = await runOrphanReconciliationOnce();
+
+      expect(report).toMatchObject({ scanned: 1, skippedOtherService: 0, absent: 1 });
+      expect(h.state.clientBaseUrls).toEqual(["http://127.0.0.1:51234"]);
+      expect(h.state.clientTransports).toHaveLength(1);
+      expect(h.state.clientTransports[0]).toBeDefined();
+    } finally {
+      clearTarget();
+    }
   });
 });
 

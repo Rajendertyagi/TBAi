@@ -1570,3 +1570,58 @@ describe("opencodeOrphanService — service ownership (H3/B3)", () => {
     expect(record.serviceOwner).toBeUndefined();
   });
 });
+
+describe("opencodeOrphanService — orphan scheduling and deferral (Amendment 2)", () => {
+  function rowFor(conversationId: string, sessionId: string): Record<string, unknown> {
+    return (
+      (db
+        .query(
+          "SELECT * FROM opencode_session_orphans WHERE conversation_id = ? AND session_id = ?",
+        )
+        .get(conversationId, sessionId) as Record<string, unknown>) ?? {}
+    );
+  }
+
+  it("defers an orphan without modifying last_checked_at or first_absent_at", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordProbe({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+      outcome: "absent",
+      at: 10_000,
+    });
+    const before = rowFor("conv-1", "ses_a");
+    expect(before.last_checked_at).toBe(10_000);
+    expect(before.first_absent_at).toBe(10_000);
+
+    const deferred = await opencodeOrphanService.deferOrphanedSession("conv-1", "ses_a", 50_000);
+    expect(deferred).toBe(true);
+
+    const after = rowFor("conv-1", "ses_a");
+    expect(after.deferred_until).toBe(50_000);
+    expect(after.last_checked_at).toBe(10_000);
+    expect(after.first_absent_at).toBe(10_000);
+  });
+
+  it("filters out deferred orphans until their deferral time arrives", async () => {
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_a",
+    });
+    await opencodeOrphanService.recordOrphanedSession({
+      conversationId: "conv-1",
+      sessionId: "ses_b",
+    });
+
+    await opencodeOrphanService.deferOrphanedSession("conv-1", "ses_a", 20_000);
+
+    const at10k = await opencodeOrphanService.listUnresolvedOrphans(undefined, 10_000);
+    expect(at10k.map((r) => r.sessionId)).toEqual(["ses_b"]);
+
+    const at25k = await opencodeOrphanService.listUnresolvedOrphans(undefined, 25_000);
+    expect(at25k.map((r) => r.sessionId).sort()).toEqual(["ses_a", "ses_b"]);
+  });
+});

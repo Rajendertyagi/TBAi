@@ -482,34 +482,18 @@ describe("B7 — adoption is decided by the live build and its capabilities", ()
     expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN_A });
   });
 
-  it("adopts a stable build below the evidence floor when its capabilities answer", async () => {
-    // B7: `minimumVersion` is an evidence boundary, not a proven
-    // incompatibility. An unmeasured stable build is probed like any other and
-    // admitted on capability presence.
-    const file = writeRecord("below-floor.json", ORIGIN_A, PID, "2.0.14");
-    stubFetch((url) =>
+  it("refuses an adopted service below 2.2.0 before capability probing", async () => {
+    const file = writeRecord("below-minimum.json", ORIGIN_A, PID, "2.1.4");
+    const calls = stubFetch((url) =>
       url.endsWith(OPENCODE_CONFIG.readinessProbePath)
-        ? readyResponse(PID, "2.0.14")
+        ? readyResponse(PID, "2.1.4")
         : capabilityResponse(url),
     );
 
     const outcome = await attemptOpenCodeAdoption({ path: file });
-    expect(outcome.status).toBe("adopted");
-    if (outcome.status === "adopted") expect(outcome.capabilities.version).toBe("2.0.14");
-    expect(readConnectionState().target).toMatchObject({ mode: "adopted", origin: ORIGIN_A });
-  });
-
-  it("refuses a below-floor build that lacks an essential route, after probing it", async () => {
-    const file = writeRecord("below-floor-no-session.json", ORIGIN_A, PID, "2.0.14");
-    const calls = stubFetch((url) => {
-      if (url.endsWith(OPENCODE_CONFIG.readinessProbePath)) return readyResponse(PID, "2.0.14");
-      if (url.endsWith("/api/session")) return new Response(null, { status: 404 });
-      return capabilityResponse(url);
-    });
-
-    expectRefused(await attemptOpenCodeAdoption({ path: file }), "probe_capability_missing");
-    // Proof the floor no longer short-circuits: the capability routes were read.
-    expect(calls.map((call) => new URL(call.url).pathname)).toContain("/api/session");
+    expectRefused(outcome, "probe_version_unsupported");
+    // Version rejection happens before capability probing
+    expect(calls.map((call) => new URL(call.url).pathname)).not.toContain("/api/session");
     expect(readConnectionState().target.mode).toBe("unresolved");
   });
 
@@ -571,6 +555,57 @@ describe("B7 — adoption is decided by the live build and its capabilities", ()
     );
 
     expectRefused(await attemptOpenCodeAdoption({ path: file }), "probe_failed");
+    expect(readConnectionState().target.mode).toBe("unresolved");
+  });
+});
+
+describe("explicit server endpoint adoption", () => {
+  it("adopts an explicit endpoint from environment variables without requiring a service.json file", async () => {
+    stubFetch((url) => respondsLikeAdoptableService(url));
+
+    const outcome = await attemptOpenCodeAdoption({
+      env: {
+        OPENCODE_URL: ORIGIN_A,
+        OPENCODE_PASSWORD: PASSWORD,
+      },
+    });
+
+    expect(outcome.status).toBe("adopted");
+    if (outcome.status === "adopted") {
+      expect(outcome.registration.origin).toBe(ORIGIN_A);
+      expect(outcome.registration.pid).toBe(PID);
+      expect(outcome.registration.version).toBe(VERSION);
+      expect(outcome.registration.path).toBe("config");
+    }
+
+    expect(readConnectionState().target).toMatchObject({
+      mode: "adopted",
+      origin: ORIGIN_A,
+    });
+  });
+
+  it("refuses adoption when explicit server config carries no password", async () => {
+    const outcome = await attemptOpenCodeAdoption({
+      env: {
+        OPENCODE_URL: ORIGIN_A,
+      },
+    });
+
+    expectRefused(outcome, "missing_credential");
+    expect(readConnectionState().target.mode).toBe("unresolved");
+  });
+
+  it("refuses adoption when explicit server endpoint is unreachable", async () => {
+    stubFetch(() => Promise.reject(new Error("connect ECONNREFUSED")));
+
+    const outcome = await attemptOpenCodeAdoption({
+      env: {
+        OPENCODE_PORT: "4201",
+        OPENCODE_PASSWORD: PASSWORD,
+      },
+    });
+
+    expectRefused(outcome, "probe_failed");
     expect(readConnectionState().target.mode).toBe("unresolved");
   });
 });

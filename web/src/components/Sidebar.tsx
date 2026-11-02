@@ -6,7 +6,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { FolderOpenDot, MessageSquarePlus, Plus } from "lucide-react";
+import { Download, FolderOpenDot, MessageSquarePlus, Plus } from "lucide-react";
 import {
   sidebarConfig,
   sectionLabel,
@@ -32,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { NewProjectChatDialog } from "./NewProjectChatDialog";
+import { OpenCodeImportDialog } from "../features/opencode/OpenCodeImportDialog";
 import { WorkspaceFolderDialog } from "../features/folders/WorkspaceFolderDialog";
 import { shouldNavigateToThread, threadUrl } from "../features/chat/state/chatTabs";
 
@@ -54,6 +55,7 @@ export function Sidebar() {
   const location = useLocation();
   const [addFolderOpen, setAddFolderOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [importOpenCodeOpen, setImportOpenCodeOpen] = useState(false);
 
   // Clicking the already-shown conversation must not push an identical
   // history entry; every other open navigates (the route view owns tab
@@ -98,6 +100,7 @@ export function Sidebar() {
     (SIDEBAR_SECTION_IDS as readonly string[]).includes(id),
   );
   const allExpanded = visibleSections.every(isExpanded);
+
   // `searchQuery` is already debounced in the store, so the sections stay put
   // for the settle window instead of collapsing out from under the user
   // mid-keystroke. Searching swaps the whole section area for one global list.
@@ -139,10 +142,19 @@ export function Sidebar() {
             {copy.shortcuts.newChat}
           </span>
         </SidebarNavButton>
+
+        <SidebarNavButton
+          onClick={() => setImportOpenCodeOpen(true)}
+          title="Import an existing OpenCode session"
+        >
+          <Download aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-left">Import from OpenCode</span>
+        </SidebarNavButton>
       </div>
 
       <WorkspaceFolderDialog open={addFolderOpen} onOpenChange={setAddFolderOpen} />
       <NewProjectChatDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} />
+      <OpenCodeImportDialog open={importOpenCodeOpen} onOpenChange={setImportOpenCodeOpen} />
 
       <div
         ref={listRef}
@@ -195,15 +207,28 @@ export function Sidebar() {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => navigate(ROUTES.CHAT_NEW)}
-                        title={copy.newChat}
-                        aria-label={copy.newChat}
-                        className="flex size-5 items-center justify-center rounded-md text-muted-foreground/90 outline-none transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-                      >
-                        <Plus className="size-3.5" />
-                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            title={copy.addToSection}
+                            aria-label={copy.addToSection}
+                            className="flex size-5 items-center justify-center rounded-md text-muted-foreground/90 outline-none transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                          >
+                            <Plus className="size-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-44">
+                          <DropdownMenuItem onSelect={() => navigate(ROUTES.CHAT_NEW)}>
+                            <Plus className="size-4" />
+                            {copy.newChat}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => setImportOpenCodeOpen(true)}>
+                            <Download className="size-4" />
+                            Import from OpenCode
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     )
                   }
                 >

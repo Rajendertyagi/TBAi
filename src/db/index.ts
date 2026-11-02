@@ -12,6 +12,7 @@ import { applyOpenCodeOrphanSchema } from "./schema/opencode-session-orphans";
 // Leaf module (no app imports) that owns the messages DDL, so the boot migration
 // and the tests that need a real `messages` table apply one definition.
 import { MESSAGES_REBUILD_SQL, MESSAGES_TABLE_SQL } from "./schema/messages";
+import { applyOpenCodeServiceOwnerSimplificationMigration } from "./schema/opencode-service-owner-migration";
 import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
 // Anchored to the install (the checkout in dev, the executable when packaged),
@@ -64,8 +65,7 @@ sqlite.run(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
 // deleting these rows is a complete rollback. See
 // docs/adr-2026-10-01-context-compaction.md.
 sqlite.run(`
-  CREATE TABLE IF NOT EXISTS conversation_compactions (
-    conversation_id      TEXT PRIMARY KEY,
+  CREATE TABLE IF NOT EXISTS conversation_compactions (\n    conversation_id      TEXT PRIMARY KEY,
     compaction_id        TEXT NOT NULL UNIQUE,
     generation           INTEGER NOT NULL DEFAULT 1,
     latched               INTEGER NOT NULL DEFAULT 1,
@@ -298,9 +298,9 @@ addColumnIfNotExists("conversations", "workspace_folder_id", "TEXT");
 // Kept separate from normal chat messages; TBAi owns the conversation, OpenCode
 // owns its session/events. Null until Code mode is first opened.
 addColumnIfNotExists("conversations", "opencode_session_id", "TEXT");
-// Which service owns the bound session's history: `managed` or `adopted:<origin>`
-// (H3/B3). Null on a bound row is a legacy managed binding. Metadata only: no
-// adopted-service history or credential is ever copied into TBAi's database.
+// Which service owns the bound session's history: `local` or `remote:<origin>`.
+// Null on a bound row is legacy local. Metadata only: no
+// remote-service history or credential is ever copied into TBAi's database.
 addColumnIfNotExists("conversations", "opencode_service_owner", "TEXT");
 // Engine selection (Direct chat vs OpenCode agent mode) and the OpenCode
 // agent/model chosen at creation. Nullable: legacy conversations are Direct and
@@ -316,6 +316,64 @@ addColumnIfNotExists("conversations", "opencode_variant", "TEXT");
 addColumnIfNotExists("conversations", "opencode_auto_approve", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfNotExists("conversations", "last_read_at", "INTEGER");
 addColumnIfNotExists("conversations", "last_message_at", "INTEGER");
+
+// OpenCode session import: confirmed directory mirror, import provenance,
+// and canonical service-owner/session uniqueness.
+export function applyOpenCodeSessionImportMigration(database: Database = sqlite): void {
+  const columns = database.query("PRAGMA table_info(conversations)").all() as Array<{
+    name: string;
+  }>;
+  if (!columns.some((c) => c.name === "opencode_directory")) {
+    database.run("ALTER TABLE conversations ADD COLUMN opencode_directory TEXT");
+  }
+  if (!columns.some((c) => c.name === "opencode_imported")) {
+    database.run(
+      "ALTER TABLE conversations ADD COLUMN opencode_imported INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
+  // 1. Run the service-owner simplification migration (maps legacy managed / loopback adopted to 'local', remote to 'remote:<origin>')
+  applyOpenCodeServiceOwnerSimplificationMigration(database);
+
+  // 2. Preflight: collect every duplicate normalized owner/session identity.
+  const opencodeDuplicates = database
+    .query(
+      `SELECT
+         COALESCE(NULLIF(opencode_service_owner, ''), 'local') AS owner_key,
+         opencode_session_id,
+         GROUP_CONCAT(id) AS conversation_ids,
+         COUNT(*) AS duplicate_count
+       FROM conversations
+       WHERE opencode_session_id IS NOT NULL
+       GROUP BY COALESCE(NULLIF(opencode_service_owner, ''), 'local'), opencode_session_id
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as Array<{
+    owner_key: string;
+    opencode_session_id: string;
+    conversation_ids: string;
+    duplicate_count: number;
+  }>;
+
+  if (opencodeDuplicates.length > 0) {
+    const conflictingConversationIds = opencodeDuplicates
+      .map((row) => row.conversation_ids)
+      .filter(Boolean)
+      .join("; ");
+    throw new Error(
+      `Duplicate OpenCode owner/session bindings require manual resolution. Conversation IDs: ${conflictingConversationIds}`,
+    );
+  }
+
+  // 3. Enforce one conversation per canonical owner/session pair.
+  database.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_opencode_owner_session
+    ON conversations(opencode_service_owner, opencode_session_id)
+    WHERE opencode_session_id IS NOT NULL
+  `);
+}
+
+applyOpenCodeSessionImportMigration();
 
 // Durable idempotency for draft materialization (Task 3). The client sends a
 // `clientRequestId` with a draft POST; a server restart between the row commit

@@ -64,6 +64,7 @@ export type OpenCodeRegistrationRecord = Readonly<{
   readonly pid: number;
   readonly password: string;
   readonly version: string;
+  readonly id?: string;
 }>;
 
 /**
@@ -365,7 +366,9 @@ function validateRegistration(value: unknown): Omit<OpenCodeRegistrationRecord, 
     );
   }
 
-  return { origin, pid, password, version };
+  const id =
+    typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : undefined;
+  return { origin, pid, password, version, ...(id ? { id } : {}) };
 }
 
 /**
@@ -373,7 +376,7 @@ function validateRegistration(value: unknown): Omit<OpenCodeRegistrationRecord, 
  * A trailing `/` is the URL parser's representation of "no path" and is
  * accepted; anything else is refused (§2.3, §8.3).
  */
-function parseRegistrationOrigin(raw: string): string {
+export function parseRegistrationOrigin(raw: string): string {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -404,4 +407,45 @@ function parseRegistrationOrigin(raw: string): string {
     });
   }
   return origin;
+}
+
+export type ExplicitOpenCodeServerConfig = Readonly<{
+  origin: string;
+  password: string;
+}>;
+
+export function hasExplicitServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  config: OpenCodeConfig = OPENCODE_CONFIG,
+): boolean {
+  return Boolean(env[config.serverUrlEnvVar]?.trim() || env[config.serverPortEnvVar]?.trim());
+}
+
+export function resolveExplicitServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  config: OpenCodeConfig = OPENCODE_CONFIG,
+): ExplicitOpenCodeServerConfig | null {
+  const urlVar = env[config.serverUrlEnvVar]?.trim();
+  const hostVar = env[config.serverHostEnvVar]?.trim();
+  const portVar = env[config.serverPortEnvVar]?.trim();
+
+  let rawUrl: string | undefined;
+  if (urlVar) {
+    rawUrl = urlVar;
+  } else if (portVar) {
+    const host = hostVar || "127.0.0.1";
+    rawUrl = `http://${host}:${portVar}`;
+  }
+
+  if (!rawUrl) return null;
+
+  const origin = parseRegistrationOrigin(rawUrl);
+  const password =
+    env[config.authPasswordEnvVar]?.trim() || env[config.authPasswordLegacyEnvVar]?.trim() || "";
+
+  if (!password) {
+    refuse("missing_credential", "explicit OpenCode configuration carries no password");
+  }
+
+  return Object.freeze({ origin, password });
 }

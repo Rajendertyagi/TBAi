@@ -70,40 +70,38 @@ function allPresent(): Record<OpenCodeCapabilityId, OpenCodeCapabilityProbeOutco
   };
 }
 
-describe("B7 — classifyAdoptionVersion admits stable builds and records the evidence floor", () => {
-  const atOrAboveFloor = ["2.0.15", "2.1.2", "2.2.0", "2.2.1", "2.4.0", "99.0.0"];
+describe("B7 — classifyAdoptionVersion enforces 2.2.0+ stable releases only", () => {
+  const atOrAboveFloor = ["2.2.0", "2.2.1", "2.4.0", "99.0.0"];
 
   for (const version of atOrAboveFloor) {
     it(`admits the stable build ${version}`, () => {
       expect(classifyAdoptionVersion(version)).toEqual({
         status: "adoptable",
         version,
-        belowCheckedFloor: false,
       });
     });
   }
 
-  it("admits an older stable build and marks it below the checked evidence floor", () => {
-    for (const version of ["2.0.14", "1.9.9", "0.5.0"]) {
+  it("refuses builds below the minimum version (2.2.0)", () => {
+    for (const version of ["2.1.4", "2.0.15", "2.0.14", "1.9.9", "0.5.0"]) {
       expect(classifyAdoptionVersion(version)).toEqual({
-        status: "adoptable",
+        status: "below_minimum",
         version,
-        belowCheckedFloor: true,
+        minimumVersion: "2.2.0",
       });
     }
   });
 
-  it("takes the floor marker from the supplied config without refusing", () => {
-    const config = { ...OPENCODE_CONFIG, minimumVersion: "2.1.0" };
-    expect(classifyAdoptionVersion("2.0.22", config)).toEqual({
-      status: "adoptable",
-      version: "2.0.22",
-      belowCheckedFloor: true,
+  it("takes the minimum version from the supplied config", () => {
+    const config = { ...OPENCODE_CONFIG, minimumVersion: "2.3.0" };
+    expect(classifyAdoptionVersion("2.2.0", config)).toEqual({
+      status: "below_minimum",
+      version: "2.2.0",
+      minimumVersion: "2.3.0",
     });
-    expect(classifyAdoptionVersion("2.1.0", config)).toEqual({
+    expect(classifyAdoptionVersion("2.3.0", config)).toEqual({
       status: "adoptable",
-      version: "2.1.0",
-      belowCheckedFloor: false,
+      version: "2.3.0",
     });
   });
 

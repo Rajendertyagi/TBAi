@@ -27,6 +27,7 @@ import {
   shouldAutoApprove,
 } from "@/features/permissions/permissionPolicy";
 import { getAutoPolicy } from "./sessionAutoPolicy";
+import { reconcileOpenCodeSessionDirectory } from "./sessionBootstrap";
 import { RetentionSet } from "./sync/retention";
 import { createSessionMessageLoader } from "./sync/sessionMessageLoader";
 import { coveredTextPartIds, shouldReplayBuffered } from "./sync/historyReplay";
@@ -320,6 +321,11 @@ export type V2ThreadControllerDeps = {
     readonly sessionId: string;
     readonly signal: AbortSignal;
   }) => Promise<V2ActivityState>;
+  readonly reconcileDirectory?: (input: {
+    readonly conversationId: string;
+    readonly sessionId: string;
+  }) => Promise<{ directory: string | null }>;
+  readonly onDirectoryChanged?: (newDirectory: string) => void;
 };
 
 /** Creates the single native OpenCode V2 session controller. */
@@ -829,6 +835,58 @@ export function createV2ThreadController(
     applyAutoApproveEvent(event);
     applyCompactionLifecycleEvent(event);
     applySettlementEvent(event);
+    applySessionMovedEvent(event);
+  }
+
+  let moveReconcileInFlight = false;
+
+  async function handleSessionMoved(event: V2Event): Promise<void> {
+    if (event.type !== "session.moved") return;
+    if (event.data?.sessionID !== client.sessionId) return;
+    if (disposed) return;
+
+    if (moveReconcileInFlight) return;
+    moveReconcileInFlight = true;
+
+    try {
+      let authoritativeDir: string | null = null;
+      if (deps?.reconcileDirectory) {
+        const res = await deps.reconcileDirectory({
+          conversationId: deps.conversationId,
+          sessionId: client.sessionId,
+        });
+        authoritativeDir = res.directory;
+      } else if (deps?.conversationId) {
+        const res = await reconcileOpenCodeSessionDirectory(deps.conversationId);
+        authoritativeDir = res.directory;
+      } else {
+        const session = await currentAttempt?.generation?.operations.sessionGet({
+          sessionID: client.sessionId,
+        });
+        authoritativeDir = session?.location?.directory ?? event.data?.location?.directory ?? null;
+      }
+
+      if (disposed) return;
+      if (authoritativeDir) {
+        deps?.onDirectoryChanged?.(authoritativeDir);
+      }
+
+      void startConnection().catch(() => undefined);
+    } catch (err) {
+      logger.warn("opencode", "opencode.session_move_reconcile_failed", {
+        sessionId: client.sessionId,
+        conversationId: deps?.conversationId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      moveReconcileInFlight = false;
+    }
+  }
+
+  function applySessionMovedEvent(event: V2Event): void {
+    if (event.type !== "session.moved") return;
+    if (event.data?.sessionID !== client.sessionId) return;
+    void handleSessionMoved(event);
   }
 
   /**

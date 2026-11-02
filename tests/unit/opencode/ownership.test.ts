@@ -217,4 +217,35 @@ describe("OpenCodeDatabaseOwnership", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("refuses when another independent OpenCode server process is running on the default database", async () => {
+    const defaultDb = path.resolve(os.homedir(), ".local", "share", "opencode", "opencode.db");
+    const { deps, released } = fakeDeps({
+      resolveDatabasePath: async () => defaultDb,
+      findProcessesUsingFiles: () => [],
+      findRunningOpenCodePids: () => [17064],
+    });
+    const lease = new OpenCodeDatabaseOwnership({ deps });
+    const error = await lease.acquire("opencode", "C:\\work").catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(OpenCodeDatabaseBusyError);
+    if (!(error instanceof OpenCodeDatabaseBusyError)) throw new Error("expected busy error");
+    expect(error.details.pids).toEqual([17064]);
+    expect(released).toHaveLength(1);
+  });
+
+  it("permits acquisition on an isolated test database even when foreign OpenCode processes exist", async () => {
+    const { dir, file } = tempDatabaseFile();
+    const { deps, released } = fakeDeps({
+      resolveDatabasePath: async () => file,
+      findProcessesUsingFiles: () => [100],
+      findRunningOpenCodePids: () => [17064],
+    });
+    const lease = new OpenCodeDatabaseOwnership({ deps });
+    try {
+      expect(await lease.acquire("opencode", dir)).toBe(file);
+      expect(released).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -40,12 +40,16 @@ export type OpenCodeTarget =
   | Readonly<{ mode: "unresolved" }>
   | Readonly<{
       mode: "managed";
+      targetId: number;
       baseUrl: string;
       origin: string;
       credential: OpenCodeManagedCredential;
+      profileId?: string;
+      dataLocation?: string;
     }>
   | Readonly<{
       mode: "adopted";
+      targetId: number;
       baseUrl: string;
       origin: string;
       credential: OpenCodeAdoptedCredential;
@@ -55,6 +59,10 @@ export type OpenCodeTarget =
        * enabled, because an absent snapshot is not evidence of absence.
        */
       capabilities: OpenCodeServiceCapabilities | null;
+      profileId?: string;
+      runtimeInstanceId?: string;
+      runtimePid?: number;
+      dataLocation?: string;
     }>;
 
 /**
@@ -74,8 +82,10 @@ export type { OpenCodeTransport };
 /** One logical request bound to one snapshot. Immutable. */
 export type OpenCodeRequestContext = Readonly<{
   readonly mode: "managed" | "adopted";
+  readonly targetId: number;
   /** Canonical, slash-free origin. */
   readonly baseUrl: string;
+  readonly origin: string;
   readonly credential: OpenCodeManagedCredential | OpenCodeAdoptedCredential;
   readonly authHeaders: Readonly<Record<string, string>>;
   /** Diagnostics only — never gates a request. */
@@ -83,6 +93,7 @@ export type OpenCodeRequestContext = Readonly<{
   /** Revocation counter; the transport re-checks it with the latch. */
   readonly shutdownEpoch: number;
   readonly transport: OpenCodeTransport;
+  readonly profileId?: string;
 }>;
 
 /** Where a discovery or start cycle came from. */
@@ -115,7 +126,9 @@ export class OpenCodeNotReadyError extends Error {
 export class OpenCodeContextInvalidatedError extends Error {
   readonly code = "OPENCODE_CONTEXT_INVALIDATED";
 
-  constructor(message = "OpenCode request context was invalidated by shutdown") {
+  constructor(
+    message = "OpenCode request context was invalidated by shutdown or target invalidation",
+  ) {
     super(message);
     this.name = "OpenCodeContextInvalidatedError";
   }
@@ -189,6 +202,11 @@ let connectionState: OpenCodeConnectionState = Object.freeze({
   target: UNRESOLVED_TARGET,
 });
 
+/** Monotonically increasing target identity counter. */
+let nextTargetId = 1;
+/** Set of target IDs that were explicitly invalidated after process exit. */
+const invalidatedTargetIds = new Set<number>();
+
 /** The module-private current-attempt slot; no getter exposes the attempt itself. */
 let currentAttempt: AdoptionAttempt | null = null;
 let nextAttemptId = 1;
@@ -255,19 +273,38 @@ function buildState(
   return Object.freeze({ revision, shutdownEpoch, shutdownStarted, target });
 }
 
-function buildManagedTarget(baseUrl: string, password: string): OpenCodeTarget {
+function buildManagedTarget(
+  baseUrl: string,
+  password: string,
+  targetId: number,
+  profileId?: string,
+  dataLocation?: string,
+): OpenCodeTarget {
   const origin = canonicalizeOpenCodeOrigin(baseUrl);
   const credential: OpenCodeManagedCredential = Object.freeze({
     kind: "managed",
     password: requirePassword(password),
   });
-  return Object.freeze({ mode: "managed", baseUrl: origin, origin, credential });
+  return Object.freeze({
+    mode: "managed",
+    targetId,
+    baseUrl: origin,
+    origin,
+    credential,
+    profileId,
+    dataLocation,
+  });
 }
 
 function buildAdoptedTarget(
   originInput: string,
   password: string,
   capabilities: OpenCodeServiceCapabilities | null,
+  targetId: number,
+  profileId?: string,
+  runtimeInstanceId?: string,
+  runtimePid?: number,
+  dataLocation?: string,
 ): OpenCodeTarget {
   const origin = canonicalizeOpenCodeOrigin(originInput);
   assertLoopbackOrigin(origin);
@@ -276,7 +313,18 @@ function buildAdoptedTarget(
     origin,
     password: requirePassword(password),
   });
-  return Object.freeze({ mode: "adopted", baseUrl: origin, origin, credential, capabilities });
+  return Object.freeze({
+    mode: "adopted",
+    targetId,
+    baseUrl: origin,
+    origin,
+    credential,
+    capabilities,
+    profileId,
+    runtimeInstanceId,
+    runtimePid,
+    dataLocation,
+  });
 }
 
 /** One reference read of the current state. Every reader uses this. */
@@ -291,6 +339,7 @@ export function currentAttemptId(): number | null {
 
 /**
  * Installs a managed target after readiness succeeds.
+ * Returns the unique target identity assigned to this installed instance.
  *
  * Copies its inputs into owner-controlled objects, so a caller that keeps its
  * own object cannot mutate what is installed (§1.9.3.1).
@@ -302,19 +351,30 @@ export function installManagedTarget(input: {
   readonly baseUrl: string;
   readonly password: string;
   readonly attempt?: AdoptionAttempt | null;
-}): void {
+  readonly profileId?: string;
+  readonly dataLocation?: string;
+}): number {
   requireActiveAttempt(input.attempt);
   refuseAfterShutdown();
   const baseUrl = input.baseUrl;
   const password = input.password;
-  const target = buildManagedTarget(baseUrl, password);
+  const targetId = nextTargetId++;
+  const target = buildManagedTarget(
+    baseUrl,
+    password,
+    targetId,
+    input.profileId,
+    input.dataLocation,
+  );
   writeState(
     buildState(connectionState.revision + 1, connectionState.shutdownEpoch, false, target),
   );
+  return targetId;
 }
 
 /**
  * Installs an adopted target after trust validation and a `ready` probe.
+ * Returns the unique target identity assigned to this installed instance.
  *
  * @throws {OpenCodeAttemptSupersededError} when an attempt is supplied and is no longer active.
  * @throws {OpenCodeContextInvalidatedError} when shutdown has begun.
@@ -325,15 +385,30 @@ export function installAdoptedTarget(input: {
   readonly attempt?: AdoptionAttempt | null;
   /** B7 capability snapshot; omitted only by tests or a legacy install. */
   readonly capabilities?: OpenCodeServiceCapabilities | null;
-}): void {
+  readonly profileId?: string;
+  readonly runtimeInstanceId?: string;
+  readonly runtimePid?: number;
+  readonly dataLocation?: string;
+}): number {
   requireActiveAttempt(input.attempt);
   refuseAfterShutdown();
   const origin = input.origin;
   const password = input.password;
-  const target = buildAdoptedTarget(origin, password, input.capabilities ?? null);
+  const targetId = nextTargetId++;
+  const target = buildAdoptedTarget(
+    origin,
+    password,
+    input.capabilities ?? null,
+    targetId,
+    input.profileId,
+    input.runtimeInstanceId,
+    input.runtimePid,
+    input.dataLocation,
+  );
   writeState(
     buildState(connectionState.revision + 1, connectionState.shutdownEpoch, false, target),
   );
+  return targetId;
 }
 
 /**
@@ -343,6 +418,10 @@ export function installAdoptedTarget(input: {
 export function clearTarget(attempt?: AdoptionAttempt | null): void {
   requireActiveAttempt(attempt);
   refuseAfterShutdown();
+  const current = connectionState.target;
+  if (current.mode !== "unresolved") {
+    invalidatedTargetIds.add(current.targetId);
+  }
   writeState(
     buildState(
       connectionState.revision + 1,
@@ -351,6 +430,40 @@ export function clearTarget(attempt?: AdoptionAttempt | null): void {
       UNRESOLVED_TARGET,
     ),
   );
+}
+
+/**
+ * Invalidates and clears a managed target by target identity.
+ *
+ * Guarantees:
+ * - If shutdown has begun, returns false.
+ * - If current target is NOT managed (e.g. adopted), returns false and changes nothing.
+ * - If current target has a different targetId (e.g. a newer replacement child), returns false.
+ * - Only if mode is 'managed' and targetId matches: transitions target to UNRESOLVED_TARGET,
+ *   records targetId in invalidatedTargetIds so in-flight transports fail predictably,
+ *   and increments revision.
+ */
+export function clearManagedTarget(targetId: number): boolean {
+  if (connectionState.shutdownStarted) return false;
+  const current = connectionState.target;
+  if (current.mode !== "managed") return false;
+  if (current.targetId !== targetId) return false;
+
+  invalidatedTargetIds.add(targetId);
+  writeState(
+    buildState(
+      connectionState.revision + 1,
+      connectionState.shutdownEpoch,
+      false,
+      UNRESOLVED_TARGET,
+    ),
+  );
+  return true;
+}
+
+/** Check whether a target identity has been invalidated. */
+export function isTargetInvalidated(targetId: number): boolean {
+  return invalidatedTargetIds.has(targetId);
 }
 
 function requireActiveAttempt(attempt: AdoptionAttempt | null | undefined): void {
@@ -385,6 +498,8 @@ export interface BoundedTransportBinding {
   readonly credential: OpenCodeManagedCredential | OpenCodeAdoptedCredential;
   /** The epoch captured with the target; the transport's initiation gate. */
   readonly shutdownEpoch: number;
+  /** Unique target identity; if invalidated, transport refuses requests. */
+  readonly targetId?: number;
 }
 
 /**
@@ -397,7 +512,7 @@ export interface BoundedTransportBinding {
  *
  * @throws {OpenCodeAuthScopeError} when an adopted credential names a different origin.
  * @throws {OpenCodeOriginMismatchError} on a request for any other origin.
- * @throws {OpenCodeContextInvalidatedError} once shutdown has begun.
+ * @throws {OpenCodeContextInvalidatedError} once shutdown has begun or target was invalidated.
  * @throws {OpenCodeRedirectRefusedError} for every 3xx.
  */
 export function createBoundedTransport(binding: BoundedTransportBinding): OpenCodeTransport {
@@ -407,11 +522,17 @@ export function createBoundedTransport(binding: BoundedTransportBinding): OpenCo
     throw new OpenCodeAuthScopeError(origin, credential.origin);
   }
   const shutdownEpoch = binding.shutdownEpoch;
+  const targetId = binding.targetId;
   const transportCredential: TransportCredential = credential;
   return createGatedTransport(Object.freeze({ origin, credential: transportCredential }), () => {
     const snapshot = readShutdownState();
     if (snapshot.shutdownStarted || snapshot.shutdownEpoch !== shutdownEpoch) {
       throw new OpenCodeContextInvalidatedError();
+    }
+    if (targetId !== undefined && invalidatedTargetIds.has(targetId)) {
+      throw new OpenCodeContextInvalidatedError(
+        "OpenCode target was invalidated after process exit",
+      );
     }
   });
 }
@@ -491,7 +612,9 @@ export function captureOpenCodeRequestContext(): OpenCodeRequestContext {
   const authHeaders = Object.freeze(buildOpenCodeBasicAuthHeader(credential.password));
   const requestContext: OpenCodeRequestContext = {
     mode: target.mode,
+    targetId: target.targetId,
     baseUrl: target.baseUrl,
+    origin: target.origin,
     credential,
     authHeaders,
     revision: state.revision,
@@ -500,7 +623,9 @@ export function captureOpenCodeRequestContext(): OpenCodeRequestContext {
       origin: target.origin,
       credential,
       shutdownEpoch: state.shutdownEpoch,
+      targetId: target.targetId,
     }),
+    profileId: target.profileId,
   };
   return Object.freeze(requestContext);
 }
@@ -651,6 +776,7 @@ export function resetConnectionStateForTests(): void {
     shutdownStarted: false,
     target: UNRESOLVED_TARGET,
   });
+  invalidatedTargetIds.clear();
   currentAttempt = null;
   nextAttemptId = 1;
   shutdownCompletion = null;

@@ -84,7 +84,8 @@ const STATUS_UNAVAILABLE: readonly number[] = [404, 405];
 
 /** The version classes an adoption attempt can reach. */
 export type OpenCodeVersionVerdict =
-  | Readonly<{ status: "adoptable"; version: string; belowCheckedFloor: boolean }>
+  | Readonly<{ status: "adoptable"; version: string }>
+  | Readonly<{ status: "below_minimum"; version: string; minimumVersion: string }>
   | Readonly<{ status: "malformed"; version: string }>
   | Readonly<{ status: "unstable"; version: string }>;
 
@@ -114,10 +115,16 @@ export function classifyAdoptionVersion(
   if (parseOpenCodeVersion(version) === null)
     return Object.freeze({ status: "malformed", version });
   if (!isStableReleaseVersion(version)) return Object.freeze({ status: "unstable", version });
+  if (!isOpenCodeVersionAtLeast(version, config.minimumVersion)) {
+    return Object.freeze({
+      status: "below_minimum",
+      version,
+      minimumVersion: config.minimumVersion,
+    });
+  }
   return Object.freeze({
     status: "adoptable",
     version,
-    belowCheckedFloor: !isOpenCodeVersionAtLeast(version, config.minimumVersion),
   });
 }
 

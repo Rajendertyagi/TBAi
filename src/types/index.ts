@@ -177,6 +177,17 @@ export interface Conversation {
    * `services/opencode/historyBoundary.ts`.
    */
   opencodeServiceOwner?: string | null;
+  /**
+   * The OpenCode session's confirmed working directory (persisted mirror).
+   * For imported sessions, this stores the location.directory from OpenCode.
+   * Null for regular TBAi conversations with default workspaces.
+   */
+  opencodeDirectory?: string | null;
+  /**
+   * True if this conversation was imported from an existing OpenCode session.
+   * Imported sessions must never be silently recreated on remote 404.
+   */
+  opencodeImported?: boolean;
   /** Engine that owns this conversation: Direct chat or OpenCode agent mode. */
   engine?: "direct" | "opencode";
   /** OpenCode agent id chosen at creation (OpenCode engine only). */

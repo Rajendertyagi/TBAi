@@ -129,6 +129,10 @@ export function runtimeChildEnvExtras(
  * the same precedence). Pinning only `OPENCODE_CONFIG_DIR` is therefore not
  * enough to keep a test off the developer's real config, because the home
  * fallback stays reachable - so both are set, plus an explicit config file.
+ *
+ * Furthermore, `XDG_DATA_HOME` is pinned so the database `opencode.db` is
+ * created inside the disposable root rather than polluting the developer's
+ * real database (`~/.local/share/opencode/opencode.db`).
  */
 export interface RuntimeIsolation {
   /** Root of the tree; safe to delete when the test ends. */
@@ -141,6 +145,10 @@ export interface RuntimeIsolation {
   readonly configFile: string;
   /** An isolated working directory, used as the child's `cwd`. */
   readonly homeDir: string;
+  /** `$XDG_DATA_HOME` - the isolated parent of the data directory. */
+  readonly xdgDataHome: string;
+  /** The isolated `opencode` data directory holding `opencode.db`. */
+  readonly dataDir: string;
 }
 
 /**
@@ -166,7 +174,9 @@ export function createRuntimeIsolation(suffix = "runtime"): RuntimeIsolation {
   const xdgConfigHome = path.join(root, "xdg-config");
   const configDir = path.join(xdgConfigHome, "opencode");
   const homeDir = path.join(root, "home");
-  for (const dir of [configDir, homeDir]) {
+  const xdgDataHome = path.join(root, "xdg-data");
+  const dataDir = path.join(xdgDataHome, "opencode");
+  for (const dir of [configDir, homeDir, dataDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   return {
@@ -175,18 +185,16 @@ export function createRuntimeIsolation(suffix = "runtime"): RuntimeIsolation {
     configDir,
     configFile: path.join(configDir, "opencode.json"),
     homeDir,
+    xdgDataHome,
+    dataDir,
   };
 }
 
 /**
- * Child environment that isolates CONFIG while deliberately keeping the real
- * cache and data directories.
+ * Child environment that isolates CONFIG and DATA while keeping cache.
  *
- * Isolating `XDG_CACHE_HOME` or `XDG_DATA_HOME` is what broke eight earlier
- * attempts at this: OpenCode resolves its model catalogue from a models.dev
- * cache, and an empty cache means zero models are ever listed. The catalogue is
- * needed even for a config-declared model, so those two are left alone and only
- * the configuration surface is pinned.
+ * Pinned `XDG_DATA_HOME` isolates the SQLite database (`opencode.db`) completely
+ * into disposable test storage.
  *
  * Project config is disabled twice on purpose: `OPENCODE_CONFIG_PROJECT_DISABLE`
  * is the documented switch, and `OPENCODE_DISABLE_PROJECT_CONFIG` covers builds
@@ -206,7 +214,38 @@ export function isolatedChildEnv(isolation: RuntimeIsolation): Record<string, st
     OPENCODE_CONFIG: isolation.configFile,
     OPENCODE_CONFIG_PROJECT_DISABLE: "1",
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    XDG_DATA_HOME: isolation.xdgDataHome,
   };
+}
+
+/**
+ * Automated guard that ensures a test server process NEVER resolves its database
+ * to the developer's personal OpenCode database.
+ */
+export function assertTestDatabaseIsolation(
+  binary: string,
+  env: Record<string, string | undefined>,
+): void {
+  const prodDb = path.join(os.homedir(), ".local", "share", "opencode", "opencode.db");
+  const localAppDb = process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "opencode", "opencode.db")
+    : null;
+  const preflight = Bun.spawnSync([binary, "debug", "paths", "db"], {
+    env: { ...process.env, ...env },
+  });
+  const resolvedDb = preflight.stdout.toString().trim();
+  if (!resolvedDb) {
+    throw new Error("Failed to determine effective OpenCode database location for runtime test");
+  }
+  if (
+    path.resolve(resolvedDb) === path.resolve(prodDb) ||
+    (localAppDb && path.resolve(resolvedDb) === path.resolve(localAppDb))
+  ) {
+    throw new Error(
+      `FATAL TEST GUARD: OpenCode runtime test attempted to run against production database: "${resolvedDb}". ` +
+        "Test isolation violated! XDG_DATA_HOME must be set to a temporary path.",
+    );
+  }
 }
 
 /**
@@ -235,25 +274,30 @@ export async function startRuntimeOpenCodeServer(
   if (!isSupportedOpenCodeVersion(version, config)) {
     throw new Error(`Unsupported OpenCode version for runtime tests: ${version}`);
   }
-  const workingDirectory = options.isolation?.homeDir ?? config.serverHomeDir;
-  fs.mkdirSync(workingDirectory, { recursive: true });
 
   const port = await allocateRuntimePort();
+  const isolation = options.isolation ?? createRuntimeIsolation(`ephemeral-${port}-${Date.now()}`);
+  const workingDirectory = isolation.homeDir;
+  fs.mkdirSync(workingDirectory, { recursive: true });
+
   const password = RUNTIME_PASSWORD;
+
+  const childEnv = {
+    ...process.env,
+    ...isolatedChildEnv(isolation),
+    ...runtimeChildEnvExtras(extras, password, config),
+  };
+
+  // Automated guard: verify database isolation BEFORE spawning the server
+  assertTestDatabaseIsolation(binary, childEnv);
+
   // Loopback is explicit here too: a test server must never be reachable from
   // another interface, and this mirrors `buildOpenCodeServeArgs`.
   const child = spawn([binary, "serve", "--port", String(port), "--hostname", "127.0.0.1"], {
     cwd: workingDirectory,
     stdout: "pipe",
     stderr: "pipe",
-    // Isolation overrides come before the auth vars and `extras` so a test can
-    // still override either, and the auth credential always wins last - it is
-    // the one value that must never be displaced.
-    env: {
-      ...process.env,
-      ...(options.isolation ? isolatedChildEnv(options.isolation) : {}),
-      ...runtimeChildEnvExtras(extras, password, config),
-    },
+    env: childEnv,
     detached: process.platform !== "win32",
   });
 

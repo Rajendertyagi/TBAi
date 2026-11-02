@@ -244,6 +244,11 @@ function sameDirectory(left: string, right: string): boolean {
  * compare.
  */
 function isEventInScope(state: V2ThreadState, event: V2Event): boolean {
+  if (event.type === "session.moved") {
+    const eventSessionId = getEventSessionId(event);
+    if (eventSessionId === state.sessionId) return true;
+  }
+
   const eventDirectory = getEventDirectory(event);
   if (eventDirectory === null) return true;
 
@@ -609,6 +614,22 @@ function withRetryScheduled(
 
 function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false): V2ThreadState {
   switch (event.type) {
+    case "session.moved": {
+      const newDir = event.data.location?.directory;
+      return {
+        ...state,
+        directory: newDir ?? state.directory,
+        session: state.session
+          ? {
+              ...state.session,
+              location: {
+                ...state.session.location,
+                directory: newDir ?? state.session.location.directory,
+              },
+            }
+          : null,
+      };
+    }
     case "session.model.selected":
       return applyModelEvent(state, event);
     case "session.agent.selected":
@@ -1025,6 +1046,7 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       return {
         ...state,
         session: action.session,
+        directory: action.session.location?.directory ?? state.directory,
         model: modelRefToV2Selection(action.session.model),
         agent: action.session.agent ?? null,
         usage: { cost: action.session.cost, tokens: action.session.tokens },

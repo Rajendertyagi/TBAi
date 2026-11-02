@@ -13,6 +13,7 @@ import {
 } from "./compatibility";
 import { readConnectionState, readShutdownState } from "./connectionState";
 import { revalidateAdoptedTarget, type AdoptedRecoveryOutcome } from "./recovery";
+import { hasExplicitServerConfig } from "./registration";
 import { openCodeServerManager } from "./serverManager";
 
 /**
@@ -129,6 +130,9 @@ async function runStartup(options: OpenCodeStartupOptions): Promise<OpenCodeStar
     return { status: "skipped", reason: "already_installed" };
   }
 
+  const env = options.env ?? process.env;
+  const explicitConfigured = hasExplicitServerConfig(env, config);
+
   const adopt =
     options.adopt ??
     (() =>
@@ -149,6 +153,13 @@ async function runStartup(options: OpenCodeStartupOptions): Promise<OpenCodeStar
     // managed path is what a user would get if adoption did not exist at all.
     if (readShutdownState().shutdownStarted) return { status: "skipped", reason: "shutdown" };
     logger.error("opencode", "opencode.startup_adoption_failed", { ...classifyError(error) });
+    if (explicitConfigured) {
+      return {
+        status: "refused",
+        reason: "managed_start_failed",
+        adoptionReason: "adoption_failed",
+      };
+    }
     return startManagedFallback(options, "adoption_failed");
   }
 
@@ -173,6 +184,17 @@ async function runStartup(options: OpenCodeStartupOptions): Promise<OpenCodeStar
   if (installed.mode !== "unresolved") {
     if (installed.mode === "adopted") startOpenCodeRevalidation(config);
     return { status: "skipped", reason: "already_installed" };
+  }
+
+  if (explicitConfigured) {
+    logger.warn("opencode", "opencode.startup_explicit_adoption_refused", {
+      reason: outcome.reason,
+    });
+    return {
+      status: "refused",
+      reason: "managed_start_failed",
+      adoptionReason: outcome.reason,
+    };
   }
 
   return startManagedFallback(options, outcome.reason);

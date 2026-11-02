@@ -16,8 +16,10 @@ import { REPO_ROOT } from "../../helpers/repo-root";
 import { stripComments } from "../../helpers/web/source-scope";
 import {
   OpenCodeRegistrationRefusalError,
+  hasExplicitServerConfig,
   readOpenCodeRegistration,
   registrationFilenameForChannel,
+  resolveExplicitServerConfig,
   resolveRegistrationPath,
   type OpenCodeRegistrationReadOptions,
   type OpenCodeRegistrationRefusalCode,
@@ -568,5 +570,69 @@ describe("BT16 — the deadline is checked after parsing", () => {
 
     const error = await refusalOf(read(file, { openFile, now }));
     expect(error.refusal).toBe("registration_read_timeout");
+  });
+});
+
+describe("explicit server configuration", () => {
+  it("detects when explicit server config is provided via OPENCODE_URL", () => {
+    expect(hasExplicitServerConfig({ OPENCODE_URL: "http://127.0.0.1:56873" })).toBe(true);
+    expect(hasExplicitServerConfig({ OPENCODE_PORT: "56873" })).toBe(true);
+    expect(hasExplicitServerConfig({})).toBe(false);
+    expect(hasExplicitServerConfig({ OPENCODE_URL: "   " })).toBe(false);
+  });
+
+  it("resolves explicit server config from OPENCODE_URL and OPENCODE_PASSWORD", () => {
+    const config = resolveExplicitServerConfig({
+      OPENCODE_URL: "http://127.0.0.1:56873",
+      OPENCODE_PASSWORD: "secret-password",
+    });
+    expect(config).toEqual({
+      origin: "http://127.0.0.1:56873",
+      password: "secret-password",
+    });
+  });
+
+  it("resolves explicit server config from OPENCODE_PORT, OPENCODE_HOST and legacy OPENCODE_SERVER_PASSWORD", () => {
+    const config = resolveExplicitServerConfig({
+      OPENCODE_HOST: "localhost",
+      OPENCODE_PORT: "59013",
+      OPENCODE_SERVER_PASSWORD: "legacy-password",
+    });
+    expect(config).toEqual({
+      origin: "http://localhost:59013",
+      password: "legacy-password",
+    });
+  });
+
+  it("refuses explicit server config when password is missing", () => {
+    expect(() =>
+      resolveExplicitServerConfig({
+        OPENCODE_URL: "http://127.0.0.1:56873",
+      }),
+    ).toThrow(OpenCodeRegistrationRefusalError);
+
+    try {
+      resolveExplicitServerConfig({ OPENCODE_URL: "http://127.0.0.1:56873" });
+    } catch (err) {
+      expect((err as OpenCodeRegistrationRefusalError).refusal).toBe("missing_credential");
+    }
+  });
+
+  it("refuses explicit server config when URL is non-loopback", () => {
+    expect(() =>
+      resolveExplicitServerConfig({
+        OPENCODE_URL: "http://remote-server.com:8080",
+        OPENCODE_PASSWORD: "secret-password",
+      }),
+    ).toThrow(OpenCodeRegistrationRefusalError);
+
+    try {
+      resolveExplicitServerConfig({
+        OPENCODE_URL: "http://remote-server.com:8080",
+        OPENCODE_PASSWORD: "secret-password",
+      });
+    } catch (err) {
+      expect((err as OpenCodeRegistrationRefusalError).refusal).toBe("registration_non_loopback");
+    }
   });
 });

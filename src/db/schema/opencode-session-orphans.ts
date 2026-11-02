@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS opencode_session_orphans (
   late_create_risk        INTEGER NOT NULL DEFAULT 1,
   first_absent_at         INTEGER,
   last_checked_at         INTEGER,
+  deferred_until          INTEGER,
   PRIMARY KEY (conversation_id, session_id)
 );
 
@@ -105,4 +106,5 @@ export function applyOpenCodeOrphanSchema(db: Database): void {
   addColumnIfMissing(db, "late_create_risk", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "first_absent_at", "INTEGER");
   addColumnIfMissing(db, "last_checked_at", "INTEGER");
+  addColumnIfMissing(db, "deferred_until", "INTEGER");
 }

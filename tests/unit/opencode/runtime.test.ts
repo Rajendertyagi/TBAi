@@ -35,11 +35,11 @@ const RUNTIME_MODULE_URL = pathToFileURL(
 const AUTH_FIXTURE_PASSWORD = "opencode-runtime-auth-fixture-password";
 const AUTH_REPLACEMENT_PASSWORD = "opencode-runtime-replacement-password";
 const AUTH_REPLACEMENT_ENV_VAR = "TBai_OPENCODE_TEST_REPLACEMENT_PASSWORD";
-const SUPPORTED_LOWER_BOUND_VERSION = "2.0.15";
+const SUPPORTED_LOWER_BOUND_VERSION = "2.2.0";
 /** The audited target: the version both manifests pin and the installed binary reports. */
 const SUPPORTED_CLIENT_VERSION = "2.2.0";
-const BELOW_LOWER_BOUND_VERSION = "2.0.14";
-const UNSUPPORTED_VERSION = "2.0.14";
+const BELOW_LOWER_BOUND_VERSION = "2.1.4";
+const UNSUPPORTED_VERSION = "2.1.4";
 /** A stable release newer than anything TBAi has measured. Admitted by B7. */
 const NEWER_STABLE_VERSION = "2.4.0";
 /** A prerelease is refused by D2 even when its core version is in range. */
@@ -289,12 +289,9 @@ describe("OpenCode managed version range", () => {
     expect(classifyOpenCodeVersion("")).toBe("malformed");
   });
 
-  it("accepts the whole 2.1 line, which was checked against the upstream source", () => {
-    // The 2.1 line was adopted on 2026-10-22: no route removed, no event type
-    // removed, and the imported types unchanged apart from branded string
-    // aliases. Every 2.1.x is inside the range.
-    for (const version of ["2.1.0", "2.1.1", "2.1.2"])
-      expect(isSupportedOpenCodeVersion(version)).toBe(true);
+  it("rejects the 2.1 line as below the approved 2.2.0 floor", () => {
+    for (const version of ["2.1.0", "2.1.1", "2.1.2", "2.1.4"])
+      expect(isSupportedOpenCodeVersion(version)).toBe(false);
   });
 
   it("rejects the below-range fixtures", () => {

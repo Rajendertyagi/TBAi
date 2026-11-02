@@ -41,6 +41,67 @@ export class OpenCodeError extends Error {
   }
 }
 
+/** Thrown when an import request carries a stale or mismatched source reference guard. */
+export class OpenCodeImportStaleSourceError extends Error {
+  readonly code = "OPENCODE_IMPORT_STALE_SOURCE";
+
+  constructor(message = "The session discovery state is stale. Please refresh the session list.") {
+    super(message);
+    this.name = "OpenCodeImportStaleSourceError";
+  }
+}
+
+/** Thrown when an OpenCode session is already bound to a conversation under the same service owner. */
+export class OpenCodeSessionAlreadyImportedError extends Error {
+  readonly code = "OPENCODE_SESSION_ALREADY_IMPORTED";
+
+  constructor(
+    readonly conversationId: string,
+    message = "This OpenCode session has already been imported.",
+  ) {
+    super(message);
+    this.name = "OpenCodeSessionAlreadyImportedError";
+  }
+}
+
+/** Thrown when an external OpenCode session is ineligible for import (e.g. child or archived). */
+export class OpenCodeImportSessionEligibilityError extends Error {
+  readonly code = "OPENCODE_IMPORT_ELIGIBILITY";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenCodeImportSessionEligibilityError";
+  }
+}
+
+/** Thrown when an imported OpenCode session no longer exists on the active service. */
+export class OpenCodeImportedSessionMissingError extends Error {
+  readonly code = "OPENCODE_IMPORTED_SESSION_MISSING";
+
+  constructor(
+    readonly conversationId: string,
+    readonly sessionId: string,
+    message?: string,
+  ) {
+    super(message ?? `Session not found on the active OpenCode server: ${sessionId}`);
+    this.name = "OpenCodeImportedSessionMissingError";
+  }
+}
+
+/** Thrown when an OpenCode session's working directory is unresolvable or unavailable. */
+export class OpenCodeDirectoryUnavailableError extends Error {
+  readonly code = "OPENCODE_DIRECTORY_UNAVAILABLE";
+
+  constructor(
+    readonly conversationId: string,
+    readonly directory: string,
+    message?: string,
+  ) {
+    super(message ?? `OpenCode session directory is unavailable: ${directory}`);
+    this.name = "OpenCodeDirectoryUnavailableError";
+  }
+}
+
 /** Reads a string property from an unknown object without an unchecked cast. */
 function readString(source: object, key: string): string | undefined {
   const value: unknown = Reflect.get(source, key);

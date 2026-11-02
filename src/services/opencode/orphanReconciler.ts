@@ -6,7 +6,19 @@ import {
   type OpenCodeOrphanRecord,
 } from "../storage/opencodeSessionOrphans";
 import { createOpenCodeClient, type OpenCodeClient } from "./client";
-import { createManagedFallbackTransport } from "./connectionState";
+import {
+  captureOpenCodeRequestContext,
+  createManagedFallbackTransport,
+  readConnectionState,
+  type OpenCodeRequestContext,
+} from "./connectionState";
+import {
+  canonicalizeServiceOwner,
+  LOCAL_HISTORY_OWNER,
+  historyOwnerFromTarget,
+  serializeHistoryOwner,
+} from "./historyBoundary";
+import type { OpenCodeTransport } from "./http";
 import { openCodeServerManager } from "./serverManager";
 import {
   fetchOpenCodeSession,
@@ -182,7 +194,12 @@ export interface OpenCodeOrphanReconcilerDeps {
    * implemented by starting one.
    */
   getRunningBaseUrl(): Promise<string | null>;
-  createClient(baseUrl: string, directory: string | null): OpenCodeClient;
+  createClient(
+    baseUrl: string,
+    directory: string | null,
+    transport?: OpenCodeTransport,
+  ): OpenCodeClient;
+  defer?(conversationId: string, sessionId: string, untilMs: number): Promise<boolean>;
 }
 
 /** What one pass did. Counts only — never session ids or message text. */
@@ -479,27 +496,59 @@ export async function runOrphanReconciliationOnce(): Promise<OpenCodeOrphanRecon
         continue;
       }
 
-      // A remote answer is required from here on — but only from the service
-      // that owns this history. An adopted-bound row is left untouched rather
-      // than probed through the managed server, whose 404 would say nothing
-      // about the adopted service's session.
-      if (record.serviceOwner !== undefined && record.serviceOwner !== "managed") {
-        report.skippedOtherService += 1;
-        logger.debug("opencode", "opencode.orphan_reconcile_other_service", {
-          conversationId: record.conversationId,
-          phase: record.phase,
-        });
-        continue;
+      let targetUrl: string;
+      let targetTransport: OpenCodeTransport | undefined;
+
+      const recordScope = canonicalizeServiceOwner(record.serviceOwner);
+      const isRecordLocal = recordScope === LOCAL_HISTORY_OWNER;
+
+      if (!isRecordLocal) {
+        let matchedAdoptedContext: OpenCodeRequestContext | null = null;
+        try {
+          const state = readConnectionState();
+          if (state.target.mode === "adopted") {
+            const currentOwner = historyOwnerFromTarget(state.target);
+            const currentScope = currentOwner ? serializeHistoryOwner(currentOwner) : null;
+            if (currentScope === recordScope) {
+              const context = captureOpenCodeRequestContext();
+              if (context.mode === "adopted") {
+                matchedAdoptedContext = context;
+              }
+            }
+          }
+        } catch {
+          matchedAdoptedContext = null;
+        }
+
+        if (!matchedAdoptedContext) {
+          if (reconcilerDeps.defer) {
+            await reconcilerDeps.defer(record.conversationId, record.sessionId, now() + 60_000);
+          }
+          report.skippedOtherService += 1;
+          logger.debug("opencode", "opencode.orphan_reconcile_other_service", {
+            conversationId: record.conversationId,
+            phase: record.phase,
+          });
+          continue;
+        }
+
+        targetUrl = matchedAdoptedContext.baseUrl;
+        targetTransport = matchedAdoptedContext.transport;
+      } else {
+        const url = await runningBaseUrl();
+        if (url === null) {
+          report.skippedNoServer += 1;
+          continue;
+        }
+        targetUrl = url;
+        targetTransport = undefined;
       }
 
-      // Without a running server, leave the row untouched rather than starting
-      // one from a background task (boot must not depend on OpenCode).
-      const url = await runningBaseUrl();
-      if (url === null) {
-        report.skippedNoServer += 1;
-        continue;
-      }
-      const client = reconcilerDeps.createClient(url, record.locationDirectory ?? null);
+      const client = reconcilerDeps.createClient(
+        targetUrl,
+        record.locationDirectory ?? null,
+        targetTransport,
+      );
 
       let remote: Awaited<ReturnType<typeof fetchOpenCodeSession>>;
       try {
@@ -818,9 +867,11 @@ export const openCodeOrphanReconcilerDeps: OpenCodeOrphanReconcilerDeps = {
   // Reconciliation is managed-only (`getRunningBaseUrl` above), so the
   // credential is the managed one. The client still requires a transport; a
   // raw header record is never handed to it.
-  createClient: (baseUrl, directory) =>
+  defer: (conversationId, sessionId, untilMs) =>
+    opencodeOrphanService.deferOrphanedSession(conversationId, sessionId, untilMs),
+  createClient: (baseUrl, directory, transport) =>
     createOpenCodeClient(baseUrl, {
       directory,
-      transport: createManagedFallbackTransport(baseUrl),
+      transport: transport ?? createManagedFallbackTransport(baseUrl),
     }),
 };

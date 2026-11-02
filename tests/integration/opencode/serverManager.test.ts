@@ -25,9 +25,9 @@ import {
 import { OpenCodeListeningMissingError } from "@/services/opencode/listening.ts";
 import { allocateTestLoopbackPort } from "../../harness/opencodeRuntimeHarness";
 
-const SUPPORTED_VERSION = "2.0.15";
+const SUPPORTED_VERSION = "2.2.0";
 const CURRENT_SUPPORTED_VERSION = "2.2.0";
-const UNSUPPORTED_VERSION = "2.0.14";
+const UNSUPPORTED_VERSION = "2.1.4";
 /** A stable release newer than the old ceiling; B7 admits it. */
 const NEWER_STABLE_VERSION = "2.2.1";
 /** D2: a prerelease is refused even inside the numeric range. */
@@ -807,7 +807,10 @@ function newFakeManager(
   config?: OpenCodeConfig,
   lease?: OpenCodeDatabaseLease,
 ): FakeOpenCodeServerManager {
-  const manager = new FakeOpenCodeServerManager(config, lease);
+  const manager = new FakeOpenCodeServerManager(
+    { ...OPENCODE_CONFIG, stabilityPeriodMs: 0, ...config },
+    lease,
+  );
   liveManagers.add(manager);
   return manager;
 }
@@ -1070,6 +1073,7 @@ describe("OpenCodeServerManager lifecycle", () => {
     const mgr = newFakeManager({
       ...OPENCODE_CONFIG,
       maxRestartAttempts: 1,
+      stabilityPeriodMs: 0,
     });
     await mgr.ensureBaseUrl();
     expect(mgr.createChildCalls).toBe(1);

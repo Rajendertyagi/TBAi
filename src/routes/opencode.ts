@@ -6,11 +6,17 @@ import {
   getOpenCodeSessionActivity,
   OpenCodeSessionIntentError,
   OpenCodeSessionMismatchError,
+  reconcileOpenCodeSessionDirectory,
   terminateOpenCodeSession,
 } from "../services/opencode/sessions";
 import { getOpenCodeCapabilities } from "../services/opencode/capabilities";
 import { getOpenCodeCommandFeed } from "../services/opencode/commands";
-import { OpenCodeHistoryBoundaryError } from "../services/opencode/historyBoundary";
+import {
+  historyOwnerFromTarget,
+  LOCAL_HISTORY_OWNER,
+  OpenCodeHistoryBoundaryError,
+  serializeHistoryOwner,
+} from "../services/opencode/historyBoundary";
 import {
   OpenCodeBinaryMissingError,
   stripOpenCodeProxyPrefix,
@@ -52,6 +58,14 @@ import {
   describeOpenCodeRuntime,
   resolveOpenCodeRuntimeTarget,
 } from "../services/opencode/runtimeTarget";
+import { listImportableOpenCodeSessions, importOpenCodeSession } from "../services/opencode/import";
+import {
+  OpenCodeDirectoryUnavailableError,
+  OpenCodeImportStaleSourceError,
+  OpenCodeSessionAlreadyImportedError,
+  OpenCodeImportSessionEligibilityError,
+  OpenCodeImportedSessionMissingError,
+} from "../services/opencode/errors";
 import { logger, getRequestContext } from "../lib/logger";
 import { classifyError } from "../lib/errors";
 import { openCodeSessionActivitySchema } from "../lib/validation";
@@ -74,7 +88,7 @@ const app = new Hono();
 function openCodeError(
   err: unknown,
   fallback: string,
-): { message: string; status: 503 | 502 | 422 | 409 | 500 } {
+): { message: string; status: 503 | 502 | 422 | 409 | 404 | 500 } {
   if (err instanceof OpenCodeBinaryMissingError) {
     return { message: err.message, status: 503 };
   }
@@ -98,6 +112,21 @@ function openCodeError(
       message: err.message,
       status: err.refusal === "adopted_unavailable" ? 503 : 409,
     };
+  }
+  if (err instanceof OpenCodeSessionAlreadyImportedError) {
+    return { message: err.message, status: 409 };
+  }
+  if (err instanceof OpenCodeImportStaleSourceError) {
+    return { message: err.message, status: 409 };
+  }
+  if (err instanceof OpenCodeImportSessionEligibilityError) {
+    return { message: err.message, status: 422 };
+  }
+  if (err instanceof OpenCodeImportedSessionMissingError) {
+    return { message: err.message, status: 404 };
+  }
+  if (err instanceof OpenCodeDirectoryUnavailableError) {
+    return { message: err.message, status: 422 };
   }
   return { message: fallback, status: 500 };
 }
@@ -132,6 +161,27 @@ app.post("/session", async (c) => {
   } catch (err) {
     logger.error("opencode", "opencode.session_error", { ...classifyError(err) });
     const mapped = openCodeError(err, "Failed to start OpenCode session");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
+ * Authoritatively reconciles the persisted directory for a session with OpenCode's
+ * server record after an external move.
+ */
+app.post("/session/reconcile-directory", async (c) => {
+  const parsed = sessionRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return c.json({ error: "conversationId is required" }, 400);
+  }
+  try {
+    const { sessionId, directory } = await reconcileOpenCodeSessionDirectory(
+      parsed.data.conversationId,
+    );
+    return c.json({ sessionId, directory });
+  } catch (err) {
+    logger.error("opencode", "opencode.session_reconcile_error", { ...classifyError(err) });
+    const mapped = openCodeError(err, "Failed to reconcile OpenCode session directory");
     return c.json({ error: mapped.message }, mapped.status);
   }
 });
@@ -521,6 +571,81 @@ app.get("/capabilities", async (c) => {
 });
 
 /**
+ * Lists external OpenCode sessions available for import into TBAi.
+ * Registered before the proxy catch-all below.
+ */
+app.get("/importable", async (c) => {
+  const query = c.req.query("query");
+  const limitParam = c.req.query("limit");
+  const scanLimitParam = c.req.query("scanLimit");
+  const cursor = c.req.query("cursor");
+  const includeChildrenParam = c.req.query("includeChildren");
+
+  const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+  const scanLimit = scanLimitParam ? Number.parseInt(scanLimitParam, 10) : undefined;
+  const includeChildren =
+    includeChildrenParam !== undefined ? includeChildrenParam !== "false" : undefined;
+
+  try {
+    const result = await listImportableOpenCodeSessions({
+      query,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      scanLimit: Number.isFinite(scanLimit) ? scanLimit : undefined,
+      cursor: cursor?.trim() || undefined,
+      includeChildren,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error("opencode", "opencode.importable_error", { ...classifyError(err) });
+    const mapped = openCodeError(err, "Failed to list importable OpenCode sessions");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
+ * Imports an external OpenCode session into TBAi.
+ * Accepts only { sessionId, sourceRef } in the body.
+ * Registered before the proxy catch-all below.
+ */
+app.post("/import", async (c) => {
+  const parseResult = z
+    .object({
+      sessionId: z.string().trim().min(1),
+      sourceRef: z.string().trim().min(1),
+    })
+    .safeParse(await c.req.json().catch(() => ({})));
+
+  if (!parseResult.success) {
+    return c.json({ error: "sessionId and sourceRef are required" }, 400);
+  }
+
+  const { sessionId, sourceRef } = parseResult.data;
+
+  try {
+    const result = await importOpenCodeSession({ sessionId, sourceRef });
+    return c.json(result, 201);
+  } catch (err) {
+    logger.error("opencode", "opencode.import_error", { ...classifyError(err), sessionId });
+
+    if (err instanceof OpenCodeSessionAlreadyImportedError) {
+      return c.json({ error: err.message, conversationId: err.conversationId }, 409);
+    }
+    if (err instanceof OpenCodeImportStaleSourceError) {
+      return c.json({ error: err.message }, 409);
+    }
+    if (err instanceof OpenCodeImportSessionEligibilityError) {
+      return c.json({ error: err.message }, 422);
+    }
+    if (err instanceof OpenCodeImportedSessionMissingError) {
+      return c.json({ error: err.message }, 404);
+    }
+
+    const mapped = openCodeError(err, "Failed to import OpenCode session");
+    return c.json({ error: mapped.message }, mapped.status);
+  }
+});
+
+/**
  * Same-origin reverse proxy to the managed OpenCode server (REST + SSE). The
  * assistant-ui OpenCode runtime talks to this path; we forward to the local
  * server, stripping the proxy prefix and preserving streaming responses.
@@ -572,12 +697,16 @@ app.all("*", async (c) => {
   // proxy resolves the session the request names (path for a session-scoped
   // route, `x-tbai-session` for the location-scoped event stream) through the
   // local database and forwards THAT directory.
+  const historyOwner = historyOwnerFromTarget(target);
+  const serviceOwner = historyOwner ? serializeHistoryOwner(historyOwner) : LOCAL_HISTORY_OWNER;
+
   let authorization: Awaited<ReturnType<typeof authorizeOpenCodeProxyRequest>>;
   try {
     authorization = await authorizeOpenCodeProxyRequest({
       route: match.route,
       parameters: match.parameters,
       sessionHeader: reqHeaders.get(OPENCODE_SESSION_HEADER),
+      serviceOwner,
     });
   } catch (err) {
     if (err instanceof OpenCodeProxyRefusalError) {

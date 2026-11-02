@@ -574,7 +574,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     });
     expect(calls).toEqual([`get:${LIVE_ID}`, `create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: createdId(), opencodeServiceOwner: "managed" } },
+      { id: "conv-1", patch: { opencodeSessionId: createdId(), opencodeServiceOwner: "local" } },
     ]);
   });
 
@@ -592,7 +592,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
     });
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([
-      { id: "conv-1", patch: { opencodeSessionId: createdId(), opencodeServiceOwner: "managed" } },
+      { id: "conv-1", patch: { opencodeSessionId: createdId(), opencodeServiceOwner: "local" } },
     ]);
   });
 });
@@ -1402,13 +1402,13 @@ describe("terminateSessionForConversationDeletion — entry-snapshot guard", () 
 describe("ensureOpenCodeSession — H3/B3 service ownership", () => {
   const ADOPTED_ORIGIN = "http://127.0.0.1:51234";
   const OTHER_ADOPTED_ORIGIN = "http://127.0.0.1:51235";
-  const ADOPTED_OWNER = `adopted:${ADOPTED_ORIGIN}`;
+  const ADOPTED_OWNER = `remote:${ADOPTED_ORIGIN}`;
   /** Synthetic only: never the owner's real service password. */
   const SYNTHETIC_PASSWORD = "synthetic-adopted-password";
 
   /** Installs an adopted service as the active target. */
   function installAdopted(origin: string = ADOPTED_ORIGIN): void {
-    installAdoptedTarget({ origin, password: SYNTHETIC_PASSWORD });
+    installAdoptedTarget({ origin, password: SYNTHETIC_PASSWORD, profileId: `explicit:${origin}` });
   }
 
   function adoptedBound(extra: Record<string, unknown> = {}): Record<string, unknown> {

@@ -61,13 +61,13 @@ describe("runtime isolation: config is pinned, catalogue is not starved", () => 
     expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
   });
 
-  it("leaves the cache and data directories alone", () => {
+  it("leaves the cache directory alone while isolating data directory", () => {
     // The regression this guards: isolating XDG_CACHE_HOME empties the
     // models.dev catalogue, and OpenCode then lists zero models regardless of
     // what the config declares.
     const env = isolatedChildEnv(isolation);
     expect(env.XDG_CACHE_HOME).toBeUndefined();
-    expect(env.XDG_DATA_HOME).toBeUndefined();
+    expect(env.XDG_DATA_HOME).toBe(isolation.xdgDataHome);
   });
 
   it("never mutates the parent environment", () => {

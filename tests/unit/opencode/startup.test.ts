@@ -185,6 +185,50 @@ describe("startOpenCodeRuntime", () => {
     });
   });
 
+  it("fails closed without calling startManaged when explicit server endpoint is configured and adoption is refused", async () => {
+    let managedStarts = 0;
+    const outcome = await startOpenCodeRuntime({
+      config: LOOP_CONFIG,
+      disabled: false,
+      env: { OPENCODE_URL: "http://127.0.0.1:56873", OPENCODE_PASSWORD: "secret-password" },
+      adopt: async () => ({ status: "refused", reason: "probe_failed" }),
+      startManaged: async () => {
+        managedStarts += 1;
+        return MANAGED_URL;
+      },
+    });
+
+    expect(outcome).toEqual({
+      status: "refused",
+      reason: "managed_start_failed",
+      adoptionReason: "probe_failed",
+    });
+    expect(managedStarts).toBe(0);
+  });
+
+  it("fails closed without calling startManaged when explicit server adoption throws", async () => {
+    let managedStarts = 0;
+    const outcome = await startOpenCodeRuntime({
+      config: LOOP_CONFIG,
+      disabled: false,
+      env: { OPENCODE_PORT: "56873", OPENCODE_PASSWORD: "secret-password" },
+      adopt: async () => {
+        throw new Error("network connection refused");
+      },
+      startManaged: async () => {
+        managedStarts += 1;
+        return MANAGED_URL;
+      },
+    });
+
+    expect(outcome).toEqual({
+      status: "refused",
+      reason: "managed_start_failed",
+      adoptionReason: "adoption_failed",
+    });
+    expect(managedStarts).toBe(0);
+  });
+
   it("starts nothing when shutdown lands during the attempt", async () => {
     let starts = 0;
     const outcome = await startOpenCodeRuntime({

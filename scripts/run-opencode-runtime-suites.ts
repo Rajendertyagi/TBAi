@@ -65,6 +65,7 @@ export const REQUIRED_SUITES = [
   "audit-b7-opencode",
   "compatibility-disposable-mutation",
   "opencode-database-compat",
+  "opencode-native-compaction-conformance",
   "opencode-ownership-runtime",
   "opencode-retry-restart",
   "opencode-retry-runtime",
@@ -77,8 +78,6 @@ export const REQUIRED_SUITES = [
 export const EXCLUDED_SUITES: Readonly<Record<string, string>> = {
   "opencode-context-meter-runtime":
     "needs a real provider credential, which the isolated runner deliberately does not have; live acceptance coverage stays dispatch-only",
-  "opencode-native-compaction-conformance":
-    "3 of 8 cases failed against 2.1.2 on a clean windows-latest runner (RT-013); all 8 passed against 2.2.0 locally on 2026-10-28, but that has no runner behind it yet, so re-admit after the 2.2.0 pin runs green on CI",
 };
 
 type SuiteOutcome = {

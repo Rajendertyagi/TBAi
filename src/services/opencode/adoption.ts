@@ -1,4 +1,5 @@
 import { OPENCODE_CONFIG, type OpenCodeConfig } from "../../config/opencode";
+import { resolveServiceProfile } from "./serviceProfile";
 import { logger } from "../../lib/logger";
 import {
   OpenCodeAttemptSupersededError,
@@ -15,7 +16,9 @@ import {
 } from "./connectionState";
 import {
   OpenCodeRegistrationRefusalError,
+  hasExplicitServerConfig,
   readOpenCodeRegistration,
+  resolveExplicitServerConfig,
   type OpenCodeRegistrationRecord,
   type OpenCodeRegistrationRefusalCode,
 } from "./registration";
@@ -90,6 +93,7 @@ export async function attemptOpenCodeAdoption(
   options: OpenCodeAdoptionOptions = {},
 ): Promise<AdoptionAttemptOutcome> {
   const config = options.config ?? OPENCODE_CONFIG;
+  const env = options.env ?? process.env;
 
   let attempt: AdoptionAttempt;
   try {
@@ -108,14 +112,28 @@ export async function attemptOpenCodeAdoption(
 
   let registration: OpenCodeRegistrationRecord;
   try {
-    registration = await readOpenCodeRegistration({
-      path: options.path,
-      channel: options.channel,
-      env: options.env,
-      homeDir: options.homeDir,
-      signal: attempt.controller.signal,
-      config,
-    });
+    if (!options.path && hasExplicitServerConfig(env, config)) {
+      const explicit = resolveExplicitServerConfig(env, config);
+      if (explicit === null) {
+        return refused("registration_missing");
+      }
+      registration = Object.freeze<OpenCodeRegistrationRecord>({
+        path: "config",
+        origin: explicit.origin,
+        pid: 0,
+        password: explicit.password,
+        version: "2.2.0",
+      });
+    } else {
+      registration = await readOpenCodeRegistration({
+        path: options.path,
+        channel: options.channel,
+        env: options.env,
+        homeDir: options.homeDir,
+        signal: attempt.controller.signal,
+        config,
+      });
+    }
   } catch (error) {
     if (error instanceof OpenCodeRegistrationRefusalError) {
       if (error.refusal === "registration_read_failed") {
@@ -146,15 +164,36 @@ export async function attemptOpenCodeAdoption(
   // Guard position: synchronous, immediately before the single install call.
   if (!isAttemptActive(attempt)) return refuseInactive();
 
+  const effectiveRegistration: OpenCodeRegistrationRecord =
+    registration.pid === 0
+      ? Object.freeze({
+          ...registration,
+          pid: probe.pid,
+          version: probe.version,
+        })
+      : registration;
+
   const capabilities = probe.capabilities;
   try {
+    const profile = resolveServiceProfile({
+      mode: "adopted",
+      origin: effectiveRegistration.origin,
+      registrationPath: registration.path,
+      explicit: registration.path === "config",
+      channel: options.channel,
+      config,
+    });
     installAdoptedTarget({
-      origin: registration.origin,
-      password: registration.password,
+      origin: effectiveRegistration.origin,
+      password: effectiveRegistration.password,
       attempt,
       capabilities,
+      profileId: profile.id,
+      runtimeInstanceId: effectiveRegistration.id,
+      runtimePid: effectiveRegistration.pid,
+      dataLocation: profile.dataLocation,
     });
-    lazyCapabilityRegistry.bindToService(registration.origin);
+    lazyCapabilityRegistry.bindToService(effectiveRegistration.origin);
   } catch (error) {
     if (error instanceof OpenCodeAttemptSupersededError) return refused("attempt_superseded");
     if (
@@ -167,7 +206,7 @@ export async function attemptOpenCodeAdoption(
   }
 
   logger.info("opencode", "opencode.adoption_ready", {
-    origin: registration.origin,
+    origin: effectiveRegistration.origin,
     attemptId: attempt.attemptId,
     source: attempt.source,
     detectedVersion: capabilities.version,
@@ -175,7 +214,7 @@ export async function attemptOpenCodeAdoption(
       (id) => !capabilities.supported[id] && !isEssentialCapability(id),
     ),
   });
-  return { status: "adopted", registration, capabilities };
+  return { status: "adopted", registration: effectiveRegistration, capabilities };
 }
 
 /** Probe outcomes, mapped 1:1 to the orchestrator's reasons (plus `ready`). */
@@ -190,7 +229,12 @@ type ProbeOutcome =
   | "shutdown";
 
 type ProbeResult =
-  | Readonly<{ status: "ready"; capabilities: OpenCodeServiceCapabilities }>
+  | Readonly<{
+      status: "ready";
+      capabilities: OpenCodeServiceCapabilities;
+      pid: number;
+      version: string;
+    }>
   | Readonly<{ status: ProbeOutcome }>;
 
 /**
@@ -244,7 +288,9 @@ async function probeCandidate(
     }
     const info = readServerInfo(await response.json().catch(() => undefined));
     if (info === null) return { status: "probe_failed" };
-    if (info.pid !== registration.pid) return { status: "probe_identity_mismatch" };
+    if (registration.pid !== 0 && info.pid !== registration.pid) {
+      return { status: "probe_identity_mismatch" };
+    }
     // The live build decides, not the record: an edited registration cannot
     // smuggle a malformed or prerelease build past the stable-only check.
     if (classifyAdoptionVersion(info.version, config).status !== "adoptable") {
@@ -273,7 +319,12 @@ async function probeCandidate(
     // it is a probe that proved nothing, so this attempt fails like any other.
     if (assessment.status === "indeterminate") return { status: "probe_failed" };
 
-    return { status: "ready", capabilities: assessment.capabilities };
+    return {
+      status: "ready",
+      capabilities: assessment.capabilities,
+      pid: info.pid,
+      version: info.version,
+    };
   } catch (error) {
     if (timedOut) return { status: "probe_timeout" };
     // A 3xx is a refusal (R1), not a generic failure: the transport cancelled

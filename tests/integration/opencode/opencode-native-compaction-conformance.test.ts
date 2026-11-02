@@ -206,8 +206,12 @@ describeRuntime("real OpenCode: native compaction conformance", () => {
             for (const line of frame.split("\n")) {
               if (!line.startsWith("data:")) continue;
               try {
-                const parsed = JSON.parse(line.slice(5).trim()) as { event?: string };
-                if (parsed?.event) events.push(parsed.event);
+                const parsed = JSON.parse(line.slice(5).trim()) as {
+                  type?: string;
+                  event?: string;
+                };
+                const eventType = parsed?.type ?? parsed?.event;
+                if (eventType) events.push(eventType);
               } catch {
                 /* keep-alive or non-JSON frame */
               }
