@@ -13,7 +13,6 @@ import {
 } from "../lib/validation";
 import { schedulerStore } from "../services/scheduler/schedulerStore";
 import type { JobCreate } from "../services/scheduler/schedulerStore";
-import { conversationService } from "../services/storage";
 import {
   cancelRun,
   isSchedulerReady,
@@ -29,10 +28,14 @@ import {
   isValidCron,
 } from "../services/scheduler/cron";
 import {
+  checkExistingThread,
+  checkOpenCodeFields,
   checkProvider,
   checkScheduleFields,
   normalizeCron,
 } from "../services/scheduler/schedulerValidation";
+import { folderService } from "../services/folders";
+import { resolveConversationWorkspace } from "../services/workspace";
 import type { SchedulerJob } from "../services/scheduler/schedulerTypes";
 
 const app = new Hono();
@@ -85,20 +88,60 @@ app.post("/jobs", async (c) => {
     timezone: v.timezone,
   });
   if (scheduleErr) return c.json({ error: scheduleErr }, 400);
-  await registry.loadFromDb(db);
-  const providerErr = checkProvider({
-    providerId: v.providerId,
-    modelId: v.modelId,
-  });
-  if (providerErr) return c.json({ error: providerErr }, 400);
-  // Fail fast when targeting an existing thread: a thread id that does not
-  // resolve would otherwise fail silently at fire time (retargets used to
-  // be stripped by validation and never saved at all).
-  if ((v.conversationPolicy ?? "dedicated_thread") === "existing_thread" && v.conversationId) {
-    const target = await conversationService.get(v.conversationId);
-    if (!target) {
-      return c.json({ error: "Target conversation not found. Pick an existing thread." }, 400);
+
+  const engine = v.engine ?? "direct";
+  let resolvedWorkspacePath = v.workspacePath;
+
+  if (engine === "direct") {
+    if (!v.providerId || !v.modelId) {
+      return c.json({ error: "providerId and modelId are required for direct jobs" }, 400);
     }
+    if (!resolvedWorkspacePath) {
+      return c.json({ error: "workspacePath is required for direct jobs" }, 400);
+    }
+    await registry.loadFromDb(db);
+    const providerErr = checkProvider({
+      providerId: v.providerId,
+      modelId: v.modelId,
+      engine: "direct",
+    });
+    if (providerErr) return c.json({ error: providerErr }, 400);
+
+    const threadErr = await checkExistingThread({
+      conversationPolicy: v.conversationPolicy,
+      conversationId: v.conversationId ?? null,
+      engine: "direct",
+    });
+    if (threadErr) return c.json({ error: threadErr }, 400);
+  } else {
+    const openCodeErr = checkOpenCodeFields({
+      engine: "opencode",
+      opencodeSessionStrategy: v.opencodeSessionStrategy ?? "fresh",
+      workspaceFolderId: v.workspaceFolderId ?? null,
+      workspacePath: resolvedWorkspacePath ?? null,
+      conversationId: v.conversationId ?? null,
+    });
+    if (openCodeErr) return c.json({ error: openCodeErr }, 400);
+
+    if (!resolvedWorkspacePath && v.workspaceFolderId) {
+      const folder = await folderService.get(v.workspaceFolderId);
+      if (folder) resolvedWorkspacePath = folder.path;
+    }
+    if (!resolvedWorkspacePath && v.conversationId) {
+      try {
+        resolvedWorkspacePath = (await resolveConversationWorkspace(v.conversationId)).dir;
+      } catch {}
+    }
+    if (!resolvedWorkspacePath) {
+      return c.json({ error: "Could not resolve workspace path for OpenCode job" }, 400);
+    }
+
+    const threadErr = await checkExistingThread({
+      conversationId: v.conversationId ?? null,
+      engine: "opencode",
+      opencodeSessionStrategy: v.opencodeSessionStrategy ?? "fresh",
+    });
+    if (threadErr) return c.json({ error: threadErr }, 400);
   }
 
   const created = schedulerStore.create(
@@ -107,16 +150,15 @@ app.post("/jobs", async (c) => {
       description: v.description ?? null,
       enabled: v.enabled ?? true,
       scheduleType: v.scheduleType,
-      // Macros are normalized to canonical 5-field form so timers,
-      // previews, and stored values always agree.
       cronExpression:
         v.scheduleType === "cron" && v.cronExpression ? normalizeCron(v.cronExpression) : null,
       execAt: v.execAt ?? null,
       timezone: v.timezone,
-      providerId: v.providerId,
-      modelId: v.modelId,
+      engine,
+      providerId: engine === "opencode" ? (v.providerId ?? "opencode") : v.providerId!,
+      modelId: engine === "opencode" ? (v.modelId ?? v.opencodeModel ?? "default") : v.modelId!,
       thinkingLevel: v.thinkingLevel ?? null,
-      workspacePath: v.workspacePath,
+      workspacePath: resolvedWorkspacePath!,
       prompt: v.prompt,
       conversationPolicy: v.conversationPolicy ?? "dedicated_thread",
       conversationId: v.conversationId ?? null,
@@ -125,6 +167,12 @@ app.post("/jobs", async (c) => {
       retryDelaySeconds: v.retryDelaySeconds ?? 60,
       timeoutSeconds: v.timeoutSeconds ?? 600,
       missedGraceSeconds: v.missedGraceSeconds ?? 600,
+      opencodeSessionStrategy: engine === "opencode" ? (v.opencodeSessionStrategy ?? "fresh") : null,
+      opencodeAgent: engine === "opencode" ? (v.opencodeAgent ?? null) : null,
+      opencodeModel: engine === "opencode" ? (v.opencodeModel ?? null) : null,
+      opencodeVariant: engine === "opencode" ? (v.opencodeVariant ?? null) : null,
+      opencodePermissions: engine === "opencode" ? (v.opencodePermissions ?? "autonomous_coding") : null,
+      workspaceFolderId: engine === "opencode" ? (v.workspaceFolderId ?? null) : null,
     } satisfies JobCreate,
     db,
   );
@@ -172,26 +220,70 @@ app.patch("/jobs/:id", async (c) => {
   };
   const scheduleErr = checkScheduleFields(merged);
   if (scheduleErr) return c.json({ error: scheduleErr }, 400);
-  if (v.providerId !== undefined || v.modelId !== undefined) {
-    await registry.loadFromDb(db);
-    const providerErr = checkProvider({
-      providerId: v.providerId ?? existing.providerId,
-      modelId: v.modelId ?? existing.modelId,
-    });
-    if (providerErr) return c.json({ error: providerErr }, 400);
-  }
-  const mergedPolicy = v.conversationPolicy ?? existing.conversationPolicy;
-  const mergedConversationId =
-    v.conversationId !== undefined ? v.conversationId : existing.conversationId;
-  if (mergedPolicy === "existing_thread" && mergedConversationId) {
-    const target = await conversationService.get(mergedConversationId);
-    if (!target) {
-      return c.json({ error: "Target conversation not found. Pick an existing thread." }, 400);
+
+  const mergedEngine = v.engine ?? existing.engine;
+  const patch: Record<string, unknown> = { ...v };
+
+  if (mergedEngine === "direct") {
+    if (v.providerId !== undefined || v.modelId !== undefined) {
+      await registry.loadFromDb(db);
+      const providerErr = checkProvider({
+        providerId: v.providerId ?? existing.providerId,
+        modelId: v.modelId ?? existing.modelId,
+        engine: "direct",
+      });
+      if (providerErr) return c.json({ error: providerErr }, 400);
     }
+    const mergedPolicy = v.conversationPolicy ?? existing.conversationPolicy;
+    const mergedConversationId =
+      v.conversationId !== undefined ? v.conversationId : existing.conversationId;
+    const threadErr = await checkExistingThread({
+      conversationPolicy: mergedPolicy,
+      conversationId: mergedConversationId,
+      engine: "direct",
+    });
+    if (threadErr) return c.json({ error: threadErr }, 400);
+  } else {
+    const mergedStrategy =
+      v.opencodeSessionStrategy !== undefined ? v.opencodeSessionStrategy : existing.opencodeSessionStrategy;
+    const mergedFolderId =
+      v.workspaceFolderId !== undefined ? v.workspaceFolderId : existing.workspaceFolderId;
+    const mergedConvId =
+      v.conversationId !== undefined ? v.conversationId : existing.conversationId;
+
+    const openCodeErr = checkOpenCodeFields({
+      engine: "opencode",
+      opencodeSessionStrategy: mergedStrategy,
+      workspaceFolderId: mergedFolderId,
+      workspacePath: v.workspacePath ?? existing.workspacePath,
+      conversationId: mergedConvId,
+    });
+    if (openCodeErr) return c.json({ error: openCodeErr }, 400);
+
+    if (v.workspaceFolderId && v.workspaceFolderId !== existing.workspaceFolderId && !v.workspacePath) {
+      const folder = await folderService.get(v.workspaceFolderId);
+      if (folder) patch.workspacePath = folder.path;
+    }
+
+    if (
+      existing.opencodeSessionStrategy === "persistent" &&
+      ((v.opencodeModel !== undefined && v.opencodeModel !== existing.opencodeModel) ||
+        (v.opencodeAgent !== undefined && v.opencodeAgent !== existing.opencodeAgent) ||
+        (v.opencodePermissions !== undefined && v.opencodePermissions !== existing.opencodePermissions) ||
+        (v.opencodeSessionStrategy !== undefined && v.opencodeSessionStrategy !== existing.opencodeSessionStrategy))
+    ) {
+      patch.conversationId = null;
+    }
+
+    const threadErr = await checkExistingThread({
+      conversationId: mergedConvId,
+      engine: "opencode",
+      opencodeSessionStrategy: mergedStrategy,
+    });
+    if (threadErr) return c.json({ error: threadErr }, 400);
   }
   // Switching schedule type clears the other type's field; editing a
   // terminal one-time job back to a live state requires a future exec_at.
-  const patch: Record<string, unknown> = { ...v };
   if (typeof patch.cronExpression === "string") {
     patch.cronExpression = normalizeCron(patch.cronExpression);
   }

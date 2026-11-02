@@ -20,7 +20,7 @@ import {
   type JobTemplate,
   type TemplateSeed,
 } from "./lib/scheduler-templates";
-import type { SchedulerJob, SchedulerRun } from "../../types";
+import type { SchedulerJob, SchedulerJobPublic, SchedulerRun } from "../../types";
 
 type Mode = "detail" | "gallery" | "editor";
 type EditorTarget = { kind: "seed"; seed: TemplateSeed } | { kind: "edit"; job: SchedulerJob };
@@ -168,15 +168,25 @@ export function SchedulerPage() {
   const defaultProviderId = providers[0]?.id ?? "";
   const defaultModelId = providers[0]?.model ?? "";
 
-  const aiLabel = (job: { providerId: string; modelId: string }): string => {
+  const aiLabel = (job: SchedulerJobPublic): string => {
+    if (job.engine === "opencode") {
+      const parts = ["OpenCode Agent"];
+      if (job.opencodeAgent) parts.push(`agent: ${job.opencodeAgent}`);
+      if (job.opencodeModel) parts.push(`model: ${job.opencodeModel}`);
+      return parts.join(" · ");
+    }
     const p = providers.find((x) => x.id === job.providerId);
     return `${p?.name ?? job.providerId} · ${job.modelId}`;
   };
 
-  const conversationLabel = (job: {
-    conversationPolicy: string;
-    conversationId: string | null;
-  }): string | null => {
+  const conversationLabel = (job: SchedulerJobPublic): string | null => {
+    if (job.engine === "opencode") {
+      if (job.opencodeSessionStrategy === "fresh") return "Fresh Session";
+      if (job.opencodeSessionStrategy === "persistent") return "Persistent Session";
+      if (job.opencodeSessionStrategy === "existing_conversation") {
+        return conversations.find((c) => c.id === job.conversationId)?.title ?? job.conversationId ?? "Existing Conversation";
+      }
+    }
     if (job.conversationPolicy !== "existing_thread") return null;
     if (!job.conversationId) return null;
     return conversations.find((c) => c.id === job.conversationId)?.title ?? job.conversationId;

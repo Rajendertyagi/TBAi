@@ -179,10 +179,15 @@ sqlite.run(MESSAGES_TABLE_SQL);
 // assistant-ui thread history persistence). The content column already exists;
 // it now stores the serialized assistant-ui storage format (JSON) instead of a
 // plain string. Old string-format rows are incompatible, so clear them.
-function addColumnIfNotExists(table: string, column: string, definition: string) {
-  const columns = sqlite.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+export function addColumnIfNotExists(
+  table: string,
+  column: string,
+  definition: string,
+  database: Database = sqlite,
+) {
+  const columns = database.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((c) => c.name === column)) {
-    sqlite.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    database.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
 
@@ -661,6 +666,35 @@ sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_status ON scheduler_ru
 sqlite.run(
   "CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next ON scheduler_jobs(enabled, next_run_at)",
 );
+
+export function applySchedulerEngineMigration(database: Database = sqlite): void {
+  // scheduler_jobs extensions
+  addColumnIfNotExists("scheduler_jobs", "engine", "TEXT NOT NULL DEFAULT 'direct'", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_session_strategy", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_agent", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_model", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_variant", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_permissions", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "workspace_folder_id", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "deleted_at", "INTEGER", database);
+
+  // scheduler_runs extensions
+  addColumnIfNotExists("scheduler_runs", "engine", "TEXT NOT NULL DEFAULT 'direct'", database);
+  addColumnIfNotExists("scheduler_runs", "opencode_session_id", "TEXT", database);
+  addColumnIfNotExists("scheduler_runs", "opencode_prompt_id", "TEXT", database);
+  addColumnIfNotExists("scheduler_runs", "turn_outcome", "TEXT", database);
+
+  // Indexes
+  database.run("CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_engine ON scheduler_jobs(engine)");
+  database.run(
+    "CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_deleted ON scheduler_jobs(deleted_at) WHERE deleted_at IS NOT NULL",
+  );
+  database.run(
+    "CREATE INDEX IF NOT EXISTS idx_scheduler_runs_prompt ON scheduler_runs(opencode_prompt_id) WHERE opencode_prompt_id IS NOT NULL",
+  );
+}
+
+applySchedulerEngineMigration(sqlite);
 
 // One-time repair: scheduler runs used to persist every message with
 // parent_id NULL, building a forest of disconnected roots the thread view

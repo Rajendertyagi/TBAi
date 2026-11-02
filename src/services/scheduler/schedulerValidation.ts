@@ -37,7 +37,15 @@ export function checkScheduleFields(value: {
 }
 
 /** Validate that a referenced provider exists. Sync. */
-export function checkProvider(value: { providerId?: string; modelId?: string }): string | null {
+export function checkProvider(value: {
+  providerId?: string;
+  modelId?: string;
+  engine?: string;
+}): string | null {
+  if (value.engine === "opencode") {
+    // OpenCode jobs resolve their own models or defaults in OpenCode
+    return null;
+  }
   if (value.providerId === undefined) return null;
   if (!registry.get(value.providerId)) {
     return `Provider "${value.providerId}" does not exist`;
@@ -55,15 +63,49 @@ export function checkProvider(value: { providerId?: string; modelId?: string }):
 export async function checkExistingThread(value: {
   conversationPolicy?: string;
   conversationId?: string | null;
+  engine?: string;
+  opencodeSessionStrategy?: string | null;
 }): Promise<string | null> {
-  if (
-    (value.conversationPolicy ?? "dedicated_thread") === "existing_thread" &&
-    value.conversationId
-  ) {
+  const isExisting =
+    value.engine === "opencode"
+      ? value.opencodeSessionStrategy === "existing_conversation"
+      : (value.conversationPolicy ?? "dedicated_thread") === "existing_thread";
+
+  if (isExisting && value.conversationId) {
     const target = await conversationService.get(value.conversationId);
     if (!target) {
-      return "Target conversation not found. Pick an existing thread.";
+      return value.engine === "opencode"
+        ? "Target OpenCode conversation not found. Pick an existing conversation."
+        : "Target conversation not found. Pick an existing thread.";
     }
+  }
+  return null;
+}
+
+/** Validate engine-specific OpenCode configuration parameters. Sync. */
+export function checkOpenCodeFields(value: {
+  engine?: string;
+  opencodeSessionStrategy?: string | null;
+  workspaceFolderId?: string | null;
+  workspacePath?: string | null;
+  conversationId?: string | null;
+}): string | null {
+  if (value.engine !== "opencode") return null;
+  if (!value.opencodeSessionStrategy) {
+    return "opencodeSessionStrategy ('fresh' | 'persistent' | 'existing_conversation') is required for OpenCode jobs";
+  }
+  if (!["fresh", "persistent", "existing_conversation"].includes(value.opencodeSessionStrategy)) {
+    return `Invalid opencodeSessionStrategy: "${value.opencodeSessionStrategy}"`;
+  }
+  if (value.opencodeSessionStrategy === "existing_conversation" && !value.conversationId) {
+    return "conversationId is required for existing_conversation strategy";
+  }
+  if (
+    (value.opencodeSessionStrategy === "fresh" || value.opencodeSessionStrategy === "persistent") &&
+    !value.workspaceFolderId &&
+    !value.workspacePath
+  ) {
+    return "workspaceFolderId or workspacePath is required for fresh/persistent OpenCode jobs";
   }
   return null;
 }

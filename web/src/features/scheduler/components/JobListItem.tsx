@@ -159,11 +159,16 @@ export function JobListItem({
               />
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-sm",
+                  "min-w-0 flex-1 truncate text-sm flex items-center gap-1.5",
                   job.enabled ? "font-medium" : "font-normal text-muted-foreground",
                 )}
               >
-                {job.name}
+                <span className="truncate">{job.name}</span>
+                {job.engine === "opencode" && (
+                  <span className="shrink-0 text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                    OpenCode
+                  </span>
+                )}
               </span>
             </button>
 

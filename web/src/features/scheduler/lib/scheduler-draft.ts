@@ -42,6 +42,7 @@ export function blankDraft(providerId: string, modelId: string): SchedulerJobDra
     execAtDate: slot.date,
     execAtTime: slot.time,
     timezone: systemTimezone(),
+    engine: "direct",
     providerId,
     modelId,
     thinkingLevel: "off",
@@ -53,6 +54,12 @@ export function blankDraft(providerId: string, modelId: string): SchedulerJobDra
     retryDelaySeconds: 60,
     timeoutSeconds: 600,
     missedGraceSeconds: 600,
+    opencodeSessionStrategy: "fresh",
+    opencodeAgent: "",
+    opencodeModel: "",
+    opencodeVariant: "",
+    opencodePermissions: "autonomous_coding",
+    workspaceFolderId: "",
   };
 }
 
@@ -73,6 +80,7 @@ export function draftFromJob(job: SchedulerJob): SchedulerJobDraft {
     execAtDate,
     execAtTime,
     timezone: job.timezone,
+    engine: job.engine ?? "direct",
     providerId: job.providerId,
     modelId: job.modelId,
     thinkingLevel: job.thinkingLevel ?? "off",
@@ -84,5 +92,11 @@ export function draftFromJob(job: SchedulerJob): SchedulerJobDraft {
     retryDelaySeconds: job.retryDelaySeconds,
     timeoutSeconds: job.timeoutSeconds,
     missedGraceSeconds: job.missedGraceSeconds,
+    opencodeSessionStrategy: job.opencodeSessionStrategy ?? "fresh",
+    opencodeAgent: job.opencodeAgent ?? "",
+    opencodeModel: job.opencodeModel ?? "",
+    opencodeVariant: job.opencodeVariant ?? "",
+    opencodePermissions: job.opencodePermissions ?? "autonomous_coding",
+    workspaceFolderId: job.workspaceFolderId ?? "",
   };
 }

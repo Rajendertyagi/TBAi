@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { schedulerViewConfig } from "@/features/scheduler/config";
 import { schedulerApi } from "@/features/scheduler/state/schedulerStore";
 import type { ProviderConfig } from "@/types";
@@ -86,6 +87,7 @@ interface JobPayload {
   cronExpression: string | null;
   execAt: number | null;
   timezone: string;
+  engine: "direct" | "opencode";
   providerId: string;
   modelId: string;
   thinkingLevel: "off" | "low" | "medium" | "high";
@@ -97,6 +99,12 @@ interface JobPayload {
   retryDelaySeconds: number;
   timeoutSeconds: number;
   missedGraceSeconds: number;
+  opencodeSessionStrategy?: "fresh" | "persistent" | "existing_conversation" | null;
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
+  opencodePermissions?: "autonomous_coding" | "read_only" | null;
+  workspaceFolderId?: string | null;
 }
 
 /**
@@ -140,6 +148,13 @@ export function JobEditor({
   const ec = schedulerViewConfig.copy.editor;
   const copy = schedulerViewConfig.copy;
   const editingId = editingJob?.id ?? null;
+
+  const folders = useFoldersStore((st) => st.folders);
+  const loadFolders = useFoldersStore((st) => st.loadFolders);
+
+  useEffect(() => {
+    loadFolders();
+  }, [loadFolders]);
 
   const [draft, setDraft] = useState<SchedulerJobDraft>(() => {
     if (editingJob) return draftFromJob(editingJob);
@@ -210,60 +225,66 @@ export function JobEditor({
 
   function buildPayload(): JobPayload | { error: string } {
     if (!draft.name.trim()) return { error: ec.errName };
-    if (!draft.providerId) return { error: ec.errProvider };
-    if (!draft.modelId.trim()) return { error: ec.errModel };
-    if (!draft.workspacePath.trim()) return { error: ec.errWorkspace };
     if (!draft.prompt.trim()) return { error: ec.errPrompt };
+
+    const isDirect = draft.engine === "direct";
+    if (isDirect) {
+      if (!draft.providerId) return { error: ec.errProvider };
+      if (!draft.modelId.trim()) return { error: ec.errModel };
+      if (!draft.workspacePath.trim()) return { error: ec.errWorkspace };
+    } else {
+      if (draft.opencodeSessionStrategy === "existing_conversation") {
+        if (!draft.conversationId) return { error: "Please select an existing OpenCode conversation" };
+      } else {
+        if (!draft.workspaceFolderId && !draft.workspacePath.trim()) {
+          return { error: "Please select a workspace folder for the OpenCode agent" };
+        }
+      }
+    }
+
+    let execAt: number | null = null;
+    let cron: string | null = null;
+
     if (draft.scheduleType === "once") {
       if (!draft.execAtDate || !draft.execAtTime) {
         return { error: ec.errDate };
       }
-      const execAt = new Date(`${draft.execAtDate}T${draft.execAtTime}:00`).getTime();
-      if (!Number.isFinite(execAt)) return { error: ec.errDateInvalid };
-      return {
-        name: draft.name.trim(),
-        description: draft.description.trim() || null,
-        enabled: draft.enabled,
-        scheduleType: "once",
-        cronExpression: null,
-        execAt,
-        timezone: draft.timezone,
-        providerId: draft.providerId,
-        modelId: draft.modelId.trim(),
-        thinkingLevel: draft.thinkingLevel,
-        workspacePath: draft.workspacePath.trim(),
-        prompt: draft.prompt,
-        conversationPolicy: draft.conversationPolicy,
-        conversationId: draft.conversationId,
-        maxRetries: draft.maxRetries,
-        retryDelaySeconds: draft.retryDelaySeconds,
-        timeoutSeconds: draft.timeoutSeconds,
-        missedGraceSeconds: draft.missedGraceSeconds,
-      };
+      const parsedAt = new Date(`${draft.execAtDate}T${draft.execAtTime}:00`).getTime();
+      if (!Number.isFinite(parsedAt)) return { error: ec.errDateInvalid };
+      execAt = parsedAt;
+    } else {
+      cron =
+        preset === "advanced"
+          ? draft.cronExpression.trim()
+          : presetToCron(preset, {
+              minutes: presetMinutes,
+              hour: presetHour,
+              minute: presetMinute,
+              weekday: presetWeekday,
+              monthDay: presetMonthDay,
+            });
+      if (!cron) return { error: ec.errCron };
     }
-    const cron =
-      preset === "advanced"
-        ? draft.cronExpression.trim()
-        : presetToCron(preset, {
-            minutes: presetMinutes,
-            hour: presetHour,
-            minute: presetMinute,
-            weekday: presetWeekday,
-            monthDay: presetMonthDay,
-          });
-    if (!cron) return { error: ec.errCron };
+
+    let wsPath = draft.workspacePath.trim();
+    if (!isDirect && !wsPath && draft.workspaceFolderId) {
+      const f = folders.find((x) => x.id === draft.workspaceFolderId);
+      if (f) wsPath = f.path;
+    }
+
     return {
       name: draft.name.trim(),
       description: draft.description.trim() || null,
       enabled: draft.enabled,
-      scheduleType: "cron",
+      scheduleType: draft.scheduleType,
       cronExpression: cron,
-      execAt: null,
+      execAt,
       timezone: draft.timezone,
-      providerId: draft.providerId,
-      modelId: draft.modelId.trim(),
-      thinkingLevel: draft.thinkingLevel,
-      workspacePath: draft.workspacePath.trim(),
+      engine: draft.engine,
+      providerId: isDirect ? draft.providerId : (draft.providerId || "opencode"),
+      modelId: isDirect ? draft.modelId.trim() : (draft.opencodeModel.trim() || "default"),
+      thinkingLevel: isDirect ? draft.thinkingLevel : "off",
+      workspacePath: wsPath,
       prompt: draft.prompt,
       conversationPolicy: draft.conversationPolicy,
       conversationId: draft.conversationId,
@@ -271,6 +292,12 @@ export function JobEditor({
       retryDelaySeconds: draft.retryDelaySeconds,
       timeoutSeconds: draft.timeoutSeconds,
       missedGraceSeconds: draft.missedGraceSeconds,
+      opencodeSessionStrategy: isDirect ? null : draft.opencodeSessionStrategy,
+      opencodeAgent: isDirect ? null : (draft.opencodeAgent.trim() || null),
+      opencodeModel: isDirect ? null : (draft.opencodeModel.trim() || null),
+      opencodeVariant: isDirect ? null : (draft.opencodeVariant.trim() || null),
+      opencodePermissions: isDirect ? null : draft.opencodePermissions,
+      workspaceFolderId: isDirect ? null : (draft.workspaceFolderId || null),
     };
   }
 
@@ -710,80 +737,311 @@ export function JobEditor({
         </div>
       </div>
 
-      {/* AI */}
+      {/* ENGINE SELECTOR */}
       <div className="space-y-2">
-        <h3 className={microLabelClass}>{ec.ai}</h3>
+        <h3 className={microLabelClass}>Execution Engine</h3>
         <div className="flex gap-2">
-          <div className="flex-1 space-y-1">
-            <div className={labelClass}>{ec.provider}</div>
-            <select
-              className={selectClass}
-              value={draft.providerId}
-              onChange={(e) => {
-                const p = providers.find((x) => x.id === e.target.value);
-                setDraft({
-                  ...draft,
-                  providerId: e.target.value,
-                  modelId: p?.model ?? "",
-                  thinkingLevel: p?.thinking && p.thinking !== "off" ? draft.thinkingLevel : "off",
-                });
-              }}
-            >
-              <option value="">{ec.selectProvider}</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex-1 space-y-1">
-            <div className={labelClass}>{ec.model}</div>
-            <select
-              className={selectClass}
-              value={draft.modelId}
-              onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}
-            >
-              <option value="">{ec.selectModel}</option>
-              {providerModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-          {thinkingOffered && (
-            <div className="flex-1 space-y-1">
-              <div className={labelClass}>{ec.thinking}</div>
-              <select
-                className={selectClass}
-                value={draft.thinkingLevel}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    thinkingLevel: e.target.value as SchedulerJobDraft["thinkingLevel"],
-                  })
-                }
-              >
-                <option value="off">{ec.thinkingOff}</option>
-                <option value="low">{ec.thinkingLow}</option>
-                <option value="medium">{ec.thinkingMedium}</option>
-                <option value="high">{ec.thinkingHigh}</option>
-              </select>
-            </div>
-          )}
+          <Button
+            type="button"
+            size="sm"
+            variant={draft.engine === "direct" ? "default" : "outline"}
+            onClick={() => setDraft({ ...draft, engine: "direct" })}
+          >
+            Direct Chat
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={draft.engine === "opencode" ? "default" : "outline"}
+            onClick={() => setDraft({ ...draft, engine: "opencode" })}
+          >
+            OpenCode Agent
+          </Button>
         </div>
       </div>
 
-      {/* WORKSPACE */}
-      <div className="space-y-2">
-        <h3 className={microLabelClass}>{ec.workspace}</h3>
-        <Input
-          placeholder={ec.workspacePlaceholder}
-          value={draft.workspacePath}
-          onChange={(e) => setDraft({ ...draft, workspacePath: e.target.value })}
-        />
-      </div>
+      {draft.engine === "direct" ? (
+        <>
+          {/* AI */}
+          <div className="space-y-2">
+            <h3 className={microLabelClass}>{ec.ai}</h3>
+            <div className="flex gap-2">
+              <div className="flex-1 space-y-1">
+                <div className={labelClass}>{ec.provider}</div>
+                <select
+                  className={selectClass}
+                  value={draft.providerId}
+                  onChange={(e) => {
+                    const p = providers.find((x) => x.id === e.target.value);
+                    setDraft({
+                      ...draft,
+                      providerId: e.target.value,
+                      modelId: p?.model ?? "",
+                      thinkingLevel: p?.thinking && p.thinking !== "off" ? draft.thinkingLevel : "off",
+                    });
+                  }}
+                >
+                  <option value="">{ec.selectProvider}</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className={labelClass}>{ec.model}</div>
+                <select
+                  className={selectClass}
+                  value={draft.modelId}
+                  onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}
+                >
+                  <option value="">{ec.selectModel}</option>
+                  {providerModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {thinkingOffered && (
+                <div className="flex-1 space-y-1">
+                  <div className={labelClass}>{ec.thinking}</div>
+                  <select
+                    className={selectClass}
+                    value={draft.thinkingLevel}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        thinkingLevel: e.target.value as SchedulerJobDraft["thinkingLevel"],
+                      })
+                    }
+                  >
+                    <option value="off">{ec.thinkingOff}</option>
+                    <option value="low">{ec.thinkingLow}</option>
+                    <option value="medium">{ec.thinkingMedium}</option>
+                    <option value="high">{ec.thinkingHigh}</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* WORKSPACE */}
+          <div className="space-y-2">
+            <h3 className={microLabelClass}>{ec.workspace}</h3>
+            <Input
+              placeholder={ec.workspacePlaceholder}
+              value={draft.workspacePath}
+              onChange={(e) => setDraft({ ...draft, workspacePath: e.target.value })}
+            />
+          </div>
+
+          {/* CONVERSATION */}
+          <div className="space-y-2">
+            <h3 className={microLabelClass}>{ec.conversation}</h3>
+            <div className="space-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="conversationPolicy"
+                  checked={draft.conversationPolicy === "dedicated_thread"}
+                  onChange={() =>
+                    setDraft({
+                      ...draft,
+                      conversationPolicy: "dedicated_thread",
+                      conversationId: null,
+                    })
+                  }
+                />
+                <span>{ec.newDedicated}</span>
+                <span className="text-xs text-muted-foreground">{ec.newDedicatedHint}</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="conversationPolicy"
+                  checked={draft.conversationPolicy === "existing_thread"}
+                  onChange={() =>
+                    setDraft({
+                      ...draft,
+                      conversationPolicy: "existing_thread",
+                    })
+                  }
+                />
+                <span>{ec.existingChat}</span>
+              </label>
+              {draft.conversationPolicy === "existing_thread" && (
+                <div className="ml-6 space-y-1">
+                  <div className={labelClass}>{ec.selectConversation}</div>
+                  <select
+                    className={selectClass}
+                    value={draft.conversationId ?? ""}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        conversationId: e.target.value || null,
+                      })
+                    }
+                  >
+                    <option value="">{ec.selectConversationPlaceholder}</option>
+                    {conversations.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        /* OPENCODE ENGINE SETTINGS */
+        <div className="space-y-4 rounded-lg border border-border bg-card/40 p-3">
+          <div className="space-y-1">
+            <div className={labelClass}>Session Strategy</div>
+            <div className="space-y-2 pt-1">
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="opencodeSessionStrategy"
+                  className="mt-0.5"
+                  checked={draft.opencodeSessionStrategy === "fresh"}
+                  onChange={() => setDraft({ ...draft, opencodeSessionStrategy: "fresh" })}
+                />
+                <div>
+                  <span className="font-medium">Fresh Session</span>
+                  <p className="text-xs text-muted-foreground">Creates a new OpenCode session for each scheduled run</p>
+                </div>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="opencodeSessionStrategy"
+                  className="mt-0.5"
+                  checked={draft.opencodeSessionStrategy === "persistent"}
+                  onChange={() => setDraft({ ...draft, opencodeSessionStrategy: "persistent" })}
+                />
+                <div>
+                  <span className="font-medium">Persistent Session</span>
+                  <p className="text-xs text-muted-foreground">Creates and reuses one dedicated OpenCode session for this job</p>
+                </div>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="opencodeSessionStrategy"
+                  className="mt-0.5"
+                  checked={draft.opencodeSessionStrategy === "existing_conversation"}
+                  onChange={() => setDraft({ ...draft, opencodeSessionStrategy: "existing_conversation" })}
+                />
+                <div>
+                  <span className="font-medium">Existing Conversation</span>
+                  <p className="text-xs text-muted-foreground">Appends prompt into an existing OpenCode conversation</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {draft.opencodeSessionStrategy === "existing_conversation" ? (
+            <div className="space-y-1">
+              <div className={labelClass}>Target OpenCode Conversation</div>
+              <select
+                className={selectClass}
+                value={draft.conversationId ?? ""}
+                onChange={(e) => setDraft({ ...draft, conversationId: e.target.value || null })}
+              >
+                <option value="">Select target OpenCode conversation...</option>
+                {conversations
+                  .filter((c) => (c as any).engine === "opencode")
+                  .concat(conversations.filter((c) => (c as any).engine !== "opencode"))
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title} {(c as any).engine === "opencode" ? "(OpenCode)" : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <div className={labelClass}>Workspace Folder</div>
+                <select
+                  className={selectClass}
+                  value={draft.workspaceFolderId}
+                  onChange={(e) => {
+                    const f = folders.find((x) => x.id === e.target.value);
+                    setDraft({
+                      ...draft,
+                      workspaceFolderId: e.target.value,
+                      workspacePath: f?.path ?? draft.workspacePath,
+                    });
+                  }}
+                >
+                  <option value="">Select registered workspace folder...</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name || f.path} ({f.path})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex gap-2">
+                <div className="flex-1 space-y-1">
+                  <div className={labelClass}>Agent (optional)</div>
+                  <Input
+                    placeholder="e.g. build, plan (blank for default)"
+                    value={draft.opencodeAgent}
+                    onChange={(e) => setDraft({ ...draft, opencodeAgent: e.target.value })}
+                  />
+                </div>
+                <div className="flex-1 space-y-1">
+                  <div className={labelClass}>Model (optional)</div>
+                  <Input
+                    placeholder="e.g. anthropic/claude-3-7-sonnet"
+                    value={draft.opencodeModel}
+                    onChange={(e) => setDraft({ ...draft, opencodeModel: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <div className={labelClass}>Permissions Preset</div>
+            <div className="space-y-2 pt-1">
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="opencodePermissions"
+                  className="mt-0.5"
+                  checked={draft.opencodePermissions === "autonomous_coding"}
+                  onChange={() => setDraft({ ...draft, opencodePermissions: "autonomous_coding" })}
+                />
+                <div>
+                  <span className="font-medium">Autonomous Coding</span>
+                  <p className="text-xs text-muted-foreground">Allow read, glob, grep, edit, shell; deny subagents & skills</p>
+                </div>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="opencodePermissions"
+                  className="mt-0.5"
+                  checked={draft.opencodePermissions === "read_only"}
+                  onChange={() => setDraft({ ...draft, opencodePermissions: "read_only" })}
+                />
+                <div>
+                  <span className="font-medium">Read-Only Analysis</span>
+                  <p className="text-xs text-muted-foreground">Allow search and read inspection; deny edits, shell, subagents</p>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* PROMPT */}
       <div className="space-y-2">
@@ -794,65 +1052,6 @@ export function JobEditor({
           value={draft.prompt}
           onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
         />
-      </div>
-
-      {/* CONVERSATION */}
-      <div className="space-y-2">
-        <h3 className={microLabelClass}>{ec.conversation}</h3>
-        <div className="space-y-2">
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="conversationPolicy"
-              checked={draft.conversationPolicy === "dedicated_thread"}
-              onChange={() =>
-                setDraft({
-                  ...draft,
-                  conversationPolicy: "dedicated_thread",
-                  conversationId: null,
-                })
-              }
-            />
-            <span>{ec.newDedicated}</span>
-            <span className="text-xs text-muted-foreground">{ec.newDedicatedHint}</span>
-          </label>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="conversationPolicy"
-              checked={draft.conversationPolicy === "existing_thread"}
-              onChange={() =>
-                setDraft({
-                  ...draft,
-                  conversationPolicy: "existing_thread",
-                })
-              }
-            />
-            <span>{ec.existingChat}</span>
-          </label>
-          {draft.conversationPolicy === "existing_thread" && (
-            <div className="ml-6 space-y-1">
-              <div className={labelClass}>{ec.selectConversation}</div>
-              <select
-                className={selectClass}
-                value={draft.conversationId ?? ""}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    conversationId: e.target.value || null,
-                  })
-                }
-              >
-                <option value="">{ec.selectConversationPlaceholder}</option>
-                {conversations.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* EXECUTION — rarely touched tuning behind a disclosure (values

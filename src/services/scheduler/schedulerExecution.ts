@@ -222,6 +222,62 @@ export function resolveJobModel(job: SchedulerJob): {
 export async function ensureJobConversation(
   job: SchedulerJob,
 ): Promise<{ conversationId: string; created: boolean; safeToDelete: boolean }> {
+  if (job.engine === "opencode") {
+    if (job.opencodeSessionStrategy === "existing_conversation") {
+      if (!job.conversationId) {
+        throw new ToolError(
+          `Job "${job.name}" uses existing conversation strategy but has no conversation selected. Select a conversation when creating or editing the job.`,
+        );
+      }
+      const conv = await conversationService.get(job.conversationId);
+      if (!conv) {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" not found (deleted or archived). Update the job to select a valid conversation.`,
+        );
+      }
+      if (conv.status === "archived") {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" is archived. Update the job to select a valid conversation.`,
+        );
+      }
+      return { conversationId: conv.id, created: false, safeToDelete: false };
+    }
+    if (job.opencodeSessionStrategy === "persistent") {
+      if (job.conversationId) {
+        const existing = await conversationService.get(job.conversationId);
+        if (existing && existing.status !== "archived") {
+          return { conversationId: existing.id, created: false, safeToDelete: true };
+        }
+      }
+      const created = await conversationService.create({
+        title: `[Scheduler] ${job.name}`,
+        providerId: "opencode",
+        modelId: job.opencodeModel ?? null,
+        workspaceMode: "project",
+        workspaceFolderId: job.workspaceFolderId,
+        engine: "opencode",
+        opencodeAgent: job.opencodeAgent ?? undefined,
+        opencodeModel: job.opencodeModel ?? undefined,
+        opencodeVariant: job.opencodeVariant ?? undefined,
+      });
+      schedulerStore.update(job.id, { conversationId: created.id });
+      return { conversationId: created.id, created: true, safeToDelete: true };
+    }
+    // fresh session strategy
+    const created = await conversationService.create({
+      title: `[Scheduler: Fresh] ${job.name}`,
+      providerId: "opencode",
+      modelId: job.opencodeModel ?? null,
+      workspaceMode: "project",
+      workspaceFolderId: job.workspaceFolderId,
+      engine: "opencode",
+      opencodeAgent: job.opencodeAgent ?? undefined,
+      opencodeModel: job.opencodeModel ?? undefined,
+      opencodeVariant: job.opencodeVariant ?? undefined,
+    });
+    return { conversationId: created.id, created: true, safeToDelete: true };
+  }
+
   if (job.conversationPolicy === "existing_thread") {
     if (!job.conversationId) {
       throw new ToolError(
@@ -282,6 +338,16 @@ export async function executeJobRun(
   conversationId: string,
   parentSignal?: AbortSignal,
 ): Promise<ExecutionResult> {
+  if (job.engine === "opencode") {
+    const { executeOpenCodeScheduledTurn } = await import("../opencode/scheduledExecution");
+    return executeOpenCodeScheduledTurn({
+      job,
+      run,
+      conversationId,
+      parentSignal,
+    });
+  }
+
   const requestId = run.requestId ?? newRequestId();
   const log = logger.child({
     requestId,

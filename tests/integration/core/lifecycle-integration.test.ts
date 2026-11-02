@@ -103,6 +103,7 @@ describe("cross-phase lifecycle integration", () => {
       cronExpression: "* * * * *",
       execAt: null,
       timezone: "UTC",
+      engine: "direct",
       providerId: "lifecycle-provider",
       modelId: "lifecycle-model",
       thinkingLevel: null,

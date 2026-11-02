@@ -554,10 +554,11 @@ export const schedulerJobCreateSchema = z.object({
   cronExpression: z.string().min(1).max(200).optional().nullable(),
   execAt: z.number().int().positive().optional().nullable(),
   timezone: z.string().min(1).max(80),
-  providerId: z.string().min(1),
-  modelId: z.string().min(1).max(200),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  providerId: z.string().min(1).optional(),
+  modelId: z.string().min(1).max(200).optional(),
   thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional().nullable(),
-  workspacePath: z.string().min(1).max(4096),
+  workspacePath: z.string().min(1).max(4096).optional(),
   prompt: z.string().min(1).max(100000),
   conversationPolicy: z.enum(["dedicated_thread", "existing_thread"]).optional(),
   conversationId: z.string().min(1).max(200).optional().nullable(),
@@ -566,6 +567,12 @@ export const schedulerJobCreateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
+  opencodeSessionStrategy: z.enum(["fresh", "persistent", "existing_conversation"]).optional().nullable(),
+  opencodeAgent: z.string().max(200).optional().nullable(),
+  opencodeModel: z.string().max(200).optional().nullable(),
+  opencodeVariant: z.string().max(200).optional().nullable(),
+  opencodePermissions: z.enum(["autonomous_coding", "read_only"]).optional().nullable(),
+  workspaceFolderId: z.string().max(200).optional().nullable(),
 });
 
 export const schedulerJobUpdateSchema = schedulerJobCreateSchema.partial();
@@ -618,6 +625,13 @@ const schedulerCreateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  opencodeSessionStrategy: z.enum(["fresh", "persistent", "existing_conversation"]).optional().nullable(),
+  opencodeAgent: z.string().max(200).optional().nullable(),
+  opencodeModel: z.string().max(200).optional().nullable(),
+  opencodeVariant: z.string().max(200).optional().nullable(),
+  opencodePermissions: z.enum(["autonomous_coding", "read_only"]).optional().nullable(),
+  workspaceFolderId: z.string().max(200).optional().nullable(),
 });
 
 const schedulerListSchema = z
@@ -664,6 +678,13 @@ const schedulerUpdateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
+  engine: z.enum(["direct", "opencode"]).optional(),
+  opencodeSessionStrategy: z.enum(["fresh", "persistent", "existing_conversation"]).optional().nullable(),
+  opencodeAgent: z.string().max(200).optional().nullable(),
+  opencodeModel: z.string().max(200).optional().nullable(),
+  opencodeVariant: z.string().max(200).optional().nullable(),
+  opencodePermissions: z.enum(["autonomous_coding", "read_only"]).optional().nullable(),
+  workspaceFolderId: z.string().max(200).optional().nullable(),
 });
 
 const schedulerDeleteSchema = z

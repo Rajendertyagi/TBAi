@@ -36,7 +36,32 @@ type SessionCreateParams = {
   location: { directory: string };
   agent?: string;
   model?: ModelRef;
+  permissions?: ReadonlyArray<{
+    readonly action: string;
+    readonly resource: string;
+    readonly effect: "allow" | "deny" | "ask";
+  }>;
 };
+
+export const AUTONOMOUS_CODING_PERMISSIONS = [
+  { action: "read", resource: "*", effect: "allow" },
+  { action: "glob", resource: "*", effect: "allow" },
+  { action: "grep", resource: "*", effect: "allow" },
+  { action: "edit", resource: "*", effect: "allow" },
+  { action: "shell", resource: "*", effect: "allow" },
+  { action: "subagent", resource: "*", effect: "deny" },
+  { action: "skill", resource: "*", effect: "deny" },
+] as const;
+
+export const READ_ONLY_PERMISSIONS = [
+  { action: "read", resource: "*", effect: "allow" },
+  { action: "glob", resource: "*", effect: "allow" },
+  { action: "grep", resource: "*", effect: "allow" },
+  { action: "edit", resource: "*", effect: "deny" },
+  { action: "shell", resource: "*", effect: "deny" },
+  { action: "subagent", resource: "*", effect: "deny" },
+  { action: "skill", resource: "*", effect: "deny" },
+] as const;
 
 /** Prefix every TBAi-minted OpenCode session id carries. */
 const SESSION_ID_PREFIX = "ses_";
@@ -187,6 +212,11 @@ export type OpenCodeSessionBinding = {
    * application was reloaded, crashed, or merely navigated back to.
    */
   reusedExistingSession: boolean;
+  /**
+   * True only when an existing session pointer was found to be stale (404)
+   * and a fresh session was created to replace it.
+   */
+  recoveredFromStaleSession?: boolean;
 };
 
 /** Reads a non-empty string, or `undefined` for anything else. */
@@ -722,29 +752,45 @@ async function recordOrphan(input: {
  * @throws {EngineMismatchError} When the conversation is not an OpenCode row.
  * @throws {OpenCodeError} When the server is unreachable or refuses the create.
  */
+export interface EnsureSessionOptions {
+  permissions?: ReadonlyArray<{
+    readonly action: string;
+    readonly resource: string;
+    readonly effect: "allow" | "deny" | "ask";
+  }>;
+}
+
 export async function ensureOpenCodeSession(
   conversationId: string,
+  options?: EnsureSessionOptions,
 ): Promise<OpenCodeSessionBinding> {
   // Phase 4 singleflight: concurrent callers for one conversation share a
   // single ensure — no second session.create, no last-writer-wins orphan.
   // (The persisted pointer covers the sequential case; this covers overlap.)
-  const inFlight = sessionEnsuresInFlight.get(conversationId);
+  const inFlightKey = options?.permissions
+    ? `${conversationId}:custom_perms`
+    : conversationId;
+  const inFlight = sessionEnsuresInFlight.get(inFlightKey);
   if (inFlight) return inFlight;
-  const ensure = ensureOpenCodeSessionInner(conversationId);
-  sessionEnsuresInFlight.set(conversationId, ensure);
+  const ensure = ensureOpenCodeSessionInner(conversationId, options);
+  sessionEnsuresInFlight.set(inFlightKey, ensure);
   try {
     return await ensure;
   } finally {
-    if (sessionEnsuresInFlight.get(conversationId) === ensure) {
-      sessionEnsuresInFlight.delete(conversationId);
+    if (sessionEnsuresInFlight.get(inFlightKey) === ensure) {
+      sessionEnsuresInFlight.delete(inFlightKey);
     }
   }
 }
 
 const sessionEnsuresInFlight = new Map<string, Promise<OpenCodeSessionBinding>>();
 
-async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenCodeSessionBinding> {
+async function ensureOpenCodeSessionInner(
+  conversationId: string,
+  options?: EnsureSessionOptions,
+): Promise<OpenCodeSessionBinding> {
   const conversation = await conversationService.get(conversationId);
+  let recoveredFromStaleSession = false;
   if (!conversation) {
     throw new Error(`Conversation not found: ${conversationId}`);
   }
@@ -803,7 +849,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
         live.id,
         live.model,
       );
-      return { sessionId: live.id, directory: live.directory, reusedExistingSession: true };
+      return { sessionId: live.id, directory: live.directory, reusedExistingSession: true, recoveredFromStaleSession: false };
     }
     // Remote session not found:
     if (conversation.opencodeImported) {
@@ -811,6 +857,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
     }
     // Stale pointer (e.g. server restarted since the session was stored):
     // fall through and recreate rather than handing out a dead id.
+    recoveredFromStaleSession = true;
     logger.warn("opencode", "opencode.session_stale", {
       conversationId,
       sessionId: conversation.opencodeSessionId,
@@ -844,6 +891,9 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
   // session but before any response is durable is still recoverable.
   const sessionId = `${SESSION_ID_PREFIX}${generateId()}`;
   const params: SessionCreateParams = { id: sessionId, location: { directory: sessionDirectory } };
+  if (options?.permissions) {
+    params.permissions = options.permissions;
+  }
 
   if (conversation.opencodeAgent) {
     params.agent = conversation.opencodeAgent;
@@ -935,7 +985,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
           sessionId,
           ...classifyError(persistError),
         });
-        return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+        return { sessionId, directory: createdDirectory, reusedExistingSession: false, recoveredFromStaleSession };
       }
 
       // No confirmed TBAi handle for this session.
@@ -1027,7 +1077,7 @@ async function ensureOpenCodeSessionInner(conversationId: string): Promise<OpenC
       );
     }
     logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
-    return { sessionId, directory: createdDirectory, reusedExistingSession: false };
+    return { sessionId, directory: createdDirectory, reusedExistingSession: false, recoveredFromStaleSession };
   } finally {
     sessionCreatesInFlight.delete(inFlightKey);
   }

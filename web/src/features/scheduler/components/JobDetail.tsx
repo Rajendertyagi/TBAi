@@ -119,6 +119,15 @@ export function JobDetail({
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{job.name}</h2>
         <JobStatusChip status={job.status} />
+        {job.engine === "opencode" ? (
+          <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary border border-primary/20">
+            OpenCode Agent
+          </span>
+        ) : (
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground border border-border">
+            Direct Chat
+          </span>
+        )}
         {!job.enabled && (
           <span className="text-xs text-muted-foreground">({copy.disabledSuffix})</span>
         )}
@@ -185,6 +194,16 @@ export function JobDetail({
             <span>{conversationLabel ?? copy.factsDedicatedThread}</span>
           )}
         </StatItem>
+        {job.engine === "opencode" && (
+          <>
+            <StatItem icon={<Bot aria-hidden="true" />} label="Strategy">
+              <span className="capitalize">{job.opencodeSessionStrategy ? job.opencodeSessionStrategy.replace(/_/g, " ") : "Fresh"}</span>
+            </StatItem>
+            <StatItem icon={<Bot aria-hidden="true" />} label="Permissions">
+              <span>{job.opencodePermissions === "read_only" ? "Read-Only" : "Autonomous Coding"}</span>
+            </StatItem>
+          </>
+        )}
       </section>
 
       {/* Run history timeline */}
@@ -247,7 +266,22 @@ export function JobDetail({
                         {run.error ? ` · ${run.error}` : ""}
                       </span>
                     </span>
-                    <RunStatusChip status={run.status} />
+                    <div className="flex items-center gap-1.5">
+                      {run.turnOutcome && (
+                        <span
+                          className={cn(
+                            "rounded px-1.5 py-0.5 text-[10px] font-mono font-medium border",
+                            run.turnOutcome === "succeeded" && "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
+                            run.turnOutcome === "failed" && "bg-destructive/10 text-destructive border-destructive/20",
+                            run.turnOutcome === "interrupted" && "bg-amber-500/10 text-amber-600 border-amber-500/20",
+                            run.turnOutcome === "outcome_unknown" && "bg-muted text-muted-foreground border-border",
+                          )}
+                        >
+                          {run.turnOutcome}
+                        </span>
+                      )}
+                      <RunStatusChip status={run.status} />
+                    </div>
                   </button>
                   {selected && (
                     <div className="ml-4 space-y-1 border-l border-border py-2 pl-4 text-xs">
@@ -259,6 +293,18 @@ export function JobDetail({
                         <span className="text-muted-foreground">occurrence: </span>
                         {run.occurrenceId}
                       </div>
+                      {run.opencodeSessionId && (
+                        <div>
+                          <span className="text-muted-foreground">opencode session: </span>
+                          <span className="break-all font-mono">{run.opencodeSessionId}</span>
+                        </div>
+                      )}
+                      {run.opencodePromptId && (
+                        <div>
+                          <span className="text-muted-foreground">opencode prompt: </span>
+                          <span className="break-all font-mono">{run.opencodePromptId}</span>
+                        </div>
+                      )}
                       {run.error && (
                         <div>
                           <span className="text-muted-foreground">{copy.runError}: </span>

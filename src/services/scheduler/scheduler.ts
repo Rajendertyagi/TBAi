@@ -20,6 +20,7 @@ import {
   parseCron,
 } from "./cron";
 import { executeJobRun, ensureJobConversation } from "./schedulerExecution";
+import { generateId } from "../../lib/utils";
 
 // Minimal shape of the Bun.cron handle (no @types/bun cron typings in 1.4.2).
 interface CronHandle {
@@ -184,7 +185,10 @@ export async function fireJob(
   // below remains for manual "Run now" (runJobNow) where two rapid clicks can
   // bypass Bun's guarantee. (Run start is logged once by executeJobRun with
   // the runId — no duplicate started line here.)
-  const run = schedulerStore.claimRun(job, occurrenceId, requestId, database);
+  const opencodePromptId = job.engine === "opencode" ? `msg_${generateId()}` : null;
+  const run = schedulerStore.claimRun(job, occurrenceId, requestId, database, {
+    opencodePromptId,
+  });
   if (!run) {
     logger.info("scheduler", "scheduler.run", {
       outcome: "skipped",
@@ -202,20 +206,46 @@ export async function fireJob(
   // Resolve the conversation used for this execution and persist it on the run.
   // This captures the exact conversation at claim time, so later job edits
   // do not alter historical run records.
-  let resolvedConversationId: string | undefined;
+  let resolvedConversationId: string;
   try {
     const conv = await ensureJobConversation(job);
     resolvedConversationId = conv.conversationId;
     schedulerStore.updateRun(run.id, { conversationId: conv.conversationId }, database);
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Conversation setup failed";
     logger.warn("scheduler", "scheduler.run", {
       outcome: "failed",
       requestId,
       jobId,
       occurrenceId,
       runId: run.id,
-      message: err instanceof Error ? err.message : "Conversation setup failed",
+      message,
     });
+    schedulerStore.updateRun(
+      run.id,
+      {
+        status: "failed",
+        turnOutcome: job.engine === "opencode" ? "failed" : null,
+        error: `Conversation setup failed: ${message}`,
+        completedAt: Date.now(),
+        durationMs: 0,
+      },
+      database,
+    );
+    releaseRun(run.id);
+    if (job.scheduleType === "once" && !occurrenceId.startsWith("manual-")) {
+      schedulerStore.update(
+        job.id,
+        {
+          status: "failed",
+          enabled: false,
+          nextRunAt: null,
+        },
+        database,
+      );
+      clearTimer(job.id);
+    }
+    return;
   }
 
   // Typed from the callback passed below, not from `extendRequestContext`: that
@@ -228,7 +258,7 @@ export async function fireJob(
     // manual id-passing below this line.
     result = await extendRequestContext(
       { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
-      () => executeJobRun(job, run, resolvedConversationId ?? "", signal),
+      () => executeJobRun(job, run, resolvedConversationId, signal),
     );
   } finally {
     releaseRun(run.id);
@@ -376,9 +406,40 @@ export function scheduleJob(job: SchedulerJob): void {
   }
 }
 
+/** Cancels queued prompts from OpenCode session inbox for a job. */
+export async function cancelQueuedPromptsForJob(jobId: string): Promise<void> {
+  const job = schedulerStore.get(jobId);
+  if (!job || job.engine !== "opencode") return;
+  const running = schedulerStore.listRuns(jobId, 10, 0);
+  for (const run of running.runs) {
+    if (
+      run.status === "running" &&
+      run.opencodePromptId &&
+      run.opencodeSessionId &&
+      run.conversationId
+    ) {
+      try {
+        const { cancelOpenCodePrompt } = await import("../opencode/scheduledExecution");
+        await cancelOpenCodePrompt({
+          sessionId: run.opencodeSessionId,
+          promptId: run.opencodePromptId,
+          conversationId: run.conversationId,
+        });
+      } catch (err: any) {
+        logger.debug("scheduler", "scheduler.cancel_inbox_error", {
+          jobId,
+          runId: run.id,
+          error: err?.message,
+        });
+      }
+    }
+  }
+}
+
 /** Drop a job's timer (disable/delete path). */
 export function unscheduleJob(jobId: string): void {
   clearTimer(jobId);
+  void cancelQueuedPromptsForJob(jobId);
 }
 
 /** Manual "Run now": a fresh explicit occurrence, never colliding with schedule. */
@@ -398,7 +459,10 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
     );
     return { error: "Previous execution still running; manual run skipped" };
   }
-  const run = schedulerStore.claimRun(job, occurrenceId, requestId);
+  const opencodePromptId = job.engine === "opencode" ? `msg_${generateId()}` : null;
+  const run = schedulerStore.claimRun(job, occurrenceId, requestId, db, {
+    opencodePromptId,
+  });
   if (!run) return { error: "Occurrence already claimed" };
   // Register the controller right after the claim so shutdown can cancel the
   // run even while its conversation is still being resolved.
@@ -500,6 +564,7 @@ export async function recoverEssential(database: Database = db): Promise<Recover
         }
       }
     } catch (err) {
+      clearTimer(job.id);
       logger.warn("scheduler", "scheduler.maintenance", {
         phase: "job_failed",
         jobId: job.id,

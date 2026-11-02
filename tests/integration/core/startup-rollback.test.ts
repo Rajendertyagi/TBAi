@@ -129,6 +129,7 @@ describe("startup-failure rollback", () => {
         cronExpression: "* * * * *",
         execAt: null,
         timezone: "UTC",
+        engine: "direct",
         providerId: "rollback-provider",
         modelId: "rollback-model",
         thinkingLevel: null,

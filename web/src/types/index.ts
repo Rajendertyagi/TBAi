@@ -354,13 +354,18 @@ export interface McpServerDraft {
 // ---- Built-in scheduler (TBAi cron) ----
 
 export type SchedulerScheduleType = "once" | "cron";
+export type SchedulerEngine = "direct" | "opencode";
+export type OpenCodeSessionStrategy = "fresh" | "persistent" | "existing_conversation";
+export type TurnOutcome = "succeeded" | "failed" | "interrupted" | "outcome_unknown";
+
 export type SchedulerJobStatus =
   | "active"
   | "paused"
   | "completed"
   | "missed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "deleted";
 export type SchedulerRunStatus =
   | "scheduled"
   | "running"
@@ -380,6 +385,7 @@ export interface SchedulerJob {
   cronExpression: string | null;
   execAt: number | null;
   timezone: string;
+  engine: SchedulerEngine;
   providerId: string;
   modelId: string;
   thinkingLevel: "off" | "low" | "medium" | "high" | null;
@@ -392,6 +398,13 @@ export interface SchedulerJob {
   retryDelaySeconds: number;
   timeoutSeconds: number;
   missedGraceSeconds: number;
+  opencodeSessionStrategy?: OpenCodeSessionStrategy | null;
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
+  opencodePermissions?: "autonomous_coding" | "read_only" | null;
+  workspaceFolderId?: string | null;
+  deletedAt?: number | null;
   nextRunAt: number | null;
   lastRunAt: number | null;
   status: SchedulerJobStatus;
@@ -415,10 +428,14 @@ export interface SchedulerRun {
   status: SchedulerRunStatus;
   error: string | null;
   outputExcerpt: string | null;
+  engine?: SchedulerEngine;
   providerId: string;
   modelId: string;
   workspacePath: string;
   conversationId: string | null;
+  opencodeSessionId?: string | null;
+  opencodePromptId?: string | null;
+  turnOutcome?: TurnOutcome | null;
   attempt: number;
   durationMs: number | null;
   createdAt: number;
@@ -433,6 +450,7 @@ export interface SchedulerJobDraft {
   execAtDate: string;
   execAtTime: string;
   timezone: string;
+  engine: SchedulerEngine;
   providerId: string;
   modelId: string;
   thinkingLevel: "off" | "low" | "medium" | "high";
@@ -444,4 +462,10 @@ export interface SchedulerJobDraft {
   retryDelaySeconds: number;
   timeoutSeconds: number;
   missedGraceSeconds: number;
+  opencodeSessionStrategy: OpenCodeSessionStrategy;
+  opencodeAgent: string;
+  opencodeModel: string;
+  opencodeVariant: string;
+  opencodePermissions: "autonomous_coding" | "read_only";
+  workspaceFolderId: string;
 }

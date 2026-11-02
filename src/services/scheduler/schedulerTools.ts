@@ -20,6 +20,7 @@ import { schedulerStore } from "./schedulerStore";
 import { runJobNow, scheduleJob, unscheduleJob } from "./scheduler";
 import {
   checkExistingThread,
+  checkOpenCodeFields,
   checkProvider,
   checkScheduleFields,
   normalizeCron,
@@ -37,6 +38,7 @@ function toJobSummary(job: SchedulerJob) {
     cronExpression: job.cronExpression,
     execAt: job.execAt,
     timezone: job.timezone,
+    engine: job.engine,
     providerId: job.providerId,
     modelId: job.modelId,
     thinkingLevel: job.thinkingLevel,
@@ -44,6 +46,12 @@ function toJobSummary(job: SchedulerJob) {
     conversationPolicy: job.conversationPolicy,
     conversationId: job.conversationId,
     overlapPolicy: job.overlapPolicy,
+    opencodeSessionStrategy: job.opencodeSessionStrategy,
+    opencodeAgent: job.opencodeAgent,
+    opencodeModel: job.opencodeModel,
+    opencodeVariant: job.opencodeVariant,
+    opencodePermissions: job.opencodePermissions,
+    workspaceFolderId: job.workspaceFolderId,
     nextRunAt: job.nextRunAt,
     lastRunAt: job.lastRunAt,
     createdAt: job.createdAt,
@@ -64,26 +72,42 @@ export const schedulerToolHandlers = {
     });
     if (scheduleErr) throw new Error(scheduleErr);
 
-    await registry.loadFromDb(db);
-    const providerErr = checkProvider({
-      providerId: v.providerId,
-      modelId: v.modelId,
-    });
-    if (providerErr) throw new Error(providerErr);
-    // providerId/modelId are optional on the AI-tool schema because the chat
-    // route injects the current conversation's values; direct callers must
-    // still supply them.
-    if (!v.providerId || !v.modelId) {
-      throw new Error(
-        "providerId and modelId are required (omit them only in chat, where the current conversation's provider and model apply)",
-      );
+    const engine = ((v as Record<string, unknown>).engine as "direct" | "opencode" | undefined) ?? "direct";
+    if (engine === "direct") {
+      await registry.loadFromDb(db);
+      const providerErr = checkProvider({
+        providerId: v.providerId,
+        modelId: v.modelId,
+        engine: "direct",
+      });
+      if (providerErr) throw new Error(providerErr);
+      if (!v.providerId || !v.modelId) {
+        throw new Error(
+          "providerId and modelId are required (omit them only in chat, where the current conversation's provider and model apply)",
+        );
+      }
+      const threadErr = await checkExistingThread({
+        conversationPolicy: v.conversationPolicy,
+        conversationId: v.conversationId ?? null,
+        engine: "direct",
+      });
+      if (threadErr) throw new Error(threadErr);
+    } else {
+      const openCodeErr = checkOpenCodeFields({
+        engine: "opencode",
+        opencodeSessionStrategy: (v as any).opencodeSessionStrategy ?? "fresh",
+        workspaceFolderId: (v as any).workspaceFolderId ?? null,
+        workspacePath: v.workspacePath ?? null,
+        conversationId: v.conversationId ?? null,
+      });
+      if (openCodeErr) throw new Error(openCodeErr);
+      const threadErr = await checkExistingThread({
+        conversationId: v.conversationId ?? null,
+        engine: "opencode",
+        opencodeSessionStrategy: (v as any).opencodeSessionStrategy ?? "fresh",
+      });
+      if (threadErr) throw new Error(threadErr);
     }
-
-    const threadErr = await checkExistingThread({
-      conversationPolicy: v.conversationPolicy,
-      conversationId: v.conversationId ?? null,
-    });
-    if (threadErr) throw new Error(threadErr);
 
     const created = schedulerStore.create(
       {
@@ -94,8 +118,9 @@ export const schedulerToolHandlers = {
         cronExpression: v.scheduleType === "cron" ? normalizeCron(v.cronExpression ?? null) : null,
         execAt: v.execAt ?? null,
         timezone: v.timezone!,
-        providerId: v.providerId!,
-        modelId: v.modelId!,
+        engine,
+        providerId: engine === "opencode" ? (v.providerId ?? "opencode") : v.providerId!,
+        modelId: engine === "opencode" ? (v.modelId ?? (v as any).opencodeModel ?? "default") : v.modelId!,
         thinkingLevel: v.thinkingLevel ?? null,
         workspacePath: v.workspacePath!,
         prompt: v.prompt!,
@@ -106,6 +131,12 @@ export const schedulerToolHandlers = {
         retryDelaySeconds: v.retryDelaySeconds ?? 60,
         timeoutSeconds: v.timeoutSeconds ?? 600,
         missedGraceSeconds: v.missedGraceSeconds ?? 600,
+        opencodeSessionStrategy: engine === "opencode" ? ((v as any).opencodeSessionStrategy ?? "fresh") : null,
+        opencodeAgent: engine === "opencode" ? ((v as any).opencodeAgent ?? null) : null,
+        opencodeModel: engine === "opencode" ? ((v as any).opencodeModel ?? null) : null,
+        opencodeVariant: engine === "opencode" ? ((v as any).opencodeVariant ?? null) : null,
+        opencodePermissions: engine === "opencode" ? ((v as any).opencodePermissions ?? "autonomous_coding") : null,
+        workspaceFolderId: engine === "opencode" ? ((v as any).workspaceFolderId ?? null) : null,
       } satisfies JobCreate,
       db,
     );
@@ -157,27 +188,62 @@ export const schedulerToolHandlers = {
     const scheduleErr = checkScheduleFields(merged);
     if (scheduleErr) throw new Error(scheduleErr);
 
-    if (args.providerId !== undefined || args.modelId !== undefined) {
-      await registry.loadFromDb(db);
-      const providerErr = checkProvider({
-        providerId: (args.providerId as string) ?? existing.providerId,
-        modelId: (args.modelId as string) ?? existing.modelId,
-      });
-      if (providerErr) throw new Error(providerErr);
-    }
-
-    const mergedPolicy = (args.conversationPolicy as string) ?? existing.conversationPolicy;
-    const mergedConversationId =
-      args.conversationId !== undefined
-        ? (args.conversationId as string | null)
-        : existing.conversationId;
-    const threadErr = await checkExistingThread({
-      conversationPolicy: mergedPolicy,
-      conversationId: mergedConversationId,
-    });
-    if (threadErr) throw new Error(threadErr);
-
+    const mergedEngine = ((args.engine as string | undefined) ?? existing.engine) as "direct" | "opencode";
     const patch: Record<string, unknown> = { ...args };
+
+    if (mergedEngine === "direct") {
+      if (args.providerId !== undefined || args.modelId !== undefined) {
+        await registry.loadFromDb(db);
+        const providerErr = checkProvider({
+          providerId: (args.providerId as string) ?? existing.providerId,
+          modelId: (args.modelId as string) ?? existing.modelId,
+          engine: "direct",
+        });
+        if (providerErr) throw new Error(providerErr);
+      }
+
+      const mergedPolicy = (args.conversationPolicy as string) ?? existing.conversationPolicy;
+      const mergedConversationId =
+        args.conversationId !== undefined
+          ? (args.conversationId as string | null)
+          : existing.conversationId;
+      const threadErr = await checkExistingThread({
+        conversationPolicy: mergedPolicy,
+        conversationId: mergedConversationId,
+        engine: "direct",
+      });
+      if (threadErr) throw new Error(threadErr);
+    } else {
+      const mergedStrategy = (args.opencodeSessionStrategy as any) ?? existing.opencodeSessionStrategy;
+      const mergedFolderId = (args.workspaceFolderId as any) ?? existing.workspaceFolderId;
+      const mergedConvId = args.conversationId !== undefined ? (args.conversationId as string | null) : existing.conversationId;
+
+      const openCodeErr = checkOpenCodeFields({
+        engine: "opencode",
+        opencodeSessionStrategy: mergedStrategy,
+        workspaceFolderId: mergedFolderId,
+        workspacePath: (args.workspacePath as string | undefined) ?? existing.workspacePath,
+        conversationId: mergedConvId,
+      });
+      if (openCodeErr) throw new Error(openCodeErr);
+
+      if (
+        existing.opencodeSessionStrategy === "persistent" &&
+        ((args.opencodeModel !== undefined && args.opencodeModel !== existing.opencodeModel) ||
+          (args.opencodeAgent !== undefined && args.opencodeAgent !== existing.opencodeAgent) ||
+          (args.opencodePermissions !== undefined && args.opencodePermissions !== existing.opencodePermissions) ||
+          (args.opencodeSessionStrategy !== undefined && args.opencodeSessionStrategy !== existing.opencodeSessionStrategy))
+      ) {
+        patch.conversationId = null;
+      }
+
+      const threadErr = await checkExistingThread({
+        conversationId: mergedConvId,
+        engine: "opencode",
+        opencodeSessionStrategy: mergedStrategy,
+      });
+      if (threadErr) throw new Error(threadErr);
+    }
     delete patch.id;
     if (typeof patch.cronExpression === "string") {
       patch.cronExpression = normalizeCron(patch.cronExpression);
