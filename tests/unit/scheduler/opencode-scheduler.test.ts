@@ -794,6 +794,19 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     } as any;
     const res = await reconcilePromptSubmission(mockClient, "ses_1", "missing");
     expect(res.found).toBe(false);
+    expect(res.error).toContain("Incomplete");
+  });
+
+  it("reconcilePromptSubmission reports incomplete on empty page with remaining cursor", async () => {
+    const mockClient = {
+      session: { inbox: { list: async () => ({ data: [] }) } },
+      message: {
+        list: async () => ({ data: [], cursor: { next: "c1" } }),
+      },
+    } as any;
+    const res = await reconcilePromptSubmission(mockClient, "ses_1", "missing");
+    expect(res.found).toBe(false);
+    expect(res.error).toContain("Incomplete");
   });
 
   it("shared-existing cancellation reports outcome_unknown when prompt already delivered", async () => {
@@ -857,6 +870,63 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
       },
     };
     void waitPromise;
+    const res = await executeOpenCodeScheduledTurn({
+      job,
+      run,
+      conversationId: conv.id,
+      parentSignal: controller.signal,
+    });
+    expect(res.ok).toBe(false);
+    const completed = schedulerStore.getRun(run.id, db)!;
+    expect(completed.turnOutcome).toBe("outcome_unknown");
+  });
+
+  it("shared-existing cancellation reports outcome_unknown when reconciliation fails", async () => {
+    const conv = await conversationService.create({
+      title: "Shared3",
+      providerId: "opencode",
+      engine: "opencode",
+      workspaceMode: "project",
+      workspaceFolderId: "wf_123",
+    });
+    const job = schedulerStore.create(
+      sampleOpenCodeJob({
+        opencodeSessionStrategy: "existing_conversation",
+        conversationId: conv.id,
+        workspacePath: process.cwd(),
+        timeoutSeconds: 10,
+      }),
+      db,
+    );
+    const run = schedulerStore.claimRun(job, "occ_cancel_recon_fail", "req_cancel3", db, {
+      opencodePromptId: "prm_cancel3",
+      opencodeSessionId: "mock_ses",
+    })!;
+
+    const controller = new AbortController();
+    mockOpenCodeClient = {
+      session: {
+        prompt: async () => ({}),
+        wait: async (_args: any, opts: any) => {
+          return new Promise((resolve) => {
+            const onAbort = () => resolve({});
+            if (opts?.signal?.aborted) return resolve({});
+            opts?.signal?.addEventListener("abort", onAbort, { once: true });
+            setTimeout(() => controller.abort(), 10);
+          });
+        },
+        inbox: {
+          cancel: async () => ({}),
+          list: async () => {
+            throw new Error("inbox list failed");
+          },
+        },
+      },
+      message: {
+        list: async () => ({ data: [] }),
+      },
+    };
+
     const res = await executeOpenCodeScheduledTurn({
       job,
       run,
