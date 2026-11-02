@@ -100,6 +100,7 @@ export async function reconcilePromptSubmission(
     // order, so order is only sent on the first (cursor-less) request.
     let cursor: string | undefined;
     const seen = new Set<string>();
+    let incomplete = false;
     for (let page = 0; page < 100; page++) {
       const params: any = { sessionID: sessionId, limit: 100 };
       if (cursor) {
@@ -113,10 +114,26 @@ export async function reconcilePromptSubmission(
         return { found: true, location: "messages" };
       }
       const next = msgResp?.cursor?.next;
-      if (!next || seen.has(next)) break;
+      if (!next) break;
+      if (seen.has(next)) {
+        // Cursor cycle: incomplete scan, not definitive absence.
+        incomplete = true;
+        break;
+      }
+      if (messages.length === 0) {
+        // Empty page with remaining cursor: incomplete.
+        incomplete = true;
+        break;
+      }
+      if (page === 99) {
+        incomplete = true;
+        break;
+      }
       seen.add(next);
       cursor = next;
-      if (messages.length === 0) break;
+    }
+    if (incomplete) {
+      return { found: false, location: "none", error: "Incomplete message history scan (cursor cycle, empty page, or page limit)" };
     }
 
     return { found: false, location: "none" };
@@ -473,7 +490,7 @@ export async function executeOpenCodeScheduledTurn(
     const allMessages: any[] = [];
     let cursor: string | undefined;
     const seen = new Set<string>();
-    let truncated = false;
+    let incomplete = false;
     for (let page = 0; page < 100; page++) {
       const params: any = { sessionID: sessionId, limit: 100 };
       if (cursor) {
@@ -485,15 +502,14 @@ export async function executeOpenCodeScheduledTurn(
       const pageMsgs = listResp?.data ?? listResp?.messages ?? [];
       allMessages.push(...pageMsgs);
       const next = listResp?.cursor?.next;
-      if (page === 99 && next && !seen.has(next)) {
-        truncated = true;
-      }
-      if (!next || seen.has(next)) break;
+      if (!next) break;
+      if (seen.has(next)) { incomplete = true; break; }
+      if (pageMsgs.length === 0) { incomplete = true; break; }
+      if (page === 99) { incomplete = true; break; }
       seen.add(next);
       cursor = next;
-      if (pageMsgs.length === 0) break;
     }
-    if (truncated) {
+    if (incomplete) {
       const durationMs = Date.now() - started;
       const errorMsg = "Could not retrieve complete message history for turn inspection.";
       schedulerStore.updateRun(run.id, {
