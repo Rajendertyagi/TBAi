@@ -1,6 +1,7 @@
 import path from "node:path";
 import { registry } from "../../config/providers";
 import { conversationService } from "../storage";
+import { resolveConversationWorkspace } from "../workspace";
 import { assertValidTimezone, isValidCron, expandMacro } from "./cron";
 import type { SchedulerJob } from "./schedulerTypes";
 
@@ -90,6 +91,15 @@ export async function checkExistingThread(value: {
       if (target.engine !== "opencode") {
         return "Target conversation does not belong to OpenCode engine. Pick an OpenCode conversation.";
       }
+      // Resolve the authoritative directory via the existing workspace resolver.
+      // Do not rely on opencodeDirectory being populated; never guess.
+      let resolvedDir: string;
+      try {
+        const resolved = await resolveConversationWorkspace(target.id);
+        resolvedDir = resolved.dir;
+      } catch {
+        return "Target OpenCode conversation's workspace folder is deleted or no longer resolvable.";
+      }
       if (
         value.workspaceFolderId &&
         target.workspaceFolderId &&
@@ -97,12 +107,18 @@ export async function checkExistingThread(value: {
       ) {
         return "Target OpenCode conversation belongs to a different workspace folder.";
       }
-      if (
-        value.workspacePath &&
-        target.opencodeDirectory &&
-        path.resolve(value.workspacePath) !== path.resolve(target.opencodeDirectory)
-      ) {
-        return "Target OpenCode conversation belongs to a different workspace directory.";
+      // When folder metadata is absent on the job, fall back to the resolved dir.
+      const jobDir = value.workspacePath ?? null;
+      const targetDir = target.opencodeDirectory ?? resolvedDir;
+      if (jobDir && targetDir) {
+        if (path.resolve(jobDir) !== path.resolve(targetDir)) {
+          return "Target OpenCode conversation belongs to a different workspace directory.";
+        }
+      }
+      // If the job provides no directory identity and the target has no resolvable
+      // directory, reject as ambiguous rather than guessing.
+      if (!jobDir && !value.workspaceFolderId && !target.workspaceFolderId) {
+        return "Target OpenCode conversation has no resolvable workspace identity.";
       }
     }
   }

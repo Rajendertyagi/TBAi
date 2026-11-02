@@ -254,6 +254,27 @@ export async function ensureJobConversation(
           `Conversation "${job.conversationId}" belongs to a different workspace folder.`,
         );
       }
+      // Verify directory compatibility via the authoritative resolver; never
+      // silently move or fall back.
+      try {
+        const { resolveConversationWorkspace } = await import("../workspace");
+        const resolved = await resolveConversationWorkspace(conv.id);
+        if (job.workspacePath && resolved.dir) {
+          if (
+            path.resolve(job.workspacePath) !== path.resolve(resolved.dir) &&
+            !(conv.opencodeDirectory && path.resolve(job.workspacePath) === path.resolve(conv.opencodeDirectory))
+          ) {
+            throw new ToolError(
+              `Conversation "${job.conversationId}" belongs to a different workspace directory.`,
+            );
+          }
+        }
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(
+          `Conversation "${job.conversationId}" workspace is no longer resolvable.`,
+        );
+      }
       return { conversationId: conv.id, created: false, safeToDelete: false };
     }
     if (job.opencodeSessionStrategy === "persistent") {

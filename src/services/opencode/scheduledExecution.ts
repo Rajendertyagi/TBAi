@@ -14,6 +14,7 @@
  * - Prohibits automatic retry on uncertain outcomes to prevent duplicate side effects
  */
 import { createOpenCodeClient, type OpenCodeClient } from "./client";
+import { toOpenCodeError } from "./errors";
 import { resolveOpenCodeServiceAccess } from "./serviceAccess";
 import {
   ensureOpenCodeSession,
@@ -252,9 +253,22 @@ export async function executeOpenCodeScheduledTurn(
       // Prompt was received by OpenCode, continue to wait and turn-bounding
     } else {
       const durationMs = Date.now() - started;
-      const isAmbiguous =
-        Boolean(reconciliation.error) ||
-        /fetch|timeout|network|econnrefused|econnreset/i.test(normalizedPromptErr);
+      // Classify the dispatch error using the OpenCode error classifier rather
+      // than fragile message matching. Only a positively identified definitive
+      // server rejection (4xx) is treated as a hard failure. Transport faults,
+      // 5xx, timeouts, malformed/lost responses and uncertain client errors are
+      // ambiguous: acceptance cannot be established, so settle as outcome_unknown.
+      // Reconciliation failure also makes acceptance unestablishable.
+      const classified = toOpenCodeError(promptErr);
+      const isDefinitiveRejection =
+        classified.kind === "auth" ||
+        classified.kind === "session_not_found" ||
+        (classified.kind === "http" &&
+          typeof classified.statusCode === "number" &&
+          classified.statusCode >= 400 &&
+          classified.statusCode < 500);
+      const reconciliationFailed = Boolean(reconciliation.error);
+      const isAmbiguous = reconciliationFailed || !isDefinitiveRejection;
       const turnOutcome = isAmbiguous ? "outcome_unknown" : "failed";
       const errorMsg = isAmbiguous
         ? `Ambiguous prompt submission: dispatch threw (${normalizedPromptErr}) and prompt existence could not be confirmed: ${reconciliation.error ?? "not found in inbox or messages"}`
@@ -301,15 +315,38 @@ export async function executeOpenCodeScheduledTurn(
     const durationMs = Date.now() - started;
     if (cancelledByParent) {
       if (isSharedExisting) {
-        // Cancel queued prompt if still in inbox; DO NOT interrupt shared session
+        // Cancel queued prompt if still in inbox; DO NOT interrupt shared session.
+        // Determine whether the prompt was still queued (cancellable) vs already
+        // delivered (underlying work continues) so we report honestly.
+        let stillQueued = false;
+        try {
+          const inboxResp = await client.session.inbox.list({ sessionID: sessionId });
+          const inboxItems = Array.isArray(inboxResp) ? inboxResp : (inboxResp as any)?.data ?? [];
+          stillQueued = inboxItems.some((item: any) => item.id === promptId);
+        } catch {
+          stillQueued = false;
+        }
         await cancelOpenCodePrompt({ sessionId, promptId, conversationId });
-        schedulerStore.updateRun(run.id, {
-          status: "cancelled",
-          turnOutcome: "outcome_unknown",
-          error: "Cancelled by user. Shared conversation session was not interrupted.",
-          completedAt: Date.now(),
-          durationMs,
-        });
+        if (stillQueued) {
+          schedulerStore.updateRun(run.id, {
+            status: "cancelled",
+            turnOutcome: "interrupted",
+            error: "Cancelled by user. Queued prompt was removed; shared session was not interrupted.",
+            completedAt: Date.now(),
+            durationMs,
+          });
+        } else {
+          // Prompt already delivered (or delivery unknown): cannot cancel the
+          // underlying work in a shared conversation. Report as outcome_unknown,
+          // not successful cancellation.
+          schedulerStore.updateRun(run.id, {
+            status: "failed",
+            turnOutcome: "outcome_unknown",
+            error: "Cancelled by user, but the prompt had already been delivered to the shared conversation; underlying work was not interrupted.",
+            completedAt: Date.now(),
+            durationMs,
+          });
+        }
         schedulerStore.update(job.id, { lastRunAt: Date.now() });
         return { ok: false, text: "", error: "Cancelled by user", retryable: false };
       } else {

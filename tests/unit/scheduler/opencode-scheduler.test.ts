@@ -145,6 +145,10 @@ describe("OpenCode Existing Conversation Validation", () => {
   let archivedConvId: string;
 
   beforeEach(async () => {
+    db.run(
+      "INSERT OR REPLACE INTO folders (id, name, path, kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["wf_target", "Target Repo", process.cwd(), "regular", Date.now(), Date.now()],
+    );
     const opencodeConv = await conversationService.create({
       title: "OpenCode Target",
       providerId: "opencode",
@@ -318,6 +322,7 @@ describe("Authoritative Conversation Creation Counts", () => {
       sampleOpenCodeJob({
         opencodeSessionStrategy: "existing_conversation",
         conversationId: targetConv.id,
+        workspacePath: process.cwd(),
       }),
       db,
     );
