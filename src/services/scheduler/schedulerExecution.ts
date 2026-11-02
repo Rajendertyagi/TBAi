@@ -255,15 +255,12 @@ export async function ensureJobConversation(
         );
       }
       // Verify directory compatibility via the authoritative resolver; never
-      // silently move or fall back.
+      // silently move or fall back. Prefer resolved dir over stale metadata.
       try {
         const { resolveConversationWorkspace } = await import("../workspace");
         const resolved = await resolveConversationWorkspace(conv.id);
         if (job.workspacePath && resolved.dir) {
-          if (
-            path.resolve(job.workspacePath) !== path.resolve(resolved.dir) &&
-            !(conv.opencodeDirectory && path.resolve(job.workspacePath) === path.resolve(conv.opencodeDirectory))
-          ) {
+          if (path.resolve(job.workspacePath) !== path.resolve(resolved.dir)) {
             throw new ToolError(
               `Conversation "${job.conversationId}" belongs to a different workspace directory.`,
             );

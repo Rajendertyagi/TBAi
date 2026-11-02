@@ -107,18 +107,12 @@ export async function checkExistingThread(value: {
       ) {
         return "Target OpenCode conversation belongs to a different workspace folder.";
       }
-      // When folder metadata is absent on the job, fall back to the resolved dir.
-      const jobDir = value.workspacePath ?? null;
-      const targetDir = target.opencodeDirectory ?? resolvedDir;
-      if (jobDir && targetDir) {
-        if (path.resolve(jobDir) !== path.resolve(targetDir)) {
+      // Authoritative directory is the resolved one; never prefer stale
+      // opencodeDirectory metadata over it.
+      if (value.workspacePath) {
+        if (path.resolve(value.workspacePath) !== path.resolve(resolvedDir)) {
           return "Target OpenCode conversation belongs to a different workspace directory.";
         }
-      }
-      // If the job provides no directory identity and the target has no resolvable
-      // directory, reject as ambiguous rather than guessing.
-      if (!jobDir && !value.workspaceFolderId && !target.workspaceFolderId) {
-        return "Target OpenCode conversation has no resolvable workspace identity.";
       }
     }
   }

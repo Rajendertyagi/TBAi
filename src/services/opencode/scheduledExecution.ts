@@ -51,8 +51,16 @@ export async function cancelOpenCodePrompt(input: {
     const conv = await conversationService.get(input.conversationId);
     if (!conv) return false;
     const access = await resolveOpenCodeServiceAccess(conv);
+    let directory: string | undefined;
+    try {
+      const { resolveConversationWorkspace } = await import("../workspace");
+      const resolved = await resolveConversationWorkspace(conv.id);
+      directory = resolved.dir;
+    } catch {
+      directory = conv.opencodeDirectory ?? undefined;
+    }
     const client = createOpenCodeClient(access.baseUrl, {
-      directory: conv.opencodeDirectory ?? undefined,
+      directory,
       transport: access.transport,
     });
     await client.session.inbox.cancel({
@@ -86,10 +94,26 @@ export async function reconcilePromptSubmission(
       return { found: true, location: "inbox" };
     }
 
-    const msgResp = await client.message.list({ sessionID: sessionId, order: "asc" });
-    const messages = msgResp?.data ?? [];
-    if (messages.some((msg: any) => msg.id === promptId)) {
-      return { found: true, location: "messages" };
+    // Cursor-aware message retrieval: walk pages until the prompt is found or
+    // there are no more pages.
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < 100; page++) {
+      const msgResp: any = await client.message.list({
+        sessionID: sessionId,
+        order: "asc",
+        cursor,
+        limit: 100,
+      });
+      const messages = msgResp?.data ?? msgResp?.messages ?? [];
+      if (messages.some((msg: any) => msg.id === promptId)) {
+        return { found: true, location: "messages" };
+      }
+      const next = msgResp?.cursor?.next;
+      if (!next || seen.has(next)) break;
+      seen.add(next);
+      cursor = next;
+      if (messages.length === 0) break;
     }
 
     return { found: false, location: "none" };
@@ -208,8 +232,16 @@ export async function executeOpenCodeScheduledTurn(
 
   const conv = await conversationService.get(conversationId);
   const access = await resolveOpenCodeServiceAccess(conv!);
+  let directory: string | undefined;
+  try {
+    const { resolveConversationWorkspace } = await import("../workspace");
+    const resolved = await resolveConversationWorkspace(conversationId);
+    directory = resolved.dir;
+  } catch {
+    directory = conv?.opencodeDirectory ?? undefined;
+  }
   const client = createOpenCodeClient(access.baseUrl, {
-    directory: conv?.opencodeDirectory ?? undefined,
+    directory,
     transport: access.transport,
   });
 
@@ -315,38 +347,50 @@ export async function executeOpenCodeScheduledTurn(
     const durationMs = Date.now() - started;
     if (cancelledByParent) {
       if (isSharedExisting) {
-        // Cancel queued prompt if still in inbox; DO NOT interrupt shared session.
-        // Determine whether the prompt was still queued (cancellable) vs already
-        // delivered (underlying work continues) so we report honestly.
-        let stillQueued = false;
+        // Attempt cancellation and capture the actual result, then reconcile
+        // against inbox + messages to avoid the race where a prompt is delivered
+        // between an inbox snapshot and the cancel call.
+        let cancelSucceeded = false;
         try {
-          const inboxResp = await client.session.inbox.list({ sessionID: sessionId });
-          const inboxItems = Array.isArray(inboxResp) ? inboxResp : (inboxResp as any)?.data ?? [];
-          stillQueued = inboxItems.some((item: any) => item.id === promptId);
+          await client.session.inbox.cancel({ sessionID: sessionId, inboxID: promptId });
+          cancelSucceeded = true;
         } catch {
-          stillQueued = false;
+          cancelSucceeded = false;
         }
-        await cancelOpenCodePrompt({ sessionId, promptId, conversationId });
-        if (stillQueued) {
-          schedulerStore.updateRun(run.id, {
-            status: "cancelled",
-            turnOutcome: "interrupted",
-            error: "Cancelled by user. Queued prompt was removed; shared session was not interrupted.",
-            completedAt: Date.now(),
-            durationMs,
-          });
+        const recon = await reconcilePromptSubmission(client, sessionId, promptId);
+        let status: any;
+        let turnOutcome: any;
+        let errorMsg: string;
+        if (recon.found) {
+          if (recon.location === "inbox") {
+            status = "failed";
+            turnOutcome = "outcome_unknown";
+            errorMsg = "Cancellation could not be confirmed; prompt remains queued in the shared conversation.";
+          } else {
+            status = "failed";
+            turnOutcome = "outcome_unknown";
+            errorMsg = "Prompt already delivered to the shared conversation; underlying work was not interrupted.";
+          }
+        } else if (recon.error) {
+          status = "failed";
+          turnOutcome = "outcome_unknown";
+          errorMsg = "Cancellation result unknown; could not reconcile prompt delivery state.";
+        } else if (cancelSucceeded) {
+          status = "cancelled";
+          turnOutcome = "interrupted";
+          errorMsg = "Cancelled by user. Queued prompt removed; shared session was not interrupted.";
         } else {
-          // Prompt already delivered (or delivery unknown): cannot cancel the
-          // underlying work in a shared conversation. Report as outcome_unknown,
-          // not successful cancellation.
-          schedulerStore.updateRun(run.id, {
-            status: "failed",
-            turnOutcome: "outcome_unknown",
-            error: "Cancelled by user, but the prompt had already been delivered to the shared conversation; underlying work was not interrupted.",
-            completedAt: Date.now(),
-            durationMs,
-          });
+          status = "failed";
+          turnOutcome = "outcome_unknown";
+          errorMsg = "Cancellation could not be established; prompt delivery state unknown.";
         }
+        schedulerStore.updateRun(run.id, {
+          status,
+          turnOutcome,
+          error: errorMsg,
+          completedAt: Date.now(),
+          durationMs,
+        });
         schedulerStore.update(job.id, { lastRunAt: Date.now() });
         return { ok: false, text: "", error: "Cancelled by user", retryable: false };
       } else {
