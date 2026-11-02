@@ -140,6 +140,8 @@ app.post("/jobs", async (c) => {
       conversationId: v.conversationId ?? null,
       engine: "opencode",
       opencodeSessionStrategy: v.opencodeSessionStrategy ?? "fresh",
+      workspaceFolderId: v.workspaceFolderId ?? null,
+      workspacePath: resolvedWorkspacePath ?? null,
     });
     if (threadErr) return c.json({ error: threadErr }, 400);
   }
@@ -265,12 +267,34 @@ app.patch("/jobs/:id", async (c) => {
       if (folder) patch.workspacePath = folder.path;
     }
 
+    const strategyChanged =
+      v.opencodeSessionStrategy !== undefined &&
+      v.opencodeSessionStrategy !== existing.opencodeSessionStrategy;
+    const modelChanged =
+      v.opencodeModel !== undefined && v.opencodeModel !== existing.opencodeModel;
+    const agentChanged =
+      v.opencodeAgent !== undefined && v.opencodeAgent !== existing.opencodeAgent;
+    const variantChanged =
+      v.opencodeVariant !== undefined && v.opencodeVariant !== existing.opencodeVariant;
+    const permsChanged =
+      v.opencodePermissions !== undefined &&
+      v.opencodePermissions !== existing.opencodePermissions;
+    const folderChanged =
+      v.workspaceFolderId !== undefined &&
+      v.workspaceFolderId !== existing.workspaceFolderId;
+    const pathChanged =
+      v.workspacePath !== undefined && v.workspacePath !== existing.workspacePath;
+
     if (
-      existing.opencodeSessionStrategy === "persistent" &&
-      ((v.opencodeModel !== undefined && v.opencodeModel !== existing.opencodeModel) ||
-        (v.opencodeAgent !== undefined && v.opencodeAgent !== existing.opencodeAgent) ||
-        (v.opencodePermissions !== undefined && v.opencodePermissions !== existing.opencodePermissions) ||
-        (v.opencodeSessionStrategy !== undefined && v.opencodeSessionStrategy !== existing.opencodeSessionStrategy))
+      (existing.opencodeSessionStrategy === "persistent" ||
+        v.opencodeSessionStrategy === "persistent") &&
+      (strategyChanged ||
+        modelChanged ||
+        agentChanged ||
+        variantChanged ||
+        permsChanged ||
+        folderChanged ||
+        pathChanged)
     ) {
       patch.conversationId = null;
     }
@@ -279,6 +303,8 @@ app.patch("/jobs/:id", async (c) => {
       conversationId: mergedConvId,
       engine: "opencode",
       opencodeSessionStrategy: mergedStrategy,
+      workspaceFolderId: mergedFolderId,
+      workspacePath: v.workspacePath ?? existing.workspacePath,
     });
     if (threadErr) return c.json({ error: threadErr }, 400);
   }

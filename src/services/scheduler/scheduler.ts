@@ -8,7 +8,7 @@
  */
 import { db } from "../../db";
 import type { Database } from "bun:sqlite";
-import { extendRequestContext, logger, newRequestId } from "../../lib/logger";
+import { extendRequestContext, logger, newRequestId, normalizeError } from "../../lib/logger";
 import type { SchedulerJob } from "./schedulerTypes";
 import { isTerminalJobStatus } from "./schedulerTypes";
 import { schedulerStore } from "./schedulerStore";
@@ -260,6 +260,27 @@ export async function fireJob(
       { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
       () => executeJobRun(job, run, resolvedConversationId, signal),
     );
+  } catch (err) {
+    const errorMsg = normalizeError(err).message;
+    logger.error("scheduler", "scheduler.run_unhandled_failure", {
+      requestId,
+      jobId,
+      occurrenceId,
+      runId: run.id,
+      error: errorMsg,
+    });
+    schedulerStore.updateRun(
+      run.id,
+      {
+        status: "failed",
+        turnOutcome: job.engine === "opencode" ? "outcome_unknown" : null,
+        error: `Unhandled execution failure: ${errorMsg}`,
+        completedAt: Date.now(),
+        durationMs: 0,
+      },
+      database,
+    );
+    result = { ok: false, text: "", error: errorMsg, retryable: false };
   } finally {
     releaseRun(run.id);
   }
@@ -482,11 +503,39 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
     trackRun(
       extendRequestContext(
         { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
-        () => executeJobRun(job, run, conv.conversationId, signal),
+        async () => {
+          try {
+            await executeJobRun(job, run, conv.conversationId, signal);
+          } catch (err) {
+            const errorMsg = normalizeError(err).message;
+            schedulerStore.updateRun(
+              run.id,
+              {
+                status: "failed",
+                turnOutcome: job.engine === "opencode" ? "outcome_unknown" : null,
+                error: `Unhandled execution failure: ${errorMsg}`,
+                completedAt: Date.now(),
+              },
+              db,
+            );
+          }
+        },
       ).finally(() => releaseRun(run.id)),
     );
     return { runId: run.id };
   } catch (err) {
+    const errorMsg = normalizeError(err).message;
+    schedulerStore.updateRun(
+      run.id,
+      {
+        status: "failed",
+        turnOutcome: job.engine === "opencode" ? "failed" : null,
+        error: `Conversation setup failed: ${errorMsg}`,
+        completedAt: Date.now(),
+        durationMs: 0,
+      },
+      db,
+    );
     releaseRun(run.id);
     throw err;
   }

@@ -240,6 +240,20 @@ export async function ensureJobConversation(
           `Conversation "${job.conversationId}" is archived. Update the job to select a valid conversation.`,
         );
       }
+      if (conv.engine !== "opencode") {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" does not belong to OpenCode engine. Update the job to select a valid OpenCode conversation.`,
+        );
+      }
+      if (
+        job.workspaceFolderId &&
+        conv.workspaceFolderId &&
+        job.workspaceFolderId !== conv.workspaceFolderId
+      ) {
+        throw new ToolError(
+          `Conversation "${job.conversationId}" belongs to a different workspace folder.`,
+        );
+      }
       return { conversationId: conv.id, created: false, safeToDelete: false };
     }
     if (job.opencodeSessionStrategy === "persistent") {

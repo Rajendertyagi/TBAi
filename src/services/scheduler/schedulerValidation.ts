@@ -1,3 +1,4 @@
+import path from "node:path";
 import { registry } from "../../config/providers";
 import { conversationService } from "../storage";
 import { assertValidTimezone, isValidCron, expandMacro } from "./cron";
@@ -58,13 +59,15 @@ export function checkProvider(value: {
 
 /**
  * When targeting an existing thread, fail fast if the conversation does not
- * resolve (deleted/archived). Returns null when valid, else an error string.
+ * resolve (deleted/archived/engine mismatch/folder mismatch). Returns null when valid, else an error string.
  */
 export async function checkExistingThread(value: {
   conversationPolicy?: string;
   conversationId?: string | null;
   engine?: string;
   opencodeSessionStrategy?: string | null;
+  workspaceFolderId?: string | null;
+  workspacePath?: string | null;
 }): Promise<string | null> {
   const isExisting =
     value.engine === "opencode"
@@ -77,6 +80,30 @@ export async function checkExistingThread(value: {
       return value.engine === "opencode"
         ? "Target OpenCode conversation not found. Pick an existing conversation."
         : "Target conversation not found. Pick an existing thread.";
+    }
+    if (target.status === "archived") {
+      return value.engine === "opencode"
+        ? "Target OpenCode conversation is archived. Pick an active conversation."
+        : "Target conversation is archived. Pick an active thread.";
+    }
+    if (value.engine === "opencode") {
+      if (target.engine !== "opencode") {
+        return "Target conversation does not belong to OpenCode engine. Pick an OpenCode conversation.";
+      }
+      if (
+        value.workspaceFolderId &&
+        target.workspaceFolderId &&
+        value.workspaceFolderId !== target.workspaceFolderId
+      ) {
+        return "Target OpenCode conversation belongs to a different workspace folder.";
+      }
+      if (
+        value.workspacePath &&
+        target.opencodeDirectory &&
+        path.resolve(value.workspacePath) !== path.resolve(target.opencodeDirectory)
+      ) {
+        return "Target OpenCode conversation belongs to a different workspace directory.";
+      }
     }
   }
   return null;

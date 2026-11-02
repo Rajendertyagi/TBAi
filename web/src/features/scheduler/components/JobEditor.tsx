@@ -955,10 +955,9 @@ export function JobEditor({
                 <option value="">Select target OpenCode conversation...</option>
                 {conversations
                   .filter((c) => (c as any).engine === "opencode")
-                  .concat(conversations.filter((c) => (c as any).engine !== "opencode"))
                   .map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.title} {(c as any).engine === "opencode" ? "(OpenCode)" : ""}
+                      {c.title}
                     </option>
                   ))}
               </select>

@@ -4,13 +4,16 @@
  * Implements executeOpenCodeScheduledTurn according to the V1 Unified Scheduler plan:
  * - 3 session strategies: fresh, persistent, existing_conversation
  * - Autonomous coding & read-only permission presets (no OS-level claims)
+ * - Single authoritative conversation resolution (no duplicate conversation creation)
  * - Queue delivery via client.session.prompt with stable prompt ID (= inbox ID)
+ * - Durable prompt submission reconciliation: verifies inbox/messages on transport error
+ * - Post-wait queue check: confirms prompt is not still queued in inbox
  * - Turn-bounding inspection (user prompt ID -> idle outcome)
  * - Cancellation isolation: no session.interrupt on shared Existing Conversations
  * - No inferred completion via session.active(); uncertain outcomes settle to 'outcome_unknown'
  * - Prohibits automatic retry on uncertain outcomes to prevent duplicate side effects
  */
-import { createOpenCodeClient } from "./client";
+import { createOpenCodeClient, type OpenCodeClient } from "./client";
 import { resolveOpenCodeServiceAccess } from "./serviceAccess";
 import {
   ensureOpenCodeSession,
@@ -67,120 +70,86 @@ export async function cancelOpenCodePrompt(input: {
 }
 
 /**
- * Resolves the target conversation and OpenCode session for a scheduled job.
+ * Reconciles prompt submission when client.session.prompt throws an error (e.g. transport drop).
+ * Verifies whether the prompt was received by inspecting session inbox and message history.
  */
-async function resolveSessionForJob(
+export async function reconcilePromptSubmission(
+  client: OpenCodeClient,
+  sessionId: string,
+  promptId: string,
+): Promise<{ found: boolean; location: "inbox" | "messages" | "none"; error?: string }> {
+  try {
+    const inboxResp = await client.session.inbox.list({ sessionID: sessionId });
+    const inboxItems = Array.isArray(inboxResp) ? inboxResp : (inboxResp as any)?.data ?? [];
+    if (inboxItems.some((item: any) => item.id === promptId)) {
+      return { found: true, location: "inbox" };
+    }
+
+    const msgResp = await client.message.list({ sessionID: sessionId, order: "asc" });
+    const messages = msgResp?.data ?? [];
+    if (messages.some((msg: any) => msg.id === promptId)) {
+      return { found: true, location: "messages" };
+    }
+
+    return { found: false, location: "none" };
+  } catch (reconcileErr: any) {
+    return {
+      found: false,
+      location: "none",
+      error: normalizeError(reconcileErr).message,
+    };
+  }
+}
+
+/**
+ * Resolves the target OpenCode session for a scheduled job.
+ * Note: The conversation itself is authoritatively managed by ensureJobConversation in schedulerExecution.ts.
+ * This function NEVER creates duplicate conversations; it binds/ensures the OpenCode session on the target conversation.
+ */
+export async function resolveSessionForJob(
   job: SchedulerJob,
   run: SchedulerRun,
+  conversationId?: string | null,
 ): Promise<{
   conversationId: string;
   sessionId: string;
   isSharedExisting: boolean;
 }> {
-  const strategy = job.opencodeSessionStrategy ?? "fresh";
-
-  if (strategy === "fresh") {
-    // Fresh session: dedicated run-scoped conversation in SQLite
-    const createdConv = await conversationService.create({
-      title: `[Scheduled: Fresh] ${job.name}`,
-      providerId: "opencode",
-      modelId: job.opencodeModel ?? null,
-      workspaceMode: "project",
-      workspaceFolderId: job.workspaceFolderId,
-      engine: "opencode",
-      opencodeAgent: job.opencodeAgent ?? undefined,
-      opencodeModel: job.opencodeModel ?? undefined,
-      opencodeVariant: job.opencodeVariant ?? undefined,
-    });
-
-    const permissions =
-      job.opencodePermissions === "read_only"
-        ? READ_ONLY_PERMISSIONS
-        : AUTONOMOUS_CODING_PERMISSIONS;
-
-    const binding = await ensureOpenCodeSession(createdConv.id, { permissions });
-
-    schedulerStore.updateRun(run.id, {
-      conversationId: createdConv.id,
-      opencodeSessionId: binding.sessionId,
-    });
-
-    return {
-      conversationId: createdConv.id,
-      sessionId: binding.sessionId,
-      isSharedExisting: false,
-    };
+  let targetConvId = conversationId ?? run.conversationId ?? job.conversationId;
+  if (!targetConvId) {
+    const { ensureJobConversation } = await import("../scheduler/schedulerExecution");
+    const resolved = await ensureJobConversation(job);
+    targetConvId = resolved.conversationId;
   }
 
-  if (strategy === "persistent") {
-    let targetConvId = job.conversationId;
-    if (targetConvId) {
-      const existing = await conversationService.get(targetConvId);
-      if (!existing || existing.status === "archived") {
-        targetConvId = null;
-      }
-    }
-
-    if (!targetConvId) {
-      const createdConv = await conversationService.create({
-        title: `[Scheduled: Persistent] ${job.name}`,
-        providerId: "opencode",
-        modelId: job.opencodeModel ?? null,
-        workspaceMode: "project",
-        workspaceFolderId: job.workspaceFolderId,
-        engine: "opencode",
-        opencodeAgent: job.opencodeAgent ?? undefined,
-        opencodeModel: job.opencodeModel ?? undefined,
-        opencodeVariant: job.opencodeVariant ?? undefined,
-      });
-      targetConvId = createdConv.id;
-      schedulerStore.update(job.id, { conversationId: createdConv.id });
-    }
-
-    const permissions =
-      job.opencodePermissions === "read_only"
-        ? READ_ONLY_PERMISSIONS
-        : AUTONOMOUS_CODING_PERMISSIONS;
-
-    const binding = await ensureOpenCodeSession(targetConvId, { permissions });
-
-    schedulerStore.updateRun(run.id, {
-      conversationId: targetConvId,
-      opencodeSessionId: binding.sessionId,
-    });
-
-    return {
-      conversationId: targetConvId,
-      sessionId: binding.sessionId,
-      isSharedExisting: false,
-    };
-  }
-
-  // existing_conversation strategy
-  if (!job.conversationId) {
+  const conv = await conversationService.get(targetConvId);
+  if (!conv || conv.status === "archived") {
     throw new Error(
-      `Job "${job.name}" uses existing conversation strategy but has no conversation selected`,
-    );
-  }
-  const existingConv = await conversationService.get(job.conversationId);
-  if (!existingConv || existingConv.status === "archived") {
-    throw new Error(
-      `Conversation "${job.conversationId}" not found or archived. Please update the job.`,
+      `Conversation "${targetConvId}" not found or archived. Please update the job.`,
     );
   }
 
-  // Existing conversations retain active permissions - no permissions override
-  const binding = await ensureOpenCodeSession(job.conversationId);
+  const isSharedExisting = job.opencodeSessionStrategy === "existing_conversation";
+  const permissions = isSharedExisting
+    ? undefined
+    : (job.opencodePermissions === "read_only"
+        ? READ_ONLY_PERMISSIONS
+        : AUTONOMOUS_CODING_PERMISSIONS);
+
+  const binding = await ensureOpenCodeSession(
+    targetConvId,
+    permissions ? { permissions } : undefined,
+  );
 
   schedulerStore.updateRun(run.id, {
-    conversationId: job.conversationId,
+    conversationId: targetConvId,
     opencodeSessionId: binding.sessionId,
   });
 
   return {
-    conversationId: job.conversationId,
+    conversationId: targetConvId,
     sessionId: binding.sessionId,
-    isSharedExisting: true,
+    isSharedExisting,
   };
 }
 
@@ -211,7 +180,7 @@ export async function executeOpenCodeScheduledTurn(
   let isSharedExisting = false;
 
   try {
-    const sessionRes = await resolveSessionForJob(job, run);
+    const sessionRes = await resolveSessionForJob(job, run, params.conversationId);
     conversationId = sessionRes.conversationId;
     sessionId = sessionRes.sessionId;
     isSharedExisting = sessionRes.isSharedExisting;
@@ -257,7 +226,7 @@ export async function executeOpenCodeScheduledTurn(
     return { ok: false, text: "", error: "Cancelled by user", retryable: false };
   }
 
-  // 1. Submit prompt to session queue
+  // 1. Submit prompt to session queue with durable submission reconciliation
   try {
     await client.session.prompt({
       sessionID: sessionId,
@@ -266,17 +235,41 @@ export async function executeOpenCodeScheduledTurn(
       delivery: "queue",
     });
   } catch (promptErr: any) {
-    const durationMs = Date.now() - started;
-    const errorMsg = `Failed to queue prompt to OpenCode: ${normalizeError(promptErr).message}`;
-    schedulerStore.updateRun(run.id, {
-      status: "failed",
-      turnOutcome: "failed",
-      error: errorMsg,
-      completedAt: Date.now(),
-      durationMs,
+    const normalizedPromptErr = normalizeError(promptErr).message;
+    log.warn("opencode", "opencode.prompt_dispatch_error_reconciling", {
+      sessionId,
+      promptId,
+      error: normalizedPromptErr,
     });
-    schedulerStore.update(job.id, { lastRunAt: Date.now() });
-    return { ok: false, text: "", error: errorMsg, retryable: false };
+
+    const reconciliation = await reconcilePromptSubmission(client, sessionId, promptId);
+    if (reconciliation.found) {
+      log.info("opencode", "opencode.prompt_reconciled_after_dispatch_error", {
+        sessionId,
+        promptId,
+        location: reconciliation.location,
+      });
+      // Prompt was received by OpenCode, continue to wait and turn-bounding
+    } else {
+      const durationMs = Date.now() - started;
+      const isAmbiguous =
+        Boolean(reconciliation.error) ||
+        /fetch|timeout|network|econnrefused|econnreset/i.test(normalizedPromptErr);
+      const turnOutcome = isAmbiguous ? "outcome_unknown" : "failed";
+      const errorMsg = isAmbiguous
+        ? `Ambiguous prompt submission: dispatch threw (${normalizedPromptErr}) and prompt existence could not be confirmed: ${reconciliation.error ?? "not found in inbox or messages"}`
+        : `Failed to queue prompt to OpenCode: ${normalizedPromptErr}`;
+
+      schedulerStore.updateRun(run.id, {
+        status: "failed",
+        turnOutcome,
+        error: errorMsg,
+        completedAt: Date.now(),
+        durationMs,
+      });
+      schedulerStore.update(job.id, { lastRunAt: Date.now() });
+      return { ok: false, text: "", error: errorMsg, retryable: false };
+    }
   }
 
   // 2. Await turn completion
@@ -367,7 +360,29 @@ export async function executeOpenCodeScheduledTurn(
     }
   }
 
-  // 3. Inspect message history for prompt -> idle turn boundary
+  // 3. Post-wait inbox check: verify prompt was actually consumed from inbox
+  try {
+    const inboxResp = await client.session.inbox.list({ sessionID: sessionId });
+    const inboxItems = Array.isArray(inboxResp) ? inboxResp : (inboxResp as any)?.data ?? [];
+    if (inboxItems.some((item: any) => item.id === promptId)) {
+      const durationMs = Date.now() - started;
+      const errorMsg =
+        "Scheduled prompt remained queued in session inbox after wait completed.";
+      schedulerStore.updateRun(run.id, {
+        status: "failed",
+        turnOutcome: "outcome_unknown",
+        error: errorMsg,
+        completedAt: Date.now(),
+        durationMs,
+      });
+      schedulerStore.update(job.id, { lastRunAt: Date.now() });
+      return { ok: false, text: "", error: errorMsg, retryable: false };
+    }
+  } catch (inboxErr: any) {
+    // Non-fatal; continue to message list inspection
+  }
+
+  // 4. Inspect message history for prompt -> idle turn boundary
   try {
     const listResp = await client.message.list({
       sessionID: sessionId,
