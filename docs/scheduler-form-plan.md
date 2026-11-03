@@ -1,25 +1,28 @@
-# TBAi Shared AI Capability & Configuration Layer — Corrected Architecture Plan
+# TBAi Shared AI Capability & Configuration Layer — Reconciled Architecture Plan
 
-**Status:** revision 4 (reconciled with Deep Audit Revision 2.3 contract). **No implementation performed.**
+**Status:** revision 5 (Fully reconciled with Deep Audit Revision 2.3 canonical contract). **No implementation performed.**
 **Scope of this document:** `scheduler-form-plan.md` only.
 
-Revision 4 reconciles the Scheduler architecture plan with the canonical contract in
-`docs/2026-11-03-model-metadata-deep-audit.md` (Revision 2.3):
-1. **Source of truth:** `src/services/provider-options.ts` is the single authority for reasoning options encoding.
-2. **Reasoning defaults:** `"off"` means Provider default (send no reasoning option to provider). `"default"` is not a separately stored state. Explicit disabling is deferred.
-3. **No synthetic wrappers:** No `"on"` or `{ kind: "enabled" }` states. Uses upstream-compatible `ReasoningControl[]` metadata.
-4. **Phasing:** Scheduler reasoning form updates belong strictly to Phase P3. P1 is context-window only. Output-limit ingestion is deferred and treated independently.
-
-Revision 3 answered six review findings plus the Anthropic deferral. It was a targeted
-correction of §3–§9 only; §1–§2 and §10 remain as revision 2 except where a correction
-is recorded in §1.1. Two revision-2 statements were withdrawn as unsupported (§3.1) and
-one was corrected as an undercount (§2.7, §6.3). Every new claim below is anchored to a
-file and line in `node_modules`, a verbatim provider-doc sentence fetched on 2026-11-03,
-or a line in this repository at `8e07e1d`.
+> [!IMPORTANT]
+> **Normative Authority Notice:**  
+> The normative architectural authority is `docs/2026-11-03-model-metadata-deep-audit.md` (Revision 2.3).  
+> Revision 5 brings this document into complete conformance with that contract:
+> 1. **Canonical Module:** `src/services/provider-options.ts` is the single authority for reasoning options encoding. (Supersedes references to `src/services/ai-capabilities.ts`).
+> 2. **Canonical Data Model:** Uses `ReasoningControl[]` (`toggle`, `effort` with `values: readonly string[]`, `budget_tokens` with `min/max`). (Supersedes the prefixed `ReasoningSelection` object union and scalar schemes from Revision 3).
+> 3. **Canonical Semantics:**
+>    - `"off"` and omitted selection mean **Provider default: send no reasoning option `{}`**.
+>    - `"default"` is a catalogue marker that resolves to Provider default; it is **never** stored or transmitted as a literal.
+>    - `"none"` is the explicit no-reasoning effort value where supported by OpenAI native/compatible adapters.
+>    - **No `"on"` or `{ kind: "enabled" }` states exist.**
+>    - **Explicit disable is deferred** until verified per-model allowlists exist.
+> 4. **Strict Phasing:**
+>    - **Phase P2:** Types, Models.dev reasoning metadata ingestion, shared backend codec in `src/services/provider-options.ts`, Direct Chat integration. Scheduler implementation is **completely untouched in P2**.
+>    - **Phase P3:** Scheduler adopts `src/services/provider-options.ts`, Scheduler validation becomes capability-aware, and Scheduler UI (`JobEditor.tsx`) receives dynamic reasoning choices.
+>    - **Scheduler Context Management:** Total-window budgeting, compaction, and mid-loop history reduction remain out of scope for P3.
 
 ---
 
-## 0. Audit record
+## 0. Historical and Audit Context (Non-Normative)
 
 | Item | Value |
 |---|---|
@@ -94,7 +97,7 @@ The previous revision contained factual errors that invalidated parts of its des
 | 5 | `isReasoningSupported` returns `support !== "unsupported"` (so `unknown` ⇒ true). | Collapses the three-state contract. | Forbidden. `unknown` is not `supported`. See §4. |
 | 6 | `resolveDirectDefaults` falls back to `providers[0]`. | Silently binds a job to a provider the user did not select. | Forbidden. Unresolvable active provider returns `ok: false`. See §4. |
 | 7 | `resolveOpenCodeDefaults` falls back to `capabilities.models[0]?.id`. | Silently picks the first model when the server advertises no default. | Forbidden. Return `null` and require explicit selection. See §4. |
-| 8 | Shared backend adapter = a wrapper importing `buildReasoningProviderOptions` from `src/routes/chat/provider-options.ts`. | Leaves the implementation inside a route module and leaves Scheduler's duplicate in place. | The implementation moves to `src/services/ai-capabilities.ts`; both consumers import it. See §5. |
+| 8 | Shared backend adapter = a wrapper importing `buildReasoningProviderOptions` from `src/routes/chat/provider-options.ts`. | Leaves the implementation inside a route module and leaves Scheduler's duplicate in place. | The implementation moves to `src/services/provider-options.ts`; both consumers import it. (Canonical in Deep Audit §5). |
 | 9 | "Chat: keep `ReasoningLevel` as 4-level union. Scheduler: widen to `string`." | Produces two divergent contracts for one concept, and an unrestricted string on the Scheduler side. | One validated contract across all seven layers. See §6. |
 | 10 | `validateThinkingLevel` returns `true` when `levels` is empty ("unknown → allow"). | Treats absence of metadata as permission. | Forbidden. See §6. |
 | 11 | Scheduler mapping hardcodes `providerOptions.openai`. | `providerOptionsNamespace()` returns `openaiCompatible` for `ollama` and for chat-completions `custom`/`openai`. The hardcoded key means those providers never receive the option. | Use `providerOptionsNamespace()` and `resolveApiProtocol()`. See §5. |
@@ -109,10 +112,10 @@ than requested (row 13).
 | # | Revision-2 statement | Verified fact | Correction |
 |---|---|---|---|
 | 13 | (Review) "Ollama documents `thinking.default` as either a boolean or a string." | The doc documents **`values`** as "booleans (`true` or `false`) for on/off controls. It can also contain model-defined strings". `default` is documented only as "used when `think` is not set", with a single string example (`"medium"`). No boolean `default` appears in the doc. | The requested widening to `string \| boolean` is **adopted for the parser** — a boolean `default` must not be discarded as malformed — but it is recorded as an inference from the `think` value domain, not as a documented sentence. See §3.1, §3.2. |
-| 14 | `ReasoningSelection` = `{off} \| {default} \| {none} \| {level}`. | A boolean-control model whose `thinking.default` is `false` cannot be switched **on**: `off`/`default`/`none`/named levels give no "enabled" value, and §3.4 rule 2 ("map any enabled level to `true`") presumes levels that by definition do not exist. | Add `{ kind: "enabled" }`. See §6.1, §6.2. |
-| 15 | "`off` explicitly disables reasoning" + "Both send no reasoning option". | Contradiction, and provider docs show why it matters: Google — "Reasoning cannot be turned off for Gemini 2.5 Pro or 3 models"; Anthropic SDK 4.0.83 emits `thinking cannot be disabled for ${modelId}; it always uses adaptive thinking` and **drops the setting**. | `off` becomes provider-specific: send the provider's disable value where one is documented, otherwise send nothing **and report the limitation**. Omission is never reported as success. See §6.1, §7.0, §5.2. |
+| 14 | `ReasoningSelection` = `{off} \| {default} \| {none} \| {level}`. | Old proposal had introduced `{ kind: "enabled" }` for boolean controls. | **Superseded in Revision 5:** Canonical architecture strictly excludes synthetic `"on"` / `enabled` wrappers. Uses `ReasoningControl[]`. |
+| 15 | "`off` explicitly disables reasoning" + "Both send no reasoning option". | Contradiction between disable and omission. | **Superseded in Revision 5:** Canonical contract clarifies `"off"` is strictly Provider default (send no options). Explicit disable is deferred. |
 | 16 | Gemini 2.5 budgets 1024/4096/8192 labelled "documented". | Google's published OpenAI-compat mapping is `minimal`→1,024, `low`→1,024, `medium`→**8,192**, `high`→**24,576**. | Relabel 1024/4096/8192 as **TBAi heuristics**, keep Google's table beside them, and state that they are not Google's conversion. See §7.3. |
-| 17 | §8.1: `ThinkingLevel` becomes `"off" \| "default" \| "none" \| string`. | In TypeScript that union reduces to `string` — no compile-time restriction, which §6.2 rule 6 forbids. No encode/decode was defined for the "scalar string" persistence form either. | One branded-free, injective scheme: object union internally, `"level:<value>"` prefixed wire form, with `encodeReasoningSelection` / `decodeReasoningSelection` in exactly one module per tree. See §6.2a, §6.5. |
+| 17 | §8.1: `ThinkingLevel` becomes `"off" \| "default" \| "none" \| string`. | Old proposal attempted an object union with prefixing (`"level:<value>"`). | **Superseded in Revision 5:** Canonical contract in Deep Audit §4.5 and §11 uses validated opaque strings for stored selections without prefixing. |
 | 18 | Model-reported default outranks the configured provider default (`selected → modelDefault → providerDefault → "off"`). | Today's verified order is one-shot request → conversation → `provider.thinking` → `"off"`; the model default is not consulted at all (`src/routes/chat/model.ts:54`, `:86`, then `validate-and-resolve.ts:210`). | Provider default outranks model default; the model default is used only when nothing is configured, and is always displayed as such. See §4.6. |
 | 19 | "`src/lib/validation.ts` — Six sites (56, 167, 206, 560, 619, 672)." | There are **seven** enum sites; line 77 (`providerCreateSchema.thinking`) was missed, and `reasoningCapabilitySchema` (lines 10-13) declares only `support` + `levels`, so the new capability fields would be stripped by validation. | Seven sites, plus capability-schema extension with combination validation and a discovery→API→save→reload round-trip test. See §6.3, §6.6, §8.1, §9.5, §9.6. |
 | 20 | §11 issue 1 — "the exact SDK option path for adaptive effort must be confirmed at implementation time". | It is now confirmed against the pinned build. `anthropicLanguageModelOptions` declares request-level `effort` (enum `low/medium/high/xhigh/max`) beside `thinking`; `dist/index.js:3781` writes `output_config: { effort … }`. | §11 issue 1 withdrawn. §7.2 rewritten with the resolved path, the per-model restriction table copied from the SDK's own doc comments, and the one thing the SDK does **not** expose publicly. |
@@ -414,7 +417,7 @@ See §8.1 and the round-trip test in §9.6.
 
 ## 4. Shared frontend resolver (corrected)
 
-Target module: `web/src/lib/ai-capabilities.ts`.
+Target module: `web/src/lib/reasoning-options.ts`.
 
 ### 4.1 Rules the previous draft violated
 
@@ -585,56 +588,43 @@ the provider SDK's own warnings are captured, not discarded (§7.2).
 
 ---
 
-## 5. Backend adapter (corrected)
+## 5. Backend adapter (reconciled)
 
-### 5.1 What changes
+### 5.1 Canonical Architecture & Implementation
+Per Deep Audit §5, reasoning option encoding belongs in a single backend service:
+- **Move** `src/routes/chat/provider-options.ts` to `src/services/provider-options.ts`.
+- `src/routes/chat/provider-options.ts` is deleted (not re-exported).
+- Both consumers import from `src/services/provider-options.ts`:
+  - `src/routes/chat/validate-and-resolve.ts` (Phase P2)
+  - `src/services/scheduler/schedulerExecution.ts` (Phase P3)
+- In Phase P3, `schedulerExecution.ts:199-217` deletes its inline encoding block and delegates to `resolveReasoningSelection`. In Phase P2, the Scheduler remains completely untouched.
 
-The previous revision proposed a wrapper around `src/routes/chat/provider-options.ts`. That keeps the implementation inside a route module and leaves Scheduler's duplicate intact. Instead:
-
-- **Move** the provider-specific implementation into `src/services/ai-capabilities.ts`.
-- `src/routes/chat/provider-options.ts` is **deleted**, not re-exported. A re-export would preserve two import paths for one concept and invite the duplicate back.
-- Both consumers import from `src/services/ai-capabilities.ts`:
-  - `src/routes/chat/validate-and-resolve.ts`
-  - `src/services/scheduler/schedulerExecution.ts`
-- `resolveJobModel`'s inline block (schedulerExecution.ts:199-217) is **removed**, not left beside the new call.
-
-### 5.2 Module contract
+### 5.2 Canonical Module Contract (`src/services/provider-options.ts`)
 
 ```ts
-// src/services/ai-capabilities.ts
-export interface ReasoningRequest {
+export type ReasoningProviderOptions = Record<string, JsonObject>;
+
+export interface ReasoningDecisionInput {
   provider: Pick<ProviderConfig, "type" | "apiProtocol">;
   model: string;
-  /** Typed internal selection — never a bare string (§6.2a). */
-  selection: ReasoningSelection;
-  /** Discovered capability for this model, when available. */
-  capabilities?: ModelCapabilities;
+  selection: string | undefined;
+  capability?: ReasoningCapability;
+  outputCap?: number;
 }
 
-/** Why the requested setting was not, or not only, what was sent. */
-export type ReasoningNoticeCode =
-  | "level_not_supported"
-  | "disable_not_supported"       // off cannot be honoured on this model
-  | "model_always_thinks"         // provider documents that thinking is mandatory
-  | "no_provider_contract"        // custom/unknown endpoint, nothing classified
-  | "provider_model_unreachable"; // Scheduler: capability data absent at fire time
+export type ReasoningDecision =
+  | { ok: true; providerOptions: ReasoningProviderOptions }
+  | {
+      ok: false;
+      reason: "unsupported_value" | "unsupported_capability";
+      allowed: readonly string[];
+    };
 
-export interface ReasoningResolution {
-  /** providerOptions to pass to streamText; empty when nothing is sent. */
-  providerOptions: Record<string, Record<string, unknown>>;
-  /** What was actually sent, for logging and tests. */
-  applied:
-    | { kind: "off"; sent: true }
-    | { kind: "off"; sent: false }   // requested off, nothing sent (see notices)
-    | { kind: "default" }
-    | { kind: "enabled"; sent: true }
-    | { kind: "level"; level: string; sent: true }
-    | { kind: "none"; reason: string };
-  /** Empty only when the request is fully honoured. */
-  notices: Array<{ code: ReasoningNoticeCode; detail: string }>;
-}
-
-export function resolveReasoningProviderOptions(req: ReasoningRequest): ReasoningResolution;
+export function resolveReasoningSelection(input: ReasoningDecisionInput): ReasoningDecision;
+export function allowedReasoningSelections(
+  capability: ReasoningCapability | undefined,
+  provider: Pick<ProviderConfig, "type" | "apiProtocol">,
+): readonly string[];
 ```
 
 - Uses `providerOptionsNamespace(provider)` and `resolveApiProtocol(provider)` from `src/services/ai.ts`. No mapper may hardcode `"openai"`.
@@ -676,78 +666,26 @@ Required, in both execution paths:
 - Where a notice or warning is knowable **before** save, the editor shows it (§4.7); the
   post-hoc warning is the fallback for what only the provider knows.
 
-## 6. App-wide reasoning contract (corrected)
+## 6. Selection validation and contract (reconciled)
 
-The previous revision left chat on a fixed four-level union and widened only Scheduler. That is not app-wide, and it leaves chat unable to express a model-defined Ollama level. One contract, seven layers.
+### 6.1 Canonical Semantics
+Per Deep Audit §4.3 and §12.1:
+- `"off"` and omitted selection mean **Provider default: send no reasoning option `{}`**.
+- `"default"` is a catalogue marker that resolves to Provider default; it is **never** stored or transmitted as a literal.
+- `"none"` is the explicit no-reasoning effort value where supported by OpenAI native/compatible adapters.
+- **No `"on"` or `{ kind: "enabled" }` states exist.**
+- **Explicit disable is deferred** until verified per-model allowlists exist.
 
-### 6.1 The value
+### 6.2 Canonical Selection Contract
+Stored selections widen from a four-value enum to a validated string (in Phase P2 for Chat; in Phase P3 for Scheduler). The internal selection representation uses opaque validated strings matching Deep Audit §4.5 and §11:
+- `selection?: string`
+- Validated at the boundary by `allowedReasoningSelections()`.
+- Legacy `off/low/medium/high` remain valid where supported.
 
-Five distinct concepts, kept distinct. Persistence is a single string; the internal value
-is the typed union of §6.2a.
+*(Note: The previous Revision 3 proposal of an object union `ReasoningSelection` with `"level:<value>"` prefixing is superseded by the canonical string contract in Deep Audit §4.5).*
 
-| Selection | Meaning | Wire effect |
-|---|---|---|
-| `off` | The user asked for reasoning to be **off**. | Provider-specific (§7.0): send the provider's documented disable value where one exists; otherwise send nothing **and** emit `disable_not_supported` / `model_always_thinks`. Omitting the parameter is never reported as success. |
-| `default` | Defer to the model's own native default. | Send nothing. The provider applies its default. Distinct from `off` because nothing is asserted about the outcome. |
-| `enabled` | Boolean-control models only: ask for thinking **on**. | Send the provider's documented on value (Ollama: `true` via a recognized effort). Valid **only** when `booleanControl` is reported. |
-| `none` | The provider's own "no reasoning" wire value. | Sent verbatim where the contract defines it (OpenAI `reasoning_effort: "none"`; Google 2.5 Flash-class `reasoning_effort: "none"` on the compat path; Ollama `"none"` for boolean-only models). Never assumed, never stored as a user choice today (§11 item 6). |
-| `level:<value>` | A named level. | Validated against discovery, then sent verbatim or rejected with a notice. |
-
-**Correction of the revision-2 contradiction.** Revision 2 wrote that `off` "explicitly
-disables reasoning" and, in the same table, that `off` "sends no reasoning option". Those
-cannot both hold: omitting a parameter lets the model use its default, which for a great
-many reasoning models means it thinks. Providers document this directly:
-
-- Google — *"If you want to disable thinking, you can set `reasoning_effort` to `"none"`
-  for 2.5 models. Reasoning cannot be turned off for Gemini 2.5 Pro or 3 models."*
-- Anthropic (from the pinned 4.0.83 build) — models such as `claude-opus-5-5` and
-  `claude-fable-5-1` *"reject `enabled` and `disabled`"*; the SDK *"drops the unsupported
-  setting, emits a warning, and sends an adaptive thinking request"*, with the user-visible
-  text *"thinking cannot be disabled for …; it always uses adaptive thinking. The thinking
-  setting has been removed. Lower 'effort' to reduce thinking."*
-
-So `off` means *"the user wants no reasoning"*, and whether that is achievable is a
-per-model fact carried by `disable` (§3.3) and the provider contract (§7.0). `default`
-means *"do not decide"*. `off` on an always-thinking model resolves to **nothing sent plus
-a notice**, and the UI says so (§4.7). Collapsing `off` and `default` — as
-`DirectChips.tsx:159` does today with `?? "off"` — is what lets a screen claim "Off" while
-the model thinks.
-
-`enabled` exists because revision 2's contract could not switch a boolean-only Ollama model
-on when its default is off: `off`/`default`/`none`/named-levels offer no "on", and §3.4's
-old rule "map any enabled level to `true`" referenced levels that by definition do not
-exist for such a model. It is a first-class selection, not a level.
-
-### 6.2 Validation
-
-```ts
-export function validateReasoningSelection(
-  raw: ReasoningSelectionScalar,
-  provider: Pick<ProviderConfig, "type" | "apiProtocol">,
-  model: string,
-  capabilities?: ModelCapabilities,
-): { ok: true; selection: ReasoningSelection } | { ok: false; reason: string };
-```
-
-Rules:
-1. `off` and `default` are always **accepted as inputs** — a saved value must never be
-   rejected at the boundary for a reason the user cannot act on. Accepting `off` is not a
-   claim that disabling is possible; that is decided at mapping time (§5.2, §7.0).
-2. If `capabilities.reasoning.support === "supported"` and `levels` is non-empty: the level
-   must be in `levels`.
-3. If `support === "supported"` with `booleanControl`: only `enabled`, `off`, `default` are
-   valid. `off` is accepted, but when `disable !== "reported"` it maps to "nothing sent"
-   plus a `disable_not_supported` notice (§5.2) rather than to a wire disable.
-4. If `support === "supported"` with no levels and no boolean flag (legacy
-   `capabilities: ["thinking"]`): only the documented provider contract applies (§7).
-5. If `support === "unsupported"`: only `off` and `default` are valid. A level or `enabled`
-   is rejected with a specific reason.
-6. If `support === "unknown"`: the level must be in the **documented provider contract**
-   for that provider+protocol. It is never accepted merely because it is a string. When no
-   documented contract exists (e.g. an unclassified `custom` endpoint), only `off` and
-   `default` are valid.
-7. `enabled` is rejected when `booleanControl` is not reported — it is not a synonym for a
-   level.
+### 6.3 Historical Revision 3 Context (Non-Normative)
+The historical discussion below is preserved for reference regarding Ollama provider discovery research:
 8. Unrestricted strings are never accepted, and there is no "bounded string" path.
    A bare value that is not a reserved keyword is decoded **only** through the single
    legacy rule of §6.2a item 3, and must then still satisfy rules 2 and 6 — being
@@ -834,7 +772,7 @@ persistence edge; the column stays TEXT.
 | Provider/model config validation | `src/lib/validation.ts:77`, `:10-13` | `providerCreateSchema.thinking` follows the selection schema (the site revision 2 missed); `reasoningCapabilitySchema` declares `booleanControl`, `disable`, `defaultLevel` (`string \| boolean`), `provenance`, with combination rules (§6.6). |
 | Scheduler job editing + validation | `web/src/features/scheduler/components/JobEditor.tsx`, `web/src/types/index.ts`, `src/lib/validation.ts:560`, `:619`, `:672`, `src/services/scheduler/schedulerValidation.ts` | Capability-driven control; `thinkingLevel: ReasoningSelection \| null` where `null` means `default`; add `checkThinkingLevel` to the existing `check*` chain (`checkScheduleFields`, `checkProvider`, `checkExistingThread`, `checkOpenCodeFields`); enforce **both** engine directions (§8.4). |
 | Scheduler persistence | `src/services/scheduler/schedulerTypes.ts`, `schedulerStore.ts` | `ThinkingLevel` becomes `ReasoningSelection`; the store encodes to the scalar at the SQL boundary; column stays TEXT. |
-| Provider execution mapping | `src/services/ai-capabilities.ts` | Single mapper; `providerOptionsNamespace()` + `resolveApiProtocol()`; emits `notices`; reads the provider contract table (§7.0). |
+| Provider execution mapping | `src/services/provider-options.ts` | Single mapper; `providerOptionsNamespace()` + `resolveApiProtocol()`; emits `notices`; reads the provider contract table (§7.0). |
 
 ### 6.4 Backward compatibility
 
@@ -1098,50 +1036,35 @@ ends in `(string & {})`, so it is an open set and says nothing about thinking mo
 - Ollama is **not** omitted from Scheduler reasoning.
 ---
 
-## 8. Complete file-change list (corrected)
+## 8. Complete file-change list (reconciled)
 
-### 8.1 Backend
+Per Deep Audit §15, deliverables are strictly partitioned between Phase P2 and Phase P3.
 
+### 8.1 Phase P2 Deliverables (Backend Codec & Metadata Discovery Only — No Scheduler Execution/UI)
 | File | Change |
 |---|---|
-| `src/lib/reasoning-selection.ts` **(NEW)** | The one owner of the contract: `ReasoningSelection`, `ReasoningSelectionScalar`, `REASONING_KEYWORDS`, `encodeReasoningSelection`, `decodeReasoningSelection`, `validateReasoningSelection`, and the `reasoningSelectionScalarSchema` used by `validation.ts`. Pure + dependency-free, so both routes and services can import it without a cycle. |
-| `src/services/ai-capabilities.ts` **(NEW)** | The single provider-specific mapper: `resolveReasoningProviderOptions` returning `{ providerOptions, applied, notices }`, and `documentedReasoningContract(provider, model)` implementing §7.0. Uses `providerOptionsNamespace()` and `resolveApiProtocol()`. Contains no `?? "medium"` and no hardcoded namespace. |
-| `src/services/modelDiscovery.ts` | `fetchOllamaModel`: parse `thinking.values` **and** `thinking.default`; emit `levels`, `booleanControl`, `disable`, `defaultLevel` (`string \| boolean`), `provenance`; distinguish absent / unsupported / boolean-with-/without-off / levels / mixed / malformed; preserve legacy `capabilities:["thinking"]` as supported-without-levels. Never infers disable-ability from absence. |
-| `src/routes/chat/provider-options.ts` **(DELETE)** | Implementation moves to `ai-capabilities.ts`. Not re-exported. |
-| `src/routes/chat/model.ts` | `ResolvedChatModel.reasoning` becomes `ReasoningSelection` (bare `string` today, `:31`); `withProviderDefaults` applies the §4.6 order exactly once; the model-reported default is consulted only when request/conversation/provider are all unset. |
-| `src/routes/chat/validate-and-resolve.ts` | Import from `src/services/ai-capabilities.ts` + `src/lib/reasoning-selection.ts`; validate before mapping; pass `capabilities` for the resolved model; **delete the duplicate `?? provider.thinking ?? "off"` at `:210`**; read step `warnings` and log them (§5.4). |
-| `src/services/scheduler/schedulerExecution.ts` | Delete the inline mapping block (lines 199-217); call `resolveReasoningProviderOptions`; remove the `isLite` name gate and the hardcoded `openai` namespace; log `notices` and provider `warnings` against the run's `requestId`. Writes nothing into `scheduler_runs.error` for a notice. |
-| `src/services/scheduler/schedulerValidation.ts` | Two changes, both required: (1) add `checkThinkingLevel(value, providerId, modelId)` using `validateReasoningSelection`, wired into the existing `check*` chain; (2) **close the engine guard** — see §8.4. |
-| `src/services/scheduler/schedulerTypes.ts` | `ThinkingLevel` becomes `ReasoningSelection`. **Not** `"off" \| "default" \| "none" \| string` — that union reduces to `string` and enforces nothing (§6.2a). |
-| `src/services/scheduler/schedulerStore.ts` | `thinkingLevel` accepts `ReasoningSelection`, encodes to the scalar at the SQL boundary; column unchanged (TEXT). |
-| `src/lib/validation.ts` | **Seven** enum sites (56, 77, 167, 206, 560, 619, 672) replaced by `reasoningSelectionScalarSchema`; **and** `reasoningCapabilitySchema` (`:10-13`) extended with `booleanControl`, `disable`, `defaultLevel: string \| boolean`, `provenance`, plus the §6.6 combination rules. Without the second half the new fields are stripped on every write. `logLevelFilterSchema` (`:808`) is not a reasoning site and stays untouched. |
-| `src/types/index.ts` | `ReasoningCapability`: add `disable: ReasoningDisable`, `defaultLevel?: string \| boolean`, `booleanControl?: boolean`, `provenance`; add `ReasoningDisable` and `ReasoningProvenance`. `ProviderConfig.thinking` (`:140`) widens to `ReasoningSelectionScalar`. |
-| `src/services/opencode/sessions.ts` | Apply stored variant in the server-default-model branch (currently only inside `if (modelRef)`). |
-| `src/routes/providers.ts` | No change required (already imports `discoverModels`). Listed to record that the audit claim about it was wrong, not to modify it. |
+| `src/services/provider-options.ts` **(MOVED & EXTENDED)** | Moved from `src/routes/chat/provider-options.ts`. The single provider-options mapper: `resolveReasoningSelection` and `allowedReasoningSelections`. |
+| `src/routes/chat/provider-options.ts` **(DELETED)** | Implementation moved to service. |
+| `src/services/modelCatalog.ts` | Parse Models.dev `reasoning` and `reasoning_options`; normalize into `ReasoningControl[]`; enrich `capabilities.reasoning`. |
+| `src/types/index.ts` & `web/src/types/index.ts` | Declare `ReasoningControl`; add `controls?: ReasoningControl[]` and `source?: "provider_reported" \| "model_catalog"` to `ReasoningCapability`. |
+| `src/lib/validation.ts` | Widen chat request `reasoningLevel` validation to validated string; validate `reasoningControlSchema`. |
+| `src/routes/chat/validate-and-resolve.ts` | Call `resolveReasoningSelection`; return 400 Bad Request with `allowed` on refusal. |
 
-### 8.2 Frontend
-
+### 8.2 Phase P3 Deliverables (Scheduler Reasoning & Dynamic UI Integration — NOT in P2)
 | File | Change |
 |---|---|
-| `web/src/lib/reasoning-selection.ts` **(NEW)** | Mirror of the backend contract (keywords, prefix, encode/decode, validate). Guarded against drift by §6.5. |
-| `web/src/lib/ai-capabilities.ts` **(NEW)** | `resolveThinkingOptions`, `resolveDirectDefaults` (returns `effective` + `needsAttention`), `resolveOpenCodeDefaults`, and the one default-level formatter that renders both a string and a boolean `defaultLevel`. |
-| `web/src/types/index.ts` | `ReasoningCapability` gains `disable` / `defaultLevel` / `booleanControl` / `provenance`; `ReasoningLevel` (`:72`) is replaced by `ReasoningSelection` + the scalar; `SchedulerJob.thinkingLevel` (`:391`) and `SchedulerJobDraft.thinkingLevel` (`:456`) follow. |
-| `web/src/components/composer/DirectChips.tsx` | `THINKING_OPTIONS` (`:27`) stops being the source of the list; render from `resolveThinkingOptions`; distinguish `off` / `Default` / `on` (§4.2); replace the `stored ?? custom?.reasoningLevel ?? providerDefault` chain at `:159` with `resolveDirectDefaults`; render the §4.7 limitation text. |
-| `web/src/features/scheduler/SchedulerPage.tsx` | Use `activeProviderId` via `resolveDirectDefaults`; remove `providers[0]` at `:168-169`; pass `engine` on the conversations it hands to `JobEditor`. |
-| `web/src/features/scheduler/components/JobEditor.tsx` | Capability-driven thinking control; OpenCode agent/model from live catalogue; qualified `providerID/modelID`; require explicit selection when no default; lock fields for existing conversation. Plus §8.4: `conversations` prop typed with `engine` (`:135` today), the `(c as any).engine` cast at `:957` removed, and the Direct selector at `:888` filtered. |
-| `web/src/features/scheduler/lib/scheduler-draft.ts` | Types follow; `null` means default. |
-| `web/src/config/tools.ts` | New copy strings for the §4.7 limitation notices and the on/off control, per the existing rule that TBAi tool/chat UI copy has exactly one owner. |
-| `web/src/features/providers/ProviderDialog.tsx` | **No change.** Per §4.5 decision (b), per-model capability editing is out of scope. Its `THINKING_OPTIONS` (`:37`) becomes the *provider default* picker only, and must accept the encoded scalar. |
+| `src/services/scheduler/schedulerExecution.ts` | Adopt `resolveReasoningSelection` from `src/services/provider-options.ts`; remove inline encoding block. |
+| `src/services/scheduler/schedulerValidation.ts` | Widen `checkThinkingLevel` to validate against model capability using `allowedReasoningSelections`. |
+| `web/src/lib/reasoning-options.ts` **(NEW in P3)** | Single pure helper `reasoningChoices()` shared by DirectChips and JobEditor. |
+| `web/src/components/composer/DirectChips.tsx` | Render dynamic reasoning chips from `reasoningChoices()`. |
+| `web/src/features/scheduler/components/JobEditor.tsx` | Render capability-driven thinking select; qualified model refs; OpenCode catalogue wiring. |
+| `web/src/features/scheduler/SchedulerPage.tsx` | Use `activeProviderId` defaults; engine filtering. |
 
-### 8.3 Explicitly not changed
-
+### 8.3 Explicitly not changed in P2 or P3
 - No database schema or migration. `thinking_level` / `reasoning_level` are TEXT and stay TEXT.
-  `scheduler_runs` gains no notices/warnings column (§5.4); the operator record is the log.
 - No new dependencies.
-- No new API endpoints.
-- No changes to `src/services/capabilityDiscovery.ts` (its limit extraction is correct and orthogonal).
-- No `AI_SDK_LOG_WARNINGS` global installation — TBAi reads `StepResult.warnings` directly
-  at the two execution boundaries rather than installing a process-wide hook.
+- No Models.dev output limit ingestion.
+- Scheduler context management (total-window budgeting, compaction seam, mid-loop history reduction) is strictly out of scope.
 
 ### 8.4 Direct/OpenCode isolation — both directions (new in revision 3)
 
@@ -1317,39 +1240,13 @@ Scenario numbers in parentheses are the revision-2 list, kept so the earlier aud
 
 ---
 
-## 10. Ordered implementation phases
+## 10. Ordered implementation phases (reconciled)
 
-0. **Engine isolation guard first** — `schedulerValidation.ts` Direct→OpenCode guard plus
-   `JobEditor` conversation typing/filtering. Covered by §9.11 case 61 and §9.12 case 62.
-   This is the only item that is a pure bug fix with no dependency on the rest of the plan,
-   and case 61 fails against `8e07e1d` before the change, which is the proof it is real.
-1. **Types and contract** — `src/lib/reasoning-selection.ts` + its `web/` mirror,
-   `ReasoningCapability` fields (`disable`, `defaultLevel`, `booleanControl`, `provenance`)
-   and `ReasoningProvenance` / `ReasoningDisable` in both type trees. Tests §9.2, §9.10. No
-   behaviour change yet.
-2. **Ollama discovery** — `fetchOllamaModel` parsing; tests §9.1 (1–10). The only phase that
-   adds new capability data.
-3. **Shared mapper** — create `src/services/ai-capabilities.ts`, delete
-   `src/routes/chat/provider-options.ts`, port chat, then delete Scheduler's inline block.
-   Tests §9.3 (19–37) and §9.4 (38). §9.3 case 37 is the equivalence gate and must pass
-   before the old file is deleted, not after.
-4. **Validation** — `src/lib/validation.ts` **seven** sites + `reasoningCapabilitySchema` +
-   `checkThinkingLevel`; tests §9.5 (39–42) and §9.11 (60), and the round trip §9.6 (43–44).
-5. **Resolution and warnings** — `src/routes/chat/model.ts` precedence, removal of the
-   duplicate application at `validate-and-resolve.ts:210`, provider-warning capture in both
-   execution paths; tests §9.7 (45–48) and §9.8 (49).
-6. **Frontend resolver** — `web/src/lib/ai-capabilities.ts`; `DirectChips.tsx`;
-   `SchedulerPage.tsx`; tests §9.9 (50–58) and §9.13 (65).
-7. **JobEditor** — capability-driven controls, OpenCode catalogue wiring, qualified model
-   refs; tests §9.12 (62–64).
-8. **OpenCode session variant** — `sessions.ts` server-default branch; test §9.14 case 70.
-9. **Backward compatibility pass** — tests §9.14 (66–71), plus a manual check against an
-   existing database.
+Per Deep Audit §15, the project order is:
+- **Phase P2:** Canonical reasoning types (`ReasoningControl[]`), Models.dev reasoning control normalization, shared backend service extraction (`src/services/provider-options.ts`), and Direct Chat integration. Scheduler implementation is completely untouched.
+- **Phase P3:** Scheduler adopts `src/services/provider-options.ts`, Scheduler validation widens to model capability, and Scheduler UI (`JobEditor.tsx`) receives dynamic reasoning choices alongside Direct Chat (`DirectChips.tsx`).
 
-Each phase is independently revertible. Phase 0 and phases 1–5 carry the correctness fixes;
-6–9 carry the UI and compatibility work. Phase 4 depends on phase 1 (the schema validates
-the encoded form) and phase 3 depends on phase 1 as well — no phase may introduce a second
-place that constructs a `ReasoningSelection`.
+*(The historical 10-phase sequence from Revision 3 has been superseded by this canonical P2/P3 partition).*
 
 ---
 
