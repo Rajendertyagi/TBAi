@@ -1345,7 +1345,7 @@ Every row names the owning layer and the reason.
 | `web/src/types/index.ts` | Mirror the capability fields; widen stored reasoning types. | Frontend consumes them. | P3 |
 | `web/src/components/composer/DirectChips.tsx` | Use `reasoningChoices(...)`; remove the fixed-list assumption when controls exist. | P8. | P3 |
 | `web/src/features/scheduler/components/JobEditor.tsx` | Use the same helper; drop the hardcoded union at `:93`. | Consistency. | P3 |
-| `web/src/features/providers/ProviderDialog.tsx` | Show "Models.dev" when `contextWindowSource === "model_catalog"` (one label branch). | Transparency. | P1 |
+| `web/src/features/providers/ProviderDialog.tsx` | Show "Models.dev" when `contextWindowSource === "model_catalog"` (deferred to P2/P3 UI phase; excluded from backend-only P1). | Transparency. | P2/P3 (deferred) |
 | `docs/decisions.md` | Record: third stored source, advisory authority, no canonical matching, no custom enrichment, protocol stays code, no migration. | ADR. | P1 |
 | `docs/provider-system.md` | Document discovery enrichment and identity rules. | Operator-facing behaviour. | P1 |
 | `docs/architecture.md` | Add `modelCatalog.ts` and the moved codec to the backend ownership table. | Ownership. | P1 |

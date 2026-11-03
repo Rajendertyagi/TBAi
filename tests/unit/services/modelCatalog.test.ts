@@ -36,27 +36,60 @@ describe("modelCatalog service", () => {
   describe("exact provider/model identity and endpoint restrictions", () => {
     it("accepts official providers on default endpoints", () => {
       expect(isEligibleForCatalogEnrichment({ type: "openai" })).toBe("openai");
-      expect(isEligibleForCatalogEnrichment({ type: "openai", endpoint: "https://api.openai.com/v1" })).toBe("openai");
-      expect(isEligibleForCatalogEnrichment({ type: "openai", endpoint: "https://api.openai.com/v1/" })).toBe("openai");
+      expect(
+        isEligibleForCatalogEnrichment({ type: "openai", endpoint: "https://api.openai.com/v1" }),
+      ).toBe("openai");
+      expect(
+        isEligibleForCatalogEnrichment({ type: "openai", endpoint: "https://api.openai.com/v1/" }),
+      ).toBe("openai");
 
       expect(isEligibleForCatalogEnrichment({ type: "anthropic" })).toBe("anthropic");
-      expect(isEligibleForCatalogEnrichment({ type: "anthropic", endpoint: "https://api.anthropic.com" })).toBe("anthropic");
+      expect(
+        isEligibleForCatalogEnrichment({
+          type: "anthropic",
+          endpoint: "https://api.anthropic.com",
+        }),
+      ).toBe("anthropic");
 
       expect(isEligibleForCatalogEnrichment({ type: "google" })).toBe("google");
-      expect(isEligibleForCatalogEnrichment({ type: "google", endpoint: "https://generativelanguage.googleapis.com/" })).toBe("google");
+      expect(
+        isEligibleForCatalogEnrichment({
+          type: "google",
+          endpoint: "https://generativelanguage.googleapis.com/",
+        }),
+      ).toBe("google");
     });
 
     it("rejects custom and ollama providers", () => {
       expect(isEligibleForCatalogEnrichment({ type: "custom" })).toBeNull();
-      expect(isEligibleForCatalogEnrichment({ type: "custom", endpoint: "https://api.openai.com/v1" })).toBeNull();
+      expect(
+        isEligibleForCatalogEnrichment({ type: "custom", endpoint: "https://api.openai.com/v1" }),
+      ).toBeNull();
       expect(isEligibleForCatalogEnrichment({ type: "ollama" })).toBeNull();
-      expect(isEligibleForCatalogEnrichment({ type: "ollama", endpoint: "http://localhost:11434" })).toBeNull();
+      expect(
+        isEligibleForCatalogEnrichment({ type: "ollama", endpoint: "http://localhost:11434" }),
+      ).toBeNull();
     });
 
     it("rejects official providers configured with non-default endpoints", () => {
-      expect(isEligibleForCatalogEnrichment({ type: "openai", endpoint: "https://my-proxy.internal/v1" })).toBeNull();
-      expect(isEligibleForCatalogEnrichment({ type: "anthropic", endpoint: "https://anthropic.internal" })).toBeNull();
-      expect(isEligibleForCatalogEnrichment({ type: "google", endpoint: "https://custom-google.internal" })).toBeNull();
+      expect(
+        isEligibleForCatalogEnrichment({
+          type: "openai",
+          endpoint: "https://my-proxy.internal/v1",
+        }),
+      ).toBeNull();
+      expect(
+        isEligibleForCatalogEnrichment({
+          type: "anthropic",
+          endpoint: "https://anthropic.internal",
+        }),
+      ).toBeNull();
+      expect(
+        isEligibleForCatalogEnrichment({
+          type: "google",
+          endpoint: "https://custom-google.internal",
+        }),
+      ).toBeNull();
     });
 
     it("enriches matching model id case-sensitively and leaves unmatched models unchanged (context window only)", async () => {
@@ -69,7 +102,11 @@ describe("modelCatalog service", () => {
         { id: "unmatched-model", provider: "openai" },
       ];
 
-      const enriched = await enrichModels(models, { type: "openai" }, { fetchFn: mockFetch as any });
+      const enriched = await enrichModels(
+        models,
+        { type: "openai" },
+        { fetchFn: mockFetch as any },
+      );
 
       expect(enriched[0].contextWindow).toBe(128000);
       expect(enriched[0].contextWindowSource).toBe("model_catalog");
@@ -241,15 +278,57 @@ describe("modelCatalog service", () => {
       expect(res2).toBe(res3);
     });
 
-    it("returns last-known-good when refresh fails with network error or malformed payload", async () => {
+    it("returns last-known-good when refresh fails with network error", async () => {
+      let fail = false;
+      const validPayload = createValidMockPayload();
+      const mockFetch = async () => {
+        if (fail) throw new Error("Network down");
+        return new Response(JSON.stringify(validPayload), { status: 200 });
+      };
+
+      let time = 1_000_000;
+      const now = () => time;
+
+      const first = await getModelCatalog({ fetchFn: mockFetch as any, now });
+      expect(first).not.toBeNull();
+      expect(first?.providers.get("openai")?.get("gpt-4o")?.contextWindow).toBe(128000);
+      expect(
+        first?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow,
+      ).toBe(200000);
+
+      // Expire TTL and fail next fetch with network error
+      time += CATALOG_TTL_MS + 1000;
+      fail = true;
+
+      const second = await getModelCatalog({ fetchFn: mockFetch as any, now });
+      // Retains cached data
+      expect(second).toBe(first);
+      expect(second?.providers.get("openai")?.get("gpt-4o")?.contextWindow).toBe(128000);
+      expect(
+        second?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow,
+      ).toBe(200000);
+    });
+
+    it("returns last-known-good when refresh encounters a malformed provider entry (e.g. anthropic: null)", async () => {
       let malformed = false;
       const validPayload = createValidMockPayload();
       const mockFetch = async () => {
         if (malformed) {
-          // Returns incomplete payload missing Anthropic & Google
-          return new Response(JSON.stringify({ openai: { models: { "gpt-4o": { limit: { context: 128000 } } } } }), {
-            status: 200,
-          });
+          // Valid openai and google, but malformed anthropic
+          const corrupted = {
+            openai: {
+              models: {
+                "gpt-4o": { limit: { context: 128000, input: 128000 } },
+              },
+            },
+            anthropic: null,
+            google: {
+              models: {
+                "gemini-1.5-pro": { limit: { context: 2000000 } },
+              },
+            },
+          };
+          return new Response(JSON.stringify(corrupted), { status: 200 });
         }
         return new Response(JSON.stringify(validPayload), { status: 200 });
       };
@@ -260,16 +339,23 @@ describe("modelCatalog service", () => {
       const first = await getModelCatalog({ fetchFn: mockFetch as any, now });
       expect(first).not.toBeNull();
       expect(first?.providers.get("openai")?.get("gpt-4o")?.contextWindow).toBe(128000);
-      expect(first?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow).toBe(200000);
+      expect(
+        first?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow,
+      ).toBe(200000);
+      expect(first?.providers.get("google")?.get("gemini-1.5-pro")?.contextWindow).toBe(2000000);
 
-      // Expire TTL and attempt refresh with partial payload
+      // Expire TTL and attempt refresh with corrupted payload
       time += CATALOG_TTL_MS + 1000;
       malformed = true;
 
       const second = await getModelCatalog({ fetchFn: mockFetch as any, now });
-      // Retains complete cached data from first run
+      // Retains complete cached data from first run; no partial replacement
       expect(second).toBe(first);
-      expect(second?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow).toBe(200000);
+      expect(second?.providers.get("openai")?.get("gpt-4o")?.contextWindow).toBe(128000);
+      expect(
+        second?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow,
+      ).toBe(200000);
+      expect(second?.providers.get("google")?.get("gemini-1.5-pro")?.contextWindow).toBe(2000000);
     });
 
     it("returns null gracefully if initial fetch fails without prior snapshot", async () => {
@@ -297,7 +383,11 @@ describe("modelCatalog service", () => {
         },
       ];
 
-      const enriched = await enrichModels(models, { type: "openai" }, { fetchFn: mockFetch as any });
+      const enriched = await enrichModels(
+        models,
+        { type: "openai" },
+        { fetchFn: mockFetch as any },
+      );
       expect(enriched[0].contextWindow).toBe(200000);
       expect(enriched[0].contextWindowSource).toBe("provider_reported");
       expect(enriched[0].maxOutputTokens).toBe(8192);

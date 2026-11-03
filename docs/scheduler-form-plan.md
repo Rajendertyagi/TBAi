@@ -1,12 +1,19 @@
-﻿# TBAi Shared AI Capability & Configuration Layer — Corrected Architecture Plan
+# TBAi Shared AI Capability & Configuration Layer — Corrected Architecture Plan
 
-**Status:** revision 3 (review corrections to §3–§9). **No implementation performed.**
+**Status:** revision 4 (reconciled with Deep Audit Revision 2.3 contract). **No implementation performed.**
 **Scope of this document:** `scheduler-form-plan.md` only.
 
-Revision 3 answers six review findings plus the Anthropic deferral. It is a targeted
+Revision 4 reconciles the Scheduler architecture plan with the canonical contract in
+`docs/2026-11-03-model-metadata-deep-audit.md` (Revision 2.3):
+1. **Source of truth:** `src/services/provider-options.ts` is the single authority for reasoning options encoding.
+2. **Reasoning defaults:** `"off"` means Provider default (send no reasoning option to provider). `"default"` is not a separately stored state. Explicit disabling is deferred.
+3. **No synthetic wrappers:** No `"on"` or `{ kind: "enabled" }` states. Uses upstream-compatible `ReasoningControl[]` metadata.
+4. **Phasing:** Scheduler reasoning form updates belong strictly to Phase P3. P1 is context-window only. Output-limit ingestion is deferred and treated independently.
+
+Revision 3 answered six review findings plus the Anthropic deferral. It was a targeted
 correction of §3–§9 only; §1–§2 and §10 remain as revision 2 except where a correction
-is recorded in §1.1. Two revision-2 statements are withdrawn as unsupported (§3.1) and
-one is corrected as an undercount (§2.7, §6.3). Every new claim below is anchored to a
+is recorded in §1.1. Two revision-2 statements were withdrawn as unsupported (§3.1) and
+one was corrected as an undercount (§2.7, §6.3). Every new claim below is anchored to a
 file and line in `node_modules`, a verbatim provider-doc sentence fetched on 2026-11-03,
 or a line in this repository at `8e07e1d`.
 

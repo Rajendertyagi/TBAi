@@ -80,7 +80,9 @@ function parseTokenLimit(val: unknown): number | undefined {
  * contextWindow = min(context, input) when both are valid positive integers.
  * If input is unusable (e.g. 0), falls back to context.
  */
-export function normalizeCatalogLimits(rawModel: Record<string, unknown> | null | undefined): NormalizedCatalogModel {
+export function normalizeCatalogLimits(
+  rawModel: Record<string, unknown> | null | undefined,
+): NormalizedCatalogModel {
   if (!rawModel || typeof rawModel !== "object") return {};
   const limitObj = rawModel.limit as Record<string, unknown> | undefined;
   if (!limitObj || typeof limitObj !== "object") return {};
@@ -110,7 +112,10 @@ export function normalizeCatalogLimits(rawModel: Record<string, unknown> | null 
  */
 export function isValidCatalogPayload(
   data: unknown,
-): data is Record<string, { models: Record<string, { limit: { context: number; input?: number } }> }> {
+): data is Record<
+  string,
+  { models: Record<string, { limit: { context: number; input?: number } }> }
+> {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return false;
   }
@@ -145,14 +150,20 @@ export function isValidCatalogPayload(
 
       const limitObj = limit as Record<string, unknown>;
       // Upstream schema: limit.context is required and non-negative
-      if (typeof limitObj.context !== "number" || !Number.isFinite(limitObj.context) || limitObj.context < 0) {
+      if (
+        typeof limitObj.context !== "number" ||
+        !Number.isFinite(limitObj.context) ||
+        limitObj.context < 0
+      ) {
         return false;
       }
 
       // Upstream schema: limit.input is optional; if present, must be non-negative number
       if (
         limitObj.input !== undefined &&
-        (typeof limitObj.input !== "number" || !Number.isFinite(limitObj.input) || limitObj.input < 0)
+        (typeof limitObj.input !== "number" ||
+          !Number.isFinite(limitObj.input) ||
+          limitObj.input < 0)
       ) {
         return false;
       }
@@ -215,7 +226,9 @@ export async function getModelCatalog(options?: {
       }
 
       if (totalNormalizedModels === 0) {
-        throw new Error("Models.dev payload contained no models with usable positive-integer context limits");
+        throw new Error(
+          "Models.dev payload contained no models with usable positive-integer context limits",
+        );
       }
 
       // Atomic cache replacement only after full validation and normalization
@@ -289,10 +302,7 @@ export async function enrichModels(
       nextContextSource = sourced.source;
     }
 
-    if (
-      nextContext === model.contextWindow &&
-      nextContextSource === model.contextWindowSource
-    ) {
+    if (nextContext === model.contextWindow && nextContextSource === model.contextWindowSource) {
       return model;
     }
 
