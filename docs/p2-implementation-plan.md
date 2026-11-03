@@ -1,17 +1,43 @@
-# Phase P2 Implementation Plan: Shared Reasoning Codec & Metadata Discovery (SUPERSEDED)
+# Phase P2 Implementation Plan: Shared Reasoning Codec & Metadata Discovery (SUPERSEDED — HISTORICAL)
 
 > [!WARNING]
-> **SUPERSEDED & SIMPLIFIED:** This proposal has been cancelled in favor of direct AI SDK v7 native integration with minimum custom code.
-> - **No Thinking Budget / Token Count Controls:** Numeric token budget controls and inputs are completely dropped. The UI and API retain strictly the 4 discrete levels: Default (stored as `"off"`), Low, Medium, High.
-> - **Matches Native AI SDK v7:** Native `reasoning` effort levels (`"low"`, `"medium"`, `"high"`) are handled natively or through minimal providerOptions in `src/routes/chat/provider-options.ts`.
-> - **Local Ollama Named Levels:** Local Ollama models using standard effort levels work out of the box via Ollama's OpenAI-compatible mapping. Any custom model-specific named levels from `/api/show` (e.g. `"turbo"`) are documented as a potential future additive discovery enhancement only; no current code changes are made.
-> - **No Code Changes Required:** Direct Chat and the composer already use this 4-level model. No numeric inputs or sliders exist.
+> **DO NOT IMPLEMENT. This document is cancelled in full.** The custom reasoning codec, Models.dev reasoning-metadata discovery, dynamic selection schemas, and the `provider-options.ts` move it proposes are superseded by a simpler, library-first implementation using AI SDK v7 native reasoning. Nothing below is approved, scheduled, or actionable.
+
+## Current status (authoritative)
+
+Direct Chat reasoning effort is implemented natively, with no custom codec:
+
+- `low`, `medium`, `high` are passed to `streamText` as the top-level `reasoning` option (`src/routes/chat/execute-direct-stream.ts:405-410`).
+- `off` (and an absent selection) omits the `reasoning` property entirely (`:407`); no disable is transmitted.
+- Google's `includeThoughts: true` is added as an additional provider option (`src/routes/chat/provider-options.ts:34-51`); it chooses no effort or budget.
+- Provider wire-format mapping (effort fields, thinking budgets, adaptive thinking) belongs to AI SDK v7 and the installed provider adapters.
+- The four stored levels (`off`/absent, `low`, `medium`, `high`) remain the complete selection vocabulary.
+- The Scheduler is unchanged and still has its own inline encoder (`src/services/scheduler/schedulerExecution.ts:199-217`).
+
+## Deferred — requires separate approval
+
+The following are **not** part of any active phase and must not be started from this document:
+
+- Models.dev `reasoning` / `reasoning_options` ingestion and provenance (`controls`, `source`).
+- Model-specific dynamic selections (advertised effort values, `none`, budget presets).
+- Exact-value validation with `allowed` refusals and a 400 contract.
+- Dynamic composer choices and any change to `DirectChips.tsx`.
+- Scheduler adoption: widened request schema/types/validation and replacement of its inline encoder.
+- Local Ollama model-specific named levels from `/api/show` (e.g. `"turbo"`); standard effort levels already work through the OpenAI-compatible mapping.
+
+A future proposal must start from the native implementation and must not revive the codec below.
 
 ---
 
-## 1. Scope & Non-Goals
+## Historical proposal (cancelled — kept only as a record)
 
-### In Scope for Phase P2
+The remainder of this file is the cancelled proposal. It is preserved to explain what was considered and why it was rejected. **Do not apply its file list, steps, or acceptance criteria.**
+
+---
+
+## 1. Historical Scope & Non-Goals (cancelled)
+
+### Proposed Scope (cancelled — do not implement)
 1. **Canonical Reasoning Metadata Types:**
    - Upstream-compatible `ReasoningControl` tagged union (`toggle`, `effort`, `budget_tokens`).
    - Additive `ReasoningCapability` with provenance (`controls?: ReasoningControl[]`, `source?: "provider_reported" | "model_catalog"`).
@@ -32,16 +58,16 @@
 5. **Backend Verification & Guards:**
    - Comprehensive unit and integration test suite asserting encoding parity, bound enforcement, and error responses.
 
-### Explicit Non-Goals (Deferred to P3 or Future Decisions)
-- **NO Scheduler Changes in P2:** Scheduler keeps its existing 4-level schema (`off/low/medium/high`), validation, types, and inline execution encoder in `src/services/scheduler/schedulerExecution.ts`. Scheduler adoption of the shared encoder is strictly **Phase P3**.
-- **NO UI Changes in P2:** No modifications to `DirectChips.tsx`, `JobEditor.tsx`, `ProviderDialog.tsx`, or `ChatWindow.tsx`. Dynamic reasoning UI controls belong strictly to **Phase P3**.
+### Explicit Non-Goals (retained — still true)
+- **NO Scheduler Changes:** The Scheduler keeps its existing 4-level schema (`off/low/medium/high`), validation, types, and inline execution encoder in `src/services/scheduler/schedulerExecution.ts`. Scheduler adoption is deferred and requires separate approval.
+- **NO UI Changes:** No modifications to `DirectChips.tsx`, `JobEditor.tsx`, `ProviderDialog.tsx`, or `ChatWindow.tsx`. Dynamic reasoning UI controls are deferred and require separate approval.
 - **NO Synthetic "On" or Disabling:** No `"on"` or `{ kind: "enabled" }` states. Explicit disabling (e.g. `thinkingBudget: 0`) is deferred until verified per-model allowlists exist. `"off"` remains Provider default (send no options).
-- **NO Models.dev Output Limit Ingestion:** Models.dev `limit.output` ingestion is excluded from P2 (remains an independent future decision). However, existing provider-reported output caps are read by the Anthropic budget clamper.
+- **NO Models.dev Output Limit Ingestion:** Models.dev `limit.output` ingestion remains an independent future decision. The native path has no Anthropic budget clamper.
 - **NO Database Migrations:** SQLite columns (`provider_configs.thinking`, `scheduler_jobs.thinking_level`) are already TEXT and remain unchanged.
 
 ---
 
-## 2. Current Architecture & Affected Call Sites
+## 2. Historical Call-Site Survey (at time of proposal)
 
 ### Current Call Sites of `src/routes/chat/provider-options.ts`
 1. `src/routes/chat/validate-and-resolve.ts:10` imports `buildReasoningProviderOptions`.
@@ -54,7 +80,9 @@
 
 ---
 
-## 3. Exact File-Change List for P2
+## 3. Historical File-Change Proposal (cancelled — do not apply)
+
+**The table below is a rejected proposal. No file was moved, added, or modified for P2.**
 
 | Action | Path | Owning Area | Purpose |
 |---|---|---|---|
@@ -74,7 +102,7 @@
 
 ---
 
-## 4. Data Model & Normalization Contract
+## 4. Historical Data Model & Normalization Contract (cancelled)
 
 ### 4.1 Canonical TypeScript Definitions (`src/types/index.ts` & `web/src/types/index.ts`)
 ```ts
@@ -122,7 +150,7 @@ Upstream Models.dev publishes two fields per model:
 
 ---
 
-## 5. Shared Service API & Responsibilities (`src/services/provider-options.ts`)
+## 5. Historical Shared Service API (cancelled — do not create `src/services/provider-options.ts`)
 
 ```ts
 export type ReasoningProviderOptions = Record<string, JsonObject>;
@@ -160,7 +188,7 @@ export function allowedReasoningSelections(
 
 ---
 
-## 6. Selection Validation & Encoding Rules
+## 6. Historical Selection Validation & Encoding Rules (cancelled)
 
 ### 6.1 Selection Semantics Table
 
@@ -196,7 +224,7 @@ export function allowedReasoningSelections(
 
 ---
 
-## 7. Direct Chat Integration Sequence
+## 7. Historical Direct Chat Integration Sequence (cancelled)
 
 1. **HTTP Request Boundary (`src/routes/chat/validate-and-resolve.ts`):**
    - Extract `reasoningLevel` from validated request payload.
@@ -219,7 +247,7 @@ export function allowedReasoningSelections(
 
 ---
 
-## 8. Error Handling & Backward Compatibility
+## 8. Historical Error Handling & Backward Compatibility (cancelled)
 
 1. **Stored Config & DB Rows:**
    - `provider_configs.thinking` and `conversations.custom.reasoningLevel` accept any validated string.
@@ -231,7 +259,9 @@ export function allowedReasoningSelections(
 
 ---
 
-## 9. Comprehensive Test Matrix for Phase P2
+## 9. Historical Test Matrix (cancelled — do not implement)
+
+**These tests were proposed for the rejected codec. None is active.**
 
 ### 9.1 Unit Tests: `tests/unit/services/provider-options.test.ts`
 1. **Provider Default (`"off"` and `undefined`):**
@@ -275,7 +305,7 @@ export function allowedReasoningSelections(
 
 ---
 
-## 10. Verification Commands
+## 10. Historical Verification Commands (cancelled — not run for P2)
 
 ```powershell
 # 1. Typecheck all workspace projects
@@ -311,7 +341,9 @@ bun run test:dom
 
 ---
 
-## 11. Ordered Implementation Steps (When Authorized)
+## 11. Historical Ordered Steps (cancelled — do not execute)
+
+**No step below is authorized.**
 
 1. **Step 1: Types & Validation:**
    - Update `src/types/index.ts` and `web/src/types/index.ts` with `ReasoningControl` and updated `ReasoningCapability`.
@@ -330,13 +362,13 @@ bun run test:dom
 
 ---
 
-## 12. Rollback Strategy
+## 12. Historical Rollback Strategy (not applicable — nothing was implemented)
 - Phase P2 makes no database schema changes.
 - Rollback can be performed via atomic `git revert` of the P2 implementation commit, leaving existing provider configs and chat functional.
 
 ---
 
-## 13. Acceptance Criteria for P2
+## 13. Historical Acceptance Criteria (not active)
 - `ReasoningControl[]` matches canonical types (`values`, not `allowedValues`; no synthetic `on`).
 - `src/services/provider-options.ts` is the single authority for Direct Chat reasoning options.
 - Models.dev reasoning controls normalize with resilient control skipping.

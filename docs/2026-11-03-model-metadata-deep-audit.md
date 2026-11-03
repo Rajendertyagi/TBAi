@@ -1,12 +1,16 @@
 # TBAi — Models.dev Integration: Deep Audit and Simplified Plan
 
 > [!WARNING]
-> **SUPERSEDED FOR REASONING EFFORT:** The proposed custom reasoning codec, discovery metadata framework, and prefixed selection schemas outlined in this document are superseded. Direct Chat reasoning effort uses the simplified, library-first implementation driven by AI SDK v7 native options and providerOptions (see `src/routes/chat/provider-options.ts`).
+> **SUPERSEDED FOR REASONING EFFORT — HISTORICAL, NOT AN ACTIVE PLAN.** The proposed custom reasoning codec, Models.dev reasoning-metadata discovery framework, prefixed/dynamic selection schemas, and the P2/P3 reasoning phases in this document are superseded. Direct Chat reasoning effort uses the simpler, library-first implementation built on AI SDK v7 native reasoning (see **§15, "Current implementation — native AI SDK v7"**, and `src/routes/chat/provider-options.ts`).
+>
+> - **Active in this document:** the context-window catalogue work (P1) and the discovery name-filter cleanup (P4).
+> - **Historical in this document:** §4, §5, §9.1's moved-codec component, §10's P2/P3 rows, §11's reasoning schemas, §12, §13.5–§13.7, §14's reasoning notes, and §15's P2/P3. They are retained as an audit record and must not be implemented.
+> - **Deferred, requiring separate approval:** model-specific reasoning metadata, dynamic selections, exact-value validation with `allowed` refusals, and any Scheduler adoption of a shared reasoning path.
 
-**Revision:** 2.3 — scoped corrections to Revision 2.2
-**Date:** 2026-11-03
+**Revision:** 2.4 — reasoning-effort supersession reconciliation
+**Date:** 2026-11-04
 **Status:** Investigation and planning only. No source file, test, schema, dependency, or configuration was modified. No migration was run. Nothing was committed or pushed.
-**Supersedes:** Revision 2.2. Revision 2.3 makes exactly two corrections and leaves the architecture, the R1–R6 decisions, and every unaffected section unchanged: (1) the P2/P3 order is corrected so the shared backend encoder, exact-value validation, and backend tests land in P2, and no dynamic reasoning choice is exposed in the UI or accepted by the Scheduler until P3; (2) `budget_tokens.min = -1` is described as a valid upstream sentinel whose semantics must not be assumed from the observed catalogue rows, rather than as universal dynamic thinking. Revision 2.2 had superseded 2.1, which had corrected eight-state vocabulary but reinterpreted TBAi's existing stored `"off"` as an explicit-disable request and inferred Google/Anthropic disable support from catalogue fields that do not prove it. Revision 2.2 restored `"off"` to its actual current meaning (send no option = provider default), removed explicit disabling from the initial release, separated advertised `none` from `off`, removed the Google `min <= 0` inference entirely (the documented per-model rule is deferred, not adopted), corrected the Anthropic disable claim (`between_tools` is not a full disable), verified the provider-default/conversation/one-shot/scheduler path against the source, and corrected the observed-limit staleness claim. §0.4 remains the Revision 2.1 record; §0.5 remains the Revision 2.2 record. The architecture, module count, context-window resolver, budget/compaction policy, cache design, identity rules, and Scheduler scope are unchanged. Revision 1's research is preserved; its multi-module architecture remains replaced. `docs/2026-11-03-model-capability-integration.md` remains the earlier narrow proposal.
+**Supersedes:** Revision 2.3. Revision 2.4 changes documentation status only: it applies the warning above throughout the document, marks the custom reasoning codec, reasoning-metadata discovery, and dynamic-selection phases as historical, and records model-specific reasoning metadata and dynamic selections as deferred work requiring separate approval. No R1–R6 decision is changed as a record, and none of them authorizes implementation. Revision 2.3 made exactly two corrections and left the architecture, the R1–R6 decisions, and every unaffected section unchanged: (1) the P2/P3 order is corrected so the shared backend encoder, exact-value validation, and backend tests land in P2, and no dynamic reasoning choice is exposed in the UI or accepted by the Scheduler until P3; (2) `budget_tokens.min = -1` is described as a valid upstream sentinel whose semantics must not be assumed from the observed catalogue rows, rather than as universal dynamic thinking. Revision 2.2 had superseded 2.1, which had corrected eight-state vocabulary but reinterpreted TBAi's existing stored `"off"` as an explicit-disable request and inferred Google/Anthropic disable support from catalogue fields that do not prove it. Revision 2.2 restored `"off"` to its actual current meaning (send no option = provider default), removed explicit disabling from the initial release, separated advertised `none` from `off`, removed the Google `min <= 0` inference entirely (the documented per-model rule is deferred, not adopted), corrected the Anthropic disable claim (`between_tools` is not a full disable), verified the provider-default/conversation/one-shot/scheduler path against the source, and corrected the observed-limit staleness claim. §0.4 remains the Revision 2.1 record; §0.5 remains the Revision 2.2 record. The architecture, module count, context-window resolver, budget/compaction policy, cache design, identity rules, and Scheduler scope are unchanged. Revision 1's research is preserved; its multi-module architecture remains replaced. `docs/2026-11-03-model-capability-integration.md` remains the earlier narrow proposal.
 **Method:** direct reading of the TBAi working tree at `8e07e1d`, live measurement of `https://models.dev/api.json`, read-only study of Cline at pinned revision `5b454165353ac1edc9a7db0ff416739044985908`, verification against the **upstream Models.dev schema** (`sst/models.dev`, `dev` branch, `packages/core/src/schema.ts` and `schema-v2.ts`, plus its `AGENTS.md`), verification against the **installed** provider SDK type declarations and adapter implementations, and verification against the **official provider documentation** for Gemini and Claude thinking controls. Every claim is labelled **[Verified]**, **[Assumption]**, or **[Recommendation]**. Anything that could not be verified is labelled **[Unverified]** and named in Appendix B. Line numbers are from the TBAi tree at the commit above and will drift; the quoted symbol names are the durable reference.
 
 ---
@@ -19,7 +23,7 @@
 2. **[Verified]** TBAi's capability type is already tri-state and already refuses to infer capability from model names (`src/types/index.ts:1-28`). The current defects are the *producers*, not the vocabulary.
 3. **[Verified]** The Direct chat path discovers models from provider listings and never consults a catalogue. The scheduler does not use context assembly at all (`src/services/scheduler/schedulerExecution.ts:453-460`: one user message, no history, no budget, no `maxOutputTokens`).
 4. **[Verified]** Reasoning support is `unknown` for OpenAI, Anthropic, and Google by construction (`src/services/modelDiscovery.ts:197,222,244`), and Ollama is `supported` only when `/api/show` returns the literal `"thinking"` token (`:116-119`).
-5. **[Verified]** Request encoding is hardcoded per provider type in `src/routes/chat/provider-options.ts:91-147`, duplicated and *divergent* in the scheduler (`schedulerExecution.ts:199-217`).
+5. **[Verified]** Direct Chat passes `low`/`medium`/`high` to AI SDK v7's top-level `reasoning` option (`src/routes/chat/execute-direct-stream.ts:405-410`); `"off"` omits it. `src/routes/chat/provider-options.ts:34-51` adds only Google's `includeThoughts`. The scheduler still re-implements a provider-specific encoder inline (`schedulerExecution.ts:199-217`) — the remaining divergence.
 6. **[Verified]** Models.dev publishes far more than the earlier plan assumed — structured `reasoning_options` for 6,848 models, `limit.input` for 1,718, `limit.output` for all 8,935 — and far less than a naive reading hopes: **no protocol semantics, no defaults, no per-model freshness**.
 
 ### 0.2 What Revision 1 got wrong
@@ -30,7 +34,7 @@ Revision 1's research was sound; its recommended architecture was not. It introd
 |---|---|---|
 | `src/services/modelCatalog/{client,normalize,identity,index}.ts` | **Rejected.** Four files for one fetch, one normalize, one lookup. | One file: `src/services/modelCatalog.ts`. |
 | `src/services/catalogEnrichment.ts` | **Rejected.** A separate module whose only caller is discovery. | One exported function in `modelCatalog.ts`. |
-| `src/services/reasoning/{capabilities,encode,index}.ts` | **Rejected.** A reasoning framework beside the existing encoding seam. | Move and extend the existing `provider-options.ts` into `src/services/`. |
+| `src/services/reasoning/{capabilities,encode,index}.ts` | **Rejected.** A reasoning framework beside the existing encoding seam. | Also rejected in Revision 2.4: native AI SDK v7 reasoning needs no shared encoder, and `provider-options.ts` stays in `routes/chat/` (§15). |
 | `ModelOption.catalogFetchedAt` / `catalogModelId` | **Rejected.** Cline has neither; `discoveredAt` already records the pass. | No new freshness fields. |
 | `ProviderConfig.catalogProviderKey` | **Rejected.** New user configuration with no demonstrated need. | No enrichment for custom providers at all. |
 | ETag / 304 revalidation | **Rejected.** Cline uses a plain fetch and a TTL. | TTL + in-flight dedup + last-known-good, exactly Cline's shape. |
@@ -48,23 +52,25 @@ Seven defects in Revision 2 are corrected below. The architecture is unchanged; 
 
 | # | Previous behaviour (Rev 2) | Corrected behaviour (Rev 2.1) | Supporting source evidence | Test case |
 |---|---|---|---|---|
-| C1 | Reasoning vocabularies contradicted each other: §4.3 said `off` "always means send no reasoning option", while §12.3 sent explicit disables; §4.3 said supported/no-controls "reasons by default", while §12.1 said it "does not claim disable"; `none`/`default` were called ordinary values but `default` was also a distinct choice. | One vocabulary with eight distinct selection semantics, defined once in §12.1 and used by §4.1, §4.3, §5.3, §4.6, §12.2, §12.3. **Sending no option is never called disable**; it is "provider default". Explicit disable is a separate selection, offered only when the adapter can express it. `reasoning: true` with no usable control means "supported and undialable", not "enabled by default". | TBAi's existing `off` branch sends `{}` (`provider-options.ts:96`); installed `@ai-sdk/anthropic` `thinking` union (§12.3); `@ai-sdk/google` `thinkingBudget`; Models.dev publishes no default (§2.7). | §13.5 (semantics matrix), §13.7 (UI/encoder equality) |
+| C1 | Reasoning vocabularies contradicted each other: §4.3 said `off` "always means send no reasoning option", while §12.3 sent explicit disables; §4.3 said supported/no-controls "reasons by default", while §12.1 said it "does not claim disable"; `none`/`default` were called ordinary values but `default` was also a distinct choice. | One vocabulary with eight distinct selection semantics, defined once in §12.1 and used by §4.1, §4.3, §5.3, §4.6, §12.2, §12.3. **Sending no option is never called disable**; it is "provider default". Explicit disable is a separate selection, offered only when the adapter can express it. `reasoning: true` with no usable control means "supported and undialable", not "enabled by default". | TBAi's `off` branch sends no reasoning option (`execute-direct-stream.ts:407`; `provider-options.ts:38` returns `{}`); installed `@ai-sdk/anthropic` `thinking` union (§12.3); `@ai-sdk/google` `thinkingBudget`; Models.dev publishes no default (§2.7). | §13.5 (semantics matrix), §13.7 (UI/encoder equality) |
 | C2 | Compatible gateways were given `thinking: { type: "enabled" \| "disabled" }` and `thinking: { type: "enabled", budget_tokens }`; Anthropic toggle-on used `thinking: { type: "enabled" }`; Google `off` always sent `{}` even where a disable is documented. | Compatible gateways accept **only** `reasoningEffort`; toggle/budget controls are not offered on them. Anthropic `on` uses `{ type: "adaptive" }` only where an effort control exists. Google `off` uses `thinkingBudget: 0` only when a budget control publishes `min <= 0`; otherwise it is not offered. Effort controls dominate budget controls everywhere. | `@ai-sdk/openai-compatible` schema has exactly `user/reasoningEffort/textVerbosity/strictJsonSchema` and strips unknown keys (`dist/index.d.ts:18-27`); Cline's `routing_generic-compatible.ts` emits no generic `thinking`; `@ai-sdk/google` maps `reasoning: "none"` to `{ thinkingBudget: 0 }` (`dist/index.js:2398`); Google Cloud/Firebase docs state `thinking_budget: 0` disables 2.5 Flash/Flash-Lite. | §13.5 (compatible + toggle refused; Google off; Anthropic on), §13.8 guard 6 |
 | C3 | Validation rejected `budget_tokens.min = 0` and `-1` (`z.number().int().positive()`), dropped `min <= 0`, and required non-empty non-null effort values. | Accept the upstream schema exactly: `min >= -1`, `max >= 0`, both optional, `min <= max`; effort entries may be `null`; `"default"` is retained. Skip only schema-invalid individual controls; never fail the model. `-1` is stored but never transmitted and is treated as `0` when resolving a preset. | Upstream `packages/core/src/schema.ts`: `min: z.number().min(-1).optional()`, `max: z.number().min(0).optional()`, effort `z.enum([... , "default"]).nullable()`; live payload has 37 `min=0` and 2 `min=-1` (§2.5). | §13.2 (min 0, min -1, missing bounds, null effort, duplicate controls) |
-| C4 | P3 claimed the Scheduler's context-budget problem was fixed by "pass `model.maxOutputTokens`"; §14.2 said "shared codec + `maxOutputTokens`". | `maxOutputTokens` is a **per-generation output cap** only. Total context budgeting, accumulated tool-loop history, and compaction remain absent from the Scheduler. P3 fixes the per-generation cap and the namespace bug; a separate, explicitly out-of-scope item covers context assembly. No claim of resolution. | `schedulerExecution.ts:453-460` calls `streamText` with one user message, `stopWhen: stepCountIs(10)`, no `maxOutputTokens`, no `assembleContext`; chat passes `generationCap` and assembles context (`execute-direct-stream.ts:440`, `assemble-run.ts`). | §13.6 (scheduler cap only), §14.2, §15 P3 exit criteria |
+| C4 | P3 claimed the Scheduler's context-budget problem was fixed by "pass `model.maxOutputTokens`"; §14.2 said "shared codec + `maxOutputTokens`". | `maxOutputTokens` is a **per-generation output cap** only. Total context budgeting, accumulated tool-loop history, and compaction remain absent from the Scheduler. The superseded phase would have fixed only the per-generation cap and the namespace bug; a separate, explicitly out-of-scope item covers context assembly. No claim of resolution. | `schedulerExecution.ts:453-460` calls `streamText` with one user message, `stopWhen: stepCountIs(10)`, no `maxOutputTokens`, no `assembleContext`; chat passes `generationCap` and assembles context (`execute-direct-stream.ts:440`, `assemble-run.ts`). | §13.6 (scheduler cap only), §14.2, §15 deferred work |
 | C5 | Precedence ranked `model_catalog` above `observed`, and `collectCandidates` excluded observed from arbitration entirely (`limits.ts:249`). | Precedence is `configured > provider_reported > observed > model_catalog > conservative_default > unknown`. Observed becomes a real candidate with evidence: it is keyed by provider config id + exact model + endpoint + protocol and is parsed only from a classified context-overflow error on that endpoint; catalogue data is third-party, model-wide, and endpoint-agnostic. A provider declaration still outranks an observation. | `src/context/observed-limits.ts` key construction; `src/lib/context-window-observation.ts:150-184` (context-overflow only); `src/context/limits.ts:249,380-415`; `budget.ts:358-363` shows divergence is diagnostics-only. | §13.4 (catalogue 128k + observed 64k → observed) |
 | C6 | UI choices were derived from capability alone; nothing proved every rendered choice was encodable, and toggle-only/effort-only/budget-only/toggle+effort/toggle+budget were not checked against the adapter. | `allowedReasoningSelections` is the single validity rule; `reasoningChoices` must return exactly that set. Values are intersected with the adapter's accepted set (Google `minimal/low/medium/high`; Anthropic `low/medium/high/xhigh/max`; OpenAI `none/minimal/low/medium/high/xhigh/max`; compatible any string). A choice that would produce `unsupported_capability` is never rendered. | Installed SDK enums (§12.3); `DirectChips.tsx` fixed list; `JobEditor.tsx` hardcoded select; §13.7 matrix. | §13.7 cross-tree matrix; §13.8 guards 7–8 |
 | C7 | **`"default"`** was described as an "ordinary advertised value" that could be passed verbatim. | `"default"` is a distinct selection meaning "use the provider's default depth": it is always available for supported capability (sending nothing is always encodable), is the only choice when the capability is undialable, and is encoded as **no level/budget field**. An advertised `default` is the same choice, not a duplicate. The literal string `"default"` is never transmitted. | Upstream schema admits `"default"`; no installed adapter accepts a `"default"` effort value (`@ai-sdk/openai` enum, `@ai-sdk/google` enum, `@ai-sdk/anthropic` enum). | §13.5 (`default` → `{}`), §13.8 guard 7 |
 
 ### 0.5 Correctness issues resolved in Revision 2.2
 
+> **Status (Revision 2.4):** These six decisions remain the audit record for the reasoning semantics the superseded proposal would have implemented. Nothing here authorizes implementation. The invariants that still describe the live native path are: `off`/absent = Provider default and never a disable; no explicit-disable or `"on"` selection exists; no stored value is reinterpreted. Dynamic metadata, effort values beyond `low`/`medium`/`high`, budget presets, and `allowed` refusals are deferred (§15).
+
 Revision 2.1's reasoning semantics were wrong in six places. The architecture is unchanged; each correction removes a claim, a stored value, or an inference that the source does not support. **§0.4 C1, C2, and C7 are superseded by R1/R2/R4 below; C3's bounds stand but its `-1` reading is corrected; C5's precedence stands but its staleness prose is corrected; C4 and C6 stand.**
 
 | # | Previous behaviour (Rev 2.1) | Corrected behaviour (Rev 2.2) | Exact source evidence | Test case |
 |---|---|---|---|---|
-| R1 | `"off"` was reinterpreted as an explicit-disable request and encoded as Anthropic `thinking: { type: "disabled" }`, Google `thinkingBudget: 0`, or `reasoningEffort: "none"`. Because `"off"` is the stored default in provider configs, conversations, and the UI, first enrichment would have changed "send nothing" into "send a disable" without any user action. | `"off"` keeps its exact current meaning: **send no reasoning option** = provider default. It is never encoded as a disable, never reinterpreted, and never migrated. A missing selection also means provider default. Explicit disabling is removed from the initial release; no new stored value is introduced. | `src/routes/chat/provider-options.ts:96` (`if (reasoning === "off") return {}`); `src/routes/chat/model.ts:54`; `src/routes/chat/validate-and-resolve.ts:210`; `src/services/scheduler/schedulerExecution.ts:199,202`; `web/src/components/composer/DirectChips.tsx:150-159`; `src/routes/providers.ts:66` (INSERT default `"off"`). | §13.5 (`off` → `{}` on every provider), §13.6 (default-path trace; enrichment writes no selection) |
+| R1 | `"off"` was reinterpreted as an explicit-disable request and encoded as Anthropic `thinking: { type: "disabled" }`, Google `thinkingBudget: 0`, or `reasoningEffort: "none"`. Because `"off"` is the stored default in provider configs, conversations, and the UI, first enrichment would have changed "send nothing" into "send a disable" without any user action. | `"off"` keeps its exact current meaning: **send no reasoning option** = provider default. It is never encoded as a disable, never reinterpreted, and never migrated. A missing selection also means provider default. Explicit disabling is removed from the initial release; no new stored value is introduced. | `src/routes/chat/execute-direct-stream.ts:407` (`"off"` omits the native reasoning option); `src/routes/chat/provider-options.ts:34-51` (Google `includeThoughts` only); `src/routes/chat/model.ts:54`; `src/routes/chat/validate-and-resolve.ts:210`; `src/services/scheduler/schedulerExecution.ts:199,202`; `web/src/components/composer/DirectChips.tsx:150-159`; `src/routes/providers.ts:66` (INSERT default `"off"`). | §13.5 (`off` → `{}` on every provider), §13.6 (default-path trace; enrichment writes no selection) |
 | R2 | The UI could render `off` (reinterpreted as an explicit disable) and an advertised `none` as two chips with the same wire value, and `"on"` was invented as an explicit-enable selection. | One visible selection for explicit no-reasoning: **advertised `none`**. `off` is Provider default and sends nothing, so it is not a duplicate. `"on"` is removed: adaptive-without-effort was never verified. Four categories remain distinct: Provider default (`off`/absent), advertised `none`, explicit-disable toggle (**deferred, not offered**), and normal effort values. | `web/src/components/composer/DirectChips.tsx:27-32`; installed adapter effort enums (§12.3); models.dev measured 1,831 models advertising an effort `none` (§2.5); Cline `supportsOff = toggle \|\| advertised.has("none")` (`providers/model-facts.ts`). | §13.5 (`off` and `none` produce different requests), §13.7 matrix |
-| R3 | Google `off` was offered whenever `budget_tokens.min <= 0`, and `min = -1` was treated as interchangeable with `0`. | Google has **no Off in the initial release**. `min <= 0` is not evidence of disable support, and `-1` is a valid upstream sentinel whose meaning is not assumed from the observed rows — not a claim of universal dynamic thinking, and not zero. `off` sends nothing on every Google model. A deferred, separately verified rule could add Off for `gemini-2.5-flash` and `gemini-2.5-flash-lite` only; it is not part of this plan. | `provider-options.ts:96` (today `off` never reaches a Google branch); official Google docs for 2.5 Flash/Flash-Lite (`thinkingBudget: 0` disables), 2.5 Pro (cannot disable), and Gemini 3.x (cannot disable); models.dev rows publish 2.5 Flash-Lite `min 512` and 2.5 Pro `min 128` (§2.5). | §13.5 (Google `off` → `{}`; `-1` never emitted), §13.7 (no Off chip for Google) |
+| R3 | Google `off` was offered whenever `budget_tokens.min <= 0`, and `min = -1` was treated as interchangeable with `0`. | Google has **no Off in the initial release**. `min <= 0` is not evidence of disable support, and `-1` is a valid upstream sentinel whose meaning is not assumed from the observed rows — not a claim of universal dynamic thinking, and not zero. `off` sends nothing on every Google model. A deferred, separately verified rule could add Off for `gemini-2.5-flash` and `gemini-2.5-flash-lite` only; it is not part of this plan. | `execute-direct-stream.ts:407` (today `off` adds no reasoning option and no Google `includeThoughts`); official Google docs for 2.5 Flash/Flash-Lite (`thinkingBudget: 0` disables), 2.5 Pro (cannot disable), and Gemini 3.x (cannot disable); models.dev rows publish 2.5 Flash-Lite `min 512` and 2.5 Pro `min 128` (§2.5). | §13.5 (Google `off` → `{}`; `-1` never emitted), §13.7 (no Off chip for Google) |
 | R4 | Anthropic `off` with a `toggle` was encoded `thinking: { type: "disabled" }`, a catalogue `toggle` was read as proof of disable support, and `between_tools` was described as a complete disable. | Anthropic has **no Off in the initial release**. A catalogue `toggle` is not evidence: official documentation rejects `disabled` for Sonnet 5, Haiku 5.5, Opus 5.5, and Opus 4.7, and Sonnet 5.5 substitutes `between_tools`, which disables only *upfront* thinking and still returns between-tool notes. Unverified models offer no disable. Effort and budget controls remain available; `off` sends nothing. | Official Anthropic thinking documentation (per-model table); installed `@ai-sdk/anthropic` 4.0.83 rewrite behaviour (`dist/index.js:3721-3743`); models.dev publishes `toggle` on `claude-haiku-5-5` and `claude-sonnet-5`. | §13.5 (Anthropic `off` → `{}`; no `disabled`/`between_tools`), §13.7 |
 | R5 | The provider-default → conversation → one-shot → scheduler path was asserted rather than traced, and the scheduler's provider-default fallback was unverified. | Traced end to end. Chat resolves `request > conversation > provider.thinking > "off"`; the frontend transmits `"off"` (truthy); the footer hides it; the scheduler uses `thinkingLevel ?? "off"` with **no** provider fallback; provider creation defaults `"off"`. Enrichment writes only capability metadata, never a selection, so first enrichment cannot turn an existing `"off"` into a disable or an invented level. | `src/routes/chat/model.ts:54`; `src/routes/chat/validate-and-resolve.ts:210`; `web/src/runtime.ts:415-418,440`; `web/src/components/ChatWindow.tsx:690-691`; `schedulerExecution.ts:199-202`; `src/routes/providers.ts:66`; `web/src/features/providers/ProviderDialog.tsx` form default. | §13.6 (default-path trace; scheduler `null`/`off`), §13.7 |
 | R6 | §3.3 claimed an observed limit "cannot be stale" and introduced "no false pre-flight rejection risk". | Observed limits have **no TTL** and are not invalidated by credential, account, name, model-list, or default-model edits on the same provider row. Only endpoint/protocol edits produce a new key, and only process restart or the 256-entry LRU removes an entry. `observed` is terminal in `decideBudget`, so a stale-low observation can cause a false pre-flight rejection. This is pre-existing and is recorded, not fixed. The precedence (observed > model_catalog) is unchanged. | `src/context/observed-limits.ts` (Map, 256-entry LRU, length-prefixed `keyOf`, no TTL, `observedAt` diagnostics-only); `src/routes/providers.ts:86-137` (stable id; endpoint/protocol editable; credential replaced under the same id); `src/context/budget.ts:196-197` (only `conservative_default`/`unknown` are advisory). | §3.3 (staleness/invalidation table), §13.4 (stale observation row) |
@@ -152,16 +158,16 @@ export interface ModelCapabilities { reasoning: ReasoningCapability }
 request.reasoningLevel > conversation.reasoningLevel > provider.thinking > "off"
 ```
 
-then encoding happens in `src/routes/chat/provider-options.ts:91-147`:
+then encoding happens in two places, not in a codec:
 
-- `"off"` returns `{}` at `:96`, **before any provider branch.** This is the existing meaning preserved by Revision 2.2: `off` sends no reasoning option.
-- `google`: `thinkingLevel` for generation ≥ 3, `thinkingBudget` otherwise, `includeThoughts: true`; lite/nano skipped.
-- `anthropic`: `{ type: "enabled", budgetTokens }`; lite/nano skipped.
-- `openai`/`custom`: `reasoningEffort` under `providerOptionsNamespace(provider)`.
+- `low`/`medium`/`high` are passed to `streamText` as the top-level `reasoning` option (`src/routes/chat/execute-direct-stream.ts:405-410`).
+- `"off"` (or no selection) **omits the `reasoning` property entirely** (`:407`); no disable is transmitted.
+- `src/routes/chat/provider-options.ts:34-51` adds only Google's `{ google: { thinkingConfig: { includeThoughts: true } } }` while reasoning is active. It does not choose an effort or a budget.
+- Provider wire-format mapping (effort fields, thinking budgets, adaptive thinking) is performed by AI SDK v7 and the installed provider adapters, not by TBAi.
 
-**[Verified] What `"off"` does today — the behaviour that must not change.** `buildReasoningProviderOptions` returns `{}` for `"off"` before any provider branch (`provider-options.ts:96`), so `"off"` sends no reasoning option on every provider. `model.ts:54` supplies `"off"` when neither the request nor the conversation nor the provider has a value; `validate-and-resolve.ts:210` does the same on its path. The composer displays `stored ?? custom?.reasoningLevel ?? providerDefault`, where the provider default is `p.thinking ?? "off"` (`DirectChips.tsx:150-159`), and persists a chosen level as both the one-shot pick and `custom.reasoningLevel` (`:161-177`). The transport sends `"off"` because the string is truthy (`web/src/runtime.ts:415-418,440`); the footer suppresses it from the displayed turn record (`ChatWindow.tsx:690-691`). Provider creation stores `"off"` when `thinking` is omitted (`src/routes/providers.ts:66`). Therefore **no selection and `"off"` already mean the same thing: provider default.** Revision 2.2 keeps that identity; it does not give `"off"` a second meaning.
+**[Verified] What `"off"` does today — the behaviour that must not change.** `"off"` omits the native reasoning option (`execute-direct-stream.ts:407`), so it sends no reasoning on every provider; `model.ts:54` supplies `"off"` when neither the request nor the conversation nor the provider has a value; `validate-and-resolve.ts:210` does the same on its path. The composer displays `stored ?? custom?.reasoningLevel ?? providerDefault`, where the provider default is `p.thinking ?? "off"` (`DirectChips.tsx:150-159`), and persists a chosen level as both the one-shot pick and `custom.reasoningLevel` (`:161-177`). The transport sends `"off"` because the string is truthy (`web/src/runtime.ts:415-418,440`); the footer suppresses it from the displayed turn record (`ChatWindow.tsx:690-691`). Provider creation stores `"off"` when `thinking` is omitted (`src/routes/providers.ts:66`). Therefore **no selection and `"off"` already mean the same thing: provider default.**
 
-**[Verified]** The four budgets/levels are hardcoded at `:31-60` and floored with `?? 4096` / `?? "medium"`. A model that supports only `xhigh`/`max` is sent `medium` and silently thinks at the wrong depth; a model that supports none is still sent a level. The defect is the flooring, not the meaning of `"off"`.
+**[Verified — historical]** The earlier chat codec hardcoded budgets/levels and floored with `?? 4096` / `?? "medium"`. That code was replaced by the native option; `provider-options.ts` no longer contains a preset map. The **scheduler** still floors (`schedulerExecution.ts:204-215`), so the silent-clamp defect remains there and is deferred with Scheduler work (§15).
 
 **[Verified]** The frontend offers a fixed four-item list (`web/src/components/composer/DirectChips.tsx:27-32`) and computes the displayed value as `stored ?? custom?.reasoningLevel ?? providerDefault` (`:159`). Nothing in the UI consults `ModelOption.capabilities`.
 
@@ -678,6 +684,8 @@ Why not request-time:
 
 ## 4. Dynamic reasoning capability and control discovery
 
+> **HISTORICAL — superseded.** This section specifies the custom reasoning-metadata and dynamic-selection proposal. It is retained as the audit record and is **not** an implementation plan. The live implementation is described in §15, "Current implementation — native AI SDK v7"; dynamic selections are deferred.
+
 ### 4.1 What the data supports
 
 **[Verified]** Five distinct states exist and must not be collapsed. The fifth was missing from Revision 2 and is the reason a published control could be shown but never sent.
@@ -759,7 +767,7 @@ Rules:
 - **Never clamp a *selection*.** If a stored value is no longer in the offered set, the request boundary refuses it with a typed error and lists `allowed`. It must not pick `medium`.
 - **Never invent a default.** `undefined` means "send nothing / provider default", not `"medium"`.
 
-This is the key correction to `provider-options.ts:108,118,131,141`, all of which currently floor an unknown selection to `medium`/`4096`.
+**[Verified — historical]** The superseded codec proposal targeted a preset map in `provider-options.ts` that floored an unknown selection to `medium`/`4096`. That map no longer exists: the native path passes `low`/`medium`/`high` to `streamText` and omits `reasoning` for any other value (`execute-direct-stream.ts:405-410`). The scheduler still floors (`schedulerExecution.ts:204-215`); that defect is deferred with Scheduler work (§15).
 
 ### 4.4 Provider-scoped by construction
 
@@ -776,7 +784,7 @@ This is the key correction to `provider-options.ts:108,118,131,141`, all of whic
 - Chat request: `reasoningLevel?: string` (validated against the resolved capability at the route boundary, not against a fixed enum).
 - Conversation metadata: `custom.reasoningLevel?: string`.
 - Provider default: `thinking?: string` (unchanged column; validated on write).
-- Scheduler (P3 only): `thinking_level TEXT` unchanged; the TypeScript type, the request schema, and validation widen to the validated selection and check it against the selected model's capability. Through P2 the Scheduler keeps its existing four-level request schema, types, validation, and inline encoding.
+- Scheduler (deferred — requires separate approval): `thinking_level TEXT` unchanged; the TypeScript type, the request schema, and validation would widen to the validated selection. The Scheduler keeps its existing four-level request schema, types, validation, and inline encoding.
 
 **Backward compatibility:** the four existing strings remain accepted inputs with their existing meanings. `"off"` always means **send no reasoning option** = Provider default, on every model, with no exception and no reinterpretation. `low`/`medium`/`high` keep their preset meaning when capability is unknown or budget-only; on an effort-capable model they are accepted only when that exact value is advertised, otherwise the boundary refuses visibly with `allowed` (never remaps). No stored value is rewritten or silently mapped to another level. `"default"` is **not** added to the stored vocabulary: an advertised `default` resolves to the `"off"` choice. No explicit-disable or explicit-enable value is added.
 
@@ -826,6 +834,8 @@ unknown/absent           → off/low/medium/high, labelled as presets
 ---
 
 ## 5. Provider/API request-encoding design
+
+> **HISTORICAL — superseded.** The shared codec and the `provider-options.ts` move proposed here are cancelled. Do not move the file and do not implement this encoder. AI SDK v7 owns provider wire-format mapping; see §15, "Current implementation — native AI SDK v7". The scheduler's separate inline encoder is deferred Scheduler work.
 
 ### 5.1 What Models.dev can and cannot decide
 
@@ -1181,8 +1191,8 @@ Severity: **H** = user-visible wrong behaviour or data loss; **M** = capability 
 
 | # | Severity | Problem | Evidence |
 |---|---|---|---|
-| P1 | **H** | Reasoning level is floored to `medium`/`4096` when a selection is missing or unsupported. A model publishing only `low/high/max`, or only `minimal/low/medium/high`, receives a value it may reject or silently run at a different depth. | `provider-options.ts:108,118,131,141` |
-| P2 | **H** | Scheduler encodes OpenAI-compatible reasoning under the literal `openai` namespace. Compatible gateways ignore it; reasoning silently does not happen. | `schedulerExecution.ts:213-216` vs `provider-options.ts:140` |
+| P1 | **H** | **Direct Chat resolved by native reasoning; Scheduler open.** The Scheduler still floors an unknown selection to `medium`/`4096`. A model publishing only `low/high/max`, or only `minimal/low/medium/high`, receives a value it may reject or silently run at a different depth. Direct Chat now forwards `low`/`medium`/`high` and omits the option otherwise. | `schedulerExecution.ts:204-215`; `execute-direct-stream.ts:405-410` |
+| P2 | **H** | Scheduler encodes OpenAI-compatible reasoning under the literal `openai` namespace. Compatible gateways ignore it; reasoning silently does not happen. | `schedulerExecution.ts:213-216` vs `execute-direct-stream.ts:405-410` |
 | P3 | **H** | Scheduler sets no **per-generation output cap** and performs no **context-window budgeting**, **compaction**, or **tool-loop history reduction**. `stopWhen: stepCountIs(10)` appends every tool result to the message array, so the input can grow until the provider rejects it. These are four different quantities (§3.1); setting `maxOutputTokens` addresses only the first. | `schedulerExecution.ts:453-460`; contrast `execute-direct-stream.ts:440` and `assemble-run.ts` |
 | P4 | **M** | Google scheduler omits `includeThoughts` and always uses `thinkingBudget`; Gemini 3 gets the wrong option generation. | `schedulerExecution.ts:203-207` |
 | P5 | **M** | Discovery drops real chat models by name regex (`o1`, `o3`, `o4-mini`, `gemma-4-*`, `deep-research-*`). | `modelDiscovery.ts:71-81` |
@@ -1190,10 +1200,10 @@ Severity: **H** = user-visible wrong behaviour or data loss; **M** = capability 
 | P7 | **M** | Every model without provider-reported limits is budgeted against 128 K, refusing up to ~75 % of a 512 K window (documented). | `limits.ts:41-58` |
 | P8 | **M** | The UI always offers four levels, including models that explicitly cannot use them, and never shows that a value was substituted. | `DirectChips.tsx:27-32,159` |
 | P9 | **M** | There is no validation anywhere that a stored reasoning selection is valid for the selected model — chat, conversation, provider, or scheduler. | `validation.ts:56,560`; `schedulerValidation.ts` (no thinking check) |
-| P10 | **M** | Reasoning encoding is duplicated between chat and scheduler and has already diverged in three ways. | §1.5 |
+| P10 | **M** | Reasoning encoding now differs in kind: Direct Chat delegates to AI SDK v7 native reasoning, while the Scheduler keeps an inline provider encoder that has diverged. | §1.5 |
 | P11 | **L** | `model_catalog` is mentioned in prose (`capabilityDiscovery.ts:22-27`, `decisions.md:3083-3107`) but does not exist in types, so the documented design and the code disagree. | `capabilityDiscovery.ts:22-27` |
 | P12 | **L** | `ProviderDialog.tsx` and `src/types/index.ts` contain pre-existing mojibake (`â€”`). Unrelated to this work; recorded so it is not mistaken for a regression from it. | `ProviderDialog.tsx:329,530,616` |
-| P13 | **M** | No shared validity rule: the UI's fixed list and the encoder's protocol branches can disagree. Toggle-only, effort-only, budget-only, toggle+effort, and toggle+budget models have no defined offered set, and nothing proves every rendered choice is encodable. | `DirectChips.tsx:27-32,159`; `JobEditor.tsx:812-818`; `provider-options.ts` |
+| P13 | **M** | No shared validity rule: the UI's fixed list and the Scheduler's inline encoder can disagree. Toggle-only, effort-only, budget-only, toggle+effort, and toggle+budget models have no defined offered set, and nothing proves every rendered choice is encodable. Direct Chat no longer encodes effort itself. | `DirectChips.tsx:27-32,159`; `JobEditor.tsx:812-818`; `schedulerExecution.ts:199-217` |
 
 ### 8.1 Risks in the proposed direction
 
@@ -1206,19 +1216,21 @@ Severity: **H** = user-visible wrong behaviour or data loss; **M** = capability 
 | Models.dev outage breaks discovery | Enrichment is optional and non-throwing; last-known-good retained; chat never waits. |
 | 5.9 MB parse on every refresh | Parse once per 10-minute TTL, only during discovery; never on the chat path. |
 | Type changes break stored configs | All new fields optional; all old values valid; no DDL (§14). |
-| A stored reasoning value becomes invalid when the model changes | Refuse with `allowed` (chat 400, scheduler save error); never substitute. `"off"` is always valid and always sends nothing; it is not an exception (§4.3). |
-| First enrichment changes an existing conversation's reasoning | Enrichment writes capability only, never a selection. `"off"`/absent always send nothing; only a level the model no longer publishes is visibly refused, never silently replaced. |
+| A stored reasoning value becomes invalid when the model changes | **Superseded (historical).** The native path performs no capability validation; the adapter or provider rejects an unsupported value. Capability-aware refusal with `allowed` is deferred (§15). `"off"` always sends nothing. |
+| First enrichment changes an existing conversation's reasoning | **Historical.** Enrichment does not ingest reasoning metadata today. If it did, it would write capability only, never a selection; `"off"`/absent always send nothing. Deferred with metadata discovery. |
 | An explicit disable cannot be offered | Intentional scope decision: no catalogue field proves endpoint disable support, and `between_tools` is not a full disable. Deferred with a verified per-model allowlist (§12.4). |
 | A stale observed limit causes a false pre-flight rejection | Recorded pre-existing behaviour (§3.3): no TTL, terminal in `decideBudget`, invalidated only by an endpoint/protocol key change, restart, or LRU eviction. Precedence and budget policy are unchanged; fixing it is out of scope. |
-| Scheduler context growth is mistaken for solved by `maxOutputTokens` | Scope P3's Scheduler work to the per-generation cap and namespace fix. Context budgeting, compaction, and loop-history reduction are a separate item (§15, "Out of scope"). |
-| A UI choice is rendered that the adapter cannot encode | One validity rule (`allowedReasoningSelections`) and a cross-tree matrix test (§13.7); undialable controls collapse to Provider default. |
-| A catalogue `default`, `-1`, or disable is sent literally | `default` → no field and not a stored selection; `-1` → contributes no lower bound and is never transmitted; no disable encoding exists. Guard 7 (§13.8). |
+| Scheduler context growth is mistaken for solved by `maxOutputTokens` | Any future Scheduler work must be scoped to the per-generation cap and namespace fix. Context budgeting, compaction, and loop-history reduction are a separate item (§15, "Out of scope"). |
+| A UI choice is rendered that the adapter cannot encode | **Historical.** No dynamic UI exists; the composer offers only `off`/`low`/`medium`/`high`. The one-validity-rule and cross-tree matrix are deferred with dynamic selections. |
+| A catalogue `default`, `-1`, or disable is sent literally | **Historical.** No catalogue reasoning value reaches the wire today. `-1` is research data only; no disable encoding exists. Deferred with metadata discovery. |
 
 ---
 
 ## 9. Simplified architecture
 
 ### 9.1 Components — one new file, one moved file
+
+> **Partly historical.** `src/services/modelCatalog.ts` and its context-window enrichment remain active. The moved `provider-options.ts` and the shared reasoning codec shown below are **cancelled**; do not move the file or implement the codec.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1311,6 +1323,10 @@ anything else → no enrichment
 
 ## 10. Exact files that need modification
 
+> **Historical rows.** In §10.1 and §10.2, every row whose phase is P2 or P3 belongs to the superseded reasoning proposal and must not be implemented. The P1 portion of a P1/P2 row remains active; P4 rows remain active.
+>
+> Read the phase column as follows: **P1/P4 = active**; **P2 = superseded** (native reasoning replaced the codec, and `provider-options.ts` was not moved); **P3 = deferred, requiring separate approval**.
+
 Every row names the owning layer and the reason.
 
 ### 10.1 New and moved files
@@ -1348,10 +1364,10 @@ Every row names the owning layer and the reason.
 | `web/src/types/index.ts` | Mirror the capability fields; widen stored reasoning types. | Frontend consumes them. | P3 |
 | `web/src/components/composer/DirectChips.tsx` | Use `reasoningChoices(...)`; remove the fixed-list assumption when controls exist. | P8. | P3 |
 | `web/src/features/scheduler/components/JobEditor.tsx` | Use the same helper; drop the hardcoded union at `:93`. | Consistency. | P3 |
-| `web/src/features/providers/ProviderDialog.tsx` | Show "Models.dev" when `contextWindowSource === "model_catalog"` (deferred to P2/P3 UI phase; excluded from backend-only P1). | Transparency. | P2/P3 (deferred) |
+| `web/src/features/providers/ProviderDialog.tsx` | Show "Models.dev" when `contextWindowSource === "model_catalog"` (**deferred — not part of active P1 or P4; requires separate approval**). No source label is rendered today. | Transparency. | Deferred |
 | `docs/decisions.md` | Record: third stored source, advisory authority, no canonical matching, no custom enrichment, protocol stays code, no migration. | ADR. | P1 |
 | `docs/provider-system.md` | Document discovery enrichment and identity rules. | Operator-facing behaviour. | P1 |
-| `docs/architecture.md` | Add `modelCatalog.ts` and the moved codec to the backend ownership table. | Ownership. | P1 |
+| `docs/architecture.md` | Add `modelCatalog.ts` to the backend ownership table. | Ownership. | P1 |
 
 ### 10.3 Explicitly **not** touched
 
@@ -1361,6 +1377,8 @@ Every row names the owning layer and the reason.
 ---
 
 ## 11. Type and validation changes
+
+> **Partly historical.** `CONTEXT_WINDOW_SOURCES`, `catalogLimit`, and `LimitSource` remain active. `ReasoningControl`, `controls`/`source`, the `reasoningCapabilitySchema` extensions, and `reasoningSelectionSchema` are historical and superseded by native reasoning; do not implement them.
 
 ### 11.1 Types
 
@@ -1456,12 +1474,12 @@ export const reasoningCapabilitySchema = z.object({
 const reasoningSelectionSchema = z.string().min(1).max(40);
 ```
 
-**Boundary rules:**
+**Boundary rules (historical — not implemented)**
 
-- `chatRequestSchema.reasoningLevel` → `reasoningSelectionSchema.optional()` (P2).
-- Provider `thinking` → `reasoningSelectionSchema.optional()` (P2).
-- `schedulerJobCreateSchema.thinkingLevel` keeps its existing four-level validation (`off`/`low`/`medium`/`high`) throughout P2. Widening it to `reasoningSelectionSchema.optional().nullable()` is **P3** work and lands together with `schedulerTypes.ts`, `schedulerValidation.ts`, the Scheduler UI, and the Scheduler's move onto the shared encoder. Until then the Scheduler API, validation, types, and inline execution remain compatible with the four-level selection set and refuse any other value.
-- The chat route validates the value against the resolved capability **after** model resolution, returning `400 { error, allowed }` on mismatch. Validation against a static enum is removed because it is the source of the silent-clamp defect. The Scheduler gains the same after-resolution capability validation at P3; it does not gain it in P2.
+- `chatRequestSchema.reasoningLevel` → `reasoningSelectionSchema.optional()` was proposed for P2; it is superseded.
+- Provider `thinking` → `reasoningSelectionSchema.optional()` was proposed for P2; it is superseded.
+- `schedulerJobCreateSchema.thinkingLevel` keeps its existing four-level validation (`off`/`low`/`medium`/`high`). Widening it was deferred with the Scheduler work and requires separate approval; it would land with `schedulerTypes.ts`, `schedulerValidation.ts`, the Scheduler UI, and any shared encoder.
+- The proposed chat-route capability validation with `400 { error, allowed }` is not implemented. The Scheduler has no capability validation either; both are deferred.
 
 ### 11.3 Enrichment rules
 
@@ -1502,6 +1520,8 @@ The stored controls are the **validated catalogue facts**. Which of them the ins
 ---
 
 ## 12. Reasoning selection contract
+
+> **HISTORICAL — superseded.** This entire contract (offered selections, validation, encoding table, deferred disabling) describes the custom codec. It is **not** an implementation plan. Current behaviour is the native path in §15; model-specific and dynamic selections are deferred and require separate approval.
 
 ### 12.1 Offered selections
 
@@ -1603,6 +1623,8 @@ Until all four exist, no disable control is displayed anywhere.
 ---
 
 ## 13. Test plan and edge cases
+
+> **Historical for reasoning.** §13.5 and §13.7, and the reasoning cases inside §13.6 and §13.8, describe tests for the superseded codec. They are retained as a record and are not active work. The context-window tests (§13.1–§13.4) remain active.
 
 ### 13.1 Catalogue module (`tests/unit/services/modelCatalog.test.ts`)
 
@@ -1732,7 +1754,7 @@ Until all four exist, no disable control is displayed anywhere.
 | Scheduler run on a compatible gateway | `reasoningEffort` under the compatible namespace (regression for §8 problem P2). |
 | Scheduler run on a compatible gateway with a toggle or budget control | No `thinking` object; Provider default or refusal (§12.3). |
 | Scheduler job with `thinking_level = NULL` or `"off"` | No reasoning options; **no `provider.thinking` fallback** (§1.5). |
-| Scheduler per-generation output cap | `streamText.maxOutputTokens` equals the model's published output figure when present; **this is the only context-related quantity added in P3**. |
+| Scheduler per-generation output cap | `streamText.maxOutputTokens` equals the model's published output figure when present; **deferred with Scheduler work — not part of an active phase**. |
 | Scheduler context scope | `schedulerExecution.ts` still sends one user message and does not import `assembleContext`; no test claims context budgeting, compaction, or loop-history reduction. |
 | Scheduler job saved with an invalid selection | Validation error at save; run-time revalidation fails loudly if the model changed. |
 
@@ -1788,7 +1810,7 @@ Per AGENTS.md §6b, each guard is verified by introducing the defect first:
 7. **No literal `"default"`, no negative budget, and no zero budget.** Across every selection a capability+adapter can produce, assert the serialized `providerOptions` contains neither the string `"default"` as an effort value, nor a negative `thinkingBudget`/`budgetTokens`, nor a `thinkingBudget: 0`/`budgetTokens: 0`. Verified by encoding `"default"` verbatim, `-1`, and `0` and watching each fail.
 8. **UI/encoder parity.** The §13.7 matrix must fail if a value is added to one derivation only. Verified by adding a temporary extra chip.
 9. **Published bounds survive normalization.** A `min = 0` and a `min = -1` control must be stored. Verified by restoring the `.positive()` schema and watching the test fail.
-10. **Scheduler scope.** A test that fails if `schedulerExecution.ts` imports `assembleContext` or `computeBudget` during P3, so the phase cannot quietly claim context management it does not implement.
+10. **Scheduler scope.** A test that fails if `schedulerExecution.ts` imports `assembleContext` or `computeBudget` in any future Scheduler phase, so that work cannot quietly claim context management it does not implement.
 11. **`off` is always provider default.** For every provider × control combination, encode `"off"` and assert the result is exactly `{}` — no `reasoningEffort`, no `thinking`, no `thinkingConfig`, no `thinkingBudget`. Verified by restoring the Rev 2.1 disable branch and watching it fail.
 12. **No disable or enable encoding exists.** A source/AST-level guard fails if `provider-options.ts` emits `"disabled"`, `"between_tools"`, or `thinking: { type: "adaptive" }` without an accompanying `effort` value; a behaviour guard fails if `"on"`, `"disabled"`, or `"between_tools"` is accepted by `resolveReasoningSelection`. Verified by re-adding the `on` branch and watching it fail.
 13. **No Google disable inference.** A capability with `toggle` and/or `budget_tokens.min <= 0` must not add Off to the offered set, and a `min = -1` row must never yield a `0` or negative budget. Verified by restoring the `min <= 0` rule and watching both assertions fail.
@@ -1811,6 +1833,8 @@ Real exit codes and suite/case counts must be reported; compilation is not compl
 
 ## 14. Migration and backward compatibility
 
+> **Status (Revision 2.4).** No migration is required today because the reasoning codec/metadata proposal was not implemented. Bullets below that mention `controls`, capability validation, or `allowed` describe that superseded proposal; they are not current behaviour. The live native behaviour is in §15.
+
 ### 14.1 No database migration
 
 **[Verified]** `provider_configs.models` is a JSON column; every added field is optional. `provider_configs.thinking` and `scheduler_jobs.thinking_level` are already `TEXT`. Therefore:
@@ -1823,6 +1847,8 @@ Real exit codes and suite/case counts must be reported; compilation is not compl
 - Stored `controls` are raw validated catalogue facts; the adapter-encodability view is derived at request time, so no re-enrichment is needed if an SDK version changes.
 
 ### 14.2 Behavioural compatibility
+
+> **Partly historical.** The context-window rows describe active P1 work. Every reasoning row describes the superseded proposal; the live native behaviour is stated in §15, "Current implementation — native AI SDK v7".
 
 | Surface | Before | After | Compatibility |
 |---|---|---|---|
@@ -1837,8 +1863,8 @@ Real exit codes and suite/case counts must be reported; compilation is not compl
 | Explicit disable / `"on"` | not present | **not added** | No regression; deferred (§12.4). |
 | Context precedence | observed consulted only when nothing else existed | observed ranks above `model_catalog` and below `provider_reported` | Behaviour change for a model that has both a catalogue row and an observed figure; divergence is recorded (C5). |
 | Observed limit staleness | no TTL; terminal in budget | unchanged | **Pre-existing and recorded (§3.3)**; enrichment does not modify observed limits or budget policy. |
-| Scheduler selection | `thinkingLevel ?? "off"`, no provider fallback, four-level request schema | unchanged through P2; widened in P3 | `off`/`NULL` still sends nothing. Only P3 changes the encoding path: the request schema, types, capability validation, and shared encoder.
-| Scheduler | no max output, wrong namespace | shared codec + per-generation `maxOutputTokens` | Bug fix; job configs unchanged. Context budgeting, compaction, and loop-history reduction are **unchanged** and remain out of scope. |
+| Scheduler selection | `thinkingLevel ?? "off"`, no provider fallback, four-level request schema | unchanged | `off`/`NULL` still sends nothing. Widening the schema/types and replacing the inline encoder were proposed in the superseded P3 and are **deferred, requiring separate approval**. |
+| Scheduler | no max output, wrong namespace | per-generation `maxOutputTokens` and a namespace fix — **deferred with Scheduler work** | Bug fix, not part of any active phase; job configs unchanged. Context budgeting, compaction, and loop-history reduction are **unchanged** and remain out of scope. |
 
 ### 14.3 Rollback
 
@@ -1846,7 +1872,7 @@ Disabling enrichment and re-running discovery replaces `model_catalog` values; `
 
 ### 14.4 What is **not** backward compatible, and why that is intended
 
-1. A stored reasoning value that the model no longer publishes will be refused rather than silently replaced. `"off"` is not affected: it always sends nothing.
+1. **Historical (superseded codec).** The proposed rule that a stored reasoning value the model no longer publishes is refused with `allowed` is not implemented. The native path forwards `low`/`medium`/`high` to the adapter and lets the provider reject an unsupported value. Dynamic capability validation is deferred (§15). `"off"` still sends nothing.
 2. Models dropped by the old name allowlist will appear in discovery after the P4 filter change. That is a fix, but it changes the visible model list.
 3. No explicit-disable or explicit-enable selection is offered in the initial release. Neither exists today, so this is a deferred capability rather than a removed one (§12.4).
 
@@ -1856,7 +1882,7 @@ Disabling enrichment and re-running discovery replaces `model_catalog` values; `
 
 Each phase is independently verifiable, leaves the tree green, and has a rollback that does not lose operator configuration.
 
-**Phase dependencies:** P1 is independent. **P2 must land before P3** — P2 delivers the Models.dev reasoning metadata, exact-value validation, shared provider-specific encoder, and backend tests; P3 exposes model-specific choices in the UI and moves the Scheduler onto that same encoder. **No phase may expose a reasoning selection that the backend cannot correctly validate and serialize**, so the existing UI, the Scheduler's four-level request schema and types, and the inline Scheduler block remain unchanged through P2. P4 is independent of P2/P3.
+**Phase dependencies:** **P1 (context windows) and P4 (discovery filter) are the active phases and are independent.** The former reasoning phases **P2 and P3 are superseded and deferred** (see the warning at the top of this document and "Current implementation — native AI SDK v7" below). No reasoning work should start from this document: model-specific reasoning metadata and dynamic selections require a new, separately approved proposal that starts from the native implementation.
 
 ### P1 — Context windows (the smallest useful slice)
 
@@ -1866,8 +1892,9 @@ Each phase is independently verifiable, leaves the tree green, and has a rollbac
 - Types + validation: `model_catalog`, `catalogLimit`.
 - `src/context/types.ts`, `limits.ts`, `budget.ts`: ranking + advisory.
 - `discoverModels` calls `enrichModels`.
-- Provider dialog source label.
 - Tests for normalization, identity, precedence, advisory.
+
+**Not part of P1:** the Provider dialog "Models.dev" source label. No source label is rendered today (`ProviderDialog.tsx` writes `contextWindowSource` but displays no source); it is deferred and requires separate approval (§10.2).
 
 **Exit criteria**
 
@@ -1876,22 +1903,24 @@ Each phase is independently verifiable, leaves the tree green, and has a rollbac
 - A catalogue outage produces the exact same discovery result as today.
 - No DB migration; old rows resolve identically.
 
-### P2 — Reasoning metadata and shared backend encoding
+### P2 — Reasoning metadata and shared backend encoding (HISTORICAL — superseded)
 
-**Deliverables**
+> **Not an active plan.** The warning at the top of this document supersedes this phase in full. It is retained only as the record of the proposal that was evaluated and rejected. **Do not implement it:** do not move `provider-options.ts`, do not add `resolveReasoningSelection`/`allowedReasoningSelections`, do not widen the reasoning schemas, and do not add reasoning metadata ingestion. The catalogue facts cited below remain valid research about Models.dev; they are not work items.
+
+**Superseded deliverables (not to be implemented)**
 
 - `ReasoningControl`, `controls`, `source`; enrichment of `reasoning`/`reasoning_options` with strict validation.
 - Move `src/routes/chat/provider-options.ts` → `src/services/provider-options.ts`; add the capability-aware decision function, the single `allowedReasoningSelections` derivation, and the shared provider-specific encoder.
 - Exact-value validation: offer/accept only values the selected adapter can encode; refuse an unsupported value with `allowed` instead of mapping it to another level.
-- Keep the `if (reasoning === "off") return {};` guard at the top of the encoder, **before every provider branch** (`provider-options.ts:96` today). Precedence and meaning are unchanged: `off` and "no selection" are Provider default.
+- Keep the `if (reasoning === "off") return {};` guard at the top of the encoder, **before every provider branch**. Precedence and meaning are unchanged: `off` and "no selection" are Provider default.
 - Remove the unverified compatible-gateway `thinking` branch. Add **no** Google or Anthropic disable path, no `disabled`/`between_tools` encoding, and no `"on"` selection (§12.4). `none` is encoded only where the selected adapter accepts an effort value.
 - Enforce effort-over-budget and the preset range `[max(min ?? 1, 1), max]`, so no preset emits a zero or negative budget and `-1` is never treated as a positive lower bound.
 - Chat validates and encodes through the shared module; an invalid stored selection returns 400 with `allowed`.
-- Widen the chat, conversation, and provider selection types without changing columns. **The Scheduler is untouched in P2**: `schedulerJobCreateSchema.thinkingLevel`, `schedulerTypes.ts`, `schedulerValidation.ts`, and the inline encoder in `schedulerExecution.ts` keep their existing four-level behavior and refuse any other value; they adopt the shared schema and encoder in P3. **No new stored value**: `"off"` remains Provider default; no disable or `"on"` value is added.
+- Widen the chat, conversation, and provider selection types without changing columns. The Scheduler would have remained untouched in P2 and adopted the shared schema in the (now deferred) P3. **No new stored value**: `"off"` remains Provider default; no disable or `"on"` value is added.
 - Backend tests for normalization, exact-value validation, and every protocol branch.
-- **No UI exposure in P2.** `DirectChips.tsx` and `JobEditor.tsx` keep their existing four-level behavior; no catalogue-driven choice is rendered, and the inline Scheduler block is not yet replaced.
+- No UI exposure in P2; `DirectChips.tsx` and `JobEditor.tsx` would have kept their four-level behavior.
 
-**Exit criteria**
+**Superseded exit criteria (historical)**
 
 - A model advertising `xhigh` (accepted by the adapter) encodes `xhigh`; a model advertising only `low/medium/high` refuses `xhigh` with `allowed` and never sends `medium`.
 - `"off"` and no selection produce `{}` on **every** provider and capability, with no `disabled`, no `between_tools`, no `thinkingBudget: 0`, and no `reasoningEffort: "none"`.
@@ -1900,15 +1929,35 @@ Each phase is independently verifiable, leaves the tree green, and has a rollbac
 - `"default"` never appears as a provider-option value, and no advertised `default` is stored or transmitted.
 - `budget_tokens.min = 0` and `-1` survive enrichment; `-1` is not treated as a positive lower bound, and no preset or wire value is ever zero or negative.
 - A chat request with an invalid stored selection returns 400 with `allowed`; no provider call is made.
-- A scheduler job request carrying a value outside `off`/`low`/`medium`/`high` is still refused by the unchanged request schema; the Scheduler API, validation, types, and inline execution remain compatible with the existing four-level selection set.
+- A scheduler job request carrying a value outside `off`/`low`/`medium`/`high` is still refused by the unchanged request schema.
 - The backend test suites for metadata and encoding pass; the existing UI and Scheduler behavior is unchanged, with DOM tests still green.
-- **No dynamic reasoning choice is exposed before these criteria pass.**
 
-### P3 — Dynamic UI and Scheduler integration
+### Current implementation — native AI SDK v7 (authoritative)
 
-**Depends on P2.** P3 consumes the shared encoder and validity rule delivered in P2; it must not add a UI or Scheduler path that P2 cannot validate.
+This subsection replaces P2 as the description of the live reasoning path. Verified against the working tree on 2026-11-04:
 
-**Deliverables**
+- **`low`, `medium`, `high`** are passed to `streamText` as the top-level `reasoning` option (`src/routes/chat/execute-direct-stream.ts:405-410`).
+- **`"off"` and an absent selection omit the `reasoning` property entirely** (`:407`). No disable, no `thinkingBudget: 0`, and no `reasoningEffort: "none"` is transmitted for `off`.
+- **Google `includeThoughts` is an additional provider option** (`src/routes/chat/provider-options.ts:34-51`): `{ google: { thinkingConfig: { includeThoughts: true } } }` is added while reasoning is active; the file chooses no effort or budget.
+- **Provider wire-format mapping belongs to AI SDK v7** and the installed provider adapters: effort fields, thinking budgets, and adaptive thinking are emitted by the SDK, not by TBAi.
+- **The four stored values remain the complete vocabulary:** `off`/absent, `low`, `medium`, `high`. Precedence is unchanged: request > conversation > provider `thinking` > `"off"` (`src/routes/chat/model.ts:54`).
+- **No model-specific reasoning metadata is ingested.** `ReasoningCapability` remains `{ support, levels? }`; `controls`, `source`, dynamic effort values (`xhigh`, `minimal`, `none`, `max`), budget presets, capability validation, and `allowed` refusals do not exist.
+- **The Scheduler is unchanged.** It still has its own inline encoder and four-level schema (`src/services/scheduler/schedulerExecution.ts:199-217`; `src/lib/validation.ts:560`).
+
+### P3 — Dynamic UI and Scheduler integration (DEFERRED — requires separate approval)
+
+> **Not scheduled and not authorized.** This phase depended on the superseded codec. Everything it proposed is deferred and requires a new, separately approved proposal that starts from the native implementation. Do not revive the old codec.
+
+**Deferred work (requires separate approval)**
+
+- Models.dev reasoning metadata ingestion (`reasoning_options`) and provenance (`controls`, `source`).
+- Dynamic selections beyond `off`/`low`/`medium`/`high`, including advertised effort values and `none`.
+- Exact-value validation with `allowed` refusals and a 400 contract.
+- Composer choices and `web/src/lib/reasoning-options.ts`; any change to `DirectChips.tsx` or `JobEditor.tsx`.
+- Scheduler adoption: widened request schema/types/validation, and replacing the inline encoder in `schedulerExecution.ts`.
+- The per-generation output cap and namespace fix are Scheduler work; they are deferred with the rest and are not part of an active phase.
+
+**Superseded deliverables (historical, not to be implemented)**
 
 - `web/src/lib/reasoning-options.ts`; composer and scheduler UI consume it.
 - Model-specific choices: exact advertised values, Provider default, budget presets, and `none` only where advertised and adapter-accepted.
@@ -1917,9 +1966,9 @@ Each phase is independently verifiable, leaves the tree green, and has a rollbac
 - Widen `schedulerJobCreateSchema.thinkingLevel`, `schedulerTypes.ts`, and the store's read/write type to the validated selection schema without changing the `thinking_level TEXT` column; `schedulerValidation.ts` validates the value against the job's model capability, and `JobEditor.tsx` offers the model-specific choices from `reasoning-options.ts`.
 - Preserve the Scheduler's existing scope limitations (no context budgeting, compaction, or loop-history reduction).
 
-**Exit criteria**
+**Superseded exit criteria (historical, not active)**
 
-- P2's backend encoder is present, and every rendered choice passes `allowedReasoningSelections`; the §13.7 matrix passes with UI choices equal to backend `allowed` for every provider × control row.
+- P2's backend encoder would be present, and every rendered choice would pass `allowedReasoningSelections`; the §13.7 matrix would pass with UI choices equal to backend `allowed` for every provider × control row.
 - Exact-values mode renders only values the selected adapter can encode; a value the backend would refuse is never offered.
 - `reasoning_options: []`, absent controls, and adapter-unencodable controls render one "Provider default" choice (stored `"off"`).
 - `reasoning: false` renders Off only.
@@ -1947,20 +1996,20 @@ Each phase is independently verifiable, leaves the tree green, and has a rollbac
 - Non-chat modalities remain excluded.
 - The change is its own commit; it does not alter provider-reported limits.
 
-### Out of scope — Scheduler context management (not P3)
+### Out of scope — Scheduler context management (not part of any active phase)
 
-P3 does **not** solve the Scheduler's context problem, and this plan does not claim it does. Four quantities are involved:
+No active phase solves the Scheduler's context problem, and this plan does not claim it does. Four quantities are involved:
 
-| Quantity | Scheduler today | Reusable infrastructure | In P3? |
+| Quantity | Scheduler today | Reusable infrastructure | In a future phase? |
 |---|---|---|---|
-| Per-generation output cap | absent | `resolveGenerationCap` / `ModelOption.maxOutputTokens` | **Yes** — `maxOutputTokens` |
+| Per-generation output cap | absent | `resolveGenerationCap` / `ModelOption.maxOutputTokens` | No active phase; deferred with Scheduler work |
 | Total context-window budgeting | absent | `resolveContextLimit` + `computeBudget` (pure) | No |
 | Accumulated tool-loop history | grows with every step (`stepCountIs(10)`) | none today; needs a reduction policy | No |
 | Compaction | absent | `assembleContext` compaction seam | No |
 
 `resolveContextLimit`, `computeBudget`, and `resolveGenerationCap` are pure and could be called by the Scheduler for its **initial** request without touching the chat pipeline. `assembleContext` is **not** a drop-in: it requires a `conversationId`, submitted messages, a terminal tap wired to the native `run_command` tool, a run signal, and a compaction store; the Scheduler has no terminal stream and a different, read-only tool set (`assemble-run.ts`).
 
-A follow-up item, separately authorized, would decide whether to (a) budget the first request with the pure functions and set its `generationCap`, and (b) add mid-loop history reduction. Until then, tool-loop growth is a **recorded limitation**, not a solved problem. Adding it to P3 would bundle an unrelated context-management redesign into the UI/Scheduler integration phase.
+A follow-up item, separately authorized, would decide whether to (a) budget the first request with the pure functions and set its `generationCap`, and (b) add mid-loop history reduction. Until then, tool-loop growth is a **recorded limitation**, not a solved problem. Attaching it to the deferred Scheduler work would bundle an unrelated context-management redesign into that future proposal.
 
 ### Cross-phase gates
 
@@ -2010,10 +2059,12 @@ Installed SDKs verified: `@ai-sdk/anthropic` 4.0.83, `@ai-sdk/google`, `@ai-sdk/
 
 ## Appendix B — Decisions resolved and remaining
 
+> **Status (Revision 2.4):** The reasoning entries below are retained as the audit record of the superseded proposal. They do **not** authorize implementation. The live native path is described in §15, "Current implementation — native AI SDK v7". Model-specific reasoning metadata and dynamic selections are deferred and require separate approval.
+
 **Resolved by Revision 2**
 
-1. **Anthropic effort encoding.** Installed `@ai-sdk/anthropic` 4.0.83 accepts top-level `effort` and `thinking: { type: "adaptive" }`. Effort-only catalogue rows are encoded that way, never as a synthetic budget. (Revision 1 left this open.)
-2. **Architecture size.** One new file and one moved file replace Revision 1's nine new files (four catalogue modules, one enrichment module, three reasoning modules, one shared UI helper). The shared UI helper survives as one small file because it has two real callers.
+1. **Anthropic effort encoding (historical).** Installed `@ai-sdk/anthropic` 4.0.83 accepts top-level `effort` and `thinking: { type: "adaptive" }`. The superseded proposal would have encoded effort-only catalogue rows that way; the native path now delegates this mapping to AI SDK v7. (Revision 1 left this open.)
+2. **Architecture size.** One new file (`modelCatalog.ts`) replaces Revision 1's nine. The moved codec and the shared UI helper belonged to the superseded reasoning proposal and are not part of any active phase (§15).
 3. **Freshness.** `discoveredAt` plus a whole-snapshot TTL; no per-model catalogue timestamps, no ETag, no disk cache.
 4. **Custom providers.** No enrichment, no new configuration field.
 5. **Advisory vs terminal for `model_catalog`.** Advisory, for the false-rejection reason in §3.4.
@@ -2030,7 +2081,7 @@ Installed SDKs verified: `@ai-sdk/anthropic` 4.0.83, `@ai-sdk/google`, `@ai-sdk/
 
 **Resolved by Revision 2.2**
 
-1. **`"off"` semantics.** `"off"` and an absent selection both mean Provider default and encode to `{}` before any provider branch. That is today's behaviour (`provider-options.ts:96`) and it is preserved; no stored value, column, or migration changes (R1).
+1. **`"off"` semantics.** `"off"` and an absent selection both mean Provider default and send nothing. That identity is preserved in the native path (`execute-direct-stream.ts:407` omits the `reasoning` option); no stored value, column, or migration changes (R1).
 2. **`none` versus `off`.** One visible explicit no-reasoning choice: the advertised `none` effort value, offered only on OpenAI native/compatible where the adapter encodes it. `off` is Provider default, not a disable. Four categories stay distinct: Provider default, advertised `none`, explicit disable, normal effort values. Explicit disable is not offered at all (R2).
 3. **Google disable.** No Off control and no inference from `budget_tokens.min`. `-1` is a valid upstream sentinel whose meaning is not assumed from the observed rows and is never treated as 0. Per-model zero-budget disabling is recorded but not offered (R3).
 4. **Anthropic disable.** No Off control and no inference from `toggle`. `between_tools` disables only upfront thinking and is never labelled a full disable. No `"on"` selection exists (R4).
