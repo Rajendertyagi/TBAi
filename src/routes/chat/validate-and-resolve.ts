@@ -208,9 +208,9 @@ export async function validateAndResolve(
 
   const languageModel = getModel(modelConfig);
   const reasoning = effectiveReasoning ?? provider.thinking ?? "off";
-  // Every provider quirk that decides whether reasoning is returned at all
-  // lives in that module — see it for why each option is shaped the way it is.
-  const providerOptions = buildReasoningProviderOptions(provider, modelConfig.model, reasoning);
+  // Provider-specific display options (e.g. Google includeThoughts).
+  // Reasoning effort itself is handled natively via streamText's top-level reasoning option.
+  const providerOptions = buildReasoningProviderOptions(provider, reasoning);
 
   // ── Manual `/compact` — intercepted ABOVE `chatRuns.create` ───────────────
   // A compaction command produces no assistant message, so it must not create a

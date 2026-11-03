@@ -210,8 +210,7 @@ function printOptionMatrix(): void {
   console.log("\n=== option matrix (offline, no provider or key needed) ===");
   for (const c of cases) {
     const options = buildReasoningProviderOptions(
-      { type: c.type, apiProtocol: c.apiProtocol },
-      c.model,
+      { type: c.type },
       c.level,
     );
     const built = JSON.stringify(options);
@@ -239,8 +238,7 @@ async function main(): Promise<void> {
   for (const { config, label } of providers) {
     const level = config.thinking ?? "off";
     const providerOptions = buildReasoningProviderOptions(
-      { type: config.type, apiProtocol: config.apiProtocol },
-      config.model,
+      { type: config.type },
       level,
     );
 
@@ -248,6 +246,9 @@ async function main(): Promise<void> {
       streamText({
         model: getModel(config as never),
         messages: [{ role: "user", content: "hi" }],
+        ...(level !== "off" && (level === "low" || level === "medium" || level === "high")
+          ? { reasoning: level }
+          : {}),
         providerOptions: providerOptions as never,
       }).consumeStream(),
     );

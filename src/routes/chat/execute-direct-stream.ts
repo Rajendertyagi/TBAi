@@ -402,6 +402,11 @@ export async function executeDirectStream(
           messages: modelMessages,
           maxRetries: DIRECT_MAX_RETRIES,
           streamRetries: DIRECT_STREAM_RETRIES,
+          // Native AI SDK v7 portable reasoning effort option:
+          // "low", "medium", "high" are passed natively; "off" omits the option.
+          ...(reasoning !== "off" && (reasoning === "low" || reasoning === "medium" || reasoning === "high")
+            ? { reasoning }
+            : {}),
           // Layer A is owned by the assembly seam. The route spreads the seam's
           // options and never names the `instructions` key, so the Direct path has
           // exactly one system-prompt seam (asserted by
