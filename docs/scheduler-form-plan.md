@@ -1,7 +1,9 @@
 # TBAi Shared AI Capability & Configuration Layer — Reconciled Architecture Plan
 
 > [!WARNING]
-> **SUPERSEDED FOR REASONING EFFORT:** The proposed complex reasoning codec and prefixed selection designs in this plan are superseded. Direct Chat reasoning effort uses the simplified AI SDK v7 native options and provider options (see `src/routes/chat/provider-options.ts`).
+> **SUPERSEDED FOR REASONING EFFORT:** The proposed complex reasoning codec, dynamic token-budget controls, and prefixed selection designs in this plan are superseded.
+> - **No Thinking Budget / Token Count Controls:** Numeric token-budget inputs/sliders are completely dropped. The UI and API retain strictly 4 discrete effort levels: Default (stored as `"off"`), Low, Medium, High, matching native AI SDK v7 effort semantics.
+> - **Direct Chat Reference:** See `src/routes/chat/provider-options.ts`.
 
 **Status:** revision 5 (Fully reconciled with Deep Audit Revision 2.3 canonical contract). **No implementation performed.**
 **Scope of this document:** `scheduler-form-plan.md` only.
