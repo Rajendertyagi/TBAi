@@ -404,7 +404,8 @@ export async function executeDirectStream(
           streamRetries: DIRECT_STREAM_RETRIES,
           // Native AI SDK v7 portable reasoning effort option:
           // "low", "medium", "high" are passed natively; "off" omits the option.
-          ...(reasoning !== "off" && (reasoning === "low" || reasoning === "medium" || reasoning === "high")
+          ...(reasoning !== "off" &&
+          (reasoning === "low" || reasoning === "medium" || reasoning === "high")
             ? { reasoning }
             : {}),
           // Layer A is owned by the assembly seam. The route spreads the seam's

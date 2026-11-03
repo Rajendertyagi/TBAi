@@ -209,10 +209,7 @@ function printOptionMatrix(): void {
   ];
   console.log("\n=== option matrix (offline, no provider or key needed) ===");
   for (const c of cases) {
-    const options = buildReasoningProviderOptions(
-      { type: c.type },
-      c.level,
-    );
+    const options = buildReasoningProviderOptions({ type: c.type }, c.level);
     const built = JSON.stringify(options);
     console.log(
       `  ${c.type.padEnd(9)} ${c.model.padEnd(22)} ${c.level.padEnd(4)} -> ${built === "{}" ? "(none)" : built}  [${c.why}]`,
@@ -237,10 +234,7 @@ async function main(): Promise<void> {
 
   for (const { config, label } of providers) {
     const level = config.thinking ?? "off";
-    const providerOptions = buildReasoningProviderOptions(
-      { type: config.type },
-      level,
-    );
+    const providerOptions = buildReasoningProviderOptions({ type: config.type }, level);
 
     const body = await captureRequestBody(() =>
       streamText({
@@ -258,7 +252,9 @@ async function main(): Promise<void> {
     console.log(`  options built    : ${JSON.stringify(providerOptions)}`);
     console.log(`  request carries  : ${findReasoningInBody(body)}`);
     if (level === "off") {
-      console.log(`  NOTE             : level is "off" — no reasoning will ever appear`);
+      console.log(
+        `  NOTE             : level is "off" — no explicit reasoning override sent; provider-default behavior applies`,
+      );
     }
     if (live) {
       console.log(`  live             : ${await probeLive(config, providerOptions)}`);

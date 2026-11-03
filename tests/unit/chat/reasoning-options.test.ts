@@ -68,7 +68,8 @@ describe("reasoning implementation (native AI SDK v7)", () => {
           messages: [{ role: "user", content: "hello" }],
           reasoning: "high",
         });
-        for await (const _chunk of res.textStream) {}
+        for await (const _chunk of res.textStream) {
+        }
       } catch {}
 
       expect(interceptedBody?.reasoning).toEqual({
@@ -98,7 +99,8 @@ describe("reasoning implementation (native AI SDK v7)", () => {
           messages: [{ role: "user", content: "hello" }],
           reasoning: "medium",
         });
-        for await (const _chunk of res.textStream) {}
+        for await (const _chunk of res.textStream) {
+        }
       } catch {}
 
       // For Claude 3.7, AI SDK v7 resolves native reasoning to extended thinking:
@@ -131,16 +133,15 @@ describe("reasoning implementation (native AI SDK v7)", () => {
           reasoning: "high",
           providerOptions,
         });
-        for await (const _chunk of res.textStream) {}
+        for await (const _chunk of res.textStream) {
+        }
       } catch {}
 
       expect(interceptedBody?.generationConfig?.thinkingConfig?.includeThoughts).toBe(true);
       expect(typeof interceptedBody?.generationConfig?.thinkingConfig?.thinkingBudget).toBe(
         "number",
       );
-      expect(
-        interceptedBody?.generationConfig?.thinkingConfig?.thinkingBudget,
-      ).toBeGreaterThan(0);
+      expect(interceptedBody?.generationConfig?.thinkingConfig?.thinkingBudget).toBeGreaterThan(0);
     });
 
     it("omits reasoning property entirely when reasoning is 'off'", async () => {
@@ -161,7 +162,8 @@ describe("reasoning implementation (native AI SDK v7)", () => {
           model,
           messages: [{ role: "user", content: "hello" }],
         });
-        for await (const _chunk of res.textStream) {}
+        for await (const _chunk of res.textStream) {
+        }
       } catch {}
 
       expect(interceptedBody?.reasoning).toBeUndefined();
