@@ -1,10 +1,8 @@
-# Phase P2 Implementation Plan: Shared Reasoning Codec & Metadata Discovery
+# Phase P2 Implementation Plan: Shared Reasoning Codec & Metadata Discovery (SUPERSEDED)
 
-**Status:** Plan only (Implementation authorization NOT GRANTED).  
-**Repository:** `Rajendertyagi/TBAi`  
-**Branch:** `ci/tauri-e2e-verify`  
-**Baseline HEAD:** `a8ceec93e7842b5552a038e979ab97abb9532b71` (`a8ceec9`)  
-**Canonical Authority:** `docs/2026-11-03-model-metadata-deep-audit.md` (Revision 2.3 is normative).
+> [!WARNING]
+> **SUPERSEDED:** This proposal has been cancelled in favor of direct AI SDK v7 integration with minimum custom code.
+> See Direct Chat implementation in `src/routes/chat/provider-options.ts`.
 
 ---
 

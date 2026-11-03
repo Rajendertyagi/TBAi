@@ -45,13 +45,6 @@ const GEMINI_LEVEL: Readonly<Record<string, "minimal" | "low" | "medium" | "high
   high: "high",
 };
 
-/** Token budgets for Anthropic extended thinking. */
-const ANTHROPIC_BUDGET: Readonly<Record<string, number>> = {
-  low: 1024,
-  medium: 4096,
-  high: 8192,
-};
-
 /** Reasoning effort for OpenAI-family models. */
 const OPENAI_EFFORT: Readonly<Record<string, string>> = {
   low: "low",
@@ -126,9 +119,9 @@ export function buildReasoningProviderOptions(
     if (isLite) return {};
     return {
       anthropic: {
+        effort: reasoning,
         thinking: {
-          type: "enabled",
-          budgetTokens: ANTHROPIC_BUDGET[reasoning] ?? 4096,
+          type: "adaptive",
         },
       },
     };

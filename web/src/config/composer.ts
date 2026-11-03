@@ -19,7 +19,7 @@ export const composerConfig = {
      * it; calling the off state "Default" hid the fact that no thinking would
      * happen at all.
      */
-    thinkingOff: "Off",
+    thinkingOff: "Default",
     thinkingLow: "Low",
     thinkingMedium: "Medium",
     thinkingHigh: "High",
