@@ -4,7 +4,8 @@
 > **SUPERSEDED & SIMPLIFIED:** This proposal has been cancelled in favor of direct AI SDK v7 native integration with minimum custom code.
 > - **No Thinking Budget / Token Count Controls:** Numeric token budget controls and inputs are completely dropped. The UI and API retain strictly the 4 discrete levels: Default (stored as `"off"`), Low, Medium, High.
 > - **Matches Native AI SDK v7:** Native `reasoning` effort levels (`"low"`, `"medium"`, `"high"`) are handled natively or through minimal providerOptions in `src/routes/chat/provider-options.ts`.
-> - **No Code Changes Required for Simplification:** Direct Chat and the composer already use this 4-level model. No numeric inputs or sliders exist.
+> - **Local Ollama Named Levels:** Local Ollama models using standard effort levels work out of the box via Ollama's OpenAI-compatible mapping. Any custom model-specific named levels from `/api/show` (e.g. `"turbo"`) are documented as a potential future additive discovery enhancement only; no current code changes are made.
+> - **No Code Changes Required:** Direct Chat and the composer already use this 4-level model. No numeric inputs or sliders exist.
 
 ---
 
