@@ -194,7 +194,9 @@ export function decideBudget(input: {
   // Tier 2 still bounds these requests unconditionally (`tier2.ts`), so this is not
   // an unbounded relaxation.
   const advisoryCeiling =
-    input.limitSource === "conservative_default" || input.limitSource === "unknown";
+    input.limitSource === "conservative_default" ||
+    input.limitSource === "unknown" ||
+    input.limitSource === "model_catalog";
 
   if (usable === undefined) {
     // No enforceable ceiling, so there is no budget to enforce and no verdict to

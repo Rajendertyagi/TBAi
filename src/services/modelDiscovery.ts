@@ -10,6 +10,7 @@ import {
   type ModelOption,
   type ProviderConfig,
 } from "../types";
+import { enrichModels } from "./modelCatalog";
 
 export type DiscoverInput = {
   type: ProviderConfig["type"];
@@ -267,13 +268,15 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
   // and a listing cannot be half fresh and half stale.
   const discoveredAt = input.now?.() ?? Date.now();
 
+  let discovered: ModelOption[];
   switch (type) {
     case "openai":
     case "custom": {
       const headers: Record<string, string> = {};
       if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
       const raw = await fetchJson(joinBase(base, "models"), { headers });
-      return normalizeOpenAI(raw, type, discoveredAt);
+      discovered = normalizeOpenAI(raw, type, discoveredAt);
+      break;
     }
     case "anthropic": {
       if (!apiKey) throw new Error("An API key is required to discover Anthropic models.");
@@ -282,23 +285,28 @@ export async function discoverModels(input: DiscoverInput): Promise<ModelOption[
         "anthropic-version": "2023-06-01",
       };
       const raw = await fetchJson(joinBase(base, "v1/models"), { headers });
-      return normalizeAnthropic(raw, type, discoveredAt);
+      discovered = normalizeAnthropic(raw, type, discoveredAt);
+      break;
     }
     case "google": {
       if (!apiKey) throw new Error("An API key is required to discover Google models.");
       const url = `${joinBase(base, "v1beta/models")}?key=${encodeURIComponent(apiKey)}`;
       const raw = await fetchJson(url, {});
-      return normalizeGoogle(raw, type, discoveredAt);
+      discovered = normalizeGoogle(raw, type, discoveredAt);
+      break;
     }
     case "ollama": {
       const raw = await fetchJson(joinBase(base, "api/tags"), {});
       const ids = normalizeOllama(raw);
-      return mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => {
+      discovered = await mapWithConcurrency(ids, OLLAMA_SHOW_CONCURRENCY, async (id) => {
         const { capabilities, limits } = await fetchOllamaModel(base, id);
         return withExtractedLimits({ id, provider: type, capabilities }, limits, discoveredAt);
       });
+      break;
     }
     default:
       throw new Error(`Model discovery is not supported for type: ${type}`);
   }
+
+  return enrichModels(discovered, { type, endpoint });
 }

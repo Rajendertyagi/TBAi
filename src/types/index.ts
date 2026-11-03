@@ -43,7 +43,11 @@ export interface ModelCapabilities {
  * This mirrors `CapabilitySupport` deliberately: a producer must take an
  * explicit stance, and absence of a stance is never a licence to assume one.
  */
-export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured"] as const;
+export const CONTEXT_WINDOW_SOURCES = [
+  "provider_reported",
+  "configured",
+  "model_catalog",
+] as const;
 export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
 
 /** The numeric half of a limit, always carrying the stance that produced it. */
@@ -73,6 +77,14 @@ export function providerReportedLimit(value: number): SourcedNumber {
  */
 export function configuredLimit(value: number): SourcedNumber {
   return { value, source: "configured" };
+}
+
+/**
+ * Build a `model_catalog` limit. Used by model catalog enrichment — third party
+ * metadata from Models.dev.
+ */
+export function catalogLimit(value: number): SourcedNumber {
+  return { value, source: "model_catalog" };
 }
 
 export interface ModelOption {

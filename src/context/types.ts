@@ -100,6 +100,8 @@ export type LimitSource =
   | "provider_reported"
   /** A figure a human configured for this installation. */
   | "configured"
+  /** A figure from a third-party model catalogue (Models.dev). */
+  | "model_catalog"
   /**
    * A figure the provider stated while rejecting an over-long request.
    *

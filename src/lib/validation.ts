@@ -22,7 +22,7 @@ export const modelCapabilitiesSchema = z.object({
  * resolver outputs, not facts about a model, so persisting them would assert
  * something no source said.
  */
-export const contextWindowSourceSchema = z.enum(["provider_reported", "configured"]);
+export const contextWindowSourceSchema = z.enum(["provider_reported", "configured", "model_catalog"]);
 
 export const modelOptionSchema = z.object({
   id: z.string().min(1).max(200),

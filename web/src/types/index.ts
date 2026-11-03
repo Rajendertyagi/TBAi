@@ -16,7 +16,7 @@ export interface ModelCapabilities {
  * listing or from a human. The resolver's `conservative_default` and `unknown`
  * are never facts about a model, so they are never persisted against one.
  */
-export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured"] as const;
+export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured", "model_catalog"] as const;
 export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
 
 export interface SourcedNumber {
@@ -40,6 +40,14 @@ export function providerReportedLimit(value: number): SourcedNumber {
  */
 export function configuredLimit(value: number): SourcedNumber {
   return { value, source: "configured" };
+}
+
+/**
+ * Build a `model_catalog` limit. Used by model catalog enrichment — third party
+ * metadata from Models.dev.
+ */
+export function catalogLimit(value: number): SourcedNumber {
+  return { value, source: "model_catalog" };
 }
 
 export interface ModelOption {
