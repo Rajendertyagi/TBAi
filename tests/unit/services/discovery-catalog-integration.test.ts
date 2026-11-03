@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import { describe, expect, it } from "bun:test";
-import { discoverModels } from "@/services/modelDiscovery";
 import { _resetModelCatalogCache } from "@/services/modelCatalog";
+import { discoverModels } from "@/services/modelDiscovery";
 
 describe("discovery and chat execution isolation from models.dev", () => {
   it("discovery succeeds and returns provider models even when models.dev is down", async () => {
@@ -41,7 +42,6 @@ describe("discovery and chat execution isolation from models.dev", () => {
 
   it("chat execution path does not import or invoke modelCatalog", async () => {
     // Assert statically that the direct chat execution files do not import modelCatalog
-    const fs = await import("fs");
     const chatFiles = [
       "src/routes/chat/assemble-run.ts",
       "src/routes/chat/execute-direct-stream.ts",

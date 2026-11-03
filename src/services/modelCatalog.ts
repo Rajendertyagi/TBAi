@@ -20,14 +20,16 @@ const DEFAULT_ENDPOINTS: Record<string, string> = {
   google: "https://generativelanguage.googleapis.com",
 };
 
-/** Normalized catalogue limit figures for one model. */
+/** Recognized core providers required for a valid catalog payload. */
+export const RECOGNIZED_PROVIDERS = ["openai", "anthropic", "google"] as const;
+
+/** Normalized catalogue limit figures for one model (P1 context window only). */
 export interface NormalizedCatalogModel {
   readonly contextWindow?: number;
-  readonly maxOutputTokens?: number;
 }
 
 /** In-memory cache snapshot. */
-interface CatalogCache {
+export interface CatalogCache {
   fetchedAt: number;
   // Key: providerKey -> modelId -> NormalizedCatalogModel
   providers: Map<string, Map<string, NormalizedCatalogModel>>;
@@ -75,8 +77,8 @@ function parseTokenLimit(val: unknown): number | undefined {
 
 /**
  * Normalizes raw model limit object from Models.dev:
- * maxInputTokens = min(context, input) when both are present, or input ?? context.
- * output = output limit when positive integer.
+ * contextWindow = min(context, input) when both are valid positive integers.
+ * If input is unusable (e.g. 0), falls back to context.
  */
 export function normalizeCatalogLimits(rawModel: Record<string, unknown> | null | undefined): NormalizedCatalogModel {
   if (!rawModel || typeof rawModel !== "object") return {};
@@ -85,7 +87,6 @@ export function normalizeCatalogLimits(rawModel: Record<string, unknown> | null 
 
   const context = parseTokenLimit(limitObj.context);
   const input = parseTokenLimit(limitObj.input);
-  const output = parseTokenLimit(limitObj.output);
 
   let contextWindow: number | undefined;
   if (context !== undefined && input !== undefined) {
@@ -94,14 +95,76 @@ export function normalizeCatalogLimits(rawModel: Record<string, unknown> | null 
     contextWindow = input ?? context;
   }
 
-  return {
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(output !== undefined ? { maxOutputTokens: output } : {}),
-  };
+  return contextWindow !== undefined ? { contextWindow } : {};
 }
 
 /**
- * Fetches and normalizes the Models.dev catalog with TTL, deduplication, and last-known-good fallback.
+ * TBAi Ingestion Subset Validator.
+ *
+ * Enforces structural integrity of the provider envelope subset consumed by TBAi:
+ * 1. Root is a non-null, non-array object.
+ * 2. All recognized core providers ('openai', 'anthropic', 'google') must be present.
+ * 3. Each recognized provider must have a non-empty `models` object.
+ * 4. Each model entry must have a valid `limit` object where `limit.context` is a non-negative finite number.
+ * 5. If `limit.input` is present, it must also be a non-negative finite number (structural failure rejects payload).
+ */
+export function isValidCatalogPayload(
+  data: unknown,
+): data is Record<string, { models: Record<string, { limit: { context: number; input?: number } }> }> {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+
+  const root = data as Record<string, unknown>;
+
+  for (const providerKey of RECOGNIZED_PROVIDERS) {
+    const providerEntry = root[providerKey];
+    if (!providerEntry || typeof providerEntry !== "object" || Array.isArray(providerEntry)) {
+      return false;
+    }
+
+    const models = (providerEntry as { models?: unknown }).models;
+    if (!models || typeof models !== "object" || Array.isArray(models)) {
+      return false;
+    }
+
+    const modelEntries = Object.entries(models as Record<string, unknown>);
+    if (modelEntries.length === 0) {
+      return false;
+    }
+
+    for (const [, rawModel] of modelEntries) {
+      if (!rawModel || typeof rawModel !== "object" || Array.isArray(rawModel)) {
+        return false;
+      }
+
+      const limit = (rawModel as { limit?: unknown }).limit;
+      if (!limit || typeof limit !== "object" || Array.isArray(limit)) {
+        return false;
+      }
+
+      const limitObj = limit as Record<string, unknown>;
+      // Upstream schema: limit.context is required and non-negative
+      if (typeof limitObj.context !== "number" || !Number.isFinite(limitObj.context) || limitObj.context < 0) {
+        return false;
+      }
+
+      // Upstream schema: limit.input is optional; if present, must be non-negative number
+      if (
+        limitObj.input !== undefined &&
+        (typeof limitObj.input !== "number" || !Number.isFinite(limitObj.input) || limitObj.input < 0)
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Fetches and normalizes the Models.dev catalog with TTL, deduplication, atomic cache replacement,
+ * and last-known-good fallback.
  */
 export async function getModelCatalog(options?: {
   fetchFn?: typeof fetch;
@@ -128,29 +191,34 @@ export async function getModelCatalog(options?: {
       if (!res.ok) {
         throw new Error(`Models.dev returned status ${res.status}`);
       }
-      const data = (await res.json()) as Record<string, unknown>;
-      if (!data || typeof data !== "object") {
-        throw new Error("Models.dev payload is not an object");
+      const data: unknown = await res.json();
+
+      if (!isValidCatalogPayload(data)) {
+        throw new Error("Models.dev payload failed structural schema validation");
       }
 
       const providersMap = new Map<string, Map<string, NormalizedCatalogModel>>();
+      let totalNormalizedModels = 0;
 
-      for (const [providerKey, providerVal] of Object.entries(data)) {
-        if (!providerVal || typeof providerVal !== "object") continue;
-        const modelsObj = (providerVal as { models?: Record<string, unknown> }).models;
-        if (!modelsObj || typeof modelsObj !== "object") continue;
-
+      for (const providerKey of RECOGNIZED_PROVIDERS) {
+        const providerVal = data[providerKey];
         const modelMap = new Map<string, NormalizedCatalogModel>();
-        for (const [modelId, rawModel] of Object.entries(modelsObj)) {
-          if (!rawModel || typeof rawModel !== "object") continue;
+
+        for (const [modelId, rawModel] of Object.entries(providerVal.models)) {
           const normalized = normalizeCatalogLimits(rawModel as Record<string, unknown>);
-          if (normalized.contextWindow !== undefined || normalized.maxOutputTokens !== undefined) {
+          if (normalized.contextWindow !== undefined) {
             modelMap.set(modelId, normalized);
+            totalNormalizedModels++;
           }
         }
         providersMap.set(providerKey, modelMap);
       }
 
+      if (totalNormalizedModels === 0) {
+        throw new Error("Models.dev payload contained no models with usable positive-integer context limits");
+      }
+
+      // Atomic cache replacement only after full validation and normalization
       cachedCatalog = {
         fetchedAt: now,
         providers: providersMap,
@@ -209,8 +277,6 @@ export async function enrichModels(
 
     let nextContext = model.contextWindow;
     let nextContextSource = model.contextWindowSource;
-    let nextMaxOutput = model.maxOutputTokens;
-    let nextMaxOutputSource = model.maxOutputTokensSource;
 
     // Only set contextWindow if not already reported by provider or configured by user
     if (
@@ -223,22 +289,9 @@ export async function enrichModels(
       nextContextSource = sourced.source;
     }
 
-    // Only set maxOutputTokens if not already present
-    if (
-      nextMaxOutput === undefined &&
-      nextMaxOutputSource === undefined &&
-      catalogData.maxOutputTokens !== undefined
-    ) {
-      const sourced = catalogLimit(catalogData.maxOutputTokens);
-      nextMaxOutput = sourced.value;
-      nextMaxOutputSource = sourced.source;
-    }
-
     if (
       nextContext === model.contextWindow &&
-      nextContextSource === model.contextWindowSource &&
-      nextMaxOutput === model.maxOutputTokens &&
-      nextMaxOutputSource === model.maxOutputTokensSource
+      nextContextSource === model.contextWindowSource
     ) {
       return model;
     }
@@ -247,8 +300,6 @@ export async function enrichModels(
       ...model,
       ...(nextContext !== undefined ? { contextWindow: nextContext } : {}),
       ...(nextContextSource !== undefined ? { contextWindowSource: nextContextSource } : {}),
-      ...(nextMaxOutput !== undefined ? { maxOutputTokens: nextMaxOutput } : {}),
-      ...(nextMaxOutputSource !== undefined ? { maxOutputTokensSource: nextMaxOutputSource } : {}),
     };
   });
 }

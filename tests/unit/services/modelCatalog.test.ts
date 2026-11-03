@@ -4,11 +4,29 @@ import {
   enrichModels,
   getModelCatalog,
   isEligibleForCatalogEnrichment,
+  isValidCatalogPayload,
   normalizeCatalogLimits,
   CATALOG_TTL_MS,
-  CATALOG_FETCH_TIMEOUT_MS,
 } from "@/services/modelCatalog";
 import type { ModelOption } from "@/types";
+
+const createValidMockPayload = () => ({
+  openai: {
+    models: {
+      "gpt-4o": { limit: { context: 128000, input: 128000 } },
+    },
+  },
+  anthropic: {
+    models: {
+      "claude-3-5-sonnet-20241022": { limit: { context: 200000 } },
+    },
+  },
+  google: {
+    models: {
+      "gemini-1.5-pro": { limit: { context: 2000000 } },
+    },
+  },
+});
 
 describe("modelCatalog service", () => {
   beforeEach(() => {
@@ -41,15 +59,8 @@ describe("modelCatalog service", () => {
       expect(isEligibleForCatalogEnrichment({ type: "google", endpoint: "https://custom-google.internal" })).toBeNull();
     });
 
-    it("enriches matching model id case-sensitively and leaves unmatched models unchanged", async () => {
-      const mockPayload = {
-        openai: {
-          models: {
-            "gpt-4o": { limit: { context: 128000, input: 128000, output: 4096 } },
-          },
-        },
-      };
-
+    it("enriches matching model id case-sensitively and leaves unmatched models unchanged (context window only)", async () => {
+      const mockPayload = createValidMockPayload();
       const mockFetch = async () => new Response(JSON.stringify(mockPayload), { status: 200 });
 
       const models: ModelOption[] = [
@@ -62,29 +73,100 @@ describe("modelCatalog service", () => {
 
       expect(enriched[0].contextWindow).toBe(128000);
       expect(enriched[0].contextWindowSource).toBe("model_catalog");
-      expect(enriched[0].maxOutputTokens).toBe(4096);
-      expect(enriched[0].maxOutputTokensSource).toBe("model_catalog");
+      // Output limits must NOT be touched in P1
+      expect(enriched[0].maxOutputTokens).toBeUndefined();
+      expect(enriched[0].maxOutputTokensSource).toBeUndefined();
 
       expect(enriched[1].contextWindow).toBeUndefined();
       expect(enriched[2].contextWindow).toBeUndefined();
     });
   });
 
+  describe("structural payload validation (isValidCatalogPayload)", () => {
+    it("validates a structurally compliant payload", () => {
+      expect(isValidCatalogPayload(createValidMockPayload())).toBe(true);
+    });
+
+    it("rejects null, non-objects, arrays, and empty root", () => {
+      expect(isValidCatalogPayload(null)).toBe(false);
+      expect(isValidCatalogPayload(undefined)).toBe(false);
+      expect(isValidCatalogPayload("string")).toBe(false);
+      expect(isValidCatalogPayload(123)).toBe(false);
+      expect(isValidCatalogPayload([])).toBe(false);
+      expect(isValidCatalogPayload({})).toBe(false);
+    });
+
+    it("rejects payload missing any recognized core provider (e.g. OpenAI-only payload)", () => {
+      const openAiOnly = {
+        openai: {
+          models: { "gpt-4o": { limit: { context: 128000 } } },
+        },
+      };
+      expect(isValidCatalogPayload(openAiOnly)).toBe(false);
+    });
+
+    it("rejects payload when a recognized provider has an empty models map", () => {
+      const payload = createValidMockPayload();
+      (payload as any).anthropic.models = {};
+      expect(isValidCatalogPayload(payload)).toBe(false);
+    });
+
+    it("rejects payload when limit.context is negative, non-finite, or not a number", () => {
+      const negPayload = createValidMockPayload();
+      (negPayload.openai.models["gpt-4o"] as any).limit.context = -1;
+      expect(isValidCatalogPayload(negPayload)).toBe(false);
+
+      const nanPayload = createValidMockPayload();
+      (nanPayload.openai.models["gpt-4o"] as any).limit.context = NaN;
+      expect(isValidCatalogPayload(nanPayload)).toBe(false);
+
+      const strPayload = createValidMockPayload();
+      (strPayload.openai.models["gpt-4o"] as any).limit.context = "128000";
+      expect(isValidCatalogPayload(strPayload)).toBe(false);
+    });
+
+    it("rejects payload when limit.input is present but negative, non-finite, or not a number", () => {
+      const negInputPayload = createValidMockPayload();
+      (negInputPayload.openai.models["gpt-4o"] as any).limit.input = -500;
+      expect(isValidCatalogPayload(negInputPayload)).toBe(false);
+
+      const strInputPayload = createValidMockPayload();
+      (strInputPayload.openai.models["gpt-4o"] as any).limit.input = "128k";
+      expect(isValidCatalogPayload(strInputPayload)).toBe(false);
+    });
+
+    it("accepts payload when limit.context is 0 (structurally non-negative, though unusable in TBAi)", () => {
+      const zeroPayload = createValidMockPayload();
+      (zeroPayload.openai.models["gpt-4o"] as any).limit.context = 0;
+      expect(isValidCatalogPayload(zeroPayload)).toBe(true);
+    });
+  });
+
   describe("context and input normalization", () => {
     it("uses min(context, input) when input is smaller than context", () => {
       const res = normalizeCatalogLimits({
-        limit: { context: 400000, input: 272000, output: 128000 },
+        limit: { context: 400000, input: 272000 },
       });
       expect(res.contextWindow).toBe(272000);
-      expect(res.maxOutputTokens).toBe(128000);
     });
 
     it("uses context when input is larger than context (anomalous row)", () => {
       const res = normalizeCatalogLimits({
-        limit: { context: 64000, input: 256000, output: 4096 },
+        limit: { context: 64000, input: 256000 },
       });
       expect(res.contextWindow).toBe(64000);
-      expect(res.maxOutputTokens).toBe(4096);
+    });
+
+    it("falls back to context when input is 0 or non-integer float (structurally valid but unusable)", () => {
+      const resZero = normalizeCatalogLimits({
+        limit: { context: 128000, input: 0 },
+      });
+      expect(resZero.contextWindow).toBe(128000);
+
+      const resFloat = normalizeCatalogLimits({
+        limit: { context: 128000, input: 128000.5 },
+      });
+      expect(resFloat.contextWindow).toBe(128000);
     });
 
     it("uses input when context is missing", () => {
@@ -92,7 +174,6 @@ describe("modelCatalog service", () => {
         limit: { input: 128000 },
       });
       expect(res.contextWindow).toBe(128000);
-      expect(res.maxOutputTokens).toBeUndefined();
     });
 
     it("uses context when input is missing", () => {
@@ -100,7 +181,6 @@ describe("modelCatalog service", () => {
         limit: { context: 128000 },
       });
       expect(res.contextWindow).toBe(128000);
-      expect(res.maxOutputTokens).toBeUndefined();
     });
 
     it("rejects non-positive, non-integer, and non-numeric limits", () => {
@@ -118,11 +198,10 @@ describe("modelCatalog service", () => {
   describe("cache TTL, deduplication, timeout, and last-known-good behavior", () => {
     it("caches results for the duration of the TTL", async () => {
       let fetchCount = 0;
+      const mockPayload = createValidMockPayload();
       const mockFetch = async () => {
         fetchCount++;
-        return new Response(JSON.stringify({ openai: { models: { "gpt-4o": { limit: { context: 128000 } } } } }), {
-          status: 200,
-        });
+        return new Response(JSON.stringify(mockPayload), { status: 200 });
       };
 
       let time = 1_000_000;
@@ -144,12 +223,11 @@ describe("modelCatalog service", () => {
 
     it("deduplicates in-flight concurrent requests", async () => {
       let fetchCount = 0;
+      const mockPayload = createValidMockPayload();
       const mockFetch = async () => {
         fetchCount++;
         await new Promise((r) => setTimeout(r, 20));
-        return new Response(JSON.stringify({ openai: { models: { "gpt-4o": { limit: { context: 128000 } } } } }), {
-          status: 200,
-        });
+        return new Response(JSON.stringify(mockPayload), { status: 200 });
       };
 
       const [res1, res2, res3] = await Promise.all([
@@ -163,13 +241,17 @@ describe("modelCatalog service", () => {
       expect(res2).toBe(res3);
     });
 
-    it("returns last-known-good when refresh fails", async () => {
-      let fail = false;
+    it("returns last-known-good when refresh fails with network error or malformed payload", async () => {
+      let malformed = false;
+      const validPayload = createValidMockPayload();
       const mockFetch = async () => {
-        if (fail) throw new Error("Network down");
-        return new Response(JSON.stringify({ openai: { models: { "gpt-4o": { limit: { context: 128000 } } } } }), {
-          status: 200,
-        });
+        if (malformed) {
+          // Returns incomplete payload missing Anthropic & Google
+          return new Response(JSON.stringify({ openai: { models: { "gpt-4o": { limit: { context: 128000 } } } } }), {
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify(validPayload), { status: 200 });
       };
 
       let time = 1_000_000;
@@ -178,15 +260,16 @@ describe("modelCatalog service", () => {
       const first = await getModelCatalog({ fetchFn: mockFetch as any, now });
       expect(first).not.toBeNull();
       expect(first?.providers.get("openai")?.get("gpt-4o")?.contextWindow).toBe(128000);
+      expect(first?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow).toBe(200000);
 
-      // Expire TTL and fail next fetch
+      // Expire TTL and attempt refresh with partial payload
       time += CATALOG_TTL_MS + 1000;
-      fail = true;
+      malformed = true;
 
       const second = await getModelCatalog({ fetchFn: mockFetch as any, now });
-      // Retains cached data
+      // Retains complete cached data from first run
       expect(second).toBe(first);
-      expect(second?.providers.get("openai")?.get("gpt-4o")?.contextWindow).toBe(128000);
+      expect(second?.providers.get("anthropic")?.get("claude-3-5-sonnet-20241022")?.contextWindow).toBe(200000);
     });
 
     it("returns null gracefully if initial fetch fails without prior snapshot", async () => {
@@ -200,13 +283,7 @@ describe("modelCatalog service", () => {
 
   describe("enrichment non-overwriting guarantees", () => {
     it("does not overwrite existing provider_reported or configured values", async () => {
-      const mockPayload = {
-        openai: {
-          models: {
-            "gpt-4o": { limit: { context: 128000, output: 4096 } },
-          },
-        },
-      };
+      const mockPayload = createValidMockPayload();
       const mockFetch = async () => new Response(JSON.stringify(mockPayload), { status: 200 });
 
       const models: ModelOption[] = [
