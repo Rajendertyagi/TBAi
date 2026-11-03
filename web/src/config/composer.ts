@@ -14,10 +14,8 @@ export const composerConfig = {
     nextMessage: (provider: string, model: string) => `Next message: ${provider} · ${model}`,
     thinking: "Thinking",
     /**
-     * `Off` is a real, selectable level — not a "default" placeholder. The
-     * effective level is always one of these four, so the chip can always name
-     * it; calling the off state "Default" hid the fact that no thinking would
-     * happen at all.
+     * Stored `"off"` means no explicit reasoning override is sent; the
+     * provider uses its default behavior. Displayed as "Default" in the composer.
      */
     thinkingOff: "Default",
     thinkingLow: "Low",

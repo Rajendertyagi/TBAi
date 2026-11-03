@@ -1,5 +1,8 @@
 # TBAi — Models.dev Integration: Deep Audit and Simplified Plan
 
+> [!WARNING]
+> **SUPERSEDED FOR REASONING EFFORT:** The proposed custom reasoning codec, discovery metadata framework, and prefixed selection schemas outlined in this document are superseded. Direct Chat reasoning effort uses the simplified, library-first implementation driven by AI SDK v7 native options and providerOptions (see `src/routes/chat/provider-options.ts`).
+
 **Revision:** 2.3 — scoped corrections to Revision 2.2
 **Date:** 2026-11-03
 **Status:** Investigation and planning only. No source file, test, schema, dependency, or configuration was modified. No migration was run. Nothing was committed or pushed.
