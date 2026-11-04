@@ -3,7 +3,7 @@
 > [!WARNING]
 > **SUPERSEDED FOR REASONING EFFORT — HISTORICAL, NOT AN ACTIVE PLAN.** The proposed custom reasoning codec, Models.dev reasoning-metadata discovery framework, prefixed/dynamic selection schemas, and the P2/P3 reasoning phases in this document are superseded. Direct Chat reasoning effort uses the simpler, library-first implementation built on AI SDK v7 native reasoning (see **§15, "Current implementation — native AI SDK v7"**, and `src/routes/chat/provider-options.ts`).
 >
-> - **Active in this document:** the context-window catalogue work (P1) and the discovery name-filter cleanup (P4).
+> - **Active in this document:** the context-window catalogue work (P1, complete subject to recorded verification) and the discovery name-filter cleanup (P4, pending/active).
 > - **Historical in this document:** §4, §5, §9.1's moved-codec component, §10's P2/P3 rows, §11's reasoning schemas, §12, §13.5–§13.7, §14's reasoning notes, and §15's P2/P3. They are retained as an audit record and must not be implemented.
 > - **Deferred, requiring separate approval:** model-specific reasoning metadata, dynamic selections, exact-value validation with `allowed` refusals, and any Scheduler adoption of a shared reasoning path.
 
@@ -1882,9 +1882,16 @@ Disabling enrichment and re-running discovery replaces `model_catalog` values; `
 
 Each phase is independently verifiable, leaves the tree green, and has a rollback that does not lose operator configuration.
 
-**Phase dependencies:** **P1 (context windows) and P4 (discovery filter) are the active phases and are independent.** The former reasoning phases **P2 and P3 are superseded and deferred** (see the warning at the top of this document and "Current implementation — native AI SDK v7" below). No reasoning work should start from this document: model-specific reasoning metadata and dynamic selections require a new, separately approved proposal that starts from the native implementation.
+**Phase dependencies:** **P1 (context windows) is complete, subject to recorded verification, and P4 (discovery filter) remains pending/active and is independent of P1.** The former reasoning phases **P2 and P3 are superseded and deferred** (see the warning at the top of this document and "Current implementation — native AI SDK v7" below). No reasoning work should start from this document: model-specific reasoning metadata and dynamic selections require a new, separately approved proposal that starts from the native implementation.
 
-### P1 — Context windows (the smallest useful slice)
+| Phase | Status |
+|---|---|
+| P1 — context-window enrichment | Complete, subject to recorded verification |
+| P2 — custom reasoning codec/metadata | Superseded; do not implement |
+| P3 — dynamic UI/Scheduler reasoning | Deferred; new approval required |
+| P4 — discovery name-filter removal | Pending/active (allowlist isKnownChatFamily remains in modelDiscovery.ts) |
+
+### P1 — Context windows (the smallest useful slice) — Complete, subject to recorded verification
 
 **Deliverables**
 
@@ -1983,7 +1990,7 @@ This subsection replaces P2 as the description of the live reasoning path. Verif
 - Anthropic effort-only models use `effort` + `adaptive`, never a synthetic budget; `toggle`-only Anthropic models offer Provider default alone.
 - The Scheduler's message/tool-loop behaviour is unchanged; only its reasoning encoding and per-generation cap change. `schedulerExecution.ts` still does not import `assembleContext` or `computeBudget`.
 
-### P4 — Discovery name-filter removal (independent)
+### P4 — Discovery name-filter removal (independent) — Pending/active
 
 **Deliverables**
 
