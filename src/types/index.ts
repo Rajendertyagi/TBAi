@@ -43,11 +43,7 @@ export interface ModelCapabilities {
  * This mirrors `CapabilitySupport` deliberately: a producer must take an
  * explicit stance, and absence of a stance is never a licence to assume one.
  */
-export const CONTEXT_WINDOW_SOURCES = [
-  "provider_reported",
-  "configured",
-  "model_catalog",
-] as const;
+export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured", "model_catalog"] as const;
 export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
 
 /** The numeric half of a limit, always carrying the stance that produced it. */

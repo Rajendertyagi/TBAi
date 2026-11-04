@@ -72,7 +72,8 @@ export const schedulerToolHandlers = {
     });
     if (scheduleErr) throw new Error(scheduleErr);
 
-    const engine = ((v as Record<string, unknown>).engine as "direct" | "opencode" | undefined) ?? "direct";
+    const engine =
+      ((v as Record<string, unknown>).engine as "direct" | "opencode" | undefined) ?? "direct";
     if (engine === "direct") {
       await registry.loadFromDb(db);
       const providerErr = checkProvider({
@@ -120,7 +121,8 @@ export const schedulerToolHandlers = {
         timezone: v.timezone!,
         engine,
         providerId: engine === "opencode" ? (v.providerId ?? "opencode") : v.providerId!,
-        modelId: engine === "opencode" ? (v.modelId ?? (v as any).opencodeModel ?? "default") : v.modelId!,
+        modelId:
+          engine === "opencode" ? (v.modelId ?? (v as any).opencodeModel ?? "default") : v.modelId!,
         thinkingLevel: v.thinkingLevel ?? null,
         workspacePath: v.workspacePath!,
         prompt: v.prompt!,
@@ -131,11 +133,13 @@ export const schedulerToolHandlers = {
         retryDelaySeconds: v.retryDelaySeconds ?? 60,
         timeoutSeconds: v.timeoutSeconds ?? 600,
         missedGraceSeconds: v.missedGraceSeconds ?? 600,
-        opencodeSessionStrategy: engine === "opencode" ? ((v as any).opencodeSessionStrategy ?? "fresh") : null,
+        opencodeSessionStrategy:
+          engine === "opencode" ? ((v as any).opencodeSessionStrategy ?? "fresh") : null,
         opencodeAgent: engine === "opencode" ? ((v as any).opencodeAgent ?? null) : null,
         opencodeModel: engine === "opencode" ? ((v as any).opencodeModel ?? null) : null,
         opencodeVariant: engine === "opencode" ? ((v as any).opencodeVariant ?? null) : null,
-        opencodePermissions: engine === "opencode" ? ((v as any).opencodePermissions ?? "autonomous_coding") : null,
+        opencodePermissions:
+          engine === "opencode" ? ((v as any).opencodePermissions ?? "autonomous_coding") : null,
         workspaceFolderId: engine === "opencode" ? ((v as any).workspaceFolderId ?? null) : null,
       } satisfies JobCreate,
       db,
@@ -188,7 +192,9 @@ export const schedulerToolHandlers = {
     const scheduleErr = checkScheduleFields(merged);
     if (scheduleErr) throw new Error(scheduleErr);
 
-    const mergedEngine = ((args.engine as string | undefined) ?? existing.engine) as "direct" | "opencode";
+    const mergedEngine = ((args.engine as string | undefined) ?? existing.engine) as
+      | "direct"
+      | "opencode";
     const patch: Record<string, unknown> = { ...args };
 
     if (mergedEngine === "direct") {
@@ -214,9 +220,13 @@ export const schedulerToolHandlers = {
       });
       if (threadErr) throw new Error(threadErr);
     } else {
-      const mergedStrategy = (args.opencodeSessionStrategy as any) ?? existing.opencodeSessionStrategy;
+      const mergedStrategy =
+        (args.opencodeSessionStrategy as any) ?? existing.opencodeSessionStrategy;
       const mergedFolderId = (args.workspaceFolderId as any) ?? existing.workspaceFolderId;
-      const mergedConvId = args.conversationId !== undefined ? (args.conversationId as string | null) : existing.conversationId;
+      const mergedConvId =
+        args.conversationId !== undefined
+          ? (args.conversationId as string | null)
+          : existing.conversationId;
 
       const openCodeErr = checkOpenCodeFields({
         engine: "opencode",
@@ -231,8 +241,10 @@ export const schedulerToolHandlers = {
         existing.opencodeSessionStrategy === "persistent" &&
         ((args.opencodeModel !== undefined && args.opencodeModel !== existing.opencodeModel) ||
           (args.opencodeAgent !== undefined && args.opencodeAgent !== existing.opencodeAgent) ||
-          (args.opencodePermissions !== undefined && args.opencodePermissions !== existing.opencodePermissions) ||
-          (args.opencodeSessionStrategy !== undefined && args.opencodeSessionStrategy !== existing.opencodeSessionStrategy))
+          (args.opencodePermissions !== undefined &&
+            args.opencodePermissions !== existing.opencodePermissions) ||
+          (args.opencodeSessionStrategy !== undefined &&
+            args.opencodeSessionStrategy !== existing.opencodeSessionStrategy))
       ) {
         patch.conversationId = null;
       }

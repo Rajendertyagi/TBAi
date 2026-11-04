@@ -304,8 +304,7 @@ export const schedulerStore = {
     if (patch.opencodeVariant !== undefined) push("opencode_variant", patch.opencodeVariant);
     if (patch.opencodePermissions !== undefined)
       push("opencode_permissions", patch.opencodePermissions);
-    if (patch.workspaceFolderId !== undefined)
-      push("workspace_folder_id", patch.workspaceFolderId);
+    if (patch.workspaceFolderId !== undefined) push("workspace_folder_id", patch.workspaceFolderId);
     if (patch.deletedAt !== undefined) push("deleted_at", patch.deletedAt);
     push("updated_at", Date.now());
     values.push(id);

@@ -22,7 +22,11 @@ export const modelCapabilitiesSchema = z.object({
  * resolver outputs, not facts about a model, so persisting them would assert
  * something no source said.
  */
-export const contextWindowSourceSchema = z.enum(["provider_reported", "configured", "model_catalog"]);
+export const contextWindowSourceSchema = z.enum([
+  "provider_reported",
+  "configured",
+  "model_catalog",
+]);
 
 export const modelOptionSchema = z.object({
   id: z.string().min(1).max(200),
@@ -567,7 +571,10 @@ export const schedulerJobCreateSchema = z.object({
   retryDelaySeconds: z.number().int().min(0).max(3600).optional(),
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
-  opencodeSessionStrategy: z.enum(["fresh", "persistent", "existing_conversation"]).optional().nullable(),
+  opencodeSessionStrategy: z
+    .enum(["fresh", "persistent", "existing_conversation"])
+    .optional()
+    .nullable(),
   opencodeAgent: z.string().max(200).optional().nullable(),
   opencodeModel: z.string().max(200).optional().nullable(),
   opencodeVariant: z.string().max(200).optional().nullable(),
@@ -626,7 +633,10 @@ const schedulerCreateSchema = z.object({
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
   engine: z.enum(["direct", "opencode"]).optional(),
-  opencodeSessionStrategy: z.enum(["fresh", "persistent", "existing_conversation"]).optional().nullable(),
+  opencodeSessionStrategy: z
+    .enum(["fresh", "persistent", "existing_conversation"])
+    .optional()
+    .nullable(),
   opencodeAgent: z.string().max(200).optional().nullable(),
   opencodeModel: z.string().max(200).optional().nullable(),
   opencodeVariant: z.string().max(200).optional().nullable(),
@@ -679,7 +689,10 @@ const schedulerUpdateSchema = z.object({
   timeoutSeconds: z.number().int().min(10).max(7200).optional(),
   missedGraceSeconds: z.number().int().min(0).max(86400).optional(),
   engine: z.enum(["direct", "opencode"]).optional(),
-  opencodeSessionStrategy: z.enum(["fresh", "persistent", "existing_conversation"]).optional().nullable(),
+  opencodeSessionStrategy: z
+    .enum(["fresh", "persistent", "existing_conversation"])
+    .optional()
+    .nullable(),
   opencodeAgent: z.string().max(200).optional().nullable(),
   opencodeModel: z.string().max(200).optional().nullable(),
   opencodeVariant: z.string().max(200).optional().nullable(),

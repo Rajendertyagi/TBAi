@@ -36,8 +36,8 @@ import { setSchedulerReady } from "@/services/scheduler/scheduler.ts";
 let mockOpenCodeClient: any = null;
 
 mock.module("@/services/opencode/sessions.ts", () => ({
-  ensureOpenCodeSession: async (conversationId: string, options?: any) => ({
-    sessionId: "mock_ses_" + conversationId,
+  ensureOpenCodeSession: async (conversationId: string) => ({
+    sessionId: `mock_ses_${conversationId}`,
     created: true,
     serviceOwner: "local",
     locationDirectory: process.cwd(),
@@ -241,10 +241,7 @@ describe("Authoritative Conversation Creation Counts", () => {
     const initialList = await conversationService.list();
     const countBefore = initialList.threads.length;
 
-    const job = schedulerStore.create(
-      sampleOpenCodeJob({ opencodeSessionStrategy: "fresh" }),
-      db,
-    );
+    const job = schedulerStore.create(sampleOpenCodeJob({ opencodeSessionStrategy: "fresh" }), db);
 
     // Run 1
     const run1 = await ensureJobConversation(job);
@@ -712,7 +709,6 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
 
   it("never calls session.interrupt on shared Existing Conversation timeout/cancellation", async () => {
     let interruptCalled = false;
-    let cancelInboxCalled = false;
 
     mockOpenCodeClient = {
       session: {
@@ -727,11 +723,6 @@ describe("Turn-Bounding & Completion in executeOpenCodeScheduledTurn", () => {
         },
         interrupt: async () => {
           interruptCalled = true;
-        },
-        inbox: {
-          cancel: async () => {
-            cancelInboxCalled = true;
-          },
         },
       },
     };
@@ -853,9 +844,8 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
     };
 
     const controller = new AbortController();
-    const waitPromise = new Promise<void>((resolve) => {
-      setTimeout(() => controller.abort(), 10);
-    });
+    // Abort shortly after the wait begins; the wait mock resolves on the abort event.
+    setTimeout(() => controller.abort(), 10);
     mockOpenCodeClient = {
       ...mockOpenCodeClient,
       session: {
@@ -869,7 +859,6 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
         },
       },
     };
-    void waitPromise;
     const res = await executeOpenCodeScheduledTurn({
       job,
       run,
@@ -877,6 +866,7 @@ describe("Cursor Pagination & Cancellation Reconciliation (regression)", () => {
       parentSignal: controller.signal,
     });
     expect(res.ok).toBe(false);
+    expect(cancelCalled).toBe(true); // queued prompt cancel is attempted; shared session is not interrupted
     const completed = schedulerStore.getRun(run.id, db)!;
     expect(completed.turnOutcome).toBe("outcome_unknown");
   });
@@ -1029,16 +1019,10 @@ describe("OpenCode Scheduler Store & Persistence", () => {
     const job = schedulerStore.create(sampleOpenCodeJob(), db);
     const occurrenceId = "cron_occ_123";
 
-    const run = schedulerStore.claimRun(
-      job,
-      occurrenceId,
-      "req_test_1",
-      db,
-      {
-        opencodeSessionId: "ses_abc_456",
-        opencodePromptId: "prm_xyz_789",
-      },
-    );
+    const run = schedulerStore.claimRun(job, occurrenceId, "req_test_1", db, {
+      opencodeSessionId: "ses_abc_456",
+      opencodePromptId: "prm_xyz_789",
+    });
 
     expect(run).not.toBeNull();
     if (!run) return;
@@ -1056,16 +1040,10 @@ describe("OpenCode Scheduler Store & Persistence", () => {
 
   it("records terminal run with turnOutcome", () => {
     const job = schedulerStore.create(sampleOpenCodeJob(), db);
-    const run = schedulerStore.claimRun(
-      job,
-      "cron_occ_term",
-      "req_term",
-      db,
-      {
-        opencodeSessionId: "ses_term",
-        opencodePromptId: "prm_term",
-      },
-    );
+    const run = schedulerStore.claimRun(job, "cron_occ_term", "req_term", db, {
+      opencodeSessionId: "ses_term",
+      opencodePromptId: "prm_term",
+    });
 
     if (!run) throw new Error("Claim failed");
 
@@ -1102,16 +1080,10 @@ describe("OpenCode Scheduler Store & Persistence", () => {
 
   it("markInterrupted populates turn_outcome as outcome_unknown for crashed runs", () => {
     const job = schedulerStore.create(sampleOpenCodeJob(), db);
-    const run = schedulerStore.claimRun(
-      job,
-      "crash_occ",
-      "req_crash",
-      db,
-      {
-        opencodeSessionId: "ses_crashed",
-        opencodePromptId: "prm_crashed",
-      },
-    );
+    const run = schedulerStore.claimRun(job, "crash_occ", "req_crash", db, {
+      opencodeSessionId: "ses_crashed",
+      opencodePromptId: "prm_crashed",
+    });
 
     if (!run) throw new Error("Claim failed");
 

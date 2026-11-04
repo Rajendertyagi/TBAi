@@ -430,7 +430,7 @@ export function scheduleJob(job: SchedulerJob): void {
 /** Cancels queued prompts from OpenCode session inbox for a job. */
 export async function cancelQueuedPromptsForJob(jobId: string): Promise<void> {
   const job = schedulerStore.get(jobId);
-  if (!job || job.engine !== "opencode") return;
+  if (job?.engine !== "opencode") return;
   const running = schedulerStore.listRuns(jobId, 10, 0);
   for (const run of running.runs) {
     if (

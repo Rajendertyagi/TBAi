@@ -767,9 +767,7 @@ export async function ensureOpenCodeSession(
   // Phase 4 singleflight: concurrent callers for one conversation share a
   // single ensure — no second session.create, no last-writer-wins orphan.
   // (The persisted pointer covers the sequential case; this covers overlap.)
-  const inFlightKey = options?.permissions
-    ? `${conversationId}:custom_perms`
-    : conversationId;
+  const inFlightKey = options?.permissions ? `${conversationId}:custom_perms` : conversationId;
   const inFlight = sessionEnsuresInFlight.get(inFlightKey);
   if (inFlight) return inFlight;
   const ensure = ensureOpenCodeSessionInner(conversationId, options);
@@ -849,7 +847,12 @@ async function ensureOpenCodeSessionInner(
         live.id,
         live.model,
       );
-      return { sessionId: live.id, directory: live.directory, reusedExistingSession: true, recoveredFromStaleSession: false };
+      return {
+        sessionId: live.id,
+        directory: live.directory,
+        reusedExistingSession: true,
+        recoveredFromStaleSession: false,
+      };
     }
     // Remote session not found:
     if (conversation.opencodeImported) {
@@ -985,7 +988,12 @@ async function ensureOpenCodeSessionInner(
           sessionId,
           ...classifyError(persistError),
         });
-        return { sessionId, directory: createdDirectory, reusedExistingSession: false, recoveredFromStaleSession };
+        return {
+          sessionId,
+          directory: createdDirectory,
+          reusedExistingSession: false,
+          recoveredFromStaleSession,
+        };
       }
 
       // No confirmed TBAi handle for this session.
@@ -1077,7 +1085,12 @@ async function ensureOpenCodeSessionInner(
       );
     }
     logger.info("opencode", "opencode.session_create", { conversationId, sessionId });
-    return { sessionId, directory: createdDirectory, reusedExistingSession: false, recoveredFromStaleSession };
+    return {
+      sessionId,
+      directory: createdDirectory,
+      reusedExistingSession: false,
+      recoveredFromStaleSession,
+    };
   } finally {
     sessionCreatesInFlight.delete(inFlightKey);
   }

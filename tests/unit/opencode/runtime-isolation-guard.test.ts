@@ -22,7 +22,9 @@ describe("OpenCode runtime test database isolation guards", () => {
 
   it("assertTestDatabaseIsolation throws if preflight resolves to production database", () => {
     // If the preflight resolves to production, assertTestDatabaseIsolation MUST throw.
-    // We pass an empty env (no XDG_DATA_HOME) which defaults to ~/.local/share/opencode/opencode.db
+    // An empty env inherits the developer's normal environment, so the preflight
+    // resolves to the production database wherever it lives on this machine
+    // (a global XDG_DATA_HOME relocates it).
     const binary = "opencode";
     let thrown = false;
     try {

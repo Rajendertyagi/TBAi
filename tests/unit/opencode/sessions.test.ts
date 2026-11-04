@@ -526,6 +526,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
       sessionId: LIVE_ID,
       directory: "D:\\ws\\chats\\conv-1",
       reusedExistingSession: true,
+      recoveredFromStaleSession: false,
     });
   });
 
@@ -537,6 +538,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
       sessionId: LIVE_ID,
       directory: null,
       reusedExistingSession: true,
+      recoveredFromStaleSession: false,
     });
   });
 
@@ -571,6 +573,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
       sessionId: createdId(),
       directory: SERVER_RECORDED_DIRECTORY,
       reusedExistingSession: false,
+      recoveredFromStaleSession: true,
     });
     expect(calls).toEqual([`get:${LIVE_ID}`, `create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([
@@ -589,6 +592,7 @@ describe("ensureOpenCodeSession — the binding carries the event-stream scope",
       sessionId: createdId(),
       directory: SUBMITTED_DIRECTORY,
       reusedExistingSession: false,
+      recoveredFromStaleSession: false,
     });
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
     expect(updates).toEqual([
@@ -631,6 +635,7 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       sessionId: createdId(),
       directory: SERVER_RECORDED_DIRECTORY,
       reusedExistingSession: false,
+      recoveredFromStaleSession: false,
     });
     expect(conversation?.opencodeSessionId).toBe(createdId());
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`]);
@@ -965,6 +970,7 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       sessionId: id,
       directory: SERVER_RECORDED_DIRECTORY,
       reusedExistingSession: false,
+      recoveredFromStaleSession: false,
     });
     expect(createArgs.map((args) => args.id)).toEqual([id, id]);
     // No probe after the successful retry: its response names the exact id.
@@ -1058,6 +1064,7 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       sessionId: id,
       directory: SERVER_RECORDED_DIRECTORY,
       reusedExistingSession: false,
+      recoveredFromStaleSession: false,
     });
     expect(calls).toEqual([
       `create:${SUBMITTED_DIRECTORY}`,
@@ -1148,6 +1155,7 @@ describe("ensureOpenCodeSession — RT-001 create/persist window", () => {
       sessionId: id,
       directory: SERVER_RECORDED_DIRECTORY,
       reusedExistingSession: false,
+      recoveredFromStaleSession: false,
     });
     expect(conversation?.opencodeSessionId).toBe(id);
     expect(calls).toEqual([`create:${SUBMITTED_DIRECTORY}`, `get:${id}`]);
@@ -1466,6 +1474,7 @@ describe("ensureOpenCodeSession — H3/B3 service ownership", () => {
       sessionId: LIVE_ID,
       directory: null,
       reusedExistingSession: true,
+      recoveredFromStaleSession: false,
     });
     expect(calls).toEqual([`get:${LIVE_ID}`]);
     expect(createArgs).toHaveLength(0);

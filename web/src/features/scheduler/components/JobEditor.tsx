@@ -234,7 +234,8 @@ export function JobEditor({
       if (!draft.workspacePath.trim()) return { error: ec.errWorkspace };
     } else {
       if (draft.opencodeSessionStrategy === "existing_conversation") {
-        if (!draft.conversationId) return { error: "Please select an existing OpenCode conversation" };
+        if (!draft.conversationId)
+          return { error: "Please select an existing OpenCode conversation" };
       } else {
         if (!draft.workspaceFolderId && !draft.workspacePath.trim()) {
           return { error: "Please select a workspace folder for the OpenCode agent" };
@@ -281,8 +282,8 @@ export function JobEditor({
       execAt,
       timezone: draft.timezone,
       engine: draft.engine,
-      providerId: isDirect ? draft.providerId : (draft.providerId || "opencode"),
-      modelId: isDirect ? draft.modelId.trim() : (draft.opencodeModel.trim() || "default"),
+      providerId: isDirect ? draft.providerId : draft.providerId || "opencode",
+      modelId: isDirect ? draft.modelId.trim() : draft.opencodeModel.trim() || "default",
       thinkingLevel: isDirect ? draft.thinkingLevel : "off",
       workspacePath: wsPath,
       prompt: draft.prompt,
@@ -293,11 +294,11 @@ export function JobEditor({
       timeoutSeconds: draft.timeoutSeconds,
       missedGraceSeconds: draft.missedGraceSeconds,
       opencodeSessionStrategy: isDirect ? null : draft.opencodeSessionStrategy,
-      opencodeAgent: isDirect ? null : (draft.opencodeAgent.trim() || null),
-      opencodeModel: isDirect ? null : (draft.opencodeModel.trim() || null),
-      opencodeVariant: isDirect ? null : (draft.opencodeVariant.trim() || null),
+      opencodeAgent: isDirect ? null : draft.opencodeAgent.trim() || null,
+      opencodeModel: isDirect ? null : draft.opencodeModel.trim() || null,
+      opencodeVariant: isDirect ? null : draft.opencodeVariant.trim() || null,
       opencodePermissions: isDirect ? null : draft.opencodePermissions,
-      workspaceFolderId: isDirect ? null : (draft.workspaceFolderId || null),
+      workspaceFolderId: isDirect ? null : draft.workspaceFolderId || null,
     };
   }
 
@@ -777,7 +778,8 @@ export function JobEditor({
                       ...draft,
                       providerId: e.target.value,
                       modelId: p?.model ?? "",
-                      thinkingLevel: p?.thinking && p.thinking !== "off" ? draft.thinkingLevel : "off",
+                      thinkingLevel:
+                        p?.thinking && p.thinking !== "off" ? draft.thinkingLevel : "off",
                     });
                   }}
                 >
@@ -912,7 +914,9 @@ export function JobEditor({
                 />
                 <div>
                   <span className="font-medium">Fresh Session</span>
-                  <p className="text-xs text-muted-foreground">Creates a new OpenCode session for each scheduled run</p>
+                  <p className="text-xs text-muted-foreground">
+                    Creates a new OpenCode session for each scheduled run
+                  </p>
                 </div>
               </label>
               <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -925,7 +929,9 @@ export function JobEditor({
                 />
                 <div>
                   <span className="font-medium">Persistent Session</span>
-                  <p className="text-xs text-muted-foreground">Creates and reuses one dedicated OpenCode session for this job</p>
+                  <p className="text-xs text-muted-foreground">
+                    Creates and reuses one dedicated OpenCode session for this job
+                  </p>
                 </div>
               </label>
               <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -934,11 +940,15 @@ export function JobEditor({
                   name="opencodeSessionStrategy"
                   className="mt-0.5"
                   checked={draft.opencodeSessionStrategy === "existing_conversation"}
-                  onChange={() => setDraft({ ...draft, opencodeSessionStrategy: "existing_conversation" })}
+                  onChange={() =>
+                    setDraft({ ...draft, opencodeSessionStrategy: "existing_conversation" })
+                  }
                 />
                 <div>
                   <span className="font-medium">Existing Conversation</span>
-                  <p className="text-xs text-muted-foreground">Appends prompt into an existing OpenCode conversation</p>
+                  <p className="text-xs text-muted-foreground">
+                    Appends prompt into an existing OpenCode conversation
+                  </p>
                 </div>
               </label>
             </div>
@@ -1021,7 +1031,9 @@ export function JobEditor({
                 />
                 <div>
                   <span className="font-medium">Autonomous Coding</span>
-                  <p className="text-xs text-muted-foreground">Allow read, glob, grep, edit, shell; deny subagents & skills</p>
+                  <p className="text-xs text-muted-foreground">
+                    Allow read, glob, grep, edit, shell; deny subagents & skills
+                  </p>
                 </div>
               </label>
               <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -1034,7 +1046,9 @@ export function JobEditor({
                 />
                 <div>
                   <span className="font-medium">Read-Only Analysis</span>
-                  <p className="text-xs text-muted-foreground">Allow search and read inspection; deny edits, shell, subagents</p>
+                  <p className="text-xs text-muted-foreground">
+                    Allow search and read inspection; deny edits, shell, subagents
+                  </p>
                 </div>
               </label>
             </div>

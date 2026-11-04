@@ -400,7 +400,9 @@ export function resolveContextLimit(input: {
   }
 
   // Precedence order: configured (0) > provider_reported (1) > observed (2) > model_catalog (3)
-  const ranked = [...candidates].sort((a, b) => CANDIDATE_RANK[a.source] - CANDIDATE_RANK[b.source]);
+  const ranked = [...candidates].sort(
+    (a, b) => CANDIDATE_RANK[a.source] - CANDIDATE_RANK[b.source],
+  );
   const winner = ranked[0] as LimitCandidate;
 
   if (candidates.length === 1) {
@@ -418,7 +420,10 @@ export function resolveContextLimit(input: {
     // report provider_reported as the authoritative external source.
     const hasProviderReported = ranked.some((c) => c.source === "provider_reported");
     const agreementSource = hasProviderReported ? "provider_reported" : winner.source;
-    const annotations = new Map<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>();
+    const annotations = new Map<
+      number,
+      { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+    >();
     ranked.forEach((c) => {
       annotations.set(c.recordIndex, { selected: true, outcome: "agreed" });
     });
@@ -430,10 +435,16 @@ export function resolveContextLimit(input: {
 
   // Conflict. The highest ranked candidate wins; highest ranked disagreeing candidate is divergentValue.
   const loser = disagreeing[0] as LimitCandidate;
-  const annotations = new Map<number, { selected: boolean; outcome: LimitCandidateRecord["outcome"] }>();
+  const annotations = new Map<
+    number,
+    { selected: boolean; outcome: LimitCandidateRecord["outcome"] }
+  >();
   ranked.forEach((c) => {
     if (c.value === winner.value) {
-      annotations.set(c.recordIndex, { selected: c.recordIndex === winner.recordIndex, outcome: "conflicted" });
+      annotations.set(c.recordIndex, {
+        selected: c.recordIndex === winner.recordIndex,
+        outcome: "conflicted",
+      });
     } else {
       annotations.set(c.recordIndex, { selected: false, outcome: "lost_precedence" });
     }

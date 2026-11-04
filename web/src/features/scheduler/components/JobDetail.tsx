@@ -197,10 +197,16 @@ export function JobDetail({
         {job.engine === "opencode" && (
           <>
             <StatItem icon={<Bot aria-hidden="true" />} label="Strategy">
-              <span className="capitalize">{job.opencodeSessionStrategy ? job.opencodeSessionStrategy.replace(/_/g, " ") : "Fresh"}</span>
+              <span className="capitalize">
+                {job.opencodeSessionStrategy
+                  ? job.opencodeSessionStrategy.replace(/_/g, " ")
+                  : "Fresh"}
+              </span>
             </StatItem>
             <StatItem icon={<Bot aria-hidden="true" />} label="Permissions">
-              <span>{job.opencodePermissions === "read_only" ? "Read-Only" : "Autonomous Coding"}</span>
+              <span>
+                {job.opencodePermissions === "read_only" ? "Read-Only" : "Autonomous Coding"}
+              </span>
             </StatItem>
           </>
         )}
@@ -271,10 +277,14 @@ export function JobDetail({
                         <span
                           className={cn(
                             "rounded px-1.5 py-0.5 text-[10px] font-mono font-medium border",
-                            run.turnOutcome === "succeeded" && "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
-                            run.turnOutcome === "failed" && "bg-destructive/10 text-destructive border-destructive/20",
-                            run.turnOutcome === "interrupted" && "bg-amber-500/10 text-amber-600 border-amber-500/20",
-                            run.turnOutcome === "outcome_unknown" && "bg-muted text-muted-foreground border-border",
+                            run.turnOutcome === "succeeded" &&
+                              "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
+                            run.turnOutcome === "failed" &&
+                              "bg-destructive/10 text-destructive border-destructive/20",
+                            run.turnOutcome === "interrupted" &&
+                              "bg-amber-500/10 text-amber-600 border-amber-500/20",
+                            run.turnOutcome === "outcome_unknown" &&
+                              "bg-muted text-muted-foreground border-border",
                           )}
                         >
                           {run.turnOutcome}

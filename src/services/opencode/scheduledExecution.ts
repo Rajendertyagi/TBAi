@@ -23,10 +23,7 @@ import {
 } from "./sessions";
 import { conversationService } from "../storage";
 import { schedulerStore } from "../scheduler/schedulerStore";
-import type {
-  SchedulerJob,
-  SchedulerRun,
-} from "../scheduler/schedulerTypes";
+import type { SchedulerJob, SchedulerRun } from "../scheduler/schedulerTypes";
 import type { ExecutionResult } from "../scheduler/schedulerExecution";
 import { logger, newRequestId, normalizeError } from "../../lib/logger";
 import { generateId } from "../../lib/utils";
@@ -90,7 +87,7 @@ export async function reconcilePromptSubmission(
 ): Promise<{ found: boolean; location: "inbox" | "messages" | "none"; error?: string }> {
   try {
     const inboxResp = await client.session.inbox.list({ sessionID: sessionId });
-    const inboxItems = Array.isArray(inboxResp) ? inboxResp : (inboxResp as any)?.data ?? [];
+    const inboxItems = Array.isArray(inboxResp) ? inboxResp : ((inboxResp as any)?.data ?? []);
     if (inboxItems.some((item: any) => item.id === promptId)) {
       return { found: true, location: "inbox" };
     }
@@ -133,7 +130,11 @@ export async function reconcilePromptSubmission(
       cursor = next;
     }
     if (incomplete) {
-      return { found: false, location: "none", error: "Incomplete message history scan (cursor cycle, empty page, or page limit)" };
+      return {
+        found: false,
+        location: "none",
+        error: "Incomplete message history scan (cursor cycle, empty page, or page limit)",
+      };
     }
 
     return { found: false, location: "none" };
@@ -169,17 +170,15 @@ export async function resolveSessionForJob(
 
   const conv = await conversationService.get(targetConvId);
   if (!conv || conv.status === "archived") {
-    throw new Error(
-      `Conversation "${targetConvId}" not found or archived. Please update the job.`,
-    );
+    throw new Error(`Conversation "${targetConvId}" not found or archived. Please update the job.`);
   }
 
   const isSharedExisting = job.opencodeSessionStrategy === "existing_conversation";
   const permissions = isSharedExisting
     ? undefined
-    : (job.opencodePermissions === "read_only"
-        ? READ_ONLY_PERMISSIONS
-        : AUTONOMOUS_CODING_PERMISSIONS);
+    : job.opencodePermissions === "read_only"
+      ? READ_ONLY_PERMISSIONS
+      : AUTONOMOUS_CODING_PERMISSIONS;
 
   const binding = await ensureOpenCodeSession(
     targetConvId,
@@ -352,10 +351,7 @@ export async function executeOpenCodeScheduledTurn(
   parentSignal?.addEventListener("abort", onParentAbort, { once: true });
 
   try {
-    await client.session.wait(
-      { sessionID: sessionId },
-      { signal: timeoutController.signal },
-    );
+    await client.session.wait({ sessionID: sessionId }, { signal: timeoutController.signal });
   } catch {
     // Wait may reject if aborted or if unsupported on server
   } finally {
@@ -386,11 +382,13 @@ export async function executeOpenCodeScheduledTurn(
           if (recon.location === "inbox") {
             status = "failed";
             turnOutcome = "outcome_unknown";
-            errorMsg = "Cancellation could not be confirmed; prompt remains queued in the shared conversation.";
+            errorMsg =
+              "Cancellation could not be confirmed; prompt remains queued in the shared conversation.";
           } else {
             status = "failed";
             turnOutcome = "outcome_unknown";
-            errorMsg = "Prompt already delivered to the shared conversation; underlying work was not interrupted.";
+            errorMsg =
+              "Prompt already delivered to the shared conversation; underlying work was not interrupted.";
           }
         } else if (recon.error) {
           status = "failed";
@@ -399,7 +397,8 @@ export async function executeOpenCodeScheduledTurn(
         } else if (cancelSucceeded) {
           status = "cancelled";
           turnOutcome = "interrupted";
-          errorMsg = "Cancelled by user. Queued prompt removed; shared session was not interrupted.";
+          errorMsg =
+            "Cancelled by user. Queued prompt removed; shared session was not interrupted.";
         } else {
           status = "failed";
           turnOutcome = "outcome_unknown";
@@ -465,11 +464,10 @@ export async function executeOpenCodeScheduledTurn(
   // 3. Post-wait inbox check: verify prompt was actually consumed from inbox
   try {
     const inboxResp = await client.session.inbox.list({ sessionID: sessionId });
-    const inboxItems = Array.isArray(inboxResp) ? inboxResp : (inboxResp as any)?.data ?? [];
+    const inboxItems = Array.isArray(inboxResp) ? inboxResp : ((inboxResp as any)?.data ?? []);
     if (inboxItems.some((item: any) => item.id === promptId)) {
       const durationMs = Date.now() - started;
-      const errorMsg =
-        "Scheduled prompt remained queued in session inbox after wait completed.";
+      const errorMsg = "Scheduled prompt remained queued in session inbox after wait completed.";
       schedulerStore.updateRun(run.id, {
         status: "failed",
         turnOutcome: "outcome_unknown",
@@ -480,7 +478,7 @@ export async function executeOpenCodeScheduledTurn(
       schedulerStore.update(job.id, { lastRunAt: Date.now() });
       return { ok: false, text: "", error: errorMsg, retryable: false };
     }
-  } catch (inboxErr: any) {
+  } catch {
     // Non-fatal; continue to message list inspection
   }
 
@@ -503,9 +501,18 @@ export async function executeOpenCodeScheduledTurn(
       allMessages.push(...pageMsgs);
       const next = listResp?.cursor?.next;
       if (!next) break;
-      if (seen.has(next)) { incomplete = true; break; }
-      if (pageMsgs.length === 0) { incomplete = true; break; }
-      if (page === 99) { incomplete = true; break; }
+      if (seen.has(next)) {
+        incomplete = true;
+        break;
+      }
+      if (pageMsgs.length === 0) {
+        incomplete = true;
+        break;
+      }
+      if (page === 99) {
+        incomplete = true;
+        break;
+      }
       seen.add(next);
       cursor = next;
     }
@@ -527,8 +534,7 @@ export async function executeOpenCodeScheduledTurn(
     const promptIdx = messages.findIndex((m: any) => m.type === "user" && m.id === promptId);
     if (promptIdx === -1) {
       const durationMs = Date.now() - started;
-      const errorMsg =
-        "Submitted prompt message could not be located in session message history.";
+      const errorMsg = "Submitted prompt message could not be located in session message history.";
       schedulerStore.updateRun(run.id, {
         status: "failed",
         turnOutcome: "outcome_unknown",
@@ -582,8 +588,7 @@ export async function executeOpenCodeScheduledTurn(
 
     if (!boundaryIdle) {
       const durationMs = Date.now() - started;
-      const errorMsg =
-        "Session did not record a terminating idle state for the scheduled prompt.";
+      const errorMsg = "Session did not record a terminating idle state for the scheduled prompt.";
       schedulerStore.updateRun(run.id, {
         status: "failed",
         turnOutcome: "outcome_unknown",
@@ -617,8 +622,7 @@ export async function executeOpenCodeScheduledTurn(
     }
 
     if (boundaryIdle.outcome === "failed") {
-      const failError =
-        boundaryIdle.error?.message ?? "OpenCode turn reported failure outcome.";
+      const failError = boundaryIdle.error?.message ?? "OpenCode turn reported failure outcome.";
       schedulerStore.updateRun(run.id, {
         status: "failed",
         turnOutcome: "failed",

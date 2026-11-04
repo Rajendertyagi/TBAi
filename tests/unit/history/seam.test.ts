@@ -146,6 +146,51 @@ function oversizedConversation(): UIMessage[] {
 }
 
 /**
+ * The "moderately over-budget" fixture, parameterised by filler size.
+ *
+ * The trigger is 80% of the usable budget and the tool layer grows as tools
+ * are added, so a fixed filler literal drifts over the trigger every time the
+ * native tool set changes. The fixture is therefore sized from measurement
+ * (see `sizedJustBelowTrigger`) rather than pinned to a constant.
+ */
+function moderateConversation(fillerRepeat: number): UIMessage[] {
+  const filler = "context filler text that costs real tokens. ".repeat(fillerRepeat);
+  const messages: UIMessage[] = [];
+  for (let i = 0; i < 8; i += 1) {
+    messages.push(user(`u${i}`, `question ${i} ${filler}`));
+    messages.push(toolTurn(`a${i}`, `tc${i}`));
+  }
+  messages.push(user("live", "THE LIVE REQUEST"));
+  messages.push(approvalPaused("aLive", "tc-live", "ap-live"));
+  return messages;
+}
+
+/** How far below the trigger the fixture lands, so it is genuinely just under it. */
+const MODERATE_MARGIN_TOKENS = 500;
+
+/**
+ * Builds the moderate fixture sized to land just below the compaction trigger.
+ *
+ * Probes the fixed layers (instructions + tool definitions + the fixed message
+ * scaffold) with two assemblies, solves for the filler repeat that lands
+ * `MODERATE_MARGIN_TOKENS` below the trigger, and returns the sized fixture.
+ * The trigger is measured on A + B + C, not C alone — an earlier version
+ * compared Layer C against a whole-request budget, which understated pressure
+ * by the tool layer and fired far too late.
+ */
+async function sizedJustBelowTrigger(): Promise<UIMessage[]> {
+  const probe0 = await assembleWithoutCompaction(moderateConversation(0));
+  const probe10 = await assembleWithoutCompaction(moderateConversation(10));
+  const base = probe0.context.provenance.estimate.estimatedTokens;
+  const perRepeat = (probe10.context.provenance.estimate.estimatedTokens - base) / 10;
+  const trigger = Math.floor(
+    probe0.context.provenance.budget.usableInputTokens * DEFAULT_COMPACTION_POLICY.triggerFraction,
+  );
+  const repeat = Math.max(0, Math.floor((trigger - MODERATE_MARGIN_TOKENS - base) / perRepeat));
+  return moderateConversation(repeat);
+}
+
+/**
  * A conversation whose span to shed is LARGER than the summariser can read.
  *
  * This is the honest terminal case: a conversation grown past the model's entire
@@ -356,22 +401,12 @@ describe("compaction is inert unless the seam supplies it", () => {
 
   it("leaves a moderately over-budget request alone", async () => {
     // Compaction must not pre-empt a pressure it does not need to solve, and must
-    // not spend a summarisation call doing so. Sized from measurement: this
-    // conversation assembles to ~18 035 tokens against a trigger of ~18 585, so it
-    // is genuinely just below.
-    //
-    // Note the trigger is measured on A + B + C, not C alone. An earlier version
-    // compared Layer C against a whole-request budget, which understated pressure
-    // by the ~10 745-token tool layer and fired far too late.
+    // not spend a summarisation call doing so. The fixture is sized from
+    // measurement to land just below the trigger (see sizedJustBelowTrigger),
+    // because the trigger is measured on A + B + C and the tool layer grows as
+    // tools are added.
     const harness = seamHarness();
-    const moderate: UIMessage[] = [];
-    const filler = "context filler text that costs real tokens. ".repeat(60);
-    for (let i = 0; i < 8; i += 1) {
-      moderate.push(user(`u${i}`, `question ${i} ${filler}`));
-      moderate.push(toolTurn(`a${i}`, `tc${i}`));
-    }
-    moderate.push(user("live", "THE LIVE REQUEST"));
-    moderate.push(approvalPaused("aLive", "tc-live", "ap-live"));
+    const moderate = await sizedJustBelowTrigger();
     const result = await harness.assemble(moderate);
     expect(result.context.provenance.compaction?.applied).toBe(false);
     expect(result.context.provenance.compaction?.reason).toBe("below_trigger");

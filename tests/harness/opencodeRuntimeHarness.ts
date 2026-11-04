@@ -219,6 +219,23 @@ export function isolatedChildEnv(isolation: RuntimeIsolation): Record<string, st
 }
 
 /**
+ * Resolves the database the binary would use with the developer's normal
+ * environment (no test overrides). This is the production database the guard
+ * exists to protect, and asking the binary is the only reliable way to find
+ * it: a global `XDG_DATA_HOME` relocates it, so platform-specific guesses
+ * (`~/.local/share`, `%LOCALAPPDATA%`) miss it. Returns null when the binary
+ * cannot answer, in which case the hardcoded candidates below still apply.
+ */
+function resolveProductionDatabase(binary: string): string | null {
+  try {
+    const probe = Bun.spawnSync([binary, "debug", "paths", "db"], { env: process.env });
+    return probe.stdout.toString().trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Automated guard that ensures a test server process NEVER resolves its database
  * to the developer's personal OpenCode database.
  */
@@ -237,9 +254,12 @@ export function assertTestDatabaseIsolation(
   if (!resolvedDb) {
     throw new Error("Failed to determine effective OpenCode database location for runtime test");
   }
+  const productionDb = resolveProductionDatabase(binary);
+  const productionCandidates = [productionDb, prodDb, localAppDb].filter(
+    (candidate): candidate is string => Boolean(candidate),
+  );
   if (
-    path.resolve(resolvedDb) === path.resolve(prodDb) ||
-    (localAppDb && path.resolve(resolvedDb) === path.resolve(localAppDb))
+    productionCandidates.some((candidate) => path.resolve(resolvedDb) === path.resolve(candidate))
   ) {
     throw new Error(
       `FATAL TEST GUARD: OpenCode runtime test attempted to run against production database: "${resolvedDb}". ` +

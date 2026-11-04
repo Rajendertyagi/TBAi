@@ -184,7 +184,11 @@ export function SchedulerPage() {
       if (job.opencodeSessionStrategy === "fresh") return "Fresh Session";
       if (job.opencodeSessionStrategy === "persistent") return "Persistent Session";
       if (job.opencodeSessionStrategy === "existing_conversation") {
-        return conversations.find((c) => c.id === job.conversationId)?.title ?? job.conversationId ?? "Existing Conversation";
+        return (
+          conversations.find((c) => c.id === job.conversationId)?.title ??
+          job.conversationId ??
+          "Existing Conversation"
+        );
       }
     }
     if (job.conversationPolicy !== "existing_thread") return null;

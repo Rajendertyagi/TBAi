@@ -169,11 +169,13 @@ app.post("/jobs", async (c) => {
       retryDelaySeconds: v.retryDelaySeconds ?? 60,
       timeoutSeconds: v.timeoutSeconds ?? 600,
       missedGraceSeconds: v.missedGraceSeconds ?? 600,
-      opencodeSessionStrategy: engine === "opencode" ? (v.opencodeSessionStrategy ?? "fresh") : null,
+      opencodeSessionStrategy:
+        engine === "opencode" ? (v.opencodeSessionStrategy ?? "fresh") : null,
       opencodeAgent: engine === "opencode" ? (v.opencodeAgent ?? null) : null,
       opencodeModel: engine === "opencode" ? (v.opencodeModel ?? null) : null,
       opencodeVariant: engine === "opencode" ? (v.opencodeVariant ?? null) : null,
-      opencodePermissions: engine === "opencode" ? (v.opencodePermissions ?? "autonomous_coding") : null,
+      opencodePermissions:
+        engine === "opencode" ? (v.opencodePermissions ?? "autonomous_coding") : null,
       workspaceFolderId: engine === "opencode" ? (v.workspaceFolderId ?? null) : null,
     } satisfies JobCreate,
     db,
@@ -247,7 +249,9 @@ app.patch("/jobs/:id", async (c) => {
     if (threadErr) return c.json({ error: threadErr }, 400);
   } else {
     const mergedStrategy =
-      v.opencodeSessionStrategy !== undefined ? v.opencodeSessionStrategy : existing.opencodeSessionStrategy;
+      v.opencodeSessionStrategy !== undefined
+        ? v.opencodeSessionStrategy
+        : existing.opencodeSessionStrategy;
     const mergedFolderId =
       v.workspaceFolderId !== undefined ? v.workspaceFolderId : existing.workspaceFolderId;
     const mergedConvId =
@@ -262,7 +266,11 @@ app.patch("/jobs/:id", async (c) => {
     });
     if (openCodeErr) return c.json({ error: openCodeErr }, 400);
 
-    if (v.workspaceFolderId && v.workspaceFolderId !== existing.workspaceFolderId && !v.workspacePath) {
+    if (
+      v.workspaceFolderId &&
+      v.workspaceFolderId !== existing.workspaceFolderId &&
+      !v.workspacePath
+    ) {
       const folder = await folderService.get(v.workspaceFolderId);
       if (folder) patch.workspacePath = folder.path;
     }
@@ -277,13 +285,10 @@ app.patch("/jobs/:id", async (c) => {
     const variantChanged =
       v.opencodeVariant !== undefined && v.opencodeVariant !== existing.opencodeVariant;
     const permsChanged =
-      v.opencodePermissions !== undefined &&
-      v.opencodePermissions !== existing.opencodePermissions;
+      v.opencodePermissions !== undefined && v.opencodePermissions !== existing.opencodePermissions;
     const folderChanged =
-      v.workspaceFolderId !== undefined &&
-      v.workspaceFolderId !== existing.workspaceFolderId;
-    const pathChanged =
-      v.workspacePath !== undefined && v.workspacePath !== existing.workspacePath;
+      v.workspaceFolderId !== undefined && v.workspaceFolderId !== existing.workspaceFolderId;
+    const pathChanged = v.workspacePath !== undefined && v.workspacePath !== existing.workspacePath;
 
     if (
       (existing.opencodeSessionStrategy === "persistent" ||
