@@ -33,6 +33,50 @@
         var bg = getComputedStyle(root).getPropertyValue("--background").trim();
         if (meta && bg) meta.setAttribute("content", bg);
       } catch (e) { /* storage unavailable — class="dark" default stands */ }
+      // Pre-apply saved typography & scale before first paint (no flash / layout shift).
+      try {
+        var tyRaw = localStorage.getItem("tbai-typography");
+        if (tyRaw) {
+          var ty = JSON.parse(tyRaw);
+          if (ty && ty.version === 1) {
+            var r = document.documentElement;
+            if (typeof ty.baseSize === "number" && ty.baseSize >= 12 && ty.baseSize <= 24 && ty.baseSize !== 16) {
+              r.style.zoom = String(ty.baseSize / 16);
+            }
+            if (typeof ty.fontWeight === "number" && ty.fontWeight >= 100 && ty.fontWeight <= 900 && ty.fontWeight !== 400) {
+              r.style.setProperty("--font-weight-base", String(ty.fontWeight));
+            }
+            if (typeof ty.lineHeight === "number" && ty.lineHeight !== 1.5) {
+              r.style.setProperty("--font-line-height", String(ty.lineHeight));
+            }
+            var FONT_MAP = {
+              "inter": '"Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              "sf-pro": '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
+              "roboto": '"Roboto Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              "open-sans": '"Open Sans Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+              "source-sans-3": '"Source Sans 3 Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+              "plus-jakarta-sans": '"Plus Jakarta Sans Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+              "outfit": '"Outfit Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+              "figtree": '"Figtree Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+              "lato": '"Lato", -apple-system, BlinkMacSystemFont, sans-serif',
+              "system": 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            };
+            var MONO_MAP = {
+              "jetbrains-mono": '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              "fira-code": '"Fira Code Variable", ui-monospace, monospace',
+              "source-code-pro": '"Source Code Pro Variable", ui-monospace, monospace',
+              "sf-mono": '"SF Mono", Consolas, "Liberation Mono", Menlo, monospace',
+              "system-mono": 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+            };
+            if (ty.fontFamily && FONT_MAP[ty.fontFamily]) {
+              r.style.setProperty("--font-sans", FONT_MAP[ty.fontFamily]);
+            }
+            if (ty.monoFontFamily && MONO_MAP[ty.monoFontFamily]) {
+              r.style.setProperty("--font-mono", MONO_MAP[ty.monoFontFamily]);
+            }
+          }
+        }
+      } catch (e) { /* storage unavailable — stylesheet defaults stand */ }
     </script>
   </head>
   <body>

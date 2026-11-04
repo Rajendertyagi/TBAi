@@ -3,6 +3,16 @@
 @import "tw-animate-css";
 /* Self-hosted Inter (variable woff2 is lazy — downloaded only when used). */
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/roboto";
+@import "@fontsource-variable/open-sans";
+@import "@fontsource-variable/source-sans-3";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource-variable/outfit";
+@import "@fontsource-variable/figtree";
+@import "@fontsource/lato";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/fira-code";
+@import "@fontsource-variable/source-code-pro";
 
 /* Generated palette blocks, one per selectable theme. Addressed by
    `html[data-tbai-theme]`, which outranks the `:root` / `.dark` blocks below on
@@ -20,10 +30,15 @@
     "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     sans-serif;
 
+  --font-mono:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-weight-base: 400;
+  --font-line-height: 1.5;
+
   font-family: var(--font-sans);
   font-size: 16px;
-  line-height: 1.5em;
-  font-weight: 400;
+  line-height: var(--font-line-height, 1.5);
+  font-weight: var(--font-weight-base, 400);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -506,4 +521,12 @@
 
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground;
+}
+
+code,
+kbd,
+samp,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
 }
