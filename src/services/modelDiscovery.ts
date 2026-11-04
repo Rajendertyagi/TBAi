@@ -53,33 +53,33 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs = 15000): Pro
 }
 
 /**
- * Modalities that can never serve as chat models. This is the legitimate half
- * of discovery filtering ("is this usable as a model?").
+ * Modalities that can never serve as chat models. This is the ONLY discovery
+ * filter: a model returned by a provider's model-list API is accepted unless
+ * it is identified here as incompatible with chat.
+ *
+ * The list is deliberately limited to non-chat model types — embedding,
+ * image generation, audio/transcription, reranking, moderation, and legacy
+ * completion models. It must not grow into a capability mechanism or a
+ * family allowlist: capability metadata comes exclusively from truthful
+ * per-model sources via ModelCapabilities, and unfamiliar-but-valid chat
+ * models (o3, gemma, mixtral, qwq, glm, kimi, …) must pass through.
  */
 function isExcludedModality(lowerId: string): boolean {
-  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-/.test(
+  return /embed|text-embedding|dall-e|flux|stable-diffusion|whisper|tts|imagen|rerank|image-|video-|moderation|transcribe|veo|babbage|davinci|realtime/.test(
     lowerId,
   );
 }
 
 /**
- * Legacy family allowlist. This is a discovery-noise filter only — it answers
- * "have we seen this family before", never "what can this model do". It must
- * NOT grow into a capability mechanism: capability metadata comes exclusively
- * from truthful per-model sources via ModelCapabilities. New families must be
- * handled by richer discovery, not by extending this expression.
+ * A model is a chat candidate unless it is identified as a non-chat modality.
+ *
+ * Provider model-list APIs are the authority on what exists; TBAi does not
+ * second-guess them with a family allowlist. Unknown families are accepted —
+ * the cost of a false accept is one unusable entry the user ignores, while
+ * the cost of a false reject is a valid model the user can never select.
  */
-function isKnownChatFamily(lowerId: string, type: string): boolean {
-  return (
-    /gpt|claude|gemini|llama|qwen|mistral|deepseek|codestral|sonnet|opus|haiku|flash|pro|yi|grok|phi|command|nighttales/.test(
-      lowerId,
-    ) || type === "ollama"
-  );
-}
-
-function isChatModel(id: string, type: string): boolean {
-  const lower = id.toLowerCase();
-  return !isExcludedModality(lower) && isKnownChatFamily(lower, type);
+function isChatModel(id: string): boolean {
+  return !isExcludedModality(id.toLowerCase());
 }
 
 /** Single owner of the "no source has reported anything yet" capability state. */
@@ -190,7 +190,7 @@ function normalizeOpenAI(raw: any, provider: string, discoveredAt: number): Mode
       // R2: the entry is read for its LIMITS, not just its id. A listing that omits
       // them yields no value and no stance — still unknown, never invented.
       .map((m: any) => ({ id: String(m?.id ?? "").trim(), raw: m as Record<string, unknown> }))
-      .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
+      .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id))
       .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
         withExtractedLimits(
           // OpenAI-compatible listings expose no reasoning metadata, so that half
@@ -208,7 +208,7 @@ function normalizeAnthropic(raw: any, provider: string, discoveredAt: number): M
   return data
     .map((m: any) => {
       const id = String(m?.id ?? "").trim();
-      if (!id || !isChatModel(id, provider)) return null;
+      if (!id || !isChatModel(id)) return null;
       // `max_input_tokens` / `max_output_tokens` are read generically now, by the
       // same extractor every other provider uses — Anthropic is no longer a
       // special case, it is simply the first provider whose field names the
@@ -238,7 +238,7 @@ function normalizeGoogle(raw: any, provider: string, discoveredAt: number): Mode
         .trim(),
       raw: m as Record<string, unknown>,
     }))
-    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id, provider))
+    .filter((m: { id: string }) => Boolean(m.id) && isChatModel(m.id))
     .map(({ id, raw }: { id: string; raw: Record<string, unknown> }) =>
       withExtractedLimits(
         // Google's listing reports no reasoning metadata either.
@@ -254,7 +254,9 @@ function normalizeGoogle(raw: any, provider: string, discoveredAt: number): Mode
 /** Ollama tag listing: identity only. Capabilities resolve per model via /api/show. */
 function normalizeOllama(raw: any): string[] {
   const data = Array.isArray(raw?.models) ? raw.models : [];
-  return data.map((m: any) => String(m?.name ?? "").trim()).filter(Boolean);
+  return data
+    .map((m: any) => String(m?.name ?? "").trim())
+    .filter((id: string) => Boolean(id) && isChatModel(id));
 }
 
 export async function discoverModels(input: DiscoverInput): Promise<ModelOption[]> {

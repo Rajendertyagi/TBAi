@@ -207,7 +207,10 @@ app.post("/api/providers/test", async (c) => {
       endpoint: cfg.endpoint ?? undefined,
       apiKey: apiKey ?? undefined,
     });
-    return c.json({ ok: true, modelCount: models.length });
+    // The test already discovered the models; returning them lets the dialog
+    // populate its picker without a second discovery pass (which for Ollama
+    // means N extra /api/show requests).
+    return c.json({ ok: true, modelCount: models.length, models });
   } catch (e) {
     logger.warn("ai", "ai.error", { ...errorLogFields(e, { provider: cfg.type }) });
     return c.json({ ok: false, error: sanitizeStreamError(e) }, 200);

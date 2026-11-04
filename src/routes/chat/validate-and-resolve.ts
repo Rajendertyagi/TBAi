@@ -29,6 +29,7 @@ import {
   type UIMessage,
 } from "ai";
 import { getModel } from "../../services/ai";
+import { resolveProviderApiKey } from "../../services/providerModel";
 import { buildReasoningProviderOptions } from "./provider-options";
 import { conversationService } from "../../services/storage";
 import { credentialStore } from "../../services/credentials";
@@ -149,13 +150,15 @@ export async function validateAndResolve(
   const needsKey = provider.type !== "ollama";
   let modelConfig = provider;
   if (needsKey) {
-    if (!credentialStore.has(provider.id)) {
+    // Decrypt failure throws and reaches the global error handler (500),
+    // exactly as before; a missing key is the diagnosable 400.
+    const apiKey = resolveProviderApiKey(provider);
+    if (!apiKey) {
       return {
         ok: false,
         response: c.json({ error: "No API key configured for this provider.", requestId }, 400),
       };
     }
-    const apiKey = credentialStore.get(provider.id);
     modelConfig = { ...provider, apiKey };
   }
   if (effectiveModel) {

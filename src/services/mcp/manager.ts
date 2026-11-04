@@ -30,8 +30,7 @@ import {
   sseFailureMessage,
 } from "./transport";
 import { extractMessageText, mcpContentToText } from "./tool-content";
-import { credentialStore } from "../../services/credentials";
-import { getModel } from "../../services/ai";
+import { buildProviderModel, resolveProviderApiKey } from "../../services/providerModel";
 import { instrumentedExecute } from "../../lib/tool-funnel";
 import { registry } from "../../config/providers";
 import type { McpServerCreate } from "../../lib/validation";
@@ -1001,20 +1000,17 @@ export class McpManager {
     if (!provider) {
       throw new Error("No active provider configured; cannot fulfill MCP sampling request");
     }
+    // A credential failure is tolerated here: proceed keyless and let the
+    // provider reject, exactly as before. The full provider config (including
+    // apiProtocol) is passed through, so a Chat Completions provider is built
+    // the same way as in the chat route.
     let apiKey: string | undefined;
-    if (provider.type !== "ollama") {
-      try {
-        apiKey = credentialStore.has(provider.id) ? credentialStore.get(provider.id) : undefined;
-      } catch {
-        apiKey = undefined;
-      }
+    try {
+      apiKey = resolveProviderApiKey(provider);
+    } catch {
+      apiKey = undefined;
     }
-    const model = getModel({
-      type: provider.type,
-      endpoint: provider.endpoint,
-      model: provider.model,
-      apiKey,
-    });
+    const model = buildProviderModel(provider, { apiKey });
     const params = request.params as {
       messages?: { role: "user" | "assistant"; content?: unknown }[];
       systemPrompt?: string;

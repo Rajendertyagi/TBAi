@@ -232,16 +232,30 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
-      const data = await res.json();
+      const data = (await res.json()) as {
+        ok: boolean;
+        modelCount?: number;
+        models?: ModelOption[];
+        error?: string;
+      };
       if (data.ok) {
+        const count = data.modelCount ?? 0;
         setTestResult({
           ok: true,
+          // Precise about what was verified: the model list is reachable.
+          // Generation is not exercised (it would spend tokens/credits).
           message:
-            data.modelCount > 0
-              ? `Connection successful (${data.modelCount} models found)`
-              : "Connection successful",
+            count > 0
+              ? `Model list reachable (${count} models found)`
+              : "Model list reachable (no models returned)",
         });
-        if (data.modelCount > 0) void handleDiscover();
+        // The test already discovered the models — reuse them instead of
+        // firing a second discovery pass (N extra /api/show calls on Ollama).
+        if (Array.isArray(data.models) && data.models.length > 0) {
+          setDiscovered(data.models);
+          setPicked(new Set());
+          setDiscoverError(null);
+        }
       } else setTestResult({ ok: false, message: data.error || "Connection failed" });
     } catch (e) {
       setTestResult({
