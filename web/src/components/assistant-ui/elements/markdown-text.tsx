@@ -163,7 +163,7 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   p: ({ className, ...props }) => (
-    <p className={cn("aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
+    <p className={cn("aui-md-p my-3 first:mt-0 last:mb-0", className)} {...props} />
   ),
   a: ({ className, ...props }) => (
     <a
@@ -242,9 +242,7 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
-  li: ({ className, ...props }) => (
-    <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
-  ),
+  li: ({ className, ...props }) => <li className={cn("aui-md-li", className)} {...props} />,
   strong: ({ className, ...props }) => (
     <strong className={cn("aui-md-strong font-semibold", className)} {...props} />
   ),
@@ -254,7 +252,7 @@ const defaultComponents = memoizeMarkdownComponents({
   pre: ({ className, ...props }) => (
     <pre
       className={cn(
-        "aui-md-pre border-border/50 bg-muted/30 overflow-x-auto rounded-t-none rounded-b-xl border border-t-0 p-3.5 text-[13px] leading-relaxed",
+        "aui-md-pre border-border/50 bg-muted/30 overflow-x-auto rounded-t-none rounded-b-xl border border-t-0 p-3.5 leading-relaxed",
         className,
       )}
       {...props}
@@ -265,8 +263,7 @@ const defaultComponents = memoizeMarkdownComponents({
     return (
       <code
         className={cn(
-          !isCodeBlock &&
-            "aui-md-inline-code bg-muted rounded-md px-1.5 py-0.5 font-mono text-[0.85em]",
+          !isCodeBlock && "aui-md-inline-code bg-muted rounded-md px-1.5 py-0.5 font-mono",
           className,
         )}
         {...props}

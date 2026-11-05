@@ -110,6 +110,11 @@ function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOr
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
     directProbe: { status: 200, error: null },
     appInstanceId: "instance-a",
+    zoomHotkeys: {
+      before: { zoom: "", fontSize: "16px" },
+      after: { zoom: "", fontSize: "16px" },
+      error: null,
+    },
     ...overrides,
   };
 }
@@ -410,6 +415,83 @@ describe("G1 packaged origin: the failure matrix", () => {
       packagedInput({ probe: { status: null, body: null, error: "TypeError: Failed to fetch" } }),
     );
     expect(transport.stage).toBe("fetch");
+  });
+
+  it("stops at zoom-hotkeys when the WebView zoom changed under Ctrl+Plus/Minus/0", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        zoomHotkeys: {
+          before: { zoom: "", fontSize: "16px" },
+          after: { zoom: "1.2", fontSize: "16px" },
+          error: null,
+        },
+      }),
+    );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    expect(assessed.ok).toBe(false);
+    expect(assessed.failures.join(" ")).toContain("zoomHotkeysEnabled must be false");
+  });
+
+  it("stops at zoom-hotkeys when the root font size changed under the chords", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        zoomHotkeys: {
+          before: { zoom: "", fontSize: "16px" },
+          after: { zoom: "", fontSize: "19.2px" },
+          error: null,
+        },
+      }),
+    );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    expect(assessed.failures.join(" ")).toContain("root font size");
+  });
+
+  it("stops at zoom-hotkeys when the probe itself failed", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        zoomHotkeys: { before: null, after: null, error: "could not read the document root" },
+      }),
+    );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    expect(assessed.failures.join(" ")).toContain("could not read the document root");
+  });
+
+  it("stops at zoom-hotkeys when only one read completed", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        zoomHotkeys: {
+          before: { zoom: "", fontSize: "16px" },
+          after: null,
+          error: null,
+        },
+      }),
+    );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    expect(assessed.failures.join(" ")).toContain("did not complete both reads");
+  });
+
+  it("accepts identical zoom and font-size reads (zoomHotkeysEnabled: false)", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        zoomHotkeys: {
+          before: { zoom: "", fontSize: "16px" },
+          after: { zoom: "", fontSize: "16px" },
+          error: null,
+        },
+      }),
+    );
+    expect(assessed.failures).toEqual([]);
+    expect(assessed.ok).toBe(true);
+  });
+
+  it("does not fail zoom-hotkeys when the page never loaded (fetch fails first)", () => {
+    const assessed = assessPackagedOrigin(
+      packagedInput({
+        probe: { status: null, body: null, error: "TypeError: Failed to fetch" },
+        zoomHotkeys: { before: null, after: null, error: null },
+      }),
+    );
+    expect(assessed.stage).toBe("fetch");
   });
 
   it("fails when the in-origin read reached a different server", () => {

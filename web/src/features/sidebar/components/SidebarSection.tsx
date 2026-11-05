@@ -43,7 +43,7 @@ export function SidebarSection({
             aria-controls={`sidebar-section-${id}`}
             className={cn(
               "flex min-w-0 flex-1 items-center gap-1 rounded-md py-0.5 pl-1.5 pr-1",
-              "text-[13px] font-semibold text-foreground/90 tracking-wide",
+              "text-[calc(var(--interface-font-size)*0.8125)] font-semibold text-foreground/90 tracking-wide",
               "transition-colors hover:text-foreground",
               "outline-none focus-visible:ring-1 focus-visible:ring-ring",
             )}

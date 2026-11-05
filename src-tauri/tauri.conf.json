@@ -26,7 +26,8 @@
         "minHeight": 360,
         "decorations": false,
         "transparent": false,
-        "visible": true
+        "visible": true,
+        "zoomHotkeysEnabled": false
       }
     ],
     "security": {

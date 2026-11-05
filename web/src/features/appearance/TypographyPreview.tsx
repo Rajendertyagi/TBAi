@@ -1,28 +1,46 @@
 import { memo } from "react";
 import { SyntaxHighlighter } from "../../components/assistant-ui/elements/shiki-highlighter";
+import { TerminalBlock } from "../../components/assistant-ui/elements/terminal-block";
+import { formatAppScale } from "./typography";
 
-export const TypographyPreview = memo(function TypographyPreview({
-  fontFamilyName,
-  monoFontFamilyName,
-  fontWeight,
-  monoFontWeight,
-  codeFontSize,
-  lineHeight,
-  baseSize,
-}: {
-  fontFamilyName: string;
-  monoFontFamilyName: string;
-  fontWeight: number;
-  monoFontWeight: number;
-  codeFontSize: number;
-  lineHeight: number;
-  baseSize: number;
-}) {
-  const sampleCode = `// TBAi code typography preview
+const SAMPLE_CODE = `// TBAi code typography preview
 function calculateMetrics(tokens: number, rate: number): number {
   return tokens * rate;
 }`;
 
+const SAMPLE_TERMINAL_LINES = [
+  "$ bun run test",
+  "bun test v1.4.4",
+  " 22 pass",
+  " 0 fail",
+  "Ran 22 tests across 1 file.",
+] as const;
+
+export const TypographyPreview = memo(function TypographyPreview({
+  interfaceFontName,
+  codeFontName,
+  terminalFontName,
+  interfaceFontWeight,
+  codeFontWeight,
+  terminalFontWeight,
+  interfaceFontSize,
+  codeFontSize,
+  terminalFontSize,
+  readingLineHeight,
+  appScale,
+}: {
+  interfaceFontName: string;
+  codeFontName: string;
+  terminalFontName: string;
+  interfaceFontWeight: number;
+  codeFontWeight: number;
+  terminalFontWeight: number;
+  interfaceFontSize: number;
+  codeFontSize: number;
+  terminalFontSize: number;
+  readingLineHeight: number;
+  appScale: number;
+}) {
   return (
     <div className="rounded-xl border border-border bg-card/60 p-4 space-y-3 transition-all shadow-xs">
       <div className="flex items-center justify-between border-b border-border/60 pb-2 flex-wrap gap-1">
@@ -30,9 +48,10 @@ function calculateMetrics(tokens: number, rate: number): number {
           Live Typography Preview
         </span>
         <span className="text-3xs text-muted-foreground tabular-nums">
-          UI: {fontFamilyName} • W{fontWeight} | Code: {monoFontFamilyName} • {codeFontSize}px • W
-          {monoFontWeight} | Scale: {baseSize}px ({Math.round((baseSize / 16) * 100)}%) •{" "}
-          {lineHeight}x
+          UI: {interfaceFontName} • {interfaceFontSize}px • W{interfaceFontWeight} | Code:{" "}
+          {codeFontName} • {codeFontSize}px • W{codeFontWeight} | Terminal: {terminalFontName} •{" "}
+          {terminalFontSize}px • W{terminalFontWeight} | Scale: {formatAppScale(appScale)} •{" "}
+          {readingLineHeight}x
         </span>
       </div>
 
@@ -49,14 +68,30 @@ function calculateMetrics(tokens: number, rate: number): number {
       <div className="pt-1">
         <div className="flex items-center justify-between text-3xs text-muted-foreground mb-1">
           <span>
-            Code font: {monoFontFamilyName} ({codeFontSize}px • W{monoFontWeight})
+            Code font: {codeFontName} ({codeFontSize}px • W{codeFontWeight})
           </span>
           <span className="font-mono">shiki: typescript</span>
         </div>
         <SyntaxHighlighter
-          code={sampleCode}
+          code={SAMPLE_CODE}
           language="typescript"
           className="rounded-lg overflow-hidden border border-border/40"
+        />
+      </div>
+
+      <div className="pt-1">
+        <div className="flex items-center justify-between text-3xs text-muted-foreground mb-1">
+          <span>
+            Terminal font: {terminalFontName} ({terminalFontSize}px • W{terminalFontWeight})
+          </span>
+          <span className="font-mono">run_command</span>
+        </div>
+        <TerminalBlock
+          command="bun run test"
+          lines={SAMPLE_TERMINAL_LINES}
+          visibleCount={SAMPLE_TERMINAL_LINES.length}
+          done={true}
+          variant="ink"
         />
       </div>
     </div>

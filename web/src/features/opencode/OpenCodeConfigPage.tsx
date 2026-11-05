@@ -164,7 +164,10 @@ function NativeJson({ raw, malformed }: { raw: string; malformed: boolean }) {
     return <p className="text-xs text-muted-foreground">{openCodeConfigCopy.json.empty}</p>;
   }
   return (
-    <pre className="max-h-[26rem] overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-[11px] leading-5">
+    <pre
+      data-slot="code-preview"
+      className="max-h-[26rem] overflow-auto rounded-lg border border-border bg-muted/30 p-3 leading-relaxed"
+    >
       <code>{raw}</code>
     </pre>
   );
@@ -208,7 +211,7 @@ function AddRuleForm({
       </div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]">
         <div className="space-y-1">
-          <label htmlFor="opencode-new-action" className="text-[11px] text-muted-foreground">
+          <label htmlFor="opencode-new-action" className="text-2xs text-muted-foreground">
             {copy.action}
           </label>
           <Input
@@ -222,7 +225,7 @@ function AddRuleForm({
           />
         </div>
         <div className="space-y-1">
-          <label htmlFor="opencode-new-resource" className="text-[11px] text-muted-foreground">
+          <label htmlFor="opencode-new-resource" className="text-2xs text-muted-foreground">
             {copy.resource}
           </label>
           <Input
@@ -235,7 +238,7 @@ function AddRuleForm({
           />
         </div>
         <div className="space-y-1">
-          <span className="text-[11px] text-muted-foreground">{copy.effect}</span>
+          <span className="text-2xs text-muted-foreground">{copy.effect}</span>
           <EffectSelect
             value={draft.effect}
             disabled={disabled}
@@ -268,7 +271,7 @@ function AddRuleForm({
           <Plus className="size-3.5" aria-hidden="true" />
           {busy ? copy.submitting : copy.submit}
         </Button>
-        <span className="text-[11px] text-muted-foreground">{copy.position}</span>
+        <span className="text-2xs text-muted-foreground">{copy.position}</span>
       </div>
     </div>
   );
@@ -530,7 +533,7 @@ export function OpenCodeConfigPage() {
 
             {rules.rules.length > 0 && (
               <div className="overflow-hidden rounded-lg border border-border">
-                <div className="grid grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+                <div className="grid grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 border-b border-border bg-muted/40 px-3 py-1.5 text-2xs font-medium text-muted-foreground">
                   <span>{openCodeConfigCopy.labels.order}</span>
                   <span>{openCodeConfigCopy.labels.action}</span>
                   <span>{openCodeConfigCopy.labels.resource}</span>
@@ -564,7 +567,7 @@ export function OpenCodeConfigPage() {
                       <span className="tabular-nums text-muted-foreground">{fileRow}</span>
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{rule.action}</span>
-                        <span className="block truncate text-[11px] text-muted-foreground">
+                        <span className="block truncate text-2xs text-muted-foreground">
                           {actionDescription(rule.action)}
                         </span>
                       </span>
@@ -694,7 +697,7 @@ export function OpenCodeConfigPage() {
           </SettingsSection>
 
           {!snapshot.malformed && (
-            <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+            <p className="flex items-start gap-1.5 text-2xs text-muted-foreground">
               <AlertCircle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
               {openCodeConfigCopy.source.description}
             </p>

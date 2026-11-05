@@ -26,7 +26,13 @@
  *   3. `executeScript` — `window.location.origin` in the page, read only once the
  *                        document has left `about:blank` (see below);
  *   4. `fetch`         — `fetch()` of `/api/server/instance` executed INSIDE that
- *                        origin, recording status and body.
+ *                        origin, recording status and body;
+ *   5. `zoom-hotkeys`  — the document root's `zoom` and computed font-size are
+ *                        read, Ctrl+Plus / Ctrl+Minus / Ctrl+0 are sent via the
+ *                        WebDriver Actions API, and both are read again. With
+ *                        `zoomHotkeysEnabled: false` (pinned in
+ *                        `src-tauri/tauri.conf.json`) the WebView ignores the
+ *                        chords, so the two reads must be identical.
  *
  * ## Why step 3 waits
  *
@@ -121,7 +127,13 @@ const NAVIGATION_TIMEOUT_MS = 60_000;
 const POLL_MS = 250;
 const LOG_TAIL_CHARS = 8_000;
 
-export const PACKAGED_STAGES = ["session-create", "port-wait", "executeScript", "fetch"] as const;
+export const PACKAGED_STAGES = [
+  "session-create",
+  "port-wait",
+  "executeScript",
+  "fetch",
+  "zoom-hotkeys",
+] as const;
 export type PackagedStage = (typeof PACKAGED_STAGES)[number];
 
 /** `{ origin, href, title }` as read from the page, with nulls for anything missing. */
@@ -129,6 +141,12 @@ export interface PageRead {
   readonly origin: string | null;
   readonly href: string | null;
   readonly title: string | null;
+}
+
+/** `{ zoom, fontSize }` as read from the document root, with nulls for anything missing. */
+export interface ZoomRead {
+  readonly zoom: string;
+  readonly fontSize: string;
 }
 
 /**
@@ -178,6 +196,16 @@ export interface PackagedOriginInput {
   /** How that direct read went, so an absent id is reported with its cause. */
   readonly directProbe: {
     readonly status: number | null;
+    readonly error: string | null;
+  };
+  /**
+   * The zoom-hotkey probe: the document root's `zoom` and computed font-size
+   * before and after sending Ctrl+Plus / Ctrl+Minus / Ctrl+0. Both reads are
+   * null when the page never loaded (the fetch stage already fails then).
+   */
+  readonly zoomHotkeys: {
+    readonly before: ZoomRead | null;
+    readonly after: ZoomRead | null;
     readonly error: string | null;
   };
 }
@@ -349,11 +377,36 @@ export function assessPackagedOrigin(input: PackagedOriginInput): PackagedAssess
     }
   }
 
+  const zoomFailures: string[] = [];
+  if (input.zoomHotkeys.error !== null) {
+    zoomFailures.push(input.zoomHotkeys.error);
+  } else if (input.zoomHotkeys.before !== null || input.zoomHotkeys.after !== null) {
+    // The probe ran (the page loaded). Both reads must exist and be identical:
+    // with `zoomHotkeysEnabled: false` the WebView ignores Ctrl+Plus/Minus/0.
+    if (input.zoomHotkeys.before === null || input.zoomHotkeys.after === null) {
+      zoomFailures.push("the zoom-hotkey probe did not complete both reads");
+    } else {
+      if (input.zoomHotkeys.before.zoom !== input.zoomHotkeys.after.zoom) {
+        zoomFailures.push(
+          `Ctrl+Plus/Minus/0 changed the WebView zoom (${input.zoomHotkeys.before.zoom} → ${input.zoomHotkeys.after.zoom}); zoomHotkeysEnabled must be false`,
+        );
+      }
+      if (input.zoomHotkeys.before.fontSize !== input.zoomHotkeys.after.fontSize) {
+        zoomFailures.push(
+          `Ctrl+Plus/Minus/0 changed the root font size (${input.zoomHotkeys.before.fontSize} → ${input.zoomHotkeys.after.fontSize})`,
+        );
+      }
+    }
+  }
+  // Both null with no error: the page never loaded, so the fetch stage fails
+  // first and sequentialStages returns it.
+
   const stages: StageResult<PackagedStage>[] = [
     { stage: "session-create", failures: sessionFailures },
     { stage: "port-wait", failures: portFailures },
     { stage: "executeScript", failures: scriptFailures },
     { stage: "fetch", failures: probeFailures },
+    { stage: "zoom-hotkeys", failures: zoomFailures },
   ];
   return sequentialStages(stages);
 }
@@ -470,6 +523,18 @@ export function readProbeValue(value: unknown): {
   };
 }
 
+/** `{ zoom, fontSize }` from the zoom-read script, with nulls for anything missing. */
+export function readZoomValue(value: unknown): ZoomRead | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.zoom !== "string" || typeof record.fontSize !== "string") {
+    return null;
+  }
+  return { zoom: record.zoom, fontSize: record.fontSize };
+}
+
 /**
  * One read of the page, or why it could not be taken.
  *
@@ -538,6 +603,91 @@ export async function waitForNavigation(
 
 const ORIGIN_SCRIPT =
   "return { origin: window.location.origin, href: window.location.href, title: document.title };";
+
+const ZOOM_READ_SCRIPT =
+  "return { zoom: document.documentElement.style.zoom || '', fontSize: getComputedStyle(document.documentElement).fontSize };";
+
+/** WebDriver spec key for Control (U+E009). */
+const KEY_CONTROL = "\uE009";
+
+/**
+ * Reads the document root's `zoom` and computed font-size. Used before and
+ * after the zoom-hotkey probe; with `zoomHotkeysEnabled: false` both must be
+ * identical.
+ */
+async function readZoomFromDriver(
+  driverBaseUrl: string,
+  sessionId: string,
+): Promise<{ read: ZoomRead | null; error: string | null }> {
+  const call = await httpJson(`${driverBaseUrl}/session/${sessionId}/execute/sync`, {
+    method: "POST",
+    body: { script: ZOOM_READ_SCRIPT, args: [] },
+    timeoutMs: CDP_STEP_TIMEOUT_MS,
+  });
+  if (call.status === null) {
+    return {
+      read: null,
+      error: `could not read the document root: ${call.error ?? "unknown error"}`,
+    };
+  }
+  const executed = parseExecuteResponse(call.text);
+  if (executed.error !== null) return { read: null, error: executed.error };
+  const read = readZoomValue(executed.value);
+  if (read === null) {
+    return { read: null, error: "the zoom-read script returned no result" };
+  }
+  return { read, error: null };
+}
+
+/**
+ * Sends one Ctrl+<key> chord to the WebView via the WebDriver Actions API,
+ * then releases the keyboard state. With `zoomHotkeysEnabled: false` the
+ * WebView ignores the chord; with it enabled, the zoom would change and the
+ * probe would fail.
+ */
+async function sendZoomHotkey(
+  driverBaseUrl: string,
+  sessionId: string,
+  key: string,
+): Promise<{ error: string | null }> {
+  const actions = {
+    actions: [
+      {
+        type: "key",
+        id: "keyboard",
+        actions: [
+          { type: "keyDown", value: KEY_CONTROL },
+          { type: "keyDown", value: key },
+          { type: "keyUp", value: key },
+          { type: "keyUp", value: KEY_CONTROL },
+        ],
+      },
+    ],
+  };
+  const sent = await httpJson(`${driverBaseUrl}/session/${sessionId}/actions`, {
+    method: "POST",
+    body: actions,
+    timeoutMs: CDP_STEP_TIMEOUT_MS,
+  });
+  if (sent.status === null) {
+    return { error: `could not send Ctrl+${key}: ${sent.error ?? "unknown error"}` };
+  }
+  if (sent.status >= 400) {
+    return {
+      error: `the driver rejected Ctrl+${key} (HTTP ${sent.status}): ${tailText(sent.text ?? "", 300)}`,
+    };
+  }
+  const released = await httpJson(`${driverBaseUrl}/session/${sessionId}/actions`, {
+    method: "DELETE",
+    timeoutMs: CDP_STEP_TIMEOUT_MS,
+  });
+  if (released.status === null || released.status >= 400) {
+    return {
+      error: `could not release the keyboard after Ctrl+${key}: ${released.error ?? `HTTP ${released.status}`}`,
+    };
+  }
+  return { error: null };
+}
 
 async function readPageFromDriver(
   driverBaseUrl: string,
@@ -809,6 +959,15 @@ async function main(): Promise<number> {
     body: null,
     error: null,
   };
+  const zoomHotkeys: {
+    before: ZoomRead | null;
+    after: ZoomRead | null;
+    error: string | null;
+  } = {
+    before: null,
+    after: null,
+    error: null,
+  };
   const directProbe: { status: number | null; error: string | null } = {
     status: null,
     error: null,
@@ -944,6 +1103,26 @@ async function main(): Promise<number> {
                 probe.body = read.body;
                 probe.error = read.error ?? probe.error;
               }
+
+              // Zoom-hotkey probe: with `zoomHotkeysEnabled: false` the
+              // WebView ignores Ctrl+Plus/Minus/0, so the document root's
+              // zoom and computed font-size must be identical before and
+              // after the chords.
+              const before = await readZoomFromDriver(driverBaseUrl, sessionId);
+              zoomHotkeys.before = before.read;
+              zoomHotkeys.error = before.error;
+              if (before.read !== null) {
+                for (const key of ["=", "-", "0"]) {
+                  const sent = await sendZoomHotkey(driverBaseUrl, sessionId, key);
+                  if (sent.error !== null) {
+                    zoomHotkeys.error = sent.error;
+                    break;
+                  }
+                }
+                const after = await readZoomFromDriver(driverBaseUrl, sessionId);
+                zoomHotkeys.after = after.read;
+                zoomHotkeys.error = zoomHotkeys.error ?? after.error;
+              }
             }
           }
         }
@@ -1035,6 +1214,7 @@ async function main(): Promise<number> {
     probe,
     directProbe,
     appInstanceId,
+    zoomHotkeys,
   });
 
   const failures = [...assessment.failures];
@@ -1086,6 +1266,8 @@ async function main(): Promise<number> {
     /** How the direct read of the launched app's own identity went. */
     directProbe,
     appInstanceId,
+    /** The zoom-hotkey probe: root zoom/font-size before and after Ctrl+Plus/Minus/0. */
+    zoomHotkeys,
     observations: {
       originMatchesExpected: script.origin === EXPECTED_PACKAGED_ORIGIN,
       inOriginApiStatus: probe.status,

@@ -24,22 +24,33 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Interface font = Inter Variable (matches Codeg's --font-sans). Smoothing
-     + legibility flags apply app-wide from the root. */
+  /* Interface font = Inter Variable. Matches UI_FONTS["inter"].stack in
+     features/appearance/typography.ts exactly, so the default appearance is
+     identical whether or not the pre-paint bootstrap runs. Smoothing +
+     legibility flags apply app-wide from the root. */
   --font-sans:
-    "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
+    "Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
   --font-mono:
     "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Fixed generic monospace stack — NEVER written by a setting. Logs, IDs,
+     paths, token counts and tool metadata use this; code surfaces use
+     --code-font-family, terminal output uses --terminal-font-family. */
   --font-weight-base: 400;
-  --font-weight-mono: 400;
+  --interface-font-size: 16px;
+  --code-font-family:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --code-font-size: 13px;
-  --font-line-height: 1.5;
+  --code-font-weight: 400;
+  --terminal-font-family:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --terminal-font-size: 12px;
+  --terminal-font-weight: 400;
+  --reading-line-height: 1.5;
 
   font-family: var(--font-sans);
   font-size: 16px;
-  line-height: var(--font-line-height, 1.5);
+  line-height: 1.5;
   font-weight: var(--font-weight-base, 400);
 
   font-synthesis: none;
@@ -268,14 +279,38 @@
   --shadow-overlay: var(--elevation-overlay);
 }
 
+/* Interface font size scales the rem type scale ONLY — spacing, radius and
+   layout stay fixed (root font-size is 16px). Plain `@theme` (not `inline`):
+   the calc() references a DIFFERENT variable, so there is no cycle, and the
+   emitted :root variable is what utilities reference. The default
+   `--text-*--line-height` tokens are unitless ratios and need no override —
+   they scale proportionally with the font-size automatically. Zero visual
+   change at the 16px default. */
+@theme {
+  --text-xs: calc(var(--interface-font-size) * 0.75);
+  --text-sm: calc(var(--interface-font-size) * 0.875);
+  --text-base: var(--interface-font-size);
+  --text-lg: calc(var(--interface-font-size) * 1.125);
+  --text-xl: calc(var(--interface-font-size) * 1.25);
+  --text-2xl: calc(var(--interface-font-size) * 1.5);
+  --text-3xl: calc(var(--interface-font-size) * 1.875);
+  --text-4xl: calc(var(--interface-font-size) * 2.25);
+  --text-5xl: calc(var(--interface-font-size) * 3);
+  --text-6xl: calc(var(--interface-font-size) * 3.75);
+  --text-7xl: calc(var(--interface-font-size) * 4.5);
+  --text-8xl: calc(var(--interface-font-size) * 6);
+  --text-9xl: calc(var(--interface-font-size) * 8);
+}
+
 /* Two sizes below text-xs. Font-size only (no line-height), so replacing
    text-[11px]/text-[10px] arbitrary values is zero-visual-difference at 100%
-   zoom while staying rem-based for UI scaling. */
+   zoom while staying rem-based for UI scaling. Both track the interface font
+   size like the rest of the type scale. */
 @utility text-2xs {
-  font-size: 0.6875rem; /* 11px @100% */
+  font-size: calc(var(--interface-font-size) * 0.6875); /* 11px @16px */
 }
 @utility text-3xs {
-  font-size: 0.625rem; /* 10px @100% */
+  font-size: calc(var(--interface-font-size) * 0.625); /* 10px @16px */
 }
 
 /* The sidebar folder tile. Geometry and type metrics are fixed here so the
@@ -491,10 +526,6 @@
   @apply flex flex-col h-full;
 }
 
-.ai-message-content {
-  @apply text-sm leading-relaxed;
-}
-
 .ai-composer {
   @apply border-t border-border bg-muted/50;
 }
@@ -525,6 +556,8 @@
   @apply bg-muted-foreground;
 }
 
+/* Generic monospace — the fixed default stack. Logs, IDs, paths, token
+   counts and tool metadata use this; it is NEVER written by a setting. */
 code,
 kbd,
 samp,
@@ -533,18 +566,62 @@ pre,
   font-family: var(--font-mono);
 }
 
-/* Code content sizing & weight */
-.aui-md-inline-code {
-  font-size: calc(var(--code-font-size, 13px) * 0.95);
-  font-weight: var(--font-weight-mono, 400);
+/* Code surfaces — the selected code font, size and weight.
+   Selectors are ordered by ascending specificity (biome noDescendingSpecificity). */
+.aui-md-pre,
+[data-slot="code-diff"],
+[data-slot="code-preview"],
+.aui-shiki-base pre,
+.aui-code-block pre,
+.aui-md-pre code,
+.aui-code-block code,
+.aui-shiki-base pre code {
+  font-family: var(--code-font-family);
+  font-size: var(--code-font-size);
+  font-weight: var(--code-font-weight);
 }
 
-.aui-code-diff pre,
-.aui-code-diff code,
-.aui-md-pre,
-.aui-shiki-base pre,
-.aui-md-pre code,
-.aui-shiki-base pre code {
-  font-size: var(--code-font-size, 13px);
-  font-weight: var(--font-weight-mono, 400);
+.aui-md-inline-code {
+  font-family: var(--code-font-family);
+  font-size: calc(var(--code-font-size) * 0.95);
+  font-weight: var(--code-font-weight);
+}
+
+/* Terminal output — the selected terminal font, size and weight. */
+[data-slot="terminal-block"] {
+  font-family: var(--terminal-font-family);
+  font-size: var(--terminal-font-size);
+  font-weight: var(--terminal-font-weight);
+}
+
+/* Reading line height — prose only (markdown paragraphs, list items and the
+   assistant reasoning body). Never controls, headers, code or terminal rows. */
+.aui-md-p,
+.aui-md-li,
+.aui-reasoning-text {
+  line-height: var(--reading-line-height, 1.5);
+}
+
+/* Code word wrap — visual only; copying preserves the source exactly.
+   Diffs are never wrapped (alignment, indentation, line numbers). */
+[data-code-wrap="on"] .aui-md-pre,
+[data-code-wrap="on"] .aui-shiki-base pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Terminal output wrapping — visual only, whitespace-preserving.
+   The vendored TerminalBlock renders rows as plain divs inside a body div
+   (its second child); these structural selectors are pinned by
+   tests/dom/appearance/typography.test.tsx so a vendored-file change fails
+   loudly instead of silently dropping the wrap behaviour. */
+[data-terminal-wrap="off"] [data-slot="terminal-block"] > div:last-child {
+  overflow-x: auto;
+}
+[data-terminal-wrap="on"] [data-slot="terminal-block"] > div:last-child > div {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+[data-terminal-wrap="off"] [data-slot="terminal-block"] > div:last-child > div {
+  white-space: pre;
 }

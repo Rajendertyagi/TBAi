@@ -48,7 +48,7 @@ export function ToolTimeline({
       onOpenChange={onOpenChange}
       className={cn("w-full max-w-sm", className)}
     >
-      <CollapsibleTrigger className="group/trigger text-foreground/55 hover:text-foreground/90 flex items-center gap-1.5 rounded-md py-1 text-[13.5px] transition-colors outline-none">
+      <CollapsibleTrigger className="group/trigger text-foreground/55 hover:text-foreground/90 flex items-center gap-1.5 rounded-md py-1 text-[calc(var(--interface-font-size)*0.84375)] transition-colors outline-none">
         <ChevronRightIcon className="size-3.5 shrink-0 opacity-60 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-open/trigger:rotate-90 group-data-panel-open/trigger:rotate-90 motion-reduce:transition-none" />
         <SwapLabel active={streaming ? 0 : 1} className="text-start tabular-nums">
           <ShimmerLabel active={streaming} className="relative inline-block leading-none">
@@ -66,7 +66,7 @@ export function ToolTimeline({
             return (
               <div
                 key={step.chip}
-                className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-foreground/55 flex items-center gap-2 text-[13.5px] duration-300"
+                className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-foreground/55 flex items-center gap-2 text-[calc(var(--interface-font-size)*0.84375)] duration-300"
               >
                 <Icon className="text-foreground/35 size-3.5 shrink-0" />
                 <ShimmerLabel active={active} className="relative inline-block leading-none">

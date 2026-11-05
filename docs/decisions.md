@@ -8805,3 +8805,76 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
   cyclic tree, launcher attribution, digest mismatch, a table asserting every
   required part rejects, and the LB5 shim refusal. The shim and digest
   comparisons were disabled once to watch their cases fail, then restored.
+
+## Typography: independent ownership per rendering context; application scale is a factor (2026-11-05)
+
+- **Decision:** TBAi now has five independent typography groups — Interface,
+  Code Block, Terminal, Reading, and Application Scale — stored as one
+  `tbai-typography` record at `version: 2`. `--font-mono` is the fixed generic
+  monospace stack and is NEVER written by a setting; code surfaces use
+  `--code-font-family`, terminal output uses `--terminal-font-family`.
+  Application scale is a factor (0.75–1.5, default 1) displayed as a
+  percentage; the legacy `baseSize` (12–24px) migrates losslessly as
+  `baseSize / 16` (13 → 0.8125 = 81.25%, 18 → 1.125 = 112.5%).
+- **Why:** the previous single "monospace" bucket meant changing the code font
+  also changed logs, IDs, paths, token counts and tool metadata, and the
+  Reading line-height setting was dead for prose (`leading-relaxed` overrode
+  the inherited variable). Zed and VS Code both separate UI / editor /
+  terminal typography; TBAi now mirrors that separation without adopting
+  their settings machinery.
+- **Interface font size is an actual font-size setting, not zoom.** Root
+  `font-size` stays 16px; Tailwind v4 `--text-*` are overridden in plain
+  `@theme` to `calc(var(--interface-font-size) * <default rem>)` (verified by
+  compiling a scratch stylesheet with the installed tailwindcss@4.3.3). The
+  `--text-*--line-height` tokens are unitless ratios and need no override.
+  Spacing, radius and layout stay fixed. `@theme inline` was tested and
+  rejected (inlines the calc into every utility, drops the `:root` variable).
+- **Application scale stays CSS `zoom`** on `documentElement` (WebView2 /
+  Chromium; Firefox 126+). Stored as `appScale`; never writes font
+  preferences. `zoomHotkeysEnabled: false` is pinned in
+  `src-tauri/tauri.conf.json` (`app.windows[0]`) so Ctrl+Plus/Minus/0 cannot
+  change the WebView zoom; the packaged WebView2 is verified by the
+  `zoom-hotkeys` stage in `scripts/verify-packaged-webview-origin.ts` (same
+  session, Actions API via the existing raw-HTTP `httpJson`; no duplicate
+  driver infrastructure).
+- **Code word wrap and terminal wrapping are visual only** (`white-space`);
+  copied source is byte-identical. Diffs never wrap. Terminal wrapping
+  preserves whitespace and indentation (`pre-wrap` + `overflow-wrap:
+  anywhere`); off means `pre` + horizontal scroll.
+- **Reading line height** applies to `.aui-md-p`, `.aui-md-li` and
+  `.aui-reasoning-text` (reasoning body included; headers/metadata
+  untouched).
+- **OpenCode JSON config preview** (`OpenCodeConfigPage.tsx`) is a code
+  surface: it uses the selected code font, size and weight via
+  `[data-slot="code-preview"]`.
+- **Migration:** v1 (both historical shapes) → v2 is lossless for every
+  legacy `baseSize` (all sixteenths, exactly representable). The pre-paint
+  bootstrap in `web/index.html` is a faithful port of the TS normalization,
+  including per-font weight clamping (fixes the existing drift where the
+  bootstrap did not clamp to font capabilities); a unit test extracts
+  `FONT_MAP`/`MONO_MAP` from `index.html` and asserts they match
+  `UI_FONTS`/`MONO_FONTS`.
+- **Vendored components were not edited.** `TerminalBlock` and `CodeDiff`
+  keep their upstream copies; the terminal/code font ownership and the
+  wrap behaviour are applied via unlayered CSS on `[data-slot="terminal-block"]`
+  / `[data-slot="code-diff"]` (unlayered beats Tailwind's layered utilities).
+  The terminal wrap rules use structural selectors
+  (`> div:last-child > div`) pinned by `tests/dom/appearance/typography.test.tsx`.
+- **Pre-existing drift fixed in passing** (all inside files already being
+  modified): the stylesheet `:root --font-sans` now matches
+  `UI_FONTS["inter"].stack` exactly (it previously differed, so the default
+  appearance changed when the bootstrap ran); dead `.aui-code-diff` and
+  `.ai-message-content` rules removed; dead `text-[13px]` / `text-[0.85em]`
+  utilities removed; `.aui-md-p` / `.aui-md-li` / `.aui-reasoning-text` no
+  longer override the reading line height with `leading-relaxed`.
+- **Guards:** `tests/unit/appearance/typography.test.ts` (v2, migration from
+  both v1 shapes, exact factor values, per-field validation, independent
+  weight clamping, scoped resets, master reset, corruption recovery,
+  bootstrap parity), `tests/dom/appearance/typography.test.tsx` (variable
+  ownership, `.font-mono` stays fixed, reset isolation, source-text guards
+  for the CSS rules and the vendored-component anchors),
+  `tests/e2e/appearance-scaling.spec.ts` (computed-style independence for
+  interface/code/terminal/scale, copy-preservation, reading-line-height
+  prose-only, 75/100/150 regression; green in chromium-headless and
+  edge-headless), `tests/unit/tooling/webview-origin-evidence.test.ts`
+  (zoom-hotkeys stage in the packaged failure matrix).

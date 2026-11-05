@@ -102,7 +102,7 @@ export function ApprovalCard({
           <TerminalIcon className="size-4" />
         </span>
         <div className="flex flex-col">
-          <p className="text-[13.5px] font-medium">{title}</p>
+          <p className="text-[calc(var(--interface-font-size)*0.84375)] font-medium">{title}</p>
           <p className="text-foreground/45 text-xs">{subtitle}</p>
         </div>
       </div>

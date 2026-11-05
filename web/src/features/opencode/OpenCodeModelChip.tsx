@@ -99,7 +99,7 @@ export function OpenCodeModelChip() {
                 groups.map((g) => (
                   <div key={g.provider || "other"}>
                     {g.provider ? (
-                      <div className="px-2 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <div className="px-2 pt-2 pb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
                         {g.provider}
                       </div>
                     ) : null}

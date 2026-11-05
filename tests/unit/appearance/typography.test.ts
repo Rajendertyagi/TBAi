@@ -1,18 +1,49 @@
 import { describe, expect, it, beforeEach } from "bun:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
+  APP_SCALE_CONFIG,
   clampWeightForFont,
   DEFAULT_TYPOGRAPHY,
+  formatAppScale,
   getFont,
+  MONO_FONTS,
   readTypography,
+  resetApplicationScale,
   resetCodeTypography,
-  resetDisplayScale,
   resetInterfaceTypography,
+  resetReadingTypography,
+  resetTerminalTypography,
   resetTypography,
+  UI_FONTS,
   writeTypography,
   type TypographyConfig,
 } from "../../../web/src/features/appearance/typography";
+import { REPO_ROOT } from "../../helpers/repo-root";
 
-describe("Typography config, storage & scoped resets", () => {
+const STORAGE_KEY = "tbai-typography";
+
+function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConfig {
+  return {
+    version: 2,
+    interfaceFontFamily: "roboto",
+    interfaceFontSize: 18,
+    interfaceFontWeight: 700,
+    codeFontFamily: "fira-code",
+    codeFontSize: 16,
+    codeFontWeight: 300,
+    codeWordWrap: true,
+    terminalFontFamily: "source-code-pro",
+    terminalFontSize: 14,
+    terminalFontWeight: 600,
+    terminalWrap: false,
+    readingLineHeight: 1.65,
+    appScale: 1.125,
+    ...overrides,
+  };
+}
+
+describe("Typography config, storage & scoped resets (v2)", () => {
   beforeEach(() => {
     if (typeof window !== "undefined" && window.localStorage) {
       window.localStorage.clear();
@@ -20,36 +51,148 @@ describe("Typography config, storage & scoped resets", () => {
   });
 
   it("returns default typography when storage is empty", () => {
-    expect(DEFAULT_TYPOGRAPHY.fontFamily).toBe("inter");
-    expect(DEFAULT_TYPOGRAPHY.monoFontFamily).toBe("jetbrains-mono");
-    expect(DEFAULT_TYPOGRAPHY.baseSize).toBe(16);
-    expect(DEFAULT_TYPOGRAPHY.fontWeight).toBe(400);
-    expect(DEFAULT_TYPOGRAPHY.monoFontWeight).toBe(400);
+    expect(DEFAULT_TYPOGRAPHY.version).toBe(2);
+    expect(DEFAULT_TYPOGRAPHY.interfaceFontFamily).toBe("inter");
+    expect(DEFAULT_TYPOGRAPHY.interfaceFontSize).toBe(16);
+    expect(DEFAULT_TYPOGRAPHY.interfaceFontWeight).toBe(400);
+    expect(DEFAULT_TYPOGRAPHY.codeFontFamily).toBe("jetbrains-mono");
     expect(DEFAULT_TYPOGRAPHY.codeFontSize).toBe(13);
-    expect(DEFAULT_TYPOGRAPHY.lineHeight).toBe(1.5);
+    expect(DEFAULT_TYPOGRAPHY.codeFontWeight).toBe(400);
+    expect(DEFAULT_TYPOGRAPHY.codeWordWrap).toBe(false);
+    expect(DEFAULT_TYPOGRAPHY.terminalFontFamily).toBe("jetbrains-mono");
+    expect(DEFAULT_TYPOGRAPHY.terminalFontSize).toBe(12);
+    expect(DEFAULT_TYPOGRAPHY.terminalFontWeight).toBe(400);
+    expect(DEFAULT_TYPOGRAPHY.terminalWrap).toBe(true);
+    expect(DEFAULT_TYPOGRAPHY.readingLineHeight).toBe(1.5);
+    expect(DEFAULT_TYPOGRAPHY.appScale).toBe(1);
   });
 
-  it("migrates legacy configuration missing monoFontWeight and codeFontSize", () => {
-    if (typeof window !== "undefined" && window.localStorage) {
-      const legacy = {
-        version: 1,
-        fontFamily: "roboto",
-        monoFontFamily: "fira-code",
-        fontWeight: 600,
-        baseSize: 18,
-        lineHeight: 1.65,
-      };
-      window.localStorage.setItem("tbai-typography", JSON.stringify(legacy));
-      const config = readTypography();
-      expect(config.fontFamily).toBe("roboto");
-      expect(config.monoFontFamily).toBe("fira-code");
-      expect(config.fontWeight).toBe(600);
-      // monoFontWeight falls back to parsed.fontWeight
-      expect(config.monoFontWeight).toBe(600);
-      // codeFontSize falls back to default 13
-      expect(config.codeFontSize).toBe(13);
-      expect(config.baseSize).toBe(18);
+  it("migrates the first v1 shape (no monoFontWeight / codeFontSize) losslessly", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    const legacy = {
+      version: 1,
+      fontFamily: "roboto",
+      monoFontFamily: "fira-code",
+      fontWeight: 600,
+      baseSize: 18,
+      lineHeight: 1.65,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+    const config = readTypography();
+    expect(config.version).toBe(2);
+    expect(config.interfaceFontFamily).toBe("roboto");
+    expect(config.interfaceFontWeight).toBe(600);
+    expect(config.codeFontFamily).toBe("fira-code");
+    // monoFontWeight falls back to fontWeight
+    expect(config.codeFontWeight).toBe(600);
+    expect(config.codeFontSize).toBe(13);
+    expect(config.readingLineHeight).toBe(1.65);
+    // 18 / 16 = 1.125 exactly
+    expect(config.appScale).toBe(1.125);
+    // New fields take defaults
+    expect(config.interfaceFontSize).toBe(16);
+    expect(config.codeWordWrap).toBe(false);
+    expect(config.terminalFontFamily).toBe("jetbrains-mono");
+    expect(config.terminalFontSize).toBe(12);
+    expect(config.terminalFontWeight).toBe(400);
+    expect(config.terminalWrap).toBe(true);
+  });
+
+  it("migrates the second v1 shape (with monoFontWeight / codeFontSize) losslessly", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    const legacy = {
+      version: 1,
+      fontFamily: "outfit",
+      monoFontFamily: "source-code-pro",
+      fontWeight: 700,
+      monoFontWeight: 300,
+      baseSize: 13,
+      codeFontSize: 15,
+      lineHeight: 1.35,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+    const config = readTypography();
+    expect(config.interfaceFontFamily).toBe("outfit");
+    expect(config.interfaceFontWeight).toBe(700);
+    expect(config.codeFontFamily).toBe("source-code-pro");
+    expect(config.codeFontWeight).toBe(300);
+    expect(config.codeFontSize).toBe(15);
+    expect(config.readingLineHeight).toBe(1.35);
+    // 13 / 16 = 0.8125 exactly (81.25%)
+    expect(config.appScale).toBe(0.8125);
+  });
+
+  it("maps every legacy baseSize to its exact factor", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    const expected: Record<number, number> = {
+      12: 0.75,
+      13: 0.8125,
+      14: 0.875,
+      15: 0.9375,
+      16: 1,
+      17: 1.0625,
+      18: 1.125,
+      19: 1.1875,
+      20: 1.25,
+      21: 1.3125,
+      22: 1.375,
+      23: 1.4375,
+      24: 1.5,
+    };
+    for (const [baseSize, appScale] of Object.entries(expected)) {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, baseSize: Number(baseSize) }),
+      );
+      expect(readTypography().appScale).toBe(appScale);
     }
+  });
+
+  it("validates appScale strictly (NaN, out-of-range, wrong type → default)", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    for (const bad of [Number.NaN, 0.5, 2, "1.25", null, undefined, Number.POSITIVE_INFINITY]) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, appScale: bad }));
+      expect(readTypography().appScale).toBe(1);
+    }
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, appScale: 1.25 }));
+    expect(readTypography().appScale).toBe(1.25);
+  });
+
+  it("validates every v2 field independently", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        interfaceFontFamily: "not-a-font",
+        interfaceFontSize: 99,
+        interfaceFontWeight: 42,
+        codeFontFamily: "not-a-mono",
+        codeFontSize: 99,
+        codeFontWeight: 42,
+        codeWordWrap: "yes",
+        terminalFontFamily: "not-a-mono",
+        terminalFontSize: 99,
+        terminalFontWeight: 42,
+        terminalWrap: "yes",
+        readingLineHeight: 99,
+        appScale: 99,
+      }),
+    );
+    const config = readTypography();
+    expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
+    expect(config.interfaceFontSize).toBe(16);
+    expect(config.interfaceFontWeight).toBe(400);
+    expect(config.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
+    expect(config.codeFontSize).toBe(13);
+    expect(config.codeFontWeight).toBe(400);
+    expect(config.codeWordWrap).toBe(false);
+    expect(config.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
+    expect(config.terminalFontSize).toBe(12);
+    expect(config.terminalFontWeight).toBe(400);
+    expect(config.terminalWrap).toBe(true);
+    expect(config.readingLineHeight).toBe(1.5);
+    expect(config.appScale).toBe(1);
   });
 
   it("clamps interface and code weights independently", () => {
@@ -81,97 +224,198 @@ describe("Typography config, storage & scoped resets", () => {
     expect(clampWeightForFont(600, lato)).toBe(700);
   });
 
-  it("resetInterfaceTypography preserves code and scale settings", () => {
-    const custom: TypographyConfig = {
-      version: 1,
-      fontFamily: "roboto",
-      monoFontFamily: "fira-code",
-      fontWeight: 700,
-      monoFontWeight: 300,
-      baseSize: 18,
-      codeFontSize: 16,
-      lineHeight: 1.65,
-    };
-    const reset = resetInterfaceTypography(custom);
-    expect(reset.fontFamily).toBe(DEFAULT_TYPOGRAPHY.fontFamily);
-    expect(reset.fontWeight).toBe(DEFAULT_TYPOGRAPHY.fontWeight);
-    // Preserved:
-    expect(reset.monoFontFamily).toBe("fira-code");
-    expect(reset.monoFontWeight).toBe(300);
-    expect(reset.codeFontSize).toBe(16);
-    expect(reset.baseSize).toBe(18);
-    expect(reset.lineHeight).toBe(1.65);
+  it("formatAppScale trims trailing zeros", () => {
+    expect(formatAppScale(0.75)).toBe("75%");
+    expect(formatAppScale(0.8125)).toBe("81.25%");
+    expect(formatAppScale(0.875)).toBe("87.5%");
+    expect(formatAppScale(0.9375)).toBe("93.75%");
+    expect(formatAppScale(1)).toBe("100%");
+    expect(formatAppScale(1.0625)).toBe("106.25%");
+    expect(formatAppScale(1.125)).toBe("112.5%");
+    expect(formatAppScale(1.25)).toBe("125%");
+    expect(formatAppScale(1.5)).toBe("150%");
   });
 
-  it("resetCodeTypography preserves interface and scale settings", () => {
-    const custom: TypographyConfig = {
-      version: 1,
-      fontFamily: "roboto",
-      monoFontFamily: "fira-code",
-      fontWeight: 700,
-      monoFontWeight: 300,
-      baseSize: 18,
-      codeFontSize: 16,
-      lineHeight: 1.65,
-    };
-    const reset = resetCodeTypography(custom);
-    // Reset:
-    expect(reset.monoFontFamily).toBe(DEFAULT_TYPOGRAPHY.monoFontFamily);
-    expect(reset.monoFontWeight).toBe(DEFAULT_TYPOGRAPHY.monoFontWeight);
+  it("APP_SCALE_CONFIG step reaches every legacy value exactly", () => {
+    expect(APP_SCALE_CONFIG.min).toBe(0.75);
+    expect(APP_SCALE_CONFIG.max).toBe(1.5);
+    expect(APP_SCALE_CONFIG.step).toBe(0.0625);
+    for (
+      let scale = APP_SCALE_CONFIG.min;
+      scale <= APP_SCALE_CONFIG.max + 1e-9;
+      scale += APP_SCALE_CONFIG.step
+    ) {
+      const rounded = Math.round(scale * 16) / 16;
+      expect(Math.abs(rounded - scale)).toBeLessThan(1e-9);
+    }
+  });
+
+  it("resetInterfaceTypography preserves code, terminal, reading and scale settings", () => {
+    const reset = resetInterfaceTypography(customConfig());
+    expect(reset.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
+    expect(reset.interfaceFontSize).toBe(DEFAULT_TYPOGRAPHY.interfaceFontSize);
+    expect(reset.interfaceFontWeight).toBe(DEFAULT_TYPOGRAPHY.interfaceFontWeight);
+    // Preserved:
+    expect(reset.codeFontFamily).toBe("fira-code");
+    expect(reset.codeFontSize).toBe(16);
+    expect(reset.codeFontWeight).toBe(300);
+    expect(reset.codeWordWrap).toBe(true);
+    expect(reset.terminalFontFamily).toBe("source-code-pro");
+    expect(reset.terminalFontSize).toBe(14);
+    expect(reset.terminalFontWeight).toBe(600);
+    expect(reset.terminalWrap).toBe(false);
+    expect(reset.readingLineHeight).toBe(1.65);
+    expect(reset.appScale).toBe(1.125);
+  });
+
+  it("resetCodeTypography preserves interface, terminal, reading and scale settings", () => {
+    const reset = resetCodeTypography(customConfig());
+    expect(reset.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
     expect(reset.codeFontSize).toBe(DEFAULT_TYPOGRAPHY.codeFontSize);
+    expect(reset.codeFontWeight).toBe(DEFAULT_TYPOGRAPHY.codeFontWeight);
+    expect(reset.codeWordWrap).toBe(DEFAULT_TYPOGRAPHY.codeWordWrap);
     // Preserved:
-    expect(reset.fontFamily).toBe("roboto");
-    expect(reset.fontWeight).toBe(700);
-    expect(reset.baseSize).toBe(18);
-    expect(reset.lineHeight).toBe(1.65);
+    expect(reset.interfaceFontFamily).toBe("roboto");
+    expect(reset.interfaceFontSize).toBe(18);
+    expect(reset.interfaceFontWeight).toBe(700);
+    expect(reset.terminalFontFamily).toBe("source-code-pro");
+    expect(reset.terminalFontSize).toBe(14);
+    expect(reset.terminalFontWeight).toBe(600);
+    expect(reset.terminalWrap).toBe(false);
+    expect(reset.readingLineHeight).toBe(1.65);
+    expect(reset.appScale).toBe(1.125);
   });
 
-  it("resetDisplayScale preserves interface and code settings", () => {
-    const custom: TypographyConfig = {
-      version: 1,
-      fontFamily: "roboto",
-      monoFontFamily: "fira-code",
-      fontWeight: 700,
-      monoFontWeight: 300,
-      baseSize: 18,
-      codeFontSize: 16,
-      lineHeight: 1.65,
-    };
-    const reset = resetDisplayScale(custom);
-    // Reset:
-    expect(reset.baseSize).toBe(DEFAULT_TYPOGRAPHY.baseSize);
-    expect(reset.lineHeight).toBe(DEFAULT_TYPOGRAPHY.lineHeight);
+  it("resetTerminalTypography preserves interface, code, reading and scale settings", () => {
+    const reset = resetTerminalTypography(customConfig());
+    expect(reset.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
+    expect(reset.terminalFontSize).toBe(DEFAULT_TYPOGRAPHY.terminalFontSize);
+    expect(reset.terminalFontWeight).toBe(DEFAULT_TYPOGRAPHY.terminalFontWeight);
+    expect(reset.terminalWrap).toBe(DEFAULT_TYPOGRAPHY.terminalWrap);
     // Preserved:
-    expect(reset.fontFamily).toBe("roboto");
-    expect(reset.fontWeight).toBe(700);
-    expect(reset.monoFontFamily).toBe("fira-code");
-    expect(reset.monoFontWeight).toBe(300);
+    expect(reset.interfaceFontFamily).toBe("roboto");
+    expect(reset.interfaceFontSize).toBe(18);
+    expect(reset.interfaceFontWeight).toBe(700);
+    expect(reset.codeFontFamily).toBe("fira-code");
     expect(reset.codeFontSize).toBe(16);
+    expect(reset.codeFontWeight).toBe(300);
+    expect(reset.codeWordWrap).toBe(true);
+    expect(reset.readingLineHeight).toBe(1.65);
+    expect(reset.appScale).toBe(1.125);
+  });
+
+  it("resetReadingTypography preserves interface, code, terminal and scale settings", () => {
+    const reset = resetReadingTypography(customConfig());
+    expect(reset.readingLineHeight).toBe(DEFAULT_TYPOGRAPHY.readingLineHeight);
+    // Preserved:
+    expect(reset.interfaceFontFamily).toBe("roboto");
+    expect(reset.codeFontFamily).toBe("fira-code");
+    expect(reset.terminalFontFamily).toBe("source-code-pro");
+    expect(reset.appScale).toBe(1.125);
+  });
+
+  it("resetApplicationScale preserves interface, code, terminal and reading settings", () => {
+    const reset = resetApplicationScale(customConfig());
+    expect(reset.appScale).toBe(DEFAULT_TYPOGRAPHY.appScale);
+    // Preserved:
+    expect(reset.interfaceFontFamily).toBe("roboto");
+    expect(reset.interfaceFontSize).toBe(18);
+    expect(reset.codeFontFamily).toBe("fira-code");
+    expect(reset.terminalFontFamily).toBe("source-code-pro");
+    expect(reset.readingLineHeight).toBe(1.65);
   });
 
   it("resetTypography restores all factory defaults", () => {
-    const custom: TypographyConfig = {
-      version: 1,
-      fontFamily: "roboto",
-      monoFontFamily: "fira-code",
-      fontWeight: 700,
-      monoFontWeight: 300,
-      baseSize: 18,
-      codeFontSize: 16,
-      lineHeight: 1.65,
-    };
-    writeTypography(custom);
+    writeTypography(customConfig());
     const reset = resetTypography();
     expect(reset).toEqual(DEFAULT_TYPOGRAPHY);
   });
 
   it("safely recovers from corrupted storage", () => {
-    if (typeof window !== "undefined" && window.localStorage) {
-      window.localStorage.setItem("tbai-typography", "{ corrupted_json: ... ");
-      const config = readTypography();
-      expect(config.fontFamily).toBe(DEFAULT_TYPOGRAPHY.fontFamily);
-      expect(config.baseSize).toBe(DEFAULT_TYPOGRAPHY.baseSize);
-      expect(config.codeFontSize).toBe(DEFAULT_TYPOGRAPHY.codeFontSize);
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(STORAGE_KEY, "{ corrupted_json: ... ");
+    const config = readTypography();
+    expect(config).toEqual(DEFAULT_TYPOGRAPHY);
+  });
+
+  it("safely recovers from a non-object payload", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]));
+    expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify("nope"));
+    expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
+  });
+});
+
+describe("index.html bootstrap parity", () => {
+  const html = readFileSync(path.join(REPO_ROOT, "web", "index.html"), "utf8");
+
+  function extractMap(
+    name: "FONT_MAP" | "MONO_MAP",
+  ): Record<string, { stack: string; min?: number; max?: number; weights?: number[] }> {
+    const match = html.match(new RegExp(`var ${name} = (\\{[\\s\\S]*?\\});`));
+    if (!match) throw new Error(`${name} not found in web/index.html`);
+    // The map is a static object literal authored in this repo; evaluate it.
+    return new Function(`return (${match[1]});`)() as Record<
+      string,
+      { stack: string; min?: number; max?: number; weights?: number[] }
+    >;
+  }
+
+  it("FONT_MAP matches UI_FONTS (stacks and weight ranges)", () => {
+    const map = extractMap("FONT_MAP");
+    expect(Object.keys(map).sort()).toEqual(UI_FONTS.map((f) => f.id).sort());
+    for (const font of UI_FONTS) {
+      const entry = map[font.id];
+      expect(entry, `FONT_MAP missing ${font.id}`).toBeDefined();
+      expect(entry.stack).toBe(font.stack);
+      if (font.weights === "continuous") {
+        expect(entry.min).toBe(font.minWeight ?? 100);
+        expect(entry.max).toBe(font.maxWeight ?? 900);
+      } else {
+        expect(entry.weights).toEqual([...font.weights]);
+      }
     }
+  });
+
+  it("MONO_MAP matches MONO_FONTS (stacks and weight ranges)", () => {
+    const map = extractMap("MONO_MAP");
+    expect(Object.keys(map).sort()).toEqual(MONO_FONTS.map((f) => f.id).sort());
+    for (const font of MONO_FONTS) {
+      const entry = map[font.id];
+      expect(entry, `MONO_MAP missing ${font.id}`).toBeDefined();
+      expect(entry.stack).toBe(font.stack);
+      if (font.weights === "continuous") {
+        expect(entry.min).toBe(font.minWeight ?? 100);
+        expect(entry.max).toBe(font.maxWeight ?? 900);
+      } else {
+        expect(entry.weights).toEqual([...font.weights]);
+      }
+    }
+  });
+
+  it("bootstrap never writes --font-mono (the fixed generic stack)", () => {
+    expect(html).not.toContain('setProperty("--font-mono"');
+    expect(html).not.toContain("setProperty('--font-mono'");
+  });
+
+  it("bootstrap writes the v2 variables and factor zoom", () => {
+    for (const variable of [
+      "--font-sans",
+      "--interface-font-size",
+      "--font-weight-base",
+      "--code-font-family",
+      "--code-font-size",
+      "--code-font-weight",
+      "--terminal-font-family",
+      "--terminal-font-size",
+      "--terminal-font-weight",
+      "--reading-line-height",
+    ]) {
+      expect(html).toContain(variable);
+    }
+    expect(html).toContain("data-code-wrap");
+    expect(html).toContain("data-terminal-wrap");
+    expect(html).toContain("appScale");
   });
 });

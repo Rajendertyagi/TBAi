@@ -1070,12 +1070,12 @@ function AssistantError() {
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             {isQuotaOrAuthError && (
-              <Button size="xs" variant="outline" asChild className="h-6 text-[11px]">
+              <Button size="xs" variant="outline" asChild className="h-6 text-2xs">
                 <Link to="/settings/providers">Open Provider Settings</Link>
               </Button>
             )}
             <ActionBarPrimitive.Reload asChild>
-              <Button size="xs" variant="outline" className="h-6 text-[11px]">
+              <Button size="xs" variant="outline" className="h-6 text-2xs">
                 <RefreshCw className="mr-1 size-3" />
                 Retry
               </Button>
@@ -1083,7 +1083,7 @@ function AssistantError() {
           </div>
         </div>
         {hasRawDetails && (
-          <details className="mt-1 text-[11px] text-muted-foreground/90">
+          <details className="mt-1 text-2xs text-muted-foreground/90">
             <summary className="cursor-pointer font-medium hover:text-foreground">
               Error Details
             </summary>

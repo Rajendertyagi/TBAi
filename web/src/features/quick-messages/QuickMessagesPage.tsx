@@ -298,7 +298,7 @@ export function QuickMessagesPage() {
                               )}
                             </div>
                             {m.content && (
-                              <div className="mt-0.5 truncate text-[0.625rem] text-muted-foreground">
+                              <div className="mt-0.5 truncate text-3xs text-muted-foreground">
                                 {m.content}
                               </div>
                             )}

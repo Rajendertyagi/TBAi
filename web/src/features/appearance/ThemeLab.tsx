@@ -120,7 +120,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function MarkdownSpecimen() {
   return (
     <div className="max-w-3xl space-y-1 text-sm">
-      <p data-lab="md/paragraph" className="aui-md-p my-3 leading-relaxed">
+      <p data-lab="md/paragraph" className="aui-md-p my-3">
         Body copy in a reply, with a{" "}
         <a
           data-lab="md/link"
@@ -139,7 +139,7 @@ function MarkdownSpecimen() {
         Inline{" "}
         <code
           data-lab="md/inline-code"
-          className="aui-md-inline-code bg-muted rounded-md px-1.5 py-0.5 font-mono text-[0.85em]"
+          className="aui-md-inline-code bg-muted rounded-md px-1.5 py-0.5 font-mono"
         >
           codeToken()
         </code>{" "}
@@ -147,7 +147,7 @@ function MarkdownSpecimen() {
       </p>
       <div
         data-lab="md/code-block"
-        className="aui-md-pre border-border/50 bg-muted/30 overflow-x-auto rounded-xl border p-3.5 text-[13px] leading-relaxed"
+        className="aui-md-pre border-border/50 bg-muted/30 overflow-x-auto rounded-xl border p-3.5 leading-relaxed"
       >
         <div className="aui-code-header-root border-border/50 bg-muted/50 -mt-3.5 -mb-3.5 mb-0 flex items-center justify-between rounded-t-xl border border-b-0 px-3.5 py-1.5">
           <span className="aui-code-header-language text-muted-foreground font-medium lowercase">
@@ -166,8 +166,8 @@ function MarkdownSpecimen() {
         A blockquote, which uses muted text and a muted left rule.
       </blockquote>
       <ul data-lab="md/list" className="aui-md-ul marker:text-muted-foreground my-3 ms-5 list-disc">
-        <li className="aui-md-li leading-relaxed">A list item</li>
-        <li className="aui-md-li leading-relaxed">Another item</li>
+        <li className="aui-md-li">A list item</li>
+        <li className="aui-md-li">Another item</li>
       </ul>
       <table className="aui-md-table my-3 w-full border-separate border-spacing-0">
         <thead>
