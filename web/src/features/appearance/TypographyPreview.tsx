@@ -5,28 +5,33 @@ export const TypographyPreview = memo(function TypographyPreview({
   fontFamilyName,
   monoFontFamilyName,
   fontWeight,
+  monoFontWeight,
+  codeFontSize,
   lineHeight,
   baseSize,
 }: {
   fontFamilyName: string;
   monoFontFamilyName: string;
   fontWeight: number;
+  monoFontWeight: number;
+  codeFontSize: number;
   lineHeight: number;
   baseSize: number;
 }) {
-  const sampleCode = `// TBAi typography preview
+  const sampleCode = `// TBAi code typography preview
 function calculateMetrics(tokens: number, rate: number): number {
   return tokens * rate;
 }`;
 
   return (
     <div className="rounded-xl border border-border bg-card/60 p-4 space-y-3 transition-all shadow-xs">
-      <div className="flex items-center justify-between border-b border-border/60 pb-2">
+      <div className="flex items-center justify-between border-b border-border/60 pb-2 flex-wrap gap-1">
         <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           Live Typography Preview
         </span>
         <span className="text-3xs text-muted-foreground tabular-nums">
-          {fontFamilyName} • {baseSize}px ({Math.round((baseSize / 16) * 100)}%) • W{fontWeight} •{" "}
+          UI: {fontFamilyName} • W{fontWeight} | Code: {monoFontFamilyName} • {codeFontSize}px • W
+          {monoFontWeight} | Scale: {baseSize}px ({Math.round((baseSize / 16) * 100)}%) •{" "}
           {lineHeight}x
         </span>
       </div>
@@ -43,13 +48,15 @@ function calculateMetrics(tokens: number, rate: number): number {
 
       <div className="pt-1">
         <div className="flex items-center justify-between text-3xs text-muted-foreground mb-1">
-          <span>Code font: {monoFontFamilyName}</span>
+          <span>
+            Code font: {monoFontFamilyName} ({codeFontSize}px • W{monoFontWeight})
+          </span>
           <span className="font-mono">shiki: typescript</span>
         </div>
         <SyntaxHighlighter
           code={sampleCode}
           language="typescript"
-          className="rounded-lg overflow-hidden border border-border/40 text-xs"
+          className="rounded-lg overflow-hidden border border-border/40"
         />
       </div>
     </div>

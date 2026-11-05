@@ -33,6 +33,8 @@
   --font-mono:
     "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --font-weight-base: 400;
+  --font-weight-mono: 400;
+  --code-font-size: 13px;
   --font-line-height: 1.5;
 
   font-family: var(--font-sans);
@@ -529,4 +531,20 @@ samp,
 pre,
 .font-mono {
   font-family: var(--font-mono);
+}
+
+/* Code content sizing & weight */
+.aui-md-inline-code {
+  font-size: calc(var(--code-font-size, 13px) * 0.95);
+  font-weight: var(--font-weight-mono, 400);
+}
+
+.aui-code-diff pre,
+.aui-code-diff code,
+.aui-md-pre,
+.aui-shiki-base pre,
+.aui-md-pre code,
+.aui-shiki-base pre code {
+  font-size: var(--code-font-size, 13px);
+  font-weight: var(--font-weight-mono, 400);
 }

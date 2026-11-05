@@ -19,11 +19,16 @@ import { CHAT_WIDTHS, CHAT_WIDTH_ORDER, DEFAULT_CHAT_WIDTH } from "../../config/
 import { cn } from "../../lib/utils";
 import {
   applyTypographyToDom,
+  clampWeightForFont,
+  CODE_FONT_SIZE_CONFIG,
   COMMON_WEIGHTS,
   getFont,
   LINE_HEIGHTS,
   MONO_FONTS,
   readTypography,
+  resetCodeTypography,
+  resetDisplayScale,
+  resetInterfaceTypography,
   resetTypography,
   SCALE_CONFIG,
   UI_FONTS,
@@ -54,13 +59,33 @@ export function AppearancePage() {
     });
   };
 
-  const handleResetTypography = () => {
+  const handleResetAll = () => {
     const defaults = resetTypography();
     setTypography(defaults);
   };
 
+  const handleResetInterface = () => {
+    setTypography((prev) => resetInterfaceTypography(prev));
+  };
+
+  const handleResetCode = () => {
+    setTypography((prev) => resetCodeTypography(prev));
+  };
+
+  const handleResetScale = () => {
+    setTypography((prev) => resetDisplayScale(prev));
+  };
+
   const currentUiFont = getFont(typography.fontFamily);
   const currentMonoFont = getFont(typography.monoFontFamily);
+
+  const effectiveUiWeight = currentUiFont
+    ? clampWeightForFont(typography.fontWeight, currentUiFont)
+    : typography.fontWeight;
+
+  const effectiveMonoWeight = currentMonoFont
+    ? clampWeightForFont(typography.monoFontWeight, currentMonoFont)
+    : typography.monoFontWeight;
 
   return (
     <SettingsPage
@@ -106,166 +131,313 @@ export function AppearancePage() {
       <SettingsSection
         title="Typography"
         icon={Type}
-        description="Font family, weight, and application-wide interface scaling."
+        description="Independent controls for interface fonts, code fonts, weights, and application scaling."
         action={
           <Button
             variant="outline"
             size="sm"
-            onClick={handleResetTypography}
+            onClick={handleResetAll}
             className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
           >
             <RotateCcw className="size-3.5" />
-            Reset to defaults
+            Reset all
           </Button>
         }
       >
-        <SettingRow
-          label="Interface font"
-          description="Primary font family applied across chat messages, buttons, and navigation."
-        >
-          <Select
-            value={typography.fontFamily}
-            onValueChange={(val) => updateTypography({ fontFamily: val })}
-          >
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select interface font" />
-            </SelectTrigger>
-            <SelectContent>
-              {UI_FONTS.map((font) => (
-                <SelectItem key={font.id} value={font.id}>
-                  {font.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
+        {/* Interface Typography Group */}
+        <div className="rounded-xl border border-border/80 bg-card/30 p-4 space-y-4">
+          <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
+                Interface Typography
+              </h3>
+              <p className="text-3xs text-muted-foreground">
+                Fonts and weights applied across navigation, messages, dialogs, and controls.
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetInterface}
+              className="h-7 px-2.5 text-3xs text-muted-foreground hover:text-foreground"
+            >
+              Reset interface
+            </Button>
+          </div>
 
-        <SettingRow
-          label="Code font"
-          description="Monospace font family used for syntax-highlighted code blocks, terminals, and identifiers."
-        >
-          <Select
-            value={typography.monoFontFamily}
-            onValueChange={(val) => updateTypography({ monoFontFamily: val })}
+          <SettingRow
+            label="Interface font"
+            description="Primary font family applied across chat messages, buttons, and navigation."
           >
-            <SelectTrigger className="w-56 font-mono text-xs">
-              <SelectValue placeholder="Select code font" />
-            </SelectTrigger>
-            <SelectContent>
-              {MONO_FONTS.map((font) => (
-                <SelectItem key={font.id} value={font.id} className="font-mono text-xs">
-                  {font.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
+            <Select
+              value={typography.fontFamily}
+              onValueChange={(val) => updateTypography({ fontFamily: val })}
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Select interface font" />
+              </SelectTrigger>
+              <SelectContent>
+                {UI_FONTS.map((font) => (
+                  <SelectItem key={font.id} value={font.id}>
+                    {font.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingRow>
 
-        <SettingRow
-          label="Base font weight"
-          description="Body text weight. Automatically clamped if a font has limited native weight ranges."
-        >
-          <Select
-            value={String(typography.fontWeight)}
-            onValueChange={(val) => updateTypography({ fontWeight: Number(val) })}
+          <SettingRow
+            label="Interface font weight"
+            description={
+              effectiveUiWeight !== typography.fontWeight
+                ? `Requested ${typography.fontWeight}, clamped to ${effectiveUiWeight} by font capability.`
+                : "Body text weight for interface elements."
+            }
           >
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select font weight" />
-            </SelectTrigger>
-            <SelectContent>
-              {COMMON_WEIGHTS.map((w) => (
-                <SelectItem key={w.value} value={String(w.value)}>
-                  {w.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
+            <Select
+              value={String(typography.fontWeight)}
+              onValueChange={(val) => updateTypography({ fontWeight: Number(val) })}
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Select font weight" />
+              </SelectTrigger>
+              <SelectContent>
+                {COMMON_WEIGHTS.map((w) => (
+                  <SelectItem key={w.value} value={String(w.value)}>
+                    {w.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingRow>
+        </div>
 
-        <SettingRow
-          label="Application scale"
-          description={`Scales the entire interface (${Math.round((typography.baseSize / 16) * 100)}%). 16px is default.`}
-        >
-          <div className="flex flex-col gap-2.5 w-full max-w-sm">
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={SCALE_CONFIG.min}
-                max={SCALE_CONFIG.max}
-                step={1}
-                value={typography.baseSize}
-                onChange={(e) => updateTypography({ baseSize: Number(e.target.value) })}
-                className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-input/40 accent-primary focus:outline-none"
-              />
-              <div className="flex items-center gap-1 shrink-0">
-                <Input
-                  type="number"
-                  min={SCALE_CONFIG.min}
-                  max={SCALE_CONFIG.max}
-                  value={typography.baseSize}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    if (val >= SCALE_CONFIG.min && val <= SCALE_CONFIG.max) {
-                      updateTypography({ baseSize: val });
-                    }
-                  }}
-                  className="h-8 w-16 text-center tabular-nums text-xs"
+        {/* Code Typography Group */}
+        <div className="rounded-xl border border-border/80 bg-card/30 p-4 space-y-4">
+          <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
+                Code Typography
+              </h3>
+              <p className="text-3xs text-muted-foreground">
+                Monospace fonts, weights, and dedicated sizing for code blocks, terminals, and
+                diffs.
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetCode}
+              className="h-7 px-2.5 text-3xs text-muted-foreground hover:text-foreground"
+            >
+              Reset code
+            </Button>
+          </div>
+
+          <SettingRow
+            label="Code font"
+            description="Monospace font family used for syntax-highlighted code blocks, terminals, and diffs."
+          >
+            <Select
+              value={typography.monoFontFamily}
+              onValueChange={(val) => updateTypography({ monoFontFamily: val })}
+            >
+              <SelectTrigger className="w-56 font-mono text-xs">
+                <SelectValue placeholder="Select code font" />
+              </SelectTrigger>
+              <SelectContent>
+                {MONO_FONTS.map((font) => (
+                  <SelectItem key={font.id} value={font.id} className="font-mono text-xs">
+                    {font.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow
+            label="Code font weight"
+            description={
+              effectiveMonoWeight !== typography.monoFontWeight
+                ? `Requested ${typography.monoFontWeight}, clamped to ${effectiveMonoWeight} by font capability.`
+                : "Weight applied to syntax highlighting and code blocks."
+            }
+          >
+            <Select
+              value={String(typography.monoFontWeight)}
+              onValueChange={(val) => updateTypography({ monoFontWeight: Number(val) })}
+            >
+              <SelectTrigger className="w-56 font-mono text-xs">
+                <SelectValue placeholder="Select code weight" />
+              </SelectTrigger>
+              <SelectContent>
+                {COMMON_WEIGHTS.map((w) => (
+                  <SelectItem key={w.value} value={String(w.value)}>
+                    {w.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <SettingRow
+            label="Code font size"
+            description={`Independent size for code blocks and diffs (${typography.codeFontSize}px). Standard is 13px.`}
+          >
+            <div className="flex flex-col gap-2.5 w-full max-w-sm">
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={CODE_FONT_SIZE_CONFIG.min}
+                  max={CODE_FONT_SIZE_CONFIG.max}
+                  step={1}
+                  value={typography.codeFontSize}
+                  onChange={(e) => updateTypography({ codeFontSize: Number(e.target.value) })}
+                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-input/40 accent-primary focus:outline-none"
                 />
-                <span className="text-3xs text-muted-foreground">px</span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Input
+                    type="number"
+                    min={CODE_FONT_SIZE_CONFIG.min}
+                    max={CODE_FONT_SIZE_CONFIG.max}
+                    value={typography.codeFontSize}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val >= CODE_FONT_SIZE_CONFIG.min && val <= CODE_FONT_SIZE_CONFIG.max) {
+                        updateTypography({ codeFontSize: val });
+                      }
+                    }}
+                    className="h-8 w-16 text-center tabular-nums text-xs"
+                  />
+                  <span className="text-3xs text-muted-foreground">px</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {CODE_FONT_SIZE_CONFIG.presets.map((preset) => (
+                  <Button
+                    key={preset}
+                    variant={typography.codeFontSize === preset ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => updateTypography({ codeFontSize: preset })}
+                    className="h-6 px-2 text-3xs font-medium tabular-nums"
+                  >
+                    {preset}px
+                  </Button>
+                ))}
               </div>
             </div>
+          </SettingRow>
+        </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {SCALE_CONFIG.presets.map((preset) => (
-                <Button
-                  key={preset}
-                  variant={typography.baseSize === preset ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => updateTypography({ baseSize: preset })}
-                  className="h-6 px-2 text-3xs font-medium tabular-nums"
-                >
-                  {preset}px ({Math.round((preset / 16) * 100)}%)
-                </Button>
-              ))}
+        {/* Application Scale & Reading Group */}
+        <div className="rounded-xl border border-border/80 bg-card/30 p-4 space-y-4">
+          <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
+                Application Scale & Reading
+              </h3>
+              <p className="text-3xs text-muted-foreground">
+                Global viewport scaling and paragraph line heights.
+              </p>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetScale}
+              className="h-7 px-2.5 text-3xs text-muted-foreground hover:text-foreground"
+            >
+              Reset scale
+            </Button>
           </div>
-        </SettingRow>
 
-        <SettingRow
-          label="Reading line height"
-          description="Vertical paragraph line spacing for chat transcripts and markdown content."
-        >
-          <div
-            role="group"
-            aria-label="Line height"
-            className="inline-flex w-fit rounded-lg border border-border bg-card/40 p-0.5"
+          <SettingRow
+            label="Application scale"
+            description={`Scales the entire interface (${Math.round((typography.baseSize / 16) * 100)}%). 16px is default.`}
           >
-            {LINE_HEIGHTS.map((lh) => {
-              const selected = typography.lineHeight === lh.value;
-              return (
-                <button
-                  key={lh.id}
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => updateTypography({ lineHeight: lh.value })}
-                  className={cn(
-                    "rounded-md px-3 py-1 text-xs font-medium transition-colors",
-                    selected
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {lh.label}
-                </button>
-              );
-            })}
-          </div>
-        </SettingRow>
+            <div className="flex flex-col gap-2.5 w-full max-w-sm">
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={SCALE_CONFIG.min}
+                  max={SCALE_CONFIG.max}
+                  step={1}
+                  value={typography.baseSize}
+                  onChange={(e) => updateTypography({ baseSize: Number(e.target.value) })}
+                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-input/40 accent-primary focus:outline-none"
+                />
+                <div className="flex items-center gap-1 shrink-0">
+                  <Input
+                    type="number"
+                    min={SCALE_CONFIG.min}
+                    max={SCALE_CONFIG.max}
+                    value={typography.baseSize}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val >= SCALE_CONFIG.min && val <= SCALE_CONFIG.max) {
+                        updateTypography({ baseSize: val });
+                      }
+                    }}
+                    className="h-8 w-16 text-center tabular-nums text-xs"
+                  />
+                  <span className="text-3xs text-muted-foreground">px</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {SCALE_CONFIG.presets.map((preset) => (
+                  <Button
+                    key={preset}
+                    variant={typography.baseSize === preset ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => updateTypography({ baseSize: preset })}
+                    className="h-6 px-2 text-3xs font-medium tabular-nums"
+                  >
+                    {preset}px ({Math.round((preset / 16) * 100)}%)
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            label="Reading line height"
+            description="Vertical paragraph line spacing for chat transcripts and markdown content."
+          >
+            <div
+              role="group"
+              aria-label="Line height"
+              className="inline-flex w-fit rounded-lg border border-border bg-card/40 p-0.5"
+            >
+              {LINE_HEIGHTS.map((lh) => {
+                const selected = typography.lineHeight === lh.value;
+                return (
+                  <button
+                    key={lh.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => updateTypography({ lineHeight: lh.value })}
+                    className={cn(
+                      "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                      selected
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {lh.label}
+                  </button>
+                );
+              })}
+            </div>
+          </SettingRow>
+        </div>
 
         <TypographyPreview
           fontFamilyName={currentUiFont?.label || typography.fontFamily}
           monoFontFamilyName={currentMonoFont?.label || typography.monoFontFamily}
-          fontWeight={typography.fontWeight}
+          fontWeight={effectiveUiWeight}
+          monoFontWeight={effectiveMonoWeight}
+          codeFontSize={typography.codeFontSize}
           lineHeight={typography.lineHeight}
           baseSize={typography.baseSize}
         />
@@ -274,53 +446,49 @@ export function AppearancePage() {
       <SettingsSection
         title="Chat layout"
         icon={SlidersHorizontal}
-        description="How wide the conversation column is. Messages, the composer and the welcome screen share one column, so they always line up."
+        description="Transcript width and layout behavior."
       >
         <SettingRow
-          label="Chat width"
-          description={`Narrow fits more lines on screen; wide gives code and tables more room. ${CHAT_WIDTHS[DEFAULT_CHAT_WIDTH].label} is the default.`}
-          control={
-            <div
-              role="group"
-              aria-label="Chat width"
-              className="inline-flex w-fit rounded-lg border border-border bg-card/40 p-0.5"
-            >
-              {CHAT_WIDTH_ORDER.map((width) => {
-                const selected = chatWidth === width;
-                return (
-                  <button
-                    key={width}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => setChatWidth(width)}
-                    className={cn(
-                      "rounded-md px-3 py-1 text-xs font-medium transition-colors",
-                      selected
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {CHAT_WIDTHS[width].label}
-                    <span className="ml-1 text-3xs tabular-nums text-muted-foreground">
-                      {CHAT_WIDTHS[width].px}px
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          }
-        />
+          label="Message width"
+          description="Default width of chat messages on large screens."
+        >
+          <div
+            role="group"
+            aria-label="Message width"
+            className="inline-flex rounded-lg border border-border bg-card/40 p-0.5"
+          >
+            {CHAT_WIDTH_ORDER.map((key) => {
+              const opt = CHAT_WIDTHS[key];
+              const selected = (chatWidth ?? DEFAULT_CHAT_WIDTH) === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setChatWidth(key)}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                    selected
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
       </SettingsSection>
 
       <SettingsSection
         title="Typing"
         icon={SpellCheck2}
-        description="How the message box behaves while you write."
+        description="Composer input assistance and dictionary checks."
       >
         <SettingRow
           label="Spell check"
-          icon={SpellCheck2}
-          description="Underline words your device thinks are misspelled. Uses your operating system's own spell checker — no extra dictionary is downloaded. On by default."
+          description="Underline misspelled words in the message composer."
           control={
             <Switch
               checked={spellCheck}

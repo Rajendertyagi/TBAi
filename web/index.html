@@ -46,6 +46,13 @@
             if (typeof ty.fontWeight === "number" && ty.fontWeight >= 100 && ty.fontWeight <= 900 && ty.fontWeight !== 400) {
               r.style.setProperty("--font-weight-base", String(ty.fontWeight));
             }
+            var monoWeight = typeof ty.monoFontWeight === "number" ? ty.monoFontWeight : ty.fontWeight;
+            if (typeof monoWeight === "number" && monoWeight >= 100 && monoWeight <= 900 && monoWeight !== 400) {
+              r.style.setProperty("--font-weight-mono", String(monoWeight));
+            }
+            if (typeof ty.codeFontSize === "number" && ty.codeFontSize >= 11 && ty.codeFontSize <= 20 && ty.codeFontSize !== 13) {
+              r.style.setProperty("--code-font-size", String(ty.codeFontSize) + "px");
+            }
             if (typeof ty.lineHeight === "number" && ty.lineHeight !== 1.5) {
               r.style.setProperty("--font-line-height", String(ty.lineHeight));
             }

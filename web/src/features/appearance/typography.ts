@@ -12,7 +12,9 @@ export interface TypographyConfig {
   fontFamily: string;
   monoFontFamily: string;
   fontWeight: number;
+  monoFontWeight: number;
   baseSize: number;
+  codeFontSize: number;
   lineHeight: number;
 }
 
@@ -31,7 +33,9 @@ export const DEFAULT_TYPOGRAPHY: TypographyConfig = {
   fontFamily: "inter",
   monoFontFamily: "jetbrains-mono",
   fontWeight: 400,
+  monoFontWeight: 400,
   baseSize: 16,
+  codeFontSize: 13,
   lineHeight: 1.5,
 };
 
@@ -197,6 +201,13 @@ export const SCALE_CONFIG = {
   presets: [13, 14, 15, 16, 18, 20] as const,
 };
 
+export const CODE_FONT_SIZE_CONFIG = {
+  min: 11,
+  max: 20,
+  default: 13,
+  presets: [12, 13, 14, 16] as const,
+};
+
 export const LINE_HEIGHTS = [
   { id: "compact", value: 1.35, label: "Compact (1.35)" },
   { id: "balanced", value: 1.5, label: "Balanced (1.5 - Default)" },
@@ -228,6 +239,7 @@ export function clampWeightForFont(weight: number, font: FontDefinition): number
 
 /**
  * Safely reads typography configuration from localStorage.
+ * Handles legacy configurations gracefully by migrating missing fields.
  */
 export function readTypography(): TypographyConfig {
   if (typeof window === "undefined") return DEFAULT_TYPOGRAPHY;
@@ -243,16 +255,37 @@ export function readTypography(): TypographyConfig {
     const monoFontFamily = MONO_FONTS.some((f) => f.id === parsed.monoFontFamily)
       ? parsed.monoFontFamily
       : DEFAULT_TYPOGRAPHY.monoFontFamily;
+
     const fontWeight =
       typeof parsed.fontWeight === "number" && parsed.fontWeight >= 100 && parsed.fontWeight <= 900
         ? parsed.fontWeight
         : DEFAULT_TYPOGRAPHY.fontWeight;
+
+    const monoFontWeight =
+      typeof parsed.monoFontWeight === "number" &&
+      parsed.monoFontWeight >= 100 &&
+      parsed.monoFontWeight <= 900
+        ? parsed.monoFontWeight
+        : typeof parsed.fontWeight === "number" &&
+            parsed.fontWeight >= 100 &&
+            parsed.fontWeight <= 900
+          ? parsed.fontWeight
+          : DEFAULT_TYPOGRAPHY.monoFontWeight;
+
     const baseSize =
       typeof parsed.baseSize === "number" &&
       parsed.baseSize >= SCALE_CONFIG.min &&
       parsed.baseSize <= SCALE_CONFIG.max
         ? parsed.baseSize
         : DEFAULT_TYPOGRAPHY.baseSize;
+
+    const codeFontSize =
+      typeof parsed.codeFontSize === "number" &&
+      parsed.codeFontSize >= CODE_FONT_SIZE_CONFIG.min &&
+      parsed.codeFontSize <= CODE_FONT_SIZE_CONFIG.max
+        ? parsed.codeFontSize
+        : DEFAULT_TYPOGRAPHY.codeFontSize;
+
     const lineHeight =
       typeof parsed.lineHeight === "number" && parsed.lineHeight >= 1.2 && parsed.lineHeight <= 2.0
         ? parsed.lineHeight
@@ -263,7 +296,9 @@ export function readTypography(): TypographyConfig {
       fontFamily,
       monoFontFamily,
       fontWeight,
+      monoFontWeight,
       baseSize,
+      codeFontSize,
       lineHeight,
     };
   } catch {
@@ -297,9 +332,19 @@ export function applyTypographyToDom(config: TypographyConfig): void {
   if (uiFont) root.style.setProperty("--font-sans", uiFont.stack);
   if (monoFont) root.style.setProperty("--font-mono", monoFont.stack);
 
-  // Clamped weight calculation
-  const clampedWeight = uiFont ? clampWeightForFont(config.fontWeight, uiFont) : config.fontWeight;
-  root.style.setProperty("--font-weight-base", String(clampedWeight));
+  // Clamped weights
+  const clampedUiWeight = uiFont
+    ? clampWeightForFont(config.fontWeight, uiFont)
+    : config.fontWeight;
+  root.style.setProperty("--font-weight-base", String(clampedUiWeight));
+
+  const clampedMonoWeight = monoFont
+    ? clampWeightForFont(config.monoFontWeight, monoFont)
+    : config.monoFontWeight;
+  root.style.setProperty("--font-weight-mono", String(clampedMonoWeight));
+
+  // Code font size
+  root.style.setProperty("--code-font-size", `${config.codeFontSize}px`);
 
   // Line height
   root.style.setProperty("--font-line-height", String(config.lineHeight));
@@ -309,22 +354,58 @@ export function applyTypographyToDom(config: TypographyConfig): void {
   if (scale === 1) {
     root.style.removeProperty("zoom");
   } else {
-    // Note: TypeScript CSSStyleDeclaration may not type zoom directly in all standard libs
     (root.style as unknown as Record<string, string>).zoom = String(scale);
   }
 }
 
 /**
- * Resets typography configuration to factory defaults.
+ * Scoped reset: restores Interface Typography defaults, preserving Code and Scale settings.
+ */
+export function resetInterfaceTypography(current: TypographyConfig): TypographyConfig {
+  const updated: TypographyConfig = {
+    ...current,
+    fontFamily: DEFAULT_TYPOGRAPHY.fontFamily,
+    fontWeight: DEFAULT_TYPOGRAPHY.fontWeight,
+  };
+  writeTypography(updated);
+  applyTypographyToDom(updated);
+  return updated;
+}
+
+/**
+ * Scoped reset: restores Code Typography defaults, preserving Interface and Scale settings.
+ */
+export function resetCodeTypography(current: TypographyConfig): TypographyConfig {
+  const updated: TypographyConfig = {
+    ...current,
+    monoFontFamily: DEFAULT_TYPOGRAPHY.monoFontFamily,
+    monoFontWeight: DEFAULT_TYPOGRAPHY.monoFontWeight,
+    codeFontSize: DEFAULT_TYPOGRAPHY.codeFontSize,
+  };
+  writeTypography(updated);
+  applyTypographyToDom(updated);
+  return updated;
+}
+
+/**
+ * Scoped reset: restores Application Scale & Reading defaults, preserving Interface and Code settings.
+ */
+export function resetDisplayScale(current: TypographyConfig): TypographyConfig {
+  const updated: TypographyConfig = {
+    ...current,
+    baseSize: DEFAULT_TYPOGRAPHY.baseSize,
+    lineHeight: DEFAULT_TYPOGRAPHY.lineHeight,
+  };
+  writeTypography(updated);
+  applyTypographyToDom(updated);
+  return updated;
+}
+
+/**
+ * Master reset: resets typography configuration to factory defaults.
  */
 export function resetTypography(): TypographyConfig {
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
-  }
+  writeTypography(DEFAULT_TYPOGRAPHY);
   applyTypographyToDom(DEFAULT_TYPOGRAPHY);
   return DEFAULT_TYPOGRAPHY;
 }

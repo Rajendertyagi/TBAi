@@ -79,7 +79,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     }
   });
 
-  test("persists typography settings across page reload with zero layout flash", async ({
+  test("persists independent interface and code typography settings across reload", async ({
     page,
   }) => {
     await page.goto("/#/appearance");
@@ -94,7 +94,9 @@ test.describe("Typography & Application Scaling Compatibility", () => {
           fontFamily: "outfit",
           monoFontFamily: "fira-code",
           fontWeight: 600,
+          monoFontWeight: 700,
           baseSize: 18,
+          codeFontSize: 15,
           lineHeight: 1.65,
         }),
       );
@@ -109,6 +111,8 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       return {
         zoom: (root.style as any).zoom,
         fontWeight: root.style.getPropertyValue("--font-weight-base").trim(),
+        monoFontWeight: root.style.getPropertyValue("--font-weight-mono").trim(),
+        codeFontSize: root.style.getPropertyValue("--code-font-size").trim(),
         lineHeight: root.style.getPropertyValue("--font-line-height").trim(),
         fontSans: root.style.getPropertyValue("--font-sans").trim(),
         fontMono: root.style.getPropertyValue("--font-mono").trim(),
@@ -117,8 +121,76 @@ test.describe("Typography & Application Scaling Compatibility", () => {
 
     expect(state.zoom).toBe(String(18 / 16)); // 1.125
     expect(state.fontWeight).toBe("600");
+    expect(state.monoFontWeight).toBe("700");
+    expect(state.codeFontSize).toBe("15px");
     expect(state.lineHeight).toBe("1.65");
     expect(state.fontSans).toContain("Outfit");
     expect(state.fontMono).toContain("Fira Code");
+  });
+
+  test("scoped resets modify only the target section", async ({ page }) => {
+    await page.goto("/#/appearance");
+    await page.waitForLoadState("domcontentloaded");
+
+    // Start with custom settings for all sections
+    await page.evaluate(() => {
+      localStorage.setItem(
+        "tbai-typography",
+        JSON.stringify({
+          version: 1,
+          fontFamily: "roboto",
+          monoFontFamily: "fira-code",
+          fontWeight: 700,
+          monoFontWeight: 600,
+          baseSize: 18,
+          codeFontSize: 16,
+          lineHeight: 1.65,
+        }),
+      );
+    });
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+
+    // Click "Reset code"
+    const resetCodeBtn = page.getByRole("button", { name: "Reset code" });
+    await expect(resetCodeBtn).toBeVisible();
+    await resetCodeBtn.click();
+
+    // Verify: Code settings reset to defaults, Interface & Scale remain custom
+    let saved = await page.evaluate(() => {
+      return JSON.parse(localStorage.getItem("tbai-typography") || "{}");
+    });
+    expect(saved.monoFontFamily).toBe("jetbrains-mono");
+    expect(saved.monoFontWeight).toBe(400);
+    expect(saved.codeFontSize).toBe(13);
+    // Preserved:
+    expect(saved.fontFamily).toBe("roboto");
+    expect(saved.fontWeight).toBe(700);
+    expect(saved.baseSize).toBe(18);
+
+    // Click "Reset interface"
+    const resetInterfaceBtn = page.getByRole("button", { name: "Reset interface" });
+    await expect(resetInterfaceBtn).toBeVisible();
+    await resetInterfaceBtn.click();
+
+    saved = await page.evaluate(() => {
+      return JSON.parse(localStorage.getItem("tbai-typography") || "{}");
+    });
+    expect(saved.fontFamily).toBe("inter");
+    expect(saved.fontWeight).toBe(400);
+    // Preserved scale:
+    expect(saved.baseSize).toBe(18);
+
+    // Click "Reset all"
+    const resetAllBtn = page.getByRole("button", { name: "Reset all" });
+    await expect(resetAllBtn).toBeVisible();
+    await resetAllBtn.click();
+
+    saved = await page.evaluate(() => {
+      return JSON.parse(localStorage.getItem("tbai-typography") || "{}");
+    });
+    expect(saved.baseSize).toBe(16);
+    expect(saved.fontFamily).toBe("inter");
+    expect(saved.monoFontFamily).toBe("jetbrains-mono");
   });
 });
