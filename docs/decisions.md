@@ -8836,7 +8836,12 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
   change the WebView zoom; the packaged WebView2 is verified by the
   `zoom-hotkeys` stage in `scripts/verify-packaged-webview-origin.ts` (same
   session, Actions API via the existing raw-HTTP `httpJson`; no duplicate
-  driver infrastructure).
+  driver infrastructure). That stage reads `window.devicePixelRatio` — the
+  browser-zoom signal — and compares a read taken immediately before and
+  after EACH chord (`Ctrl+=`, `Ctrl+Shift+=`, `Ctrl+-`, `Ctrl+0`). A single
+  read before and after all four would pass falsely, because `Ctrl+0` resets
+  what `Ctrl+=` changed; the app's inline `style.zoom` and computed root
+  font-size are asserted separately as application scaling.
 - **Code word wrap and terminal wrapping are visual only** (`white-space`);
   copied source is byte-identical. Diffs never wrap. Terminal wrapping
   preserves whitespace and indentation (`pre-wrap` + `overflow-wrap:
@@ -8846,7 +8851,10 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
   untouched).
 - **OpenCode JSON config preview** (`OpenCodeConfigPage.tsx`) is a code
   surface: it uses the selected code font, size and weight via
-  `[data-slot="code-preview"]`.
+  `[data-slot="code-preview"]` AND `[data-slot="code-preview"] code`. The
+  nested `<code>` selector is required, not redundant: the generic `code` rule
+  applies `--font-mono` to that child, so styling only the `<pre>` left the
+  visible text on the fixed stack.
 - **Migration:** v1 (both historical shapes) → v2 is lossless for every
   legacy `baseSize` (all sixteenths, exactly representable). The pre-paint
   bootstrap in `web/index.html` is a faithful port of the TS normalization,

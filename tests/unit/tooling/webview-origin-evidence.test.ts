@@ -39,6 +39,9 @@ import {
   type PackagedNavigation,
   type PackagedOriginInput,
   type PageReadResult,
+  type ZoomRead,
+  type ZoomStep,
+  ZOOM_SHORTCUTS,
   assessPackagedOrigin,
   awaitsNavigation,
   checkDriverBinary,
@@ -48,6 +51,7 @@ import {
   parseWindowHandles,
   readOriginValue,
   readProbeValue,
+  readZoomValue,
   unloadedDocumentFailure,
   waitForNavigation,
 } from "../../../scripts/verify-packaged-webview-origin";
@@ -94,6 +98,23 @@ function navigatedOnce(overrides: Partial<PackagedNavigation> = {}): PackagedNav
   };
 }
 
+/**
+ * One zoom read as the page would report it. `devicePixelRatio` is the
+ * browser-zoom signal; `zoom`/`fontSize` are the app's own scale.
+ */
+function zoomRead(overrides: Partial<ZoomRead> = {}): ZoomRead {
+  return { devicePixelRatio: 1, zoom: "", fontSize: "16px", ...overrides };
+}
+
+/** Every shortcut probed once, with identical readings either side. */
+function zoomSteps(): ZoomStep[] {
+  return ZOOM_SHORTCUTS.map((shortcut) => ({
+    shortcut: shortcut.label,
+    before: zoomRead(),
+    after: zoomRead(),
+  }));
+}
+
 function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOriginInput {
   return {
     appPath: "C:\\portable\\TBAi.exe",
@@ -110,11 +131,7 @@ function packagedInput(overrides: Partial<PackagedOriginInput> = {}): PackagedOr
     probe: { status: 200, body: JSON.stringify({ instanceId: "instance-a" }), error: null },
     directProbe: { status: 200, error: null },
     appInstanceId: "instance-a",
-    zoomHotkeys: {
-      before: { zoom: "", fontSize: "16px" },
-      after: { zoom: "", fontSize: "16px" },
-      error: null,
-    },
+    zoomHotkeys: { baseline: zoomRead(), steps: zoomSteps(), error: null },
     ...overrides,
   };
 }
@@ -417,69 +434,113 @@ describe("G1 packaged origin: the failure matrix", () => {
     expect(transport.stage).toBe("fetch");
   });
 
-  it("stops at zoom-hotkeys when the WebView zoom changed under Ctrl+Plus/Minus/0", () => {
+  it("fails when window.devicePixelRatio moved under a chord", () => {
+    const steps = zoomSteps();
+    steps[0] = {
+      shortcut: "Ctrl+=",
+      before: zoomRead(),
+      after: zoomRead({ devicePixelRatio: 1.2 }),
+    };
     const assessed = assessPackagedOrigin(
-      packagedInput({
-        zoomHotkeys: {
-          before: { zoom: "", fontSize: "16px" },
-          after: { zoom: "1.2", fontSize: "16px" },
-          error: null,
-        },
-      }),
+      packagedInput({ zoomHotkeys: { baseline: zoomRead(), steps, error: null } }),
     );
     expect(assessed.stage).toBe("zoom-hotkeys");
     expect(assessed.ok).toBe(false);
-    expect(assessed.failures.join(" ")).toContain("zoomHotkeysEnabled must be false");
+    const failures = assessed.failures.join(" ");
+    expect(failures).toContain("Ctrl+=");
+    expect(failures).toContain("devicePixelRatio");
+    expect(failures).toContain("zoomHotkeysEnabled: false");
   });
 
-  it("stops at zoom-hotkeys when the root font size changed under the chords", () => {
+  it("catches a zoom that Ctrl+0 would have masked", () => {
+    // The exact defect this probe was rebuilt for: Ctrl+= zooms in and Ctrl+0
+    // resets, so a single read taken after all the chords ends where it began.
+    // Judged per chord, the Ctrl+= step fails and the run is red.
+    const steps = zoomSteps();
+    steps[0] = {
+      shortcut: "Ctrl+=",
+      before: zoomRead(),
+      after: zoomRead({ devicePixelRatio: 1.2 }),
+    };
+    steps[3] = {
+      shortcut: "Ctrl+0",
+      before: zoomRead({ devicePixelRatio: 1.2 }),
+      after: zoomRead(),
+    };
     const assessed = assessPackagedOrigin(
-      packagedInput({
-        zoomHotkeys: {
-          before: { zoom: "", fontSize: "16px" },
-          after: { zoom: "", fontSize: "19.2px" },
-          error: null,
-        },
-      }),
+      packagedInput({ zoomHotkeys: { baseline: zoomRead(), steps, error: null } }),
+    );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    expect(assessed.ok).toBe(false);
+    expect(assessed.failures.join(" ")).toContain("Ctrl+=");
+  });
+
+  it("asserts the app's inline CSS zoom separately from browser zoom", () => {
+    const steps = zoomSteps();
+    steps[2] = {
+      shortcut: "Ctrl+-",
+      before: zoomRead(),
+      after: zoomRead({ zoom: "0.9" }),
+    };
+    const assessed = assessPackagedOrigin(
+      packagedInput({ zoomHotkeys: { baseline: zoomRead(), steps, error: null } }),
+    );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    const failures = assessed.failures.join(" ");
+    expect(failures).toContain("inline CSS zoom");
+    expect(failures).toContain("Ctrl+-");
+  });
+
+  it("fails when the computed root font size moved under a chord", () => {
+    const steps = zoomSteps();
+    steps[1] = {
+      shortcut: "Ctrl+Shift+=",
+      before: zoomRead(),
+      after: zoomRead({ fontSize: "19.2px" }),
+    };
+    const assessed = assessPackagedOrigin(
+      packagedInput({ zoomHotkeys: { baseline: zoomRead(), steps, error: null } }),
     );
     expect(assessed.stage).toBe("zoom-hotkeys");
     expect(assessed.failures.join(" ")).toContain("root font size");
   });
 
-  it("stops at zoom-hotkeys when the probe itself failed", () => {
+  it("fails when the probe itself failed", () => {
     const assessed = assessPackagedOrigin(
       packagedInput({
-        zoomHotkeys: { before: null, after: null, error: "could not read the document root" },
+        zoomHotkeys: {
+          baseline: null,
+          steps: [],
+          error: "could not read the document root",
+        },
       }),
     );
     expect(assessed.stage).toBe("zoom-hotkeys");
     expect(assessed.failures.join(" ")).toContain("could not read the document root");
   });
 
-  it("stops at zoom-hotkeys when only one read completed", () => {
+  it("fails when a chord's pair of reads is incomplete", () => {
+    const steps = zoomSteps();
+    steps[2] = { shortcut: "Ctrl+-", before: zoomRead(), after: null };
     const assessed = assessPackagedOrigin(
-      packagedInput({
-        zoomHotkeys: {
-          before: { zoom: "", fontSize: "16px" },
-          after: null,
-          error: null,
-        },
-      }),
+      packagedInput({ zoomHotkeys: { baseline: zoomRead(), steps, error: null } }),
     );
     expect(assessed.stage).toBe("zoom-hotkeys");
     expect(assessed.failures.join(" ")).toContain("did not complete both reads");
   });
 
-  it("accepts identical zoom and font-size reads (zoomHotkeysEnabled: false)", () => {
+  it("fails when a chord was never probed", () => {
+    // A partial probe is not evidence about the chords it skipped.
+    const steps = zoomSteps().filter((step) => step.shortcut !== "Ctrl+Shift+=");
     const assessed = assessPackagedOrigin(
-      packagedInput({
-        zoomHotkeys: {
-          before: { zoom: "", fontSize: "16px" },
-          after: { zoom: "", fontSize: "16px" },
-          error: null,
-        },
-      }),
+      packagedInput({ zoomHotkeys: { baseline: zoomRead(), steps, error: null } }),
     );
+    expect(assessed.stage).toBe("zoom-hotkeys");
+    expect(assessed.failures.join(" ")).toContain("did not send Ctrl+Shift+=");
+  });
+
+  it("accepts identical readings for every chord (zoomHotkeysEnabled: false)", () => {
+    const assessed = assessPackagedOrigin(packagedInput());
     expect(assessed.failures).toEqual([]);
     expect(assessed.ok).toBe(true);
   });
@@ -488,10 +549,23 @@ describe("G1 packaged origin: the failure matrix", () => {
     const assessed = assessPackagedOrigin(
       packagedInput({
         probe: { status: null, body: null, error: "TypeError: Failed to fetch" },
-        zoomHotkeys: { before: null, after: null, error: null },
+        zoomHotkeys: { baseline: null, steps: [], error: null },
       }),
     );
     expect(assessed.stage).toBe("fetch");
+  });
+
+  it("reads a zoom payload only when it carries a finite devicePixelRatio", () => {
+    expect(readZoomValue({ devicePixelRatio: 1.25, zoom: "", fontSize: "16px" })).toEqual({
+      devicePixelRatio: 1.25,
+      zoom: "",
+      fontSize: "16px",
+    });
+    // Without the browser-zoom signal the reading proves nothing, so it is not
+    // a reading at all.
+    expect(readZoomValue({ zoom: "", fontSize: "16px" })).toBeNull();
+    expect(readZoomValue({ devicePixelRatio: null, zoom: "", fontSize: "16px" })).toBeNull();
+    expect(readZoomValue(null)).toBeNull();
   });
 
   it("fails when the in-origin read reached a different server", () => {

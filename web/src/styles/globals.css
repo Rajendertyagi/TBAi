@@ -575,6 +575,7 @@ pre,
 .aui-code-block pre,
 .aui-md-pre code,
 .aui-code-block code,
+[data-slot="code-preview"] code,
 .aui-shiki-base pre code {
   font-family: var(--code-font-family);
   font-size: var(--code-font-size);

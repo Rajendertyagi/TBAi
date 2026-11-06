@@ -27,12 +27,25 @@
  *                        document has left `about:blank` (see below);
  *   4. `fetch`         — `fetch()` of `/api/server/instance` executed INSIDE that
  *                        origin, recording status and body;
- *   5. `zoom-hotkeys`  — the document root's `zoom` and computed font-size are
- *                        read, Ctrl+Plus / Ctrl+Minus / Ctrl+0 are sent via the
- *                        WebDriver Actions API, and both are read again. With
- *                        `zoomHotkeysEnabled: false` (pinned in
+ *   5. `zoom-hotkeys`  — `window.devicePixelRatio` is read, then each chord
+ *                        (`Ctrl+=`, `Ctrl+Shift+=`, `Ctrl+-`, `Ctrl+0`) is sent
+ *                        on its own via the WebDriver Actions API with a read
+ *                        taken immediately before AND immediately after it.
+ *                        With `zoomHotkeysEnabled: false` (pinned in
  *                        `src-tauri/tauri.conf.json`) the WebView ignores the
- *                        chords, so the two reads must be identical.
+ *                        chords, so each pair must be identical.
+ *
+ * ## Why the zoom probe reads devicePixelRatio, and per chord
+ *
+ * Page zoom is a WebView2 property, not an application one: it moves
+ * `window.devicePixelRatio` and leaves the CSS root font-size alone. A probe
+ * that compared only the app's inline `style.zoom` or the computed root
+ * font-size would therefore report a pass while the WebView zoomed freely.
+ * Comparing one read before all three chords against one read after them is
+ * equally weak — `Ctrl+0` resets the zoom, so a working `Ctrl+=` followed by
+ * `Ctrl+0` ends exactly where it started. Each chord is consequently judged on
+ * its own before/after pair, and the app's inline `zoom` plus computed
+ * font-size are asserted separately as the application-scale half.
  *
  * ## Why step 3 waits
  *
@@ -136,6 +149,18 @@ export const PACKAGED_STAGES = [
 ] as const;
 export type PackagedStage = (typeof PACKAGED_STAGES)[number];
 
+/**
+ * The zoom chords a packaged WebView must ignore, in the order they are sent.
+ * `Ctrl+Shift+=` is the real "zoom in" a user presses; `Ctrl+=` is the bare-key
+ * form Windows also accepts, so both are covered.
+ */
+export const ZOOM_SHORTCUTS = [
+  { label: "Ctrl+=", key: "=", shift: false },
+  { label: "Ctrl+Shift+=", key: "=", shift: true },
+  { label: "Ctrl+-", key: "-", shift: false },
+  { label: "Ctrl+0", key: "0", shift: false },
+] as const;
+
 /** `{ origin, href, title }` as read from the page, with nulls for anything missing. */
 export interface PageRead {
   readonly origin: string | null;
@@ -143,10 +168,25 @@ export interface PageRead {
   readonly title: string | null;
 }
 
-/** `{ zoom, fontSize }` as read from the document root, with nulls for anything missing. */
+/**
+ * One read of the page's zoom signals, taken from the document root.
+ *
+ * `devicePixelRatio` is the browser-zoom signal: WebView2 page zoom changes
+ * it, while the CSS root font-size does not move. `zoom` is the app's own
+ * inline CSS scale and `fontSize` its computed root font-size — both belong to
+ * application scaling and are asserted separately from the browser zoom.
+ */
 export interface ZoomRead {
+  readonly devicePixelRatio: number;
   readonly zoom: string;
   readonly fontSize: string;
+}
+
+/** One zoom chord and the two reads taken either side of it. */
+export interface ZoomStep {
+  readonly shortcut: string;
+  readonly before: ZoomRead | null;
+  readonly after: ZoomRead | null;
 }
 
 /**
@@ -199,13 +239,14 @@ export interface PackagedOriginInput {
     readonly error: string | null;
   };
   /**
-   * The zoom-hotkey probe: the document root's `zoom` and computed font-size
-   * before and after sending Ctrl+Plus / Ctrl+Minus / Ctrl+0. Both reads are
-   * null when the page never loaded (the fetch stage already fails then).
+   * The zoom-hotkey probe. `baseline` is the `devicePixelRatio` read taken
+   * before any chord; `steps` holds one entry per chord, in the order sent,
+   * each with the reads taken immediately before and after it. All null or
+   * empty when the page never loaded (the fetch stage already fails then).
    */
   readonly zoomHotkeys: {
-    readonly before: ZoomRead | null;
-    readonly after: ZoomRead | null;
+    readonly baseline: ZoomRead | null;
+    readonly steps: readonly ZoomStep[];
     readonly error: string | null;
   };
 }
@@ -378,28 +419,53 @@ export function assessPackagedOrigin(input: PackagedOriginInput): PackagedAssess
   }
 
   const zoomFailures: string[] = [];
-  if (input.zoomHotkeys.error !== null) {
-    zoomFailures.push(input.zoomHotkeys.error);
-  } else if (input.zoomHotkeys.before !== null || input.zoomHotkeys.after !== null) {
-    // The probe ran (the page loaded). Both reads must exist and be identical:
-    // with `zoomHotkeysEnabled: false` the WebView ignores Ctrl+Plus/Minus/0.
-    if (input.zoomHotkeys.before === null || input.zoomHotkeys.after === null) {
-      zoomFailures.push("the zoom-hotkey probe did not complete both reads");
-    } else {
-      if (input.zoomHotkeys.before.zoom !== input.zoomHotkeys.after.zoom) {
+  const zoom = input.zoomHotkeys;
+  if (zoom.error !== null) {
+    zoomFailures.push(zoom.error);
+  } else if (zoom.baseline !== null || zoom.steps.length > 0) {
+    // The probe ran (the page loaded). Every chord is judged on its OWN
+    // before/after pair: a single read after all of them lets Ctrl+0 undo what
+    // Ctrl+= did, which is a pass that proves nothing.
+    if (zoom.baseline === null) {
+      zoomFailures.push("the zoom-hotkey probe took no baseline devicePixelRatio read");
+    }
+    // Every chord must have been sent and measured; a partial probe is not
+    // evidence about the chords it skipped.
+    const probed = new Set(zoom.steps.map((step) => step.shortcut));
+    for (const shortcut of ZOOM_SHORTCUTS) {
+      if (!probed.has(shortcut.label)) {
+        zoomFailures.push(`the zoom-hotkey probe did not send ${shortcut.label}`);
+      }
+    }
+    for (const step of zoom.steps) {
+      if (step.before === null || step.after === null) {
+        zoomFailures.push(`the ${step.shortcut} probe did not complete both reads`);
+        continue;
+      }
+      // Browser zoom: the only signal that actually moves when the WebView
+      // handles a zoom chord.
+      if (step.before.devicePixelRatio !== step.after.devicePixelRatio) {
         zoomFailures.push(
-          `Ctrl+Plus/Minus/0 changed the WebView zoom (${input.zoomHotkeys.before.zoom} → ${input.zoomHotkeys.after.zoom}); zoomHotkeysEnabled must be false`,
+          `${step.shortcut} changed window.devicePixelRatio (${step.before.devicePixelRatio} → ${step.after.devicePixelRatio}); the packaged WebView must ignore zoom hotkeys (zoomHotkeysEnabled: false)`,
         );
       }
-      if (input.zoomHotkeys.before.fontSize !== input.zoomHotkeys.after.fontSize) {
+      // Application scaling: a separate contract, reported separately.
+      if (step.before.zoom !== step.after.zoom) {
         zoomFailures.push(
-          `Ctrl+Plus/Minus/0 changed the root font size (${input.zoomHotkeys.before.fontSize} → ${input.zoomHotkeys.after.fontSize})`,
+          `${step.shortcut} changed the app's inline CSS zoom (${JSON.stringify(
+            step.before.zoom,
+          )} → ${JSON.stringify(step.after.zoom)})`,
+        );
+      }
+      if (step.before.fontSize !== step.after.fontSize) {
+        zoomFailures.push(
+          `${step.shortcut} changed the computed root font size (${step.before.fontSize} → ${step.after.fontSize})`,
         );
       }
     }
   }
-  // Both null with no error: the page never loaded, so the fetch stage fails
-  // first and sequentialStages returns it.
+  // No baseline, no steps, no error: the page never loaded, so the fetch stage
+  // fails first and sequentialStages returns it.
 
   const stages: StageResult<PackagedStage>[] = [
     { stage: "session-create", failures: sessionFailures },
@@ -523,16 +589,23 @@ export function readProbeValue(value: unknown): {
   };
 }
 
-/** `{ zoom, fontSize }` from the zoom-read script, with nulls for anything missing. */
+/** `{ devicePixelRatio, zoom, fontSize }` from the zoom-read script, or null. */
 export function readZoomValue(value: unknown): ZoomRead | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const record = value as Record<string, unknown>;
+  if (typeof record.devicePixelRatio !== "number" || !Number.isFinite(record.devicePixelRatio)) {
+    return null;
+  }
   if (typeof record.zoom !== "string" || typeof record.fontSize !== "string") {
     return null;
   }
-  return { zoom: record.zoom, fontSize: record.fontSize };
+  return {
+    devicePixelRatio: record.devicePixelRatio,
+    zoom: record.zoom,
+    fontSize: record.fontSize,
+  };
 }
 
 /**
@@ -605,15 +678,18 @@ const ORIGIN_SCRIPT =
   "return { origin: window.location.origin, href: window.location.href, title: document.title };";
 
 const ZOOM_READ_SCRIPT =
-  "return { zoom: document.documentElement.style.zoom || '', fontSize: getComputedStyle(document.documentElement).fontSize };";
+  "return { devicePixelRatio: window.devicePixelRatio, zoom: document.documentElement.style.zoom || '', fontSize: getComputedStyle(document.documentElement).fontSize };";
 
 /** WebDriver spec key for Control (U+E009). */
 const KEY_CONTROL = "\uE009";
+/** WebDriver spec key for Shift (U+E008) — what turns Ctrl+= into Ctrl++. */
+const KEY_SHIFT = "\uE008";
 
 /**
- * Reads the document root's `zoom` and computed font-size. Used before and
- * after the zoom-hotkey probe; with `zoomHotkeysEnabled: false` both must be
- * identical.
+ * Reads `window.devicePixelRatio` plus the app's inline CSS `zoom` and computed
+ * root font-size. Taken immediately before and immediately after each chord:
+ * the pixel ratio is the browser-zoom signal, the other two are application
+ * scaling and are asserted separately.
  */
 async function readZoomFromDriver(
   driverBaseUrl: string,
@@ -642,39 +718,33 @@ async function readZoomFromDriver(
 /**
  * Sends one Ctrl+<key> chord to the WebView via the WebDriver Actions API,
  * then releases the keyboard state. With `zoomHotkeysEnabled: false` the
- * WebView ignores the chord; with it enabled, the zoom would change and the
- * probe would fail.
+ * WebView ignores the chord; with it enabled, the pixel ratio would change and
+ * the probe would fail.
  */
 async function sendZoomHotkey(
   driverBaseUrl: string,
   sessionId: string,
-  key: string,
+  shortcut: (typeof ZOOM_SHORTCUTS)[number],
 ): Promise<{ error: string | null }> {
-  const actions = {
-    actions: [
-      {
-        type: "key",
-        id: "keyboard",
-        actions: [
-          { type: "keyDown", value: KEY_CONTROL },
-          { type: "keyDown", value: key },
-          { type: "keyUp", value: key },
-          { type: "keyUp", value: KEY_CONTROL },
-        ],
-      },
-    ],
-  };
+  const chord = [{ type: "keyDown", value: KEY_CONTROL }];
+  if (shortcut.shift) chord.push({ type: "keyDown", value: KEY_SHIFT });
+  chord.push({ type: "keyDown", value: shortcut.key });
+  chord.push({ type: "keyUp", value: shortcut.key });
+  if (shortcut.shift) chord.push({ type: "keyUp", value: KEY_SHIFT });
+  chord.push({ type: "keyUp", value: KEY_CONTROL });
+
+  const actions = { actions: [{ type: "key", id: "keyboard", actions: chord }] };
   const sent = await httpJson(`${driverBaseUrl}/session/${sessionId}/actions`, {
     method: "POST",
     body: actions,
     timeoutMs: CDP_STEP_TIMEOUT_MS,
   });
   if (sent.status === null) {
-    return { error: `could not send Ctrl+${key}: ${sent.error ?? "unknown error"}` };
+    return { error: `could not send ${shortcut.label}: ${sent.error ?? "unknown error"}` };
   }
   if (sent.status >= 400) {
     return {
-      error: `the driver rejected Ctrl+${key} (HTTP ${sent.status}): ${tailText(sent.text ?? "", 300)}`,
+      error: `the driver rejected ${shortcut.label} (HTTP ${sent.status}): ${tailText(sent.text ?? "", 300)}`,
     };
   }
   const released = await httpJson(`${driverBaseUrl}/session/${sessionId}/actions`, {
@@ -683,7 +753,7 @@ async function sendZoomHotkey(
   });
   if (released.status === null || released.status >= 400) {
     return {
-      error: `could not release the keyboard after Ctrl+${key}: ${released.error ?? `HTTP ${released.status}`}`,
+      error: `could not release the keyboard after ${shortcut.label}: ${released.error ?? `HTTP ${released.status}`}`,
     };
   }
   return { error: null };
@@ -960,12 +1030,12 @@ async function main(): Promise<number> {
     error: null,
   };
   const zoomHotkeys: {
-    before: ZoomRead | null;
-    after: ZoomRead | null;
+    baseline: ZoomRead | null;
+    steps: ZoomStep[];
     error: string | null;
   } = {
-    before: null,
-    after: null,
+    baseline: null,
+    steps: [],
     error: null,
   };
   const directProbe: { status: number | null; error: string | null } = {
@@ -1105,23 +1175,38 @@ async function main(): Promise<number> {
               }
 
               // Zoom-hotkey probe: with `zoomHotkeysEnabled: false` the
-              // WebView ignores Ctrl+Plus/Minus/0, so the document root's
-              // zoom and computed font-size must be identical before and
-              // after the chords.
-              const before = await readZoomFromDriver(driverBaseUrl, sessionId);
-              zoomHotkeys.before = before.read;
-              zoomHotkeys.error = before.error;
-              if (before.read !== null) {
-                for (const key of ["=", "-", "0"]) {
-                  const sent = await sendZoomHotkey(driverBaseUrl, sessionId, key);
+              // WebView ignores every zoom chord, so window.devicePixelRatio
+              // must be identical either side of EACH one. Each chord gets its
+              // own pair of reads — one read after all of them would let
+              // Ctrl+0 undo what Ctrl+= did and report a pass.
+              const baseline = await readZoomFromDriver(driverBaseUrl, sessionId);
+              zoomHotkeys.baseline = baseline.read;
+              zoomHotkeys.error = baseline.error;
+              if (baseline.read !== null) {
+                for (const shortcut of ZOOM_SHORTCUTS) {
+                  const before = await readZoomFromDriver(driverBaseUrl, sessionId);
+                  const step: {
+                    shortcut: string;
+                    before: ZoomRead | null;
+                    after: ZoomRead | null;
+                  } = { shortcut: shortcut.label, before: before.read, after: null };
+                  zoomHotkeys.steps.push(step);
+                  if (before.error !== null) {
+                    zoomHotkeys.error = before.error;
+                    break;
+                  }
+                  const sent = await sendZoomHotkey(driverBaseUrl, sessionId, shortcut);
                   if (sent.error !== null) {
                     zoomHotkeys.error = sent.error;
                     break;
                   }
+                  const after = await readZoomFromDriver(driverBaseUrl, sessionId);
+                  step.after = after.read;
+                  if (after.error !== null) {
+                    zoomHotkeys.error = after.error;
+                    break;
+                  }
                 }
-                const after = await readZoomFromDriver(driverBaseUrl, sessionId);
-                zoomHotkeys.after = after.read;
-                zoomHotkeys.error = zoomHotkeys.error ?? after.error;
               }
             }
           }
@@ -1266,7 +1351,7 @@ async function main(): Promise<number> {
     /** How the direct read of the launched app's own identity went. */
     directProbe,
     appInstanceId,
-    /** The zoom-hotkey probe: root zoom/font-size before and after Ctrl+Plus/Minus/0. */
+    /** The zoom-hotkey probe: devicePixelRatio either side of each chord. */
     zoomHotkeys,
     observations: {
       originMatchesExpected: script.origin === EXPECTED_PACKAGED_ORIGIN,
@@ -1275,6 +1360,11 @@ async function main(): Promise<number> {
       inOriginInstanceId,
       /** True only when both ids were read and are equal; missing evidence fails. */
       instanceMatchesApp: appInstanceId !== null && inOriginInstanceId === appInstanceId,
+      /**
+       * The browser-zoom baseline the chords were measured against. Page zoom
+       * moves this number; the CSS root font-size does not.
+       */
+      devicePixelRatio: zoomHotkeys.baseline?.devicePixelRatio ?? null,
     },
     assessment: { ok: assessment.ok && failures.length === 0, stage: assessment.stage, failures },
     teardown: { sessionDeleteStatus, driverStop, tempRootRemoved, errors: teardownErrors },

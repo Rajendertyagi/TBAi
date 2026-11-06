@@ -1,7 +1,7 @@
-# TBAi — Typography, Terminal & Application Scaling: Implementation Plan (P0, plan only)
+# TBAi — Typography, Terminal & Application Scaling: Implementation Record (P0, implemented)
 
 **Date:** 2026-11-05
-**Status:** Plan only — awaiting maintainer approval. No code modified, nothing committed or pushed.
+**Status:** Implemented in `dd82ed8` (`feat(appearance): independent typography per surface with factor-based app scale`), on branch `ci/tauri-e2e-verify`. This document is the approved Revision 2 plan and the record of what was built; §14 lists the post-review corrections. The packaged WebView2 zoom observation runs in the `tauri` CI job, not locally (no MSVC linker on the development box).
 **Revision 2 (2026-11-05, maintainer review):** corrected CSS font ownership (`--font-mono` stays the fixed generic stack; code/terminal get their own variables), inventoried and classified all 52 arbitrary pixel font-size declarations, `appScale` is now an exact factor (0.75–1.5) with lossless legacy migration, packaged zoom-hotkey test reuses the existing WebDriver infrastructure (no new script), and the Tailwind v4 `@theme` mechanism was verified empirically (plain `@theme`, not `@theme inline`; line-height tokens are unitless and need no override). See §13.
 **Baseline (verified):** branch `ci/tauri-e2e-verify`, HEAD `42930ff` (`feat(appearance): decouple interface and code typography with scoped resets`), clean tree. Tauri CLI **2.12.3**, Rust crate **2.12.5**. No `xterm`/`pty` dependency anywhere; **TBAi has no live PTY terminal** — all "terminal" output is captured tool output rendered as HTML rows.
 
@@ -209,9 +209,9 @@ P1 → P2 → P3 are sequential; P4 is independent after P1; P5 closes. Each pha
 
 ## 12. Verdict
 
-**READY FOR IMPLEMENTATION REVIEW** — decision points remaining in §10: #3 (reasoning scope), #4 (terminal wrap default), #8 (`OpenCodeConfigPage.tsx` L167). #1, #2, #5, #6 are resolved and verified. No code has been modified; nothing committed or pushed.
+**IMPLEMENTED** in `dd82ed8` on branch `ci/tauri-e2e-verify`. All §10 decision points were resolved by the maintainer before implementation: reasoning body text follows the reading line height, terminal wrapping defaults ON, and the OpenCode JSON preview is a code surface (`[data-slot="code-preview"]`). `bun run verify` passed, and `tests/e2e/appearance-scaling.spec.ts` passed 10/10 in both `chromium-headless` and `edge-headless`.
 
-**Verified facts** are marked as such above; everything else is explicitly a proposal. Awaiting maintainer approval (and answers to §10) before implementation.
+**Verified facts** are marked as such above. The packaged WebView2 zoom observation cannot run on the development box (no MSVC linker, so neither `cargo install tauri-driver` nor `bunx tauri build` completes); it runs in the `tauri` CI job. §14 records the corrections made after the maintainer's review of the pushed implementation.
 
 ## 13. Revision 2 — corrected sections (2026-11-05, maintainer review)
 
@@ -308,4 +308,35 @@ See §5 (revised): `scripts/verify-packaged-zoom-hotkeys.ts` is **not** created;
 - **Unit:** exact factor migration values (13→0.8125, 14→0.875, 15→0.9375, 18→1.125); `appScale` validation (NaN / 0.5 / 2 / `"1.25"` → 1); bootstrap parity guard (`index.html` sets `--code-font-family`, never `--font-mono`; factor zoom).
 - **DOM:** `.font-mono` resolves to the fixed default (not the code selection); `[data-slot="terminal-block"]` / `[data-slot="code-diff"]` carry the right vars; reset isolation.
 - **E2E:** independent computed-style assertions for interface / code / terminal / app scale; code wrap on ⇒ copied text byte-identical; terminal wrap ⇏ code wrap; reading line height affects prose only; resets preserve unrelated groups; 75/100/150 regression retained.
-- **Packaged (`tauri` CI job, medium integrity):** `zoom-hotkeys` stage — Ctrl+Plus/Minus/0 leave `document.documentElement.style.zoom` and computed root font-size unchanged; Settings scale applies and persists across restart.
+- **Packaged (`tauri` CI job, medium integrity):** `zoom-hotkeys` stage — `window.devicePixelRatio` is read, then each of `Ctrl+=`, `Ctrl+Shift+=`, `Ctrl+-` and `Ctrl+0` is sent separately with a read taken immediately before and after it; every pair must be identical. The app's inline `style.zoom` and computed root font-size are asserted separately (application scaling, not browser zoom). Settings scale applies and persists across restart.
+
+## 14. Post-review corrections (2026-11-05)
+
+The maintainer reviewed the pushed implementation and found two real defects and one documentation issue. All three are corrected here.
+
+### 14.1 Packaged zoom probe could pass falsely
+
+The stage compared one read taken before all three chords with one read taken after them, and treated `document.documentElement.style.zoom` plus the computed root font-size as the browser-zoom signal. Both choices are wrong:
+
+- `style.zoom` is TBAi's own inline CSS scale, not the WebView's page zoom.
+- Page zoom moves `window.devicePixelRatio`; the computed root font-size can stay unchanged.
+- `Ctrl+0` resets the zoom, so a working `Ctrl+=` followed by `Ctrl+0` ends exactly where it started and the endpoint comparison passes.
+
+The stage now reads `window.devicePixelRatio` as the browser-zoom signal, sends each chord separately (`Ctrl+=`, `Ctrl+Shift+=`, `Ctrl+-`, `Ctrl+0`), and compares the reads taken immediately before and after **each** chord. The app's inline `zoom` and computed root font-size remain a separate assertion. A partial probe fails: every shortcut in `ZOOM_SHORTCUTS` must be present in the recorded steps.
+
+`tests/unit/tooling/webview-origin-evidence.test.ts` covers the failure matrix, including the exact regression this replaced: a `Ctrl+=` that moves the pixel ratio followed by a `Ctrl+0` that resets it now fails on the `Ctrl+=` step. The guard was falsified by temporarily restoring the endpoint comparison — the regression case failed with `stage: null` — then reverted.
+
+### 14.2 OpenCode JSON preview ignored the selected code font
+
+`OpenCodeConfigPage.tsx` renders `<pre data-slot="code-preview"><code>{raw}</code></pre>`. The code-font rule covered the `<pre>` but not the nested `<code>`, and the generic `code` rule applies `--font-mono` directly to that child, so selecting a code font never reached the visible text. `[data-slot="code-preview"] code` is now in the same selector group that sets `var(--code-font-family)`.
+
+Coverage, both halves:
+
+- `tests/e2e/appearance-scaling.spec.ts` — the real component is rendered against a stubbed `/api/opencode/config` snapshot (the e2e server has no managed OpenCode server or global config), and the computed font family of the nested `<code>` is asserted after selecting a non-default code font.
+- `tests/dom/appearance/typography.test.tsx` — the stylesheet guard asserts both selectors belong to the same code-font rule, and the component anchor asserts the preview really nests a `<code>` element.
+
+Both guards were falsified: removing the selector failed the stylesheet guard, and replacing `<code>` with a non-code element failed the component anchor.
+
+### 14.3 This document's status
+
+The status line said "Plan only — awaiting maintainer approval. No code modified, nothing committed or pushed." while the implementation was already committed in `dd82ed8`. It now records the implementation and this section records the corrections.

@@ -24,6 +24,8 @@ import { REPO_ROOT } from "../../helpers/repo-root";
  * - `applyTypographyToDom` writes the v2 variables and NEVER `--font-mono`;
  * - the generic monospace rule still maps `.font-mono` to `var(--font-mono)`;
  * - code surfaces and the terminal block carry their own variables;
+ * - the OpenCode JSON preview's nested `<code>` is covered by the same rule
+ *   that sets the code font (and the component really nests one);
  * - scoped resets leave every unrelated group's variables untouched.
  */
 
@@ -47,6 +49,28 @@ const codeDiffSource = readFileSync(
   path.join(REPO_ROOT, "web", "src", "components", "assistant-ui", "elements", "code-diff.tsx"),
   "utf8",
 );
+const openCodeConfigPageSource = readFileSync(
+  path.join(REPO_ROOT, "web", "src", "features", "opencode", "OpenCodeConfigPage.tsx"),
+  "utf8",
+);
+
+/**
+ * Every selector list whose rule declares `font-family: var(--code-font-family)`.
+ *
+ * Returned as arrays so a guard can assert that two selectors belong to the
+ * SAME rule — the invariant, independent of how the formatter wraps the list.
+ */
+function codeFontSelectorGroups(): string[][] {
+  const groups: string[][] = [];
+  for (const match of globalsCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectorList = match[1];
+    const body = match[2];
+    if (selectorList === undefined || body === undefined) continue;
+    if (!/font-family:\s*var\(--code-font-family\)/.test(body)) continue;
+    groups.push(selectorList.split(",").map((selector) => selector.trim()));
+  }
+  return groups;
+}
 
 function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConfig {
   return {
@@ -197,6 +221,20 @@ describe("globals.css — ownership rules (source-text guards)", () => {
     expect(globalsCss).toContain("var(--code-font-weight)");
   });
 
+  it("applies the code font to the OpenCode preview and its nested code element", () => {
+    // The preview is `<pre data-slot="code-preview"><code>…</code></pre>`. The
+    // generic `code` rule gives the child `--font-mono`, so a selector for the
+    // `<pre>` alone leaves the visible text on the fixed stack. Both must sit
+    // in the same rule that sets the code font, or the child wins.
+    const groups = codeFontSelectorGroups();
+    const coversPreview = groups.some(
+      (selectors) =>
+        selectors.includes('[data-slot="code-preview"]') &&
+        selectors.includes('[data-slot="code-preview"] code'),
+    );
+    expect(coversPreview).toBe(true);
+  });
+
   it("maps the terminal block to the terminal font variables", () => {
     expect(globalsCss).toMatch(
       /\[data-slot="terminal-block"\]\s*\{[^}]*font-family:\s*var\(--terminal-font-family\)/,
@@ -263,5 +301,14 @@ describe("vendored components — structural anchors for the CSS selectors", () 
   it('CodeDiff renders data-slot="code-diff" and keeps whitespace-pre rows', () => {
     expect(codeDiffSource).toContain('data-slot="code-diff"');
     expect(codeDiffSource).toContain("whitespace-pre");
+  });
+
+  it('OpenCodeConfigPage renders its JSON preview as <pre data-slot="code-preview"><code>', () => {
+    // The CSS above targets `[data-slot="code-preview"] code`; if the preview
+    // stopped nesting a `<code>` element the selector would match nothing and
+    // the code font would silently stop applying.
+    expect(openCodeConfigPageSource).toMatch(
+      /<pre\b[^>]*data-slot="code-preview"[^>]*>\s*<code>\{raw\}<\/code>\s*<\/pre>/,
+    );
   });
 });

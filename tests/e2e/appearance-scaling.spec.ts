@@ -533,6 +533,65 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     expect(await terminalRow.evaluate((el) => getComputedStyle(el).whiteSpace)).toBe("pre");
   });
 
+  test("the OpenCode JSON preview uses the selected code font", async ({ page }) => {
+    // The preview is rendered by the real `OpenCodeConfigPage` component from a
+    // `GET /api/opencode/config` snapshot. That snapshot needs a live managed
+    // OpenCode server AND a readable global `opencode.json`, and the isolated
+    // e2e server deliberately has neither (its own empty XDG roots, no managed
+    // server). So the DATA SOURCE is stubbed here; everything the assertion is
+    // about — the component's markup, the real stylesheet, the cascade onto the
+    // nested `<code>` — is the application's own.
+    const snapshot = {
+      path: "C:\\config\\opencode\\opencode.json",
+      discoveredPaths: ["C:\\config\\opencode\\opencode.json"],
+      raw: '{\n  "$schema": "https://opencode.ai/config.json"\n}\n',
+      malformed: false,
+      permissions: null,
+      editable: false,
+      writeDisabledReason: null,
+    };
+    await page.route("**/api/opencode/config", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(snapshot),
+      }),
+    );
+
+    // The nested `<code>` is the element the bug lived on: the generic code
+    // rule applied `--font-mono` to it, overriding the preview's code font.
+    const readPreview = async () => {
+      const preview = page.locator('[data-slot="code-preview"]');
+      const code = page.locator('[data-slot="code-preview"] code');
+      await expect(code).toBeVisible();
+      return {
+        previewFamily: await preview.evaluate((el) => getComputedStyle(el).fontFamily),
+        codeFamily: await code.evaluate((el) => getComputedStyle(el).fontFamily),
+      };
+    };
+
+    await page.goto("/#/opencode-config");
+    await page.waitForLoadState("domcontentloaded");
+    const before = await readPreview();
+
+    // A non-default code font is required: the default code font IS the generic
+    // monospace stack, so a default-only reading cannot tell a working selector
+    // from the broken one.
+    await page.evaluate(() => {
+      localStorage.setItem(
+        "tbai-typography",
+        JSON.stringify({ version: 2, codeFontFamily: "fira-code", codeFontSize: 17 }),
+      );
+    });
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+
+    const after = await readPreview();
+    expect(after.previewFamily).toContain("Fira Code");
+    expect(after.codeFamily).toContain("Fira Code");
+    expect(after.codeFamily).not.toBe(before.codeFamily);
+  });
+
   test("reading line height affects prose only", async ({ page, request }) => {
     test.setTimeout(120_000);
     const conversationId = await seedConversationWithReply(
