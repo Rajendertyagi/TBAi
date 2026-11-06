@@ -580,6 +580,29 @@ describe("Phase 4 inventory — literal pixels and ad-hoc multipliers", () => {
     expect(approvalCardSource).toContain("0.84375");
   });
 
+  it("permits only the documented responsive calc multipliers of --interface-font-size", () => {
+    const calcMatches: string[] = [];
+    for (const file of files) {
+      if (file.endsWith(".css")) continue; // Theme definitions in globals.css define the type scale
+      const text = readFileSync(file, "utf8");
+      const relative = path.relative(REPO_ROOT, file).replaceAll("\\", "/");
+      const lines = text.split("\n");
+      lines.forEach((line) => {
+        const matches = line.matchAll(/calc\(var\(--interface-font-size\)\s*\*\s*([\d.]+)\)/g);
+        for (const m of matches) {
+          calcMatches.push(`${relative}:${m[1]}`);
+        }
+      });
+    }
+    // Only two files in web/src contain inline calc multipliers:
+    // 1. SidebarSection.tsx: 0.8125 (documented responsive type role exception)
+    // 2. approval-card.tsx: 0.84375 (vendored, documented unused exception)
+    expect(calcMatches.sort()).toEqual([
+      "web/src/components/assistant-ui/elements/approval-card.tsx:0.84375",
+      "web/src/features/sidebar/components/SidebarSection.tsx:0.8125",
+    ]);
+  });
+
   it("migrates the mono helper to the compact scale", () => {
     expect(mono).toContain("text-2xs");
     expect(mono).not.toContain("text-[11px]");
