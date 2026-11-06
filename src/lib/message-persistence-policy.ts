@@ -23,6 +23,13 @@
  * FAIL-OPEN on anything unrecognised: an unknown part type is treated as real
  * content, because silently dropping a part we do not understand would destroy a
  * genuine reply. Only the types listed here are ever treated as non-content.
+ *
+ * A failed run is the one exception to "contentless is not a reply": the turn
+ * produced nothing to read, but the sanitized provider error IS what the reader
+ * has to see, and it lives in `metadata.error`. That field is declared here for
+ * the same reason as the part types above — the writer (the chat route), the
+ * storage guard (the message POST), and the reload renderer all have to agree on
+ * one spelling, and the browser reads it as `metadata.custom.error`.
  */
 
 /** TBAi's UI-only progress part (server-written, rendered by `TodoList`). */
@@ -71,6 +78,9 @@ function progressPartRenders(part: UnknownPart): boolean {
  */
 export function hasRenderableAssistantContent(content: unknown): boolean {
   if (!isRecord(content)) return true;
+  // A failed turn renders its error card even with no parts at all, so it is
+  // content by this module's own definition.
+  if (storedErrorMessage(content) !== null) return true;
   const parts = content.parts;
   // No parts array: not a shape we understand, so keep it.
   if (!Array.isArray(parts)) return true;
@@ -97,4 +107,55 @@ export function isContentlessAssistantMessage(content: unknown): boolean {
   if (!isRecord(content)) return false;
   if (content.role !== "assistant") return false;
   return !hasRenderableAssistantContent(content);
+}
+
+/**
+ * Where a failed run's sanitized user-facing error is stored, as the runtime's
+ * own message metadata (`{ role, parts, metadata: { error } }`).
+ *
+ * It is NOT `status`. A stored `status` is dropped by the assistant-ui AI SDK
+ * converter on the way in — only a synthesized `cancelled` survives — so a
+ * persisted status would be lost on reload. Metadata is carried through: the
+ * converter folds any key it does not recognise into `metadata.custom`, which is
+ * why the browser reads `message.metadata.custom.error`.
+ *
+ * The value is a string because it comes from `sanitizeStreamError`, which
+ * already replaced provider prose with fixed, user-facing copy. Nothing raw is
+ * ever written here, and the string is what the reader sees on both paths: live
+ * (from the stream's error status) and after a reload (from this field).
+ */
+export const MESSAGE_ERROR_METADATA_KEY = "error";
+
+/**
+ * The stored error text for a message, or null when it carries none.
+ *
+ * Deliberately strict about the value being a NON-EMPTY string: `{ error: "" }`
+ * and `{ error: {} }` describe no failure a reader could act on, and treating
+ * them as an error would let an empty row claim the "has an error" rule that
+ * makes an otherwise contentless turn persistable.
+ */
+export function storedErrorMessage(content: unknown): string | null {
+  if (!isRecord(content)) return null;
+  const metadata = content.metadata;
+  if (!isRecord(metadata)) return null;
+  // Two spellings describe the same fact, because the message crosses the
+  // assistant-ui converter in both directions.
+  //
+  // `metadata.error` is what the server writes (the AI SDK message's own
+  // metadata). The converter folds every key it does not recognise into
+  // `custom`, so the browser reads `metadata.custom.error`; a message the
+  // browser then writes back carries that folded shape instead. Recognising only
+  // one spelling would make a reloaded error row look like a row with no error
+  // to every writer and guard that runs after it.
+  const direct = metadata[MESSAGE_ERROR_METADATA_KEY];
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const custom = metadata.custom;
+  if (!isRecord(custom)) return null;
+  const folded = custom[MESSAGE_ERROR_METADATA_KEY];
+  return typeof folded === "string" && folded.length > 0 ? folded : null;
+}
+
+/** True when this stored message body carries a failed run's error text. */
+export function hasStoredErrorMetadata(content: unknown): boolean {
+  return storedErrorMessage(content) !== null;
 }

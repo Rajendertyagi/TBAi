@@ -5,6 +5,7 @@ import {
   ConversationNotFoundError,
   MessageOwnershipError,
   conversationService,
+  getStoredMessageSync,
   messageService,
 } from "../services/storage";
 import type { Conversation } from "../types";
@@ -18,7 +19,10 @@ import {
   messageUpsertSchema,
   messageWindowQuerySchema,
 } from "../lib/validation";
-import { isContentlessAssistantMessage } from "../lib/message-persistence-policy";
+import {
+  hasStoredErrorMetadata,
+  isContentlessAssistantMessage,
+} from "../lib/message-persistence-policy";
 import { folderService } from "../services/folders";
 import { resolveConversationWorkspace } from "../services/workspace";
 import { storageError } from "./shared";
@@ -371,6 +375,26 @@ app.post("/api/conversations/:id/messages", async (c) => {
         conversationId: id,
         messageId: parsed.message.id,
         format: parsed.message.format,
+      });
+      return c.json({ success: true, persisted: false });
+    }
+
+    // A failed run's error text is written by the chat route and exists NOWHERE
+    // else: the client streams it, but never holds it as message data, so its own
+    // write of the same message carries no error. Landing that write would replace
+    // the row and erase the only record of why the turn failed — the next reload
+    // would show a blank turn. So a write that would drop a stored error is
+    // refused, on the same terms as the contentless shell above: the row stays as
+    // the server wrote it.
+    const stored = getStoredMessageSync(id, parsed.message.id);
+    if (
+      stored &&
+      hasStoredErrorMetadata(stored.content) &&
+      !hasStoredErrorMetadata(parsed.message.content)
+    ) {
+      logger.debug("conversations", "conversation.message_error_overwrite_skipped", {
+        conversationId: id,
+        messageId: parsed.message.id,
       });
       return c.json({ success: true, persisted: false });
     }

@@ -60,8 +60,11 @@ import { resumableContext, chatStreamStore } from "../../lib/resumable";
 import { createTerminalBatcher } from "../../lib/terminal-stream";
 import { chatRuns } from "../../services/chat-runs";
 import {
+  buildFailedRunMessage,
   chatHistoryFinalizerDeps,
+  failedRunHistoryDeps,
   finalizeDetachedRunHistory,
+  persistFailedRunMessage,
   validateFinalMessage,
 } from "../../services/chat-streams/historyFinalizer";
 import { generateId } from "../../lib/utils";
@@ -850,7 +853,14 @@ export async function executeDirectStream(
           // The inner conversion owns producer settlement. It continues even when
           // the browser detaches, so a client disconnect cannot turn a healthy
           // run into a cancellation or a false success.
-          onEnd: async ({ outcome, finishReason, responseMessage, isAborted, messages }) => {
+          onEnd: async ({
+            outcome,
+            finishReason,
+            responseMessage,
+            isAborted,
+            isCancelled,
+            messages,
+          }) => {
             // Detachment is read BEFORE settling, in the same synchronous turn:
             // `chatRuns.attach` clears the mark regardless of run status, so a resume
             // landing later would flip the answer and suppress a finalization this
@@ -878,6 +888,37 @@ export async function executeDirectStream(
                   parentId,
                 });
               }
+            }
+            // A failed run is still a turn the reader has to be able to see after
+            // a reload. The provider error was already sanitized for the live
+            // stream; the same text is stored on the assistant row, which is the
+            // only copy that survives the page. Written here rather than by the
+            // client because the client never holds this string as data.
+            //
+            // Scoped to a provider verdict the user can act on: a stream the user
+            // stopped, or one a vanished consumer cancelled, is not a failure to
+            // report. `settleFromUiOutcome` maps an unknown outcome to `failed`, so
+            // the two flags are checked explicitly rather than inferred.
+            if (settlement === "failed" && !isAborted && isCancelled !== true && threadId) {
+              // The stream's own failure when it declared one; otherwise the
+              // provider error the overflow gate published. A run that settled
+              // failed on its finish reason alone has neither, and
+              // `sanitizeStreamError` answers with its generic copy.
+              const failureCause =
+                outcome.status === "failed" ? outcome.error : originalStreamError;
+              persistFailedRunMessage(
+                failedRunHistoryDeps,
+                {
+                  conversationId: threadId,
+                  message: buildFailedRunMessage(
+                    responseMessage,
+                    sanitizeStreamError(failureCause),
+                  ),
+                  isAborted,
+                  parentId,
+                },
+                chatLog,
+              );
             }
             // Server-side history finalization: the connected client persists through
             // the assistant-ui history adapter, so this is only the fallback for a run

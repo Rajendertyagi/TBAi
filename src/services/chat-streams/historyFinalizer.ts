@@ -1,10 +1,17 @@
 import {
+  getStoredMessageSync,
   MessageIdentityError,
   MessageOwnershipError,
   resolveMessageForHistorySync,
+  upsertStoredSync,
   type HistoryMessageResolutionInput,
   type HistoryResolution,
+  type StoredMessageEntry,
 } from "../storage/messages";
+import {
+  MESSAGE_ERROR_METADATA_KEY,
+  storedErrorMessage,
+} from "../../lib/message-persistence-policy";
 import { logger } from "../../lib/logger";
 import { chatStreamStore } from "../../lib/resumable";
 import type { ChatStreamRunContext, SqliteResumableStreamStore } from "./sqliteResumableStore";
@@ -35,6 +42,25 @@ import type { ChatStreamRunContext, SqliteResumableStreamStore } from "./sqliteR
  * and the capture. That process-death window remains documented and unrepaired.
  * A run that *did* settle normally but whose client failed to write is not in
  * that window: its message is durable, and `historyReconciler` re-offers it here.
+ *
+ * ## The failed-run writer is not a second finalizer
+ *
+ * `persistFailedRunMessage` writes the other kind of turn a reader must be able
+ * to see again: a run that settled `failed`. It cannot use the machinery above,
+ * and deliberately does not try —
+ *
+ *  - the obligation (`claimHistory` → `done`) is defined only for
+ *    `terminal_kind = 'completed'`, so a failed run can never hold one;
+ *  - nothing here is transactional with a claim, so there is no compare-and-set
+ *    to win. Idempotency comes from the message id instead: the row is upserted
+ *    and read back, and the same capture written twice is the same row;
+ *  - it writes an ERROR, not a reply. `validateFinalMessage` still decides which
+ *    messages are persistable; it additionally accepts an empty `parts` array
+ *    when the message carries `metadata.error`, because that is exactly the
+ *    out-of-credits turn: the provider failed before producing a single part.
+ *
+ * The two writers overlap only in the row they may touch, and they never both
+ * own it: a run settles once, as completed OR failed.
  */
 
 /**
@@ -184,6 +210,12 @@ export const ASSISTANT_UI_STORAGE_FORMAT = "ai-sdk/v6";
  * message. Anything else is reported, never invented: the alternative would be
  * writing partial output as if it were the answer.
  *
+ * The single relaxation is for a FAILED turn, which is the one assistant message
+ * whose whole content can legitimately be nothing: `metadata.error` is a
+ * non-empty string, so the row renders the error card and is not a blank bubble.
+ * Callers that pass a completed capture gain nothing from it — a completed reply
+ * never carries that field.
+ *
  * Returns the message when it is usable, otherwise a `skipReason`. Modelled as
  * two nullable fields rather than a discriminated union so the call site reads as
  * a plain null check.
@@ -199,12 +231,17 @@ export function validateFinalMessage(
 ): { message: FinalUIMessage | null; skipReason: HistorySkipReason | null } {
   if (isAborted) return { message: null, skipReason: "aborted" };
   if (!responseMessage) return { message: null, skipReason: "no_message" };
+  // A failed turn is persistable even with NO parts, but only because it carries
+  // the sanitized error that makes it readable. Without that text an empty
+  // assistant message is a blank bubble, which is the case this rule has always
+  // refused.
+  const carriesError = storedErrorMessage(responseMessage) !== null;
   if (
     typeof responseMessage.id !== "string" ||
     responseMessage.id.length === 0 ||
     responseMessage.role !== "assistant" ||
     !Array.isArray(responseMessage.parts) ||
-    responseMessage.parts.length === 0
+    (responseMessage.parts.length === 0 && !carriesError)
   ) {
     return { message: null, skipReason: "invalid_message" };
   }
@@ -587,8 +624,137 @@ export async function finalizeDetachedRunHistory(
   }
 }
 
+/**
+ * The storage surface the failed-run writer needs.
+ *
+ * Narrower than `HistoryMessageWriter` on purpose: there is no claim to verify
+ * against, and `resolveMessageForHistorySync` must NOT be reused here. Its
+ * `canonicalShapesEqual` compares role and parts only, so a stored row that
+ * already held the same (empty) parts would resolve `matched` and the error
+ * metadata would never be written. This writer is about the metadata, so it
+ * writes and reads the row back itself.
+ */
+export interface FailedRunMessageStore {
+  /** Read one stored row, or null when this conversation holds none. Never throws. */
+  readStoredMessage(
+    conversationId: string,
+    messageId: string,
+  ): { parentId: string | null; content: unknown } | null;
+  /** Upsert one row by id. Throws `MessageOwnershipError` for another conversation's id. */
+  upsertStored(conversationId: string, entry: StoredMessageEntry): void;
+}
+
+export interface FailedRunPersistDeps {
+  messages: FailedRunMessageStore;
+}
+
+/** What `persistFailedRunMessage` did. Never carries message or error text. */
+export type FailedRunPersistOutcome = "written" | "skipped" | "conflicted" | "failed";
+
+/**
+ * Add the failed run's sanitized error to the message that will be stored.
+ *
+ * `error` must be `sanitizeStreamError`'s output — the same text the live stream
+ * already showed the user — so the reloaded turn says exactly what the live one
+ * said. Existing metadata is preserved: on a turn that streamed provider
+ * metadata before failing, `custom` still names the provider/model the footer
+ * reads, and the error is added beside it.
+ */
+export function buildFailedRunMessage(message: FinalUIMessage, error: string): FinalUIMessage {
+  const existing =
+    typeof message.metadata === "object" && message.metadata !== null
+      ? (message.metadata as Record<string, unknown>)
+      : {};
+  return { ...message, metadata: { ...existing, [MESSAGE_ERROR_METADATA_KEY]: error } };
+}
+
+/**
+ * Persist one failed run as the assistant turn it was.
+ *
+ * Never throws. The parent rule is the same one the completed path enforces: a
+ * reply may not hang from a link that does not resolve, because the conversation
+ * is READ by walking `parent_id` and an unresolvable link would truncate the
+ * whole chain rather than just this row. Unlike the completed path there is no
+ * claim to leave open, so a refusal is reported and nothing is written.
+ *
+ * A write that lands but does not read back with the exact error text is
+ * reported `failed`: the row is what a reload will show, so "it was written" is
+ * only true when the text survived the round trip. The text is never logged.
+ */
+export function persistFailedRunMessage(
+  deps: FailedRunPersistDeps,
+  input: {
+    conversationId: string;
+    message: FinalUIMessage | null;
+    isAborted: boolean;
+    parentId: string | null;
+  },
+  log: FinalizerLog = logger,
+): FailedRunPersistOutcome {
+  const { conversationId, parentId } = input;
+  const { message, skipReason } = validateFinalMessage(input.message, input.isAborted);
+  if (!message) {
+    log.warn("chat", "chat_history_skipped", { reason: skipReason });
+    return "skipped";
+  }
+  const errorText = storedErrorMessage(message);
+  if (errorText === null) {
+    // A failed run with no sanitized text has nothing to show a reader, so it is
+    // not persistable. The route always supplies one.
+    log.warn("chat", "chat_history_skipped", { messageId: message.id, reason: "invalid_message" });
+    return "skipped";
+  }
+
+  const existing = deps.messages.readStoredMessage(conversationId, message.id);
+  const anchored =
+    existing?.parentId != null ||
+    parentId === null ||
+    (parentId !== message.id && deps.messages.readStoredMessage(conversationId, parentId) !== null);
+  if (!anchored) {
+    log.warn("chat", "chat_history_conflicted", { messageId: message.id, reason: "parent" });
+    return "conflicted";
+  }
+
+  try {
+    deps.messages.upsertStored(conversationId, {
+      id: message.id,
+      parent_id: parentId,
+      format: ASSISTANT_UI_STORAGE_FORMAT,
+      content: toStoredMessageContent(message),
+    });
+  } catch (error) {
+    if (error instanceof MessageOwnershipError) {
+      log.warn("chat", "chat_history_conflicted", { messageId: message.id, reason: "ownership" });
+      return "conflicted";
+    }
+    log.error("chat", "chat_history_finalize_failed", {
+      messageId: message.id,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return "failed";
+  }
+
+  const stored = deps.messages.readStoredMessage(conversationId, message.id);
+  if (stored === null || storedErrorMessage(stored.content) !== errorText) {
+    log.error("chat", "chat_history_failed_error_not_stored", { messageId: message.id });
+    return "failed";
+  }
+
+  log.info("chat", "chat_history_failed_written", {
+    messageId: message.id,
+    partCount: message.parts.length,
+    parentId,
+  });
+  return "written";
+}
+
 /** Production wiring: the process singleton store and the real message service. */
 export const chatHistoryFinalizerDeps: HistoryFinalizerDeps = {
   store: chatStreamStore,
   messages: { resolveMessageForHistorySync },
+};
+
+/** Production wiring for the failed-run writer: the plain storage functions. */
+export const failedRunHistoryDeps: FailedRunPersistDeps = {
+  messages: { readStoredMessage: getStoredMessageSync, upsertStored: upsertStoredSync },
 };

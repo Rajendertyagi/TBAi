@@ -352,6 +352,57 @@ describe("a failed assistant message renders its error", () => {
   });
 });
 
+describe("a reloaded failure renders the same card", () => {
+  // What the chat route stores when a run fails: the sanitized text, in message
+  // metadata. The AI SDK converter drops an assistant `status`, so this message
+  // reaches the transcript with no status at all; the converter folds the key
+  // into `custom`, which is where the renderer reads it.
+  const STORED = "Provider credit or quota exhausted. Check the provider's billing.";
+
+  const reloaded = (content = [TEXT_PART], id = "assistant_reloaded"): ThreadMessageLike =>
+    ({
+      id,
+      role: "assistant",
+      content,
+      metadata: { custom: { error: STORED } },
+    }) as ThreadMessageLike;
+
+  it("shows the stored text with no live status", async () => {
+    const { container } = await mount({ messages: [USER, reloaded()], mode: "chat" });
+
+    const found = alerts(container);
+    expect(found).toHaveLength(1);
+    // Byte-for-byte: the stored string is what the reloaded transcript shows.
+    expect(found[0]?.textContent ?? "").toContain(STORED);
+  });
+
+  it("still shows it when the failed turn produced no parts", async () => {
+    // The out-of-credits shape: the provider failed before any text existed, and
+    // the row was persisted with `parts: []` plus the error alone.
+    const { container } = await mount({ messages: [USER, reloaded([])], mode: "chat" });
+
+    const found = alerts(container);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.textContent ?? "").toContain(STORED);
+  });
+
+  it("does not put a stored error on a turn the user has moved past", async () => {
+    // Same last-message rule the runtime applies to a live error status: a Retry
+    // card on an older turn would re-run a conversation the user has left.
+    const laterUser: ThreadMessageLike = {
+      id: "user_2",
+      role: "user",
+      content: [{ type: "text", text: "next question" }],
+    };
+    const { container } = await mount({
+      messages: [USER, reloaded(), laterUser],
+      mode: "chat",
+    });
+
+    expect(alerts(container)).toHaveLength(0);
+  });
+});
+
 describe("non-error outcomes render no error card", () => {
   it("a successful message shows none", async () => {
     const ok: ThreadMessageLike = {

@@ -1027,7 +1027,7 @@ function HighlightingSyntax(props: {
 }
 
 function AssistantError() {
-  const error = useAuiState((s) => {
+  const statusError = useAuiState((s) => {
     const status = s.message.status;
     if (status?.type !== "incomplete" || status.reason !== "error") return undefined;
     const err = status.error;
@@ -1043,6 +1043,28 @@ function AssistantError() {
     return err ? String(err) : "An error occurred";
   });
 
+  // The reloaded copy of the same failure, read back from history.
+  //
+  // A stored failure has no `status` — the AI SDK converter drops an assistant
+  // status on the way in — so `MessagePrimitive.Error` and
+  // `ErrorPrimitive.Message` both render null for it. The text instead lives in
+  // message metadata, where the chat route wrote `sanitizeStreamError`'s output;
+  // the converter folds it into `custom`, which is why it is read from
+  // `metadata.custom.error`.
+  //
+  // Gated on the last message for the same reason the runtime's own auto status
+  // is (core `runtime/utils/auto-status.ts`: `isLast && error`): a live error
+  // belongs to the turn that just failed, and a turn the user has since moved
+  // past must not keep wearing a card with a Retry action that would re-run it.
+  const storedError = useAuiState((s) => {
+    if (s.message.role !== "assistant") return undefined;
+    if (s.thread.messages.at(-1)?.id !== s.message.id) return undefined;
+    const custom = s.message.metadata?.custom as { error?: unknown } | undefined;
+    const text = custom?.error;
+    return typeof text === "string" && text.length > 0 ? text : undefined;
+  });
+
+  const error = statusError ?? storedError;
   if (!error) return null;
 
   const transportCopy = chatErrorCopy(classifyChatError(error));
@@ -1057,42 +1079,45 @@ function AssistantError() {
 
   const hasRawDetails = displayText.length > 300;
 
-  return (
-    <MessagePrimitive.Error>
-      <ErrorPrimitive.Root
-        role="alert"
-        className="mt-2 flex flex-col gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2 font-medium">
-            <AlertCircle className="size-4 shrink-0 text-destructive" />
-            <span className="break-words">{displayText}</span>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            {isQuotaOrAuthError && (
-              <Button size="xs" variant="outline" asChild className="h-6 text-2xs">
-                <Link to="/settings/providers">Open Provider Settings</Link>
-              </Button>
-            )}
-            <ActionBarPrimitive.Reload asChild>
-              <Button size="xs" variant="outline" className="h-6 text-2xs">
-                <RefreshCw className="mr-1 size-3" />
-                Retry
-              </Button>
-            </ActionBarPrimitive.Reload>
-          </div>
+  // One card, rendered by both paths. `MessagePrimitive.Error` is only the
+  // render gate for a live error status; it holds no markup of its own, so the
+  // reloaded state uses the identical element without it.
+  const card = (
+    <ErrorPrimitive.Root
+      role="alert"
+      className="mt-2 flex flex-col gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium">
+          <AlertCircle className="size-4 shrink-0 text-destructive" />
+          <span className="break-words">{displayText}</span>
         </div>
-        {hasRawDetails && (
-          <details className="mt-1 text-2xs text-muted-foreground/90">
-            <summary className="cursor-pointer font-medium hover:text-foreground">
-              Error Details
-            </summary>
-            <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/50 p-2 font-mono text-3xs text-foreground">
-              {displayText}
-            </pre>
-          </details>
-        )}
-      </ErrorPrimitive.Root>
-    </MessagePrimitive.Error>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isQuotaOrAuthError && (
+            <Button size="xs" variant="outline" asChild className="h-6 text-2xs">
+              <Link to="/settings/providers">Open Provider Settings</Link>
+            </Button>
+          )}
+          <ActionBarPrimitive.Reload asChild>
+            <Button size="xs" variant="outline" className="h-6 text-2xs">
+              <RefreshCw className="mr-1 size-3" />
+              Retry
+            </Button>
+          </ActionBarPrimitive.Reload>
+        </div>
+      </div>
+      {hasRawDetails && (
+        <details className="mt-1 text-2xs text-muted-foreground/90">
+          <summary className="cursor-pointer font-medium hover:text-foreground">
+            Error Details
+          </summary>
+          <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/50 p-2 font-mono text-3xs text-foreground">
+            {displayText}
+          </pre>
+        </details>
+      )}
+    </ErrorPrimitive.Root>
   );
+
+  return statusError === undefined ? card : <MessagePrimitive.Error>{card}</MessagePrimitive.Error>;
 }

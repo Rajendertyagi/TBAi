@@ -1,9 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { MessageIdentityError, type HistoryResolution } from "@/services/storage/messages.ts";
+import {
+  MessageIdentityError,
+  MessageOwnershipError,
+  type HistoryResolution,
+} from "@/services/storage/messages.ts";
 import {
   ASSISTANT_UI_STORAGE_FORMAT,
+  buildFailedRunMessage,
+  failedRunHistoryDeps,
   finalizeDetachedRunHistory,
+  persistFailedRunMessage,
   toStoredMessageContent,
+  validateFinalMessage,
+  type FailedRunPersistDeps,
   type FinalUIMessage,
   type HistoryFinalizerDeps,
   type HistoryFinalizerStore,
@@ -504,5 +513,144 @@ describe("history finalizer — the client may have persisted already", () => {
     expect(writes).toHaveLength(0);
     expect(store.historyState).toBe("claimed");
     expect(store.skips).toBe(0);
+  });
+});
+
+/**
+ * The failed-run writer.
+ *
+ * It shares the row with the completed path but not its machinery: there is no
+ * obligation to claim, so persistability is the whole gate. The one shape it
+ * must accept and the completed path must not is the out-of-credits turn — no
+ * parts at all, plus the sanitized error that makes it readable. These cases pin
+ * the decisions local to this module; the SQLite round trip and the client
+ * overwrite guard are asserted in
+ * tests/integration/history/failed-run-error-persistence.test.ts.
+ */
+describe("failed-run persistence", () => {
+  const BILLING = "Provider credit or quota exhausted. Check the provider's billing.";
+
+  /**
+   * A store that only holds rows it was given, so the parent rule, the
+   * cross-conversation refusal and the read-back are each observable.
+   */
+  function store(options: { writeError?: Error; echoError?: string } = {}): {
+    deps: FailedRunPersistDeps;
+    writes: () => number;
+  } {
+    let written = false;
+    let writeCount = 0;
+    return {
+      deps: {
+        messages: {
+          readStoredMessage: (_conversationId: string, messageId: string) => {
+            if (messageId === "msg_user_1") return { parentId: null, content: { role: "user" } };
+            if (written && messageId === "msg_assistant_1") {
+              return {
+                parentId: "msg_user_1",
+                content: { metadata: { error: options.echoError ?? BILLING } },
+              };
+            }
+            return null;
+          },
+          upsertStored: () => {
+            writeCount += 1;
+            if (options.writeError) throw options.writeError;
+            written = true;
+          },
+        },
+      },
+      writes: () => writeCount,
+    };
+  }
+
+  it("accepts an empty parts array only when the turn carries the sanitized error", () => {
+    expect(validateFinalMessage(assistantMessage({ parts: [] }), false).skipReason).toBe(
+      "invalid_message",
+    );
+    const failed = buildFailedRunMessage(assistantMessage({ parts: [] }), BILLING);
+    expect(validateFinalMessage(failed, false).message).not.toBeNull();
+  });
+
+  it("adds the error beside existing metadata instead of replacing it", () => {
+    const built = buildFailedRunMessage(
+      assistantMessage({ metadata: { custom: { providerId: "prov_1" } } }),
+      BILLING,
+    );
+    expect(built.metadata).toEqual({ custom: { providerId: "prov_1" }, error: BILLING });
+    expect(built.parts).toHaveLength(1);
+  });
+
+  it("writes the adapter shape with the exact error text", () => {
+    const { deps, writes } = store();
+    const outcome = persistFailedRunMessage(
+      deps,
+      {
+        conversationId: "conv_1",
+        message: buildFailedRunMessage(assistantMessage({ parts: [] }), BILLING),
+        isAborted: false,
+        parentId: "msg_user_1",
+      },
+      silentLog,
+    );
+
+    expect(outcome).toBe("written");
+    expect(writes()).toBe(1);
+  });
+
+  it("reports failed when the error does not survive the write", () => {
+    const { deps } = store({ echoError: "Generation failed." });
+    const outcome = persistFailedRunMessage(
+      deps,
+      {
+        conversationId: "conv_1",
+        message: buildFailedRunMessage(assistantMessage(), BILLING),
+        isAborted: false,
+        parentId: "msg_user_1",
+      },
+      silentLog,
+    );
+
+    expect(outcome).toBe("failed");
+  });
+
+  it("refuses a parent that does not resolve", () => {
+    const { deps, writes } = store();
+    const outcome = persistFailedRunMessage(
+      deps,
+      {
+        conversationId: "conv_1",
+        message: buildFailedRunMessage(assistantMessage(), BILLING),
+        isAborted: false,
+        parentId: "msg_missing",
+      },
+      silentLog,
+    );
+
+    expect(outcome).toBe("conflicted");
+    expect(writes()).toBe(0);
+  });
+
+  it("reports a cross-conversation id as a conflict, never a write", () => {
+    const { deps } = store({
+      writeError: new MessageOwnershipError("msg_assistant_1", "conv_1", "conv_2"),
+    });
+    const outcome = persistFailedRunMessage(
+      deps,
+      {
+        conversationId: "conv_1",
+        message: buildFailedRunMessage(assistantMessage(), BILLING),
+        isAborted: false,
+        parentId: "msg_user_1",
+      },
+      silentLog,
+    );
+
+    expect(outcome).toBe("conflicted");
+  });
+
+  it("is wired to the real storage functions in production", () => {
+    expect(failedRunHistoryDeps.messages.readStoredMessage).toBeFunction();
+    expect(failedRunHistoryDeps.messages.upsertStored).toBeFunction();
   });
 });

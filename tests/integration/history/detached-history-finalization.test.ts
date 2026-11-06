@@ -22,7 +22,8 @@
  *   4. the persisted shape is the adapter's: `format='ai-sdk/v6'`, the id in the
  *      row and NOT inside `content`;
  *   5. `parent_id` is the user message the run continued;
- *   6. a detached FAILED run finalizes nothing (partial output is not a reply);
+ *   6. a detached FAILED run finalizes no reply, but records the sanitized
+ *      error so the failure survives a reload;
  *   7. a detached CANCELLED run finalizes nothing;
  *   8. the durable row records the finalization state honestly.
  *
@@ -278,6 +279,22 @@ async function assistantRow(
   const rows = await storedRows(conversationId);
   const found = rows.find((r) => (r.content as { role?: string })?.role === "assistant");
   return (found as (StoredRow & { content: { role?: string } }) | undefined) ?? null;
+}
+
+/** The `errorText` the UI stream carried, i.e. exactly what a live client shows. */
+function uiErrorText(text: string): string | null {
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const raw = line.slice("data:".length).trim();
+    if (!raw || raw === "[DONE]") continue;
+    try {
+      const frame = JSON.parse(raw) as { type?: string; errorText?: unknown };
+      if (frame.type === "error" && typeof frame.errorText === "string") return frame.errorText;
+    } catch {
+      /* non-JSON frame */
+    }
+  }
+  return null;
 }
 
 function historyStateOf(streamId: string): string {
@@ -641,6 +658,7 @@ describe("History reconciliation — outstanding completed run", () => {
   it("does not finalize an attached run that failed", async () => {
     await seedControlledProvider();
     const conversationId = await createDirectConversation("reconcile-failed");
+    const since = logger.lastSeq;
 
     try {
       behavior = "gated-then-error";
@@ -655,16 +673,38 @@ describe("History reconciliation — outstanding completed run", () => {
       const streamId = streamIdOf(res);
       await waitFor(() => captured.length >= 1, "the provider request");
       gate?.open();
-      await res.text();
+      const body = await res.text();
       await awaitRunSettled(streamId);
 
       expect(chatStreamStore.getRunContext(streamId)?.historyState).toBe("pending");
       const report = await reconcileNow();
 
-      // The failed run is not a reconciliation candidate at all: no candidate, no
-      // write, and the row is not closed as if it had produced a reply.
+      // The failed run is not a reconciliation candidate at all: no candidate and
+      // no finalization, so the obligation stays pending rather than being closed
+      // as if the run had produced a reply.
       expect(report?.written ?? 0).toBe(0);
-      expect(await assistantRow(conversationId)).toBeNull();
+      expect(historyStateOf(streamId)).toBe("pending");
+      expect(
+        logEntriesSince(since).filter((e) => e.event === "chat_history_finalized"),
+      ).toHaveLength(0);
+
+      // A failure IS recorded, by the failed-run writer, carrying the sanitized
+      // text the live client was shown. The wire copy appends a support
+      // reference (` [ref:<requestId>]`) that the durable row deliberately does
+      // not carry, so the two must differ by exactly that suffix — the stored
+      // string is the sanitizer's output, unchanged. That row is an error, not a
+      // reply, so it neither closes the obligation nor counts as a finalization.
+      const wireText = uiErrorText(body);
+      expect(wireText).not.toBeNull();
+      const storedError = (
+        (await assistantRow(conversationId))?.content as
+          | { metadata?: { error?: unknown } }
+          | undefined
+      )?.metadata?.error;
+      expect(typeof storedError).toBe("string");
+      const refSuffix = / \[ref:[^\]]+\]$/.exec(wireText as string)?.[0];
+      expect(refSuffix).toBeDefined();
+      expect(wireText).toBe(`${storedError as string}${refSuffix as string}`);
     } finally {
       await conversationService.delete(conversationId);
     }
@@ -1070,7 +1110,7 @@ describe("History finalization — browser/server convergence", () => {
 
 // ── 5. Only a completed run is ever finalized ────────────────────────────────
 describe("Detached history finalization — non-completed runs", () => {
-  it("writes nothing for a detached run that FAILED after the client left", async () => {
+  it("records the error, never a reply, for a detached run that FAILED", async () => {
     await seedControlledProvider();
     const conversationId = await createDirectConversation("detached-history-failed");
     const since = logger.lastSeq;
@@ -1079,9 +1119,20 @@ describe("Detached history finalization — non-completed runs", () => {
       const { streamId } = await runDetached(conversationId, "gated-then-error");
       expect(chatRuns.get(streamId)?.status).toBe("failed");
 
-      // Partial output is not a reply the user asked to keep, and the run's own
-      // verdict must agree: no finalization, no message row.
-      expect(await assistantRow(conversationId)).toBeNull();
+      // Partial output is not a reply the user asked to keep, so the run is never
+      // finalized and the obligation stays open. What IS durable is the failure
+      // itself, stored as the row's metadata so a reload can show it. No client
+      // observed this stream, so there is no wire text to compare against; what
+      // must hold is that the stored copy is sanitized, never the raw provider
+      // error (the equality with the wire text is pinned in the attached case).
+      const storedError = (
+        (await assistantRow(conversationId))?.content as
+          | { metadata?: { error?: unknown } }
+          | undefined
+      )?.metadata?.error;
+      expect(typeof storedError).toBe("string");
+      expect((storedError as string).length).toBeGreaterThan(0);
+      expect(storedError).not.toContain(PROVIDER_ERROR_MARKER);
       expect(historyStateOf(streamId)).toBe("pending");
       expect(
         logEntriesSince(since).filter((e) => e.event === "chat_history_finalized").length,
