@@ -25,6 +25,7 @@ import {
   createDirectResumableStorage,
   forgetRememberedStreamId,
   lastRememberedStreamId,
+  readDirectResumableStreamId,
   rememberStreamId,
 } from "./features/chat/state/resumable-stream";
 import {
@@ -225,7 +226,9 @@ function ResumableThreadRuntime(): ReturnType<typeof useChatRuntime> {
       const threadId = currentThread();
       if (!threadId) return;
       try {
-        rememberStreamId(threadId, storage.getStreamId(threadId));
+        // Recovery bookkeeping is not a resume decision: it reads the pointer
+        // directly so a send during the history-load window still records its id.
+        rememberStreamId(threadId, readDirectResumableStreamId(threadId));
       } catch {
         /* sessionStorage unavailable — recovery is simply unavailable */
       }

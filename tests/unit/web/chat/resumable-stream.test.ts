@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   createDirectResumableStorage,
   directResumeStorageKey,
+  markDirectHistorySettled,
   readDirectResumableStreamId,
 } from "@web/features/chat/state/resumable-stream.ts";
 
@@ -96,5 +97,53 @@ describe("Direct resumable stream storage", () => {
     });
 
     expect(readDirectResumableStreamId("thread-a")).toBeNull();
+  });
+});
+
+describe("Direct resumable read gate", () => {
+  it("suppresses a thread-addressed read until that thread's history settles, but never writes", () => {
+    const threadId = `gate-write-${Date.now()}`;
+    const storage = createDirectResumableStorage(() => threadId);
+
+    // A send inside the load window still records its id...
+    storage.setStreamId("stream-during-load", threadId);
+    expect(sessionStorage.getItem(directResumeStorageKey(threadId))).toBe("stream-during-load");
+    expect(readDirectResumableStreamId(threadId), "the write is not lost").toBe(
+      "stream-during-load",
+    );
+
+    // ...but the runtime cannot decide to resume from it yet.
+    expect(storage.getStreamId(threadId), "the thread-addressed read is suppressed").toBeNull();
+    // The transport's own bookkeeping read names no thread and stays live.
+    expect(storage.getStreamId(), "the unnamed read is not gated").toBe("stream-during-load");
+
+    markDirectHistorySettled(threadId);
+    expect(storage.getStreamId(threadId), "the read opens once history settles").toBe(
+      "stream-during-load",
+    );
+  });
+
+  it("notifies only the settled thread's subscribers, once", () => {
+    const settledId = `gate-settled-${Date.now()}`;
+    const otherId = `gate-other-${Date.now()}`;
+    const calls: string[] = [];
+    const storage = createDirectResumableStorage(() => settledId);
+
+    const unsubscribeSettled =
+      storage.subscribe?.(() => calls.push("settled"), settledId) ?? (() => {});
+    const unsubscribeOther = storage.subscribe?.(() => calls.push("other"), otherId) ?? (() => {});
+
+    markDirectHistorySettled(settledId);
+    expect(calls).toEqual(["settled"]);
+
+    markDirectHistorySettled(otherId);
+    expect(calls).toEqual(["settled", "other"]);
+
+    // Settling is one-way and idempotent: no second notification.
+    markDirectHistorySettled(settledId);
+    expect(calls).toEqual(["settled", "other"]);
+
+    unsubscribeSettled();
+    unsubscribeOther();
   });
 });

@@ -19,6 +19,7 @@ import {
 import type { WindowController } from "../features/chat/history/windowController";
 import { apiFetch } from "../lib/platform";
 import { notifyConversationMutations } from "../features/chat/state/conversationMutations";
+import { markDirectHistorySettled } from "../features/chat/state/resumable-stream";
 import { logger } from "../lib/logger";
 
 /**
@@ -333,99 +334,105 @@ export function createThreadHistoryAdapter(
           const remoteId = getRemoteId();
           if (!remoteId) return { messages: [] };
 
-          // Phase 4: opencode conversations are session-history owned (the
-          // OpenCode server is the authority and the runtime projects it). Their
-          // messages are not Direct SQLite history, so they keep the plain load
-          // path. One writer per engine, never two for the same thread.
-          if (peekMaterializedEngine(remoteId) === "opencode") {
-            return loadFullHistory(remoteId, formatAdapter);
-          }
-
-          let controller: WindowController | null = null;
+          // The resumable read gate stays closed until this resolves, so the
+          // runtime cannot resume a stream before these rows are imported.
           try {
-            controller = ensureWindowController(remoteId, (stored) =>
-              formatAdapter.decode(stored as never),
-            );
-            // Initial load only: a re-mount reuses the committed window rather
-            // than re-walking and discarding what the user already navigated.
-            // This guard is also what makes recovery safe: a conversation that
-            // already holds rows skips the fetch entirely, so re-entering a
-            // healthy thread costs ZERO requests.
-            if (controller.rows().length === 0) {
-              await controller.loadTip();
-            }
-            const rows = controller.rows();
-            const messages = rows.map((row, index) => ({
-              parentId: index === 0 ? null : row.parentId,
-              message: row.message as never,
-            }));
-
-            // Currency is decided BEFORE any shared state is written. A superseded
-            // controller still holds committed rows and a successful server answer,
-            // so returning them here would hand the runtime an older window than
-            // the one that replaced it - and whichever load settles last wins.
-            if (windowControllerStanding(remoteId, controller) === "superseded") {
-              logger.warn("chat", "history.load_superseded", { conversationId: remoteId });
-              // Report the window that actually owns the conversation instead, so a
-              // late completion cannot overwrite newer data and cannot blank the
-              // transcript either.
-              return reportCurrentWindow(remoteId);
+            // Phase 4: opencode conversations are session-history owned (the
+            // OpenCode server is the authority and the runtime projects it). Their
+            // messages are not Direct SQLite history, so they keep the plain load
+            // path. One writer per engine, never two for the same thread.
+            if (peekMaterializedEngine(remoteId) === "opencode") {
+              return await loadFullHistory(remoteId, formatAdapter);
             }
 
-            // Reached only when the server answered (or genuinely answered with
-            // nothing), so any previous failure is now stale.
-            clearHistoryLoadFailed(remoteId);
-            publishWindowUiFor(remoteId, controller);
-            rememberHistory(remoteId, messages);
-            return { headId: rows.at(-1)?.id ?? null, messages };
-          } catch (error) {
-            // Which failure this is matters twice over. A bounded request that hit
-            // its deadline is not a transport error - it was abandoned rather than
-            // refused, and both still settle the load so both arm recovery. But a
-            // SUPERSEDED load reports neither: the conversation now belongs to a
-            // different, healthy controller, and this log is what an operator reads
-            // to decide whether history is broken.
-            const superseded =
-              controller !== null &&
-              windowControllerStanding(remoteId, controller) === "superseded";
-            if (superseded) {
-              logger.warn("chat", "history.load_superseded", { conversationId: remoteId });
-            } else if (error instanceof HistoryWindowTimeoutError) {
-              logger.warn("chat", "history.load_timeout", {
-                conversationId: remoteId,
-                timeoutMs: error.timeoutMs,
-              });
-            } else {
-              logger.warn("chat", "history.load_failed", {
-                conversationId: remoteId,
-                errorType: error instanceof Error ? error.name : typeof error,
-              });
-            }
-            // This is the ONLY place a load is known to have failed: an empty
-            // conversation never reaches here, because a zero-row slice is a
-            // successful answer. Recording it here is what lets recovery tell
-            // "nothing to load" apart from "the load never arrived".
-            //
-            // A superseded controller must not record it: the conversation has a
-            // different owner now, and marking THIS load failed would drive the
-            // Retry row for a thread whose replacement is healthy. The order below
-            // is load-bearing - the failure flag is set before publishing, so the
-            // snapshot this call builds already carries it. The publish is the GUARDED one on purpose:
-            // an ORPHANED controller is not superseded, so it reaches this branch, and
-            // publishing it unguarded would put UI state on screen for a controller
-            // that is not registered. Guarding re-adopts it, so the failure state and
-            // the controller that owns it stay consistent and Retry still resolves one.
-            if (superseded) return reportCurrentWindow(remoteId);
-            if (error instanceof HistoryWindowTimeoutError) {
-              const retained = retainedHistory<any>(remoteId);
-              if (retained.length > 0) return { messages: retained };
-            }
+            let controller: WindowController | null = null;
+            try {
+              controller = ensureWindowController(remoteId, (stored) =>
+                formatAdapter.decode(stored as never),
+              );
+              // Initial load only: a re-mount reuses the committed window rather
+              // than re-walking and discarding what the user already navigated.
+              // This guard is also what makes recovery safe: a conversation that
+              // already holds rows skips the fetch entirely, so re-entering a
+              // healthy thread costs ZERO requests.
+              if (controller.rows().length === 0) {
+                await controller.loadTip();
+              }
+              const rows = controller.rows();
+              const messages = rows.map((row, index) => ({
+                parentId: index === 0 ? null : row.parentId,
+                message: row.message as never,
+              }));
 
-            if (controller) {
-              markHistoryLoadFailed(remoteId);
+              // Currency is decided BEFORE any shared state is written. A superseded
+              // controller still holds committed rows and a successful server answer,
+              // so returning them here would hand the runtime an older window than
+              // the one that replaced it - and whichever load settles last wins.
+              if (windowControllerStanding(remoteId, controller) === "superseded") {
+                logger.warn("chat", "history.load_superseded", { conversationId: remoteId });
+                // Report the window that actually owns the conversation instead, so a
+                // late completion cannot overwrite newer data and cannot blank the
+                // transcript either.
+                return reportCurrentWindow(remoteId);
+              }
+
+              // Reached only when the server answered (or genuinely answered with
+              // nothing), so any previous failure is now stale.
+              clearHistoryLoadFailed(remoteId);
               publishWindowUiFor(remoteId, controller);
+              rememberHistory(remoteId, messages);
+              return { headId: rows.at(-1)?.id ?? null, messages };
+            } catch (error) {
+              // Which failure this is matters twice over. A bounded request that hit
+              // its deadline is not a transport error - it was abandoned rather than
+              // refused, and both still settle the load so both arm recovery. But a
+              // SUPERSEDED load reports neither: the conversation now belongs to a
+              // different, healthy controller, and this log is what an operator reads
+              // to decide whether history is broken.
+              const superseded =
+                controller !== null &&
+                windowControllerStanding(remoteId, controller) === "superseded";
+              if (superseded) {
+                logger.warn("chat", "history.load_superseded", { conversationId: remoteId });
+              } else if (error instanceof HistoryWindowTimeoutError) {
+                logger.warn("chat", "history.load_timeout", {
+                  conversationId: remoteId,
+                  timeoutMs: error.timeoutMs,
+                });
+              } else {
+                logger.warn("chat", "history.load_failed", {
+                  conversationId: remoteId,
+                  errorType: error instanceof Error ? error.name : typeof error,
+                });
+              }
+              // This is the ONLY place a load is known to have failed: an empty
+              // conversation never reaches here, because a zero-row slice is a
+              // successful answer. Recording it here is what lets recovery tell
+              // "nothing to load" apart from "the load never arrived".
+              //
+              // A superseded controller must not record it: the conversation has a
+              // different owner now, and marking THIS load failed would drive the
+              // Retry row for a thread whose replacement is healthy. The order below
+              // is load-bearing - the failure flag is set before publishing, so the
+              // snapshot this call builds already carries it. The publish is the GUARDED one on purpose:
+              // an ORPHANED controller is not superseded, so it reaches this branch, and
+              // publishing it unguarded would put UI state on screen for a controller
+              // that is not registered. Guarding re-adopts it, so the failure state and
+              // the controller that owns it stay consistent and Retry still resolves one.
+              if (superseded) return reportCurrentWindow(remoteId);
+              if (error instanceof HistoryWindowTimeoutError) {
+                const retained = retainedHistory<any>(remoteId);
+                if (retained.length > 0) return { messages: retained };
+              }
+
+              if (controller) {
+                markHistoryLoadFailed(remoteId);
+                publishWindowUiFor(remoteId, controller);
+              }
+              return { messages: [] };
             }
-            return { messages: [] };
+          } finally {
+            markDirectHistorySettled(remoteId);
           }
         },
       };

@@ -90,7 +90,7 @@ protocol helper. Adding a store here would be framework multiplication.
 |---|---|---|
 | `chat/state/composerDraft.ts` | unsent composer text per thread | localStorage `tbai:composer-draft:<key>`; cleared on send/clear |
 | `chat/state/pendingFirstMessage.ts` | one-shot first-prompt handoff | localStorage `tbai:pending-first-prompt:<id>`; claimed-then-consumed, idempotent |
-| `chat/state/resumable-stream.ts` | Direct run stream pointer | sessionStorage via `createResumableSessionStorage` (`tbai-resume:<thread>`) + a module-level `lastKnownStreamId` map |
+| `chat/state/resumable-stream.ts` | Direct run stream pointer | sessionStorage via `createResumableSessionStorage` (`tbai-resume:<thread>`) + a module-level `lastKnownStreamId` map + a per-session `settledHistory` set that suppresses thread-addressed reads until the history load settles (interim gate; see `docs/decisions.md`, 2026-11-06) |
 | `appearance/theme-storage.ts` | mode + per-mode palette | localStorage `tbai-theme`, `tbai-theme-light`, `tbai-theme-dark` |
 | `config/navigation.ts` | last visited settings route | localStorage `tbai:settingsRoute` |
 | `desktop/state/serverIdentity.ts` | server port / reachability | React local state + poller (one consumer, not shared) |

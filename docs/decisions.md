@@ -8927,3 +8927,66 @@ under Revision 5 specification:
   height at 16px interface, 15px / ≥21px at 24px). `SidebarSection` retains
   `min-h-6` with verified clearance at 24px. All 9 intentional `font-normal`
   weight pins preserved.
+
+## ADR: The Direct resumable pointer read is gated on history settling — an INTERIM guard, flagged for removal when upstream guarantees the ordering (2026-11-06)
+
+**Decision.** `createDirectResumableStorage` suppresses a thread-addressed
+`getStreamId(threadId)` until `markDirectHistorySettled(threadId)` records that the
+conversation's history `load()` has finished. The real adapter
+(`web/src/adapters/threadHistoryAdapter.ts`) settles in a `finally`, so success,
+server refusal, timeout, supersession and the OpenCode path all settle. Writes
+(`setStreamId`/`clear`) are never gated, and the storage's unnamed read — used by
+the transport's own checkpoint bookkeeping — is never gated. The recovery
+subscription in `web/src/runtime.ts` reads through the ungated
+`readDirectResumableStreamId` so a send during the load window still records its id.
+
+**Why the read and not the key getter.** Returning `undefined` from the
+`createResumableSessionStorage({ key })` getter would also drop writes, which loses
+a stream id created during the load window. The documented storage interface
+suppresses only the read the auto-resume effect performs.
+
+**Why the application and not the library.** With the installed
+`@assistant-ui/react` 0.15.32 / `@assistant-ui/ai-sdk` 0.0.16 / `ai` 7.0.145,
+`useExternalHistory` reports `isLoading === false` in the mount window before
+`withFormat().load()` is invoked (`hasLoaded` starts true when no `remoteId` is
+present), so `useChatThread`'s `isLoadingHistory` guard reads "not loading" as
+"ready" and the resume starts inside the load window. That guard is already the
+library's fix for the reported issue; it cannot see this mount ordering. No released
+assistant-ui version provides a wait-for-history seam today, and the dependency
+train is frozen under `AGENTS.md`.
+
+**Evidence.** `tests/dom/history/p0b-resume-race.test.tsx` reproduces the defect on
+the real runtime and now asserts the fixed ordering. Measured on the versions
+above with a 250 ms history load and a stream whose tail arrives 150 ms after its
+head: load starts ~54 ms, resolves ~305 ms, resume request ~325 ms, resumed row
+appended ~503 ms under parent `a0` with `aitxt-RaceApproval` intact. Before the
+gate, the resume fired at ~59 ms against a load resolving at ~308 ms and the reply
+was clobbered — absent from the chat and thread, zero history writes. The guarantee
+is the ordering, not the numbers.
+`tests/dom/history/resume-history-gate.test.ts` proves the real adapter opens the
+gate after a 200 and after a 500; `tests/unit/web/chat/resumable-stream.test.ts`
+proves reads are suppressed, writes are not, and subscribers are notified once per
+thread.
+
+**Alternatives rejected.** (1) Upgrading `@assistant-ui/react-ai-sdk` to `^1.4.0`:
+that line is a re-export of `@assistant-ui/ai-sdk`, which is already at the newest
+release 0.0.16 and already contains the history guard. (2) Returning `undefined`
+from the storage key during the load window: drops writes (above). (3) A second
+transport or a custom resume path: prohibited by `AGENTS.md` and `docs/architectural-principles.md`.
+
+**Removal flag — this guard is temporary.** Delete the gate (the
+`settledHistory`/`markDirectHistorySettled` suppression in `getStreamId`, the
+adapter's `finally`, and the listener bookkeeping) when an installed assistant-ui
+release guarantees that auto-resume cannot start before the conversation's history
+import completes. To prove removability: delete the gate, keep
+`tests/dom/history/p0b-resume-race.test.tsx` unchanged, and require the natural case
+to stay green. If it fails, upstream still depends on this ordering and the gate
+must be restored. The set is module-level, per session, bounded by the threads the
+user visits, and a failed load settles — a finished load has nothing left to
+clobber.
+
+**Not covered by this ADR.** The route-level `toolApproval` carrier
+(`src/routes/chat/execute-direct-stream.ts`) that the incident used: it still has to
+satisfy the library's `requires-action` persistence gate, tracked in
+`docs/2026-11-06-tool-approval-persistence-plan.md`. This ADR fixes the resume/history
+ordering only.
