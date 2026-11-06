@@ -165,7 +165,7 @@ export function JobListItem({
               >
                 <span className="truncate">{job.name}</span>
                 {job.engine === "opencode" && (
-                  <span className="shrink-0 text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                  <span className="shrink-0 text-3xs font-mono font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
                     OpenCode
                   </span>
                 )}

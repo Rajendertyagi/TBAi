@@ -599,7 +599,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                       {m.label ?? m.id}
                     </button>
                     {m.id === form.model && (
-                      <span className="text-[10px] text-muted-foreground">default</span>
+                      <span className="text-3xs text-muted-foreground">default</span>
                     )}
                     {editingWindow?.id === m.id ? (
                       <Input
@@ -616,7 +616,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                         }}
                         placeholder={m.contextWindow ? String(m.contextWindow) : "tokens"}
                         aria-label={`Context window for ${m.id}`}
-                        className="h-5 w-20 px-1 text-[10px]"
+                        className="min-h-5 w-20 px-1 text-3xs"
                       />
                     ) : (
                       <button
@@ -628,7 +628,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                           })
                         }
                         title={m.contextWindow ? "Edit context window" : "Set context window"}
-                        className="text-[10px] text-muted-foreground hover:text-foreground"
+                        className="text-3xs text-muted-foreground hover:text-foreground"
                       >
                         {m.contextWindow ? formatContextWindow(m.contextWindow) : "set window"}
                       </button>

@@ -276,7 +276,7 @@ export function JobDetail({
                       {run.turnOutcome && (
                         <span
                           className={cn(
-                            "rounded px-1.5 py-0.5 text-[10px] font-mono font-medium border",
+                            "rounded px-1.5 py-0.5 text-3xs font-mono font-medium border",
                             run.turnOutcome === "succeeded" &&
                               "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
                             run.turnOutcome === "failed" &&

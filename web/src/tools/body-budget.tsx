@@ -43,8 +43,7 @@ import { boundText, type BoundedText } from "@/lib/text-budget";
  */
 
 /** The card body chrome, shared so every bounded body looks like every other. */
-const PRE_CLASS =
-  "max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground";
+const PRE_CLASS = "max-h-64 overflow-auto whitespace-pre-wrap break-words text-muted-foreground";
 
 /**
  * Apply the tool-body budget.
@@ -81,11 +80,13 @@ export function BoundedBody({ text, empty }: { text: string; empty?: ReactNode }
   const bounded = boundToolBody(text);
   return (
     <div className="aui-tool-body">
-      <pre className={PRE_CLASS}>{text ? bounded.text : (empty ?? bounded.text)}</pre>
+      <pre data-slot="code-payload" className={PRE_CLASS}>
+        {text ? bounded.text : (empty ?? bounded.text)}
+      </pre>
       {bounded.truncated && (
         <p
           role="status"
-          className="aui-tool-body-truncated text-muted-foreground px-3.5 py-1.5 text-[11px]"
+          className="aui-tool-body-truncated text-muted-foreground px-3.5 py-1.5 text-2xs"
         >
           {toolsConfig.copy.status.toolBodyTruncated(bounded.omitted)}
         </p>

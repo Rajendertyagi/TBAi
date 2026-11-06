@@ -495,7 +495,7 @@ export function OpenCodeConfigPage() {
                   <li
                     key={path}
                     className={cn(
-                      "truncate font-mono text-[11px]",
+                      "truncate font-mono text-2xs",
                       path === snapshot.path ? "text-foreground" : "text-muted-foreground",
                     )}
                   >
@@ -572,15 +572,12 @@ export function OpenCodeConfigPage() {
                         </span>
                       </span>
                       <span className="min-w-0">
-                        <span
-                          className="block truncate font-mono text-[11px]"
-                          title={rule.resource}
-                        >
+                        <span className="block truncate font-mono text-2xs" title={rule.resource}>
                           {rule.resource}
                         </span>
                         {override.kind !== "none" && (
                           <span
-                            className="block truncate text-[10px] text-amber-600 dark:text-amber-400"
+                            className="block truncate text-3xs text-amber-600 dark:text-amber-400"
                             title={openCodeConfigCopy.permissions.overrideTitle(
                               override.kind,
                               override.byIndex + 1,
@@ -614,7 +611,7 @@ export function OpenCodeConfigPage() {
                           }}
                         />
                         {isPending && (
-                          <span className="text-[10px] text-muted-foreground">
+                          <span className="text-3xs text-muted-foreground">
                             {openCodeConfigCopy.save.dirty}
                           </span>
                         )}

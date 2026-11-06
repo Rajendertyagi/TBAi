@@ -131,7 +131,7 @@ function renderPreview(
         // numbers shifted by the edits before them, so showing them would mean
         // printing locations that are only right after the earlier ones are
         // applied. Saying how many there are is the honest, useful part.
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-muted-foreground text-2xs">
           {toolsConfig.copy.status.editPreviewMoreOccurrences(preview.occurrences)}
         </p>
       )}

@@ -27,7 +27,8 @@ export function SettingsLayout() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PageTitleStrip title={active?.label ?? "Settings"} />
+      {/* Each section page owns the route's single h1; the strip is chrome. */}
+      <PageTitleStrip title={active?.label ?? "Settings"} titleAs="span" />
       <div className="flex min-h-0 flex-1">
         <SettingsNav />
         <div className="min-w-0 flex-1">

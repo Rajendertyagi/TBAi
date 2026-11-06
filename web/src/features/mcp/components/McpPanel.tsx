@@ -73,7 +73,7 @@ function StatusBadge({ status }: { status: McpConnectionStatus }) {
   return (
     <span
       className={cn(
-        "rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
+        "rounded-full px-2 py-0.5 text-3xs font-medium capitalize",
         STATUS_STYLES[status],
       )}
     >
@@ -366,13 +366,13 @@ function ServerCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm">{server.name}</span>
             <StatusBadge status={server.status} />
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
+            <span className="text-3xs uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
               {server.transport}
             </span>
             {server.location && (
               <span
                 className={cn(
-                  "text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5",
+                  "text-3xs uppercase tracking-wide border rounded px-1.5 py-0.5",
                   server.location === "local"
                     ? "text-success border-success/30"
                     : "text-muted-foreground border-border",
@@ -382,9 +382,9 @@ function ServerCard({
               </span>
             )}
             {server.enabled ? (
-              <span className="text-[10px] text-success">enabled</span>
+              <span className="text-3xs text-success">enabled</span>
             ) : (
-              <span className="text-[10px] text-muted-foreground">disabled</span>
+              <span className="text-3xs text-muted-foreground">disabled</span>
             )}
           </div>
           <div className="text-xs text-muted-foreground mt-1">
@@ -459,7 +459,7 @@ function ServerCard({
                     key={`${ev.at}-${ev.kind}-${ev.message}`}
                     className="text-xs text-muted-foreground flex gap-2"
                   >
-                    <span className="text-[10px] uppercase text-border shrink-0 w-24 truncate">
+                    <span className="text-3xs uppercase text-border shrink-0 w-24 truncate">
                       {ev.kind}
                     </span>
                     <span className="truncate">{ev.message}</span>
@@ -700,7 +700,7 @@ function PromptRow({
           {args.map((a) => (
             <div key={a.name} className="flex flex-col gap-0.5">
               <label
-                className="text-[10px] text-muted-foreground"
+                className="text-3xs text-muted-foreground"
                 htmlFor={promptArgId(serverId, a.name)}
               >
                 {a.name}

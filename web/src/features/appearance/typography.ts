@@ -218,10 +218,10 @@ export const COMMON_WEIGHTS = [
 ] as const;
 
 export const INTERFACE_FONT_SIZE_CONFIG = {
-  min: 12,
+  min: 14,
   max: 24,
   default: 16,
-  presets: [13, 14, 16, 18, 20] as const,
+  presets: [14, 16, 18, 20] as const,
 };
 
 export const CODE_FONT_SIZE_CONFIG = {
@@ -313,6 +313,29 @@ function isValidUiFontId(value: unknown): value is string {
   return typeof value === "string" && UI_FONTS.some((f) => f.id === value);
 }
 
+/**
+ * Smallest interface size this app ever stored: the pre-2026-11 minimum (12)
+ * and its 13px preset. A stored value in the legacy range migrates UP to the
+ * current minimum rather than falling back to the 16px default, so a user who
+ * picked the smallest size keeps the smallest size.
+ */
+const LEGACY_INTERFACE_FONT_SIZE_MIN = 12;
+
+/**
+ * Resolves a stored interface font size, preserving a legacy 12/13 as the new
+ * minimum. A value outside every range this app ever wrote is discarded to the
+ * default, exactly as before.
+ */
+function normalizeInterfaceFontSize(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TYPOGRAPHY.interfaceFontSize;
+  }
+  if (value < LEGACY_INTERFACE_FONT_SIZE_MIN || value > INTERFACE_FONT_SIZE_CONFIG.max) {
+    return DEFAULT_TYPOGRAPHY.interfaceFontSize;
+  }
+  return Math.max(INTERFACE_FONT_SIZE_CONFIG.min, value);
+}
+
 function isValidMonoFontId(value: unknown): value is string {
   return typeof value === "string" && MONO_FONTS.some((f) => f.id === value);
 }
@@ -374,13 +397,7 @@ function readV2(parsed: Record<string, unknown>): TypographyConfig {
     interfaceFontFamily: isValidUiFontId(parsed.interfaceFontFamily)
       ? parsed.interfaceFontFamily
       : DEFAULT_TYPOGRAPHY.interfaceFontFamily,
-    interfaceFontSize: isValidRange(
-      parsed.interfaceFontSize,
-      INTERFACE_FONT_SIZE_CONFIG.min,
-      INTERFACE_FONT_SIZE_CONFIG.max,
-    )
-      ? parsed.interfaceFontSize
-      : DEFAULT_TYPOGRAPHY.interfaceFontSize,
+    interfaceFontSize: normalizeInterfaceFontSize(parsed.interfaceFontSize),
     interfaceFontWeight: isValidWeight(parsed.interfaceFontWeight)
       ? parsed.interfaceFontWeight
       : DEFAULT_TYPOGRAPHY.interfaceFontWeight,

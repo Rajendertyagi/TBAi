@@ -712,7 +712,7 @@ export function LogsPanel() {
     <div className="h-full overflow-y-auto">
       <div className="w-full space-y-4 p-3 md:p-4">
         <section className="space-y-1">
-          <h1 className="text-sm font-semibold">Logs</h1>
+          <h1 className="text-base font-semibold">Logs</h1>
           <p className="text-xs text-muted-foreground">
             View and configure runtime logs. Entries are redacted server-side — this view never
             receives secrets.

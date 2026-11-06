@@ -125,7 +125,7 @@ export const BoundedSyntaxHighlighter: FC<HighlighterProps> = (props) => {
       {bounded.truncated && (
         <p
           role="status"
-          className="aui-code-truncated border-border/50 text-muted-foreground border-t px-3.5 py-1.5 text-[11px]"
+          className="aui-code-truncated border-border/50 text-muted-foreground border-t px-3.5 py-1.5 text-2xs"
         >
           {toolsConfig.copy.status.codeFenceTruncated(bounded.omitted)}
         </p>

@@ -469,7 +469,7 @@ function UserMessage() {
         <MessagePrimitive.Parts />
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group/message">
-        {timeStr && <span className="text-[11px] tabular-nums text-background/50">{timeStr}</span>}
+        {timeStr && <span className="text-2xs tabular-nums text-background/50">{timeStr}</span>}
         <MessageCopyAction />
       </div>
     </MessagePrimitive.Root>
@@ -1087,7 +1087,7 @@ function AssistantError() {
             <summary className="cursor-pointer font-medium hover:text-foreground">
               Error Details
             </summary>
-            <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/50 p-2 font-mono text-[10px] text-foreground">
+            <pre className="mt-1 max-h-40 overflow-auto rounded bg-background/50 p-2 font-mono text-3xs text-foreground">
               {displayText}
             </pre>
           </details>

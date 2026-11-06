@@ -551,7 +551,7 @@ function BarVisual() {
           style={{ width: `${percent}%` }}
         />
       </div>
-      <span className="text-muted-foreground text-[10px] tabular-nums">
+      <span className="text-muted-foreground text-3xs tabular-nums">
         {formatTokenCount(totalTokens)} ({Math.round(percent)}%)
       </span>
     </div>

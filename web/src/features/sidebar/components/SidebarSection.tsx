@@ -35,7 +35,7 @@ export function SidebarSection({
 }) {
   return (
     <Collapsible open={expanded} onOpenChange={onExpandedChange} className="flex flex-col">
-      <div className="group/section flex h-6 items-center gap-0.5">
+      <div className="group/section flex min-h-6 items-center gap-0.5">
         <CollapsibleTrigger asChild>
           <button
             type="button"

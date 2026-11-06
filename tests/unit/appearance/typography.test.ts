@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   APP_SCALE_CONFIG,
@@ -7,6 +7,7 @@ import {
   DEFAULT_TYPOGRAPHY,
   formatAppScale,
   getFont,
+  INTERFACE_FONT_SIZE_CONFIG,
   MONO_FONTS,
   readTypography,
   resetApplicationScale,
@@ -41,6 +42,34 @@ function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConf
     appScale: 1.125,
     ...overrides,
   };
+}
+
+/**
+ * Reads a stored record through the production `readTypography()` path.
+ *
+ * The canonical unit run has no DOM, so `window` is supplied for the duration
+ * of the read and the previous descriptor is restored afterwards. The module
+ * reads `window.localStorage` at call time, which is why this works without a
+ * second storage implementation.
+ */
+function readStoredTypography(record: unknown): TypographyConfig {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const raw = JSON.stringify(record);
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key: string) => (key === STORAGE_KEY ? raw : null),
+        setItem: () => {},
+      },
+    },
+  });
+  try {
+    return readTypography();
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "window", previous);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
 }
 
 describe("Typography config, storage & scoped resets (v2)", () => {
@@ -417,5 +446,90 @@ describe("index.html bootstrap parity", () => {
     expect(html).toContain("data-code-wrap");
     expect(html).toContain("data-terminal-wrap");
     expect(html).toContain("appScale");
+  });
+});
+
+/**
+ * The interface minimum is 14px (D-2 option A).
+ *
+ * A stored 12 or 13 is a LEGACY value, not an invalid one: it migrates to the
+ * new minimum instead of being reset to the 16px default, so a user who chose
+ * the smallest size keeps the smallest size. 11 and 25 were never selectable
+ * and still fall back to the default.
+ */
+describe("interface font-size minimum and the 12/13 migration", () => {
+  it("declares a 14px minimum and drops the 13px preset", () => {
+    expect(INTERFACE_FONT_SIZE_CONFIG.min).toBe(14);
+    expect(INTERFACE_FONT_SIZE_CONFIG.max).toBe(24);
+    expect([...INTERFACE_FONT_SIZE_CONFIG.presets]).not.toContain(13);
+    expect([...INTERFACE_FONT_SIZE_CONFIG.presets]).toContain(14);
+  });
+
+  it("clamps a stored 12 or 13 to 14 and preserves every other field", () => {
+    for (const stored of [12, 13]) {
+      const config = readStoredTypography(customConfig({ interfaceFontSize: stored }));
+      expect(config.interfaceFontSize, `stored ${stored} must migrate to 14`).toBe(14);
+      expect({ ...config, interfaceFontSize: 16 }).toEqual({
+        ...customConfig(),
+        interfaceFontSize: 16,
+      });
+    }
+  });
+
+  it("preserves every selectable size from 14 through 24", () => {
+    for (let size = 14; size <= 24; size++) {
+      expect(
+        readStoredTypography(customConfig({ interfaceFontSize: size })).interfaceFontSize,
+      ).toBe(size);
+    }
+  });
+
+  it("resets 11 and 25 to the 16px default", () => {
+    for (const stored of [11, 25]) {
+      expect(
+        readStoredTypography(customConfig({ interfaceFontSize: stored })).interfaceFontSize,
+      ).toBe(DEFAULT_TYPOGRAPHY.interfaceFontSize);
+    }
+  });
+});
+
+/**
+ * Lato advertises five static weights. Only the 400 face was imported, so
+ * `font-weight` 100/300/700/900 silently rendered at 400 (M-4 measured
+ * identical widths for all five). The package ships one CSS entry point per
+ * weight; both the import and the file must exist.
+ */
+describe("Lato ships every weight it advertises", () => {
+  const globalsCss = readFileSync(
+    path.join(REPO_ROOT, "web", "src", "styles", "globals.css"),
+    "utf8",
+  );
+  const lato = UI_FONTS.find((font) => font.id === "lato");
+  const declaredWeights = lato && lato.weights !== "continuous" ? lato.weights : [];
+
+  it("declares five static weights", () => {
+    expect(declaredWeights).toEqual([100, 300, 400, 700, 900]);
+  });
+
+  it("imports a stylesheet for every declared weight", () => {
+    for (const weight of declaredWeights) {
+      expect(globalsCss, `missing @fontsource/lato/${weight}.css`).toContain(
+        `@import "@fontsource/lato/${weight}.css";`,
+      );
+    }
+  });
+
+  it("has every imported weight file installed", () => {
+    for (const weight of declaredWeights) {
+      const file = path.join(
+        REPO_ROOT,
+        "web",
+        "node_modules",
+        "@fontsource",
+        "lato",
+        `${weight}.css`,
+      );
+      expect(existsSync(file), `@fontsource/lato/${weight}.css is not installed`).toBe(true);
+    }
   });
 });

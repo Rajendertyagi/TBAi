@@ -119,12 +119,14 @@ export const RunCommandTerminalUI: ToolCallMessagePartComponent = (p: AnyProps) 
         status={errored ? "error" : "success"}
       />
       {timedOut && (
-        <div role="alert" className="mt-1 font-mono text-xs text-destructive">
+        <div data-slot="terminal-line" role="alert" className="mt-1 text-destructive">
           timed out — process killed
         </div>
       )}
       {!timedOut && failed && (
-        <div className="mt-1 font-mono text-xs text-destructive">exit {exitCode}</div>
+        <div data-slot="terminal-line" className="mt-1 text-destructive">
+          exit {exitCode}
+        </div>
       )}
     </div>
   );

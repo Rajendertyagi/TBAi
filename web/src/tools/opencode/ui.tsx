@@ -102,7 +102,10 @@ function ResultBody({ result }: { result: unknown }) {
     return <span className="text-muted-foreground">{toolsConfig.copy.status.noOutput}</span>;
   }
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/90">
+    <pre
+      data-slot="code-payload"
+      className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-foreground/90"
+    >
       {textPreview(body.text)}
     </pre>
   );
@@ -114,7 +117,10 @@ function TextBody({ text }: { text: string }) {
     return <span className="text-muted-foreground">{toolsConfig.copy.status.noOutput}</span>;
   }
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/90">
+    <pre
+      data-slot="code-payload"
+      className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-foreground/90"
+    >
       {textPreview(text)}
     </pre>
   );
@@ -226,7 +232,10 @@ export const OpenCodeGrepToolUI = openCodeView({
 
 /** Preview of a whole-file write, mirroring the native writer's shape. */
 const contentPreview = (args: AnyArgs) => (
-  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+  <pre
+    data-slot="code-payload"
+    className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+  >
     {typeof args.content === "string" ? textPreview(args.content) : ""}
   </pre>
 );
@@ -235,13 +244,19 @@ const contentPreview = (args: AnyArgs) => (
 const editPreview = (args: AnyArgs) => (
   <div className="space-y-1 text-xs">
     <div className="text-muted-foreground">Find:</div>
-    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
+    <pre
+      data-slot="code-payload"
+      className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+    >
       {typeof args.oldText === "string"
         ? textPreview(args.oldText, toolsConfig.limits.toolArgEditPreviewMaxChars)
         : ""}
     </pre>
     <div className="text-muted-foreground">Replace with:</div>
-    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
+    <pre
+      data-slot="code-payload"
+      className="max-h-24 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+    >
       {typeof args.newText === "string"
         ? textPreview(args.newText, toolsConfig.limits.toolArgEditPreviewMaxChars)
         : ""}
@@ -570,7 +585,10 @@ export const OpenCodePatchView = ({ ...p }: AnyProps) => {
         files.length > 0 ? (
           <PatchFiles files={files} fallbackName={paths[0] ?? ""} />
         ) : (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          <pre
+            data-slot="code-payload"
+            className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-muted-foreground"
+          >
             {patchText}
           </pre>
         )

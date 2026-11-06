@@ -81,6 +81,13 @@
             };
             var isWeight = function (v) { return typeof v === "number" && isFinite(v) && v >= 100 && v <= 900; };
             var isRange = function (v, min, max) { return typeof v === "number" && isFinite(v) && v >= min && v <= max; };
+            // A stored 12 or 13 predates the 14px floor. It migrates UP to the
+            // floor instead of being discarded to the 16px default; anything
+            // outside the range this app ever stored falls back to 16.
+            var normalizeInterfaceSize = function (v) {
+              if (!isRange(v, 12, 24)) return 16;
+              return Math.max(14, v);
+            };
             var isAppScale = function (v) { return typeof v === "number" && isFinite(v) && v >= 0.75 && v <= 1.5; };
             var pick = function (map, id, fallback) { return map[id] ? id : fallback; };
 
@@ -89,7 +96,7 @@
             if (ty.version === 2) {
               cfg = {
                 interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
-                interfaceFontSize: isRange(ty.interfaceFontSize, 12, 24) ? ty.interfaceFontSize : 16,
+                interfaceFontSize: normalizeInterfaceSize(ty.interfaceFontSize),
                 interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 400,
                 codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,

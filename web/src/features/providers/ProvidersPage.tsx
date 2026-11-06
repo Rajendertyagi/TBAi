@@ -98,7 +98,7 @@ export function ProvidersPage() {
     <div className="h-full overflow-y-auto">
       <section className="space-y-3 px-3 pt-3 md:px-4 md:pt-4">
         <div>
-          <h1 className="text-sm font-semibold">Providers</h1>
+          <h1 className="text-base font-semibold">Providers</h1>
           <p className="text-sm text-muted-foreground">
             Model providers, endpoints, and credentials. API keys are encrypted on the server and
             never shown here.

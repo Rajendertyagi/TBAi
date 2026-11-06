@@ -82,7 +82,7 @@ export function WebSearch({
             <span className="bg-foreground/[0.06] text-foreground/45 flex size-4 shrink-0 items-center justify-center rounded text-[9px] font-medium">
               {result.domain.charAt(0).toUpperCase()}
             </span>
-            <span className="text-foreground/90 min-w-0 flex-1 truncate text-[calc(var(--interface-font-size)*0.84375)]">
+            <span className="text-foreground/90 min-w-0 flex-1 truncate text-sm">
               {result.title}
             </span>
             <span className={cn(mono, "text-foreground/35 shrink-0")}>{result.domain}</span>

@@ -9,7 +9,14 @@
 @import "@fontsource-variable/plus-jakarta-sans";
 @import "@fontsource-variable/outfit";
 @import "@fontsource-variable/figtree";
-@import "@fontsource/lato";
+/* Lato is a static family: one stylesheet per weight. Importing only the
+   package index gave 400, so the UI advertised 100/300/700/900 and rendered
+   400 for all of them. */
+@import "@fontsource/lato/100.css";
+@import "@fontsource/lato/300.css";
+@import "@fontsource/lato/400.css";
+@import "@fontsource/lato/700.css";
+@import "@fontsource/lato/900.css";
 @import "@fontsource-variable/jetbrains-mono";
 @import "@fontsource-variable/fira-code";
 @import "@fontsource-variable/source-code-pro";
@@ -302,15 +309,16 @@
   --text-9xl: calc(var(--interface-font-size) * 8);
 }
 
-/* Two sizes below text-xs. Font-size only (no line-height), so replacing
-   text-[11px]/text-[10px] arbitrary values is zero-visual-difference at 100%
-   zoom while staying rem-based for UI scaling. Both track the interface font
-   size like the rest of the type scale. */
+/* Two sizes below text-xs. Font-size only (no line-height), sized from
+   `--interface-font-size` like the rest of the type scale, so they grow and
+   shrink with the setting instead of being frozen at a fixed pixel value. */
 @utility text-2xs {
   font-size: calc(var(--interface-font-size) * 0.6875); /* 11px @16px */
 }
+/* 10px @16px, but never below 9px: the smallest tier is a legibility floor,
+   not a value the interface size can drive further down. */
 @utility text-3xs {
-  font-size: calc(var(--interface-font-size) * 0.625); /* 10px @16px */
+  font-size: max(9px, calc(var(--interface-font-size) * 0.625));
 }
 
 /* The sidebar folder tile. Geometry and type metrics are fixed here so the
@@ -571,11 +579,13 @@ pre,
 .aui-md-pre,
 [data-slot="code-diff"],
 [data-slot="code-preview"],
+[data-slot="code-payload"],
 .aui-shiki-base pre,
 .aui-code-block pre,
 .aui-md-pre code,
 .aui-code-block code,
 [data-slot="code-preview"] code,
+[data-slot="code-payload"] code,
 .aui-shiki-base pre code {
   font-family: var(--code-font-family);
   font-size: var(--code-font-size);
@@ -588,8 +598,11 @@ pre,
   font-weight: var(--code-font-weight);
 }
 
-/* Terminal output — the selected terminal font, size and weight. */
-[data-slot="terminal-block"] {
+/* Terminal output — the selected terminal font, size and weight. The card body
+   carries `terminal-block`; the status lines below it (`exit 1`, a timeout) are
+   part of the same output and must not fall back to the generic monospace. */
+[data-slot="terminal-block"],
+[data-slot="terminal-line"] {
   font-family: var(--terminal-font-family);
   font-size: var(--terminal-font-size);
   font-weight: var(--terminal-font-weight);
