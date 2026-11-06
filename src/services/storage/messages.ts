@@ -411,6 +411,34 @@ function toChainMessage(row: MessageRow, content: unknown): HeadChainMessage {
 }
 
 /**
+ * The parent link a write may actually store.
+ *
+ * A parent id that names no row in THIS conversation cannot be a branch link:
+ * history is read by walking `parent_id`, so one unresolvable ancestor makes the
+ * whole conversation unreadable. The browser can name exactly such a parent — a
+ * run's `start` event hands it an assistant message id, the run then fails before
+ * that reply is persisted, and the next send uses the id as its parent. The link
+ * is downgraded to a branch start instead of being stored.
+ *
+ * A self-link is the same class of defect and takes the same path.
+ */
+function resolveStoredParent(
+  conversationId: string,
+  messageId: string,
+  parentId: string | null,
+): string | null {
+  if (parentId === null || parentId === messageId) return null;
+  // One query answers both halves: no row at all and a row in another
+  // conversation are the same defect — a parent this message cannot hang from.
+  const owner = db
+    .query<{ conversation_id: string }, SQLQueryBindings[]>(
+      "SELECT conversation_id FROM messages WHERE id = ?",
+    )
+    .get(parentId);
+  return owner?.conversation_id === conversationId ? parentId : null;
+}
+
+/**
  * Upserts one stored message entry (keyed by message id).
  *
  * The entry is the runtime's storage format (`{ id, parent_id, format, content }`);
@@ -442,6 +470,15 @@ function toChainMessage(row: MessageRow, content: unknown): HeadChainMessage {
  * Keeping the stored link is therefore fail-closed and data-preserving: it
  * refuses a write that would silently discard history it already holds.
  *
+ * ## An unresolvable parent becomes a branch start
+ *
+ * A NEW row whose parent names no row in this conversation is stored with a
+ * `null` parent rather than a link nothing can resolve (see
+ * `resolveStoredParent`). A failed run can otherwise leave a pointer to a reply
+ * that never persisted, and one such pointer makes the whole conversation
+ * unreadable. An UPDATE keeps its existing stored parent when the incoming one
+ * does not resolve, by the same preservation rule as above.
+ *
  * @throws {MessageOwnershipError} when `entry.id` already names a row in another
  *   conversation.
  */
@@ -459,10 +496,11 @@ export function upsertStoredSync(conversationId: string, entry: StoredMessageEnt
   if (existing && existing.conversation_id !== conversationId) {
     throw new MessageOwnershipError(entry.id, conversationId, existing.conversation_id);
   }
+  const resolvedParentId = resolveStoredParent(conversationId, entry.id, entry.parent_id);
   const parentId =
-    existing && existing.parent_id !== null && entry.parent_id === null
+    existing && existing.parent_id !== null && resolvedParentId === null
       ? existing.parent_id
-      : entry.parent_id;
+      : resolvedParentId;
   const orderSeq = existing
     ? existing.order_seq
     : (db
@@ -780,7 +818,7 @@ export const messageService = {
 
       // Integrity, captured BEFORE the root check below: "is the walk itself
       // sound", with no notion of how far it reached.
-      let contiguous = complete;
+      const contiguous = complete;
 
       const rootReached = rows.length > 0 && rows[rows.length - 1].parent_id === null;
       if (!rootReached) complete = false;
@@ -796,18 +834,21 @@ export const messageService = {
       // Collapsing the two made every initial bounded load of a long thread look
       // untrustworthy, so the client refused the very window it asked for and
       // rendered an empty thread. The walk's own integrity is therefore reported
-      // here: the loop above already breaks on an unparsable row or a broken
-      // parent link, and a walk ending on a parent link it cannot resolve is
-      // detached rather than merely depth-limited.
-      const lastRow = rows[rows.length - 1];
-      if (contiguous && lastRow && lastRow.parent_id !== null) {
-        const parentExists = db
-          .query<{ id: string }, SQLQueryBindings[]>(
-            "SELECT id FROM messages WHERE conversation_id = ? AND id = ?",
-          )
-          .get(conversationId, lastRow.parent_id);
-        if (!parentExists) contiguous = false;
-      }
+      // here: the loop above already breaks on an unparsable row, which is the
+      // only defect that makes the returned page itself unsound.
+      //
+      // A missing ancestor is the END OF THE REACHABLE CHAIN, not a corrupt
+      // page: the walk is bounded and single-branch, so everything above the
+      // break is unreachable from the tip either way. `complete` already reports
+      // that no legitimate root was reached, and `getHeadChain` — the
+      // model-visible reader — stays strict on the same data. The caller clips
+      // the oldest row's parent to `null` exactly as it does for any bounded
+      // window.
+      //
+      // This used to clear `contiguous` here as well, which the client reads as
+      // "refuse the whole conversation". One failed run whose reply never
+      // persisted — its id still reached the browser and became the next
+      // message's parent — made a Direct thread permanently unloadable.
 
       // `older` returns the run ending at the anchor, oldest-first, trimmed to
       // the page. `newer` returns the run starting at the anchor, trimmed to

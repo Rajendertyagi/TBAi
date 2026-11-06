@@ -136,4 +136,29 @@ describe("P2 stored parent chain", () => {
     });
     expect(parentsOf(conversationId).get("standalone")).toBeNull();
   });
+
+  it("stores an unresolvable parent as a branch start", async () => {
+    conversationId = await seedChain(2);
+    // A failed run hands the browser an assistant message id whose reply never
+    // persisted; the next send names it as its parent. Storing that link would
+    // make the whole conversation unreadable, so it becomes a branch start.
+    await messageService.upsertStored(conversationId, {
+      id: "after-failed-run",
+      parent_id: "never-persisted",
+      format: "ai-sdk/v6",
+      content: { role: "user", parts: [{ type: "text", text: "resume" }] },
+    });
+    expect(parentsOf(conversationId).get("after-failed-run")).toBeNull();
+  });
+
+  it("does not lose a stored link when the incoming parent is unresolvable", async () => {
+    conversationId = await seedChain(3);
+    await messageService.upsertStored(conversationId, {
+      id: "m1",
+      parent_id: "never-persisted",
+      format: "ai-sdk/v6",
+      content: { role: "assistant", parts: [{ type: "text", text: "edited" }] },
+    });
+    expect(parentsOf(conversationId).get("m1")).toBe("m0");
+  });
 });

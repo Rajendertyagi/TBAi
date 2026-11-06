@@ -347,6 +347,23 @@ describe("P2 window slice â€” fail-closed boundaries", () => {
     expect(slice.complete).toBe(false);
   });
 
+  it("treats a missing ancestor at the oldest row as the branch start", async () => {
+    await seedChain(["m1", "m2", "m3"]);
+    // The oldest reachable row names a parent that was never persisted — what a
+    // failed run leaves behind. The page itself is sound: every interior link
+    // holds. `complete` still reports that no legitimate root was reached.
+    db.query("UPDATE messages SET parent_id = ? WHERE id = ?").run("never-persisted", "m1");
+
+    const slice = await messageService.getWindowSlice(CONVERSATION, {
+      direction: "older",
+      anchorId: "m3",
+      limit: 10,
+    });
+    expect(idsOf(slice.messages)).toEqual(["m1", "m2", "m3"]);
+    expect(slice.contiguous).toBe(true);
+    expect(slice.complete).toBe(false);
+  });
+
   it("never returns a detached row", async () => {
     await seedChain(["m1", "m2", "m3"]);
     seedOffChain("orphan", "ghost", 50);

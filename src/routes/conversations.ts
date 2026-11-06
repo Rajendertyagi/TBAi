@@ -314,9 +314,11 @@ app.get("/api/conversations/:id/messages", async (c) => {
  * chain, not a page of a listing: SQLite stays authoritative, and the walk
  * proves contiguity on the selected branch.
  *
- * `complete` is the fail-closed signal. A client MUST NOT treat an incomplete
- * slice as the conversation's history — a dangling `parent_id` or unparsable row
- * stops the walk, and the caller keeps its last valid window instead.
+ * `contiguous` is the client's integrity signal: a page containing an unparsable
+ * row is refused. `complete` answers a different question — did the walk reach a
+ * legitimate root — so it is false for every bounded page of a long thread, and
+ * for a chain whose oldest reachable row names an ancestor that was never
+ * persisted. Those are renderable branch starts, not failed loads.
  */
 app.get("/api/conversations/:id/messages/window", async (c) => {
   try {
