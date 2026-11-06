@@ -1,6 +1,13 @@
 # TBAi — Application-Wide Typography Standardization Plan
 
-**Status:** Planning only — implementation is not authorized yet  
+> [!NOTE]
+> **SUPERSEDED DRAFT:** This in-tree working document has been superseded by the
+> authoritative Revision 5 plan (`TBAi-typography-standardization-plan-2026-11-05.md`
+> Revision 5, approved 2026-11-06). Implementation and verification records are
+> codified in `docs/decisions.md` and repository tests. Do not edit this draft as
+> an active specification.
+
+**Status:** Superseded by Revision 5
 **Source baseline audited:** `ci/tauri-e2e-verify` at `dd82ed8beb0080dfd5588c499afd2ac1009d9627`  
 **Execution dependency:** The original agent must first finish the already-open P1/P2/P3 typography repairs. Those changes must then be independently reviewed and accepted.  
 **Purpose:** Make typography consistent and predictable throughout TBAi, using one understandable design standard rather than fixing isolated font problems one component at a time.

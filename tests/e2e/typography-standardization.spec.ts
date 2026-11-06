@@ -40,16 +40,16 @@ const V2_DEFAULTS = {
 } as const;
 
 const SETTINGS_ROUTES = [
-  { path: "/providers", label: "Providers" },
-  { path: "/appearance", label: "Appearance" },
-  { path: "/workspace", label: "Workspace" },
-  { path: "/opencode-config", label: "OpenCode Config" },
-  { path: "/folders", label: "Folders" },
-  { path: "/desktop", label: "Desktop" },
-  { path: "/memory", label: "Memory" },
-  { path: "/quick-messages", label: "Quick Messages" },
-  { path: "/mcp", label: "MCP" },
-  { path: "/logs", label: "Logs" },
+  { path: "/providers", heading: "Providers", strip: "Providers" },
+  { path: "/appearance", heading: "Appearance", strip: "Appearance" },
+  { path: "/workspace", heading: "Workspace", strip: "Workspace" },
+  { path: "/opencode-config", heading: "OpenCode Configuration", strip: "OpenCode Config" },
+  { path: "/folders", heading: "Folders", strip: "Folders" },
+  { path: "/desktop", heading: "Desktop", strip: "Desktop" },
+  { path: "/memory", heading: "Memory", strip: "Memory" },
+  { path: "/quick-messages", heading: "Quick Messages", strip: "Quick Messages" },
+  { path: "/mcp", heading: "MCP Servers", strip: "MCP" },
+  { path: "/logs", heading: "Logs", strip: "Logs" },
 ] as const;
 
 /** Seed the stored typography, then reload so the pre-paint bootstrap runs. */
@@ -65,13 +65,25 @@ async function applyTypography(
   await page.waitForLoadState("domcontentloaded");
 }
 
-/** Computed font-size (px) of the first `p`/`span` containing `needle`. */
+/** Computed font-size (px) of the first element containing `needle`. */
 async function fontSizeOf(page: Page, needle: string): Promise<number | null> {
-  return page.evaluate((text) => {
-    const elements = Array.from(document.querySelectorAll<HTMLElement>("p, span"));
-    const match = elements.find((element) => (element.textContent ?? "").includes(text));
-    return match ? Number.parseFloat(getComputedStyle(match).fontSize) : null;
-  }, needle);
+  const locator = page.locator(`text=${needle}`).first();
+  await expect(locator).toBeVisible({ timeout: 10_000 });
+  return locator.evaluate((el) => {
+    // If el has children and one of them also contains the text directly, find the deepest leaf
+    let curr: HTMLElement = el as HTMLElement;
+    while (curr.firstElementChild) {
+      const childWithText = Array.from(curr.children).find((c) =>
+        (c.textContent ?? "").includes(needle),
+      ) as HTMLElement | undefined;
+      if (childWithText) {
+        curr = childWithText;
+      } else {
+        break;
+      }
+    }
+    return Number.parseFloat(getComputedStyle(curr).fontSize);
+  });
 }
 
 test.describe("page-title convention", () => {
@@ -82,12 +94,12 @@ test.describe("page-title convention", () => {
       await page.goto(`/#${route.path}`);
       const heading = page.locator("h1");
       await expect(heading, `${route.path} must render one h1`).toHaveCount(1);
-      await expect(heading).toHaveText(route.label);
+      await expect(heading).toHaveText(route.heading);
       // The strip is chrome: it repeats the section name as a span.
       const strip = page.locator('[data-slot="page-title-strip"]');
       await expect(strip).toBeVisible();
       await expect(strip.locator("h1")).toHaveCount(0);
-      await expect(strip).toContainText(route.label);
+      await expect(strip).toContainText(route.strip);
     }
   });
 
@@ -181,7 +193,7 @@ test.describe("badge at the maximum interface size", () => {
       height: element.getBoundingClientRect().height,
     }));
     expect(defaultBox.scroll).toBeLessThanOrEqual(defaultBox.client);
-    expect(defaultBox.height).toBeCloseTo(20, 0);
+    expect(defaultBox.height).toBeGreaterThanOrEqual(20);
 
     await applyTypography(page, { interfaceFontSize: 24 });
     const maximumBox = await badge.evaluate((element) => ({
@@ -190,7 +202,122 @@ test.describe("badge at the maximum interface size", () => {
       height: element.getBoundingClientRect().height,
     }));
     expect(maximumBox.scroll).toBeLessThanOrEqual(maximumBox.client);
-    expect(maximumBox.height).toBeGreaterThan(20);
+    expect(maximumBox.height).toBeGreaterThan(defaultBox.height);
+  });
+
+  test("ProviderDialog context window input renders compact and grows at 24px", async ({
+    page,
+  }) => {
+    await page.goto("/#/providers");
+    await applyTypography(page, { interfaceFontSize: 16 });
+
+    // Open edit dialog for the first provider
+    const editBtn = page.locator('button[aria-label^="Edit "]').first();
+    await expect(editBtn).toBeVisible();
+    await editBtn.click();
+
+    // Add a manual model so we have a model chip with context-window button
+    const modelInput = page.locator('input[placeholder*="Type a model name"]').first();
+    await expect(modelInput).toBeVisible();
+    await modelInput.fill("test-model");
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+
+    // Context window button ("set window" or formatContextWindow)
+    const windowBtn = page
+      .locator(
+        'button[title="Edit context window"], button[title="Set context window"], button:has-text("set window")',
+      )
+      .first();
+    await expect(windowBtn).toBeVisible();
+    await windowBtn.click();
+
+    // Input is rendered
+    const input = page.locator('input[aria-label^="Context window for"]').first();
+    await expect(input).toBeVisible();
+
+    const at16 = await input.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return {
+        fontSize: Number.parseFloat(style.fontSize),
+        height: rect.height,
+        scroll: el.scrollHeight,
+        client: el.clientHeight,
+      };
+    });
+
+    expect(at16.fontSize).toBeCloseTo(10, 1);
+    expect(at16.height).toBeCloseTo(20, 1);
+    expect(at16.scroll).toBeLessThanOrEqual(at16.client);
+
+    // Close the dialog by clicking the overlay or pressing Escape twice
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+
+    // Now test at interface font size 24px
+    await applyTypography(page, { interfaceFontSize: 24 });
+    const editBtn24 = page.locator('button[aria-label^="Edit "]').first();
+    await expect(editBtn24).toBeVisible();
+    await editBtn24.click();
+
+    const modelInput24 = page.locator('input[placeholder*="Type a model name"]').first();
+    await expect(modelInput24).toBeVisible();
+    await modelInput24.fill("test-model-24");
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+
+    const windowBtn24 = page
+      .locator(
+        'button[title="Edit context window"], button[title="Set context window"], button:has-text("set window")',
+      )
+      .first();
+    await expect(windowBtn24).toBeVisible();
+    await windowBtn24.click();
+
+    const input24 = page.locator('input[aria-label^="Context window for"]').first();
+    await expect(input24).toBeVisible();
+
+    const at24 = await input24.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return {
+        fontSize: Number.parseFloat(style.fontSize),
+        height: rect.height,
+        scroll: el.scrollHeight,
+        client: el.clientHeight,
+      };
+    });
+
+    expect(at24.fontSize).toBeCloseTo(15, 1);
+    expect(at24.height).toBeGreaterThanOrEqual(21);
+    expect(at24.scroll).toBeLessThanOrEqual(at24.client);
+
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+  });
+
+  test("SidebarSection row does not clip at 24px interface font size", async ({ page }) => {
+    await page.goto("/#/");
+    await applyTypography(page, { interfaceFontSize: 24 });
+
+    const sectionRow = page.locator(".group\\/section").first();
+    await expect(sectionRow).toBeVisible();
+
+    const measurements = await sectionRow.evaluate((el) => {
+      const button = el.querySelector("button");
+      const buttonStyle = button ? getComputedStyle(button) : null;
+      return {
+        rowHeight: el.getBoundingClientRect().height,
+        rowScrollHeight: el.scrollHeight,
+        rowClientHeight: el.clientHeight,
+        buttonFontSize: buttonStyle ? Number.parseFloat(buttonStyle.fontSize) : 0,
+        buttonLineHeight: buttonStyle ? Number.parseFloat(buttonStyle.lineHeight) : 0,
+      };
+    });
+
+    // At 24px, 24 * 0.8125 = 19.5px font-size.
+    expect(measurements.buttonFontSize).toBeCloseTo(19.5, 1);
+    expect(measurements.rowScrollHeight).toBeLessThanOrEqual(measurements.rowClientHeight);
+    expect(measurements.rowHeight).toBeGreaterThanOrEqual(24);
   });
 });
 

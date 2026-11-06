@@ -465,6 +465,8 @@ jobs:
           p2-tool-result-persistence.spec.ts
           phase-8-tabs-navigation.spec.ts
           opencode-v2-code-route.spec.ts
+          appearance-scaling.spec.ts
+          typography-standardization.spec.ts
 
   # G5 — the same full, non-live suite at two revisions, compared test identity by
   # test identity.

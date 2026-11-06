@@ -8886,3 +8886,44 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
   prose-only, 75/100/150 regression; green in chromium-headless and
   edge-headless), `tests/unit/tooling/webview-origin-evidence.test.ts`
   (zoom-hotkeys stage in the packaged failure matrix).
+
+### Typography Standardization (Revision 5, 2026-11-06)
+
+Seven visible outcomes and architectural dispositions D-0 through D-13 approved
+under Revision 5 specification:
+
+- **1. Interface minimum 14px; migrate saved 12/13 to 14 (Option A):**
+  Interface font size floor is 14px (slider range 14–24px). Preset buttons:
+  `[14, 16, 18, 20]`. Stored values of 12 or 13 migrate cleanly to 14px at
+  hydration and pre-paint bootstrap. Option B (retaining 12/13 with artificial
+  flat plateaus) was rejected.
+- **2. Page-title hierarchy (one meaningful `h1` per route):**
+  Every settings route renders exactly one `h1` at consistent page-title sizing
+  (`text-base font-semibold`). `PageTitleStrip` serves as context chrome with a
+  plain `<span>` label and back-navigation, except Scheduler which keeps its
+  strip as the single `h1`.
+- **3. Badge minimum-height correction:**
+  `Badge` primitive uses `min-h-5` rather than fixed `h-5`, preserving the
+  compact 20px default while growing gracefully at large font sizes (e.g. 24px)
+  without text clipping.
+- **4. Lato static-weight parity:**
+  Imported `@fontsource/lato` static weights 100, 300, 700, 900 in `globals.css`
+  alongside 400. Verified across `A` and `Ž` probe characters without synthetic bold.
+- **5. Structured payloads follow Code Font:**
+  Payload containers (`[data-slot="code-payload"]`) follow `--code-font-*`
+  rather than interface `text-xs`. Truncation status notices and permission
+  grants remain on interface or fixed-mono channels.
+- **6. Terminal exit/timeout lines follow Terminal Font:**
+  Lines of terminal output follow `--terminal-font-*`; status pills and badges
+  remain compact metadata.
+- **7. Scale-responsive compact metadata with a 9px floor:**
+  The literal-pixel inventory (25 migrated, 1 investigated control, 2 geometry
+  exceptions kept) scales with `--interface-font-size`. `text-3xs` is floored
+  at 9px via `max(9px, calc(var(--interface-font-size) * 0.625))`. The three
+  active `0.84375×` ad-hoc multipliers migrated to `text-sm` (+0.5px default increase).
+- **Control geometry & weight pins:**
+  Investigated `ProviderDialog` context-window input uses `h-auto min-h-5
+  leading-none w-20 px-1 py-0.5 text-3xs md:text-3xs` (measured at 10px / 20px
+  height at 16px interface, 15px / ≥21px at 24px). `SidebarSection` retains
+  `min-h-6` with verified clearance at 24px. All 9 intentional `font-normal`
+  weight pins preserved.

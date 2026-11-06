@@ -616,7 +616,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
                         }}
                         placeholder={m.contextWindow ? String(m.contextWindow) : "tokens"}
                         aria-label={`Context window for ${m.id}`}
-                        className="min-h-5 w-20 px-1 text-3xs"
+                        className="h-auto min-h-5 leading-none w-20 px-1 py-0.5 text-3xs md:text-3xs"
                       />
                     ) : (
                       <button
