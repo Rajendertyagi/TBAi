@@ -4,7 +4,7 @@ import type { AgentState } from "@/components/assistant-ui/elements/agent-status
 /**
  * A message part plus the status the runtime attaches at run time.
  *
- * The published `ToolCallMessagePart` omits `status` on assistant-ui 0.15.30,
+ * The published `ToolCallMessagePart` omits `status` on assistant-ui 0.15.32,
  * but the runtime reads it (`normalizePartStatus` in `@assistant-ui/core`), so
  * the field is stated once here instead of cast at each read.
  */
