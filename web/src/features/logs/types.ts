@@ -19,6 +19,7 @@ export interface ScopeTarget {
 
 export interface FileSettings {
   enabled: boolean;
+  path?: string;
   maxMb: number;
   keepFiles: number;
   maxTotalMb: number;
@@ -43,6 +44,10 @@ export interface LogBatch {
   entries: LogEntry[];
   bootId: string;
   reset?: boolean;
+}
+
+export interface ThrottleInfo {
+  throttled: Array<{ scope: string; dropped: number }>;
 }
 
 export interface DateRange {

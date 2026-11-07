@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("logs match codeg layout: capture, viewer, files", async ({ page, request }) => {
+test("logs viewer: settings, live entries, filtering, export, files", async ({ page, request }) => {
   // Force capture on (every API call is logged) and restore afterwards.
   const before = await (await request.get("/api/logs/settings")).json();
   await request.put("/api/logs/settings", { data: { level: "debug", targets: [] } });
@@ -11,22 +11,25 @@ test("logs match codeg layout: capture, viewer, files", async ({ page, request }
     await page.goto("/#/logs");
     const main = page.getByRole("main");
 
-    // Capture card.
-    await expect(main.getByRole("heading", { name: "Log level", exact: true })).toBeVisible({
-      timeout: 15000,
-    });
-    await expect(main.getByText("Per-scope overrides")).toBeVisible();
-    await expect(main.getByRole("switch", { name: "Toggle file sink" })).toBeVisible();
-
-    // Viewer card.
-    await expect(main.getByRole("heading", { name: "Recent logs" })).toBeVisible();
+    // Viewer chrome.
+    await expect(main.getByText("Runtime Logs")).toBeVisible({ timeout: 15000 });
     await expect(main.getByRole("button", { name: "Pause" })).toBeVisible();
-    await expect(main.getByRole("button", { name: "Refresh" })).toBeVisible();
     await expect(main.getByRole("button", { name: "Clear" })).toBeVisible();
     await expect(main.getByRole("button", { name: "Export" })).toBeVisible();
-    const search = main.getByPlaceholder("Search message or target…");
+    await expect(main.getByRole("button", { name: "Settings" })).toBeVisible();
+    await expect(main.getByRole("button", { name: "Files" })).toBeVisible();
+    const search = main.getByPlaceholder(/Search logs/i);
     await expect(search).toBeVisible();
-    await expect(main.getByText(/\/ \d+ shown/)).toBeVisible();
+    await expect(main.getByText(/\d+ \/ \d+/)).toBeVisible();
+
+    // Settings dialog exposes capture controls and preserves backend contract fields.
+    await main.getByRole("button", { name: "Settings" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Log Runtime Settings")).toBeVisible();
+    await expect(dialog.getByText("Default Capture Level")).toBeVisible();
+    await expect(dialog.getByText("Per-Scope Overrides")).toBeVisible();
+    await expect(dialog.getByRole("switch", { name: "Toggle file sink" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Close" }).click();
 
     // The list is virtualized: isolate our row via search so it renders.
     await search.fill(marker);
@@ -34,45 +37,25 @@ test("logs match codeg layout: capture, viewer, files", async ({ page, request }
     await expect(seeded).toBeVisible({ timeout: 15000 });
 
     // Rows expand to a structured detail grid.
-    //
-    // Scoped to the row we identified, NOT `.first()`. The list live-tails, so a
-    // fresh entry can land above it between the click and the assertion; a
-    // positional locator then re-resolves to a different row and reports
-    // "aria-expanded=false" for a row that was never clicked. The expanded set is
-    // keyed by record seq and is stable across refreshes, so scoping is a pure
-    // fix to the locator, not a workaround for a product bug.
     const expander = seeded
       .locator('xpath=ancestor::*[.//button[@aria-label="Toggle details"]][1]')
       .getByRole("button", { name: "Toggle details" });
     await expander.click();
     await expect(expander).toHaveAttribute("aria-expanded", "true");
-    await expect(main.locator("div.grid.grid-cols-\\[auto_1fr\\]").first()).toBeVisible();
+    await expect(main.locator("div.rounded-md.bg-muted\\/40").first()).toBeVisible();
 
     // Search narrows; clearing restores the live list.
     await search.fill("zzz-no-such-log");
-    await expect(main.getByText("No entries match the current filters.")).toBeVisible();
+    await expect(main.getByText("No matching log entries found.")).toBeVisible();
     await search.fill("");
-    await expect(main.getByText(/\/ \d+ shown/)).toBeVisible();
-
-    // Time range: a future window matches nothing; clearing restores rows.
-    // NOTE: datetime-local interprets input as LOCAL time — build the string
-    // from local components (toISOString is UTC and lands in the past here).
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const future = new Date(Date.now() + 3600 * 1000);
-    const iso =
-      `${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}` +
-      `T${pad(future.getHours())}:${pad(future.getMinutes())}`;
-    await main.getByLabel("Show entries from").fill(iso);
-    await expect(main.getByText("No entries match the current filters.")).toBeVisible();
-    await main.getByRole("button", { name: "Clear range" }).click();
-    await expect(main.getByText(/\/ \d+ shown/)).toBeVisible();
+    await expect(main.getByText(/\d+ \/ \d+/)).toBeVisible();
 
     // Keyboard: "/" focuses search (from a neutral focus point).
-    await main.getByRole("button", { name: "Refresh" }).click();
+    await main.getByRole("button", { name: "Clear" }).focus();
     await page.keyboard.press("/");
     await expect(search).toBeFocused();
 
-    // Export downloads the visible entries as JSON lines.
+    // Export downloads the visible entries.
     await search.fill(marker);
     const downloadPromise = page.waitForEvent("download");
     await main.getByRole("button", { name: "Export" }).click();
@@ -85,9 +68,14 @@ test("logs match codeg layout: capture, viewer, files", async ({ page, request }
     expect(exported).toContain(marker);
     expect(exported.trim().split("\n").length).toBeGreaterThanOrEqual(1);
 
-    // Files card with retention policy.
-    await expect(main.getByRole("heading", { name: "Log files" })).toBeVisible();
-    await expect(main.getByText(/files · .* total/)).toBeVisible();
+    // Files dialog shows retention info.
+    await main.getByRole("button", { name: "Files" }).click();
+    const filesDialog = page.getByRole("dialog");
+    await expect(filesDialog.getByText("Disk Log Files & Retention")).toBeVisible();
+    await expect(
+      filesDialog.getByText(/Total Disk Files|No log files found on disk/i),
+    ).toBeVisible();
+    await filesDialog.getByRole("button", { name: "Close" }).click();
   } finally {
     await request.put("/api/logs/settings", {
       data: { level: before.level, targets: before.targets ?? [] },

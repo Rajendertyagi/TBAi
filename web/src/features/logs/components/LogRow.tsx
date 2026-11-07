@@ -101,7 +101,8 @@ export const LogRow = React.memo(function LogRow({
             <CollapsibleTrigger asChild>
               <button
                 type="button"
-                aria-label={isExpanded ? "Collapse log details" : "Expand log details"}
+                aria-label="Toggle details"
+                aria-expanded={isExpanded}
                 className="p-0.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground transition-transform"
               >
                 <ChevronRight

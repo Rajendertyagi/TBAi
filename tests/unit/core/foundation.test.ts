@@ -127,6 +127,7 @@ describe("settings nav source of truth", () => {
     expect(routes).toEqual([
       "/providers",
       "/appearance",
+      "/typography",
       "/workspace",
       "/opencode-config",
       "/folders",

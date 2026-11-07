@@ -32,13 +32,35 @@ import type {
   LogLevel,
   RetentionInfo,
   ScopeTarget,
+  ThrottleInfo,
 } from "../types";
 
 const ALL_LEVELS: LogLevel[] = ["debug", "info", "warn", "error"];
 
+// Scope paths are dot-separated idents; an override matches its scope and
+// everything below it. Rows failing this are excluded from saves.
+const SCOPE_RE = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/;
+
+function validTargets(targets: ScopeTarget[]): ScopeTarget[] {
+  return targets
+    .map((t) => ({ ...t, scope: t.scope.trim() }))
+    .filter((t) => SCOPE_RE.test(t.scope));
+}
+
+function defaultFileSettings(): FileSettings {
+  return {
+    enabled: false,
+    maxMb: 5,
+    keepFiles: 20,
+    maxTotalMb: 100,
+    retentionHours: 24,
+  };
+}
+
 export function LogsViewer() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [isPaused, setIsPaused] = useState(false);
+  const [streamState, setStreamState] = useState<"live" | "reconnecting">("live");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedLevel, setSelectedLevel] = useState<LogLevel | "all">("all");
   const [selectedScope, setSelectedScope] = useState<string>("all");
@@ -52,13 +74,17 @@ export function LogsViewer() {
 
   // Settings & retention remote data
   const [captureLevel, setCaptureLevel] = useState<CaptureLevel>("info");
-  const [fileSettings, setFileSettings] = useState<FileSettings | undefined>(undefined);
-  const [scopes, setScopes] = useState<ScopeTarget[]>([]);
+  const [targets, setTargets] = useState<ScopeTarget[]>([]);
+  const [envLocked, setEnvLocked] = useState(false);
+  const [fileSettings, setFileSettings] = useState<FileSettings | null>(null);
+  const [fileLocked, setFileLocked] = useState(false);
+  const [throttled, setThrottled] = useState<ThrottleInfo["throttled"]>([]);
   const [retentionInfo, setRetentionInfo] = useState<RetentionInfo | null>(null);
   const [logFiles, setLogFiles] = useState<LogFileInfo[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // Tracking state refs for SSE streaming
+  // Tracking state refs for SSE streaming / safe persistence
   const entriesRef = useRef<LogEntry[]>([]);
   entriesRef.current = entries;
   const bootIdRef = useRef<string | null>(null);
@@ -66,11 +92,34 @@ export function LogsViewer() {
   const parentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Authoritative {level, targets, file}, updated synchronously by every save
+  // handler so a queued write always reads the freshest combined state.
+  const settingsRef = useRef<{
+    level: CaptureLevel;
+    targets: ScopeTarget[];
+    file: FileSettings | null;
+  }>({
+    level: "info",
+    targets: [],
+    file: null,
+  });
+  // Serialize writes so out-of-order async resolution can't lose an update.
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const inFlightRef = useRef(0);
+
   const applyIncoming = useCallback((incoming: LogEntry[], nextBootId: string) => {
+    if (incoming.length === 0 && bootIdRef.current === nextBootId) return;
     const merged = mergeLogEntries(entriesRef.current, incoming, bootIdRef.current, nextBootId);
-    bootIdRef.current = merged.bootId;
     entriesRef.current = merged.entries;
-    lastSeqRef.current = maxSeq(merged.entries);
+    bootIdRef.current = merged.bootId;
+    // After a server restart the cursor must restart too: old seqs are larger
+    // than anything the new boot will emit, and `since` would hide everything.
+    lastSeqRef.current = merged.reset
+      ? maxSeq(merged.entries)
+      : Math.max(lastSeqRef.current, maxSeq(merged.entries));
+    if (merged.reset) {
+      setExpandedIds(new Set());
+    }
     setEntries(merged.entries);
   }, []);
 
@@ -80,12 +129,10 @@ export function LogsViewer() {
       const res = await apiFetch(`/api/logs/recent?since=${lastSeqRef.current}`);
       if (res.ok) {
         const data = (await res.json()) as LogBatch;
-        if (data.entries && Array.isArray(data.entries)) {
-          applyIncoming(data.entries, data.bootId ?? "");
-        }
+        applyIncoming(data.entries ?? [], data.bootId ?? "");
       }
     } catch {
-      // Ignore network errors on init
+      // Ignore network errors on init/refresh
     }
   }, [applyIncoming]);
 
@@ -94,10 +141,24 @@ export function LogsViewer() {
     try {
       const res = await apiFetch("/api/logs/settings");
       if (res.ok) {
-        const data = await res.json();
-        if (data.level) setCaptureLevel(data.level);
-        if (data.scopes) setScopes(data.scopes);
-        if (data.file) setFileSettings(data.file);
+        const data = (await res.json()) as {
+          level?: CaptureLevel;
+          targets?: ScopeTarget[];
+          env_locked?: boolean;
+          file?: FileSettings;
+          file_locked?: boolean;
+          throttle?: ThrottleInfo;
+        };
+        const nextLevel = data.level ?? "info";
+        const nextTargets = data.targets ?? [];
+        const nextFile = data.file ?? null;
+        setCaptureLevel(nextLevel);
+        setTargets(nextTargets);
+        setEnvLocked(data.env_locked ?? false);
+        setFileSettings(nextFile);
+        setFileLocked(data.file_locked ?? false);
+        setThrottled(data.throttle?.throttled ?? []);
+        settingsRef.current = { level: nextLevel, targets: nextTargets, file: nextFile };
       }
     } catch {
       // Ignore
@@ -110,9 +171,12 @@ export function LogsViewer() {
     try {
       const res = await apiFetch("/api/logs/files");
       if (res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as {
+          files?: LogFileInfo[];
+          retention?: RetentionInfo;
+        };
         if (data.retention) setRetentionInfo(data.retention);
-        if (data.files && Array.isArray(data.files)) setLogFiles(data.files);
+        if (Array.isArray(data.files)) setLogFiles(data.files);
       }
     } catch {
       // Ignore
@@ -121,12 +185,16 @@ export function LogsViewer() {
     }
   }, []);
 
-  // SSE Stream
+  // SSE Stream (named `entries` event; backend contract). Pausing closes the
+  // stream; resuming reconnects and recent fetch catches up.
   useEffect(() => {
-    fetchRecentLogs();
-    fetchSettings();
+    void fetchRecentLogs();
+    void fetchSettings();
 
-    if (isPaused) return;
+    if (isPaused) {
+      setStreamState("live");
+      return;
+    }
 
     let closed = false;
     let source: EventSource | null = null;
@@ -134,23 +202,29 @@ export function LogsViewer() {
 
     const connect = () => {
       if (closed) return;
-      const source_ = new EventSource(resolveApiUrl("/api/logs/stream"));
+      const since = lastSeqRef.current;
+      const url = resolveApiUrl(`/api/logs/stream${since > 0 ? `?since=${since}` : ""}`);
+      const source_ = new EventSource(url);
       source = source_;
 
-      source_.onmessage = (event) => {
+      source_.onopen = () => {
+        if (!closed) setStreamState("live");
+      };
+
+      source_.addEventListener("entries", (ev) => {
         try {
-          const payload = JSON.parse(event.data);
-          if (Array.isArray(payload.entries)) {
-            applyIncoming(payload.entries, payload.bootId ?? "");
-          }
+          const payload = JSON.parse((ev as MessageEvent).data) as LogBatch;
+          applyIncoming(payload.entries ?? [], payload.bootId ?? "");
         } catch {
           // Ignore parse errors
         }
-      };
+      });
 
       source_.onerror = () => {
         source_?.close();
+        if (source === source_) source = null;
         if (!closed) {
+          setStreamState("reconnecting");
           retryTimer = setTimeout(connect, 2000);
         }
       };
@@ -181,7 +255,7 @@ export function LogsViewer() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Collect unique scopes
+  // Collect unique scopes from visible buffer
   const availableScopes = useMemo(() => {
     const set = new Set<string>();
     for (const e of entries) {
@@ -197,31 +271,23 @@ export function LogsViewer() {
     const toTime = dateRange.to ? new Date(dateRange.to).getTime() : null;
 
     return entries.filter((item) => {
-      // Level filter
-      if (selectedLevel !== "all" && item.level !== selectedLevel) {
-        return false;
-      }
+      if (selectedLevel !== "all" && item.level !== selectedLevel) return false;
+      if (selectedScope !== "all" && item.scope !== selectedScope) return false;
 
-      // Scope filter
-      if (selectedScope !== "all" && item.scope !== selectedScope) {
-        return false;
-      }
-
-      // Date Range filter
       if (fromTime || toTime) {
         const itemTime = new Date(item.time).getTime();
-        if (fromTime && itemTime < fromTime) return false;
-        if (toTime && itemTime > toTime) return false;
+        if (!Number.isNaN(itemTime)) {
+          if (fromTime && itemTime < fromTime) return false;
+          if (toTime && itemTime > toTime) return false;
+        }
       }
 
-      // Text Search query
       if (query) {
         const inScope = item.scope?.toLowerCase().includes(query);
         const inEvent = item.event?.toLowerCase().includes(query);
         const inMessage = item.message?.toLowerCase().includes(query);
-        let inFields = false;
         const details = detailEntries(item);
-        inFields = details.some(
+        const inFields = details.some(
           (d) => d.key.toLowerCase().includes(query) || d.value.toLowerCase().includes(query),
         );
         return inScope || inEvent || inMessage || inFields;
@@ -244,7 +310,6 @@ export function LogsViewer() {
     [filteredEntries, expandedIds],
   );
 
-  // TanStack Virtualizer
   const rowVirtualizer = useVirtualizer({
     count: filteredEntries.length,
     getScrollElement: () => parentRef.current,
@@ -270,11 +335,8 @@ export function LogsViewer() {
   const handleToggleExpand = useCallback((seq: number) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(seq)) {
-        next.delete(seq);
-      } else {
-        next.add(seq);
-      }
+      if (next.has(seq)) next.delete(seq);
+      else next.add(seq);
       return next;
     });
   }, []);
@@ -282,9 +344,7 @@ export function LogsViewer() {
   const handleExpandAll = () => {
     const all = new Set<number>();
     for (const e of filteredEntries) {
-      if (detailEntries(e).length > 0) {
-        all.add(e.seq);
-      }
+      if (detailEntries(e).length > 0) all.add(e.seq);
     }
     setExpandedIds(all);
   };
@@ -294,66 +354,86 @@ export function LogsViewer() {
   };
 
   const handleClear = () => {
+    entriesRef.current = [];
+    lastSeqRef.current = 0;
+    bootIdRef.current = null;
     setEntries([]);
     setExpandedIds(new Set());
   };
 
-  const handleExportJson = () => {
+  const handleExport = () => {
     const content = serializeLogEntries(filteredEntries);
-    const blob = new Blob([content], { type: "application/json" });
+    const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `tbai-logs-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+    a.download = "tbai-logs-export.log";
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  const handleUpdateCaptureLevel = async (level: CaptureLevel) => {
-    setCaptureLevel(level);
+  const refreshThrottle = useCallback(async () => {
     try {
-      const res = await apiFetch("/api/logs/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ level, targets: scopes, file: fileSettings }),
-      });
-      if (!res.ok) throw new Error("Failed to save capture level");
-      toast.success("Capture level updated.");
+      const res = await apiFetch("/api/logs/settings");
+      if (!res.ok) return;
+      const data = (await res.json()) as { throttle?: ThrottleInfo };
+      setThrottled(data.throttle?.throttled ?? []);
     } catch {
-      toast.error("Could not update capture level.");
+      /* best-effort */
     }
-  };
+  }, []);
 
-  const handleUpdateScopes = async (newScopes: ScopeTarget[]) => {
-    setScopes(newScopes);
-    try {
-      const res = await apiFetch("/api/logs/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ level: captureLevel, targets: newScopes, file: fileSettings }),
-      });
-      if (!res.ok) throw new Error("Failed to save scopes");
-      toast.success("Scope overrides saved.");
-    } catch {
-      toast.error("Could not update scope overrides.");
-    }
-  };
+  const queueSave = useCallback(() => {
+    inFlightRef.current += 1;
+    setSaving(true);
+    saveChainRef.current = saveChainRef.current.then(async () => {
+      try {
+        const body: Record<string, unknown> = {
+          level: settingsRef.current.level,
+          targets: validTargets(settingsRef.current.targets),
+        };
+        if (settingsRef.current.file) body.file = settingsRef.current.file;
+        const res = await apiFetch("/api/logs/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) toast.error("Could not save log settings.");
+        else void refreshThrottle();
+      } catch {
+        toast.error("Could not save log settings.");
+      } finally {
+        inFlightRef.current -= 1;
+        if (inFlightRef.current === 0) setSaving(false);
+      }
+    });
+  }, [refreshThrottle]);
 
-  const handleUpdateFileSettings = async (patch: Partial<FileSettings>) => {
-    const next = { ...fileSettings, ...patch } as FileSettings;
-    setFileSettings(next);
-    try {
-      const res = await apiFetch("/api/logs/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ level: captureLevel, targets: scopes, file: next }),
-      });
-      if (!res.ok) throw new Error("Failed to update file settings");
-      toast.success("File logging settings saved.");
-    } catch {
-      toast.error("Could not update file settings.");
-    }
-  };
+  const handleCaptureLevelChange = useCallback(
+    (level: CaptureLevel) => {
+      settingsRef.current = { ...settingsRef.current, level };
+      setCaptureLevel(level);
+      queueSave();
+    },
+    [queueSave],
+  );
+
+  const handleTargetsChange = useCallback((next: ScopeTarget[]) => {
+    settingsRef.current = { ...settingsRef.current, targets: next };
+    setTargets(next);
+  }, []);
+
+  const handleFileSettingsChange = useCallback(
+    (patch: Partial<FileSettings>) => {
+      const next: FileSettings = settingsRef.current.file
+        ? { ...settingsRef.current.file, ...patch }
+        : { ...defaultFileSettings(), ...patch };
+      settingsRef.current = { ...settingsRef.current, file: next };
+      setFileSettings(next);
+      queueSave();
+    },
+    [queueSave],
+  );
 
   const handleDownloadFile = async (file: LogFileInfo) => {
     try {
@@ -372,11 +452,12 @@ export function LogsViewer() {
     }
   };
 
-  // Quick Date Chips
+  // Quick Date Chips (local day boundaries)
   const setPresetToday = () => {
     const now = new Date();
-    const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    setDateRange({ from: `${ymd}T00:00:00.000Z`, to: `${ymd}T23:59:59.999Z` });
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    setDateRange({ from: start.toISOString(), to: end.toISOString() });
     setCalendarOpen(false);
   };
 
@@ -417,14 +498,21 @@ export function LogsViewer() {
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-3xs font-medium ${
                 isPaused
                   ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
-                  : "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                  : streamState === "reconnecting"
+                    ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                    : "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
               }`}
             >
               <span
-                className={`w-1.5 h-1.5 rounded-full ${isPaused ? "bg-amber-400" : "bg-emerald-400 animate-pulse"}`}
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isPaused || streamState === "reconnecting"
+                    ? "bg-amber-400"
+                    : "bg-emerald-400 animate-pulse"
+                }`}
               />
-              {isPaused ? "PAUSED" : "LIVE"}
+              {isPaused ? "PAUSED" : streamState === "reconnecting" ? "RECONNECTING" : "LIVE"}
             </div>
+            {saving && <span className="text-3xs text-muted-foreground">Saving…</span>}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -453,8 +541,8 @@ export function LogsViewer() {
 
             <button
               type="button"
-              onClick={handleExportJson}
-              title="Export visible logs as JSON"
+              onClick={handleExport}
+              title="Export visible logs"
               className="h-7 px-2 rounded-md border border-border bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted text-xs font-medium flex items-center gap-1 transition-colors"
             >
               <Download className="w-3 h-3" />
@@ -464,7 +552,7 @@ export function LogsViewer() {
             <button
               type="button"
               onClick={() => {
-                fetchRetention();
+                void fetchRetention();
                 setFilesOpen(true);
               }}
               title="Disk log files & retention"
@@ -486,9 +574,20 @@ export function LogsViewer() {
           </div>
         </div>
 
+        {captureLevel === "off" && (
+          <p className="text-2xs text-amber-500">
+            Capture is off — showing buffered history; new entries are not recorded.
+          </p>
+        )}
+        {throttled.length > 0 && (
+          <p className="text-2xs text-amber-500">
+            Throttling {throttled.map((t) => `${t.scope} (${t.dropped} shed)`).join(", ")} — over
+            the 1/sec info budget. Quiet the source or raise its capture level.
+          </p>
+        )}
+
         {/* Filter Toolbar */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* Search Input */}
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60" />
             <input
@@ -510,7 +609,6 @@ export function LogsViewer() {
             )}
           </div>
 
-          {/* Level Filter */}
           <select
             value={selectedLevel}
             onChange={(e) => setSelectedLevel(e.target.value as LogLevel | "all")}
@@ -524,7 +622,6 @@ export function LogsViewer() {
             ))}
           </select>
 
-          {/* Scope Filter */}
           <select
             value={selectedScope}
             onChange={(e) => setSelectedScope(e.target.value)}
@@ -538,7 +635,6 @@ export function LogsViewer() {
             ))}
           </select>
 
-          {/* Date Range Popover */}
           <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
             <PopoverTrigger asChild>
               <button
@@ -608,7 +704,6 @@ export function LogsViewer() {
             </PopoverContent>
           </Popover>
 
-          {/* Expand / Collapse All */}
           <div className="flex items-center gap-0.5 border border-border rounded-md bg-muted/20">
             <button
               type="button"
@@ -691,20 +786,20 @@ export function LogsViewer() {
         )}
       </div>
 
-      {/* Settings Dialog */}
       <LogSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         captureLevel={captureLevel}
-        onCaptureLevelChange={handleUpdateCaptureLevel}
+        onCaptureLevelChange={handleCaptureLevelChange}
+        envLocked={envLocked}
         fileSettings={fileSettings}
-        onFileSettingsChange={handleUpdateFileSettings}
-        scopes={scopes}
-        onScopesChange={handleUpdateScopes}
-        availableScopes={availableScopes}
+        fileLocked={fileLocked}
+        onFileSettingsChange={handleFileSettingsChange}
+        targets={targets}
+        onTargetsChange={handleTargetsChange}
+        onSave={queueSave}
       />
 
-      {/* Rotated Files Dialog */}
       <LogFilesDialog
         open={filesOpen}
         onOpenChange={setFilesOpen}
