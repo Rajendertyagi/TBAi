@@ -1,5 +1,5 @@
 import { RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -34,10 +34,13 @@ import {
   applyWindowZoom,
   clampWindowZoom,
   DEFAULT_WINDOW_ZOOM,
+  isTauri,
+  onWindowZoomChange,
   readWindowZoom,
   WINDOW_ZOOM_MAX,
   WINDOW_ZOOM_MIN,
   WINDOW_ZOOM_PRESETS,
+  WINDOW_ZOOM_STORAGE_KEY,
 } from "@/lib/platform";
 import { SyntaxHighlighter } from "@/components/assistant-ui/elements/shiki-highlighter";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
@@ -103,16 +106,23 @@ function Card({
 export function TypographyPage() {
   const [typography, setTypography] = useState<TypographyConfig>(readTypography);
   const [zoom, setZoom] = useState<number>(readWindowZoom);
+  const desktopZoom = isTauri();
+  // Latest-request-safe: only the most recent zoom request may update displayed state.
+  const zoomRequestId = useRef(0);
 
-  // Sync window zoom from external shortcut changes (e.g. Ctrl +/-)
+  // Sync confirmed window zoom from same-window changes (shortcuts/other controls) and other tabs.
   useEffect(() => {
+    const off = onWindowZoomChange((value) => setZoom(clampWindowZoom(value)));
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "tbai-window-zoom") {
+      if (e.key === WINDOW_ZOOM_STORAGE_KEY) {
         setZoom(readWindowZoom());
       }
     };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    return () => {
+      off();
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   const updateTypography = useCallback((patch: Partial<TypographyConfig>) => {
@@ -124,19 +134,43 @@ export function TypographyPage() {
     });
   }, []);
 
-  const handleUpdateZoom = (newZoom: number) => {
-    const clamped = clampWindowZoom(newZoom);
-    setZoom(clamped);
-    applyWindowZoom(clamped);
-  };
+  const requestWindowZoom = useCallback(
+    async (newZoom: number, opts?: { reportFailure?: boolean }): Promise<boolean> => {
+      const clamped = clampWindowZoom(newZoom);
+      if (!desktopZoom) return false;
+      const requestId = ++zoomRequestId.current;
+      const applied = await applyWindowZoom(clamped);
+      if (requestId !== zoomRequestId.current) return applied;
+      if (applied) {
+        setZoom(clamped);
+        return true;
+      }
+      if (opts?.reportFailure !== false) {
+        toast.error("Could not apply window zoom.", { id: "window-zoom-toast" });
+      }
+      setZoom(readWindowZoom());
+      return false;
+    },
+    [desktopZoom],
+  );
 
-  const handleResetAll = () => {
+  const handleResetAll = async () => {
     const next = resetTypography();
     setTypography(next);
     writeTypography(next);
     applyTypographyToDom(next);
-    handleUpdateZoom(DEFAULT_WINDOW_ZOOM);
-    toast.success("All typography and zoom settings restored to default.");
+    if (!desktopZoom) {
+      toast.success(
+        "Typography restored to default. Window zoom is available only in the desktop application.",
+      );
+      return;
+    }
+    const zoomApplied = await requestWindowZoom(DEFAULT_WINDOW_ZOOM, { reportFailure: false });
+    if (zoomApplied) {
+      toast.success("Typography and window zoom restored to default.");
+    } else {
+      toast.error("Typography restored to default. Window zoom could not be reset.");
+    }
   };
 
   const currentUiFont = getFont(typography.interfaceFontFamily);
@@ -510,7 +544,9 @@ export function TypographyPage() {
             setTypography(next);
             writeTypography(next);
             applyTypographyToDom(next);
-            handleUpdateZoom(DEFAULT_WINDOW_ZOOM);
+            if (desktopZoom) {
+              void requestWindowZoom(DEFAULT_WINDOW_ZOOM);
+            }
           }}
         >
           {/* Window Zoom Row */}
@@ -522,11 +558,11 @@ export function TypographyPage() {
                   <span className="text-xs font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">
                     Current zoom: {Math.round(zoom * 100)}%
                   </span>
-                  {zoom !== 1.0 ? (
+                  {desktopZoom && zoom !== 1.0 ? (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleUpdateZoom(1.0)}
+                      onClick={() => void requestWindowZoom(1.0)}
                       className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground rounded-full"
                     >
                       100% (Default)
@@ -534,13 +570,18 @@ export function TypographyPage() {
                   ) : null}
                 </div>
                 <div className="text-xs text-muted-foreground mt-1 max-w-xl leading-relaxed">
-                  Scale the entire interface. Applies immediately and persists per device. ⌘/Ctrl +
-                  and - move through the same zoom levels as this menu (⌘/Ctrl 0 resets to 100%).
+                  {desktopZoom
+                    ? "Scale the entire interface. Applies immediately and persists per device. ⌘/Ctrl + and - move through the same zoom levels as this menu (⌘/Ctrl 0 resets to 100%)."
+                    : "Native window zoom is available only in the desktop application. Use your browser's zoom controls in browser mode."}
                 </div>
               </div>
 
               <div className="shrink-0 sm:min-w-[180px] flex justify-end">
-                <Select value={String(zoom)} onValueChange={(val) => handleUpdateZoom(Number(val))}>
+                <Select
+                  value={String(zoom)}
+                  onValueChange={(val) => void requestWindowZoom(Number(val))}
+                  disabled={!desktopZoom}
+                >
                   <SelectTrigger className="w-44">
                     <SelectValue />
                   </SelectTrigger>
@@ -563,8 +604,9 @@ export function TypographyPage() {
                 max={WINDOW_ZOOM_MAX}
                 step={0.05}
                 value={zoom}
-                onChange={(e) => handleUpdateZoom(Number(e.target.value))}
-                className="w-full accent-primary h-2 bg-input/40 rounded-lg cursor-pointer"
+                onChange={(e) => void requestWindowZoom(Number(e.target.value))}
+                disabled={!desktopZoom}
+                className="w-full accent-primary h-2 bg-input/40 rounded-lg cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="Window zoom range slider"
               />
               <div className="flex items-center gap-1.5 flex-wrap pt-1">
@@ -573,7 +615,8 @@ export function TypographyPage() {
                     key={preset}
                     variant={zoom === preset ? "default" : "secondary"}
                     size="sm"
-                    onClick={() => handleUpdateZoom(preset)}
+                    onClick={() => void requestWindowZoom(preset)}
+                    disabled={!desktopZoom}
                     className="h-7 px-2.5 text-xs font-medium tabular-nums rounded-md"
                   >
                     {Math.round(preset * 100)}%

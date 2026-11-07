@@ -4,6 +4,7 @@ import { isComposing } from "../lib/ime";
 import {
   applyWindowZoom,
   clampWindowZoom,
+  isTauri,
   readWindowZoom,
   WINDOW_ZOOM_PRESETS,
 } from "../lib/platform";
@@ -19,20 +20,19 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Global Window Zoom Controller:
- * 1. Restores the persisted window zoom on startup via `applyWindowZoom(readWindowZoom())`.
- * 2. Handles global keyboard shortcuts:
- *    - Ctrl/Cmd + or Ctrl/Cmd = : step to next preset
- *    - Ctrl/Cmd -               : step to previous preset
- *    - Ctrl/Cmd 0               : restore 100% (1.0)
- *    - Ignored during text editing / IME composition.
- *    - Displays subtle toast with the resulting zoom percentage.
+ * Global Window Zoom Controller (desktop/Tauri only):
+ * 1. Restores the last successfully applied native window zoom on startup.
+ * 2. Handles global keyboard shortcuts (Ctrl/Cmd +, -, 0) by stepping presets.
+ *    - Ignored during text editing / IME composition and on interactive targets.
+ *    - Never intercepts browser-native zoom shortcuts outside Tauri.
+ *    - Shows a success toast only when native zoom is actually applied; reports failures visibly.
  */
 export function ZoomController() {
   useEffect(() => {
-    // Initial startup application
-    const saved = readWindowZoom();
-    applyWindowZoom(saved);
+    if (!isTauri()) return;
+
+    // Restore the last successfully applied native zoom (no toast; fail safely).
+    void applyWindowZoom(readWindowZoom());
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (isComposing(e)) return;
@@ -65,12 +65,17 @@ export function ZoomController() {
       }
 
       next = clampWindowZoom(next);
-      applyWindowZoom(next);
-
-      toast.info(`Zoom: ${Math.round(next * 100)}%`, {
-        id: "window-zoom-toast",
-        duration: 1200,
-      });
+      void (async () => {
+        const applied = await applyWindowZoom(next);
+        if (applied) {
+          toast.info(`Zoom: ${Math.round(next * 100)}%`, {
+            id: "window-zoom-toast",
+            duration: 1200,
+          });
+        } else {
+          toast.error("Could not apply window zoom.", { id: "window-zoom-toast" });
+        }
+      })();
     };
 
     window.addEventListener("keydown", onKeyDown, { capture: true });

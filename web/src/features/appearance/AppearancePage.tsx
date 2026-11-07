@@ -1,5 +1,4 @@
 import { Palette, SlidersHorizontal, SpellCheck2, Type, ArrowRight } from "lucide-react";
-import { useState } from "react";
 import { Link } from "react-router";
 import { SettingRow, SettingsPage, SettingsSection } from "../../components/shared/settings";
 import { Switch } from "../../components/ui/switch";
@@ -16,7 +15,8 @@ export function AppearancePage() {
   const { themeIds, setThemeId } = useTheme();
   const chatWidth = useDesktopLayout((s) => s.chatWidth);
   const setChatWidth = useDesktopLayout((s) => s.setChatWidth);
-  const [spellCheck, setSpellCheck] = useState<boolean>(true);
+  const spellCheck = useDesktopLayout((s) => s.spellCheck);
+  const setSpellCheck = useDesktopLayout((s) => s.setSpellCheck);
 
   return (
     <SettingsPage

@@ -241,6 +241,28 @@ export const WINDOW_ZOOM_PRESETS = [0.8, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.
 export const WINDOW_ZOOM_MIN = 0.8;
 export const WINDOW_ZOOM_MAX = 3.0;
 
+/** Same-document notification (the `storage` event does not fire in the writing document). */
+export const WINDOW_ZOOM_CHANGED_EVENT = "tbai:window-zoom-changed";
+
+export function notifyWindowZoomChanged(zoom: number): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(WINDOW_ZOOM_CHANGED_EVENT, { detail: { zoom: clampWindowZoom(zoom) } }),
+  );
+}
+
+export function onWindowZoomChange(listener: (zoom: number) => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (e: Event) => {
+    const detail = (e as CustomEvent<{ zoom?: number }>).detail;
+    if (detail && typeof detail.zoom === "number" && Number.isFinite(detail.zoom)) {
+      listener(clampWindowZoom(detail.zoom));
+    }
+  };
+  window.addEventListener(WINDOW_ZOOM_CHANGED_EVENT, handler);
+  return () => window.removeEventListener(WINDOW_ZOOM_CHANGED_EVENT, handler);
+}
+
 export function clampWindowZoom(val: number): number {
   if (!Number.isFinite(val)) return DEFAULT_WINDOW_ZOOM;
   return Math.min(WINDOW_ZOOM_MAX, Math.max(WINDOW_ZOOM_MIN, Math.round(val * 100) / 100));
@@ -269,17 +291,18 @@ export function writeWindowZoom(zoom: number): void {
 }
 
 /**
- * Applies window zoom scale factor (0.8 - 3.0) via Tauri 2 getCurrentWebview().setZoom(factor).
- * Saves to local persistence regardless of environment.
- * In desktop mode (Tauri), applies native webview zoom immediately.
+ * Applies native window zoom (0.8 - 3.0) via Tauri 2 getCurrentWebview().setZoom(factor).
+ * Desktop (Tauri) only: persists and notifies same-window listeners ONLY after a successful
+ * native apply. Returns false (and does not persist) in browser mode or when native zoom fails.
  */
 export async function applyWindowZoom(zoom: number): Promise<boolean> {
   const clamped = clampWindowZoom(zoom);
-  writeWindowZoom(clamped);
   if (!isTauri()) return false;
   try {
     const { getCurrentWebview } = await import("@tauri-apps/api/webview");
     await getCurrentWebview().setZoom(clamped);
+    writeWindowZoom(clamped);
+    notifyWindowZoomChanged(clamped);
     return true;
   } catch {
     return false;
