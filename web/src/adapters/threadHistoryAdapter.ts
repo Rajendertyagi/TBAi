@@ -95,8 +95,10 @@ function retainedHistory<T>(remoteId: string): T[] {
 
 /** Drop retained history projections (recovery forces fresh reads). */
 export function invalidateHistoryCache(remoteId?: string): void {
-  // The bounded window is a retained projection too: coordinated recovery must
-  // force a fresh read, so a stale window cannot outlive the cache it replaced.
+  // The bounded window is a retained projection too, so it is invalidated here
+  // as well - but invalidation marks a COMMITTED window stale rather than
+  // deleting it, because the mounted runtime cannot reload. The next mount
+  // re-reads authoritatively (see `clearAllWindowControllers`).
   logger.info("chat", "history.cache_invalidated", {
     remoteId: remoteId ?? null,
     scope: remoteId ? "single" : "all",

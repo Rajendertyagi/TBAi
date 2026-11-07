@@ -240,6 +240,7 @@ export function AppearancePage() {
               </h3>
               <p className="text-3xs text-muted-foreground">
                 Fonts and weights applied across navigation, messages, dialogs, and controls.
+                Compact metadata scales with the interface size and never drops below 9px.
               </p>
             </div>
             <Button
@@ -275,7 +276,7 @@ export function AppearancePage() {
 
           <SettingRow
             label="Interface font size"
-            description={`Actual font size for interface text (${typography.interfaceFontSize}px). Standard is 16px. Does not scale layout or spacing.`}
+            description={`Actual font size for interface text (${typography.interfaceFontSize}px). Standard is 16px; the minimum is 14px. Does not scale layout or spacing.`}
           >
             <PxSizeSlider
               value={typography.interfaceFontSize}
@@ -416,7 +417,8 @@ export function AppearancePage() {
               </h3>
               <p className="text-3xs text-muted-foreground">
                 Fonts, weights, and sizing for captured command output (run_command, OpenCode
-                bash/shell).
+                bash/shell), including exit and timeout lines. Status pills and badges stay on the
+                fixed monospace metadata channel.
               </p>
             </div>
             <Button
@@ -431,7 +433,7 @@ export function AppearancePage() {
 
           <SettingRow
             label="Terminal font"
-            description="Monospace font family used for captured terminal output."
+            description="Monospace font family used for captured terminal output, including exit and timeout lines."
           >
             <Select
               value={typography.terminalFontFamily}
@@ -452,7 +454,7 @@ export function AppearancePage() {
 
           <SettingRow
             label="Terminal font size"
-            description={`Independent size for terminal output (${typography.terminalFontSize}px). Standard is 12px.`}
+            description={`Independent size for terminal output, including exit and timeout lines (${typography.terminalFontSize}px). Standard is 12px.`}
           >
             <PxSizeSlider
               value={typography.terminalFontSize}
@@ -469,7 +471,7 @@ export function AppearancePage() {
             description={
               effectiveTerminalWeight !== typography.terminalFontWeight
                 ? `Requested ${typography.terminalFontWeight}, clamped to ${effectiveTerminalWeight} by font capability.`
-                : "Weight applied to terminal output."
+                : "Weight applied to terminal output, including exit and timeout lines."
             }
           >
             <Select

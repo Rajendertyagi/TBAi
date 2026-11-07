@@ -8889,8 +8889,24 @@ against 2.2.0 (against 2.1.2 on a runner it was 5 pass / 3 fail, RT-013).
 
 ### Typography Standardization (Revision 5, 2026-11-06)
 
-Seven visible outcomes and architectural dispositions D-0 through D-13 approved
-under Revision 5 specification:
+**Authority.** Revision 5 is the authoritative specification for this work, approved
+2026-11-06. It is an external document and is **not committed to this repository**;
+there is no in-repo Revision 5 file. This section records the outcomes that were
+implemented and verified here — it is not a copy of the specification, and the
+specification's full disposition list is not reproduced.
+
+**On the D-numbering.** The in-repo audit
+(`docs/2026-11-05-typography-consistency-audit.md`) records confirmed defects as
+D-1 through D-8. Revision 5 dispositions those and carries its own, wider
+disposition list (D-0 through D-13). The two numberings are not the same list:
+the audit's D-1/D-2/D-3 are dispositioned by outcome 7 below, the audit's D-5 by
+outcome 6, and the audit's D-6 by outcome 2. The remaining Revision 5 dispositions
+(D-0, D-4, D-7, D-8 and D-9 through D-13) are recorded in the Revision 5
+specification itself, which is not in this repository; they are not restated here
+and must not be inferred from the audit's numbering. Where this section and the
+audit disagree, Revision 5 governs.
+
+Seven visible outcomes and the architectural dispositions approved under Revision 5:
 
 - **1. Interface minimum 14px; migrate saved 12/13 to 14 (Option A):**
   Interface font size floor is 14px (slider range 14–24px). Preset buttons:
@@ -8914,8 +8930,9 @@ under Revision 5 specification:
   rather than interface `text-xs`. Truncation status notices and permission
   grants remain on interface or fixed-mono channels.
 - **6. Terminal exit/timeout lines follow Terminal Font:**
-  Lines of terminal output follow `--terminal-font-*`; status pills and badges
-  remain compact metadata.
+  Exit and timeout lines follow `--terminal-font-*`; status pills and badges
+  remain compact metadata on the fixed monospace channel (`--font-mono`), which
+  no setting writes.
 - **7. Scale-responsive compact metadata with a 9px floor:**
   The literal-pixel inventory (25 migrated, 1 investigated control, 2 geometry
   exceptions kept) scales with `--interface-font-size`. `text-3xs` is floored

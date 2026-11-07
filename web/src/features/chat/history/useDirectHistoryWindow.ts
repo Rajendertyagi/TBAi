@@ -98,6 +98,18 @@ export type RowDecoder = (stored: StoredRow) => { parentId: string | null; messa
 type ControllerSlot = {
   /** Assigned immediately after construction; read only once it exists. */
   controller?: WindowController;
+  /**
+   * Coordinated recovery invalidated this window while it was registered.
+   *
+   * It is deliberately NOT deleted: `useExternalHistory` latches `load()` per
+   * mount, so the CURRENT mount can never build a replacement. The committed
+   * rows are the only window that mount has, and deleting them leaves the
+   * transcript rendering from runtime memory while `Load earlier` disappears
+   * (its visibility is derived from the controller) with no reload able to
+   * bring it back. A stale slot therefore keeps serving the current mount and
+   * the next `ensureWindowController` replaces it with an authoritative read.
+   */
+  stale?: boolean;
 };
 
 const controllers = new Map<string, ControllerSlot>();
@@ -213,7 +225,11 @@ export function ensureWindowController(
   decode: RowDecoder,
 ): WindowController {
   const existing = controllers.get(conversationId);
-  if (existing?.controller) return existing.controller;
+  if (existing?.controller && !existing.stale) return existing.controller;
+  // A stale slot is replaced, not deleted: the mount that built it keeps paging
+  // its committed window (see `ControllerSlot.stale`), while THIS mount takes
+  // ownership and re-reads SQLite. The replacement starts with no rows, so the
+  // adapter's initial-load path below fetches a fresh authoritative tip.
 
   const controller = new WindowController({
     limit: DEFAULT_WINDOW_LIMIT,
@@ -272,25 +288,51 @@ export function dropWindowController(conversationId: string): void {
   }
 }
 
-/** Forget every conversation's window (coordinated recovery / full reset). */
+/**
+ * Invalidate every conversation's window (coordinated recovery / full reset).
+ *
+ * Coordinated (availability) recovery must NOT clobber the per-conversation
+ * failure record or the recovery latch: doing so made a failed load silently
+ * render as an empty conversation (the failure row vanished and the re-arm never
+ * fired). The failure record is cleared only by a successful load
+ * (`clearHistoryLoadFailed`) or by deleting the conversation
+ * (`dropWindowController`).
+ *
+ * Committed windows survive as STALE rather than being deleted, because the
+ * mounted runtime cannot reload them (see `ControllerSlot.stale`). What recovery
+ * guarantees is that the NEXT mount re-reads authoritatively.
+ */
 export function clearAllWindowControllers(): void {
   const ids = [...controllers.keys()];
+  let staleCount = 0;
   logger.info("chat", "history.all_controllers_cleared", { count: ids.length, ids });
   for (const id of ids) {
-    // Coordinated (availability) recovery drops the window projection (so the
-    // next load re-reads authoritatively) but must NOT clobber the
-    // per-conversation failure record or the recovery latch: doing so made a
-    // failed load silently render as an empty conversation (the failure row
-    // vanished and the re-arm never fired). The failure record is cleared only
-    // by a successful load (clearHistoryLoadFailed) or by deleting the
-    // conversation (dropWindowController).
-    //
+    const slot = controllers.get(id);
+    const controller = slot?.controller;
+    endHistoryReload(id);
+
+    // A controller that has COMMITTED rows is still the only window the CURRENT
+    // mount can render. `useExternalHistory` latches `load()` per mount, so
+    // recovery cannot hand that mount a replacement: deleting the slot leaves the
+    // transcript populated from runtime memory while `Load earlier` (derived from
+    // the controller) disappears, and nothing can bring it back. So it is KEPT
+    // and marked stale instead: the current mount keeps paging its committed
+    // window, and the next `ensureWindowController` replaces it with an
+    // authoritative read. Its UI snapshot is left untouched for the same reason -
+    // it describes a window that is still on screen.
+    if (slot && controller && controller.rows().length > 0) {
+      controllers.set(id, { ...slot, stale: true });
+      staleCount += 1;
+      continue;
+    }
+
+    // Nothing committed yet (or nothing built): dropping is safe, and a late
+    // load still re-adopts the controller through `publishWindowUiFor`.
+    controllers.delete(id);
+    activities.delete(id);
     // The ui snapshot is retained (not deleted) so its `loadFailed` flag
     // survives; only the paging fields are reset, so a stale "Load earlier"
     // control cannot outlive the controller it pointed at.
-    endHistoryReload(id);
-    controllers.delete(id);
-    activities.delete(id);
     const prev = uiSnapshots.get(id);
     if (prev) {
       uiSnapshots.set(id, {
@@ -301,6 +343,9 @@ export function clearAllWindowControllers(): void {
         revision: prev.revision + 1,
       });
     }
+  }
+  if (staleCount > 0) {
+    logger.info("chat", "history.controllers_staled", { count: staleCount });
   }
   resetHistoryVisit();
   for (const listener of uiListeners) listener();
@@ -590,7 +635,12 @@ export function publishWindowUi(conversationId: string, controller: WindowContro
  * with nothing put back yet, and those two demand opposite responses.
  */
 export type WindowControllerStanding =
-  /** Registered and identical: its state is authoritative. */
+  /**
+   * Registered and identical: its state is authoritative for the mounted
+   * consumer. A slot that recovery marked stale still classifies here while it
+   * remains registered - it is the window the current mount is rendering and
+   * paging, and replacement hands that mount a different controller instead.
+   */
   | "current"
   /** Dropped, and nothing has replaced it: its freshly fetched window is the newest. */
   | "orphaned"
@@ -618,23 +668,25 @@ export function windowControllerStanding(
  * Publish UI state on behalf of a controller that may have been invalidated while
  * an asynchronous operation was in flight.
  *
- * Coordinated recovery drops every controller (`clearAllWindowControllers`), but a
- * load already in flight still holds its controller in a closure and publishes
- * with it when it settles. Publishing unconditionally resurrects paging state for
- * a controller nobody owns any more: the UI renders a "Load earlier" control whose
- * handler resolves no controller and silently does nothing.
+ * Coordinated recovery drops uncommitted controllers and stale-marks committed
+ * ones (`clearAllWindowControllers`), and a load already in flight still holds
+ * its controller in a closure and publishes with it when it settles. Publishing
+ * unconditionally resurrects paging state for a controller nobody owns any more:
+ * the UI renders a "Load earlier" control whose handler resolves no controller
+ * and silently does nothing.
  *
  * Two outcomes, and the difference matters:
  *
  *  - **Superseded.** A different controller is registered for this conversation.
  *    The late completion is stale in the strict sense and must NOT publish: it
  *    would clobber newer, authoritative state.
- *  - **Orphaned.** Nothing is registered â€” recovery dropped the controller and no
- *    replacement has been built. The window this load just fetched is the freshest
- *    thing that exists for the conversation, and `useExternalHistory` latches
- *    `load()` per mount, so discarding it would leave the transcript populated but
- *    permanently unpageable. It is re-adopted and published, which is what keeps
- *    the conversation usable instead of merely hiding the control.
+ *  - **Orphaned.** Nothing is registered - recovery dropped an uncommitted
+ *    controller and no replacement has been built. The window this load just
+ *    fetched is the freshest thing that exists for the conversation, and
+ *    `useExternalHistory` latches `load()` per mount, so discarding it would leave
+ *    the transcript populated but permanently unpageable. It is re-adopted and
+ *    published, which is what keeps the conversation usable instead of merely
+ *    hiding the control.
  *
  * @returns Whether state was published.
  */

@@ -77,12 +77,12 @@ is not stylistic:
   `bun run test` scopes to `./tests/unit ./tests/integration` and excludes the
   three lifecycle test files (`shutdown-lifecycle`, `startup-rollback`,
   `lifecycle-integration`), giving 319. Bare `bun test` collects all 322
-  unit/integration files, plus the 50 DOM contract files, plus the 45 E2E
-  Playwright specs in `tests/e2e`: 322 + 50 + 45 = 417.
+  unit/integration files, plus the 50 DOM contract files, plus the 50 E2E
+  Playwright specs in `tests/e2e`: 322 + 50 + 50 = 422.
   The DOM files need `--preload ./tests/setup/dom-preload.ts` and fail
   without it (measured: 18 fail, 8 errors). The E2E specs are named
-  `*.spec.ts`, which bare `bun test` collects; they are the 45 on disk
-  (39 non-live + 6 `*-live`).
+  `*.spec.ts`, which bare `bun test` collects; they are the 50 on disk
+  (43 non-live + 7 `*-live`).
   The totals move as tests are added; the argument rests on the named
   groups, not on a fixed difference.
 - Without `--isolate` the shared test database cascades "Database has closed",
@@ -128,11 +128,12 @@ the kind of check that passes while the thing it names has drifted.
 The E2E job is separate and deliberately has no `needs:` on it, so an E2E failure
 cannot be misread as a backend or typecheck failure. Because jobs do not share a
 filesystem, that job builds for itself rather than relying on the `verify` job's
-artifact. **The `e2e` job is scoped to seven specs**, listed explicitly in
+artifact. **The `e2e` job is scoped to nine specs**, listed explicitly in
 `.github/workflows/tests.yml` (the file that owns the list):
 `p2-history-load-recovery.spec.ts`, `p2-direct-history-window.spec.ts`,
 `p2-paging.spec.ts`, `p2-live-runtime.spec.ts`, `p2-tool-result-persistence.spec.ts`,
-`phase-8-tabs-navigation.spec.ts` and `opencode/opencode-v2-code-route.spec.ts`.
+`phase-8-tabs-navigation.spec.ts`, `opencode/opencode-v2-code-route.spec.ts`,
+`appearance-scaling.spec.ts` and `typography-standardization.spec.ts`.
 The first six are the conversation-history and tool-persistence specs, where a
 silent stale-bundle run does the most damage. The Code-mode spec is the only
 browser-level coverage of the OpenCode runtime: it drives the real managed
@@ -141,11 +142,13 @@ real hydration. It needs the pinned CLI, so the job installs it with the same
 `./.github/actions/install-opencode` composite action `verify` uses; the version
 and its integrity hash live once, in the workflow's `env`. The spec needs no
 model credentials - a runner without them exercises the refusal surface instead
-of the model.
+of the model. The last two are the typography/scaling rendered-behaviour specs.
 The remaining specs on disk are pre-existing work in progress and are not gated
 here; widening this list is a deliberate decision, not an oversight. The
-scoped list is **not** the full E2E suite: 45 specs live on disk
-(39 non-live + 6 `*-live`), and the `e2e` job runs only the seven above.
+scoped list is **not** the full E2E suite: 50 specs live on disk
+(43 non-live + 7 `*-live`), and the `e2e` job runs only the nine above.
+`docs/e2e-spec-inventory.md` records the per-spec classification and the rule
+for widening the list.
 
 A fourth CI job, **`e2e-big-pickle`**, is dispatch-only: it runs only when
 triggered via `workflow_dispatch` with the `live_opencode` boolean input set to
