@@ -290,21 +290,124 @@ export function writeWindowZoom(zoom: number): void {
   }
 }
 
+export type WindowZoomRequestStatus = "applied" | "failed" | "superseded";
+
+export interface WindowZoomRequestResult {
+  status: WindowZoomRequestStatus;
+  /** The clamped zoom target this request asked to apply. */
+  zoom: number;
+}
+
+// Centralized, latest-wins zoom ordering shared by all callers (Typography page, global
+// shortcuts). Native setZoom, persistence, and same-window notifications only commit for the
+// latest requested intent; superseded/failed requests never persist or notify a false success.
+let zoomSeq = 0;
+let latestZoomId = 0;
+let latestRequestedZoom: number | null = null;
+let zoomWorker: Promise<void> | null = null;
+const zoomPending = new Map<
+  number,
+  { zoom: number; resolve: (result: WindowZoomRequestResult) => void }
+>();
+
+/** Latest requested zoom target (if any), otherwise the last confirmed/persisted zoom. */
+export function getTargetWindowZoom(): number {
+  return latestRequestedZoom ?? readWindowZoom();
+}
+
+function settleZoomRequest(id: number, result: WindowZoomRequestResult): void {
+  const entry = zoomPending.get(id);
+  if (!entry) return;
+  zoomPending.delete(id);
+  entry.resolve(result);
+}
+
+function supersedeZoomRequestsExcept(keepId: number): void {
+  for (const [id, entry] of Array.from(zoomPending.entries())) {
+    if (id === keepId) continue;
+    zoomPending.delete(id);
+    entry.resolve({ status: "superseded", zoom: entry.zoom });
+  }
+}
+
+async function runZoomWorker(): Promise<void> {
+  try {
+    while (latestZoomId !== 0 && zoomPending.has(latestZoomId)) {
+      const targetId = latestZoomId;
+      const target = zoomPending.get(targetId);
+      if (!target) break;
+      const targetZoom = target.zoom;
+
+      let applied = false;
+      if (isTauri()) {
+        try {
+          const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+          await getCurrentWebview().setZoom(targetZoom);
+          applied = true;
+        } catch {
+          applied = false;
+        }
+      }
+
+      // A newer request arrived while the native call was in flight: never persist/notify this
+      // intermediate result; converge by applying the latest target next.
+      if (latestZoomId !== targetId) {
+        settleZoomRequest(targetId, { status: "superseded", zoom: targetZoom });
+        continue;
+      }
+
+      if (applied) {
+        writeWindowZoom(targetZoom);
+        notifyWindowZoomChanged(targetZoom);
+        latestRequestedZoom = targetZoom;
+        supersedeZoomRequestsExcept(targetId);
+        settleZoomRequest(targetId, { status: "applied", zoom: targetZoom });
+      } else {
+        latestRequestedZoom = readWindowZoom();
+        supersedeZoomRequestsExcept(targetId);
+        settleZoomRequest(targetId, { status: "failed", zoom: targetZoom });
+      }
+    }
+  } finally {
+    // Resolve any orphaned pending requests defensively.
+    for (const [id, entry] of Array.from(zoomPending.entries())) {
+      zoomPending.delete(id);
+      entry.resolve({ status: "superseded", zoom: entry.zoom });
+    }
+    if (latestZoomId === 0 || !zoomPending.has(latestZoomId)) {
+      latestRequestedZoom = null;
+    }
+    zoomWorker = null;
+  }
+}
+
 /**
- * Applies native window zoom (0.8 - 3.0) via Tauri 2 getCurrentWebview().setZoom(factor).
- * Desktop (Tauri) only: persists and notifies same-window listeners ONLY after a successful
- * native apply. Returns false (and does not persist) in browser mode or when native zoom fails.
+ * Requests a native window zoom (0.8 - 3.0) with centralized latest-wins ordering.
+ * Desktop (Tauri) only: persists and notifies same-window listeners ONLY after a confirmed
+ * native apply of the latest requested intent. Returns applied/failed/superseded; superseded
+ * and failed requests never persist or report a false success.
+ */
+export function requestWindowZoom(zoom: number): Promise<WindowZoomRequestResult> {
+  const clamped = clampWindowZoom(zoom);
+  if (!isTauri()) {
+    return Promise.resolve({ status: "failed", zoom: clamped });
+  }
+  const id = ++zoomSeq;
+  latestZoomId = id;
+  latestRequestedZoom = clamped;
+  return new Promise<WindowZoomRequestResult>((resolve) => {
+    zoomPending.set(id, { zoom: clamped, resolve });
+    if (!zoomWorker) {
+      zoomWorker = runZoomWorker();
+    }
+  });
+}
+
+/**
+ * Applies native window zoom with centralized ordering. Returns true only when this request's
+ * zoom was confirmed applied (not when superseded or failed).
  */
 export async function applyWindowZoom(zoom: number): Promise<boolean> {
-  const clamped = clampWindowZoom(zoom);
-  if (!isTauri()) return false;
-  try {
-    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-    await getCurrentWebview().setZoom(clamped);
-    writeWindowZoom(clamped);
-    notifyWindowZoomChanged(clamped);
-    return true;
-  } catch {
-    return false;
-  }
+  const result = await requestWindowZoom(zoom);
+  return result.status === "applied";
 }

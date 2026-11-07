@@ -1,5 +1,5 @@
 import { RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -31,16 +31,17 @@ import {
   type TypographyConfig,
 } from "./typography";
 import {
-  applyWindowZoom,
   clampWindowZoom,
   DEFAULT_WINDOW_ZOOM,
   isTauri,
   onWindowZoomChange,
   readWindowZoom,
+  requestWindowZoom as requestPlatformWindowZoom,
   WINDOW_ZOOM_MAX,
   WINDOW_ZOOM_MIN,
   WINDOW_ZOOM_PRESETS,
   WINDOW_ZOOM_STORAGE_KEY,
+  type WindowZoomRequestResult,
 } from "@/lib/platform";
 import { SyntaxHighlighter } from "@/components/assistant-ui/elements/shiki-highlighter";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
@@ -107,8 +108,6 @@ export function TypographyPage() {
   const [typography, setTypography] = useState<TypographyConfig>(readTypography);
   const [zoom, setZoom] = useState<number>(readWindowZoom);
   const desktopZoom = isTauri();
-  // Latest-request-safe: only the most recent zoom request may update displayed state.
-  const zoomRequestId = useRef(0);
 
   // Sync confirmed window zoom from same-window changes (shortcuts/other controls) and other tabs.
   useEffect(() => {
@@ -135,21 +134,24 @@ export function TypographyPage() {
   }, []);
 
   const requestWindowZoom = useCallback(
-    async (newZoom: number, opts?: { reportFailure?: boolean }): Promise<boolean> => {
-      const clamped = clampWindowZoom(newZoom);
-      if (!desktopZoom) return false;
-      const requestId = ++zoomRequestId.current;
-      const applied = await applyWindowZoom(clamped);
-      if (requestId !== zoomRequestId.current) return applied;
-      if (applied) {
-        setZoom(clamped);
-        return true;
+    async (
+      newZoom: number,
+      opts?: { reportFailure?: boolean },
+    ): Promise<WindowZoomRequestResult> => {
+      if (!desktopZoom) {
+        return { status: "failed", zoom: clampWindowZoom(newZoom) };
       }
-      if (opts?.reportFailure !== false) {
-        toast.error("Could not apply window zoom.", { id: "window-zoom-toast" });
+      const result = await requestPlatformWindowZoom(newZoom);
+      if (result.status === "applied") {
+        setZoom(result.zoom);
+      } else if (result.status === "failed") {
+        if (opts?.reportFailure !== false) {
+          toast.error("Could not apply window zoom.", { id: "window-zoom-toast" });
+        }
+        setZoom(readWindowZoom());
       }
-      setZoom(readWindowZoom());
-      return false;
+      // superseded: a newer request owns ordering/state/toasts; do not report or mutate here.
+      return result;
     },
     [desktopZoom],
   );
@@ -165,11 +167,15 @@ export function TypographyPage() {
       );
       return;
     }
-    const zoomApplied = await requestWindowZoom(DEFAULT_WINDOW_ZOOM, { reportFailure: false });
-    if (zoomApplied) {
+    const zoomResult = await requestWindowZoom(DEFAULT_WINDOW_ZOOM, { reportFailure: false });
+    if (zoomResult.status === "applied") {
       toast.success("Typography and window zoom restored to default.");
-    } else {
+    } else if (zoomResult.status === "failed") {
       toast.error("Typography restored to default. Window zoom could not be reset.");
+    } else {
+      toast.info(
+        "Typography restored to default. Window zoom reset was superseded by a newer change.",
+      );
     }
   };
 

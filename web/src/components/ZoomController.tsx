@@ -2,10 +2,11 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { isComposing } from "../lib/ime";
 import {
-  applyWindowZoom,
   clampWindowZoom,
+  getTargetWindowZoom,
   isTauri,
   readWindowZoom,
+  requestWindowZoom,
   WINDOW_ZOOM_PRESETS,
 } from "../lib/platform";
 
@@ -23,16 +24,17 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
  * Global Window Zoom Controller (desktop/Tauri only):
  * 1. Restores the last successfully applied native window zoom on startup.
  * 2. Handles global keyboard shortcuts (Ctrl/Cmd +, -, 0) by stepping presets.
+ *    - Steps from the latest requested zoom target so rapid presses do not race stale state.
  *    - Ignored during text editing / IME composition and on interactive targets.
  *    - Never intercepts browser-native zoom shortcuts outside Tauri.
- *    - Shows a success toast only when native zoom is actually applied; reports failures visibly.
+ *    - Shows a success toast only when native zoom is actually applied; superseded requests are silent.
  */
 export function ZoomController() {
   useEffect(() => {
     if (!isTauri()) return;
 
     // Restore the last successfully applied native zoom (no toast; fail safely).
-    void applyWindowZoom(readWindowZoom());
+    void requestWindowZoom(readWindowZoom());
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (isComposing(e)) return;
@@ -50,7 +52,8 @@ export function ZoomController() {
 
       e.preventDefault();
 
-      const current = readWindowZoom();
+      // Step from the latest requested target (not only persisted) so rapid shortcuts stay ordered.
+      const current = getTargetWindowZoom();
       let next = current;
 
       if (isZoomReset) {
@@ -66,15 +69,16 @@ export function ZoomController() {
 
       next = clampWindowZoom(next);
       void (async () => {
-        const applied = await applyWindowZoom(next);
-        if (applied) {
-          toast.info(`Zoom: ${Math.round(next * 100)}%`, {
+        const result = await requestWindowZoom(next);
+        if (result.status === "applied") {
+          toast.info(`Zoom: ${Math.round(result.zoom * 100)}%`, {
             id: "window-zoom-toast",
             duration: 1200,
           });
-        } else {
+        } else if (result.status === "failed") {
           toast.error("Could not apply window zoom.", { id: "window-zoom-toast" });
         }
+        // superseded: a newer shortcut won; no misleading toast.
       })();
     };
 
