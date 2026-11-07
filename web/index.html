@@ -91,9 +91,9 @@
             var isAppScale = function (v) { return typeof v === "number" && isFinite(v) && v >= 0.75 && v <= 1.5; };
             var pick = function (map, id, fallback) { return map[id] ? id : fallback; };
 
-            // Normalize to v2 (migrating v1 when needed), mirroring typography.ts.
+            // Normalize to v3 (migrating v2 and v1 when needed), mirroring typography.ts.
             var cfg;
-            if (ty.version === 2) {
+            if (ty.version === 3) {
               cfg = {
                 interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
                 interfaceFontSize: normalizeInterfaceSize(ty.interfaceFontSize),
@@ -101,21 +101,39 @@
                 codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
                 codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
-                codeWordWrap: typeof ty.codeWordWrap === "boolean" ? ty.codeWordWrap : false,
+                codeWordWrap: ty.codeWordWrap === true,
                 terminalFontFamily: pick(MONO_MAP, ty.terminalFontFamily, "jetbrains-mono"),
                 terminalFontSize: isRange(ty.terminalFontSize, 10, 20) ? ty.terminalFontSize : 12,
                 terminalFontWeight: isWeight(ty.terminalFontWeight) ? ty.terminalFontWeight : 400,
-                terminalWrap: typeof ty.terminalWrap === "boolean" ? ty.terminalWrap : true,
-                readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5,
-                appScale: isAppScale(ty.appScale) ? ty.appScale : 1
+                terminalWrap: ty.terminalWrap !== false,
+                readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5
+              };
+            } else if (ty.version === 2) {
+              var normUi = normalizeInterfaceSize(ty.interfaceFontSize);
+              var appScale = isRange(ty.appScale, 0.75, 1.5) ? ty.appScale : 1;
+              var effectiveSize = Math.min(24, Math.max(14, Math.round(normUi * appScale)));
+              cfg = {
+                interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
+                interfaceFontSize: effectiveSize,
+                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 400,
+                codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
+                codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
+                codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
+                codeWordWrap: ty.codeWordWrap === true,
+                terminalFontFamily: pick(MONO_MAP, ty.terminalFontFamily, "jetbrains-mono"),
+                terminalFontSize: isRange(ty.terminalFontSize, 10, 20) ? ty.terminalFontSize : 12,
+                terminalFontWeight: isWeight(ty.terminalFontWeight) ? ty.terminalFontWeight : 400,
+                terminalWrap: ty.terminalWrap !== false,
+                readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5
               };
             } else {
-              // v1 (either historical shape) → v2. baseSize/16 is lossless.
+              // v1 (either historical shape) → v3.
+              var legacyBase = isRange(ty.baseSize, 12, 24) ? Math.max(14, ty.baseSize) : 16;
               var legacyWeight = isWeight(ty.fontWeight) ? ty.fontWeight : 400;
               var legacyMonoWeight = isWeight(ty.monoFontWeight) ? ty.monoFontWeight : legacyWeight;
               cfg = {
                 interfaceFontFamily: pick(FONT_MAP, ty.fontFamily, "inter"),
-                interfaceFontSize: 16,
+                interfaceFontSize: legacyBase,
                 interfaceFontWeight: legacyWeight,
                 codeFontFamily: pick(MONO_MAP, ty.monoFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
@@ -125,8 +143,7 @@
                 terminalFontSize: 12,
                 terminalFontWeight: 400,
                 terminalWrap: true,
-                readingLineHeight: isRange(ty.lineHeight, 1.2, 2.0) ? ty.lineHeight : 1.5,
-                appScale: isRange(ty.baseSize, 12, 24) ? Math.min(1.5, Math.max(0.75, ty.baseSize / 16)) : 1
+                readingLineHeight: isRange(ty.lineHeight, 1.2, 2.0) ? ty.lineHeight : 1.5
               };
             }
 
@@ -135,7 +152,7 @@
             var codeDef = MONO_MAP[cfg.codeFontFamily];
             var termDef = MONO_MAP[cfg.terminalFontFamily];
             if (uiDef) r.style.setProperty("--font-sans", uiDef.stack);
-            r.style.setProperty("--interface-font-size", String(cfg.interfaceFontSize) + "px");
+            r.style.fontSize = String((cfg.interfaceFontSize / 16) * 100) + "%";
             r.style.setProperty("--font-weight-base", String(clampWeight(cfg.interfaceFontWeight, uiDef)));
             if (codeDef) r.style.setProperty("--code-font-family", codeDef.stack);
             r.style.setProperty("--code-font-size", String(cfg.codeFontSize) + "px");
@@ -144,11 +161,9 @@
             r.style.setProperty("--terminal-font-size", String(cfg.terminalFontSize) + "px");
             r.style.setProperty("--terminal-font-weight", String(clampWeight(cfg.terminalFontWeight, termDef)));
             r.style.setProperty("--reading-line-height", String(cfg.readingLineHeight));
-            if (cfg.appScale === 1) {
-              r.style.removeProperty("zoom");
-            } else {
-              r.style.zoom = String(cfg.appScale);
-            }
+            r.style.removeProperty("zoom");
+            r.setAttribute("data-code-wrap", cfg.codeWordWrap ? "on" : "off");
+            r.setAttribute("data-terminal-wrap", cfg.terminalWrap ? "on" : "off");
             r.setAttribute("data-code-wrap", cfg.codeWordWrap ? "on" : "off");
             r.setAttribute("data-terminal-wrap", cfg.terminalWrap ? "on" : "off");
           }

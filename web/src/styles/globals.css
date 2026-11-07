@@ -44,7 +44,6 @@
      paths, token counts and tool metadata use this; code surfaces use
      --code-font-family, terminal output uses --terminal-font-family. */
   --font-weight-base: 400;
-  --interface-font-size: 16px;
   --code-font-family:
     "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --code-font-size: 13px;
@@ -56,7 +55,7 @@
   --reading-line-height: 1.5;
 
   font-family: var(--font-sans);
-  font-size: 16px;
+  font-size: 100%;
   line-height: 1.5;
   font-weight: var(--font-weight-base, 400);
 
@@ -286,39 +285,17 @@
   --shadow-overlay: var(--elevation-overlay);
 }
 
-/* Interface font size scales the rem type scale ONLY — spacing, radius and
-   layout stay fixed (root font-size is 16px). Plain `@theme` (not `inline`):
-   the calc() references a DIFFERENT variable, so there is no cycle, and the
-   emitted :root variable is what utilities reference. The default
-   `--text-*--line-height` tokens are unitless ratios and need no override —
-   they scale proportionally with the font-size automatically. Zero visual
-   change at the 16px default. */
-@theme {
-  --text-xs: calc(var(--interface-font-size) * 0.75);
-  --text-sm: calc(var(--interface-font-size) * 0.875);
-  --text-base: var(--interface-font-size);
-  --text-lg: calc(var(--interface-font-size) * 1.125);
-  --text-xl: calc(var(--interface-font-size) * 1.25);
-  --text-2xl: calc(var(--interface-font-size) * 1.5);
-  --text-3xl: calc(var(--interface-font-size) * 1.875);
-  --text-4xl: calc(var(--interface-font-size) * 2.25);
-  --text-5xl: calc(var(--interface-font-size) * 3);
-  --text-6xl: calc(var(--interface-font-size) * 3.75);
-  --text-7xl: calc(var(--interface-font-size) * 4.5);
-  --text-8xl: calc(var(--interface-font-size) * 6);
-  --text-9xl: calc(var(--interface-font-size) * 8);
+/* Compact text sizes below native Tailwind text-xs (0.75rem / 12px).
+   Sized in rem so they scale naturally with the root interface size. */
+@utility text-2xs {
+  font-size: 0.6875rem; /* 11px @16px */
 }
 
-/* Two sizes below text-xs. Font-size only (no line-height), sized from
-   `--interface-font-size` like the rest of the type scale, so they grow and
-   shrink with the setting instead of being frozen at a fixed pixel value. */
-@utility text-2xs {
-  font-size: calc(var(--interface-font-size) * 0.6875); /* 11px @16px */
-}
-/* 10px @16px, but never below 9px: the smallest tier is a legibility floor,
-   not a value the interface size can drive further down. */
+/* 10px @16px, but never below 9px: max(9px, 0.625rem) enforces a 9px legibility
+   floor at small root sizes (e.g. 14px root = 9px floor), while scaling up
+   proportionally at larger sizes (e.g. 20px root = 12.5px, 24px root = 15px). */
 @utility text-3xs {
-  font-size: max(9px, calc(var(--interface-font-size) * 0.625));
+  font-size: max(9px, 0.625rem);
 }
 
 /* The sidebar folder tile. Geometry and type metrics are fixed here so the

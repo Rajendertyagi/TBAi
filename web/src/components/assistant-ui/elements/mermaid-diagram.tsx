@@ -302,7 +302,13 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({ code, className, streamin
     const run = (render: MermaidRenderer) => {
       if (cancelled) return;
       try {
-        setResult({ svg: render(code, MERMAID_THEME), error: null });
+        const rawSvg = render(code, {
+          ...MERMAID_THEME,
+          font: "Inter",
+        });
+        // Strip the external Google Fonts @import for offline security & performance
+        const sanitizedSvg = rawSvg.replace(/@import\s+url\([^)]+\);\s*/gi, "");
+        setResult({ svg: sanitizedSvg, error: null });
       } catch (err) {
         setResult({
           svg: null,

@@ -22,6 +22,9 @@ import { useTheme } from "./theme-provider";
  * an inline style cannot contain a media query. See `styles/globals.css`.
  */
 const TOAST_SURFACE: CSSProperties = {
+  fontFamily: "var(--font-sans)",
+  fontSize: "0.875rem",
+  lineHeight: "1.25rem",
   backgroundColor: "var(--tbai-toast-surface)",
   borderColor: "transparent",
   backdropFilter: "var(--tbai-toast-backdrop)",

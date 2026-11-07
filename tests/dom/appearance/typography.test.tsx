@@ -6,7 +6,6 @@ import {
   applyTypographyToDom,
   DEFAULT_TYPOGRAPHY,
   readTypography,
-  resetApplicationScale,
   resetCodeTypography,
   resetInterfaceTypography,
   resetReadingTypography,
@@ -133,7 +132,7 @@ function codeFontSelectorGroups(): string[][] {
 
 function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConfig {
   return {
-    version: 2,
+    version: 3,
     interfaceFontFamily: "roboto",
     interfaceFontSize: 18,
     interfaceFontWeight: 700,
@@ -146,7 +145,6 @@ function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConf
     terminalFontWeight: 600,
     terminalWrap: false,
     readingLineHeight: 1.65,
-    appScale: 1.125,
     ...overrides,
   };
 }
@@ -180,7 +178,7 @@ describe("applyTypographyToDom — variable ownership", () => {
     }
 
     expect(written).toContain("--font-sans");
-    expect(written).toContain("--interface-font-size");
+    expect(written).toContain("font-size");
     expect(written).toContain("--font-weight-base");
     expect(written).toContain("--code-font-family");
     expect(written).toContain("--code-font-size");
@@ -204,9 +202,9 @@ describe("applyTypographyToDom — variable ownership", () => {
     expect(document.documentElement.getAttribute("data-terminal-wrap")).toBe("on");
   });
 
-  it("applies the interface font size as an actual font-size variable", () => {
+  it("applies the interface font size as root rem font-size", () => {
     applyTypographyToDom(customConfig({ interfaceFontSize: 20 }));
-    expect(rootStyle().getPropertyValue("--interface-font-size")).toBe("20px");
+    expect(rootStyle().fontSize).toBe("125%");
   });
 
   it("applies the reading line height variable", () => {
@@ -254,12 +252,6 @@ describe("applyTypographyToDom — variable ownership", () => {
     expect(rootStyle().getPropertyValue("--reading-line-height")).toBe(
       String(DEFAULT_TYPOGRAPHY.readingLineHeight),
     );
-
-    // Application scale reset: font variables are untouched.
-    applyTypographyToDom(customConfig());
-    resetApplicationScale(customConfig());
-    expect(rootStyle().getPropertyValue("--code-font-family")).toBe(custom.codeFamily);
-    expect(rootStyle().getPropertyValue("--terminal-font-family")).toBe(custom.terminalFamily);
   });
 });
 
@@ -328,15 +320,14 @@ describe("globals.css — ownership rules (source-text guards)", () => {
     );
   });
 
-  it("overrides the rem type scale from the interface font size (plain @theme)", () => {
-    expect(globalsCss).toContain("--text-sm: calc(var(--interface-font-size) * 0.875)");
-    expect(globalsCss).toContain("--text-base: var(--interface-font-size)");
-    // Line-height tokens are unitless ratios and must NOT be overridden.
-    expect(globalsCss).not.toContain("--text-sm--line-height:");
+  it("preserves native Tailwind rem type scale and drops manual @theme calc overrides", () => {
+    expect(globalsCss).not.toContain("--text-sm: calc(");
+    expect(globalsCss).not.toContain("--text-base: var(--interface-font-size)");
+    expect(globalsCss).not.toContain("--interface-font-size");
   });
 
-  it("keeps root font-size fixed at 16px", () => {
-    expect(globalsCss).toMatch(/:root\s*\{[^}]*font-size:\s*16px/);
+  it("keeps root font-size at 100% in stylesheet", () => {
+    expect(globalsCss).toMatch(/:root\s*\{[^}]*font-size:\s*100%/);
   });
 
   it("no longer contains the dead .aui-code-diff or .ai-message-content rules", () => {
@@ -407,9 +398,9 @@ describe("globals.css — payload and terminal-line classification", () => {
     expect(selectors).not.toContain("code");
   });
 
-  it("floors text-3xs at 9px while keeping it scale-driven", () => {
+  it("floors text-3xs at 9px while keeping it rem-based", () => {
     expect(globalsCss).toMatch(
-      /@utility text-3xs\s*\{\s*font-size:\s*max\(9px,\s*calc\(var\(--interface-font-size\)\s*\*\s*0\.625\)\)/,
+      /@utility text-3xs\s*\{\s*font-size:\s*max\(9px,\s*0\.625rem\)/,
     );
   });
 });
@@ -490,13 +481,20 @@ describe("typography bootstrap — executable parity with readTypography", () =>
   }
 
   /** Run the shipped pre-paint script against a fake root and return its writes. */
-  function runBootstrap(stored: unknown): Map<string, string> {
+  function runBootstrap(stored: unknown): { writes: Map<string, string>; rootFontSize: string } {
     const writes = new Map<string, string>();
+    let rootFontSize = "";
     const documentStub = {
       documentElement: {
         style: {
           setProperty: (name: string, value: string) => writes.set(name, value),
           removeProperty: () => {},
+          set fontSize(value: string) {
+            rootFontSize = value;
+          },
+          get fontSize() {
+            return rootFontSize;
+          },
           zoom: "",
         },
         setAttribute: (name: string, value: string) => writes.set(`@${name}`, value),
@@ -508,7 +506,7 @@ describe("typography bootstrap — executable parity with readTypography", () =>
     };
     // The shipped script is a static, repository-authored IIFE-free block.
     new Function("localStorage", "document", bootstrapSource())(storageStub, documentStub);
-    return writes;
+    return { writes, rootFontSize };
   }
 
   it("agrees with readTypography for every boundary input", () => {
@@ -517,8 +515,8 @@ describe("typography bootstrap — executable parity with readTypography", () =>
       const stored = { ...DEFAULT_TYPOGRAPHY, interfaceFontSize: size };
       window.localStorage.setItem("tbai-typography", JSON.stringify(stored));
       const hydrated = readTypography().interfaceFontSize;
-      const prePaint = runBootstrap(stored).get("--interface-font-size");
-      expect(prePaint, `stored ${size}`).toBe(`${hydrated}px`);
+      const prePaint = runBootstrap(stored).rootFontSize;
+      expect(prePaint, `stored ${size}`).toBe(`${(hydrated / 16) * 100}%`);
     }
     window.localStorage.removeItem("tbai-typography");
   });
@@ -526,12 +524,12 @@ describe("typography bootstrap — executable parity with readTypography", () =>
   it("paints a stored 12 at 14px, identical before and after hydration", () => {
     const stored = { ...DEFAULT_TYPOGRAPHY, interfaceFontSize: 12 };
     window.localStorage.setItem("tbai-typography", JSON.stringify(stored));
-    const prePaint = runBootstrap(stored).get("--interface-font-size");
+    const prePaint = runBootstrap(stored).rootFontSize;
 
     applyTypographyToDom(readTypography());
-    const postHydration = document.documentElement.style.getPropertyValue("--interface-font-size");
+    const postHydration = document.documentElement.style.fontSize;
 
-    expect(prePaint).toBe("14px");
+    expect(prePaint).toBe(`${(14 / 16) * 100}%`);
     expect(postHydration).toBe(prePaint);
     window.localStorage.removeItem("tbai-typography");
   });

@@ -2,15 +2,12 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  APP_SCALE_CONFIG,
   clampWeightForFont,
   DEFAULT_TYPOGRAPHY,
-  formatAppScale,
   getFont,
   INTERFACE_FONT_SIZE_CONFIG,
   MONO_FONTS,
   readTypography,
-  resetApplicationScale,
   resetCodeTypography,
   resetInterfaceTypography,
   resetReadingTypography,
@@ -26,7 +23,7 @@ const STORAGE_KEY = "tbai-typography";
 
 function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConfig {
   return {
-    version: 2,
+    version: 3,
     interfaceFontFamily: "roboto",
     interfaceFontSize: 18,
     interfaceFontWeight: 700,
@@ -39,7 +36,6 @@ function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConf
     terminalFontWeight: 600,
     terminalWrap: false,
     readingLineHeight: 1.65,
-    appScale: 1.125,
     ...overrides,
   };
 }
@@ -72,7 +68,7 @@ function readStoredTypography(record: unknown): TypographyConfig {
   }
 }
 
-describe("Typography config, storage & scoped resets (v2)", () => {
+describe("Typography config, storage & scoped resets (v3)", () => {
   beforeEach(() => {
     if (typeof window !== "undefined" && window.localStorage) {
       window.localStorage.clear();
@@ -80,7 +76,7 @@ describe("Typography config, storage & scoped resets (v2)", () => {
   });
 
   it("returns default typography when storage is empty", () => {
-    expect(DEFAULT_TYPOGRAPHY.version).toBe(2);
+    expect(DEFAULT_TYPOGRAPHY.version).toBe(3);
     expect(DEFAULT_TYPOGRAPHY.interfaceFontFamily).toBe("inter");
     expect(DEFAULT_TYPOGRAPHY.interfaceFontSize).toBe(16);
     expect(DEFAULT_TYPOGRAPHY.interfaceFontWeight).toBe(400);
@@ -93,7 +89,6 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(DEFAULT_TYPOGRAPHY.terminalFontWeight).toBe(400);
     expect(DEFAULT_TYPOGRAPHY.terminalWrap).toBe(true);
     expect(DEFAULT_TYPOGRAPHY.readingLineHeight).toBe(1.5);
-    expect(DEFAULT_TYPOGRAPHY.appScale).toBe(1);
   });
 
   it("migrates the first v1 shape (no monoFontWeight / codeFontSize) losslessly", () => {
@@ -108,7 +103,7 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
     const config = readTypography();
-    expect(config.version).toBe(2);
+    expect(config.version).toBe(3);
     expect(config.interfaceFontFamily).toBe("roboto");
     expect(config.interfaceFontWeight).toBe(600);
     expect(config.codeFontFamily).toBe("fira-code");
@@ -116,10 +111,8 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(config.codeFontWeight).toBe(600);
     expect(config.codeFontSize).toBe(13);
     expect(config.readingLineHeight).toBe(1.65);
-    // 18 / 16 = 1.125 exactly
-    expect(config.appScale).toBe(1.125);
-    // New fields take defaults
-    expect(config.interfaceFontSize).toBe(16);
+    // baseSize 18 migrated directly to interfaceFontSize
+    expect(config.interfaceFontSize).toBe(18);
     expect(config.codeWordWrap).toBe(false);
     expect(config.terminalFontFamily).toBe("jetbrains-mono");
     expect(config.terminalFontSize).toBe(12);
@@ -141,58 +134,50 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
     const config = readTypography();
+    expect(config.version).toBe(3);
     expect(config.interfaceFontFamily).toBe("outfit");
     expect(config.interfaceFontWeight).toBe(700);
     expect(config.codeFontFamily).toBe("source-code-pro");
     expect(config.codeFontWeight).toBe(300);
     expect(config.codeFontSize).toBe(15);
     expect(config.readingLineHeight).toBe(1.35);
-    // 13 / 16 = 0.8125 exactly (81.25%)
-    expect(config.appScale).toBe(0.8125);
+    // Legacy baseSize 13 maps to 14
+    expect(config.interfaceFontSize).toBe(14);
   });
 
-  it("maps every legacy baseSize to its exact factor", () => {
+  it("migrates v2 records normalizing interfaceFontSize * appScale clamped to 14-24", () => {
     if (typeof window === "undefined" || !window.localStorage) return;
-    const expected: Record<number, number> = {
-      12: 0.75,
-      13: 0.8125,
-      14: 0.875,
-      15: 0.9375,
-      16: 1,
-      17: 1.0625,
-      18: 1.125,
-      19: 1.1875,
-      20: 1.25,
-      21: 1.3125,
-      22: 1.375,
-      23: 1.4375,
-      24: 1.5,
+    const v2Record = {
+      version: 2,
+      interfaceFontFamily: "figtree",
+      interfaceFontSize: 16,
+      interfaceFontWeight: 500,
+      codeFontFamily: "jetbrains-mono",
+      codeFontSize: 14,
+      codeFontWeight: 400,
+      codeWordWrap: true,
+      terminalFontFamily: "jetbrains-mono",
+      terminalFontSize: 12,
+      terminalFontWeight: 400,
+      terminalWrap: true,
+      readingLineHeight: 1.5,
+      appScale: 1.25,
     };
-    for (const [baseSize, appScale] of Object.entries(expected)) {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ version: 1, baseSize: Number(baseSize) }),
-      );
-      expect(readTypography().appScale).toBe(appScale);
-    }
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v2Record));
+    const config = readTypography();
+    expect(config.version).toBe(3);
+    expect(config.interfaceFontFamily).toBe("figtree");
+    // 16 * 1.25 = 20
+    expect(config.interfaceFontSize).toBe(20);
+    expect(config.codeWordWrap).toBe(true);
   });
 
-  it("validates appScale strictly (NaN, out-of-range, wrong type → default)", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    for (const bad of [Number.NaN, 0.5, 2, "1.25", null, undefined, Number.POSITIVE_INFINITY]) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, appScale: bad }));
-      expect(readTypography().appScale).toBe(1);
-    }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, appScale: 1.25 }));
-    expect(readTypography().appScale).toBe(1.25);
-  });
-
-  it("validates every v2 field independently", () => {
+  it("validates every v3 field independently", () => {
     if (typeof window === "undefined" || !window.localStorage) return;
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 3,
         interfaceFontFamily: "not-a-font",
         interfaceFontSize: 99,
         interfaceFontWeight: 42,
@@ -205,10 +190,10 @@ describe("Typography config, storage & scoped resets (v2)", () => {
         terminalFontWeight: 42,
         terminalWrap: "yes",
         readingLineHeight: 99,
-        appScale: 99,
       }),
     );
     const config = readTypography();
+    expect(config.version).toBe(3);
     expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
     expect(config.interfaceFontSize).toBe(16);
     expect(config.interfaceFontWeight).toBe(400);
@@ -221,7 +206,6 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(config.terminalFontWeight).toBe(400);
     expect(config.terminalWrap).toBe(true);
     expect(config.readingLineHeight).toBe(1.5);
-    expect(config.appScale).toBe(1);
   });
 
   it("clamps interface and code weights independently", () => {
@@ -253,33 +237,7 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(clampWeightForFont(600, lato)).toBe(700);
   });
 
-  it("formatAppScale trims trailing zeros", () => {
-    expect(formatAppScale(0.75)).toBe("75%");
-    expect(formatAppScale(0.8125)).toBe("81.25%");
-    expect(formatAppScale(0.875)).toBe("87.5%");
-    expect(formatAppScale(0.9375)).toBe("93.75%");
-    expect(formatAppScale(1)).toBe("100%");
-    expect(formatAppScale(1.0625)).toBe("106.25%");
-    expect(formatAppScale(1.125)).toBe("112.5%");
-    expect(formatAppScale(1.25)).toBe("125%");
-    expect(formatAppScale(1.5)).toBe("150%");
-  });
-
-  it("APP_SCALE_CONFIG step reaches every legacy value exactly", () => {
-    expect(APP_SCALE_CONFIG.min).toBe(0.75);
-    expect(APP_SCALE_CONFIG.max).toBe(1.5);
-    expect(APP_SCALE_CONFIG.step).toBe(0.0625);
-    for (
-      let scale = APP_SCALE_CONFIG.min;
-      scale <= APP_SCALE_CONFIG.max + 1e-9;
-      scale += APP_SCALE_CONFIG.step
-    ) {
-      const rounded = Math.round(scale * 16) / 16;
-      expect(Math.abs(rounded - scale)).toBeLessThan(1e-9);
-    }
-  });
-
-  it("resetInterfaceTypography preserves code, terminal, reading and scale settings", () => {
+  it("resetInterfaceTypography preserves code, terminal and reading settings", () => {
     const reset = resetInterfaceTypography(customConfig());
     expect(reset.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
     expect(reset.interfaceFontSize).toBe(DEFAULT_TYPOGRAPHY.interfaceFontSize);
@@ -294,10 +252,9 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(reset.terminalFontWeight).toBe(600);
     expect(reset.terminalWrap).toBe(false);
     expect(reset.readingLineHeight).toBe(1.65);
-    expect(reset.appScale).toBe(1.125);
   });
 
-  it("resetCodeTypography preserves interface, terminal, reading and scale settings", () => {
+  it("resetCodeTypography preserves interface, terminal and reading settings", () => {
     const reset = resetCodeTypography(customConfig());
     expect(reset.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
     expect(reset.codeFontSize).toBe(DEFAULT_TYPOGRAPHY.codeFontSize);
@@ -312,10 +269,9 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(reset.terminalFontWeight).toBe(600);
     expect(reset.terminalWrap).toBe(false);
     expect(reset.readingLineHeight).toBe(1.65);
-    expect(reset.appScale).toBe(1.125);
   });
 
-  it("resetTerminalTypography preserves interface, code, reading and scale settings", () => {
+  it("resetTerminalTypography preserves interface, code and reading settings", () => {
     const reset = resetTerminalTypography(customConfig());
     expect(reset.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
     expect(reset.terminalFontSize).toBe(DEFAULT_TYPOGRAPHY.terminalFontSize);
@@ -330,28 +286,15 @@ describe("Typography config, storage & scoped resets (v2)", () => {
     expect(reset.codeFontWeight).toBe(300);
     expect(reset.codeWordWrap).toBe(true);
     expect(reset.readingLineHeight).toBe(1.65);
-    expect(reset.appScale).toBe(1.125);
   });
 
-  it("resetReadingTypography preserves interface, code, terminal and scale settings", () => {
+  it("resetReadingTypography preserves interface, code and terminal settings", () => {
     const reset = resetReadingTypography(customConfig());
     expect(reset.readingLineHeight).toBe(DEFAULT_TYPOGRAPHY.readingLineHeight);
     // Preserved:
     expect(reset.interfaceFontFamily).toBe("roboto");
     expect(reset.codeFontFamily).toBe("fira-code");
     expect(reset.terminalFontFamily).toBe("source-code-pro");
-    expect(reset.appScale).toBe(1.125);
-  });
-
-  it("resetApplicationScale preserves interface, code, terminal and reading settings", () => {
-    const reset = resetApplicationScale(customConfig());
-    expect(reset.appScale).toBe(DEFAULT_TYPOGRAPHY.appScale);
-    // Preserved:
-    expect(reset.interfaceFontFamily).toBe("roboto");
-    expect(reset.interfaceFontSize).toBe(18);
-    expect(reset.codeFontFamily).toBe("fira-code");
-    expect(reset.terminalFontFamily).toBe("source-code-pro");
-    expect(reset.readingLineHeight).toBe(1.65);
   });
 
   it("resetTypography restores all factory defaults", () => {
@@ -428,10 +371,9 @@ describe("index.html bootstrap parity", () => {
     expect(html).not.toContain("setProperty('--font-mono'");
   });
 
-  it("bootstrap writes the v2 variables and factor zoom", () => {
+  it("bootstrap writes the v3 variables without zoom", () => {
     for (const variable of [
       "--font-sans",
-      "--interface-font-size",
       "--font-weight-base",
       "--code-font-family",
       "--code-font-size",
@@ -445,7 +387,8 @@ describe("index.html bootstrap parity", () => {
     }
     expect(html).toContain("data-code-wrap");
     expect(html).toContain("data-terminal-wrap");
-    expect(html).toContain("appScale");
+    expect(html).not.toContain("style.zoom");
+    expect(html).toContain("r.style.fontSize");
   });
 });
 

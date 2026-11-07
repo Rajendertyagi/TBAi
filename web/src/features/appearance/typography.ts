@@ -14,7 +14,7 @@
  */
 
 export interface TypographyConfig {
-  version: 2;
+  version: 3;
   // Interface
   interfaceFontFamily: string;
   interfaceFontSize: number;
@@ -31,8 +31,6 @@ export interface TypographyConfig {
   terminalWrap: boolean;
   // Reading
   readingLineHeight: number;
-  // Application scale (factor; UI shows percent)
-  appScale: number;
 }
 
 export interface FontDefinition {
@@ -46,7 +44,7 @@ export interface FontDefinition {
 }
 
 export const DEFAULT_TYPOGRAPHY: TypographyConfig = {
-  version: 2,
+  version: 3,
   interfaceFontFamily: "inter",
   interfaceFontSize: 16,
   interfaceFontWeight: 400,
@@ -59,7 +57,6 @@ export const DEFAULT_TYPOGRAPHY: TypographyConfig = {
   terminalFontWeight: 400,
   terminalWrap: true,
   readingLineHeight: 1.5,
-  appScale: 1,
 };
 
 export const UI_FONTS: readonly FontDefinition[] = [
@@ -300,15 +297,6 @@ function isValidRange(value: unknown, min: number, max: number): value is number
   return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 }
 
-function isValidAppScale(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= APP_SCALE_CONFIG.min &&
-    value <= APP_SCALE_CONFIG.max
-  );
-}
-
 function isValidUiFontId(value: unknown): value is string {
   return typeof value === "string" && UI_FONTS.some((f) => f.id === value);
 }
@@ -349,28 +337,30 @@ function isValidMonoFontId(value: unknown): value is string {
  * 15 → 0.9375 (93.75%), 18 → 1.125 (112.5%).
  */
 function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
-  const interfaceFontWeight = isValidWeight(parsed.fontWeight)
+  const legacyBase = isValidRange(parsed.baseSize, 12, 24)
+    ? Math.max(14, parsed.baseSize)
+    : DEFAULT_TYPOGRAPHY.interfaceFontSize;
+
+  const legacyWeight = isValidWeight(parsed.fontWeight)
     ? parsed.fontWeight
     : DEFAULT_TYPOGRAPHY.interfaceFontWeight;
-  const codeFontWeight = isValidWeight(parsed.monoFontWeight)
+
+  const legacyMonoWeight = isValidWeight(parsed.monoFontWeight)
     ? parsed.monoFontWeight
     : isValidWeight(parsed.fontWeight)
       ? parsed.fontWeight
       : DEFAULT_TYPOGRAPHY.codeFontWeight;
-  const appScale = isValidRange(parsed.baseSize, 12, 24)
-    ? Math.min(APP_SCALE_CONFIG.max, Math.max(APP_SCALE_CONFIG.min, parsed.baseSize / 16))
-    : DEFAULT_TYPOGRAPHY.appScale;
+
+  const uiFont = (isValidUiFontId(parsed.fontFamily) && getFont(parsed.fontFamily)) || UI_FONTS[0]!;
+  const codeFont =
+    (isValidMonoFontId(parsed.monoFontFamily) && getFont(parsed.monoFontFamily)) || MONO_FONTS[0]!;
 
   return {
-    version: 2,
-    interfaceFontFamily: isValidUiFontId(parsed.fontFamily)
-      ? parsed.fontFamily
-      : DEFAULT_TYPOGRAPHY.interfaceFontFamily,
-    interfaceFontSize: DEFAULT_TYPOGRAPHY.interfaceFontSize,
-    interfaceFontWeight,
-    codeFontFamily: isValidMonoFontId(parsed.monoFontFamily)
-      ? parsed.monoFontFamily
-      : DEFAULT_TYPOGRAPHY.codeFontFamily,
+    version: 3,
+    interfaceFontFamily: uiFont.id,
+    interfaceFontSize: legacyBase,
+    interfaceFontWeight: clampWeightForFont(legacyWeight, uiFont),
+    codeFontFamily: codeFont.id,
     codeFontSize: isValidRange(
       parsed.codeFontSize,
       CODE_FONT_SIZE_CONFIG.min,
@@ -378,8 +368,8 @@ function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
     )
       ? parsed.codeFontSize
       : DEFAULT_TYPOGRAPHY.codeFontSize,
-    codeFontWeight,
-    codeWordWrap: DEFAULT_TYPOGRAPHY.codeWordWrap,
+    codeFontWeight: clampWeightForFont(legacyMonoWeight, codeFont),
+    codeWordWrap: false,
     terminalFontFamily: DEFAULT_TYPOGRAPHY.terminalFontFamily,
     terminalFontSize: DEFAULT_TYPOGRAPHY.terminalFontSize,
     terminalFontWeight: DEFAULT_TYPOGRAPHY.terminalFontWeight,
@@ -387,23 +377,39 @@ function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
     readingLineHeight: isValidRange(parsed.lineHeight, 1.2, 2.0)
       ? parsed.lineHeight
       : DEFAULT_TYPOGRAPHY.readingLineHeight,
-    appScale,
   };
 }
 
-function readV2(parsed: Record<string, unknown>): TypographyConfig {
+function migrateV2(parsed: Record<string, unknown>): TypographyConfig {
+  const normUi = normalizeInterfaceFontSize(parsed.interfaceFontSize);
+  const appScale = isValidRange(parsed.appScale, 0.75, 1.5) ? parsed.appScale : 1;
+  const effectiveSize = Math.min(24, Math.max(14, Math.round(normUi * appScale)));
+
+  const uiFont =
+    (isValidUiFontId(parsed.interfaceFontFamily) && getFont(parsed.interfaceFontFamily)) ||
+    UI_FONTS[0]!;
+  const codeFont =
+    (isValidMonoFontId(parsed.codeFontFamily) && getFont(parsed.codeFontFamily)) || MONO_FONTS[0]!;
+  const terminalFont =
+    (isValidMonoFontId(parsed.terminalFontFamily) && getFont(parsed.terminalFontFamily)) ||
+    MONO_FONTS[0]!;
+
+  const reqUiWeight = isValidWeight(parsed.interfaceFontWeight)
+    ? parsed.interfaceFontWeight
+    : DEFAULT_TYPOGRAPHY.interfaceFontWeight;
+  const reqCodeWeight = isValidWeight(parsed.codeFontWeight)
+    ? parsed.codeFontWeight
+    : DEFAULT_TYPOGRAPHY.codeFontWeight;
+  const reqTermWeight = isValidWeight(parsed.terminalFontWeight)
+    ? parsed.terminalFontWeight
+    : DEFAULT_TYPOGRAPHY.terminalFontWeight;
+
   return {
-    version: 2,
-    interfaceFontFamily: isValidUiFontId(parsed.interfaceFontFamily)
-      ? parsed.interfaceFontFamily
-      : DEFAULT_TYPOGRAPHY.interfaceFontFamily,
-    interfaceFontSize: normalizeInterfaceFontSize(parsed.interfaceFontSize),
-    interfaceFontWeight: isValidWeight(parsed.interfaceFontWeight)
-      ? parsed.interfaceFontWeight
-      : DEFAULT_TYPOGRAPHY.interfaceFontWeight,
-    codeFontFamily: isValidMonoFontId(parsed.codeFontFamily)
-      ? parsed.codeFontFamily
-      : DEFAULT_TYPOGRAPHY.codeFontFamily,
+    version: 3,
+    interfaceFontFamily: uiFont.id,
+    interfaceFontSize: effectiveSize,
+    interfaceFontWeight: clampWeightForFont(reqUiWeight, uiFont),
+    codeFontFamily: codeFont.id,
     codeFontSize: isValidRange(
       parsed.codeFontSize,
       CODE_FONT_SIZE_CONFIG.min,
@@ -411,16 +417,9 @@ function readV2(parsed: Record<string, unknown>): TypographyConfig {
     )
       ? parsed.codeFontSize
       : DEFAULT_TYPOGRAPHY.codeFontSize,
-    codeFontWeight: isValidWeight(parsed.codeFontWeight)
-      ? parsed.codeFontWeight
-      : DEFAULT_TYPOGRAPHY.codeFontWeight,
-    codeWordWrap:
-      typeof parsed.codeWordWrap === "boolean"
-        ? parsed.codeWordWrap
-        : DEFAULT_TYPOGRAPHY.codeWordWrap,
-    terminalFontFamily: isValidMonoFontId(parsed.terminalFontFamily)
-      ? parsed.terminalFontFamily
-      : DEFAULT_TYPOGRAPHY.terminalFontFamily,
+    codeFontWeight: clampWeightForFont(reqCodeWeight, codeFont),
+    codeWordWrap: parsed.codeWordWrap === true,
+    terminalFontFamily: terminalFont.id,
     terminalFontSize: isValidRange(
       parsed.terminalFontSize,
       TERMINAL_FONT_SIZE_CONFIG.min,
@@ -428,18 +427,70 @@ function readV2(parsed: Record<string, unknown>): TypographyConfig {
     )
       ? parsed.terminalFontSize
       : DEFAULT_TYPOGRAPHY.terminalFontSize,
-    terminalFontWeight: isValidWeight(parsed.terminalFontWeight)
-      ? parsed.terminalFontWeight
-      : DEFAULT_TYPOGRAPHY.terminalFontWeight,
-    terminalWrap:
-      typeof parsed.terminalWrap === "boolean"
-        ? parsed.terminalWrap
-        : DEFAULT_TYPOGRAPHY.terminalWrap,
+    terminalFontWeight: clampWeightForFont(reqTermWeight, terminalFont),
+    terminalWrap: parsed.terminalWrap !== false,
     readingLineHeight: isValidRange(parsed.readingLineHeight, 1.2, 2.0)
       ? parsed.readingLineHeight
       : DEFAULT_TYPOGRAPHY.readingLineHeight,
-    appScale: isValidAppScale(parsed.appScale) ? parsed.appScale : DEFAULT_TYPOGRAPHY.appScale,
   };
+}
+
+function readV3(parsed: Record<string, unknown>): TypographyConfig {
+  const uiFont =
+    (isValidUiFontId(parsed.interfaceFontFamily) && getFont(parsed.interfaceFontFamily)) ||
+    UI_FONTS[0]!;
+  const codeFont =
+    (isValidMonoFontId(parsed.codeFontFamily) && getFont(parsed.codeFontFamily)) || MONO_FONTS[0]!;
+  const terminalFont =
+    (isValidMonoFontId(parsed.terminalFontFamily) && getFont(parsed.terminalFontFamily)) ||
+    MONO_FONTS[0]!;
+
+  const reqUiWeight = isValidWeight(parsed.interfaceFontWeight)
+    ? parsed.interfaceFontWeight
+    : DEFAULT_TYPOGRAPHY.interfaceFontWeight;
+  const reqCodeWeight = isValidWeight(parsed.codeFontWeight)
+    ? parsed.codeFontWeight
+    : DEFAULT_TYPOGRAPHY.codeFontWeight;
+  const reqTermWeight = isValidWeight(parsed.terminalFontWeight)
+    ? parsed.terminalFontWeight
+    : DEFAULT_TYPOGRAPHY.terminalFontWeight;
+
+  return {
+    version: 3,
+    interfaceFontFamily: uiFont.id,
+    interfaceFontSize: normalizeInterfaceFontSize(parsed.interfaceFontSize),
+    interfaceFontWeight: clampWeightForFont(reqUiWeight, uiFont),
+    codeFontFamily: codeFont.id,
+    codeFontSize: isValidRange(
+      parsed.codeFontSize,
+      CODE_FONT_SIZE_CONFIG.min,
+      CODE_FONT_SIZE_CONFIG.max,
+    )
+      ? parsed.codeFontSize
+      : DEFAULT_TYPOGRAPHY.codeFontSize,
+    codeFontWeight: clampWeightForFont(reqCodeWeight, codeFont),
+    codeWordWrap: parsed.codeWordWrap === true,
+    terminalFontFamily: terminalFont.id,
+    terminalFontSize: isValidRange(
+      parsed.terminalFontSize,
+      TERMINAL_FONT_SIZE_CONFIG.min,
+      TERMINAL_FONT_SIZE_CONFIG.max,
+    )
+      ? parsed.terminalFontSize
+      : DEFAULT_TYPOGRAPHY.terminalFontSize,
+    terminalFontWeight: clampWeightForFont(reqTermWeight, terminalFont),
+    terminalWrap: parsed.terminalWrap !== false,
+    readingLineHeight: isValidRange(parsed.readingLineHeight, 1.2, 2.0)
+      ? parsed.readingLineHeight
+      : DEFAULT_TYPOGRAPHY.readingLineHeight,
+  };
+}
+
+export function migrateTypography(raw: unknown): TypographyConfig {
+  if (!isRecord(raw)) return DEFAULT_TYPOGRAPHY;
+  if (raw.version === 3) return readV3(raw);
+  if (raw.version === 2) return migrateV2(raw);
+  return migrateV1(raw);
 }
 
 /**
@@ -452,10 +503,12 @@ export function readTypography(): TypographyConfig {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_TYPOGRAPHY;
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return DEFAULT_TYPOGRAPHY;
-    if (parsed.version === 2) return readV2(parsed);
-    // v1 (either historical shape) or a missing version: migrate.
-    return migrateV1(parsed);
+    const config = migrateTypography(parsed);
+    // If parsed was not already v3, persist migrated v3 once for idempotence
+    if (isRecord(parsed) && parsed.version !== 3) {
+      writeTypography(config);
+    }
+    return config;
   } catch {
     return DEFAULT_TYPOGRAPHY;
   }
@@ -489,7 +542,9 @@ export function applyTypographyToDom(config: TypographyConfig): void {
     getFont(config.terminalFontFamily) || getFont(DEFAULT_TYPOGRAPHY.terminalFontFamily);
 
   if (uiFont) root.style.setProperty("--font-sans", uiFont.stack);
-  root.style.setProperty("--interface-font-size", `${config.interfaceFontSize}px`);
+
+  // Single Interface Size drives root font-size directly via rem scaling!
+  root.style.fontSize = `${(config.interfaceFontSize / 16) * 100}%`;
 
   const clampedUiWeight = uiFont
     ? clampWeightForFont(config.interfaceFontWeight, uiFont)
@@ -512,12 +567,8 @@ export function applyTypographyToDom(config: TypographyConfig): void {
 
   root.style.setProperty("--reading-line-height", String(config.readingLineHeight));
 
-  // Application scale / zoom (factor; 1 = 100%)
-  if (config.appScale === 1) {
-    root.style.removeProperty("zoom");
-  } else {
-    (root.style as unknown as Record<string, string>).zoom = String(config.appScale);
-  }
+  // No application-level zoom writers!
+  root.style.removeProperty("zoom");
 
   root.setAttribute("data-code-wrap", config.codeWordWrap ? "on" : "off");
   root.setAttribute("data-terminal-wrap", config.terminalWrap ? "on" : "off");
@@ -574,16 +625,6 @@ export function resetReadingTypography(current: TypographyConfig): TypographyCon
   return persist({
     ...current,
     readingLineHeight: DEFAULT_TYPOGRAPHY.readingLineHeight,
-  });
-}
-
-/**
- * Scoped reset: restores Application Scale defaults, preserving all other groups.
- */
-export function resetApplicationScale(current: TypographyConfig): TypographyConfig {
-  return persist({
-    ...current,
-    appScale: DEFAULT_TYPOGRAPHY.appScale,
   });
 }
 

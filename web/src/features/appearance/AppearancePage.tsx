@@ -19,17 +19,14 @@ import { CHAT_WIDTHS, CHAT_WIDTH_ORDER, DEFAULT_CHAT_WIDTH } from "../../config/
 import { cn } from "../../lib/utils";
 import {
   applyTypographyToDom,
-  APP_SCALE_CONFIG,
   clampWeightForFont,
   CODE_FONT_SIZE_CONFIG,
   COMMON_WEIGHTS,
-  formatAppScale,
   getFont,
   INTERFACE_FONT_SIZE_CONFIG,
   LINE_HEIGHTS,
   MONO_FONTS,
   readTypography,
-  resetApplicationScale,
   resetCodeTypography,
   resetInterfaceTypography,
   resetReadingTypography,
@@ -152,10 +149,6 @@ export function AppearancePage() {
 
   const handleResetReading = () => {
     setTypography((prev) => resetReadingTypography(prev));
-  };
-
-  const handleResetScale = () => {
-    setTypography((prev) => resetApplicationScale(prev));
   };
 
   const currentUiFont = getFont(typography.interfaceFontFamily);
@@ -555,65 +548,6 @@ export function AppearancePage() {
           </SettingRow>
         </div>
 
-        {/* Application Scale Group */}
-        <div className="rounded-xl border border-border/80 bg-card/30 p-4 space-y-4">
-          <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
-                Application Scale
-              </h3>
-              <p className="text-3xs text-muted-foreground">
-                Scales the whole interface — navigation, cards, buttons, icons, spacing, and panels.
-              </p>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleResetScale}
-              className="h-7 px-2.5 text-3xs text-muted-foreground hover:text-foreground"
-            >
-              Reset scale
-            </Button>
-          </div>
-
-          <SettingRow
-            label="Application scale"
-            description={`Scales the entire interface (${formatAppScale(typography.appScale)}). 100% is default. Font preferences are unchanged.`}
-          >
-            <div className="flex flex-col gap-2.5 w-full max-w-sm">
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min={APP_SCALE_CONFIG.min}
-                  max={APP_SCALE_CONFIG.max}
-                  step={APP_SCALE_CONFIG.step}
-                  value={typography.appScale}
-                  aria-label="Application scale"
-                  onChange={(e) => updateTypography({ appScale: Number(e.target.value) })}
-                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-input/40 accent-primary focus:outline-none"
-                />
-                <span className="w-16 shrink-0 text-right text-xs tabular-nums text-foreground">
-                  {formatAppScale(typography.appScale)}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {APP_SCALE_CONFIG.presets.map((preset) => (
-                  <Button
-                    key={preset}
-                    variant={typography.appScale === preset ? "secondary" : "ghost"}
-                    size="sm"
-                    onClick={() => updateTypography({ appScale: preset })}
-                    className="h-6 px-2 text-3xs font-medium tabular-nums"
-                  >
-                    {formatAppScale(preset)}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </SettingRow>
-        </div>
-
         <TypographyPreview
           interfaceFontName={currentUiFont?.label || typography.interfaceFontFamily}
           codeFontName={currentCodeFont?.label || typography.codeFontFamily}
@@ -625,7 +559,6 @@ export function AppearancePage() {
           codeFontSize={typography.codeFontSize}
           terminalFontSize={typography.terminalFontSize}
           readingLineHeight={typography.readingLineHeight}
-          appScale={typography.appScale}
         />
       </SettingsSection>
 

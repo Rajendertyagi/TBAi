@@ -1,7 +1,6 @@
 import { memo } from "react";
 import { SyntaxHighlighter } from "../../components/assistant-ui/elements/shiki-highlighter";
 import { TerminalBlock } from "../../components/assistant-ui/elements/terminal-block";
-import { formatAppScale } from "./typography";
 
 const SAMPLE_CODE = `// TBAi code typography preview
 function calculateMetrics(tokens: number, rate: number): number {
@@ -27,7 +26,6 @@ export const TypographyPreview = memo(function TypographyPreview({
   codeFontSize,
   terminalFontSize,
   readingLineHeight,
-  appScale,
 }: {
   interfaceFontName: string;
   codeFontName: string;
@@ -39,7 +37,6 @@ export const TypographyPreview = memo(function TypographyPreview({
   codeFontSize: number;
   terminalFontSize: number;
   readingLineHeight: number;
-  appScale: number;
 }) {
   return (
     <div className="rounded-xl border border-border bg-card/60 p-4 space-y-3 transition-all shadow-xs">
@@ -50,8 +47,7 @@ export const TypographyPreview = memo(function TypographyPreview({
         <span className="text-3xs text-muted-foreground tabular-nums">
           UI: {interfaceFontName} • {interfaceFontSize}px • W{interfaceFontWeight} | Code:{" "}
           {codeFontName} • {codeFontSize}px • W{codeFontWeight} | Terminal: {terminalFontName} •{" "}
-          {terminalFontSize}px • W{terminalFontWeight} | Scale: {formatAppScale(appScale)} •{" "}
-          {readingLineHeight}x
+          {terminalFontSize}px • W{terminalFontWeight} | {readingLineHeight}x line height
         </span>
       </div>
 

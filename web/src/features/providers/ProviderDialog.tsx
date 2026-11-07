@@ -378,7 +378,7 @@ function ProviderDialog({ mode, provider, open, onOpenChange, onSaved }: Provide
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="overflow-y-auto min-h-0 flex-1 -mx-6 px-6 py-1 space-y-4">
           <div className="space-y-1.5">
             <label
               htmlFor={mode === "edit" ? "edit-mp-name" : "add-mp-name"}
