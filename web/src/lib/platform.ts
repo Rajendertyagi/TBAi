@@ -233,3 +233,55 @@ export async function openFolderInExplorer(path: string): Promise<boolean> {
   await openPath(path);
   return true;
 }
+
+// ── Window Zoom (Official Tauri 2 WebView API) ──────────────────────────────
+export const WINDOW_ZOOM_STORAGE_KEY = "tbai-window-zoom";
+export const DEFAULT_WINDOW_ZOOM = 1.0;
+export const WINDOW_ZOOM_PRESETS = [0.8, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] as const;
+export const WINDOW_ZOOM_MIN = 0.8;
+export const WINDOW_ZOOM_MAX = 3.0;
+
+export function clampWindowZoom(val: number): number {
+  if (!Number.isFinite(val)) return DEFAULT_WINDOW_ZOOM;
+  return Math.min(WINDOW_ZOOM_MAX, Math.max(WINDOW_ZOOM_MIN, Math.round(val * 100) / 100));
+}
+
+export function readWindowZoom(): number {
+  if (typeof window === "undefined") return DEFAULT_WINDOW_ZOOM;
+  try {
+    const raw = window.localStorage.getItem(WINDOW_ZOOM_STORAGE_KEY);
+    if (!raw) return DEFAULT_WINDOW_ZOOM;
+    const parsed = Number.parseFloat(raw);
+    return clampWindowZoom(parsed);
+  } catch {
+    return DEFAULT_WINDOW_ZOOM;
+  }
+}
+
+export function writeWindowZoom(zoom: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    const clamped = clampWindowZoom(zoom);
+    window.localStorage.setItem(WINDOW_ZOOM_STORAGE_KEY, String(clamped));
+  } catch {
+    // Ignore localStorage write failures
+  }
+}
+
+/**
+ * Applies window zoom scale factor (0.8 - 3.0) via Tauri 2 getCurrentWebview().setZoom(factor).
+ * Saves to local persistence regardless of environment.
+ * In desktop mode (Tauri), applies native webview zoom immediately.
+ */
+export async function applyWindowZoom(zoom: number): Promise<boolean> {
+  const clamped = clampWindowZoom(zoom);
+  writeWindowZoom(clamped);
+  if (!isTauri()) return false;
+  try {
+    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+    await getCurrentWebview().setZoom(clamped);
+    return true;
+  } catch {
+    return false;
+  }
+}

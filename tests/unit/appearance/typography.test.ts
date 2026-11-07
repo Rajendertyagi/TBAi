@@ -135,8 +135,8 @@ describe("Typography config, storage & scoped resets (v3)", () => {
   it("returns default typography when storage is empty", () => {
     expect(DEFAULT_TYPOGRAPHY.version).toBe(3);
     expect(DEFAULT_TYPOGRAPHY.interfaceFontFamily).toBe("inter");
-    expect(DEFAULT_TYPOGRAPHY.interfaceFontSize).toBe(16);
-    expect(DEFAULT_TYPOGRAPHY.interfaceFontWeight).toBe(400);
+    expect(DEFAULT_TYPOGRAPHY.interfaceFontSize).toBe(15);
+    expect(DEFAULT_TYPOGRAPHY.interfaceFontWeight).toBe(300);
     expect(DEFAULT_TYPOGRAPHY.codeFontFamily).toBe("jetbrains-mono");
     expect(DEFAULT_TYPOGRAPHY.codeFontSize).toBe(13);
     expect(DEFAULT_TYPOGRAPHY.codeFontWeight).toBe(400);
@@ -204,8 +204,8 @@ describe("Typography config, storage & scoped resets (v3)", () => {
       expect(config.codeFontWeight).toBe(300);
       expect(config.codeFontSize).toBe(15);
       expect(config.readingLineHeight).toBe(1.35);
-      // Legacy baseSize 13 maps to 14
-      expect(config.interfaceFontSize).toBe(14);
+      // Legacy baseSize 13 is preserved
+      expect(config.interfaceFontSize).toBe(13);
     });
   });
 
@@ -216,7 +216,7 @@ describe("Typography config, storage & scoped resets (v3)", () => {
         fontFamily: "unknown-font",
         monoFontFamily: "unknown-mono",
         fontWeight: 9999,
-        baseSize: 100, // outside legacy 12-24 -> default 16
+        baseSize: 100, // outside legacy 12-24 -> default 15
         codeFontSize: -5,
         lineHeight: "not-a-number",
       };
@@ -225,7 +225,7 @@ describe("Typography config, storage & scoped resets (v3)", () => {
       expect(config.version).toBe(3);
       expect(config.interfaceFontFamily).toBe("inter");
       expect(config.codeFontFamily).toBe("jetbrains-mono");
-      expect(config.interfaceFontSize).toBe(16);
+      expect(config.interfaceFontSize).toBe(15);
       expect(config.codeFontSize).toBe(13);
       expect(config.readingLineHeight).toBe(1.5);
     });
@@ -285,15 +285,45 @@ describe("Typography config, storage & scoped resets (v3)", () => {
         .interfaceFontSize,
     ).toBe(18);
 
-    // Clamping to 14–24px
-    // 14 * 0.75 = 10.5 -> 11 -> clamped to 14
+    // Clamping to 12–24px
+    // 14 * 0.75 = 10.5 -> 11 -> clamped to 12
     expect(
       readStoredTypography({ version: 2, interfaceFontSize: 14, appScale: 0.75 }).interfaceFontSize,
-    ).toBe(14);
+    ).toBe(12);
     // 24 * 1.5 = 36 -> clamped to 24
     expect(
       readStoredTypography({ version: 2, interfaceFontSize: 24, appScale: 1.5 }).interfaceFontSize,
     ).toBe(24);
+  });
+
+  it("preserves existing valid V3 user preferences (e.g., 16px and 400 weight) unchanged", () => {
+    withStorage(undefined, (storage) => {
+      const existingV3UserConfig: TypographyConfig = {
+        version: 3,
+        interfaceFontFamily: "roboto",
+        interfaceFontSize: 16,
+        interfaceFontWeight: 400,
+        codeFontFamily: "fira-code",
+        codeFontSize: 14,
+        codeFontWeight: 500,
+        codeWordWrap: true,
+        terminalFontFamily: "source-code-pro",
+        terminalFontSize: 13,
+        terminalFontWeight: 600,
+        terminalWrap: false,
+        readingLineHeight: 1.6,
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(existingV3UserConfig));
+      const read = readTypography();
+      expect(read).toEqual(existingV3UserConfig);
+      expect(read.interfaceFontSize).toBe(16);
+      expect(read.interfaceFontWeight).toBe(400);
+      expect(read.codeFontSize).toBe(14);
+      expect(read.codeFontWeight).toBe(500);
+      expect(read.terminalFontSize).toBe(13);
+      expect(read.terminalFontWeight).toBe(600);
+      expect(read.readingLineHeight).toBe(1.6);
+    });
   });
 
   it("validates every v3 field independently and enforces strict booleans", () => {
@@ -319,8 +349,8 @@ describe("Typography config, storage & scoped resets (v3)", () => {
       const config = readTypography();
       expect(config.version).toBe(3);
       expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
-      expect(config.interfaceFontSize).toBe(16);
-      expect(config.interfaceFontWeight).toBe(400);
+      expect(config.interfaceFontSize).toBe(15);
+      expect(config.interfaceFontWeight).toBe(300);
       expect(config.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
       expect(config.codeFontSize).toBe(13);
       expect(config.codeFontWeight).toBe(400);
@@ -622,34 +652,33 @@ describe("index.html bootstrap parity", () => {
  * the smallest size keeps the smallest size. 11 and 25 were never selectable
  * and still fall back to the default.
  */
-describe("interface font-size minimum and the 12/13 migration", () => {
-  it("declares a 14px minimum and drops the 13px preset", () => {
-    expect(INTERFACE_FONT_SIZE_CONFIG.min).toBe(14);
+describe("interface font-size minimum and range (12px to 24px)", () => {
+  it("declares a 12px minimum", () => {
+    expect(INTERFACE_FONT_SIZE_CONFIG.min).toBe(12);
     expect(INTERFACE_FONT_SIZE_CONFIG.max).toBe(24);
-    expect([...INTERFACE_FONT_SIZE_CONFIG.presets]).not.toContain(13);
-    expect([...INTERFACE_FONT_SIZE_CONFIG.presets]).toContain(14);
+    expect(INTERFACE_FONT_SIZE_CONFIG.default).toBe(15);
   });
 
-  it("clamps a stored 12 or 13 to 14 and preserves every other field", () => {
+  it("preserves a stored 12 or 13 without clamping and preserves every other field", () => {
     for (const stored of [12, 13]) {
       const config = readStoredTypography(customConfig({ interfaceFontSize: stored }));
-      expect(config.interfaceFontSize, `stored ${stored} must migrate to 14`).toBe(14);
-      expect({ ...config, interfaceFontSize: 16 }).toEqual({
+      expect(config.interfaceFontSize, `stored ${stored} must be preserved`).toBe(stored);
+      expect({ ...config, interfaceFontSize: 18 }).toEqual({
         ...customConfig(),
-        interfaceFontSize: 16,
+        interfaceFontSize: 18,
       });
     }
   });
 
-  it("preserves every selectable size from 14 through 24", () => {
-    for (let size = 14; size <= 24; size++) {
+  it("preserves every selectable size from 12 through 24", () => {
+    for (let size = 12; size <= 24; size++) {
       expect(
         readStoredTypography(customConfig({ interfaceFontSize: size })).interfaceFontSize,
       ).toBe(size);
     }
   });
 
-  it("resets 11 and 25 to the 16px default", () => {
+  it("resets 11 and 25 to the 15px default", () => {
     for (const stored of [11, 25]) {
       expect(
         readStoredTypography(customConfig({ interfaceFontSize: stored })).interfaceFontSize,

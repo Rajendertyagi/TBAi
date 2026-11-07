@@ -43,7 +43,7 @@
   /* Fixed generic monospace stack — NEVER written by a setting. Logs, IDs,
      paths, token counts and tool metadata use this; code surfaces use
      --code-font-family, terminal output uses --terminal-font-family. */
-  --font-weight-base: 400;
+  --font-weight-base: 300;
   --code-font-family:
     "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --code-font-size: 13px;
@@ -55,9 +55,9 @@
   --reading-line-height: 1.5;
 
   font-family: var(--font-sans);
-  font-size: 100%;
+  font-size: 93.75%;
   line-height: 1.5;
-  font-weight: var(--font-weight-base, 400);
+  font-weight: var(--font-weight-base, 300);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -286,9 +286,10 @@
 }
 
 /* Compact text sizes below native Tailwind text-xs (0.75rem / 12px).
-   Sized in rem so they scale naturally with the root interface size. */
+   Sized in rem so they scale naturally with the root interface size, but never below
+   the 9px legibility floor at smaller root sizes (e.g. 12px root = 9px floor). */
 @utility text-2xs {
-  font-size: 0.6875rem; /* 11px @16px */
+  font-size: max(9px, 0.6875rem);
 }
 
 /* 10px @16px, but never below 9px: max(9px, 0.625rem) enforces a 9px legibility

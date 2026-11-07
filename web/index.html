@@ -81,12 +81,9 @@
             };
             var isWeight = function (v) { return typeof v === "number" && isFinite(v) && v >= 100 && v <= 900; };
             var isRange = function (v, min, max) { return typeof v === "number" && isFinite(v) && v >= min && v <= max; };
-            // A stored 12 or 13 predates the 14px floor. It migrates UP to the
-            // floor instead of being discarded to the 16px default; anything
-            // outside the range this app ever stored falls back to 16.
             var normalizeInterfaceSize = function (v) {
-              if (!isRange(v, 12, 24)) return 16;
-              return Math.max(14, v);
+              if (!isRange(v, 12, 24)) return 15;
+              return v;
             };
             var pick = function (map, id, fallback) { return map[id] ? id : fallback; };
 
@@ -96,7 +93,7 @@
               cfg = {
                 interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
                 interfaceFontSize: normalizeInterfaceSize(ty.interfaceFontSize),
-                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 400,
+                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 300,
                 codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
                 codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
@@ -110,11 +107,11 @@
             } else if (ty.version === 2) {
               var normUi = normalizeInterfaceSize(ty.interfaceFontSize);
               var appScale = isRange(ty.appScale, 0.75, 1.5) ? ty.appScale : 1;
-              var effectiveSize = Math.min(24, Math.max(14, Math.round(normUi * appScale)));
+              var effectiveSize = Math.min(24, Math.max(12, Math.round(normUi * appScale)));
               cfg = {
                 interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
                 interfaceFontSize: effectiveSize,
-                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 400,
+                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 300,
                 codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
                 codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
@@ -127,8 +124,8 @@
               };
             } else {
               // v1 (either historical shape) → v3.
-              var legacyBase = isRange(ty.baseSize, 12, 24) ? Math.max(14, ty.baseSize) : 16;
-              var legacyWeight = isWeight(ty.fontWeight) ? ty.fontWeight : 400;
+              var legacyBase = isRange(ty.baseSize, 12, 24) ? ty.baseSize : 15;
+              var legacyWeight = isWeight(ty.fontWeight) ? ty.fontWeight : 300;
               var legacyMonoWeight = isWeight(ty.monoFontWeight) ? ty.monoFontWeight : legacyWeight;
               cfg = {
                 interfaceFontFamily: pick(FONT_MAP, ty.fontFamily, "inter"),

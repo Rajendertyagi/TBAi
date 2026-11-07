@@ -19,6 +19,7 @@ export const ROUTE_PATTERNS = {
   QUICK_MESSAGES: "quick-messages",
   PROVIDERS: "providers",
   APPEARANCE: "appearance",
+  TYPOGRAPHY: "typography",
   DESKTOP: "desktop",
   WORKSPACE: "workspace",
   OPENCODE_CONFIG: "opencode-config",
@@ -39,6 +40,7 @@ export const ROUTES = {
     ROOT: "/providers", // Default fallback settings entry point
     PROVIDERS: "/providers",
     APPEARANCE: "/appearance",
+    TYPOGRAPHY: "/typography",
     WORKSPACE: "/workspace",
     OPENCODE: "/opencode-config",
     DESKTOP: "/desktop",

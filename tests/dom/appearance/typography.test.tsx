@@ -326,8 +326,10 @@ describe("globals.css — ownership rules (source-text guards)", () => {
     expect(globalsCss).not.toContain("--interface-font-size");
   });
 
-  it("keeps root font-size at 100% in stylesheet", () => {
-    expect(globalsCss).toMatch(/:root\s*\{[^}]*font-size:\s*100%/);
+  it("keeps root font-size at 93.75% (15px) and base weight at 300 in stylesheet", () => {
+    expect(globalsCss).toMatch(/:root\s*\{[^}]*font-size:\s*93\.75%/);
+    expect(globalsCss).toMatch(/:root\s*\{[^}]*--font-weight-base:\s*300/);
+    expect(globalsCss).toMatch(/:root\s*\{[^}]*font-weight:\s*var\(--font-weight-base,\s*300\)/);
   });
 
   it("no longer contains the dead .aui-code-diff or .ai-message-content rules", () => {
@@ -398,7 +400,8 @@ describe("globals.css — payload and terminal-line classification", () => {
     expect(selectors).not.toContain("code");
   });
 
-  it("floors text-3xs at 9px while keeping it rem-based", () => {
+  it("floors text-2xs and text-3xs at 9px while keeping them rem-based", () => {
+    expect(globalsCss).toMatch(/@utility text-2xs\s*\{\s*font-size:\s*max\(9px,\s*0\.6875rem\)/);
     expect(globalsCss).toMatch(/@utility text-3xs\s*\{\s*font-size:\s*max\(9px,\s*0\.625rem\)/);
   });
 });
@@ -519,7 +522,7 @@ describe("typography bootstrap — executable parity with readTypography", () =>
     window.localStorage.removeItem("tbai-typography");
   });
 
-  it("paints a stored 12 at 14px, identical before and after hydration", () => {
+  it("paints a stored 12 at 12px, identical before and after hydration", () => {
     const stored = { ...DEFAULT_TYPOGRAPHY, interfaceFontSize: 12 };
     window.localStorage.setItem("tbai-typography", JSON.stringify(stored));
     const prePaint = runBootstrap(stored).rootFontSize;
@@ -527,8 +530,38 @@ describe("typography bootstrap — executable parity with readTypography", () =>
     applyTypographyToDom(readTypography());
     const postHydration = document.documentElement.style.fontSize;
 
-    expect(prePaint).toBe(`${(14 / 16) * 100}%`);
+    expect(prePaint).toBe(`${(12 / 16) * 100}%`);
     expect(postHydration).toBe(prePaint);
+    window.localStorage.removeItem("tbai-typography");
+  });
+
+  it("leaves clean-install (no storage) and invalid storage matching default 15px / 300 across bootstrap and runtime", () => {
+    // 1. Clean installation: no localStorage item
+    window.localStorage.removeItem("tbai-typography");
+    const cleanBootstrap = runBootstrap(null);
+    // When no storage exists, bootstrap does not override root style fontSize or --font-weight-base,
+    // so globals.css defaults (93.75% = 15px, and weight 300) stand untouched.
+    expect(cleanBootstrap.rootFontSize).toBe("");
+    expect(cleanBootstrap.writes.has("--font-weight-base")).toBe(false);
+
+    // Runtime readTypography yields 15px and 300 weight
+    const cleanConfig = readTypography();
+    expect(cleanConfig.interfaceFontSize).toBe(15);
+    expect(cleanConfig.interfaceFontWeight).toBe(300);
+
+    // Applying runtime config sets 93.75% and 300
+    applyTypographyToDom(cleanConfig);
+    expect(document.documentElement.style.fontSize).toBe(`${(15 / 16) * 100}%`);
+    expect(rootStyle().getPropertyValue("--font-weight-base")).toBe("300");
+
+    // 2. Corrupted/invalid storage
+    window.localStorage.setItem("tbai-typography", "not-a-json");
+    const invalidConfig = readTypography();
+    expect(invalidConfig.interfaceFontSize).toBe(15);
+    expect(invalidConfig.interfaceFontWeight).toBe(300);
+    applyTypographyToDom(invalidConfig);
+    expect(document.documentElement.style.fontSize).toBe(`${(15 / 16) * 100}%`);
+    expect(rootStyle().getPropertyValue("--font-weight-base")).toBe("300");
     window.localStorage.removeItem("tbai-typography");
   });
 });

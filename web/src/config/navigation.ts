@@ -12,6 +12,7 @@ import {
   Monitor,
   Settings,
   ShieldCheck,
+  Type,
   type LucideIcon,
 } from "lucide-react";
 
@@ -40,6 +41,7 @@ export type ViewId =
   | "quick-messages"
   | "providers"
   | "appearance"
+  | "typography"
   | "desktop"
   | "opencode-config";
 
@@ -132,6 +134,17 @@ export const appConfig: AppConfig = {
       visible: true,
       railVisible: false,
       order: 3,
+    },
+    {
+      id: "typography",
+      label: "Typography",
+      icon: Type,
+      view: "typography",
+      route: ROUTES.SETTINGS.TYPOGRAPHY,
+      description: "Fonts, sizes, weights, and window zoom",
+      visible: true,
+      railVisible: false,
+      order: 3.5,
     },
     {
       id: "workspace",
@@ -268,6 +281,7 @@ export function getRailNav(): NavItem[] {
 const SETTINGS_VIEWS: ViewId[] = [
   "providers",
   "appearance",
+  "typography",
   "workspace",
   "opencode-config",
   "folders",

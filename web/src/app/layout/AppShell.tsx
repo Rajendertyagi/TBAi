@@ -16,6 +16,7 @@ import { CommandPalette } from "../../components/CommandPalette";
 import { RightEdgeChrome } from "../../components/RightEdgeChrome";
 import { WindowControls } from "../../components/WindowControls";
 import { ChromeShortcuts } from "../../components/ChromeShortcuts";
+import { ZoomController } from "../../components/ZoomController";
 import { PageContextMenu } from "../../components/PageContextMenu";
 import { TabUrlSync } from "../TabUrlSync";
 import { RouteObserver } from "../RouteObserver";
@@ -196,6 +197,7 @@ export function AppShell() {
 
         {/* Desktop keyboard shortcuts (self-gates on isTauri) */}
         <ChromeShortcuts />
+        <ZoomController />
         <TabUrlSync />
         {/* Route transitions are part of every operation's story — recorded once,
             for both shells, since both render through this component. */}

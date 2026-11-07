@@ -34,6 +34,7 @@ const SETTINGS_ROUTES = [
   "/quick-messages",
   "/providers",
   "/appearance",
+  "/typography",
   "/desktop",
   "/workspace",
   "/opencode-config",
@@ -114,6 +115,7 @@ describe("settings navigation", () => {
       "quick-messages",
       "providers",
       "appearance",
+      "typography",
       "desktop",
     ]);
     for (const item of appConfig.nav) {

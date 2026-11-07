@@ -128,6 +128,13 @@ export const router = createHashRouter([
                   })),
               },
               {
+                path: ROUTE_PATTERNS.TYPOGRAPHY,
+                lazy: () =>
+                  import("../features/appearance/TypographyPage").then((m) => ({
+                    Component: m.TypographyPage,
+                  })),
+              },
+              {
                 path: ROUTE_PATTERNS.DESKTOP,
                 lazy: () =>
                   import("../features/desktop/DesktopSettings").then((m) => ({

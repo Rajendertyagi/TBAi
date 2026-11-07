@@ -49,8 +49,8 @@ export interface UIFontDefinition extends FontDefinition {
 export const DEFAULT_TYPOGRAPHY: TypographyConfig = {
   version: 3,
   interfaceFontFamily: "inter",
-  interfaceFontSize: 16,
-  interfaceFontWeight: 400,
+  interfaceFontSize: 15,
+  interfaceFontWeight: 300,
   codeFontFamily: "jetbrains-mono",
   codeFontSize: 13,
   codeFontWeight: 400,
@@ -228,24 +228,21 @@ export const COMMON_WEIGHTS = [
 ] as const;
 
 export const INTERFACE_FONT_SIZE_CONFIG = {
-  min: 14,
+  min: 12,
   max: 24,
-  default: 16,
-  presets: [14, 16, 18, 20] as const,
+  default: 15,
 };
 
 export const CODE_FONT_SIZE_CONFIG = {
   min: 11,
   max: 20,
   default: 13,
-  presets: [12, 13, 14, 16] as const,
 };
 
 export const TERMINAL_FONT_SIZE_CONFIG = {
   min: 10,
   max: 20,
   default: 12,
-  presets: [11, 12, 13, 14] as const,
 };
 
 export const LINE_HEIGHTS = [
@@ -309,26 +306,17 @@ function isValidUiFontId(value: unknown): value is string {
 }
 
 /**
- * Smallest interface size this app ever stored: the pre-2026-11 minimum (12)
- * and its 13px preset. A stored value in the legacy range migrates UP to the
- * current minimum rather than falling back to the 16px default, so a user who
- * picked the smallest size keeps the smallest size.
- */
-const LEGACY_INTERFACE_FONT_SIZE_MIN = 12;
-
-/**
- * Resolves a stored interface font size, preserving a legacy 12/13 as the new
- * minimum. A value outside every range this app ever wrote is discarded to the
+ * Resolves a stored interface font size. A value outside 12-24 is discarded to the
  * default, exactly as before.
  */
 function normalizeInterfaceFontSize(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_TYPOGRAPHY.interfaceFontSize;
   }
-  if (value < LEGACY_INTERFACE_FONT_SIZE_MIN || value > INTERFACE_FONT_SIZE_CONFIG.max) {
+  if (value < INTERFACE_FONT_SIZE_CONFIG.min || value > INTERFACE_FONT_SIZE_CONFIG.max) {
     return DEFAULT_TYPOGRAPHY.interfaceFontSize;
   }
-  return Math.max(INTERFACE_FONT_SIZE_CONFIG.min, value);
+  return value;
 }
 
 function isValidMonoFontId(value: unknown): value is string {
@@ -345,7 +333,7 @@ function isValidMonoFontId(value: unknown): value is string {
  */
 function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
   const legacyBase = isValidRange(parsed.baseSize, 12, 24)
-    ? Math.max(14, parsed.baseSize)
+    ? parsed.baseSize
     : DEFAULT_TYPOGRAPHY.interfaceFontSize;
 
   const legacyWeight = isValidWeight(parsed.fontWeight)
@@ -390,7 +378,7 @@ function migrateV1(parsed: Record<string, unknown>): TypographyConfig {
 function migrateV2(parsed: Record<string, unknown>): TypographyConfig {
   const normUi = normalizeInterfaceFontSize(parsed.interfaceFontSize);
   const appScale = isValidRange(parsed.appScale, 0.75, 1.5) ? parsed.appScale : 1;
-  const effectiveSize = Math.min(24, Math.max(14, Math.round(normUi * appScale)));
+  const effectiveSize = Math.min(24, Math.max(12, Math.round(normUi * appScale)));
 
   const uiFont =
     (isValidUiFontId(parsed.interfaceFontFamily) && getFont(parsed.interfaceFontFamily)) ||
