@@ -466,8 +466,30 @@
    which cannot contain a media query. `--normal-bg` stays untouched: sonner also
    uses it for the close button. */
 [data-sonner-toaster] {
+  font-family: var(--font-sans);
   --tbai-toast-surface: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
   --tbai-toast-backdrop: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+}
+/* Ensure Sonner toast text roles scale with root rem and inherit the active Interface font */
+[data-sonner-toaster] [data-sonner-toast] {
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+[data-sonner-toaster] [data-title] {
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+[data-sonner-toaster] [data-description] {
+  font-family: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+[data-sonner-toaster] [data-button] {
+  font-family: inherit;
+  font-size: 0.75rem;
+  min-height: 1.5rem;
+  height: auto;
 }
 @media (prefers-reduced-transparency: reduce) {
   [data-sonner-toaster] {

@@ -399,9 +399,7 @@ describe("globals.css — payload and terminal-line classification", () => {
   });
 
   it("floors text-3xs at 9px while keeping it rem-based", () => {
-    expect(globalsCss).toMatch(
-      /@utility text-3xs\s*\{\s*font-size:\s*max\(9px,\s*0\.625rem\)/,
-    );
+    expect(globalsCss).toMatch(/@utility text-3xs\s*\{\s*font-size:\s*max\(9px,\s*0\.625rem\)/);
   });
 });
 
@@ -592,12 +590,10 @@ describe("Phase 4 inventory — literal pixels and ad-hoc multipliers", () => {
         }
       });
     }
-    // Only two files in web/src contain inline calc multipliers:
-    // 1. SidebarSection.tsx: 0.8125 (documented responsive type role exception)
-    // 2. approval-card.tsx: 0.84375 (vendored, documented unused exception)
+    // approval-card.tsx: 0.84375 is the single documented vendored unused exception.
+    // SidebarSection.tsx migrated to native rem text-[0.8125rem].
     expect(calcMatches.sort()).toEqual([
       "web/src/components/assistant-ui/elements/approval-card.tsx:0.84375",
-      "web/src/features/sidebar/components/SidebarSection.tsx:0.8125",
     ]);
   });
 

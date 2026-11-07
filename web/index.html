@@ -101,11 +101,11 @@
                 codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
                 codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
-                codeWordWrap: ty.codeWordWrap === true,
+                codeWordWrap: typeof ty.codeWordWrap === "boolean" ? ty.codeWordWrap : false,
                 terminalFontFamily: pick(MONO_MAP, ty.terminalFontFamily, "jetbrains-mono"),
                 terminalFontSize: isRange(ty.terminalFontSize, 10, 20) ? ty.terminalFontSize : 12,
                 terminalFontWeight: isWeight(ty.terminalFontWeight) ? ty.terminalFontWeight : 400,
-                terminalWrap: ty.terminalWrap !== false,
+                terminalWrap: typeof ty.terminalWrap === "boolean" ? ty.terminalWrap : true,
                 readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5
               };
             } else if (ty.version === 2) {
@@ -119,11 +119,11 @@
                 codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
                 codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
                 codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
-                codeWordWrap: ty.codeWordWrap === true,
+                codeWordWrap: typeof ty.codeWordWrap === "boolean" ? ty.codeWordWrap : false,
                 terminalFontFamily: pick(MONO_MAP, ty.terminalFontFamily, "jetbrains-mono"),
                 terminalFontSize: isRange(ty.terminalFontSize, 10, 20) ? ty.terminalFontSize : 12,
                 terminalFontWeight: isWeight(ty.terminalFontWeight) ? ty.terminalFontWeight : 400,
-                terminalWrap: ty.terminalWrap !== false,
+                terminalWrap: typeof ty.terminalWrap === "boolean" ? ty.terminalWrap : true,
                 readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5
               };
             } else {

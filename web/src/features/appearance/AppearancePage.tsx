@@ -41,8 +41,7 @@ import { TypographyPreview } from "./TypographyPreview";
 
 /**
  * Pixel size slider with a number input and preset buttons. Shared by the
- * Interface, Code and Terminal groups — the Application Scale group uses its
- * own factor-based slider (percent display).
+ * Interface, Code and Terminal groups.
  */
 function PxSizeSlider({
   value,
@@ -211,7 +210,7 @@ export function AppearancePage() {
       <SettingsSection
         title="Typography"
         icon={Type}
-        description="Independent controls for interface, code, terminal and reading typography, plus application scaling."
+        description="Independent controls for interface, code, terminal and reading typography."
         action={
           <Button
             variant="outline"
@@ -268,7 +267,7 @@ export function AppearancePage() {
 
           <SettingRow
             label="Interface font size"
-            description={`Actual font size for interface text (${typography.interfaceFontSize}px). Standard is 16px. Does not scale layout or spacing.`}
+            description={`Interface Size controls root rem scaling (${typography.interfaceFontSize}px). Rem-based typography and layout scale together, while explicit fixed-pixel dimensions remain fixed.`}
           >
             <PxSizeSlider
               value={typography.interfaceFontSize}

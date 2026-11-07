@@ -10,9 +10,11 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { readTypography, subscribeInterfaceFont, UI_FONTS } from "@/features/appearance/typography";
 
 export type MermaidDiagramProps = {
   code: string;
@@ -290,6 +292,14 @@ function MermaidZoom({ svg, children }: MermaidZoomProps) {
 const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({ code, className, streaming = false }) => {
   const [result, setResult] = useState<MermaidRender | null>(null);
 
+  // Subscribe strictly to Interface Font changes so the diagram rerenders when the user
+  // switches fonts in Settings. Interface Size changes are handled automatically by CSS rem.
+  const activeFontId = useSyncExternalStore(
+    subscribeInterfaceFont,
+    () => readTypography().interfaceFontFamily,
+    () => "inter",
+  );
+
   useEffect(() => {
     if (streaming) {
       setResult(null);
@@ -302,13 +312,49 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({ code, className, streamin
     const run = (render: MermaidRenderer) => {
       if (cancelled) return;
       try {
+        const uiFont = UI_FONTS.find((f) => f.id === activeFontId) || UI_FONTS[0]!;
+        const rendererFont = uiFont.rendererFamily;
+
         const rawSvg = render(code, {
           ...MERMAID_THEME,
-          font: "Inter",
+          font: rendererFont,
         });
+
         // Strip the external Google Fonts @import for offline security & performance
-        const sanitizedSvg = rawSvg.replace(/@import\s+url\([^)]+\);\s*/gi, "");
-        setResult({ svg: sanitizedSvg, error: null });
+        const strippedSvg = rawSvg.replace(/@import\s+url\([^)]+\);\s*/gi, "");
+
+        // Parse with DOMParser to safely inspect and set rem width without breaking existing attributes/styles
+        let sizedSvg = strippedSvg;
+        if (typeof DOMParser !== "undefined") {
+          try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(strippedSvg, "image/svg+xml");
+            const svgEl = doc.documentElement;
+            if (svgEl && svgEl.nodeName.toLowerCase() === "svg") {
+              const vb = svgEl.getAttribute("viewBox");
+              if (vb) {
+                const parts = vb.trim().split(/\s+/).map(Number);
+                if (
+                  parts.length === 4 &&
+                  parts.every((n) => Number.isFinite(n)) &&
+                  parts[2]! > 0 &&
+                  parts[3]! > 0
+                ) {
+                  const vbWidth = parts[2]!;
+                  const widthRem = (vbWidth / 16).toFixed(4);
+                  svgEl.style.width = `${widthRem}rem`;
+                  svgEl.style.maxWidth = "100%";
+                  svgEl.style.height = "auto";
+                  sizedSvg = new XMLSerializer().serializeToString(svgEl);
+                }
+              }
+            }
+          } catch {
+            // Keep strippedSvg if parsing fails
+          }
+        }
+
+        setResult({ svg: sizedSvg, error: null });
       } catch (err) {
         setResult({
           svg: null,
@@ -336,7 +382,7 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({ code, className, streamin
     return () => {
       cancelled = true;
     };
-  }, [streaming, code]);
+  }, [streaming, code, activeFontId]);
 
   if (!result) {
     return (

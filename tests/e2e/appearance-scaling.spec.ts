@@ -1,23 +1,26 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * Typography & application scaling — rendered-behaviour coverage.
+ * Typography & root rem scaling — rendered-behaviour coverage.
+ *
+ * In V7, Interface Size directly drives root rem scaling:
+ * <html> font-size is set to `${interfaceFontSize}px` (14px–24px).
  *
  * The independence contract is asserted against COMPUTED styles of real
  * elements (the appearance page renders a live code preview and a live
  * terminal preview), not against root variables alone:
  *
- * - interface changes leave code and terminal typography untouched;
+ * - interface size/font changes leave code and terminal typography untouched;
  * - code changes leave interface and terminal typography untouched;
  * - terminal changes leave interface and code typography untouched;
  * - code wrap is visual only (textContent is byte-identical);
  * - terminal wrap does not affect code wrap;
  * - reading line height affects prose only;
- * - application scale changes geometry but never stored font preferences.
+ * - legacy v2 stored settings migrate to valid v3 on startup and reload.
  */
 
-const V2_DEFAULTS = {
-  version: 2,
+const V3_DEFAULTS = {
+  version: 3,
   interfaceFontFamily: "inter",
   interfaceFontSize: 16,
   interfaceFontWeight: 400,
@@ -30,7 +33,6 @@ const V2_DEFAULTS = {
   terminalFontWeight: 400,
   terminalWrap: true,
   readingLineHeight: 1.5,
-  appScale: 1,
 } as const;
 
 /** Seed a Direct conversation with one user turn and one assistant reply. */
@@ -69,30 +71,43 @@ async function seedConversationWithReply(
   return conversation.id;
 }
 
-test.describe("Typography & Application Scaling Compatibility", () => {
-  test("scales application at 75%, 100%, and 150% without breaking virtualized transcript, logs, and radix overlays", async ({
+test.describe("Typography & Root REM Scaling Compatibility", () => {
+  test("Interface Size scales documentElement font-size across supported sizes (14px–24px) without breaking overlays, logs, or overflowing", async ({
     page,
   }) => {
-    // Test scales: 75% (0.75), 100% (1), 150% (1.5)
-    const zoomLevels = [0.75, 1.0, 1.5];
+    const testSizes = [14, 16, 20, 24];
 
-    for (const zoom of zoomLevels) {
-      // 1. Visit Appearance and apply zoom
+    for (const size of testSizes) {
       await page.goto("/#/appearance");
       await page.waitForLoadState("domcontentloaded");
 
-      await page.evaluate((z) => {
-        document.documentElement.style.zoom = String(z);
-      }, zoom);
+      // Set interface size in localStorage and reload
+      await page.evaluate((s) => {
+        localStorage.setItem(
+          "tbai-typography",
+          JSON.stringify({
+            version: 3,
+            interfaceFontSize: s,
+          }),
+        );
+      }, size);
 
-      // In CSS zoom, document.body.scrollWidth reports in scaled CSS pixels.
-      // Assert that there is no unintended horizontal scrollbar on documentElement.
+      await page.reload();
+      await page.waitForLoadState("domcontentloaded");
+
+      // Verify root element computed font-size matches exactly
+      const rootComputedSize = await page.evaluate(() => {
+        return Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      });
+      expect(rootComputedSize).toBe(size);
+
+      // Verify no horizontal document overflow
       const hasHorizontalOverflow = await page.evaluate(() => {
         return document.documentElement.scrollWidth > document.documentElement.clientWidth + 5;
       });
       expect(hasHorizontalOverflow).toBe(false);
 
-      // 2. Test Radix Overlay (Select dropdown) under zoom
+      // Verify Radix Select dropdown works and stays in viewport
       const fontSelect = page.getByRole("combobox").first();
       await expect(fontSelect).toBeVisible();
       await fontSelect.click();
@@ -100,41 +115,28 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       const selectContent = page.locator("[data-slot='select-content']");
       await expect(selectContent).toBeVisible();
 
-      // Check coordinates of popover are aligned within viewport
       const selectBox = await selectContent.boundingBox();
       expect(selectBox).not.toBeNull();
       expect(selectBox!.x).toBeGreaterThanOrEqual(0);
       expect(selectBox!.y).toBeGreaterThanOrEqual(0);
 
-      // Dismiss select with Escape
       await page.keyboard.press("Escape");
 
-      // 3. Test Virtualized Transcript under zoom
+      // Verify Transcript composer mounts cleanly under root rem scaling
       await page.goto("/#/");
       await page.waitForLoadState("domcontentloaded");
-
-      await page.evaluate((z) => {
-        document.documentElement.style.zoom = String(z);
-      }, zoom);
-
       const composer = page
         .getByRole("textbox", { name: "Send a message" })
         .or(page.locator("textarea"))
         .first();
       await expect(composer).toBeVisible();
 
-      // 4. Test Virtualized LogsPanel under zoom
+      // Verify Logs page scroll container functions cleanly
       await page.goto("/#/logs");
       await page.waitForLoadState("domcontentloaded");
-
-      await page.evaluate((z) => {
-        document.documentElement.style.zoom = String(z);
-      }, zoom);
-
       const recentHeading = page.getByRole("heading", { name: "Recent logs" });
       await expect(recentHeading).toBeVisible({ timeout: 15000 });
 
-      // Check log viewport scroll dimensions
       const logScrollContainer = page.locator(".h-\\[30rem\\]").first();
       if (await logScrollContainer.isVisible()) {
         const dimensions = await logScrollContainer.evaluate((el) => ({
@@ -159,7 +161,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       localStorage.setItem(
         "tbai-typography",
         JSON.stringify({
-          version: 2,
+          version: 3,
           interfaceFontFamily: "outfit",
           interfaceFontSize: 18,
           interfaceFontWeight: 600,
@@ -172,7 +174,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
           terminalFontWeight: 600,
           terminalWrap: false,
           readingLineHeight: 1.65,
-          appScale: 1.125,
         }),
       );
     });
@@ -184,8 +185,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     const state = await page.evaluate(() => {
       const root = document.documentElement;
       return {
-        zoom: (root.style as CSSStyleDeclaration & { zoom?: string }).zoom,
-        interfaceFontSize: root.style.getPropertyValue("--interface-font-size").trim(),
+        rootComputedSize: Number.parseFloat(getComputedStyle(root).fontSize),
         fontWeight: root.style.getPropertyValue("--font-weight-base").trim(),
         codeFontFamily: root.style.getPropertyValue("--code-font-family").trim(),
         codeFontSize: root.style.getPropertyValue("--code-font-size").trim(),
@@ -200,8 +200,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       };
     });
 
-    expect(state.zoom).toBe("1.125");
-    expect(state.interfaceFontSize).toBe("18px");
+    expect(state.rootComputedSize).toBe(18);
     expect(state.fontWeight).toBe("600");
     expect(state.codeFontFamily).toContain("Fira Code");
     expect(state.codeFontSize).toBe("15px");
@@ -224,7 +223,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       localStorage.setItem(
         "tbai-typography",
         JSON.stringify({
-          version: 2,
+          version: 3,
           interfaceFontFamily: "roboto",
           interfaceFontSize: 18,
           interfaceFontWeight: 700,
@@ -237,7 +236,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
           terminalFontWeight: 600,
           terminalWrap: false,
           readingLineHeight: 1.65,
-          appScale: 1.125,
         }),
       );
     });
@@ -265,7 +263,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     expect(saved.terminalFontSize).toBe(14);
     expect(saved.terminalWrap).toBe(false);
     expect(saved.readingLineHeight).toBe(1.65);
-    expect(saved.appScale).toBe(1.125);
 
     // Click "Reset interface"
     const resetInterfaceBtn = page.getByRole("button", { name: "Reset interface" });
@@ -278,7 +275,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     expect(saved.interfaceFontWeight).toBe(400);
     // Preserved:
     expect(saved.terminalFontFamily).toBe("source-code-pro");
-    expect(saved.appScale).toBe(1.125);
 
     // Click "Reset terminal"
     const resetTerminalBtn = page.getByRole("button", { name: "Reset terminal" });
@@ -291,7 +287,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     expect(saved.terminalFontWeight).toBe(400);
     expect(saved.terminalWrap).toBe(true);
     // Preserved:
-    expect(saved.appScale).toBe(1.125);
     expect(saved.readingLineHeight).toBe(1.65);
 
     // Click "Reset reading"
@@ -301,16 +296,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
 
     saved = await readSaved();
     expect(saved.readingLineHeight).toBe(1.5);
-    // Preserved:
-    expect(saved.appScale).toBe(1.125);
-
-    // Click "Reset scale"
-    const resetScaleBtn = page.getByRole("button", { name: "Reset scale" });
-    await expect(resetScaleBtn).toBeVisible();
-    await resetScaleBtn.click();
-
-    saved = await readSaved();
-    expect(saved.appScale).toBe(1);
 
     // Click "Reset all"
     const resetAllBtn = page.getByRole("button", { name: "Reset all" });
@@ -318,7 +303,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     await resetAllBtn.click();
 
     saved = await readSaved();
-    expect(saved).toEqual(V2_DEFAULTS);
+    expect(saved).toEqual(V3_DEFAULTS);
   });
 
   test("interface changes do not modify code or terminal typography", async ({ page }) => {
@@ -339,11 +324,11 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       terminalWeight: await terminalBlock.evaluate((el) => getComputedStyle(el).fontWeight),
     };
 
-    // Change the interface font to Roboto via localStorage + reload.
+    // Change the interface font to Roboto and size to 20px via localStorage + reload.
     await page.evaluate(() => {
       localStorage.setItem(
         "tbai-typography",
-        JSON.stringify({ version: 2, interfaceFontFamily: "roboto", interfaceFontSize: 20 }),
+        JSON.stringify({ version: 3, interfaceFontFamily: "roboto", interfaceFontSize: 20 }),
       );
     });
     await page.reload();
@@ -376,6 +361,10 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     // The interface itself did change.
     const bodyFamily = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
     expect(bodyFamily).toContain("Roboto");
+    const rootComputedSize = await page.evaluate(() =>
+      Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+    );
+    expect(rootComputedSize).toBe(20);
   });
 
   test("code changes do not modify interface or terminal typography", async ({ page }) => {
@@ -396,7 +385,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       localStorage.setItem(
         "tbai-typography",
         JSON.stringify({
-          version: 2,
+          version: 3,
           codeFontFamily: "fira-code",
           codeFontSize: 17,
           codeFontWeight: 700,
@@ -447,7 +436,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       localStorage.setItem(
         "tbai-typography",
         JSON.stringify({
-          version: 2,
+          version: 3,
           terminalFontFamily: "source-code-pro",
           terminalFontSize: 16,
           terminalFontWeight: 700,
@@ -492,7 +481,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
 
     // Enable code word wrap via localStorage + reload.
     await page.evaluate(() => {
-      localStorage.setItem("tbai-typography", JSON.stringify({ version: 2, codeWordWrap: true }));
+      localStorage.setItem("tbai-typography", JSON.stringify({ version: 3, codeWordWrap: true }));
     });
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
@@ -516,7 +505,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
 
     // Toggle terminal wrapping off; code wrapping must be untouched.
     await page.evaluate(() => {
-      localStorage.setItem("tbai-typography", JSON.stringify({ version: 2, terminalWrap: false }));
+      localStorage.setItem("tbai-typography", JSON.stringify({ version: 3, terminalWrap: false }));
     });
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
@@ -534,13 +523,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
   });
 
   test("the OpenCode JSON preview uses the selected code font", async ({ page }) => {
-    // The preview is rendered by the real `OpenCodeConfigPage` component from a
-    // `GET /api/opencode/config` snapshot. That snapshot needs a live managed
-    // OpenCode server AND a readable global `opencode.json`, and the isolated
-    // e2e server deliberately has neither (its own empty XDG roots, no managed
-    // server). So the DATA SOURCE is stubbed here; everything the assertion is
-    // about — the component's markup, the real stylesheet, the cascade onto the
-    // nested `<code>` — is the application's own.
     const snapshot = {
       path: "C:\\config\\opencode\\opencode.json",
       discoveredPaths: ["C:\\config\\opencode\\opencode.json"],
@@ -558,8 +540,6 @@ test.describe("Typography & Application Scaling Compatibility", () => {
       }),
     );
 
-    // The nested `<code>` is the element the bug lived on: the generic code
-    // rule applied `--font-mono` to it, overriding the preview's code font.
     const readPreview = async () => {
       const preview = page.locator('[data-slot="code-preview"]');
       const code = page.locator('[data-slot="code-preview"] code');
@@ -574,13 +554,10 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     await page.waitForLoadState("domcontentloaded");
     const before = await readPreview();
 
-    // A non-default code font is required: the default code font IS the generic
-    // monospace stack, so a default-only reading cannot tell a working selector
-    // from the broken one.
     await page.evaluate(() => {
       localStorage.setItem(
         "tbai-typography",
-        JSON.stringify({ version: 2, codeFontFamily: "fira-code", codeFontSize: 17 }),
+        JSON.stringify({ version: 3, codeFontFamily: "fira-code", codeFontSize: 17 }),
       );
     });
     await page.reload();
@@ -616,7 +593,7 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     await page.evaluate(() => {
       localStorage.setItem(
         "tbai-typography",
-        JSON.stringify({ version: 2, readingLineHeight: 1.65 }),
+        JSON.stringify({ version: 3, readingLineHeight: 1.65 }),
       );
     });
     await page.reload();
@@ -633,10 +610,14 @@ test.describe("Typography & Application Scaling Compatibility", () => {
     );
   });
 
-  test("application scale changes geometry but not stored font preferences", async ({ page }) => {
+  test("legacy v2 stored typography migrates to valid v3 on startup and reload", async ({
+    page,
+  }) => {
     await page.goto("/#/appearance");
     await page.waitForLoadState("domcontentloaded");
 
+    // Seed v2 configuration with interfaceFontSize 18 and appScale 1.125
+    // 18 * 1.125 = 20.25 -> clamped/rounded to 20
     await page.evaluate(() => {
       localStorage.setItem(
         "tbai-typography",
@@ -648,28 +629,31 @@ test.describe("Typography & Application Scaling Compatibility", () => {
           codeFontSize: 15,
           terminalFontFamily: "source-code-pro",
           terminalFontSize: 14,
-          appScale: 1.25,
+          appScale: 1.125,
         }),
       );
     });
+
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
-    const zoom = await page.evaluate(
-      () => (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom,
+    // Root computed fontSize should be migrated to 20px
+    const rootComputedSize = await page.evaluate(() =>
+      Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
     );
-    expect(zoom).toBe("1.25");
+    expect(rootComputedSize).toBe(20);
 
-    // Stored font preferences are untouched by the scale.
+    // Stored settings migrated to version 3 without appScale
     const saved = await page.evaluate(() =>
       JSON.parse(localStorage.getItem("tbai-typography") || "{}"),
     );
+    expect(saved.version).toBe(3);
     expect(saved.interfaceFontFamily).toBe("roboto");
-    expect(saved.interfaceFontSize).toBe(18);
+    expect(saved.interfaceFontSize).toBe(20);
     expect(saved.codeFontFamily).toBe("fira-code");
     expect(saved.codeFontSize).toBe(15);
     expect(saved.terminalFontFamily).toBe("source-code-pro");
     expect(saved.terminalFontSize).toBe(14);
-    expect(saved.appScale).toBe(1.25);
+    expect(saved.appScale).toBeUndefined();
   });
 });

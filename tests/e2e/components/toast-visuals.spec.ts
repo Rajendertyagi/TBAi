@@ -59,7 +59,7 @@ async function removeCreated(request: APIRequestContext, before: Set<string>): P
 /** Opens Quick Messages and creates a row, which raises sonner's success toast. */
 async function createToast(page: Page): Promise<void> {
   await page.goto("/#/quick-messages");
-  await expect(page.getByRole("heading", { name: "Quick Messages", level: 2 })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Quick Messages", level: 1 })).toBeVisible({
     timeout: 15000,
   });
   await page.getByRole("button", { name: "New", exact: true }).click();

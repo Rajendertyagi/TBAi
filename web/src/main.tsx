@@ -5,6 +5,10 @@ import { installGlobalLogHooks } from "./lib/logger";
 import { installOperationHeaderFetch } from "./lib/operation";
 import { ThemeProvider } from "./components/theme-provider";
 import { AppToaster } from "./components/AppToaster";
+import { readTypography } from "./features/appearance/typography";
+
+// Ensure migrated typography is normalized and persisted on startup
+readTypography();
 
 // DEV ONLY compatibility shim for the assistant-ui DevTools chain.
 //

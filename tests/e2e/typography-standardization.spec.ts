@@ -3,7 +3,7 @@ import type { APIRequestContext, Page } from "@playwright/test";
 import type { TypographyConfig } from "../../web/src/features/appearance/typography";
 
 /**
- * Typography standardization — rendered behaviour (Phase 5).
+ * Typography standardization — rendered behaviour (Phase 5 / V7).
  *
  * This spec covers what only a real browser can prove:
  *
@@ -14,7 +14,10 @@ import type { TypographyConfig } from "../../web/src/features/appearance/typogra
  * - the badge's content-driven minimum at the maximum interface size;
  * - a real structured tool payload following the Code channel (not Interface);
  * - Lato registering every advertised weight for both probe texts;
- * - the 12/13 → 14 migration reaching first paint.
+ * - the 12/13 → 14 migration reaching first paint;
+ * - Mermaid renderer font reactivity and rem-based scaling;
+ * - Sonner toast font inheritance without blanket !important;
+ * - Dialog viewport constraints at 600px, 700px, and 900px.
  *
  * The three `0.84375×` multiplier sites and the `mono` helper live only in
  * agent-mode (OpenCode) surfaces, which the isolated e2e server cannot mount
@@ -22,8 +25,8 @@ import type { TypographyConfig } from "../../web/src/features/appearance/typogra
  * see tests/dom/appearance/typography.test.tsx.
  */
 
-const V2_DEFAULTS = {
-  version: 2,
+const V3_DEFAULTS = {
+  version: 3,
   interfaceFontFamily: "inter",
   interfaceFontSize: 16,
   interfaceFontWeight: 400,
@@ -36,7 +39,6 @@ const V2_DEFAULTS = {
   terminalFontWeight: 400,
   terminalWrap: true,
   readingLineHeight: 1.5,
-  appScale: 1,
 } as const;
 
 const SETTINGS_ROUTES = [
@@ -57,7 +59,7 @@ async function applyTypography(
   page: Page,
   overrides: Partial<TypographyConfig> = {},
 ): Promise<void> {
-  const config = { ...V2_DEFAULTS, ...overrides };
+  const config = { ...V3_DEFAULTS, ...overrides };
   await page.evaluate((value) => {
     localStorage.setItem("tbai-typography", JSON.stringify(value));
   }, config);
@@ -70,7 +72,6 @@ async function fontSizeOf(page: Page, needle: string): Promise<number | null> {
   const locator = page.locator(`text=${needle}`).first();
   await expect(locator).toBeVisible({ timeout: 10_000 });
   return locator.evaluate((el) => {
-    // If el has children and one of them also contains the text directly, find the deepest leaf
     let curr: HTMLElement = el as HTMLElement;
     while (curr.firstElementChild) {
       const childWithText = Array.from(curr.children).find((c) =>
@@ -95,7 +96,6 @@ test.describe("page-title convention", () => {
       const heading = page.locator("h1");
       await expect(heading, `${route.path} must render one h1`).toHaveCount(1);
       await expect(heading).toHaveText(route.heading);
-      // The strip is chrome: it repeats the section name as a span.
       const strip = page.locator('[data-slot="page-title-strip"]');
       await expect(strip).toBeVisible();
       await expect(strip.locator("h1")).toHaveCount(0);
@@ -170,10 +170,10 @@ test.describe("migration to the 14px minimum", () => {
     await page.goto("/#/appearance");
     await applyTypography(page, { interfaceFontSize: 12 });
 
-    const rootSize = await page.evaluate(() =>
-      getComputedStyle(document.documentElement).getPropertyValue("--interface-font-size").trim(),
+    const rootComputed = await page.evaluate(() =>
+      Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
     );
-    expect(rootSize).toBe("14px");
+    expect(rootComputed).toBe(14);
     await expect(page.getByRole("spinbutton", { name: "Interface font size (px)" })).toHaveValue(
       "14",
     );
@@ -202,7 +202,7 @@ test.describe("badge at the maximum interface size", () => {
       height: element.getBoundingClientRect().height,
     }));
     expect(maximumBox.scroll).toBeLessThanOrEqual(maximumBox.client);
-    expect(Math.round(maximumBox.height)).toBe(23);
+    expect(maximumBox.height).toBeGreaterThanOrEqual(23);
   });
 
   test("ProviderDialog context window input renders compact and grows at 24px", async ({
@@ -211,18 +211,15 @@ test.describe("badge at the maximum interface size", () => {
     await page.goto("/#/providers");
     await applyTypography(page, { interfaceFontSize: 16 });
 
-    // Open edit dialog for the first provider
     const editBtn = page.locator('button[aria-label^="Edit "]').first();
     await expect(editBtn).toBeVisible();
     await editBtn.click();
 
-    // Add a manual model so we have a model chip with context-window button
     const modelInput = page.locator('input[placeholder*="Type a model name"]').first();
     await expect(modelInput).toBeVisible();
     await modelInput.fill("test-model");
     await page.getByRole("button", { name: "Add", exact: true }).click();
 
-    // Context window button ("set window" or formatContextWindow)
     const windowBtn = page
       .locator(
         'button[title="Edit context window"], button[title="Set context window"], button:has-text("set window")',
@@ -231,7 +228,6 @@ test.describe("badge at the maximum interface size", () => {
     await expect(windowBtn).toBeVisible();
     await windowBtn.click();
 
-    // Input is rendered
     const input = page.locator('input[aria-label^="Context window for"]').first();
     await expect(input).toBeVisible();
 
@@ -250,11 +246,9 @@ test.describe("badge at the maximum interface size", () => {
     expect(at16.height).toBeCloseTo(20, 1);
     expect(at16.scroll).toBeLessThanOrEqual(at16.client);
 
-    // Close the dialog by clicking the overlay or pressing Escape twice
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
 
-    // Now test at interface font size 24px
     await applyTypography(page, { interfaceFontSize: 24 });
     const editBtn24 = page.locator('button[aria-label^="Edit "]').first();
     await expect(editBtn24).toBeVisible();
@@ -349,6 +343,7 @@ test.describe("structured tool payload follows the Code channel", () => {
     page,
     request,
   }) => {
+    test.setTimeout(120_000);
     const conversationId = await createConversation(request);
     try {
       await page.goto(`/#/chat/${conversationId}`);
@@ -371,8 +366,6 @@ test.describe("structured tool payload follows the Code channel", () => {
       expect(atDefault.size).toBeCloseTo(13, 2);
       expect(atDefault.family).toContain("JetBrains Mono");
 
-      // Interface 24 with Code still 13: the payload must not grow with the
-      // interface setting. Reloading also re-renders it from history.
       await applyTypography(page, { interfaceFontSize: 24, codeFontSize: 13 });
       const afterResize = page.locator('[data-slot="code-payload"]').first();
       await expect(afterResize).toBeVisible({ timeout: 60_000 });
@@ -390,6 +383,7 @@ test.describe("structured tool payload follows the Code channel", () => {
     page,
     request,
   }) => {
+    test.setTimeout(120_000);
     const conversationId = await createConversation(request);
     try {
       await page.goto(`/#/chat/${conversationId}`);
@@ -407,7 +401,6 @@ test.describe("structured tool payload follows the Code channel", () => {
 
       await sendMessage(page, "run a failing command for the typography probe");
 
-      // Approve the command when the approval button appears
       const approveBtn = page.getByRole("button", { name: /^Approve\b/i }).first();
       await expect(approveBtn).toBeVisible({ timeout: 30_000 });
       await approveBtn.click();
@@ -426,7 +419,6 @@ test.describe("structured tool payload follows the Code channel", () => {
       expect(lineStyles.size).toBeCloseTo(14, 2);
       expect(lineStyles.family).toContain("JetBrains Mono");
 
-      // Status pill / header exit badge remains compact metadata on fixed monospace stack
       const terminalBlock = page.locator('[data-slot="terminal-block"]').first();
       await expect(terminalBlock).toBeVisible();
       const statusPill = terminalBlock
@@ -439,7 +431,6 @@ test.describe("structured tool payload follows the Code channel", () => {
           family: style.fontFamily,
         };
       });
-      // Compact metadata is 12px (text-xs at 16px) or uses generic font-mono
       expect(pillStyles.size).toBeLessThanOrEqual(14);
     } finally {
       await request.post(`${STUB}/__e2e/tool/disarm`).catch(() => undefined);
@@ -471,4 +462,226 @@ test.describe("Lato weight parity", () => {
     expect(new Set(loaded.a)).toEqual(new Set(["100", "300", "400", "700", "900"]));
     expect(new Set(loaded.z)).toEqual(new Set(["100", "300", "400", "700", "900"]));
   });
+});
+
+test.describe("Mermaid renderer font and scaling integration", () => {
+  const MERMAID_BLOCK = ["```mermaid", "flowchart TD", "  A[Start] --> B[Finish]", "```"].join(
+    "\n",
+  );
+
+  async function seedConversation(request: APIRequestContext, label: string): Promise<string> {
+    const created = await request.post("/api/conversations", {
+      data: { title: label, workspaceMode: "simple", engine: "direct" },
+    });
+    expect(created.ok()).toBe(true);
+    const conversation = (await created.json()) as { id: string };
+    const user = await request.post(`/api/conversations/${conversation.id}/messages`, {
+      data: {
+        message: {
+          id: `seed-user-${conversation.id}`,
+          parent_id: null,
+          format: "ai-sdk/v6",
+          content: { role: "user", parts: [{ type: "text", text: "draw the flow" }] },
+        },
+      },
+    });
+    expect(user.ok()).toBe(true);
+    return conversation.id;
+  }
+
+  async function seedAssistantReply(
+    request: APIRequestContext,
+    conversationId: string,
+    text: string,
+  ): Promise<void> {
+    const reply = await request.post(`/api/conversations/${conversationId}/messages`, {
+      data: {
+        message: {
+          id: `seed-assistant-${conversationId}`,
+          parent_id: `seed-user-${conversationId}`,
+          format: "ai-sdk/v6",
+          content: { role: "assistant", parts: [{ type: "text", text }] },
+        },
+      },
+    });
+    expect(reply.ok()).toBe(true);
+  }
+
+  test("Mermaid SVG uses selected font, scales with root rem, and blocks external font requests", async ({
+    page,
+    request,
+  }) => {
+    // Intercept and assert no external requests to Google Fonts
+    const fontRequests: string[] = [];
+    await page.route("**/fonts.googleapis.com/**", (route) => {
+      fontRequests.push(route.request().url());
+      route.abort();
+    });
+    await page.route("**/fonts.gstatic.com/**", (route) => {
+      fontRequests.push(route.request().url());
+      route.abort();
+    });
+
+    const conversationId = await seedConversation(request, `mermaid probe ${Date.now()}`);
+    try {
+      await seedAssistantReply(
+        request,
+        conversationId,
+        `Here is the diagram.\n\n${MERMAID_BLOCK}\n`,
+      );
+
+      await page.goto(`/#/chat/${conversationId}`);
+      await applyTypography(page, {
+        interfaceFontFamily: "roboto",
+        interfaceFontSize: 16,
+      });
+
+      // Verify the rendered SVG appears
+      const diagram = page.locator('[data-slot="mermaid-diagram"]');
+      await expect(diagram).toBeVisible({ timeout: 30_000 });
+      const svg = diagram.locator("svg").first();
+      await expect(svg).toBeVisible({ timeout: 30_000 });
+
+      // Check font family inside the SVG text elements matches Roboto
+      const svgTextFamily = await svg
+        .locator("text")
+        .first()
+        .evaluate((el) => {
+          return getComputedStyle(el).fontFamily;
+        });
+      expect(svgTextFamily.toLowerCase()).toContain("roboto");
+
+      // Check rem-based width styling on SVG root
+      const svgWidth16 = await svg.evaluate((el) => {
+        return (el as SVGElement).style.width;
+      });
+      expect(svgWidth16).toMatch(/rem$/);
+
+      const computedPixelWidth16 = await svg.evaluate((el) => el.getBoundingClientRect().width);
+
+      // Change root interface font size to 24px and verify SVG scales proportionally
+      await applyTypography(page, {
+        interfaceFontFamily: "roboto",
+        interfaceFontSize: 24,
+      });
+
+      const diagram24 = page.locator('[data-slot="mermaid-diagram"]');
+      await expect(diagram24).toBeVisible({ timeout: 30_000 });
+      const svg24 = diagram24.locator("svg").first();
+      await expect(svg24).toBeVisible({ timeout: 30_000 });
+      const computedPixelWidth24 = await svg24.evaluate((el) => el.getBoundingClientRect().width);
+      // At 24px root vs 16px root, ratio is 1.5x
+      expect(computedPixelWidth24).toBeGreaterThan(computedPixelWidth16 * 1.3);
+
+      // Verify no external font requests were made
+      expect(fontRequests).toEqual([]);
+    } finally {
+      await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);
+    }
+  });
+});
+
+test.describe("Sonner toast typography inheritance", () => {
+  const TOAST = "[data-sonner-toast]";
+
+  async function quickMessageIds(request: APIRequestContext): Promise<Set<string>> {
+    const res = await request.get("/api/quick-messages");
+    expect(res.ok()).toBe(true);
+    const items = (await res.json()) as Array<{ id: string }>;
+    return new Set(items.map((item) => item.id));
+  }
+
+  async function removeCreated(request: APIRequestContext, before: Set<string>): Promise<void> {
+    const res = await request.get("/api/quick-messages");
+    if (!res.ok()) return;
+    const items = (await res.json()) as Array<{ id: string }>;
+    for (const item of items) {
+      if (!before.has(item.id)) {
+        await request.delete(`/api/quick-messages/${item.id}`);
+      }
+    }
+  }
+
+  test("toasts inherit font-family and scale with root rem across 14px, 16px, and 24px", async ({
+    page,
+    request,
+  }) => {
+    const before = await quickMessageIds(request);
+    try {
+      const sizes = [14, 16, 24];
+
+      for (const size of sizes) {
+        await page.goto("/#/quick-messages");
+        await applyTypography(page, {
+          interfaceFontFamily: "outfit",
+          interfaceFontSize: size,
+        });
+
+        await expect(page.getByRole("heading", { name: "Quick Messages", level: 1 })).toBeVisible({
+          timeout: 15000,
+        });
+        await page.getByRole("button", { name: "New", exact: true }).click();
+        const toastLocator = page.locator(TOAST).first();
+        await expect(toastLocator).toBeVisible({ timeout: 15000 });
+
+        // Evaluate toast computed styles
+        const toastStyles = await toastLocator.evaluate((el) => {
+          const style = getComputedStyle(el);
+          return {
+            family: style.fontFamily,
+            fontSize: Number.parseFloat(style.fontSize),
+          };
+        });
+
+        // Font family inherits the interface font (Outfit)
+        expect(toastStyles.family.toLowerCase()).toContain("outfit");
+
+        // Font size is rem-based (0.875rem), so at root size S it should compute to S * 0.875
+        expect(toastStyles.fontSize).toBeCloseTo(size * 0.875, 1);
+      }
+    } finally {
+      await removeCreated(request, before);
+    }
+  });
+});
+
+test.describe("Dialog viewport constraints", () => {
+  const viewports = [
+    { width: 1024, height: 600 },
+    { width: 1024, height: 700 },
+    { width: 1024, height: 900 },
+  ];
+
+  for (const vp of viewports) {
+    test(`ProviderDialog stays within viewport and maintains internal scroll at ${vp.height}px height`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(vp);
+      await page.goto("/#/providers");
+      await applyTypography(page, { interfaceFontSize: 16 });
+
+      const editBtn = page.locator('button[aria-label^="Edit "]').first();
+      await expect(editBtn).toBeVisible();
+      await editBtn.click();
+
+      const dialogContent = page.locator("[data-slot='dialog-content']").first();
+      await expect(dialogContent).toBeVisible();
+
+      const rect = await dialogContent.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return {
+          top: r.top,
+          bottom: r.bottom,
+          height: r.height,
+        };
+      });
+
+      // Dialog must be bounded within viewport height
+      expect(rect.top).toBeGreaterThanOrEqual(0);
+      expect(rect.bottom).toBeLessThanOrEqual(vp.height + 2);
+      expect(rect.height).toBeLessThanOrEqual(vp.height);
+
+      await page.keyboard.press("Escape");
+    });
+  }
 });

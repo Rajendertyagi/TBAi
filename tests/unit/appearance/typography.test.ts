@@ -13,6 +13,7 @@ import {
   resetReadingTypography,
   resetTerminalTypography,
   resetTypography,
+  subscribeInterfaceFont,
   UI_FONTS,
   writeTypography,
   type TypographyConfig,
@@ -172,7 +173,7 @@ describe("Typography config, storage & scoped resets (v3)", () => {
     expect(config.codeWordWrap).toBe(true);
   });
 
-  it("validates every v3 field independently", () => {
+  it("validates every v3 field independently and enforces strict booleans", () => {
     if (typeof window === "undefined" || !window.localStorage) return;
     window.localStorage.setItem(
       STORAGE_KEY,
@@ -184,11 +185,11 @@ describe("Typography config, storage & scoped resets (v3)", () => {
         codeFontFamily: "not-a-mono",
         codeFontSize: 99,
         codeFontWeight: 42,
-        codeWordWrap: "yes",
+        codeWordWrap: "yes", // malformed non-boolean -> false
         terminalFontFamily: "not-a-mono",
         terminalFontSize: 99,
         terminalFontWeight: 42,
-        terminalWrap: "yes",
+        terminalWrap: "no", // malformed non-boolean -> true
         readingLineHeight: 99,
       }),
     );
@@ -206,6 +207,78 @@ describe("Typography config, storage & scoped resets (v3)", () => {
     expect(config.terminalFontWeight).toBe(400);
     expect(config.terminalWrap).toBe(true);
     expect(config.readingLineHeight).toBe(1.5);
+  });
+
+  it("proves migration and serialization idempotence across repeated cycles", () => {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    const v2 = {
+      version: 2,
+      interfaceFontFamily: "outfit",
+      interfaceFontSize: 16,
+      interfaceFontWeight: 600,
+      codeFontFamily: "fira-code",
+      codeFontSize: 14,
+      codeFontWeight: 500,
+      codeWordWrap: true,
+      terminalFontFamily: "source-code-pro",
+      terminalFontSize: 13,
+      terminalFontWeight: 400,
+      terminalWrap: false,
+      readingLineHeight: 1.65,
+      appScale: 1.125, // 16 * 1.125 = 18
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v2));
+
+    const read1 = readTypography();
+    expect(read1.interfaceFontSize).toBe(18);
+    expect(read1.version).toBe(3);
+
+    const serialized1 = window.localStorage.getItem(STORAGE_KEY);
+    const read2 = readTypography();
+    const serialized2 = window.localStorage.getItem(STORAGE_KEY);
+
+    expect(read2).toEqual(read1);
+    expect(serialized2).toBe(serialized1);
+  });
+
+  it("observable font subscription matrix: notifies strictly on Interface Font changes", () => {
+    const received: string[] = [];
+    const unsubscribe = subscribeInterfaceFont((id) => received.push(id));
+
+    // Baseline: current font is "inter"
+    const current = readTypography();
+
+    // 1. Unrelated changes must NOT notify
+    writeTypography({ ...current, interfaceFontSize: 20 });
+    writeTypography({ ...current, interfaceFontWeight: 700 });
+    writeTypography({ ...current, codeFontFamily: "fira-code" });
+    writeTypography({ ...current, terminalFontFamily: "source-code-pro" });
+    writeTypography({ ...current, readingLineHeight: 1.65 });
+    expect(received).toEqual([]);
+
+    // 2. Genuine Interface Font change MUST notify
+    writeTypography({ ...current, interfaceFontFamily: "roboto" });
+    expect(received).toEqual(["roboto"]);
+
+    // 3. Repeated write of the same font must NOT notify again
+    writeTypography({ ...current, interfaceFontFamily: "roboto" });
+    expect(received).toEqual(["roboto"]);
+
+    // 4. Second subscriber receives notifications simultaneously
+    const secondReceived: string[] = [];
+    const unsubscribe2 = subscribeInterfaceFont((id) => secondReceived.push(id));
+
+    writeTypography({ ...current, interfaceFontFamily: "outfit" });
+    expect(received).toEqual(["roboto", "outfit"]);
+    expect(secondReceived).toEqual(["outfit"]);
+
+    // 5. Unsubscribed listener stops receiving notifications
+    unsubscribe();
+    writeTypography({ ...current, interfaceFontFamily: "figtree" });
+    expect(received).toEqual(["roboto", "outfit"]); // unchanged
+    expect(secondReceived).toEqual(["outfit", "figtree"]);
+
+    unsubscribe2();
   });
 
   it("clamps interface and code weights independently", () => {

@@ -43,6 +43,10 @@ export interface FontDefinition {
   maxWeight?: number;
 }
 
+export interface UIFontDefinition extends FontDefinition {
+  readonly rendererFamily: string;
+}
+
 export const DEFAULT_TYPOGRAPHY: TypographyConfig = {
   version: 3,
   interfaceFontFamily: "inter",
@@ -59,12 +63,13 @@ export const DEFAULT_TYPOGRAPHY: TypographyConfig = {
   readingLineHeight: 1.5,
 };
 
-export const UI_FONTS: readonly FontDefinition[] = [
+export const UI_FONTS: readonly UIFontDefinition[] = [
   {
     id: "inter",
     label: "Inter (Default)",
     stack:
       '"Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    rendererFamily: "Inter Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 100,
@@ -75,6 +80,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     label: "SF Pro / Apple System",
     stack:
       '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
+    rendererFamily: "SF Pro Display",
     category: "sans",
     weights: "continuous",
     minWeight: 100,
@@ -84,6 +90,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "roboto",
     label: "Roboto",
     stack: '"Roboto Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    rendererFamily: "Roboto Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 100,
@@ -93,6 +100,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "open-sans",
     label: "Open Sans",
     stack: '"Open Sans Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+    rendererFamily: "Open Sans Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 300,
@@ -102,6 +110,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "source-sans-3",
     label: "Source Sans 3",
     stack: '"Source Sans 3 Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+    rendererFamily: "Source Sans 3 Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 200,
@@ -111,6 +120,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "plus-jakarta-sans",
     label: "Plus Jakarta Sans",
     stack: '"Plus Jakarta Sans Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+    rendererFamily: "Plus Jakarta Sans Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 200,
@@ -120,6 +130,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "outfit",
     label: "Outfit",
     stack: '"Outfit Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+    rendererFamily: "Outfit Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 100,
@@ -129,6 +140,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "figtree",
     label: "Figtree",
     stack: '"Figtree Variable", -apple-system, BlinkMacSystemFont, sans-serif',
+    rendererFamily: "Figtree Variable",
     category: "sans",
     weights: "continuous",
     minWeight: 300,
@@ -138,6 +150,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "lato",
     label: "Lato",
     stack: '"Lato", -apple-system, BlinkMacSystemFont, sans-serif',
+    rendererFamily: "Lato",
     category: "sans",
     weights: [100, 300, 400, 700, 900],
   },
@@ -145,6 +158,7 @@ export const UI_FONTS: readonly FontDefinition[] = [
     id: "system",
     label: "System Sans",
     stack: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    rendererFamily: "system-ui",
     category: "sans",
     weights: "continuous",
     minWeight: 100,
@@ -235,18 +249,6 @@ export const TERMINAL_FONT_SIZE_CONFIG = {
   presets: [11, 12, 13, 14] as const,
 };
 
-/**
- * Application scale as a factor. `step` is 1/16, which is exactly the legacy
- * 12px–24px range (12/16 … 24/16), so every legacy value is reachable.
- */
-export const APP_SCALE_CONFIG = {
-  min: 0.75,
-  max: 1.5,
-  default: 1,
-  step: 0.0625,
-  presets: [0.75, 0.875, 1, 1.125, 1.25, 1.5] as const,
-};
-
 export const LINE_HEIGHTS = [
   { id: "compact", value: 1.35, label: "Compact (1.35)" },
   { id: "balanced", value: 1.5, label: "Balanced (1.5 - Default)" },
@@ -254,6 +256,21 @@ export const LINE_HEIGHTS = [
 ] as const;
 
 const STORAGE_KEY = "tbai-typography";
+
+// Minimal typed external store subscription for Interface Font changes only.
+// Used by components that need to re-render when the primary interface font changes (e.g. Mermaid).
+type FontListener = (fontId: string) => void;
+const fontListeners = new Set<FontListener>();
+
+// Initialized strictly from persisted configuration on startup so initial state matches storage.
+let lastNotifiedFontId: string | null = null;
+
+export function subscribeInterfaceFont(listener: FontListener): () => void {
+  fontListeners.add(listener);
+  return () => {
+    fontListeners.delete(listener);
+  };
+}
 
 export function getFont(id: string): FontDefinition | undefined {
   return UI_FONTS.find((f) => f.id === id) || MONO_FONTS.find((f) => f.id === id);
@@ -274,15 +291,6 @@ export function clampWeightForFont(weight: number, font: FontDefinition): number
   return weights.reduce((prev, curr) =>
     Math.abs(curr - weight) < Math.abs(prev - weight) ? curr : prev,
   );
-}
-
-/**
- * Formats an application-scale factor as a trimmed percentage string.
- * 0.8125 → "81.25%", 0.875 → "87.5%", 1 → "100%", 1.125 → "112.5%".
- */
-export function formatAppScale(scale: number): string {
-  const pct = Math.round(scale * 10000) / 100;
-  return `${Number(pct.toFixed(2))}%`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -428,7 +436,10 @@ function migrateV2(parsed: Record<string, unknown>): TypographyConfig {
       ? parsed.terminalFontSize
       : DEFAULT_TYPOGRAPHY.terminalFontSize,
     terminalFontWeight: clampWeightForFont(reqTermWeight, terminalFont),
-    terminalWrap: parsed.terminalWrap !== false,
+    terminalWrap:
+      typeof parsed.terminalWrap === "boolean"
+        ? parsed.terminalWrap
+        : DEFAULT_TYPOGRAPHY.terminalWrap,
     readingLineHeight: isValidRange(parsed.readingLineHeight, 1.2, 2.0)
       ? parsed.readingLineHeight
       : DEFAULT_TYPOGRAPHY.readingLineHeight,
@@ -469,7 +480,10 @@ function readV3(parsed: Record<string, unknown>): TypographyConfig {
       ? parsed.codeFontSize
       : DEFAULT_TYPOGRAPHY.codeFontSize,
     codeFontWeight: clampWeightForFont(reqCodeWeight, codeFont),
-    codeWordWrap: parsed.codeWordWrap === true,
+    codeWordWrap:
+      typeof parsed.codeWordWrap === "boolean"
+        ? parsed.codeWordWrap
+        : DEFAULT_TYPOGRAPHY.codeWordWrap,
     terminalFontFamily: terminalFont.id,
     terminalFontSize: isValidRange(
       parsed.terminalFontSize,
@@ -479,7 +493,10 @@ function readV3(parsed: Record<string, unknown>): TypographyConfig {
       ? parsed.terminalFontSize
       : DEFAULT_TYPOGRAPHY.terminalFontSize,
     terminalFontWeight: clampWeightForFont(reqTermWeight, terminalFont),
-    terminalWrap: parsed.terminalWrap !== false,
+    terminalWrap:
+      typeof parsed.terminalWrap === "boolean"
+        ? parsed.terminalWrap
+        : DEFAULT_TYPOGRAPHY.terminalWrap,
     readingLineHeight: isValidRange(parsed.readingLineHeight, 1.2, 2.0)
       ? parsed.readingLineHeight
       : DEFAULT_TYPOGRAPHY.readingLineHeight,
@@ -501,15 +518,27 @@ export function readTypography(): TypographyConfig {
   if (typeof window === "undefined") return DEFAULT_TYPOGRAPHY;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_TYPOGRAPHY;
+    if (!raw) {
+      if (lastNotifiedFontId === null) {
+        lastNotifiedFontId = DEFAULT_TYPOGRAPHY.interfaceFontFamily;
+      }
+      return DEFAULT_TYPOGRAPHY;
+    }
     const parsed: unknown = JSON.parse(raw);
     const config = migrateTypography(parsed);
+    // Initialize baseline tracking to the active interface font so migration doesn't falsely notify
+    if (lastNotifiedFontId === null) {
+      lastNotifiedFontId = config.interfaceFontFamily;
+    }
     // If parsed was not already v3, persist migrated v3 once for idempotence
     if (isRecord(parsed) && parsed.version !== 3) {
       writeTypography(config);
     }
     return config;
   } catch {
+    if (lastNotifiedFontId === null) {
+      lastNotifiedFontId = DEFAULT_TYPOGRAPHY.interfaceFontFamily;
+    }
     return DEFAULT_TYPOGRAPHY;
   }
 }
@@ -518,11 +547,26 @@ export function readTypography(): TypographyConfig {
  * Safely writes typography configuration to localStorage.
  */
 export function writeTypography(config: TypographyConfig): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-  } catch {
-    /* storage unavailable */
+  const newFont = config.interfaceFontFamily;
+  const fontChanged = lastNotifiedFontId !== null ? newFont !== lastNotifiedFontId : false;
+  lastNotifiedFontId = newFont;
+
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    } catch {
+      /* storage unavailable — live listeners still get notified */
+    }
+  }
+
+  if (fontChanged) {
+    for (const listener of fontListeners) {
+      try {
+        listener(newFont);
+      } catch {
+        /* listener error ignored */
+      }
+    }
   }
 }
 
