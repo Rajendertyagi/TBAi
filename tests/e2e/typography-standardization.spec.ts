@@ -193,7 +193,7 @@ test.describe("badge at the maximum interface size", () => {
       height: element.getBoundingClientRect().height,
     }));
     expect(defaultBox.scroll).toBeLessThanOrEqual(defaultBox.client);
-    expect(defaultBox.height).toBeGreaterThanOrEqual(20);
+    expect(Math.round(defaultBox.height)).toBe(20);
 
     await applyTypography(page, { interfaceFontSize: 24 });
     const maximumBox = await badge.evaluate((element) => ({
@@ -202,7 +202,7 @@ test.describe("badge at the maximum interface size", () => {
       height: element.getBoundingClientRect().height,
     }));
     expect(maximumBox.scroll).toBeLessThanOrEqual(maximumBox.client);
-    expect(maximumBox.height).toBeGreaterThan(defaultBox.height);
+    expect(Math.round(maximumBox.height)).toBe(23);
   });
 
   test("ProviderDialog context window input renders compact and grows at 24px", async ({
@@ -380,6 +380,67 @@ test.describe("structured tool payload follows the Code channel", () => {
         Number.parseFloat(getComputedStyle(element).fontSize),
       );
       expect(computed).toBeCloseTo(13, 2);
+    } finally {
+      await request.post(`${STUB}/__e2e/tool/disarm`).catch(() => undefined);
+      await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);
+    }
+  });
+
+  test("terminal exit line follows the Terminal channel while status pills remain compact metadata", async ({
+    page,
+    request,
+  }) => {
+    const conversationId = await createConversation(request);
+    try {
+      await page.goto(`/#/chat/${conversationId}`);
+      await applyTypography(page, {
+        interfaceFontSize: 16,
+        terminalFontSize: 14,
+        terminalFontFamily: "jetbrains-mono",
+      });
+
+      await request.post(`${STUB}/__e2e/text`, { data: { text: FINAL_ANSWER } });
+      const armed = await request.post(`${STUB}/__e2e/tool`, {
+        data: { toolName: "run_command", args: { command: "powershell -Command exit 7" } },
+      });
+      expect(armed.ok(), "arming the stub tool call failed").toBeTruthy();
+
+      await sendMessage(page, "run a failing command for the typography probe");
+
+      // Approve the command when the approval button appears
+      const approveBtn = page.getByRole("button", { name: /^Approve\b/i }).first();
+      await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+      await approveBtn.click();
+
+      const terminalLine = page.locator('[data-slot="terminal-line"]').first();
+      await expect(terminalLine).toBeVisible({ timeout: 60_000 });
+      await expect(terminalLine).toHaveText(/^exit \d+/);
+
+      const lineStyles = await terminalLine.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          size: Number.parseFloat(style.fontSize),
+          family: style.fontFamily,
+        };
+      });
+      expect(lineStyles.size).toBeCloseTo(14, 2);
+      expect(lineStyles.family).toContain("JetBrains Mono");
+
+      // Status pill / header exit badge remains compact metadata on fixed monospace stack
+      const terminalBlock = page.locator('[data-slot="terminal-block"]').first();
+      await expect(terminalBlock).toBeVisible();
+      const statusPill = terminalBlock
+        .locator("span.font-mono, [data-slot='terminal-block'] span")
+        .last();
+      const pillStyles = await statusPill.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          size: Number.parseFloat(style.fontSize),
+          family: style.fontFamily,
+        };
+      });
+      // Compact metadata is 12px (text-xs at 16px) or uses generic font-mono
+      expect(pillStyles.size).toBeLessThanOrEqual(14);
     } finally {
       await request.post(`${STUB}/__e2e/tool/disarm`).catch(() => undefined);
       await request.delete(`/api/conversations/${conversationId}`).catch(() => undefined);

@@ -608,6 +608,15 @@ pre,
   font-weight: var(--terminal-font-weight);
 }
 
+/* Badge geometry — Revision 5 outcome:
+   20px at the 16px default interface size, 23px at 24px interface size.
+   line-height: 1 and 1.5px vertical padding satisfy both bounds with zero clipping under overflow-hidden. */
+[data-slot="badge"] {
+  line-height: 1;
+  padding-top: 1.5px;
+  padding-bottom: 1.5px;
+}
+
 /* Reading line height — prose only (markdown paragraphs, list items and the
    assistant reasoning body). Never controls, headers, code or terminal rows. */
 .aui-md-p,

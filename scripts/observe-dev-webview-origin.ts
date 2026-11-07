@@ -853,16 +853,41 @@ async function main(): Promise<number> {
       }
 
       if (target.webSocketUrl !== null) {
-        const originResult = await evaluateOverCdp(
-          target.webSocketUrl,
-          "({ origin: window.location.origin, href: window.location.href, title: document.title })",
-        );
-        evaluation.error = originResult.error;
-        if (originResult.value !== null && typeof originResult.value === "object") {
-          const record = originResult.value as Record<string, unknown>;
-          evaluation.origin = typeof record.origin === "string" ? record.origin : null;
-          evaluation.href = typeof record.href === "string" ? record.href : null;
-          evaluation.title = typeof record.title === "string" ? record.title : null;
+        // Poll for the page navigation to complete and commit on the configured origin.
+        // A target on http://localhost:3000/ initially reports about:blank during initial document creation.
+        const navDeadline = Date.now() + 30_000;
+        let lastOriginError: string | null = null;
+        for (;;) {
+          const originResult = await evaluateOverCdp(
+            target.webSocketUrl,
+            "({ origin: window.location.origin, href: window.location.href, title: document.title, readyState: document.readyState })",
+          );
+          lastOriginError = originResult.error;
+          evaluation.error = originResult.error;
+          if (originResult.value !== null && typeof originResult.value === "object") {
+            const record = originResult.value as Record<string, unknown>;
+            const observedOrigin = typeof record.origin === "string" ? record.origin : null;
+            const observedHref = typeof record.href === "string" ? record.href : null;
+            evaluation.origin = observedOrigin;
+            evaluation.href = observedHref;
+            evaluation.title = typeof record.title === "string" ? record.title : null;
+
+            if (
+              observedOrigin !== null &&
+              observedOrigin !== "null" &&
+              observedHref !== "about:blank" &&
+              (configuredOrigin === null || observedOrigin === configuredOrigin)
+            ) {
+              break;
+            }
+          }
+          if (Date.now() > navDeadline) {
+            evaluation.error =
+              evaluation.error ??
+              `page did not navigate away from about:blank within 30000 ms (last error: ${lastOriginError ?? "none"})`;
+            break;
+          }
+          await sleep(POLL_MS);
         }
 
         const probeResult = await evaluateOverCdp(

@@ -298,7 +298,11 @@ export interface ProcessStopResult {
 export function isTaskkillAlreadyGone(status: number | null, stderr: string): boolean {
   if (status === 128) return true;
   if (status !== 1) return false;
-  return stderr.toLowerCase().includes("no running instance of the task");
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes("no running instance of the task") ||
+    lower.includes("the operation attempted is not supported")
+  );
 }
 
 /**

@@ -28,6 +28,16 @@ describe("taskkill on a pid that already exited", () => {
     ).toBe(true);
   });
 
+  it("accepts exit 1 with 'The operation attempted is not supported' for dead or exiting stubs", () => {
+    expect(
+      isTaskkillAlreadyGone(
+        1,
+        "ERROR: The process with PID 6880 could not be terminated.\r\n" +
+          "Reason: The operation attempted is not supported.",
+      ),
+    ).toBe(true);
+  });
+
   it("does not report a real refusal as success", () => {
     expect(isTaskkillAlreadyGone(1, "ERROR: Access is denied.")).toBe(false);
     expect(isTaskkillAlreadyGone(2, "ERROR: The process with PID 5 could not be terminated.")).toBe(
