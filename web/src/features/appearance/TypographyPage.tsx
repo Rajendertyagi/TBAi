@@ -33,6 +33,7 @@ import {
 import {
   clampWindowZoom,
   DEFAULT_WINDOW_ZOOM,
+  getConfirmedWindowZoom,
   isTauri,
   onWindowZoomChange,
   readWindowZoom,
@@ -106,16 +107,19 @@ function Card({
 
 export function TypographyPage() {
   const [typography, setTypography] = useState<TypographyConfig>(readTypography);
-  const [zoom, setZoom] = useState<number>(readWindowZoom);
+  const [zoom, setZoom] = useState<number>(getConfirmedWindowZoom);
   const desktopZoom = isTauri();
 
   // Sync confirmed window zoom from same-window changes (shortcuts/other controls) and other tabs.
   useEffect(() => {
     const off = onWindowZoomChange((value) => setZoom(clampWindowZoom(value)));
     const onStorage = (e: StorageEvent) => {
-      if (e.key === WINDOW_ZOOM_STORAGE_KEY) {
-        setZoom(readWindowZoom());
-      }
+      if (e.key !== WINDOW_ZOOM_STORAGE_KEY) return;
+      // In Tauri, cross-document storage may be stale; the current window's
+      // confirmed native zoom is authoritative. Browser mode has no native
+      // authority, so preserve persisted cross-tab sync.
+      if (isTauri()) return;
+      setZoom(readWindowZoom());
     };
     window.addEventListener("storage", onStorage);
     return () => {
@@ -148,7 +152,7 @@ export function TypographyPage() {
         if (opts?.reportFailure !== false) {
           toast.error("Could not apply window zoom.", { id: "window-zoom-toast" });
         }
-        setZoom(readWindowZoom());
+        setZoom(getConfirmedWindowZoom());
       }
       // superseded: a newer request owns ordering/state/toasts; do not report or mutate here.
       return result;

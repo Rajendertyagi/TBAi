@@ -298,116 +298,148 @@ export interface WindowZoomRequestResult {
   zoom: number;
 }
 
-// Centralized, latest-wins zoom ordering shared by all callers (Typography page, global
-// shortcuts). Native setZoom, persistence, and same-window notifications only commit for the
-// latest requested intent; superseded/failed requests never persist or notify a false success.
-let zoomSeq = 0;
-let latestZoomId = 0;
-let latestRequestedZoom: number | null = null;
-let zoomWorker: Promise<void> | null = null;
-const zoomPending = new Map<
-  number,
-  { zoom: number; resolve: (result: WindowZoomRequestResult) => void }
->();
+type ZoomRequest = {
+  target: number;
+  resolve: (result: WindowZoomRequestResult) => void;
+};
 
-/** Latest requested zoom target (if any), otherwise the last confirmed/persisted zoom. */
+// Serialized latest-pending queue: one active native operation, at most one
+// replaceable pending request. `confirmedZoom` starts from the persisted
+// baseline; in Tauri it becomes authoritative only after a successful native
+// `setZoom()` commits. In browser mode there is no native authority and
+// `getConfirmedWindowZoom()` reads persisted state dynamically.
+let activeRequest: ZoomRequest | null = null;
+let pendingRequest: ZoomRequest | null = null;
+let activeWorker: Promise<void> | null = null;
+let confirmedZoom = clampWindowZoom(readWindowZoom());
+let latestRequestedTarget = confirmedZoom;
+
+/** @internal Test-only: resets queue state. Call only when no requests are in flight. */
+export function __resetZoomQueueForTests(): void {
+  activeRequest = null;
+  pendingRequest = null;
+  activeWorker = null;
+  confirmedZoom = clampWindowZoom(readWindowZoom());
+  latestRequestedTarget = confirmedZoom;
+}
+
+/**
+ * Authoritative confirmed zoom for the current app lifetime. In Tauri this is
+ * the last successfully applied native WebView zoom (in-memory). In browser
+ * mode it reads persisted state dynamically because there is no native zoom
+ * authority. Does not change `readWindowZoom()`'s persisted-reader meaning.
+ */
+export function getConfirmedWindowZoom(): number {
+  if (!isTauri()) return readWindowZoom();
+  return confirmedZoom;
+}
+
+/**
+ * Latest requested zoom target while work is active/pending (for rapid shortcut
+ * stepping), otherwise the last confirmed zoom.
+ */
 export function getTargetWindowZoom(): number {
-  return latestRequestedZoom ?? readWindowZoom();
+  if (activeRequest || pendingRequest) return latestRequestedTarget;
+  return getConfirmedWindowZoom();
 }
 
-function settleZoomRequest(id: number, result: WindowZoomRequestResult): void {
-  const entry = zoomPending.get(id);
-  if (!entry) return;
-  zoomPending.delete(id);
-  entry.resolve(result);
+function settle(request: ZoomRequest, status: WindowZoomRequestStatus): void {
+  request.resolve({ status, zoom: request.target });
 }
 
-function supersedeZoomRequestsExcept(keepId: number): void {
-  for (const [id, entry] of Array.from(zoomPending.entries())) {
-    if (id === keepId) continue;
-    zoomPending.delete(id);
-    entry.resolve({ status: "superseded", zoom: entry.zoom });
-  }
+function commitConfirmedZoom(zoom: number): void {
+  confirmedZoom = clampWindowZoom(zoom);
+  // Best-effort persistence: a storage failure must not turn native success into
+  // failure or corrupt confirmed runtime state.
+  writeWindowZoom(confirmedZoom);
+  notifyWindowZoomChanged(confirmedZoom);
 }
 
 async function runZoomWorker(): Promise<void> {
   try {
-    while (latestZoomId !== 0 && zoomPending.has(latestZoomId)) {
-      const targetId = latestZoomId;
-      const target = zoomPending.get(targetId);
-      if (!target) break;
-      const targetZoom = target.zoom;
+    while (activeRequest) {
+      const current = activeRequest;
 
       let applied = false;
-      if (isTauri()) {
-        try {
+      try {
+        if (isTauri()) {
           const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-          await getCurrentWebview().setZoom(targetZoom);
+          await getCurrentWebview().setZoom(current.target);
           applied = true;
-        } catch {
-          applied = false;
         }
-      }
-
-      // A newer request arrived while the native call was in flight: never persist/notify this
-      // intermediate result; converge by applying the latest target next.
-      if (latestZoomId !== targetId) {
-        settleZoomRequest(targetId, { status: "superseded", zoom: targetZoom });
-        continue;
+      } catch {
+        applied = false;
       }
 
       if (applied) {
-        writeWindowZoom(targetZoom);
-        notifyWindowZoomChanged(targetZoom);
-        latestRequestedZoom = targetZoom;
-        supersedeZoomRequestsExcept(targetId);
-        settleZoomRequest(targetId, { status: "applied", zoom: targetZoom });
-      } else {
-        latestRequestedZoom = readWindowZoom();
-        supersedeZoomRequestsExcept(targetId);
-        settleZoomRequest(targetId, { status: "failed", zoom: targetZoom });
+        commitConfirmedZoom(current.target);
+        if (pendingRequest) {
+          // Native side effect is committed; this caller's intent was overtaken.
+          settle(current, "superseded");
+          activeRequest = pendingRequest;
+          pendingRequest = null;
+          continue;
+        }
+        settle(current, "applied");
+        activeRequest = null;
+        latestRequestedTarget = confirmedZoom;
+        break;
       }
+
+      // Native failure: retain confirmed state, do not persist failed target.
+      settle(current, "failed");
+      if (pendingRequest) {
+        activeRequest = pendingRequest;
+        pendingRequest = null;
+        continue;
+      }
+      activeRequest = null;
+      latestRequestedTarget = confirmedZoom;
+      break;
     }
   } finally {
-    // Resolve any orphaned pending requests defensively.
-    for (const [id, entry] of Array.from(zoomPending.entries())) {
-      zoomPending.delete(id);
-      entry.resolve({ status: "superseded", zoom: entry.zoom });
+    // Defensive: callers must never hang if an unexpected path leaves requests.
+    if (pendingRequest) {
+      settle(pendingRequest, "superseded");
+      pendingRequest = null;
     }
-    if (latestZoomId === 0 || !zoomPending.has(latestZoomId)) {
-      latestRequestedZoom = null;
+    if (activeRequest) {
+      settle(activeRequest, "failed");
+      activeRequest = null;
     }
-    zoomWorker = null;
+    if (!activeRequest && !pendingRequest) {
+      latestRequestedTarget = confirmedZoom;
+    }
+    activeWorker = null;
   }
 }
 
 /**
  * Requests a native window zoom (0.8 - 3.0) with centralized latest-wins ordering.
- * Desktop (Tauri) only: persists and notifies same-window listeners ONLY after a confirmed
- * native apply of the latest requested intent. Returns applied/failed/superseded; superseded
- * and failed requests never persist or report a false success.
+ * Desktop (Tauri) only: requests are serialized with at most one replaceable
+ * pending request. Every successful native `setZoom` is committed as confirmed
+ * state (in-memory, best-effort persistence, same-window notification) even when
+ * a newer request is waiting. `result.zoom` is always the clamped target
+ * requested by that caller.
  */
 export function requestWindowZoom(zoom: number): Promise<WindowZoomRequestResult> {
-  const clamped = clampWindowZoom(zoom);
+  const target = clampWindowZoom(zoom);
   if (!isTauri()) {
-    return Promise.resolve({ status: "failed", zoom: clamped });
+    return Promise.resolve({ status: "failed", zoom: target });
   }
-  const id = ++zoomSeq;
-  latestZoomId = id;
-  latestRequestedZoom = clamped;
+  latestRequestedTarget = target;
   return new Promise<WindowZoomRequestResult>((resolve) => {
-    zoomPending.set(id, { zoom: clamped, resolve });
-    if (!zoomWorker) {
-      zoomWorker = runZoomWorker();
+    const request: ZoomRequest = { target, resolve };
+    if (activeRequest) {
+      if (pendingRequest) {
+        settle(pendingRequest, "superseded");
+      }
+      pendingRequest = request;
+      return;
+    }
+    activeRequest = request;
+    if (!activeWorker) {
+      activeWorker = runZoomWorker();
     }
   });
-}
-
-/**
- * Applies native window zoom with centralized ordering. Returns true only when this request's
- * zoom was confirmed applied (not when superseded or failed).
- */
-export async function applyWindowZoom(zoom: number): Promise<boolean> {
-  const result = await requestWindowZoom(zoom);
-  return result.status === "applied";
 }
