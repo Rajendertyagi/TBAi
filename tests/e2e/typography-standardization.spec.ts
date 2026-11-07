@@ -507,7 +507,7 @@ test.describe("Mermaid renderer font and scaling integration", () => {
     expect(reply.ok()).toBe(true);
   }
 
-  test("Mermaid SVG uses selected font, scales with root rem, and blocks external font requests", async ({
+  test("Mermaid SVG uses selected font, reacts live to font changes, scales with rem, and supports zoom overlay", async ({
     page,
     request,
   }) => {
@@ -530,6 +530,7 @@ test.describe("Mermaid renderer font and scaling integration", () => {
         `Here is the diagram.\n\n${MERMAID_BLOCK}\n`,
       );
 
+      // 1. Initial render with Roboto at 16px
       await page.goto(`/#/chat/${conversationId}`);
       await applyTypography(page, {
         interfaceFontFamily: "roboto",
@@ -542,36 +543,84 @@ test.describe("Mermaid renderer font and scaling integration", () => {
       const svg = diagram.locator("svg").first();
       await expect(svg).toBeVisible({ timeout: 30_000 });
 
-      // Check font family inside the SVG text elements matches Roboto
-      const svgTextFamily = await svg
+      // 2. Initial font family inside SVG text elements matches Roboto
+      const initialTextFamily = await svg
         .locator("text")
         .first()
-        .evaluate((el) => {
-          return getComputedStyle(el).fontFamily;
-        });
-      expect(svgTextFamily.toLowerCase()).toContain("roboto");
+        .evaluate((el) => getComputedStyle(el).fontFamily);
+      expect(initialTextFamily.toLowerCase()).toContain("roboto");
 
-      // Check rem-based width styling on SVG root
-      const svgWidth16 = await svg.evaluate((el) => {
-        return (el as SVGElement).style.width;
-      });
+      // Verify rem-based width styling on SVG root
+      const svgWidth16 = await svg.evaluate((el) => (el as SVGElement).style.width);
       expect(svgWidth16).toMatch(/rem$/);
-
       const computedPixelWidth16 = await svg.evaluate((el) => el.getBoundingClientRect().width);
 
-      // Change root interface font size to 24px and verify SVG scales proportionally
-      await applyTypography(page, {
-        interfaceFontFamily: "roboto",
-        interfaceFontSize: 24,
+      // 3. Live change: Switch Interface Font to Outfit via appearance settings without page reload
+      await page.goto("/#/appearance");
+      await expect(page.getByRole("heading", { name: "Appearance", level: 1 })).toBeVisible({
+        timeout: 15_000,
       });
+      // Click Interface font select and select Outfit
+      const fontSelect = page.locator('button:has-text("Roboto")').first();
+      await fontSelect.click();
+      await page.locator('[role="option"]:has-text("Outfit")').click();
 
-      const diagram24 = page.locator('[data-slot="mermaid-diagram"]');
-      await expect(diagram24).toBeVisible({ timeout: 30_000 });
-      const svg24 = diagram24.locator("svg").first();
-      await expect(svg24).toBeVisible({ timeout: 30_000 });
-      const computedPixelWidth24 = await svg24.evaluate((el) => el.getBoundingClientRect().width);
+      // Return to chat transcript WITHOUT reloading
+      await page.goto(`/#/chat/${conversationId}`);
+      await expect(diagram).toBeVisible({ timeout: 15_000 });
+      const updatedSvg = diagram.locator("svg").first();
+      await expect(updatedSvg).toBeVisible({ timeout: 15_000 });
+
+      // Live re-rendered SVG text elements must now use Outfit
+      await expect
+        .poll(
+          async () => {
+            return updatedSvg
+              .locator("text")
+              .first()
+              .evaluate((el) => getComputedStyle(el).fontFamily.toLowerCase());
+          },
+          { timeout: 15_000 },
+        )
+        .toContain("outfit");
+
+      // 4. Interface Size scaling: Change size to 24px via Appearance without changing font
+      await page.goto("/#/appearance");
+      const sizeSlider = page.getByRole("slider", { name: "Interface font size" });
+      await sizeSlider.fill("24");
+      // Return to chat transcript without reload
+      await page.goto(`/#/chat/${conversationId}`);
+      await expect(diagram).toBeVisible({ timeout: 15_000 });
+      const scaledSvg = diagram.locator("svg").first();
+      await expect(scaledSvg).toBeVisible({ timeout: 15_000 });
+
+      const computedPixelWidth24 = await scaledSvg.evaluate(
+        (el) => el.getBoundingClientRect().width,
+      );
       // At 24px root vs 16px root, ratio is 1.5x
       expect(computedPixelWidth24).toBeGreaterThan(computedPixelWidth16 * 1.3);
+
+      // 5. Test Zoom/Expanded overlay
+      const zoomTrigger = page.locator('[data-slot="mermaid-zoom-trigger"]');
+      // Hover to reveal trigger
+      await diagram.hover();
+      await expect(zoomTrigger).toBeVisible({ timeout: 5_000 });
+      await zoomTrigger.click();
+
+      // Verify overlay dialog opened
+      const overlay = page.locator('[data-slot="mermaid-zoom-overlay"]');
+      await expect(overlay).toBeVisible({ timeout: 5_000 });
+      const overlaySvg = overlay.locator("svg").first();
+      await expect(overlaySvg).toBeVisible({ timeout: 5_000 });
+
+      // Close overlay with close button
+      const closeBtn = page.getByRole("button", { name: "Close", exact: true });
+      await expect(closeBtn).toBeVisible();
+      await closeBtn.click();
+      await expect(overlay).not.toBeVisible();
+
+      // Original diagram remains usable
+      await expect(scaledSvg).toBeVisible();
 
       // Verify no external font requests were made
       expect(fontRequests).toEqual([]);
@@ -624,7 +673,7 @@ test.describe("Sonner toast typography inheritance", () => {
         const toastLocator = page.locator(TOAST).first();
         await expect(toastLocator).toBeVisible({ timeout: 15000 });
 
-        // Evaluate toast computed styles
+        // Evaluate toast root computed styles
         const toastStyles = await toastLocator.evaluate((el) => {
           const style = getComputedStyle(el);
           return {
@@ -635,9 +684,42 @@ test.describe("Sonner toast typography inheritance", () => {
 
         // Font family inherits the interface font (Outfit)
         expect(toastStyles.family.toLowerCase()).toContain("outfit");
-
         // Font size is rem-based (0.875rem), so at root size S it should compute to S * 0.875
         expect(toastStyles.fontSize).toBeCloseTo(size * 0.875, 1);
+
+        // Verify child title element if present
+        const titleLocator = toastLocator.locator("[data-title]").first();
+        if ((await titleLocator.count()) > 0) {
+          const titleStyles = await titleLocator.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return {
+              family: style.fontFamily,
+              fontSize: Number.parseFloat(style.fontSize),
+            };
+          });
+          expect(titleStyles.family.toLowerCase()).toContain("outfit");
+          expect(titleStyles.fontSize).toBeGreaterThanOrEqual(9);
+        }
+
+        // Verify child description element if present
+        const descLocator = toastLocator.locator("[data-description]").first();
+        if ((await descLocator.count()) > 0) {
+          const descStyles = await descLocator.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return {
+              family: style.fontFamily,
+              fontSize: Number.parseFloat(style.fontSize),
+            };
+          });
+          expect(descStyles.family.toLowerCase()).toContain("outfit");
+          expect(descStyles.fontSize).toBeGreaterThanOrEqual(9);
+        }
+
+        // Verify close button if present
+        const closeLocator = toastLocator.locator("[data-close-button]").first();
+        if ((await closeLocator.count()) > 0) {
+          await expect(closeLocator).toBeVisible();
+        }
       }
     } finally {
       await removeCreated(request, before);
@@ -667,6 +749,7 @@ test.describe("Dialog viewport constraints", () => {
       const dialogContent = page.locator("[data-slot='dialog-content']").first();
       await expect(dialogContent).toBeVisible();
 
+      // 1. Dialog content must be bounded within viewport height
       const rect = await dialogContent.evaluate((el) => {
         const r = el.getBoundingClientRect();
         return {
@@ -676,12 +759,47 @@ test.describe("Dialog viewport constraints", () => {
         };
       });
 
-      // Dialog must be bounded within viewport height
       expect(rect.top).toBeGreaterThanOrEqual(0);
       expect(rect.bottom).toBeLessThanOrEqual(vp.height + 2);
       expect(rect.height).toBeLessThanOrEqual(vp.height);
 
+      // 2. Identify internal scroll container
+      const scrollBody = dialogContent.locator(".overflow-y-auto").first();
+      await expect(scrollBody).toBeVisible();
+
+      const scrollMetrics = await scrollBody.evaluate((el) => {
+        return {
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+        };
+      });
+
+      // When constrained (especially at 600px height), content should scroll internally
+      if (scrollMetrics.scrollHeight > scrollMetrics.clientHeight) {
+        expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+
+        // Scroll to the bottom of the container
+        await scrollBody.evaluate((el) => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
+
+      // 3. Final form controls and footer actions remain reachable, visible, and clickable
+      const testBtn = dialogContent.getByRole("button", { name: "Test connection" });
+      await expect(testBtn).toBeVisible();
+
+      const cancelBtn = dialogContent.getByRole("button", { name: "Cancel" });
+      const saveBtn = dialogContent.getByRole("button", { name: "Save" });
+      await expect(cancelBtn).toBeVisible();
+      await expect(saveBtn).toBeVisible();
+
+      // 4. Verify the page itself does NOT scroll unintentionally
+      const pageScroll = await page.evaluate(() => window.scrollY);
+      expect(pageScroll).toBe(0);
+
+      // 5. Escape closes the dialog cleanly
       await page.keyboard.press("Escape");
+      await expect(dialogContent).not.toBeVisible();
     });
   }
 });

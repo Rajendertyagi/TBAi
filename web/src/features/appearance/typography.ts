@@ -4,13 +4,12 @@
  * Follows the existing theme-storage.ts and theme-dom.ts conventions:
  * - Single persistent JSON object under `tbai-typography`
  * - Resilient total reads falling back safely to defaults
- * - Single framework-free DOM applicator writing root CSS custom properties and zoom
+ * - Single framework-free DOM applicator writing root CSS custom properties and root rem font-size
  *
- * v2 (2026-11-05): independent ownership per rendering context — Interface,
- * Code, Terminal, Reading and Application Scale. `--font-mono` is the fixed
- * generic monospace stack and is NEVER written by a setting; code surfaces use
- * `--code-font-family`, terminal output uses `--terminal-font-family`.
- * Application scale is a factor (0.75–1.5), displayed as a percentage.
+ * v3 (2026-11-06): Interface Size controls root rem scaling (14–24px).
+ * Independent ownership per rendering context — Interface, Code, Terminal, and Reading.
+ * `--font-mono` is the fixed generic monospace stack and is NEVER written by a setting;
+ * code surfaces use `--code-font-family`, terminal output uses `--terminal-font-family`.
  */
 
 export interface TypographyConfig {
@@ -512,7 +511,7 @@ export function migrateTypography(raw: unknown): TypographyConfig {
 
 /**
  * Safely reads typography configuration from localStorage.
- * Handles v1 configurations (both historical shapes) by migrating to v2.
+ * Handles v1 configurations (both historical shapes) and v2 configurations by migrating to v3.
  */
 export function readTypography(): TypographyConfig {
   if (typeof window === "undefined") return DEFAULT_TYPOGRAPHY;

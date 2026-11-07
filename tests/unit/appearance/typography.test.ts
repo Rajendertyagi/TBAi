@@ -41,32 +41,88 @@ function customConfig(overrides: Partial<TypographyConfig> = {}): TypographyConf
   };
 }
 
+interface MemoryStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+  clear(): void;
+  readonly length: number;
+  key(index: number): string | null;
+}
+
+function createMemoryStorage(initial: Record<string, string> = {}): MemoryStorage {
+  const map = new Map<string, string>(Object.entries(initial));
+  return {
+    getItem: (key: string) => (map.has(key) ? map.get(key)! : null),
+    setItem: (key: string, value: string) => {
+      map.set(key, String(value));
+    },
+    removeItem: (key: string) => {
+      map.delete(key);
+    },
+    clear: () => {
+      map.clear();
+    },
+    get length() {
+      return map.size;
+    },
+    key: (index: number) => Array.from(map.keys())[index] ?? null,
+  };
+}
+
+/**
+ * Executes a callback with an isolated in-memory `window.localStorage` harness.
+ * Preserves and restores the original global `window` descriptor.
+ */
+function withStorage<T>(
+  initialOrRecord: Record<string, string> | unknown,
+  fn: (storage: MemoryStorage) => T,
+): T {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const storage =
+    typeof initialOrRecord === "object" &&
+    initialOrRecord !== null &&
+    !Array.isArray(initialOrRecord) &&
+    STORAGE_KEY in (initialOrRecord as Record<string, unknown>)
+      ? createMemoryStorage(initialOrRecord as Record<string, string>)
+      : createMemoryStorage(
+          initialOrRecord !== undefined
+            ? {
+                [STORAGE_KEY]:
+                  typeof initialOrRecord === "string"
+                    ? initialOrRecord
+                    : JSON.stringify(initialOrRecord),
+              }
+            : {},
+        );
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    writable: true,
+    value: {
+      localStorage: storage,
+    },
+  });
+
+  try {
+    return fn(storage);
+  } finally {
+    if (previous) {
+      Object.defineProperty(globalThis, "window", previous);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+  }
+}
+
 /**
  * Reads a stored record through the production `readTypography()` path.
  *
- * The canonical unit run has no DOM, so `window` is supplied for the duration
- * of the read and the previous descriptor is restored afterwards. The module
- * reads `window.localStorage` at call time, which is why this works without a
- * second storage implementation.
+ * Uses the in-memory localStorage harness so it executes deterministically
+ * in headless unit runs without requiring happy-dom.
  */
 function readStoredTypography(record: unknown): TypographyConfig {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
-  const raw = JSON.stringify(record);
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      localStorage: {
-        getItem: (key: string) => (key === STORAGE_KEY ? raw : null),
-        setItem: () => {},
-      },
-    },
-  });
-  try {
-    return readTypography();
-  } finally {
-    if (previous) Object.defineProperty(globalThis, "window", previous);
-    else Reflect.deleteProperty(globalThis, "window");
-  }
+  return withStorage(record, () => readTypography());
 }
 
 describe("Typography config, storage & scoped resets (v3)", () => {
@@ -93,192 +149,283 @@ describe("Typography config, storage & scoped resets (v3)", () => {
   });
 
   it("migrates the first v1 shape (no monoFontWeight / codeFontSize) losslessly", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    const legacy = {
-      version: 1,
-      fontFamily: "roboto",
-      monoFontFamily: "fira-code",
-      fontWeight: 600,
-      baseSize: 18,
-      lineHeight: 1.65,
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
-    const config = readTypography();
-    expect(config.version).toBe(3);
-    expect(config.interfaceFontFamily).toBe("roboto");
-    expect(config.interfaceFontWeight).toBe(600);
-    expect(config.codeFontFamily).toBe("fira-code");
-    // monoFontWeight falls back to fontWeight
-    expect(config.codeFontWeight).toBe(600);
-    expect(config.codeFontSize).toBe(13);
-    expect(config.readingLineHeight).toBe(1.65);
-    // baseSize 18 migrated directly to interfaceFontSize
-    expect(config.interfaceFontSize).toBe(18);
-    expect(config.codeWordWrap).toBe(false);
-    expect(config.terminalFontFamily).toBe("jetbrains-mono");
-    expect(config.terminalFontSize).toBe(12);
-    expect(config.terminalFontWeight).toBe(400);
-    expect(config.terminalWrap).toBe(true);
+    withStorage(undefined, (storage) => {
+      const legacy = {
+        version: 1,
+        fontFamily: "roboto",
+        monoFontFamily: "fira-code",
+        fontWeight: 600,
+        baseSize: 18,
+        lineHeight: 1.65,
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+      const config = readTypography();
+      expect(config.version).toBe(3);
+      expect(config.interfaceFontFamily).toBe("roboto");
+      expect(config.interfaceFontWeight).toBe(600);
+      expect(config.codeFontFamily).toBe("fira-code");
+      // monoFontWeight falls back to fontWeight
+      expect(config.codeFontWeight).toBe(600);
+      expect(config.codeFontSize).toBe(13);
+      expect(config.readingLineHeight).toBe(1.65);
+      // baseSize 18 migrated directly to interfaceFontSize
+      expect(config.interfaceFontSize).toBe(18);
+      expect(config.codeWordWrap).toBe(false);
+      expect(config.terminalFontFamily).toBe("jetbrains-mono");
+      expect(config.terminalFontSize).toBe(12);
+      expect(config.terminalFontWeight).toBe(400);
+      expect(config.terminalWrap).toBe(true);
+
+      // Verify serialized state is updated to V3
+      const stored = JSON.parse(storage.getItem(STORAGE_KEY)!);
+      expect(stored.version).toBe(3);
+      expect(stored.interfaceFontSize).toBe(18);
+    });
   });
 
   it("migrates the second v1 shape (with monoFontWeight / codeFontSize) losslessly", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    const legacy = {
-      version: 1,
-      fontFamily: "outfit",
-      monoFontFamily: "source-code-pro",
-      fontWeight: 700,
-      monoFontWeight: 300,
-      baseSize: 13,
-      codeFontSize: 15,
-      lineHeight: 1.35,
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
-    const config = readTypography();
-    expect(config.version).toBe(3);
-    expect(config.interfaceFontFamily).toBe("outfit");
-    expect(config.interfaceFontWeight).toBe(700);
-    expect(config.codeFontFamily).toBe("source-code-pro");
-    expect(config.codeFontWeight).toBe(300);
-    expect(config.codeFontSize).toBe(15);
-    expect(config.readingLineHeight).toBe(1.35);
-    // Legacy baseSize 13 maps to 14
-    expect(config.interfaceFontSize).toBe(14);
+    withStorage(undefined, (storage) => {
+      const legacy = {
+        version: 1,
+        fontFamily: "outfit",
+        monoFontFamily: "source-code-pro",
+        fontWeight: 700,
+        monoFontWeight: 300,
+        baseSize: 13,
+        codeFontSize: 15,
+        lineHeight: 1.35,
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+      const config = readTypography();
+      expect(config.version).toBe(3);
+      expect(config.interfaceFontFamily).toBe("outfit");
+      expect(config.interfaceFontWeight).toBe(700);
+      expect(config.codeFontFamily).toBe("source-code-pro");
+      expect(config.codeFontWeight).toBe(300);
+      expect(config.codeFontSize).toBe(15);
+      expect(config.readingLineHeight).toBe(1.35);
+      // Legacy baseSize 13 maps to 14
+      expect(config.interfaceFontSize).toBe(14);
+    });
+  });
+
+  it("migrates v1 invalid fields safely and defaults missing ones", () => {
+    withStorage(undefined, (storage) => {
+      const invalidLegacy = {
+        version: 1,
+        fontFamily: "unknown-font",
+        monoFontFamily: "unknown-mono",
+        fontWeight: 9999,
+        baseSize: 100, // outside legacy 12-24 -> default 16
+        codeFontSize: -5,
+        lineHeight: "not-a-number",
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(invalidLegacy));
+      const config = readTypography();
+      expect(config.version).toBe(3);
+      expect(config.interfaceFontFamily).toBe("inter");
+      expect(config.codeFontFamily).toBe("jetbrains-mono");
+      expect(config.interfaceFontSize).toBe(16);
+      expect(config.codeFontSize).toBe(13);
+      expect(config.readingLineHeight).toBe(1.5);
+    });
   });
 
   it("migrates v2 records normalizing interfaceFontSize * appScale clamped to 14-24", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    const v2Record = {
-      version: 2,
-      interfaceFontFamily: "figtree",
-      interfaceFontSize: 16,
-      interfaceFontWeight: 500,
-      codeFontFamily: "jetbrains-mono",
-      codeFontSize: 14,
-      codeFontWeight: 400,
-      codeWordWrap: true,
-      terminalFontFamily: "jetbrains-mono",
-      terminalFontSize: 12,
-      terminalFontWeight: 400,
-      terminalWrap: true,
-      readingLineHeight: 1.5,
-      appScale: 1.25,
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v2Record));
-    const config = readTypography();
-    expect(config.version).toBe(3);
-    expect(config.interfaceFontFamily).toBe("figtree");
-    // 16 * 1.25 = 20
-    expect(config.interfaceFontSize).toBe(20);
-    expect(config.codeWordWrap).toBe(true);
+    withStorage(undefined, (storage) => {
+      const v2Record = {
+        version: 2,
+        interfaceFontFamily: "figtree",
+        interfaceFontSize: 16,
+        interfaceFontWeight: 500,
+        codeFontFamily: "jetbrains-mono",
+        codeFontSize: 14,
+        codeFontWeight: 400,
+        codeWordWrap: true,
+        terminalFontFamily: "jetbrains-mono",
+        terminalFontSize: 12,
+        terminalFontWeight: 400,
+        terminalWrap: true,
+        readingLineHeight: 1.5,
+        appScale: 1.25,
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(v2Record));
+      const config = readTypography();
+      expect(config.version).toBe(3);
+      expect(config.interfaceFontFamily).toBe("figtree");
+      // 16 * 1.25 = 20
+      expect(config.interfaceFontSize).toBe(20);
+      expect(config.codeWordWrap).toBe(true);
+    });
+  });
+
+  it("migrates v2 boundary scale values, invalid scales, and clamps properly", () => {
+    // 18 * 1.125 = 20.25 -> 20
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 18, appScale: 1.125 })
+        .interfaceFontSize,
+    ).toBe(20);
+
+    // appScale below 0.75 -> defaults to factor 1 -> 16
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 16, appScale: 0.5 }).interfaceFontSize,
+    ).toBe(16);
+
+    // appScale above 1.5 -> defaults to factor 1 -> 16
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 16, appScale: 2.0 }).interfaceFontSize,
+    ).toBe(16);
+
+    // missing, null, string appScale -> defaults to factor 1 -> 18
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 18, appScale: null }).interfaceFontSize,
+    ).toBe(18);
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 18, appScale: "1.25" })
+        .interfaceFontSize,
+    ).toBe(18);
+
+    // Clamping to 14–24px
+    // 14 * 0.75 = 10.5 -> 11 -> clamped to 14
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 14, appScale: 0.75 }).interfaceFontSize,
+    ).toBe(14);
+    // 24 * 1.5 = 36 -> clamped to 24
+    expect(
+      readStoredTypography({ version: 2, interfaceFontSize: 24, appScale: 1.5 }).interfaceFontSize,
+    ).toBe(24);
   });
 
   it("validates every v3 field independently and enforces strict booleans", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
+    withStorage(undefined, (storage) => {
+      storage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 3,
+          interfaceFontFamily: "not-a-font",
+          interfaceFontSize: 99,
+          interfaceFontWeight: 42,
+          codeFontFamily: "not-a-mono",
+          codeFontSize: 99,
+          codeFontWeight: 42,
+          codeWordWrap: "yes", // malformed non-boolean -> false
+          terminalFontFamily: "not-a-mono",
+          terminalFontSize: 99,
+          terminalFontWeight: 42,
+          terminalWrap: "no", // malformed non-boolean -> true
+          readingLineHeight: 99,
+        }),
+      );
+      const config = readTypography();
+      expect(config.version).toBe(3);
+      expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
+      expect(config.interfaceFontSize).toBe(16);
+      expect(config.interfaceFontWeight).toBe(400);
+      expect(config.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
+      expect(config.codeFontSize).toBe(13);
+      expect(config.codeFontWeight).toBe(400);
+      expect(config.codeWordWrap).toBe(false);
+      expect(config.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
+      expect(config.terminalFontSize).toBe(12);
+      expect(config.terminalFontWeight).toBe(400);
+      expect(config.terminalWrap).toBe(true);
+      expect(config.readingLineHeight).toBe(1.5);
+    });
+
+    // Test malformed boolean variations: only real booleans accepted
+    for (const malformed of ["true", "false", 0, 1, null, undefined]) {
+      const cfg = readStoredTypography({
         version: 3,
-        interfaceFontFamily: "not-a-font",
-        interfaceFontSize: 99,
-        interfaceFontWeight: 42,
-        codeFontFamily: "not-a-mono",
-        codeFontSize: 99,
-        codeFontWeight: 42,
-        codeWordWrap: "yes", // malformed non-boolean -> false
-        terminalFontFamily: "not-a-mono",
-        terminalFontSize: 99,
-        terminalFontWeight: 42,
-        terminalWrap: "no", // malformed non-boolean -> true
-        readingLineHeight: 99,
-      }),
-    );
-    const config = readTypography();
-    expect(config.version).toBe(3);
-    expect(config.interfaceFontFamily).toBe(DEFAULT_TYPOGRAPHY.interfaceFontFamily);
-    expect(config.interfaceFontSize).toBe(16);
-    expect(config.interfaceFontWeight).toBe(400);
-    expect(config.codeFontFamily).toBe(DEFAULT_TYPOGRAPHY.codeFontFamily);
-    expect(config.codeFontSize).toBe(13);
-    expect(config.codeFontWeight).toBe(400);
-    expect(config.codeWordWrap).toBe(false);
-    expect(config.terminalFontFamily).toBe(DEFAULT_TYPOGRAPHY.terminalFontFamily);
-    expect(config.terminalFontSize).toBe(12);
-    expect(config.terminalFontWeight).toBe(400);
-    expect(config.terminalWrap).toBe(true);
-    expect(config.readingLineHeight).toBe(1.5);
+        codeWordWrap: malformed,
+        terminalWrap: malformed,
+      });
+      expect(cfg.codeWordWrap).toBe(false);
+      expect(cfg.terminalWrap).toBe(true);
+    }
   });
 
   it("proves migration and serialization idempotence across repeated cycles", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    const v2 = {
-      version: 2,
-      interfaceFontFamily: "outfit",
-      interfaceFontSize: 16,
-      interfaceFontWeight: 600,
-      codeFontFamily: "fira-code",
-      codeFontSize: 14,
-      codeFontWeight: 500,
-      codeWordWrap: true,
-      terminalFontFamily: "source-code-pro",
-      terminalFontSize: 13,
-      terminalFontWeight: 400,
-      terminalWrap: false,
-      readingLineHeight: 1.65,
-      appScale: 1.125, // 16 * 1.125 = 18
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v2));
+    withStorage(undefined, (storage) => {
+      const v2 = {
+        version: 2,
+        interfaceFontFamily: "outfit",
+        interfaceFontSize: 16,
+        interfaceFontWeight: 600,
+        codeFontFamily: "fira-code",
+        codeFontSize: 14,
+        codeFontWeight: 500,
+        codeWordWrap: true,
+        terminalFontFamily: "source-code-pro",
+        terminalFontSize: 13,
+        terminalFontWeight: 400,
+        terminalWrap: false,
+        readingLineHeight: 1.65,
+        appScale: 1.125, // 16 * 1.125 = 18
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(v2));
 
-    const read1 = readTypography();
-    expect(read1.interfaceFontSize).toBe(18);
-    expect(read1.version).toBe(3);
+      const read1 = readTypography();
+      expect(read1.interfaceFontSize).toBe(18);
+      expect(read1.version).toBe(3);
 
-    const serialized1 = window.localStorage.getItem(STORAGE_KEY);
-    const read2 = readTypography();
-    const serialized2 = window.localStorage.getItem(STORAGE_KEY);
+      const serialized1 = storage.getItem(STORAGE_KEY);
+      const read2 = readTypography();
+      const serialized2 = storage.getItem(STORAGE_KEY);
 
-    expect(read2).toEqual(read1);
-    expect(serialized2).toBe(serialized1);
+      expect(read2).toEqual(read1);
+      expect(serialized2).toBe(serialized1);
+
+      // Write -> read -> write stability
+      // Note: writeTypography modifies lastNotifiedFontId to "outfit"
+      writeTypography(read2);
+      const read3 = readTypography();
+      expect(read3).toEqual(read2);
+      // Restore default typography so module-level baseline doesn't leak into subsequent tests
+      writeTypography(DEFAULT_TYPOGRAPHY);
+    });
   });
 
   it("observable font subscription matrix: notifies strictly on Interface Font changes", () => {
-    const received: string[] = [];
-    const unsubscribe = subscribeInterfaceFont((id) => received.push(id));
+    withStorage(undefined, () => {
+      // Establish baseline read inside clean storage
+      const current = readTypography();
+      expect(current.interfaceFontFamily).toBe("inter");
 
-    // Baseline: current font is "inter"
-    const current = readTypography();
+      const received: string[] = [];
+      const unsubscribe = subscribeInterfaceFont((id) => received.push(id));
 
-    // 1. Unrelated changes must NOT notify
-    writeTypography({ ...current, interfaceFontSize: 20 });
-    writeTypography({ ...current, interfaceFontWeight: 700 });
-    writeTypography({ ...current, codeFontFamily: "fira-code" });
-    writeTypography({ ...current, terminalFontFamily: "source-code-pro" });
-    writeTypography({ ...current, readingLineHeight: 1.65 });
-    expect(received).toEqual([]);
+      // 1. Unrelated changes must NOT notify
+      writeTypography({ ...current, interfaceFontSize: 20 });
+      writeTypography({ ...current, interfaceFontWeight: 700 });
+      writeTypography({ ...current, codeFontFamily: "fira-code" });
+      writeTypography({ ...current, terminalFontFamily: "source-code-pro" });
+      writeTypography({ ...current, readingLineHeight: 1.65 });
+      expect(received).toEqual([]);
 
-    // 2. Genuine Interface Font change MUST notify
-    writeTypography({ ...current, interfaceFontFamily: "roboto" });
-    expect(received).toEqual(["roboto"]);
+      // 2. Genuine Interface Font change MUST notify
+      writeTypography({ ...current, interfaceFontFamily: "roboto" });
+      expect(received).toEqual(["roboto"]);
 
-    // 3. Repeated write of the same font must NOT notify again
-    writeTypography({ ...current, interfaceFontFamily: "roboto" });
-    expect(received).toEqual(["roboto"]);
+      // 3. Repeated write of the same font must NOT notify again
+      writeTypography({ ...current, interfaceFontFamily: "roboto" });
+      expect(received).toEqual(["roboto"]);
 
-    // 4. Second subscriber receives notifications simultaneously
-    const secondReceived: string[] = [];
-    const unsubscribe2 = subscribeInterfaceFont((id) => secondReceived.push(id));
+      // 4. Second subscriber receives notifications simultaneously
+      const secondReceived: string[] = [];
+      const unsubscribe2 = subscribeInterfaceFont((id) => secondReceived.push(id));
 
-    writeTypography({ ...current, interfaceFontFamily: "outfit" });
-    expect(received).toEqual(["roboto", "outfit"]);
-    expect(secondReceived).toEqual(["outfit"]);
+      writeTypography({ ...current, interfaceFontFamily: "outfit" });
+      expect(received).toEqual(["roboto", "outfit"]);
+      expect(secondReceived).toEqual(["outfit"]);
 
-    // 5. Unsubscribed listener stops receiving notifications
-    unsubscribe();
-    writeTypography({ ...current, interfaceFontFamily: "figtree" });
-    expect(received).toEqual(["roboto", "outfit"]); // unchanged
-    expect(secondReceived).toEqual(["outfit", "figtree"]);
+      // 5. Unsubscribed listener stops receiving notifications
+      unsubscribe();
+      writeTypography({ ...current, interfaceFontFamily: "figtree" });
+      expect(received).toEqual(["roboto", "outfit"]); // unchanged
+      expect(secondReceived).toEqual(["outfit", "figtree"]);
 
-    unsubscribe2();
+      unsubscribe2();
+    });
   });
 
   it("clamps interface and code weights independently", () => {
@@ -377,18 +524,20 @@ describe("Typography config, storage & scoped resets (v3)", () => {
   });
 
   it("safely recovers from corrupted storage", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    window.localStorage.setItem(STORAGE_KEY, "{ corrupted_json: ... ");
-    const config = readTypography();
-    expect(config).toEqual(DEFAULT_TYPOGRAPHY);
+    withStorage(undefined, (storage) => {
+      storage.setItem(STORAGE_KEY, "{ corrupted_json: ... ");
+      const config = readTypography();
+      expect(config).toEqual(DEFAULT_TYPOGRAPHY);
+    });
   });
 
   it("safely recovers from a non-object payload", () => {
-    if (typeof window === "undefined" || !window.localStorage) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]));
-    expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify("nope"));
-    expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
+    withStorage(undefined, (storage) => {
+      storage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]));
+      expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
+      storage.setItem(STORAGE_KEY, JSON.stringify("nope"));
+      expect(readTypography()).toEqual(DEFAULT_TYPOGRAPHY);
+    });
   });
 });
 

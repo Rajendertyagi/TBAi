@@ -88,7 +88,6 @@
               if (!isRange(v, 12, 24)) return 16;
               return Math.max(14, v);
             };
-            var isAppScale = function (v) { return typeof v === "number" && isFinite(v) && v >= 0.75 && v <= 1.5; };
             var pick = function (map, id, fallback) { return map[id] ? id : fallback; };
 
             // Normalize to v3 (migrating v2 and v1 when needed), mirroring typography.ts.
