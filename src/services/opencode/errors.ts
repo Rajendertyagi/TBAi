@@ -41,6 +41,67 @@ export class OpenCodeError extends Error {
   }
 }
 
+/** Thrown when an import request carries a stale or mismatched source reference guard. */
+export class OpenCodeImportStaleSourceError extends Error {
+  readonly code = "OPENCODE_IMPORT_STALE_SOURCE";
+
+  constructor(message = "The session discovery state is stale. Please refresh the session list.") {
+    super(message);
+    this.name = "OpenCodeImportStaleSourceError";
+  }
+}
+
+/** Thrown when an OpenCode session is already bound to a conversation under the same service owner. */
+export class OpenCodeSessionAlreadyImportedError extends Error {
+  readonly code = "OPENCODE_SESSION_ALREADY_IMPORTED";
+
+  constructor(
+    readonly conversationId: string,
+    message = "This OpenCode session has already been imported.",
+  ) {
+    super(message);
+    this.name = "OpenCodeSessionAlreadyImportedError";
+  }
+}
+
+/** Thrown when an external OpenCode session is ineligible for import (e.g. child or archived). */
+export class OpenCodeImportSessionEligibilityError extends Error {
+  readonly code = "OPENCODE_IMPORT_ELIGIBILITY";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenCodeImportSessionEligibilityError";
+  }
+}
+
+/** Thrown when an imported OpenCode session no longer exists on the active service. */
+export class OpenCodeImportedSessionMissingError extends Error {
+  readonly code = "OPENCODE_IMPORTED_SESSION_MISSING";
+
+  constructor(
+    readonly conversationId: string,
+    readonly sessionId: string,
+    message?: string,
+  ) {
+    super(message ?? `Session not found on the active OpenCode server: ${sessionId}`);
+    this.name = "OpenCodeImportedSessionMissingError";
+  }
+}
+
+/** Thrown when an OpenCode session's working directory is unresolvable or unavailable. */
+export class OpenCodeDirectoryUnavailableError extends Error {
+  readonly code = "OPENCODE_DIRECTORY_UNAVAILABLE";
+
+  constructor(
+    readonly conversationId: string,
+    readonly directory: string,
+    message?: string,
+  ) {
+    super(message ?? `OpenCode session directory is unavailable: ${directory}`);
+    this.name = "OpenCodeDirectoryUnavailableError";
+  }
+}
+
 /** Reads a string property from an unknown object without an unchecked cast. */
 function readString(source: object, key: string): string | undefined {
   const value: unknown = Reflect.get(source, key);
@@ -49,9 +110,7 @@ function readString(source: object, key: string): string | undefined {
 
 /** Reads the human message off any object-shaped error body. */
 function messageOf(value: unknown): string | undefined {
-  return value !== null && typeof value === "object"
-    ? readString(value, "message")
-    : undefined;
+  return value !== null && typeof value === "object" ? readString(value, "message") : undefined;
 }
 
 /** Best-effort human detail from a declared-status error body (a plain object). */
@@ -95,20 +154,18 @@ export function toOpenCodeError(err: unknown): OpenCodeError {
   if (err instanceof OpenCodeError) return err;
 
   if (isSessionNotFoundError(err)) {
-    return new OpenCodeError(
-      "session_not_found",
-      `OpenCode session not found: ${err.sessionID}`,
-      404,
-      { cause: err },
-    );
+    // The id is deliberately NOT in the message: this error is spread into
+    // structured logs by several callers, and a session id must never ride
+    // out in free text (the logger redacts id-shaped FIELDS only). The kind
+    // and status are enough to act on; the id stays on `cause`.
+    return new OpenCodeError("session_not_found", "OpenCode session not found", 404, {
+      cause: err,
+    });
   }
   if (isUnauthorizedError(err) || isForbiddenError(err)) {
-    return new OpenCodeError(
-      "auth",
-      `OpenCode authentication failed: ${bodyDetail(err)}`,
-      401,
-      { cause: err },
-    );
+    return new OpenCodeError("auth", `OpenCode authentication failed: ${bodyDetail(err)}`, 401, {
+      cause: err,
+    });
   }
   if (isInvalidRequestError(err)) {
     return new OpenCodeError(

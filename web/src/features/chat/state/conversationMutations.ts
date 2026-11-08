@@ -9,14 +9,40 @@ export interface SetConversationStatusOptions {
   status: "regular" | "archived";
 }
 
+type MutationListener = () => void;
+const mutationListeners = new Set<MutationListener>();
+
+/**
+ * Subscribe to conversation mutations (renames, status updates, new messages/titles).
+ * Consumed by sidebar conversation lists and header tabs to refresh immediately without a reload.
+ */
+export function subscribeConversationMutations(listener: MutationListener): () => void {
+  mutationListeners.add(listener);
+  return () => {
+    mutationListeners.delete(listener);
+  };
+}
+
+/**
+ * Emit an invalidation event across the application.
+ */
+export function notifyConversationMutations(): void {
+  mutationListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch (err) {
+      logger.debug("chat", "conversation_mutation_listener_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+}
+
 /**
  * Domain operation for renaming a conversation.
  * Issues a PATCH request to /api/conversations/:id.
  */
-export async function renameConversation(
-  conversationId: string,
-  title: string,
-): Promise<void> {
+export async function renameConversation(conversationId: string, title: string): Promise<void> {
   const cleanTitle = title.trim();
   if (!cleanTitle) {
     throw new Error("Title cannot be empty");
@@ -35,6 +61,8 @@ export async function renameConversation(
     });
     throw new Error(`Failed to rename conversation (${res.status})`);
   }
+
+  notifyConversationMutations();
 }
 
 /**
@@ -58,4 +86,6 @@ export async function setConversationStatus(
     });
     throw new Error(`Failed to update conversation status (${res.status})`);
   }
+
+  notifyConversationMutations();
 }

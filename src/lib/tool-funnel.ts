@@ -26,11 +26,7 @@ export interface InstrumentedExecuteOptions {
 
 export function instrumentedExecute<
   TFunc extends (args: any, opts?: any) => unknown | Promise<unknown>,
->(
-  toolName: string,
-  execute: TFunc,
-  extra: Record<string, unknown> = {},
-): TFunc {
+>(toolName: string, execute: TFunc, extra: Record<string, unknown> = {}): TFunc {
   // Generic passthrough (cast once, here): call sites keep the original
   // function type, so AI SDK tool() overloads resolve exactly as if the
   // function were passed unwrapped. A fixed signature would poison
@@ -45,8 +41,7 @@ export function instrumentedExecute<
       // carries no threadId (scheduler, browser, process/system, MCP) emit
       // no conversationId — identical to the previous explicit `funnelExtra`
       // wiring, which bound the thread only to fs/run/todo executes.
-      const contextThreadId = (opts?.context as { threadId?: unknown } | undefined)
-        ?.threadId;
+      const contextThreadId = (opts?.context as { threadId?: unknown } | undefined)?.threadId;
       const ctx = {
         tool: toolName,
         toolCallId: opts?.toolCallId,

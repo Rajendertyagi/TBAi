@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import {
   folderService,
   folderLinkService,
@@ -15,7 +15,6 @@ import {
   folderLinkUpdateSchema,
   folderGroupCreateSchema,
   folderGroupUpdateSchema,
-  folderBrowseSchema,
 } from "../lib/validation";
 import { storageError } from "./shared";
 
@@ -114,7 +113,7 @@ app.get("/browse", async (c) => {
   try {
     const url = new URL(c.req.url);
     const requested = url.searchParams.get("path");
-    const base = requested && requested.trim() ? requested.trim() : process.cwd();
+    const base = requested?.trim() ? requested.trim() : process.cwd();
     const abs = path.resolve(base);
     if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
       return c.json({ error: "Directory not found", path: abs }, 404);
@@ -162,6 +161,19 @@ app.get("/:id", async (c) => {
     const folder = await folderService.get(c.req.param("id"));
     if (!folder) return c.json({ error: "Folder not found" }, 404);
     return c.json(folder);
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
+app.patch("/reorder", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    if (!Array.isArray(body.ids)) {
+      return c.json({ error: "ids must be an array of folder IDs" }, 400);
+    }
+    await folderService.reorder(body.ids.map(String));
+    return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);
   }
@@ -243,11 +255,7 @@ app.post("/:id/links", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const parsed = folderLinkCreateSchema.parse(body);
-    const link = await folderLinkService.insert(
-      c.req.param("id"),
-      parsed.name,
-      parsed.targetPath,
-    );
+    const link = await folderLinkService.insert(c.req.param("id"), parsed.name, parsed.targetPath);
     return c.json(link);
   } catch (e) {
     return storageError(c, e);
@@ -269,6 +277,16 @@ app.patch("/:id/links/:linkId", async (c) => {
 app.delete("/:id/links/:linkId", async (c) => {
   try {
     await folderLinkService.delete(c.req.param("linkId"));
+    return c.json({ success: true });
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
+app.post("/:id/reveal", async (c) => {
+  try {
+    const ok = await folderService.revealInExplorer(c.req.param("id"));
+    if (!ok) return c.json({ error: "Folder not found" }, 404);
     return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);

@@ -33,6 +33,136 @@
         var bg = getComputedStyle(root).getPropertyValue("--background").trim();
         if (meta && bg) meta.setAttribute("content", bg);
       } catch (e) { /* storage unavailable — class="dark" default stands */ }
+      // Pre-apply saved typography & scale before first paint (no flash / layout shift).
+      //
+      // This mirrors typography.ts EXACTLY — same v3 normalization, same v1/v2→v3
+      // migration, same per-font weight clamping — so the pre-paint values and
+      // the post-mount values agree. tests/unit/appearance/typography.test.ts
+      // extracts FONT_MAP/MONO_MAP from this file and asserts they match
+      // UI_FONTS/MONO_FONTS, so the two cannot drift apart silently.
+      //
+      // `--font-mono` is the fixed generic monospace stack and is NEVER set
+      // here; code surfaces use `--code-font-family`, terminal output uses
+      // `--terminal-font-family`.
+      try {
+        var tyRaw = localStorage.getItem("tbai-typography");
+        if (tyRaw) {
+          var ty = JSON.parse(tyRaw);
+          if (ty && typeof ty === "object") {
+            var FONT_MAP = {
+              "inter": { stack: '"Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', min: 100, max: 900 },
+              "sf-pro": { stack: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif', min: 100, max: 900 },
+              "roboto": { stack: '"Roboto Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', min: 100, max: 900 },
+              "open-sans": { stack: '"Open Sans Variable", -apple-system, BlinkMacSystemFont, sans-serif', min: 300, max: 800 },
+              "source-sans-3": { stack: '"Source Sans 3 Variable", -apple-system, BlinkMacSystemFont, sans-serif', min: 200, max: 900 },
+              "plus-jakarta-sans": { stack: '"Plus Jakarta Sans Variable", -apple-system, BlinkMacSystemFont, sans-serif', min: 200, max: 800 },
+              "outfit": { stack: '"Outfit Variable", -apple-system, BlinkMacSystemFont, sans-serif', min: 100, max: 900 },
+              "figtree": { stack: '"Figtree Variable", -apple-system, BlinkMacSystemFont, sans-serif', min: 300, max: 900 },
+              "lato": { stack: '"Lato", -apple-system, BlinkMacSystemFont, sans-serif', weights: [100, 300, 400, 700, 900] },
+              "system": { stack: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', min: 100, max: 900 }
+            };
+            var MONO_MAP = {
+              "jetbrains-mono": { stack: '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', min: 100, max: 800 },
+              "fira-code": { stack: '"Fira Code Variable", ui-monospace, monospace', min: 300, max: 700 },
+              "source-code-pro": { stack: '"Source Code Pro Variable", ui-monospace, monospace', min: 200, max: 900 },
+              "sf-mono": { stack: '"SF Mono", Consolas, "Liberation Mono", Menlo, monospace', min: 100, max: 900 },
+              "system-mono": { stack: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', min: 100, max: 900 }
+            };
+            var clampWeight = function (weight, def) {
+              if (!def) return weight;
+              if (def.weights) {
+                var best = def.weights[0];
+                for (var i = 1; i < def.weights.length; i++) {
+                  if (Math.abs(def.weights[i] - weight) < Math.abs(best - weight)) best = def.weights[i];
+                }
+                return best;
+              }
+              return Math.max(def.min == null ? 100 : def.min, Math.min(def.max == null ? 900 : def.max, weight));
+            };
+            var isWeight = function (v) { return typeof v === "number" && isFinite(v) && v >= 100 && v <= 900; };
+            var isRange = function (v, min, max) { return typeof v === "number" && isFinite(v) && v >= min && v <= max; };
+            var normalizeInterfaceSize = function (v) {
+              if (!isRange(v, 12, 24)) return 15;
+              return v;
+            };
+            var pick = function (map, id, fallback) { return map[id] ? id : fallback; };
+
+            // Normalize to v3 (migrating v2 and v1 when needed), mirroring typography.ts.
+            var cfg;
+            if (ty.version === 3) {
+              cfg = {
+                interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
+                interfaceFontSize: normalizeInterfaceSize(ty.interfaceFontSize),
+                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 300,
+                codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
+                codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
+                codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
+                codeWordWrap: typeof ty.codeWordWrap === "boolean" ? ty.codeWordWrap : false,
+                terminalFontFamily: pick(MONO_MAP, ty.terminalFontFamily, "jetbrains-mono"),
+                terminalFontSize: isRange(ty.terminalFontSize, 10, 20) ? ty.terminalFontSize : 12,
+                terminalFontWeight: isWeight(ty.terminalFontWeight) ? ty.terminalFontWeight : 400,
+                terminalWrap: typeof ty.terminalWrap === "boolean" ? ty.terminalWrap : true,
+                readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5
+              };
+            } else if (ty.version === 2) {
+              var normUi = normalizeInterfaceSize(ty.interfaceFontSize);
+              var appScale = isRange(ty.appScale, 0.75, 1.5) ? ty.appScale : 1;
+              var effectiveSize = Math.min(24, Math.max(12, Math.round(normUi * appScale)));
+              cfg = {
+                interfaceFontFamily: pick(FONT_MAP, ty.interfaceFontFamily, "inter"),
+                interfaceFontSize: effectiveSize,
+                interfaceFontWeight: isWeight(ty.interfaceFontWeight) ? ty.interfaceFontWeight : 300,
+                codeFontFamily: pick(MONO_MAP, ty.codeFontFamily, "jetbrains-mono"),
+                codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
+                codeFontWeight: isWeight(ty.codeFontWeight) ? ty.codeFontWeight : 400,
+                codeWordWrap: typeof ty.codeWordWrap === "boolean" ? ty.codeWordWrap : false,
+                terminalFontFamily: pick(MONO_MAP, ty.terminalFontFamily, "jetbrains-mono"),
+                terminalFontSize: isRange(ty.terminalFontSize, 10, 20) ? ty.terminalFontSize : 12,
+                terminalFontWeight: isWeight(ty.terminalFontWeight) ? ty.terminalFontWeight : 400,
+                terminalWrap: typeof ty.terminalWrap === "boolean" ? ty.terminalWrap : true,
+                readingLineHeight: isRange(ty.readingLineHeight, 1.2, 2.0) ? ty.readingLineHeight : 1.5
+              };
+            } else {
+              // v1 (either historical shape) → v3.
+              var legacyBase = isRange(ty.baseSize, 12, 24) ? ty.baseSize : 15;
+              var legacyWeight = isWeight(ty.fontWeight) ? ty.fontWeight : 300;
+              var legacyMonoWeight = isWeight(ty.monoFontWeight) ? ty.monoFontWeight : legacyWeight;
+              cfg = {
+                interfaceFontFamily: pick(FONT_MAP, ty.fontFamily, "inter"),
+                interfaceFontSize: legacyBase,
+                interfaceFontWeight: legacyWeight,
+                codeFontFamily: pick(MONO_MAP, ty.monoFontFamily, "jetbrains-mono"),
+                codeFontSize: isRange(ty.codeFontSize, 11, 20) ? ty.codeFontSize : 13,
+                codeFontWeight: legacyMonoWeight,
+                codeWordWrap: false,
+                terminalFontFamily: "jetbrains-mono",
+                terminalFontSize: 12,
+                terminalFontWeight: 400,
+                terminalWrap: true,
+                readingLineHeight: isRange(ty.lineHeight, 1.2, 2.0) ? ty.lineHeight : 1.5
+              };
+            }
+
+            var r = document.documentElement;
+            var uiDef = FONT_MAP[cfg.interfaceFontFamily];
+            var codeDef = MONO_MAP[cfg.codeFontFamily];
+            var termDef = MONO_MAP[cfg.terminalFontFamily];
+            if (uiDef) r.style.setProperty("--font-sans", uiDef.stack);
+            r.style.fontSize = String((cfg.interfaceFontSize / 16) * 100) + "%";
+            r.style.setProperty("--font-weight-base", String(clampWeight(cfg.interfaceFontWeight, uiDef)));
+            if (codeDef) r.style.setProperty("--code-font-family", codeDef.stack);
+            r.style.setProperty("--code-font-size", String(cfg.codeFontSize) + "px");
+            r.style.setProperty("--code-font-weight", String(clampWeight(cfg.codeFontWeight, codeDef)));
+            if (termDef) r.style.setProperty("--terminal-font-family", termDef.stack);
+            r.style.setProperty("--terminal-font-size", String(cfg.terminalFontSize) + "px");
+            r.style.setProperty("--terminal-font-weight", String(clampWeight(cfg.terminalFontWeight, termDef)));
+            r.style.setProperty("--reading-line-height", String(cfg.readingLineHeight));
+            r.style.removeProperty("zoom");
+            r.setAttribute("data-code-wrap", cfg.codeWordWrap ? "on" : "off");
+            r.setAttribute("data-terminal-wrap", cfg.terminalWrap ? "on" : "off");
+          }
+        }
+      } catch (e) { /* storage unavailable — stylesheet defaults stand */ }
     </script>
   </head>
   <body>

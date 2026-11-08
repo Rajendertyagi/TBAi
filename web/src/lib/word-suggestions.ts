@@ -66,10 +66,7 @@ const MIN_CORRECTABLE_LENGTH = 2;
  * @param caret - Selection offsets captured during the context-menu event.
  * @returns The target word, or `null` when there is nothing to correct.
  */
-export function findWordAtCaret(
-  text: string,
-  caret: CaretSnapshot,
-): WordAtCaret | null {
+export function findWordAtCaret(text: string, caret: CaretSnapshot): WordAtCaret | null {
   const start = Math.min(caret.selectionStart, caret.selectionEnd);
   const end = Math.max(caret.selectionStart, caret.selectionEnd);
 
@@ -144,11 +141,7 @@ function scanEnd(text: string, index: number): number {
 }
 
 /** Builds a `WordAtCaret`, or `null` when the run is too short to correct. */
-function toWordAtCaret(
-  text: string,
-  start: number,
-  end: number,
-): WordAtCaret | null {
+function toWordAtCaret(text: string, start: number, end: number): WordAtCaret | null {
   if (end - start < MIN_CORRECTABLE_LENGTH) return null;
   return { word: text.slice(start, end), start, end };
 }
@@ -167,7 +160,6 @@ export function replaceWord(
   target: WordAtCaret,
   replacement: string,
 ): { text: string; caret: number } {
-  const next =
-    text.slice(0, target.start) + replacement + text.slice(target.end);
+  const next = text.slice(0, target.start) + replacement + text.slice(target.end);
   return { text: next, caret: target.start + replacement.length };
 }

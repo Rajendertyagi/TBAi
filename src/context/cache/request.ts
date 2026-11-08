@@ -73,18 +73,17 @@ export type CacheProviderOptions = Record<string, CacheJsonObject>;
 export type CacheProviderNamespace = CacheCapability["namespace"];
 
 /** Outcome of asking what to send. Carries the reason, so omission is explainable. */
-export type CacheControlDecision =
-  | {
-      readonly send: boolean;
-      readonly providerOptions: CacheProviderOptions | undefined;
-      /** Modes the options actually request, for diagnostics. */
-      readonly requestedModes: readonly string[];
-      /**
-       * Why nothing was sent. Enumerated rather than free text so a log line is
-       * greppable and an omitted control is never mistaken for a bug.
-       */
-      readonly reason?: CacheOmissionReason;
-    };
+export type CacheControlDecision = {
+  readonly send: boolean;
+  readonly providerOptions: CacheProviderOptions | undefined;
+  /** Modes the options actually request, for diagnostics. */
+  readonly requestedModes: readonly string[];
+  /**
+   * Why nothing was sent. Enumerated rather than free text so a log line is
+   * greppable and an omitted control is never mistaken for a bug.
+   */
+  readonly reason?: CacheOmissionReason;
+};
 
 /** Enumerated reasons a cache control was not sent. */
 export const CACHE_OMISSION_REASONS = [
@@ -187,7 +186,10 @@ export function buildCacheProviderOptions(input: {
  * A TTL is only ever forwarded when the capability DOCUMENTS that exact value.
  * Substituting a default would send a TTL the vendor never stated for this model.
  */
-function pickTtl(requested: CacheTtlOption | undefined, documented: readonly CacheTtlOption[] | undefined) {
+function pickTtl(
+  requested: CacheTtlOption | undefined,
+  documented: readonly CacheTtlOption[] | undefined,
+) {
   if (!requested || !documented) return undefined;
   return documented.includes(requested) ? requested : undefined;
 }
@@ -222,6 +224,8 @@ export function describeCacheDecision(decision: CacheControlDecision): Record<st
 }
 
 /** Convenience for the route: an unknown capability always sends nothing. */
-export function isOmittedForUnknown(capability: CacheCapability): capability is UnknownCacheCapability {
+export function isOmittedForUnknown(
+  capability: CacheCapability,
+): capability is UnknownCacheCapability {
   return capability.status === "unknown";
 }

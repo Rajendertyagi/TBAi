@@ -47,10 +47,7 @@ export function useFormDockMaxHeight(
       const boundaryTop = Math.max(main.getBoundingClientRect().top, visualTop);
       // The body's bottom edge is its anchor and does not depend on how tall it
       // currently is, so this measurement is not circular.
-      const available = formDockAvailablePx(
-        body.getBoundingClientRect().bottom,
-        boundaryTop,
-      );
+      const available = formDockAvailablePx(body.getBoundingClientRect().bottom, boundaryTop);
       const next = formDockBodyMaxHeight(formDockMeasuredMaxHeight(available));
       setMaxHeight((previous) => (previous === next ? previous : next));
     };

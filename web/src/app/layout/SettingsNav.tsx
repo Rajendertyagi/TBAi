@@ -12,15 +12,12 @@ export function SettingsNav() {
 
   return (
     <aside className="flex w-56 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-muted/30 px-2 py-3">
-      <div className="px-2 text-xs font-medium text-muted-foreground">
-        Settings
-      </div>
+      <div className="px-2 text-xs font-medium text-muted-foreground">Settings</div>
       <nav className="space-y-1">
         {items.map((item) => {
           const Icon = item.icon;
           const route = item.route;
-          const active =
-            pathname === route || pathname.startsWith(`${route}/`);
+          const active = pathname === route || pathname.startsWith(`${route}/`);
           return (
             <Link
               key={item.id}

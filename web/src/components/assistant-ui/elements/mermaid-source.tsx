@@ -40,8 +40,7 @@ import {
  * terminated by a semicolon. Anchored so body lines and other diagram types are
  * never touched.
  */
-const HEADER_WITH_OPTIONAL_SEMICOLON =
-  /^(\s*(?:graph|flowchart)\s+[A-Za-z]+\s*);\s*$/;
+const HEADER_WITH_OPTIONAL_SEMICOLON = /^(\s*(?:graph|flowchart)\s+[A-Za-z]+\s*);\s*$/;
 
 /**
  * Drop a stray semicolon from a `graph`/`flowchart` header line.

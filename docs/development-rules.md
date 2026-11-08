@@ -94,7 +94,8 @@ Do **not** add: LangChain, LangGraph, Mastra, Redis, PostgreSQL, Docker, or
 unnecessary agent frameworks / abstractions. Add a dependency only with a clear
 technical reason, recorded in `docs/decisions.md`.
 
-The **official `@modelcontextprotocol/sdk`** is the allowed MCP implementation (it provides the
+The **official `@modelcontextprotocol/*` packages** (client v2.3.1, server v2.3.1, core v2.3.1) are the
+allowed MCP implementation (they provide the
 wire protocol, transports, and notification schemas). Do **not** hand-roll JSON-RPC/MCP framing or
 add a second MCP client library. AI SDK v7 `tool()` wraps discovered MCP tools for the model; the
 `@ai-sdk/mcp` helper is intentionally not used (see `decisions.md`).
@@ -105,15 +106,114 @@ Before declaring a feature complete: typecheck, build, start the app, verify a r
 AI request works, verify streaming works, verify errors are handled, and verify
 provider switching works when applicable.
 
-- The suite has a documented baseline of **259 unique failing tests** from
-  cross-file SQLite contention (all test files in a process share one database via
-  `tests/setup.ts`). A failure in-suite is therefore not evidence of a regression.
-  **Verify a suspected regression by running the single file in isolation** before
-  believing or dismissing it. The known cause is `tests/unit/db.test.ts` opening
-  that shared database three times concurrently.
-- Because the gate cannot currently fail for the right reason, do not add a CI
-  performance or size gate until the baseline is fixed — it inherits the same
-  noise, and a gate that cries wolf gets disabled. See `performance.md`.
+The mandatory gates and what each one catches are in **`docs/engineering-quality.md`**.
+Run them all with `bun run verify`.
+
+- The suite is **green** when all ten `bun run verify` gate steps exit 0
+  (measured 2026-10-20 at `ci/tauri-e2e-verify`): typecheck, lint,
+  `format:check`, `test:locations`, build, unit/integration
+  (4320 pass / 43 skip / 0 fail across 319 files), the three isolated
+  lifecycle suites, and the DOM contract suite (518 pass / 0 fail across
+  50 files). `docs/engineering-quality.md` is the single owner of the gate
+  definitions and the measured counts; this bullet points at it rather than
+  duplicating numbers that drift. An earlier note here claimed a baseline of
+  "259 unique failing tests" from cross-file SQLite contention; that is no
+  longer true and was removed rather than left to mislead.
+- **A failure in-suite is still not automatically a regression.** One test is
+  timing-sensitive under full-suite load and fails intermittently on its own:
+  `MCP lifecycle (Phase 4) > disconnectAll on a mid-connect connection` in
+  `tests/integration/mcp/mcp-v2.test.ts`. Its cause is real — `connect()` in
+  `src/services/mcp/manager.ts` promotes a connection to `"connected"` without
+  checking it is still the current, still-connecting entry, so an interrupted
+  connect resurrects a connection that `disconnectAll` just closed. **Verify a
+  suspected regression by running the single file in isolation** before believing
+  or dismissing it.
+- **A second MCP timing failure, measured on 2026-10-22, and NOT a
+  regression.** The cases in `tests/integration/mcp/connection-lifecycle-race.test.ts`
+  that interrupt a connect mid-handshake — *a connect interrupted by disconnect
+  stays disconnected*, *an interrupted connect schedules no reconnect*, *a
+  connect interrupted during the SSE probe does not reach connected*, and *a
+  superseded attempt is abandoned and does not overwrite the newer one* — time
+  out at **exactly 5000 ms** when the MCP integration directory is run
+  **without the repository's `--timeout=30000`**. The cause is measured, not
+  guessed:
+  - The MCP SDK leaves `client.connect()` **pending** after `close()` (the
+    test's own comment at `connection-lifecycle-race.test.ts:223` says so), so
+    the interrupted attempt never settles.
+  - `disconnectAll` therefore waits its full bound,
+    `INFLIGHT_SETTLE_TIMEOUT_MS = 5000` (`src/services/mcp/manager.ts:85`).
+  - Only one case in that file declares a timeout (`30000`). The rest inherit
+    bun's **5000 ms default**, which is exactly that bound — so a
+    `disconnectAll` that is *supposed* to take its whole bound is killed by the
+    harness one millisecond before it finishes. Declaring `30000` on the
+    affected case makes it pass (verified).
+  - The child fixture is **not** the problem: its `requested` marker appears in
+    **113 ms** (measured), so the handshake boundary is reached well inside the
+    budget.
+  - The fix is the **timeout declaration**, not the production bound: the
+    production constant is load-bearing — it is what bounds a shutdown — and
+    lowering it to fit a test would weaken the guarantee it exists to provide.
+  - **It is pre-existing.** The same failures reproduce at commit `7de8555`
+    (before the OpenCode runtime-remediation work), in a clean worktree, with
+    the same 5000 ms signature: 3 fail at the base commit, 2-3 fail with the
+    remediation applied.
+  - **The repository's own gate does not hit it**: `bun run test` carries
+    `--timeout=30000`, and with it the MCP integration directory is **49 pass /
+    0 fail**. The failure appears only when the directory is run bare, which is
+    why a single-file run under the default timeout is a misleading signal
+    about this file.
+- **A CI failure in the MCP area is not evidence of a regression in the change
+  on the branch.** The CI run of `75ec732` failed with **1** failure — `F3 -
+  unexpected session/transport loss > transitions to error and reconnects when
+  transport closes unexpectedly` (**5790.68 ms**) — in a file that none of that
+  commit's 14 changed files touch. The same case **passes** in isolation, under
+  the whole-directory load, and on the next commit's CI run, which was green.
+  The arithmetic points at one assertion. The case's first poll waits for the
+  `connect outcome=error` log entry on a budget of **50 × 100 ms = 5000 ms**
+  (`mcp-v2.test.ts:200`), and that entry is only emitted when the child's
+  `close` event arrives — SIGTERM, to the child's death, to the transport's
+  close. A **5790 ms** total is that budget **exhausted**: ≈790 ms of setup,
+  then the full 5000 ms of polling, and the assertion at
+  `mcp-v2.test.ts:213` (`expect(errorLogs.length).toBeGreaterThanOrEqual(1)`)
+  failed. The number is also exactly where the *reconnect* would fire — the
+  manager arms it 5000 ms after the kill — so on the CI runner the child's
+  teardown was delivered **later than the reconnect delay**, and the poll gave
+  up at the same instant the retry landed. Locally the same case delivers the
+  error log immediately and the reconnect 5000 ms later, which is the
+  timeline the test was written against. **The delivery delay itself has not
+  been reproduced on a loaded runner here**, so this is recorded as a known
+  flake with its arithmetic, not as a diagnosis. Verify a suspected MCP
+  regression by running the single file under `bun run test`'s own timeout,
+  not bare.
+- **A handshake file is not readable just because it exists.** Measured
+  2026-10-26: `G2 Windows process ownership > hard-killing the shell kills the
+  sidecar and its detached descendant` in
+  `tests/integration/opencode/process-ownership.test.ts` failed **2 of 28**
+  isolated runs (and once inside a full `verify`, where the quarantine guard
+  reported it as an ordinary failure) on its *first* liveness assertion. The
+  cause is not timing: `writeFileSync` and `Bun.write` create and truncate the
+  destination **before** writing the bytes, and every reader in these fixtures
+  polls for existence and then reads once. A probe mirroring `startLifecycle`
+  saw the grandchild marker as **`""` in 3 of 40** starts, with the content
+  arriving moments later and the server answering. The fix publishes the record
+  atomically (`tests/helpers/atomic-record.ts`: sibling file, then rename), so
+  existence means completeness; afterwards **0 of 40** starts observed an empty
+  marker and **20 of 20** isolated runs passed. Any new handshake file needs the
+  same treatment - waiting longer would have hidden it, not fixed it.
+- **A test must not bind a port the application may be on.** On 2026-10-22
+  `tests/integration/server/port-configurability.test.ts` restarted onto
+  **3030**, which was held by a TBAi instance the maintainer was running
+  outside the repository, so the full suite failed on a machine where the
+  product worked. The number was never a product fact — the default is
+  **3000** (`src/services/server-port.ts`) — it was a hardcoded fixture. The
+  test now asks the OS for free ports (`Bun.serve({ port: 0 })`, several
+  reserved at once so they cannot be handed the same number) and releases them
+  before binding. A test's sockets come from the machine, never from the
+  application's neighbourhood: the suite must pass while the real app is
+  running.
+- Because the gate can currently fail for the wrong reason (above), do not add a CI
+  performance or size gate until that is fixed — it inherits the same noise, and a
+  gate that cries wolf gets disabled. See `performance.md`.
 
 ## 9. Performance
 

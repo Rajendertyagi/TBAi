@@ -11,6 +11,7 @@ import { WelcomeEnginePicker } from "./WelcomeEnginePicker";
 export function WelcomeScreen({ composer }: { composer: ReactNode }) {
   const layout = welcomeConfig.layout;
   const copy = welcomeConfig.copy;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: false positive. The body reads `copy.tips` twice (`copy.tips.length` and `copy.tips[...]`), but Biome's dependency walk does not match a NESTED member expression against the same expression in the dependency list, so it reports the dependency as unused.
   const tip = useMemo(() => {
     if (copy.tips.length === 0) return null;
     const day = new Date().getDate();
@@ -19,6 +20,7 @@ export function WelcomeScreen({ composer }: { composer: ReactNode }) {
 
   return (
     <div
+      role="region"
       aria-label={copy.newChatAria}
       className="flex h-full min-h-0 items-center justify-center overflow-y-auto"
     >

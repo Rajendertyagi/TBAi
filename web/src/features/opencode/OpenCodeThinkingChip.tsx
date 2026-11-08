@@ -21,15 +21,8 @@ import { buildOpenCodeThinkingOptions } from "./useOpenCodeCapabilities";
 export function OpenCodeThinkingChip() {
   const { agentId } = useParams();
   const conversationId = agentId ?? "";
-  const {
-    isLoading,
-    error,
-    open,
-    setOpen,
-    currentVariant,
-    currentModelInfo,
-    persist,
-  } = useOpenCodeChipState(conversationId);
+  const { isLoading, error, open, setOpen, currentVariant, currentModelInfo, persist } =
+    useOpenCodeChipState(conversationId);
 
   const thinkingOptions = buildOpenCodeThinkingOptions(currentModelInfo);
 

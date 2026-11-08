@@ -78,7 +78,13 @@ export function normalizeOpenCodeArgs(
 
 function isToolContent(value: unknown): value is ToolContent {
   if (value === null || typeof value !== "object") return false;
-  const record = value as { type?: unknown; text?: unknown; uri?: unknown; mime?: unknown; name?: unknown };
+  const record = value as {
+    type?: unknown;
+    text?: unknown;
+    uri?: unknown;
+    mime?: unknown;
+    name?: unknown;
+  };
   if (record.type === "text") return typeof record.text === "string";
   if (record.type !== "file") return false;
   return (
@@ -345,9 +351,7 @@ function rawPartForCallId(
 }
 
 /** A raw tool part's own `state.metadata`, or `null` when it carries none. */
-function rawPartMetadata(
-  part: Record<string, unknown> | null,
-): Record<string, unknown> | null {
+function rawPartMetadata(part: Record<string, unknown> | null): Record<string, unknown> | null {
   if (part === null) return null;
   const state = part.state as Record<string, unknown> | undefined;
   const metadata = state?.metadata;
@@ -425,7 +429,11 @@ export function openCodeQuestionAnswersFromParts(
   if (!Array.isArray(answers)) return null;
   // A non-string, or a non-array entry, means the shape is not what the capture
   // shows — so it is dropped rather than rendered as `undefined`.
-  if (!answers.every((entry) => Array.isArray(entry) && entry.every((item) => typeof item === "string"))) {
+  if (
+    !answers.every(
+      (entry) => Array.isArray(entry) && entry.every((item) => typeof item === "string"),
+    )
+  ) {
     return null;
   }
   return answers as readonly (readonly string[])[];
@@ -503,9 +511,7 @@ const HIT_HEADING = /^##\s+\[(.*)\]\((.*)\)\s*$/;
  *   usable; and `null` when it is not this shape at all, so the caller keeps
  *   the plain-text fallback instead of reporting a source count it never read.
  */
-export function parseOpenCodeWebSearchHits(
-  result: unknown,
-): OpenCodeWebSearchHit[] | null {
+export function parseOpenCodeWebSearchHits(result: unknown): OpenCodeWebSearchHit[] | null {
   const text = openCodeResultText(result);
   if (text === null || !text.trim()) return null;
 

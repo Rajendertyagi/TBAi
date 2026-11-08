@@ -1,7 +1,4 @@
-import type {
-  ToolCallMessagePartComponent,
-  ToolCallMessagePartProps,
-} from "@assistant-ui/react";
+import type { ToolCallMessagePartComponent, ToolCallMessagePartProps } from "@assistant-ui/react";
 import { BackendToolView } from "../filesystem/ui";
 import { BoundedBody } from "@/tools/body-budget";
 import { toolsConfig } from "@/config/tools";
@@ -43,7 +40,10 @@ function browserSummary(result: AnyResult) {
     return (
       <div className="space-y-1">
         <div className="text-muted-foreground">
-          {r.ok ? toolsConfig.copy.status.screenshotSaved : toolsConfig.copy.status.screenshotFailed}: {r.path}
+          {r.ok
+            ? toolsConfig.copy.status.screenshotSaved
+            : toolsConfig.copy.status.screenshotFailed}
+          : {r.path}
         </div>
         {r.stdout ? <BoundedBody text={r.stdout} /> : null}
       </div>
@@ -56,12 +56,7 @@ function browserSummary(result: AnyResult) {
   // know it was one fortieth of what the tool returned - a silent truncation
   // reads as a complete answer.
   const output = [r.stdout, r.stderr].filter(Boolean).join("\n");
-  return (
-    <BoundedBody
-      text={output}
-      empty={r.ok ? "ok" : `exit ${r.exitCode ?? "?"}`}
-    />
-  );
+  return <BoundedBody text={output} empty={r.ok ? "ok" : `exit ${r.exitCode ?? "?"}`} />;
 }
 
 export const BrowserToolUI: ToolCallMessagePartComponent = (p: AnyProps) => (

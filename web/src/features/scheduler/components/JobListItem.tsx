@@ -1,7 +1,7 @@
 import { Fragment, useState, type ElementType } from "react";
 import { Copy, Loader2, MoreHorizontal, Pencil, Play, Power, PowerOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { schedulerViewConfig } from "@/config/scheduler";
+import { schedulerViewConfig } from "@/features/scheduler/config";
 import { formatRelative, formatRelativePast } from "@/features/scheduler/lib/scheduler-format";
 import { jobDotClass } from "@/features/scheduler/components/SchedulerStatus";
 import {
@@ -141,9 +141,7 @@ export function JobListItem({
               // Border always in the box (transparent when unselected) so
               // selecting never shifts row height.
               "group flex h-8 w-full items-center rounded-full border pr-1 transition-colors",
-              selected
-                ? "border-border bg-accent"
-                : "border-transparent hover:bg-accent/60",
+              selected ? "border-border bg-accent" : "border-transparent hover:bg-accent/60",
             )}
           >
             <button
@@ -161,13 +159,16 @@ export function JobListItem({
               />
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-sm",
-                  job.enabled
-                    ? "font-medium"
-                    : "font-normal text-muted-foreground",
+                  "min-w-0 flex-1 truncate text-sm flex items-center gap-1.5",
+                  job.enabled ? "font-medium" : "font-normal text-muted-foreground",
                 )}
               >
-                {job.name}
+                <span className="truncate">{job.name}</span>
+                {job.engine === "opencode" && (
+                  <span className="shrink-0 text-3xs font-mono font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                    OpenCode
+                  </span>
+                )}
               </span>
             </button>
 
@@ -219,15 +220,11 @@ export function JobListItem({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.deleteDescription(job.name)}
-            </AlertDialogDescription>
+            <AlertDialogDescription>{copy.deleteDescription(job.name)}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>
-            <AlertDialogAction onClick={onDelete}>
-              {copy.delete}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={onDelete}>{copy.delete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

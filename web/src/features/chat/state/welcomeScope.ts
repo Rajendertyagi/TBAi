@@ -28,7 +28,11 @@ function loadScope(): WelcomeScope {
     const raw = window.localStorage.getItem(welcomeConfig.storage.scopeKey);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<WelcomeScope>;
-    if (parsed.mode === "project" && typeof parsed.folderId === "string" && parsed.folderId.length > 0) {
+    if (
+      parsed.mode === "project" &&
+      typeof parsed.folderId === "string" &&
+      parsed.folderId.length > 0
+    ) {
       return { mode: "project", folderId: parsed.folderId };
     }
     return fallback;
@@ -48,10 +52,7 @@ function loadTab(): QuickActionTabId {
 
 function persistScope(scope: WelcomeScope): void {
   try {
-    window.localStorage.setItem(
-      welcomeConfig.storage.scopeKey,
-      JSON.stringify(scope),
-    );
+    window.localStorage.setItem(welcomeConfig.storage.scopeKey, JSON.stringify(scope));
   } catch {
     /* storage unavailable — session-only */
   }

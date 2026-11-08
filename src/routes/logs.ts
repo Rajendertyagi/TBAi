@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import {
   defaultLogFilePath,
   listLogFiles,
@@ -19,7 +19,6 @@ import {
   logSettingsSchema,
 } from "../lib/validation";
 import {
-  getPersistedLogSettings,
   isLogFileEnvLocked,
   isLogLevelEnvLocked,
   persistLogSettings,
@@ -28,7 +27,7 @@ import { disableIdleTimeout } from "./shared";
 
 const app = new Hono<{ Variables: { requestId: string } }>();
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+import { DATA_DIR } from "../config/data-dir";
 
 const LEVEL_RANK: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
@@ -117,9 +116,9 @@ app.post("/client", async (c) => {
   // Scope registry check: the browser may only emit scopes the FRONTEND
   // actually owns, so a stray client cannot fragment the vocabulary or
   // masquerade as a backend-only subsystem (`scheduler`, `db`, …).
-  const unknownScopes = [
-    ...new Set(parsed.data.events.map((e) => e.scope)),
-  ].filter((s) => !isKnownClientScope(s));
+  const unknownScopes = [...new Set(parsed.data.events.map((e) => e.scope))].filter(
+    (s) => !isKnownClientScope(s),
+  );
   if (unknownScopes.length > 0) {
     return c.json({ error: "Unknown log scope", scopes: unknownScopes }, 400);
   }

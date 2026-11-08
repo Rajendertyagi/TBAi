@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
-import path from 'path'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "node:path";
 
 /**
  * Vite configuration.
@@ -38,7 +38,7 @@ import path from 'path'
  * ships: unminified output is several times larger and parses slower, so
  * treating it as a production build would quietly make the app worse.
  */
-const isProfileBuild = process.env.TBAI_PROFILE_BUILD === '1'
+const isProfileBuild = process.env.TBAI_PROFILE_BUILD === "1";
 
 /**
  * Where the shippable SPA is written, relative to this file.
@@ -60,7 +60,7 @@ const isProfileBuild = process.env.TBAI_PROFILE_BUILD === '1'
  * It empties `dist/web` only and never `dist/` itself, so `tbai-server` is not at
  * risk.
  */
-const SHIPPABLE_OUT_DIR = '../dist/web'
+const SHIPPABLE_OUT_DIR = "../dist/web";
 
 /**
  * Where the profiling build writes, relative to this file.
@@ -71,13 +71,42 @@ const SHIPPABLE_OUT_DIR = '../dist/web'
  * the server at this directory through `WEB_DIST_DIR`, so the minified shippable
  * output is never touched by a profiling run.
  */
-const PROFILE_OUT_DIR = 'dist-profile'
+const PROFILE_OUT_DIR = "dist-profile";
+
+/**
+ * The dev server's port, EXPLICIT, and unable to move.
+ *
+ * ## Why the port is pinned
+ *
+ * The application's development endpoint is **3000**: `tauri.conf.json` sets
+ * `devUrl: "http://localhost:3000"` and `beforeDevCommand: "bun run dev"`,
+ * and the root `dev` script starts the backend, whose port authority lands on
+ * 3000. The backend serves the SPA itself, so the Tauri dev window's origin
+ * is 3000 — and that is the origin the API's CORS policy trusts
+ * (`src/config/cors.ts`).
+ *
+ * This Vite server is a **separate, plain-browser** flow: the app's API calls
+ * are relative there, so they are same-origin and CORS does not apply to them.
+ * Its port is therefore not a CORS participant — but it must still not drift
+ * silently. A dev server that quietly moved to 5174 (or whatever happened to
+ * be free) would break every assumption built on 5173, including the `/api`
+ * proxy this configuration used to carry.
+ *
+ * `strictPort` is what makes the pin real: without it Vite falls back to the
+ * next free port, and a moved port is a different origin that nothing is
+ * configured for. With it, a busy port is a loud failure instead.
+ */
+const DEV_SERVER_PORT = 5173;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    port: DEV_SERVER_PORT,
+    strictPort: true,
+  },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      "@": path.resolve(__dirname, "./src"),
     },
   },
   build: isProfileBuild
@@ -99,4 +128,4 @@ export default defineConfig({
         outDir: SHIPPABLE_OUT_DIR,
         emptyOutDir: true,
       },
-})
+});

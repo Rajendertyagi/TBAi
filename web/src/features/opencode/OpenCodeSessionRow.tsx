@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { welcomeConfig } from "@/config/welcome";
 import { probeConversation } from "@/features/chat/state/conversationExistence";
 
@@ -84,12 +84,11 @@ export function OpenCodeSessionRow() {
 
   if (!identity) return null;
 
-  const engineLabel =
-    ENGINE_LABELS[identity.engine ?? ""] ?? identity.engine ?? "OpenCode";
+  const engineLabel = ENGINE_LABELS[identity.engine ?? ""] ?? identity.engine ?? "OpenCode";
   const isProject = identity.workspaceMode === "project";
   const folder =
     isProject && identity.workspaceFolderId
-      ? folders.find((f) => f.id === identity.workspaceFolderId) ?? null
+      ? (folders.find((f) => f.id === identity.workspaceFolderId) ?? null)
       : null;
   const scopeLabel = isProject
     ? folder?.alias || folder?.name || welcomeConfig.copy.folderRemoved

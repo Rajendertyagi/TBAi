@@ -68,7 +68,11 @@ export interface CacheExperimentResult {
   readonly reasons: readonly string[];
   /** DOCUMENTED values, carried through unchanged for comparison. */
   readonly documented: {
-    readonly minimumPrefixTokens: number | null;
+    // `undefined`, not `null`: the value is copied straight from
+    // `CacheCapability.documentedMinimumPrefixTokens`, which is optional and
+    // absent (not null) when a vendor documents no minimum. The verdict is a
+    // transport for that fact, so it must not re-spell it.
+    readonly minimumPrefixTokens: number | undefined;
     readonly mode: string;
     readonly source: string;
     readonly verifiedOn: string;
@@ -198,9 +202,7 @@ export function evaluateCacheExperiment(input: {
   //     "Modifying tool definitions (names, descriptions, parameters)
   //     invalidates the entire cache." So this is checked FIRST and
   //     unconditionally — it is not part of the append-growth special case.
-  const invalidating = secondIdentity.invalidationReasons.filter(
-    (r) => r !== "history_appended",
-  );
+  const invalidating = secondIdentity.invalidationReasons.filter((r) => r !== "history_appended");
   if (invalidating.length > 0) {
     reasons.push("stable_prefix_changed_between_requests");
     return {
@@ -352,9 +354,10 @@ export interface CacheSizingBasisInput {
  *
  * @returns Whether a sizing claim is permitted, and why not if it is not.
  */
-export function cacheExperimentEligibility(
-  input: CacheSizingBasisInput,
-): { eligible: boolean; reasons: readonly string[] } {
+export function cacheExperimentEligibility(input: CacheSizingBasisInput): {
+  eligible: boolean;
+  reasons: readonly string[];
+} {
   const { capability, sizingBasis } = input;
   const reasons: string[] = [];
 

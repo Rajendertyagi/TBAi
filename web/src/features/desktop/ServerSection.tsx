@@ -58,8 +58,7 @@ export function ServerSection() {
   // configured ports plus reachability. Local input state stays here — the
   // shared poller never steals typed text; it only refreshes on explicit
   // reload() calls below.
-  const { identity, reachable, checkedAt, loadError, reload } =
-    useServerIdentity();
+  const { identity, reachable, checkedAt, loadError, reload } = useServerIdentity();
   const [input, setInput] = useState("");
   const [inputSeeded, setInputSeeded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -90,11 +89,9 @@ export function ServerSection() {
   const inputValid = isValidPortText(input);
   const inputPort = inputValid ? Number.parseInt(input.trim(), 10) : null;
   // Save: input differs from the persisted configured value.
-  const dirty = identity != null && inputPort != null
-    && inputPort !== identity.configuredPort;
+  const dirty = identity != null && inputPort != null && inputPort !== identity.configuredPort;
   // Restart: input differs from the live listener.
-  const pending = identity != null && inputPort != null
-    && inputPort !== identity.activePort;
+  const pending = identity != null && inputPort != null && inputPort !== identity.activePort;
 
   const onSave = useCallback(async () => {
     if (!identity || busy || !dirty || inputPort == null) return;
@@ -121,7 +118,7 @@ export function ServerSection() {
     } finally {
       if (mounted.current) setSaving(false);
     }
-  }, [busy, dirty, inputPort, reload]);
+  }, [busy, dirty, inputPort, reload, identity]);
 
   const probePort = useCallback(async (port: number): Promise<PortProbe> => {
     const res = await apiFetch("/api/server/check-port", {
@@ -241,7 +238,10 @@ export function ServerSection() {
 
   const statusDot =
     reachable == null ? (
-      <span className="inline-block size-2 rounded-full bg-muted-foreground/40" aria-hidden="true" />
+      <span
+        className="inline-block size-2 rounded-full bg-muted-foreground/40"
+        aria-hidden="true"
+      />
     ) : reachable ? (
       <span className="inline-block size-2 rounded-full bg-emerald-500" aria-hidden="true" />
     ) : (
@@ -264,7 +264,7 @@ export function ServerSection() {
         label="Active port"
         icon={Globe}
         description={
-          loadError ?? identity == null
+          (loadError ?? identity == null)
             ? (loadError ?? "Reading server state…")
             : `The server is currently listening on port ${identity.activePort}.`
         }

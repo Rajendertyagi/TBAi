@@ -1,4 +1,20 @@
-import { Archive, Circle, Search, Plug, ScrollText, Clock, MessageSquare, MessageSquareText, Palette, FolderCog, Server, Monitor, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
+import {
+  Archive,
+  Circle,
+  Plug,
+  ScrollText,
+  Clock,
+  MessageSquare,
+  MessageSquareText,
+  Palette,
+  FolderCog,
+  Server,
+  Monitor,
+  Settings,
+  ShieldCheck,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * Single source of truth for application navigation and branding.
@@ -25,6 +41,7 @@ export type ViewId =
   | "quick-messages"
   | "providers"
   | "appearance"
+  | "typography"
   | "desktop"
   | "opencode-config";
 
@@ -65,20 +82,18 @@ export interface AppConfig {
    * area that opens instead. Change here only.
    */
   settingsIndexRoute: string;
-  features: {
-    /** When false, the Search navigation item is hidden. */
-    search: boolean;
-  };
+  features: Record<string, never>;
   /** Bottom navigation items (Settings / Memory / Search ...). */
   nav: NavItem[];
 }
 
-const features = {
-  search: false,
-};
+const features: Record<string, never> = {};
+
+import { ROUTES } from "./routes";
+export { ROUTES };
 
 /** Fallback settings route (no settings-index page exists). */
-const SETTINGS_INDEX_ROUTE = "/providers";
+const SETTINGS_INDEX_ROUTE = ROUTES.SETTINGS.ROOT;
 
 export const appConfig: AppConfig = {
   branding: {
@@ -93,7 +108,7 @@ export const appConfig: AppConfig = {
       label: "Chat",
       icon: MessageSquare,
       view: "chat",
-      route: "/chat",
+      route: ROUTES.CHAT,
       description: "Conversations with any provider",
       visible: true,
       order: 1,
@@ -103,7 +118,7 @@ export const appConfig: AppConfig = {
       label: "Providers",
       icon: Server,
       view: "providers",
-      route: "/providers",
+      route: ROUTES.SETTINGS.PROVIDERS,
       description: "Models, endpoints, API keys",
       visible: true,
       railVisible: false,
@@ -114,18 +129,29 @@ export const appConfig: AppConfig = {
       label: "Appearance",
       icon: Palette,
       view: "appearance",
-      route: "/appearance",
+      route: ROUTES.SETTINGS.APPEARANCE,
       description: "Theme and display",
       visible: true,
       railVisible: false,
       order: 3,
     },
     {
+      id: "typography",
+      label: "Typography",
+      icon: Type,
+      view: "typography",
+      route: ROUTES.SETTINGS.TYPOGRAPHY,
+      description: "Fonts, sizes, weights, and window zoom",
+      visible: true,
+      railVisible: false,
+      order: 3.5,
+    },
+    {
       id: "workspace",
       label: "Workspace",
       icon: FolderCog,
       view: "workspace",
-      route: "/workspace",
+      route: ROUTES.SETTINGS.WORKSPACE,
       description: "Working folder and tools",
       visible: true,
       railVisible: false,
@@ -136,7 +162,7 @@ export const appConfig: AppConfig = {
       label: "OpenCode Config",
       icon: ShieldCheck,
       view: "opencode-config",
-      route: "/opencode-config",
+      route: ROUTES.SETTINGS.OPENCODE,
       description: "The real OpenCode configuration and its permission rules",
       visible: true,
       railVisible: false,
@@ -147,7 +173,7 @@ export const appConfig: AppConfig = {
       label: "Folders",
       icon: FolderCog,
       view: "folders",
-      route: "/folders",
+      route: ROUTES.FOLDERS,
       description: "Registered project folders",
       visible: true,
       railVisible: false,
@@ -158,7 +184,7 @@ export const appConfig: AppConfig = {
       label: "Desktop",
       icon: Monitor,
       view: "desktop",
-      route: "/desktop",
+      route: ROUTES.SETTINGS.DESKTOP,
       description: "Window layout and desktop options",
       visible: true,
       railVisible: false,
@@ -169,7 +195,7 @@ export const appConfig: AppConfig = {
       label: "Memory",
       icon: Circle,
       view: "memories",
-      route: "/memory",
+      route: ROUTES.SETTINGS.MEMORY,
       description: "Long-term memories",
       visible: true,
       railVisible: false,
@@ -180,19 +206,10 @@ export const appConfig: AppConfig = {
       label: "Quick Messages",
       icon: MessageSquareText,
       view: "quick-messages",
-      route: "/quick-messages",
+      route: ROUTES.SETTINGS.QUICK_MESSAGES,
       description: "Reusable composer snippets",
       visible: true,
       railVisible: false,
-      order: 8,
-    },
-    {
-      id: "search",
-      label: "Search",
-      icon: Search,
-      view: "search",
-      route: "/memory",
-      visible: features.search,
       order: 8,
     },
     {
@@ -200,7 +217,7 @@ export const appConfig: AppConfig = {
       label: "MCP",
       icon: Plug,
       view: "mcp",
-      route: "/mcp",
+      route: ROUTES.SETTINGS.MCP,
       description: "External model tools",
       visible: true,
       railVisible: false,
@@ -211,7 +228,7 @@ export const appConfig: AppConfig = {
       label: "Scheduler",
       icon: Clock,
       view: "scheduler",
-      route: "/scheduler",
+      route: ROUTES.SCHEDULER,
       description: "Automated scheduled runs",
       visible: true,
       order: 10,
@@ -221,7 +238,7 @@ export const appConfig: AppConfig = {
       label: "Archived",
       icon: Archive,
       view: "archived",
-      route: "/archived",
+      route: ROUTES.ARCHIVED,
       description: "Archived conversations",
       visible: true,
       order: 11,
@@ -231,7 +248,7 @@ export const appConfig: AppConfig = {
       label: "Logs",
       icon: ScrollText,
       view: "logs",
-      route: "/logs",
+      route: ROUTES.SETTINGS.LOGS,
       description: "Application logs",
       visible: true,
       railVisible: false,
@@ -252,9 +269,7 @@ export const appConfig: AppConfig = {
 
 /** Nav items that should actually render, sorted by `order`. */
 export function getVisibleNav(): NavItem[] {
-  return appConfig.nav
-    .filter((item) => item.visible)
-    .sort((a, b) => a.order - b.order);
+  return appConfig.nav.filter((item) => item.visible).sort((a, b) => a.order - b.order);
 }
 
 /** Rail icons: visible items not opted out (settings areas live behind the single gear). */
@@ -266,6 +281,7 @@ export function getRailNav(): NavItem[] {
 const SETTINGS_VIEWS: ViewId[] = [
   "providers",
   "appearance",
+  "typography",
   "workspace",
   "opencode-config",
   "folders",

@@ -53,7 +53,11 @@ export function describeCompactionOutcome(report: CompactionReport): MechanismOu
   // A re-applied record means a previous compaction is in force; the embedded
   // reason is a genuine compaction decision and is decoded on its own merits.
   if (reason.startsWith(REAPPLY_PREFIX)) {
-    return describeCompactionOutcome({ ...report, applied: false, reason: reason.slice(REAPPLY_PREFIX.length) });
+    return describeCompactionOutcome({
+      ...report,
+      applied: false,
+      reason: reason.slice(REAPPLY_PREFIX.length),
+    });
   }
 
   if (reason.startsWith(SUMMARIZE_FAILED_PREFIX)) return { kind: "withheld", reason: "failed" };

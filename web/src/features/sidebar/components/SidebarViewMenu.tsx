@@ -24,8 +24,6 @@ import { SidebarSectionOrderControl } from "@/features/sidebar/components/Sideba
  */
 export function SidebarViewMenu() {
   const copy = sidebarConfig.copy;
-  const showRecent = useDesktopLayout((s) => s.showRecent);
-  const setShowRecent = useDesktopLayout((s) => s.setShowRecent);
   const showCompleted = useDesktopLayout((s) => s.showCompleted);
   const setShowCompleted = useDesktopLayout((s) => s.setShowCompleted);
   const sidebarSort = useDesktopLayout((s) => s.sidebarSort);
@@ -51,13 +49,6 @@ export function SidebarViewMenu() {
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuCheckboxItem
-              checked={showRecent}
-              onCheckedChange={setShowRecent}
-              onSelect={(event) => event.preventDefault()}
-            >
-              {copy.showRecent}
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
               checked={showCompleted}
               onCheckedChange={setShowCompleted}
               onSelect={(event) => event.preventDefault()}
@@ -76,16 +67,10 @@ export function SidebarViewMenu() {
               setSidebarSort(sort);
             }}
           >
-            <DropdownMenuRadioItem
-              value="updated"
-              onSelect={(event) => event.preventDefault()}
-            >
+            <DropdownMenuRadioItem value="updated" onSelect={(event) => event.preventDefault()}>
               {copy.sortByUpdated}
             </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem
-              value="created"
-              onSelect={(event) => event.preventDefault()}
-            >
+            <DropdownMenuRadioItem value="created" onSelect={(event) => event.preventDefault()}>
               {copy.sortByCreated}
             </DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>

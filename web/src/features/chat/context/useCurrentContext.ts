@@ -103,9 +103,14 @@ export function parseCurrentContext(metadata: unknown): CurrentContext | undefin
   // Absent means the server could not establish a trustworthy number. That is
   // reported as `unknown` rather than silently defaulting to a measurement.
   const occupancyKind: OccupancyKind =
-    raw.occupancyKind === "provider" || raw.occupancyKind === "estimate" ? raw.occupancyKind : "unknown";
+    raw.occupancyKind === "provider" || raw.occupancyKind === "estimate"
+      ? raw.occupancyKind
+      : "unknown";
   const resolvedForRaw = isRecord(raw.resolvedFor) ? raw.resolvedFor : undefined;
-  const modelId = resolvedForRaw && typeof resolvedForRaw.modelId === "string" ? resolvedForRaw.modelId : undefined;
+  const modelId =
+    resolvedForRaw && typeof resolvedForRaw.modelId === "string"
+      ? resolvedForRaw.modelId
+      : undefined;
   return {
     usedTokens,
     windowTokens,
@@ -124,12 +129,15 @@ export function parseCurrentContext(metadata: unknown): CurrentContext | undefin
     ...(resolvedForRaw && modelId
       ? {
           resolvedFor: {
-            providerId: typeof resolvedForRaw.providerId === "string" ? resolvedForRaw.providerId : undefined,
+            providerId:
+              typeof resolvedForRaw.providerId === "string" ? resolvedForRaw.providerId : undefined,
             modelId,
           },
         }
       : {}),
-    ...(positiveInt(raw.cachedInputTokens) ? { cachedInputTokens: positiveInt(raw.cachedInputTokens) } : {}),
+    ...(positiveInt(raw.cachedInputTokens)
+      ? { cachedInputTokens: positiveInt(raw.cachedInputTokens) }
+      : {}),
   };
 }
 
@@ -189,7 +197,9 @@ export function readingApplies(
  */
 export function useCurrentContext(expected?: ExpectedResolution): CurrentContext | undefined {
   const message = useAuiState((s) => {
-    const messages = s.thread.messages as ReadonlyArray<{ role?: string; metadata?: unknown }> | undefined;
+    const messages = s.thread.messages as
+      | ReadonlyArray<{ role?: string; metadata?: unknown }>
+      | undefined;
     if (!messages) return undefined;
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const m = messages[i];
@@ -199,6 +209,7 @@ export function useCurrentContext(expected?: ExpectedResolution): CurrentContext
     }
     return undefined;
   });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `expected` is a fresh object on every render, so depending on it wholesale would discard this memo's whole purpose. The two fields that actually decide `readingApplies` ARE listed individually below, which is exactly the dependency set that matters.
   return useMemo(() => {
     if (!message) return undefined;
     const reading = parseCurrentContext(message.metadata);

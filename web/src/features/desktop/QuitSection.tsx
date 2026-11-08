@@ -1,11 +1,7 @@
 import { useState } from "react";
 import { Power } from "lucide-react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import {
-  SettingsError,
-  SettingsSection,
-  SettingRow,
-} from "../../components/shared/settings";
+import { SettingsError, SettingsSection, SettingRow } from "../../components/shared/settings";
 import { Button } from "../../components/ui/button";
 import {
   AlertDialog,
@@ -52,11 +48,7 @@ export function QuitSection() {
         label="Quit TBAi"
         description="Stops the backend server and closes the app window."
         control={
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={() => setConfirming(true)}
-          >
+          <Button size="sm" variant="destructive" onClick={() => setConfirming(true)}>
             Quit
           </Button>
         }
@@ -66,15 +58,13 @@ export function QuitSection() {
           <AlertDialogHeader>
             <AlertDialogTitle>Quit TBAi?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops the backend server and closes the desktop app. Any
-              running AI work is cancelled.
+              This stops the backend server and closes the desktop app. Any running AI work is
+              cancelled.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void quit()}>
-              Quit TBAi
-            </AlertDialogAction>
+            <AlertDialogAction onClick={() => void quit()}>Quit TBAi</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

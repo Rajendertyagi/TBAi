@@ -8,9 +8,12 @@ import { db } from "../../db";
 import { generateId } from "../../lib/utils";
 import type {
   JobStatus,
+  OpenCodeSessionStrategy,
   RunStatus,
+  SchedulerEngine,
   SchedulerJob,
   SchedulerRun,
+  TurnOutcome,
 } from "./schedulerTypes";
 
 interface JobRow {
@@ -39,6 +42,14 @@ interface JobRow {
   status: string;
   created_at: number;
   updated_at: number;
+  engine: string | null;
+  opencode_session_strategy: string | null;
+  opencode_agent: string | null;
+  opencode_model: string | null;
+  opencode_variant: string | null;
+  opencode_permissions: string | null;
+  workspace_folder_id: string | null;
+  deleted_at: number | null;
 }
 
 interface RunRow {
@@ -58,6 +69,10 @@ interface RunRow {
   attempt: number;
   duration_ms: number | null;
   created_at: number;
+  engine: string | null;
+  opencode_session_id: string | null;
+  opencode_prompt_id: string | null;
+  turn_outcome: string | null;
 }
 
 function mapJob(row: JobRow): SchedulerJob {
@@ -75,8 +90,7 @@ function mapJob(row: JobRow): SchedulerJob {
     thinkingLevel: row.thinking_level as SchedulerJob["thinkingLevel"],
     workspacePath: row.workspace_path,
     prompt: row.prompt,
-    conversationPolicy:
-      row.conversation_policy as SchedulerJob["conversationPolicy"],
+    conversationPolicy: row.conversation_policy as SchedulerJob["conversationPolicy"],
     conversationId: row.conversation_id,
     overlapPolicy: row.overlap_policy as SchedulerJob["overlapPolicy"],
     maxRetries: row.max_retries,
@@ -88,6 +102,14 @@ function mapJob(row: JobRow): SchedulerJob {
     status: row.status as JobStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    engine: (row.engine as SchedulerEngine) || "direct",
+    opencodeSessionStrategy: (row.opencode_session_strategy as OpenCodeSessionStrategy) ?? null,
+    opencodeAgent: row.opencode_agent ?? null,
+    opencodeModel: row.opencode_model ?? null,
+    opencodeVariant: row.opencode_variant ?? null,
+    opencodePermissions: row.opencode_permissions ?? null,
+    workspaceFolderId: row.workspace_folder_id ?? null,
+    deletedAt: row.deleted_at ?? null,
   };
 }
 
@@ -109,6 +131,10 @@ function mapRun(row: RunRow): SchedulerRun {
     attempt: row.attempt,
     durationMs: row.duration_ms,
     createdAt: row.created_at,
+    engine: (row.engine as SchedulerEngine) || "direct",
+    opencodeSessionId: row.opencode_session_id ?? null,
+    opencodePromptId: row.opencode_prompt_id ?? null,
+    turnOutcome: (row.turn_outcome as TurnOutcome) ?? null,
   };
 }
 
@@ -132,6 +158,13 @@ export interface JobCreate {
   retryDelaySeconds?: number;
   timeoutSeconds?: number;
   missedGraceSeconds?: number;
+  engine?: SchedulerEngine;
+  opencodeSessionStrategy?: OpenCodeSessionStrategy | null;
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
+  opencodePermissions?: string | null;
+  workspaceFolderId?: string | null;
 }
 
 export type JobUpdate = Partial<JobCreate> & {
@@ -139,17 +172,20 @@ export type JobUpdate = Partial<JobCreate> & {
   nextRunAt?: number | null;
   lastRunAt?: number | null;
   conversationId?: string | null;
+  deletedAt?: number | null;
 };
 
 const JOB_COLUMNS = `id, name, description, enabled, schedule_type, cron_expression,
   exec_at, timezone, provider_id, model_id, thinking_level, workspace_path, prompt,
   conversation_policy, conversation_id, overlap_policy, max_retries,
   retry_delay_seconds, timeout_seconds, missed_grace_seconds, next_run_at,
-  last_run_at, status, created_at, updated_at`;
+  last_run_at, status, created_at, updated_at, engine, opencode_session_strategy,
+  opencode_agent, opencode_model, opencode_variant, opencode_permissions,
+  workspace_folder_id, deleted_at`;
 
 const RUN_COLUMNS = `id, job_id, occurrence_id, request_id, started_at, completed_at, status,
   error, output_excerpt, provider_id, model_id, workspace_path, conversation_id, attempt,
-  duration_ms, created_at`;
+  duration_ms, created_at, engine, opencode_session_id, opencode_prompt_id, turn_outcome`;
 
 export const schedulerStore = {
   create(input: JobCreate, database: Database = db): SchedulerJob {
@@ -157,7 +193,7 @@ export const schedulerStore = {
     const id = generateId();
     database.run(
       `INSERT INTO scheduler_jobs (${JOB_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.name,
@@ -184,6 +220,14 @@ export const schedulerStore = {
         "active",
         now,
         now,
+        input.engine ?? "direct",
+        input.opencodeSessionStrategy ?? null,
+        input.opencodeAgent ?? null,
+        input.opencodeModel ?? null,
+        input.opencodeVariant ?? null,
+        input.opencodePermissions ?? null,
+        input.workspaceFolderId ?? null,
+        null,
       ],
     );
     const created = this.get(id, database);
@@ -193,9 +237,7 @@ export const schedulerStore = {
 
   get(id: string, database: Database = db): SchedulerJob | null {
     const row = database
-      .query<JobRow, SQLQueryBindings[]>(
-        `SELECT ${JOB_COLUMNS} FROM scheduler_jobs WHERE id = ?`,
-      )
+      .query<JobRow, SQLQueryBindings[]>(`SELECT ${JOB_COLUMNS} FROM scheduler_jobs WHERE id = ?`)
       .get(id);
     return row ? mapJob(row) : null;
   },
@@ -223,11 +265,7 @@ export const schedulerStore = {
     return rows.map(mapJob);
   },
 
-  update(
-    id: string,
-    patch: JobUpdate,
-    database: Database = db,
-  ): SchedulerJob | null {
+  update(id: string, patch: JobUpdate, database: Database = db): SchedulerJob | null {
     const sets: string[] = [];
     const values: SQLQueryBindings[] = [];
     const push = (col: string, v: SQLQueryBindings): void => {
@@ -246,22 +284,31 @@ export const schedulerStore = {
     if (patch.thinkingLevel !== undefined) push("thinking_level", patch.thinkingLevel);
     if (patch.workspacePath !== undefined) push("workspace_path", patch.workspacePath);
     if (patch.prompt !== undefined) push("prompt", patch.prompt);
-    if (patch.conversationPolicy !== undefined) push("conversation_policy", patch.conversationPolicy);
+    if (patch.conversationPolicy !== undefined)
+      push("conversation_policy", patch.conversationPolicy);
     if (patch.conversationId !== undefined) push("conversation_id", patch.conversationId);
     if (patch.overlapPolicy !== undefined) push("overlap_policy", patch.overlapPolicy);
     if (patch.maxRetries !== undefined) push("max_retries", patch.maxRetries);
     if (patch.retryDelaySeconds !== undefined) push("retry_delay_seconds", patch.retryDelaySeconds);
     if (patch.timeoutSeconds !== undefined) push("timeout_seconds", patch.timeoutSeconds);
-    if (patch.missedGraceSeconds !== undefined) push("missed_grace_seconds", patch.missedGraceSeconds);
+    if (patch.missedGraceSeconds !== undefined)
+      push("missed_grace_seconds", patch.missedGraceSeconds);
     if (patch.nextRunAt !== undefined) push("next_run_at", patch.nextRunAt);
     if (patch.lastRunAt !== undefined) push("last_run_at", patch.lastRunAt);
     if (patch.status !== undefined) push("status", patch.status);
+    if (patch.engine !== undefined) push("engine", patch.engine);
+    if (patch.opencodeSessionStrategy !== undefined)
+      push("opencode_session_strategy", patch.opencodeSessionStrategy);
+    if (patch.opencodeAgent !== undefined) push("opencode_agent", patch.opencodeAgent);
+    if (patch.opencodeModel !== undefined) push("opencode_model", patch.opencodeModel);
+    if (patch.opencodeVariant !== undefined) push("opencode_variant", patch.opencodeVariant);
+    if (patch.opencodePermissions !== undefined)
+      push("opencode_permissions", patch.opencodePermissions);
+    if (patch.workspaceFolderId !== undefined) push("workspace_folder_id", patch.workspaceFolderId);
+    if (patch.deletedAt !== undefined) push("deleted_at", patch.deletedAt);
     push("updated_at", Date.now());
     values.push(id);
-    database.run(
-      `UPDATE scheduler_jobs SET ${sets.join(", ")} WHERE id = ?`,
-      values,
-    );
+    database.run(`UPDATE scheduler_jobs SET ${sets.join(", ")} WHERE id = ?`, values);
     return this.get(id, database);
   },
 
@@ -277,8 +324,8 @@ export const schedulerStore = {
   softDelete(id: string, database: Database = db): void {
     const now = Date.now();
     database.run(
-      "UPDATE scheduler_jobs SET status = 'deleted', enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ?",
-      [now, id],
+      "UPDATE scheduler_jobs SET status = 'deleted', enabled = 0, next_run_at = NULL, deleted_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, id],
     );
   },
 
@@ -291,6 +338,10 @@ export const schedulerStore = {
     occurrenceId: string,
     requestId: string,
     database: Database = db,
+    options?: {
+      opencodePromptId?: string | null;
+      opencodeSessionId?: string | null;
+    },
   ): SchedulerRun | null {
     const now = Date.now();
     const id = generateId();
@@ -299,8 +350,8 @@ export const schedulerStore = {
         `INSERT INTO scheduler_runs
           (id, job_id, occurrence_id, request_id, started_at, completed_at, status,
            error, output_excerpt, provider_id, model_id, workspace_path, conversation_id, attempt,
-           duration_ms, created_at)
-          VALUES (?, ?, ?, ?, ?, NULL, 'running', NULL, NULL, ?, ?, ?, ?, 0, NULL, ?)`,
+           duration_ms, created_at, engine, opencode_session_id, opencode_prompt_id, turn_outcome)
+          VALUES (?, ?, ?, ?, ?, NULL, 'running', NULL, NULL, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, NULL)`,
         [
           id,
           job.id,
@@ -312,6 +363,9 @@ export const schedulerStore = {
           job.workspacePath,
           job.conversationId ?? null,
           now,
+          job.engine ?? "direct",
+          options?.opencodeSessionId ?? (job.engine === "opencode" ? job.conversationId : null),
+          options?.opencodePromptId ?? null,
         ],
       );
     } catch {
@@ -319,9 +373,7 @@ export const schedulerStore = {
       return null;
     }
     const row = database
-      .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs WHERE id = ?",
-      )
+      .query<RunRow, SQLQueryBindings[]>(`SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`)
       .get(id);
     return row ? mapRun(row) : null;
   },
@@ -334,6 +386,7 @@ export const schedulerStore = {
     error: string | null,
     requestId: string | null = null,
     database: Database = db,
+    turnOutcome: TurnOutcome | null = null,
   ): SchedulerRun | null {
     const now = Date.now();
     const id = generateId();
@@ -342,8 +395,8 @@ export const schedulerStore = {
         `INSERT INTO scheduler_runs
           (id, job_id, occurrence_id, request_id, started_at, completed_at, status,
            error, output_excerpt, provider_id, model_id, workspace_path, conversation_id, attempt,
-           duration_ms, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, ?)`,
+           duration_ms, created_at, engine, opencode_session_id, opencode_prompt_id, turn_outcome)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, ?, ?, ?, NULL, ?)`,
         [
           id,
           job.id,
@@ -358,25 +411,37 @@ export const schedulerStore = {
           job.workspacePath,
           job.conversationId ?? null,
           now,
+          job.engine ?? "direct",
+          job.engine === "opencode" ? job.conversationId : null,
+          turnOutcome,
         ],
       );
     } catch {
       return null;
     }
     const row = database
-      .query<RunRow, SQLQueryBindings[]>(
-        "SELECT * FROM scheduler_runs WHERE id = ?",
-      )
+      .query<RunRow, SQLQueryBindings[]>(`SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`)
       .get(id);
     return row ? mapRun(row) : null;
   },
 
   updateRun(
     id: string,
-    patch: Partial<Pick<
-      SchedulerRun,
-      "status" | "error" | "outputExcerpt" | "attempt" | "completedAt" | "durationMs" | "conversationId"
-    >>,
+    patch: Partial<
+      Pick<
+        SchedulerRun,
+        | "status"
+        | "error"
+        | "outputExcerpt"
+        | "attempt"
+        | "completedAt"
+        | "durationMs"
+        | "conversationId"
+        | "opencodeSessionId"
+        | "opencodePromptId"
+        | "turnOutcome"
+      >
+    >,
     database: Database = db,
   ): void {
     const sets: string[] = [];
@@ -409,19 +474,26 @@ export const schedulerStore = {
       sets.push("conversation_id = ?");
       values.push(patch.conversationId);
     }
+    if (patch.opencodeSessionId !== undefined) {
+      sets.push("opencode_session_id = ?");
+      values.push(patch.opencodeSessionId);
+    }
+    if (patch.opencodePromptId !== undefined) {
+      sets.push("opencode_prompt_id = ?");
+      values.push(patch.opencodePromptId);
+    }
+    if (patch.turnOutcome !== undefined) {
+      sets.push("turn_outcome = ?");
+      values.push(patch.turnOutcome);
+    }
     if (sets.length === 0) return;
     values.push(id);
-    database.run(
-      `UPDATE scheduler_runs SET ${sets.join(", ")} WHERE id = ?`,
-      values,
-    );
+    database.run(`UPDATE scheduler_runs SET ${sets.join(", ")} WHERE id = ?`, values);
   },
 
   getRun(id: string, database: Database = db): SchedulerRun | null {
     const row = database
-      .query<RunRow, SQLQueryBindings[]>(
-        `SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`,
-      )
+      .query<RunRow, SQLQueryBindings[]>(`SELECT ${RUN_COLUMNS} FROM scheduler_runs WHERE id = ?`)
       .get(id);
     return row ? mapRun(row) : null;
   },
@@ -459,9 +531,7 @@ export const schedulerStore = {
       )
       .all(limit, offset);
     const totalRow = database
-      .query<{ c: number }, SQLQueryBindings[]>(
-        "SELECT COUNT(*) as c FROM scheduler_runs",
-      )
+      .query<{ c: number }, SQLQueryBindings[]>("SELECT COUNT(*) as c FROM scheduler_runs")
       .get();
     return {
       runs: rows.map(mapRun),
@@ -482,7 +552,7 @@ export const schedulerStore = {
   markInterrupted(database: Database = db): number {
     const now = Date.now();
     database.run(
-      "UPDATE scheduler_runs SET status = 'interrupted', completed_at = ?, error = 'Interrupted by server shutdown or restart' WHERE status IN ('running', 'scheduled')",
+      "UPDATE scheduler_runs SET status = 'interrupted', completed_at = ?, error = 'Interrupted by server shutdown or restart', turn_outcome = COALESCE(turn_outcome, 'outcome_unknown') WHERE status IN ('running', 'scheduled')",
       [now],
     );
     // bun:sqlite reports changes via a follow-up query.
@@ -498,10 +568,7 @@ export const schedulerStore = {
    * Delete terminal runs older than `olderThanMs` (default 30 days, codeg
    * parity). Running/scheduled rows are never touched. Returns deleted count.
    */
-  pruneOldRuns(
-    olderThanMs: number = 30 * 24 * 3600_000,
-    database: Database = db,
-  ): number {
+  pruneOldRuns(olderThanMs: number = 30 * 24 * 3600_000, database: Database = db): number {
     const cutoff = Date.now() - olderThanMs;
     const before =
       database
@@ -531,10 +598,7 @@ export const schedulerStore = {
     }
   > {
     const rows = database
-      .query<
-        RunRow & { job_name: string | null },
-        SQLQueryBindings[]
-      >(
+      .query<RunRow & { job_name: string | null }, SQLQueryBindings[]>(
         `SELECT r.*, j.name as job_name FROM scheduler_runs r
          LEFT JOIN scheduler_jobs j ON j.id = r.job_id
          WHERE r.started_at >= ? AND r.status IN ('failed','interrupted','missed')

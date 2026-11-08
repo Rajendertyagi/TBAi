@@ -10,7 +10,7 @@ import {
   ContextMenuShortcut,
 } from "./ui/context-menu";
 import { sidebarConfig } from "../config/sidebar";
-import { lastSettingsRoute } from "../config/navigation";
+import { lastSettingsRoute, ROUTES } from "../config/navigation";
 import { useDesktopLayout } from "../features/desktop/state/desktopLayout";
 import { copyTextFromMenu } from "../lib/clipboard";
 import { canCopySelection, readPageSelection } from "../lib/page-selection";
@@ -56,7 +56,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   };
 
   const handleNewChat = () => {
-    navigate("/chat/new");
+    navigate(ROUTES.CHAT_NEW);
   };
 
   /**
@@ -79,9 +79,7 @@ export function PageContextMenu({ children }: { children: ReactNode }) {
   return (
     <ContextMenu modal={false} onOpenChange={handleOpenChange}>
       <ContextMenuTrigger asChild>
-        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-          {children}
-        </div>
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[13rem]">
         <ContextMenuItem

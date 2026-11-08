@@ -193,9 +193,7 @@ export async function windowIsMaximized(): Promise<boolean> {
 }
 
 /** Subscribe to window-resize events; resolves to the unlisten function. */
-export async function onWindowResized(
-  handler: () => void,
-): Promise<() => void> {
+export async function onWindowResized(handler: () => void): Promise<() => void> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   return getCurrentWindow().onResized(handler);
 }
@@ -221,4 +219,227 @@ export async function setAutostartEnabled(on: boolean): Promise<void> {
   const { enable, disable } = await import("@tauri-apps/plugin-autostart");
   if (on) await enable();
   else await disable();
+}
+
+/**
+ * Opens a directory in the OS file manager via the official Tauri opener
+ * plugin. Returns false in the browser, which has no way to reach the desktop
+ * — callers gate the menu item on `isTauri()` so this is an invariant, not a
+ * silent no-op the user can trigger.
+ */
+export async function openFolderInExplorer(path: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { openPath } = await import("@tauri-apps/plugin-opener");
+  await openPath(path);
+  return true;
+}
+
+// ── Window Zoom (Official Tauri 2 WebView API) ──────────────────────────────
+export const WINDOW_ZOOM_STORAGE_KEY = "tbai-window-zoom";
+export const DEFAULT_WINDOW_ZOOM = 1.0;
+export const WINDOW_ZOOM_PRESETS = [0.8, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] as const;
+export const WINDOW_ZOOM_MIN = 0.8;
+export const WINDOW_ZOOM_MAX = 3.0;
+
+/** Same-document notification (the `storage` event does not fire in the writing document). */
+export const WINDOW_ZOOM_CHANGED_EVENT = "tbai:window-zoom-changed";
+
+export function notifyWindowZoomChanged(zoom: number): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(WINDOW_ZOOM_CHANGED_EVENT, { detail: { zoom: clampWindowZoom(zoom) } }),
+  );
+}
+
+export function onWindowZoomChange(listener: (zoom: number) => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const handler = (e: Event) => {
+    const detail = (e as CustomEvent<{ zoom?: number }>).detail;
+    if (detail && typeof detail.zoom === "number" && Number.isFinite(detail.zoom)) {
+      listener(clampWindowZoom(detail.zoom));
+    }
+  };
+  window.addEventListener(WINDOW_ZOOM_CHANGED_EVENT, handler);
+  return () => window.removeEventListener(WINDOW_ZOOM_CHANGED_EVENT, handler);
+}
+
+export function clampWindowZoom(val: number): number {
+  if (!Number.isFinite(val)) return DEFAULT_WINDOW_ZOOM;
+  return Math.min(WINDOW_ZOOM_MAX, Math.max(WINDOW_ZOOM_MIN, Math.round(val * 100) / 100));
+}
+
+export function readWindowZoom(): number {
+  if (typeof window === "undefined") return DEFAULT_WINDOW_ZOOM;
+  try {
+    const raw = window.localStorage.getItem(WINDOW_ZOOM_STORAGE_KEY);
+    if (!raw) return DEFAULT_WINDOW_ZOOM;
+    const parsed = Number.parseFloat(raw);
+    return clampWindowZoom(parsed);
+  } catch {
+    return DEFAULT_WINDOW_ZOOM;
+  }
+}
+
+export function writeWindowZoom(zoom: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    const clamped = clampWindowZoom(zoom);
+    window.localStorage.setItem(WINDOW_ZOOM_STORAGE_KEY, String(clamped));
+  } catch {
+    // Ignore localStorage write failures
+  }
+}
+
+export type WindowZoomRequestStatus = "applied" | "failed" | "superseded";
+
+export interface WindowZoomRequestResult {
+  status: WindowZoomRequestStatus;
+  /** The clamped zoom target this request asked to apply. */
+  zoom: number;
+}
+
+type ZoomRequest = {
+  target: number;
+  resolve: (result: WindowZoomRequestResult) => void;
+};
+
+// Serialized latest-pending queue: one active native operation, at most one
+// replaceable pending request. `confirmedZoom` starts from the persisted
+// baseline; in Tauri it becomes authoritative only after a successful native
+// `setZoom()` commits. In browser mode there is no native authority and
+// `getConfirmedWindowZoom()` reads persisted state dynamically.
+let activeRequest: ZoomRequest | null = null;
+let pendingRequest: ZoomRequest | null = null;
+let activeWorker: Promise<void> | null = null;
+let confirmedZoom = clampWindowZoom(readWindowZoom());
+let latestRequestedTarget = confirmedZoom;
+
+/** @internal Test-only: resets queue state. Call only when no requests are in flight. */
+export function __resetZoomQueueForTests(): void {
+  activeRequest = null;
+  pendingRequest = null;
+  activeWorker = null;
+  confirmedZoom = clampWindowZoom(readWindowZoom());
+  latestRequestedTarget = confirmedZoom;
+}
+
+/**
+ * Authoritative confirmed zoom for the current app lifetime. In Tauri this is
+ * the last successfully applied native WebView zoom (in-memory). In browser
+ * mode it reads persisted state dynamically because there is no native zoom
+ * authority. Does not change `readWindowZoom()`'s persisted-reader meaning.
+ */
+export function getConfirmedWindowZoom(): number {
+  if (!isTauri()) return readWindowZoom();
+  return confirmedZoom;
+}
+
+/**
+ * Latest requested zoom target while work is active/pending (for rapid shortcut
+ * stepping), otherwise the last confirmed zoom.
+ */
+export function getTargetWindowZoom(): number {
+  if (activeRequest || pendingRequest) return latestRequestedTarget;
+  return getConfirmedWindowZoom();
+}
+
+function settle(request: ZoomRequest, status: WindowZoomRequestStatus): void {
+  request.resolve({ status, zoom: request.target });
+}
+
+function commitConfirmedZoom(zoom: number): void {
+  confirmedZoom = clampWindowZoom(zoom);
+  // Best-effort persistence: a storage failure must not turn native success into
+  // failure or corrupt confirmed runtime state.
+  writeWindowZoom(confirmedZoom);
+  notifyWindowZoomChanged(confirmedZoom);
+}
+
+async function runZoomWorker(): Promise<void> {
+  try {
+    while (activeRequest) {
+      const current = activeRequest;
+
+      let applied = false;
+      try {
+        if (isTauri()) {
+          const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+          await getCurrentWebview().setZoom(current.target);
+          applied = true;
+        }
+      } catch {
+        applied = false;
+      }
+
+      if (applied) {
+        commitConfirmedZoom(current.target);
+        if (pendingRequest) {
+          // Native side effect is committed; this caller's intent was overtaken.
+          settle(current, "superseded");
+          activeRequest = pendingRequest;
+          pendingRequest = null;
+          continue;
+        }
+        settle(current, "applied");
+        activeRequest = null;
+        latestRequestedTarget = confirmedZoom;
+        break;
+      }
+
+      // Native failure: retain confirmed state, do not persist failed target.
+      settle(current, "failed");
+      if (pendingRequest) {
+        activeRequest = pendingRequest;
+        pendingRequest = null;
+        continue;
+      }
+      activeRequest = null;
+      latestRequestedTarget = confirmedZoom;
+      break;
+    }
+  } finally {
+    // Defensive: callers must never hang if an unexpected path leaves requests.
+    if (pendingRequest) {
+      settle(pendingRequest, "superseded");
+      pendingRequest = null;
+    }
+    if (activeRequest) {
+      settle(activeRequest, "failed");
+      activeRequest = null;
+    }
+    if (!activeRequest && !pendingRequest) {
+      latestRequestedTarget = confirmedZoom;
+    }
+    activeWorker = null;
+  }
+}
+
+/**
+ * Requests a native window zoom (0.8 - 3.0) with centralized latest-wins ordering.
+ * Desktop (Tauri) only: requests are serialized with at most one replaceable
+ * pending request. Every successful native `setZoom` is committed as confirmed
+ * state (in-memory, best-effort persistence, same-window notification) even when
+ * a newer request is waiting. `result.zoom` is always the clamped target
+ * requested by that caller.
+ */
+export function requestWindowZoom(zoom: number): Promise<WindowZoomRequestResult> {
+  const target = clampWindowZoom(zoom);
+  if (!isTauri()) {
+    return Promise.resolve({ status: "failed", zoom: target });
+  }
+  latestRequestedTarget = target;
+  return new Promise<WindowZoomRequestResult>((resolve) => {
+    const request: ZoomRequest = { target, resolve };
+    if (activeRequest) {
+      if (pendingRequest) {
+        settle(pendingRequest, "superseded");
+      }
+      pendingRequest = request;
+      return;
+    }
+    activeRequest = request;
+    if (!activeWorker) {
+      activeWorker = runZoomWorker();
+    }
+  });
 }

@@ -1,3 +1,4 @@
+import { subscribeConversationMutations } from "@/features/chat/state/conversationMutations";
 import { useCallback, useEffect, useState } from "react";
 import { useAvailabilityStore } from "../../availability/availabilityStore";
 import { sidebarConfig } from "../../../config/sidebar";
@@ -23,12 +24,18 @@ export interface UseConversationsListOptions {
   limit?: number;
   /**
    * Sidebar scope. `"simple"` = non-folder chats; `"project"` = folder-bound.
-   * Omit for no scope (every conversation) — which is what Recent, the archived
-   * page, and global search want.
+   * Omit for no scope (every conversation) — which is what the archived page
+   * and global search want.
    */
   workspaceMode?: "simple" | "project";
   /** One folder's project chats. Pairs with `workspaceMode: "project"`. */
   folderId?: string;
+  /**
+   * False pauses fetching and keeps the last page. The sidebar owns this list
+   * above the section so the section's count badge survives a search, but the
+   * rows are replaced by the search results while the query is active.
+   */
+  enabled?: boolean;
 }
 
 export interface UseConversationsListResult {
@@ -38,6 +45,11 @@ export interface UseConversationsListResult {
   hasMore: boolean;
   loadMore: () => void;
   refetch: () => void;
+  /**
+   * Rows matching the current filters across ALL pages — the section header
+   * badge. Undefined until the first successful response.
+   */
+  total?: number;
 }
 
 /**
@@ -54,9 +66,11 @@ export function useConversationsList(
     limit = 20,
     workspaceMode,
     folderId,
+    enabled = true,
   } = options;
 
   const [items, setItems] = useState<ConversationItem[]>([]);
+  const [total, setTotal] = useState<number | undefined>(undefined);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
   const [hasMore, setHasMore] = useState<boolean>(false);
@@ -76,13 +90,24 @@ export function useConversationsList(
     setRefreshTrigger((n) => n + 1);
   }, []);
 
+  useEffect(() => {
+    return subscribeConversationMutations(() => {
+      refetch();
+    });
+  }, [refetch]);
+
   const loadMore = useCallback(() => {
     if (hasMore && !isLoading) {
       setPage((p) => p + 1);
     }
   }, [hasMore, isLoading]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `refreshTrigger` is a counter that is never read in the body - it is the refetch trigger. It is how a caller says "the list changed underneath you, ask the server again" when none of the query inputs (search, status, order, page) have moved.
   useEffect(() => {
+    if (!enabled) {
+      setIsLoading(false);
+      return;
+    }
     let cancelled = false;
     setIsLoading(true);
     setError(null);
@@ -116,6 +141,7 @@ export function useConversationsList(
             lastMessageAt?: string;
             engine?: string | null;
           }>;
+          total?: number;
         }>;
       })
       .then((data) => {
@@ -129,13 +155,11 @@ export function useConversationsList(
           engine: t.engine ?? null,
         }));
         setItems(fetchedItems);
+        setTotal(typeof data.total === "number" ? data.total : fetchedItems.length);
         // At the request ceiling there may be more rows, but we will not ask
         // for them — hide the button rather than offer a click that changes
         // nothing.
-        setHasMore(
-          rawThreads.length >= queryLimit &&
-            queryLimit < sidebarConfig.maxListPageSize,
-        );
+        setHasMore(rawThreads.length >= queryLimit && queryLimit < sidebarConfig.maxListPageSize);
         setIsLoading(false);
       })
       .catch((err: unknown) => {
@@ -147,7 +171,7 @@ export function useConversationsList(
     return () => {
       cancelled = true;
     };
-  }, [search, order, status, limit, page, refreshTrigger, workspaceMode, folderId]);
+  }, [search, order, status, limit, page, refreshTrigger, workspaceMode, folderId, enabled]);
 
   return {
     items,
@@ -156,5 +180,6 @@ export function useConversationsList(
     hasMore,
     loadMore,
     refetch,
+    total,
   };
 }

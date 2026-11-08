@@ -1,10 +1,10 @@
 import { Circle } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { appConfig, getNavItem } from "../config/navigation";
+import { appConfig, getNavItem, ROUTES } from "../config/navigation";
 import { statusBarConfig } from "../config/statusBar";
-import { useSettingsStore } from "../stores/index";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { useAvailabilityStore } from "../features/availability/availabilityStore";
-import { useOpenCodeConversationConfig } from "../features/opencode/useOpenCodeConversationConfig";
+import { OpenCodeStatusBarLabel } from "../features/opencode/OpenCodeStatusBarLabel";
 import { useServerIdentity } from "../features/desktop/state/serverIdentity";
 import { StatusBarQuickActions } from "./StatusBarQuickActions";
 import { cn } from "../lib/utils";
@@ -44,16 +44,8 @@ export function StatusBar() {
     ? `${provider.name}${directModelLabel ? ` · ${directModelLabel}` : ""}`
     : copy.noProvider;
 
-  const isCode = pathname.startsWith("/code");
-  const codeConfig = useOpenCodeConversationConfig(
-    isCode ? agentId : undefined,
-  );
-  const codeLabel = codeConfig
-    ? [codeConfig.opencodeAgent, codeConfig.opencodeModel]
-        .filter((v): v is string => !!v)
-        .join(" · ")
-    : null;
-  const rightLabel = isCode ? codeLabel : directLabel;
+  const isCode = pathname.startsWith(ROUTES.CODE);
+  const rightLabel = isCode ? null : directLabel;
 
   const availability = useAvailabilityStore((s) => s.status);
   const { identity } = useServerIdentity();
@@ -81,8 +73,7 @@ export function StatusBar() {
 
   const openProviders = () =>
     navigate(getNavItem("providers")?.route ?? appConfig.settingsIndexRoute);
-  const openServer = () =>
-    navigate(getNavItem("desktop")?.route ?? appConfig.settingsIndexRoute);
+  const openServer = () => navigate(getNavItem("desktop")?.route ?? appConfig.settingsIndexRoute);
 
   return (
     <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border bg-statusbar pl-2 pr-4 text-xs text-muted-foreground">
@@ -106,17 +97,17 @@ export function StatusBar() {
             )}
           />
           <span>{availabilityLabel}</span>
-          <span className="tabular-nums">
-            {serverPort != null ? `:${serverPort}` : "…"}
-          </span>
+          <span className="tabular-nums">{serverPort != null ? `:${serverPort}` : "…"}</span>
         </button>
       </div>
       <div className="flex min-w-0 items-center gap-3">
-        {rightLabel ? (
+        {isCode ? (
+          <OpenCodeStatusBarLabel agentId={agentId} openProviders={openProviders} />
+        ) : rightLabel ? (
           <button
             type="button"
             onClick={openProviders}
-            title={isCode ? rightLabel : copy.openProviders}
+            title={copy.openProviders}
             className="hidden min-w-0 max-w-55 truncate rounded outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring md:block"
           >
             {rightLabel}

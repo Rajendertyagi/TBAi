@@ -101,10 +101,7 @@ export function WindowControls() {
       </button>
       <button
         type="button"
-        className={cn(
-          BTN_CLASS,
-          "hover:bg-destructive hover:text-destructive-foreground",
-        )}
+        className={cn(BTN_CLASS, "hover:bg-destructive hover:text-destructive-foreground")}
         title={copy.close}
         aria-label={copy.close}
         onClick={() => runWindowAction("close", windowClose)}

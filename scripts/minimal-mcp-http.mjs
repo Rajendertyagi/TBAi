@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 // Minimal MCP server over Streamable HTTP for testing the TBAi HTTP client
 // transport. Run: bun run scripts/minimal-mcp-http.mjs  (listens on :8787)
 import { z } from "zod";
-import { createServer } from "http";
+import { createServer } from "node:http";
 
 const PORT = Number(process.env.PORT || 8787);
 
@@ -44,12 +44,20 @@ const httpServer = createServer(async (req, res) => {
     });
     globalThis.__t = transport;
     const server = new McpServer({ name: "minimal-http", version: "1.0.0" });
-    server.registerTool("ping", { description: "Return pong", inputSchema: z.object({}) }, async () => ({
-                content: [{ type: "text", text: "pong" }],
-              }));
-    server.registerTool("square", { description: "Square a number", inputSchema: z.object({ n: z.number() }) }, async ({ n }) => ({
-                content: [{ type: "text", text: String(n * n) }],
-              }));
+    server.registerTool(
+      "ping",
+      { description: "Return pong", inputSchema: z.object({}) },
+      async () => ({
+        content: [{ type: "text", text: "pong" }],
+      }),
+    );
+    server.registerTool(
+      "square",
+      { description: "Square a number", inputSchema: z.object({ n: z.number() }) },
+      async ({ n }) => ({
+        content: [{ type: "text", text: String(n * n) }],
+      }),
+    );
     await server.connect(transport);
   }
   const body = req.method === "POST" ? await readBody(req) : undefined;

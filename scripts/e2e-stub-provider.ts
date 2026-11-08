@@ -48,6 +48,20 @@ export interface StubProvider {
   chunkChars: number;
   /** Pause between deltas, in ms. 0 emits back-to-back. */
   chunkDelayMs: number;
+  /**
+   * Arm a tool call for the NEXT completion.
+   *
+   * Consuming the arming on use (like `hold`) is deliberate: the stub is shared
+   * by the whole suite and outlives any single spec, so a sticky tool call would
+   * make every later send in every later spec emit one. One arm, one call.
+   *
+   * With this, the suite can drive the REAL tool-execution path - provider tool
+   * call, backend tool execution, tool result, automatic continuation - with no
+   * live model and no network.
+   */
+  armTool(toolName: string, args: unknown): void;
+  /** Whether a tool call is armed and not yet consumed. */
+  toolArmed(): boolean;
   release(): void;
   requestCount(): number;
   stop(): void;
@@ -71,6 +85,28 @@ function chunk(delta: unknown, finishReason: string | null = null): string {
     model: MODEL,
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   })}\n\n`;
+}
+
+/**
+ * A streaming tool call, in the OpenAI chat-completions shape.
+ *
+ * The shape is the point. A stub that invented its own tool-call envelope would
+ * exercise a parser that no real provider produces, so a bug in the real
+ * tool-call path could hide behind a stub that agrees with the bug. `id`,
+ * `type` and the `function.arguments` JSON string are all load-bearing.
+ */
+function toolCallChunk(id: string, toolName: string, args: unknown): string {
+  return chunk({
+    role: "assistant",
+    tool_calls: [
+      {
+        index: 0,
+        id,
+        type: "function",
+        function: { name: toolName, arguments: JSON.stringify(args ?? {}) },
+      },
+    ],
+  });
 }
 
 /**
@@ -114,11 +150,15 @@ export function startStubProvider(port: number): StubProvider {
   let hold = false;
   let chunkChars = 0;
   let chunkDelayMs = 0;
+  /** Armed tool call, consumed by the next completion. See `armTool`. */
+  let armedTool: { toolName: string; args: unknown; callId: string } | null = null;
+  let armedToolSequence = 0;
+  /** Tool names the most recent request offered. Diagnostic only. */
+  let lastOfferedTools: string[] = [];
   const held = new Set<HeldResponse>();
   const encoder = new TextEncoder();
 
-  const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
   const finish = (entry: HeldResponse): void => {
     entry.done = true;
@@ -163,7 +203,29 @@ export function startStubProvider(port: number): StubProvider {
           held: held.size,
           chunkChars,
           chunkDelayMs,
+          toolArmed: armedTool !== null,
+          lastOfferedTools,
         });
+      }
+      if (url.pathname === "/__e2e/tool" && req.method === "POST") {
+        try {
+          const body = (await req.json()) as { toolName?: unknown; args?: unknown };
+          if (typeof body.toolName !== "string" || body.toolName.length === 0) {
+            return new Response("toolName is required", { status: 400 });
+          }
+          armedTool = {
+            toolName: body.toolName,
+            args: body.args ?? {},
+            callId: `call_e2e_${armedToolSequence++}`,
+          };
+          return Response.json({ ok: true, callId: armedTool.callId });
+        } catch {
+          return new Response("malformed tool request", { status: 400 });
+        }
+      }
+      if (url.pathname === "/__e2e/tool/disarm" && req.method === "POST") {
+        armedTool = null;
+        return Response.json({ ok: true });
       }
       if (url.pathname === "/__e2e/text" && req.method === "POST") {
         try {
@@ -196,7 +258,34 @@ export function startStubProvider(port: number): StubProvider {
         return new Response("not found", { status: 404 });
       }
       requests += 1;
-      await req.text();
+      const rawBody = await req.text();
+
+      /**
+       * Which tools a request OFFERS, read from the request body.
+       *
+       * This is what makes an armed tool call safe to leave pending. Several
+       * other requests reach this stub from a single send - title generation,
+       * most notably - and none of them carry tool definitions. Consuming the arm
+       * on "the next request of any kind" therefore handed the tool call to
+       * whichever request happened to arrive first, which made the tool-execution
+       * specs fail intermittently for a reason that had nothing to do with tool
+       * execution. Requiring the request to actually offer the tool makes the
+       * arm survive unrelated traffic and be consumed by exactly the run it was
+       * armed for.
+       */
+      const offersTool = (wanted: string): boolean => {
+        try {
+          const body = JSON.parse(rawBody) as {
+            tools?: Array<{ function?: { name?: string }; name?: string; type?: string }>;
+          };
+          const names = (body.tools ?? []).map((t) => t.function?.name ?? t.name ?? "?");
+          lastOfferedTools = names;
+          return names.includes(wanted);
+        } catch {
+          lastOfferedTools = ["<unparseable>"];
+          return false;
+        }
+      };
 
       // `hold` is CONSUMED by the request that observes it, so it can never leak
       // into a later spec. The stub is shared by the whole suite and outlives any
@@ -210,6 +299,12 @@ export function startStubProvider(port: number): StubProvider {
       // stub must not mutate the shape of a stream that is already in flight.
       const thisChunkChars = chunkChars;
       const thisChunkDelayMs = chunkDelayMs;
+      // Consumed only by a request that offers the tool. The client then receives
+      // the result and immediately issues the CONTINUATION request, which also
+      // offers the tool - so the arm must be cleared here rather than allowed to
+      // fire twice. That two-request shape is exactly what the tool specs assert.
+      const toolThisRequest = armedTool && offersTool(armedTool.toolName) ? armedTool : null;
+      if (toolThisRequest) armedTool = null;
 
       // Any straggler from an abandoned hold is released rather than left hanging.
       release();
@@ -227,6 +322,30 @@ export function startStubProvider(port: number): StubProvider {
 
           const pieces = splitIntoDeltas(text, thisChunkChars);
           try {
+            // An armed tool call REPLACES the text reply for this one request.
+            // The tool result then arrives, the client continues, and that
+            // follow-up request finds the arm already consumed and takes the
+            // ordinary text path below.
+            if (toolThisRequest) {
+              controller.enqueue(
+                encoder.encode(
+                  toolCallChunk(
+                    toolThisRequest.callId,
+                    toolThisRequest.toolName,
+                    toolThisRequest.args,
+                  ),
+                ),
+              );
+              // `tool_calls` is a distinct finish reason from `stop`: the client
+              // must not treat this as a completed answer, or it would never
+              // execute the tool and the specs would be asserting on a path
+              // that never ran.
+              controller.enqueue(encoder.encode(chunk({}, "tool_calls")));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
+            }
+
             // The role marker stays on the first piece, matching the OpenAI
             // chat-completions shape the real provider sends, so the client's
             // stream parser sees the same sequence of chunks it sees in
@@ -293,6 +412,10 @@ export function startStubProvider(port: number): StubProvider {
     set chunkDelayMs(next: number) {
       chunkDelayMs = next;
     },
+    armTool: (toolName: string, args: unknown) => {
+      armedTool = { toolName, args, callId: `call_e2e_${armedToolSequence++}` };
+    },
+    toolArmed: () => armedTool !== null,
     release,
     requestCount: () => requests,
     stop: () => {
@@ -306,10 +429,7 @@ export function startStubProvider(port: number): StubProvider {
 }
 
 /** Register the stub as a provider and make it the active one. */
-export async function seedStubProvider(
-  apiBaseUrl: string,
-  stub: StubProvider,
-): Promise<string> {
+export async function seedStubProvider(apiBaseUrl: string, stub: StubProvider): Promise<string> {
   const response = await fetch(`${apiBaseUrl}/api/providers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -1,19 +1,30 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { registry } from "../config/providers";
-import { ConversationNotFoundError, conversationService, messageService } from "../services/storage";
+import {
+  ConversationNotFoundError,
+  MessageOwnershipError,
+  conversationService,
+  getStoredMessageSync,
+  messageService,
+} from "../services/storage";
 import type { Conversation } from "../types";
-import { terminateOpenCodeSession } from "../services/opencode/sessions";
-import { logger, normalizeError } from "../lib/logger";
+import { deleteOpenCodeConversation } from "../services/opencode/conversationDeletion";
+import { logger } from "../lib/logger";
 import {
   conversationsListQuerySchema,
   conversationCreateSchema,
   conversationReconcileSchema,
   conversationUpdateSchema,
   messageUpsertSchema,
+  messageWindowQuerySchema,
 } from "../lib/validation";
-import { isContentlessAssistantMessage } from "../lib/message-persistence-policy";
+import {
+  hasStoredErrorMetadata,
+  isContentlessAssistantMessage,
+} from "../lib/message-persistence-policy";
 import { folderService } from "../services/folders";
+import { resolveConversationWorkspace } from "../services/workspace";
 import { storageError } from "./shared";
 
 const app = new Hono();
@@ -100,8 +111,7 @@ app.post("/api/conversations", async (c) => {
     // value means "the user chose this" and must survive refresh/switching.
     // (Rows created before this contract carry baked defaults that are
     // indistinguishable from explicit choices; only new behavior is covered.)
-    const provider =
-      (parsed.providerId && registry.get(parsed.providerId)) || null;
+    const provider = (parsed.providerId && registry.get(parsed.providerId)) || null;
     const modelId = parsed.modelId ?? null;
     const reasoningLevel = parsed.reasoningLevel ?? null;
 
@@ -118,10 +128,7 @@ app.post("/api/conversations", async (c) => {
           reason: "folder_not_available",
           folderId: parsed.workspaceFolderId ?? null,
         });
-        return c.json(
-          { error: "Project folder is not available" },
-          400,
-        );
+        return c.json({ error: "Project folder is not available" }, 400);
       }
     }
 
@@ -302,6 +309,48 @@ app.get("/api/conversations/:id/messages", async (c) => {
   }
 });
 
+/**
+ * Bounded history window (P2). The window is a SEMANTIC slice of the selected
+ * chain, not a page of a listing: SQLite stays authoritative, and the walk
+ * proves contiguity on the selected branch.
+ *
+ * `contiguous` is the client's integrity signal: a page containing an unparsable
+ * row is refused. `complete` answers a different question — did the walk reach a
+ * legitimate root — so it is false for every bounded page of a long thread, and
+ * for a chain whose oldest reachable row names an ancestor that was never
+ * persisted. Those are renderable branch starts, not failed loads.
+ */
+app.get("/api/conversations/:id/messages/window", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const conversation = await conversationService.get(id);
+    if (!conversation) {
+      return c.json({ error: "Conversation not found" }, 404);
+    }
+    const query = messageWindowQuerySchema.parse({
+      direction: c.req.query("direction") ?? undefined,
+      anchorId: c.req.query("anchorId") ?? null,
+      limit: c.req.query("limit") ?? undefined,
+    });
+    const slice = await messageService.getWindowSlice(id, {
+      direction: query.direction,
+      anchorId: query.anchorId,
+      limit: query.limit,
+    });
+    if (!slice.complete) {
+      logger.warn("conversations", "conversations.window_incomplete", {
+        conversationId: id,
+        direction: query.direction,
+        messageCount: slice.messages.length,
+      });
+    }
+    return c.json(slice);
+  } catch (e) {
+    // `storageError` maps ZodError to 400 and everything else to a 5xx.
+    return storageError(c, e);
+  }
+});
+
 app.post("/api/conversations/:id/messages", async (c) => {
   try {
     const id = c.req.param("id");
@@ -332,6 +381,26 @@ app.post("/api/conversations/:id/messages", async (c) => {
       return c.json({ success: true, persisted: false });
     }
 
+    // A failed run's error text is written by the chat route and exists NOWHERE
+    // else: the client streams it, but never holds it as message data, so its own
+    // write of the same message carries no error. Landing that write would replace
+    // the row and erase the only record of why the turn failed — the next reload
+    // would show a blank turn. So a write that would drop a stored error is
+    // refused, on the same terms as the contentless shell above: the row stays as
+    // the server wrote it.
+    const stored = getStoredMessageSync(id, parsed.message.id);
+    if (
+      stored &&
+      hasStoredErrorMetadata(stored.content) &&
+      !hasStoredErrorMetadata(parsed.message.content)
+    ) {
+      logger.debug("conversations", "conversation.message_error_overwrite_skipped", {
+        conversationId: id,
+        messageId: parsed.message.id,
+      });
+      return c.json({ success: true, persisted: false });
+    }
+
     await messageService.upsertStored(id, {
       id: parsed.message.id,
       parent_id: parsed.message.parent_id ?? null,
@@ -340,6 +409,12 @@ app.post("/api/conversations/:id/messages", async (c) => {
     });
     return c.json({ success: true, persisted: true });
   } catch (e) {
+    // A message id owned by another conversation is a client-side ownership
+    // conflict, not a server fault: answering 500 would invite an endless retry
+    // of a write that can never succeed, and would hide which row was refused.
+    if (e instanceof MessageOwnershipError) {
+      return storageError(c, e, 409);
+    }
     return storageError(c, e);
   }
 });
@@ -380,19 +455,14 @@ app.patch("/api/conversations/:id", async (c) => {
         ? null
         : (parsed.workspaceFolderId ?? oldFolderId);
     if (effectiveMode === "project") {
-      const folder = effectiveFolderId
-        ? await folderService.get(effectiveFolderId)
-        : null;
+      const folder = effectiveFolderId ? await folderService.get(effectiveFolderId) : null;
       if (!folder || folder.kind === "chat") {
         logger.warn("workspace", "workspace.rejected", {
           reason: "folder_not_available",
           conversationId: id,
           folderId: effectiveFolderId,
         });
-        return c.json(
-          { error: "Project folder is not available" },
-          400,
-        );
+        return c.json({ error: "Project folder is not available" }, 400);
       }
     }
 
@@ -409,7 +479,7 @@ app.patch("/api/conversations/:id", async (c) => {
           ? null
           : parsed.workspaceFolderId === null
             ? null
-            : parsed.workspaceFolderId ?? undefined,
+            : (parsed.workspaceFolderId ?? undefined),
     });
 
     // Cleanup old hidden chat folder when switching away from simple mode,
@@ -444,19 +514,49 @@ app.delete("/api/conversations/:id", async (c) => {
     // clean up the hidden chat folder afterward.
     const conv = await conversationService.get(id);
     const folderId = conv?.workspaceFolderId ?? null;
-    // Phase 6: terminate the bound OpenCode session BEFORE the deletes —
-    // terminate reads the conversation row for the session id, and only
-    // opencode-engine conversations own a session. Best-effort: a failed
-    // cleanup is logged and never blocks conversation teardown.
+    // RT-011: an OpenCode row owns a remote session. The entry snapshot is the
+    // only binding this request may act on: the coordinator arms a durable
+    // marker before its first decision read, terminates only that session, and
+    // refuses to delete a row that was rebound after the snapshot. Direct rows
+    // keep the plain teardown below.
     if (conv?.engine === "opencode") {
-      try {
-        await terminateOpenCodeSession(id);
-      } catch (err) {
-        logger.warn("opencode", "conversation_delete_terminate_failed", {
+      const outcome = await deleteOpenCodeConversation({
+        conversationId: id,
+        entry: {
+          engine: conv.engine,
+          opencodeSessionId: conv.opencodeSessionId ?? null,
+          opencodeServiceOwner: conv.opencodeServiceOwner ?? null,
+        },
+      });
+      if (outcome.kind === "conflict") {
+        logger.warn("opencode", "conversation.delete_rebound", {
           conversationId: id,
-          ...normalizeError(err),
+          reason: outcome.reason,
         });
+        return c.json({ error: "session_rebound" }, 409);
       }
+      if (outcome.kind === "unavailable") {
+        logger.error("opencode", "conversation.delete_cleanup_unavailable", {
+          conversationId: id,
+          reason: outcome.reason,
+        });
+        return c.json({ error: "session_cleanup_unavailable" }, 503);
+      }
+      // Cleanup hidden chat folder if no other conversations reference it.
+      if (folderId) {
+        await folderService.cleanupChatFolder(folderId);
+      }
+      logger.info("conversations", "conversation.delete", {
+        conversationId: id,
+        deleted: outcome.kind === "deleted",
+        engine: "opencode",
+        sessionCleanup: outcome.sessionCleanup,
+      });
+      return c.json({
+        success: true,
+        deleted: outcome.kind === "deleted",
+        sessionCleanup: outcome.sessionCleanup,
+      });
     }
     await messageService.deleteByConversation(id);
     const deleted = await conversationService.delete(id);
@@ -473,6 +573,21 @@ app.delete("/api/conversations/:id", async (c) => {
       ...(conv ? { engine: conv.engine ?? "direct" } : {}),
     });
     return c.json({ success: true, deleted });
+  } catch (e) {
+    return storageError(c, e);
+  }
+});
+
+app.post("/api/conversations/:id/reveal", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const workspace = await resolveConversationWorkspace(id);
+    if (!workspace?.dir) {
+      return c.json({ error: "Workspace directory not found" }, 404);
+    }
+    const ok = await folderService.revealPath(workspace.dir);
+    if (!ok) return c.json({ error: "Failed to reveal directory" }, 500);
+    return c.json({ success: true });
   } catch (e) {
     return storageError(c, e);
   }

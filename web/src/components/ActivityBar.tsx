@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { appConfig, getRailNav, lastSettingsRoute } from "../config/navigation";
+import { appConfig, getRailNav, lastSettingsRoute, ROUTES } from "../config/navigation";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/platform";
 
@@ -19,6 +19,7 @@ export function ActivityBar() {
   const items = getRailNav();
   const [schedUnseen, setSchedUnseen] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `pathname` is not read in the body on purpose - it is the re-trigger. The effect refreshes the scheduler badge after a navigation, and the rail does not otherwise observe the route.
   useEffect(() => {
     let cancelled = false;
     apiFetch("/api/scheduler/summary")
@@ -40,8 +41,7 @@ export function ActivityBar() {
     };
   }, [pathname]);
 
-  const isActive = (route: string) =>
-    pathname === route || pathname.startsWith(`${route}/`);
+  const isActive = (route: string) => pathname === route || pathname.startsWith(`${route}/`);
 
   const handleClick = (id: string, route: string) => {
     // The single gear opens settings in the main window (same as Scheduler)
@@ -60,7 +60,7 @@ export function ActivityBar() {
     >
       <button
         type="button"
-        onClick={() => navigate("/chat")}
+        onClick={() => navigate(ROUTES.CHAT)}
         title={appConfig.branding.appName}
         className="mb-2 flex h-8 w-8 items-center justify-center rounded bg-foreground text-xs font-bold text-background"
       >

@@ -1,14 +1,24 @@
 import { Database } from "bun:sqlite";
-import path from "path";
-import fs from "fs";
+import fs from "node:fs";
 import { logger } from "../lib/logger";
 // Leaf module (no app imports) that owns the chat-stream DDL, so the boot
 // migration and the store's tests apply one definition and cannot drift.
 // Durable Direct-chat resumable streams: docs/2026-09-25-phase2-durability-design.md.
-import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "../services/chat-streams/schema";
+import { applyChatStreamsSchema, addChatStreamsColumnsIfMissing } from "./schema/chat-streams";
+// Leaf module (no app imports) that owns the OpenCode orphan-session journal
+// DDL. RT-001: a remote session created but not bound persists here so a
+// reconciler can remove it; see the module header for scope and lifecycle.
+import { applyOpenCodeOrphanSchema } from "./schema/opencode-session-orphans";
+// Leaf module (no app imports) that owns the messages DDL, so the boot migration
+// and the tests that need a real `messages` table apply one definition.
+import { MESSAGES_REBUILD_SQL, MESSAGES_TABLE_SQL } from "./schema/messages";
+import { applyOpenCodeServiceOwnerSimplificationMigration } from "./schema/opencode-service-owner-migration";
+import { DATA_DIR as APP_DATA_DIR, DB_PATH as APP_DB_PATH } from "../config/data-dir";
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "chat.db");
+// Anchored to the install (the checkout in dev, the executable when packaged),
+// not to `process.cwd()` — see src/config/data-dir.ts.
+const DATA_DIR = APP_DATA_DIR;
+const DB_PATH = APP_DB_PATH;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -55,8 +65,7 @@ sqlite.run(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
 // deleting these rows is a complete rollback. See
 // docs/adr-2026-10-01-context-compaction.md.
 sqlite.run(`
-  CREATE TABLE IF NOT EXISTS conversation_compactions (
-    conversation_id      TEXT PRIMARY KEY,
+  CREATE TABLE IF NOT EXISTS conversation_compactions (\n    conversation_id      TEXT PRIMARY KEY,
     compaction_id        TEXT NOT NULL UNIQUE,
     generation           INTEGER NOT NULL DEFAULT 1,
     latched               INTEGER NOT NULL DEFAULT 1,
@@ -73,7 +82,9 @@ sqlite.run(`
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   )
 `);
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_compactions_created ON conversation_compactions (created_at)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_compactions_created ON conversation_compactions (created_at)",
+);
 
 // Create tables
 sqlite.run(`
@@ -114,6 +125,14 @@ applyChatStreamsSchema(sqlite);
 // existing install only through this additive, idempotent pass.
 addChatStreamsColumnsIfMissing(sqlite);
 
+// OpenCode session journal (RT-001): additive, idempotent — one new table and
+// one partial index, no existing table altered and no row rewritten. It holds
+// the pre-create intent (the durable correlation id) and confirmed orphans, so
+// a crash in the create/persist window is recoverable by the reconciler; see
+// `src/services/storage/opencodeSessionOrphans.ts` for the service and
+// `src/services/opencode/orphanReconciler.ts` for the consumer.
+applyOpenCodeOrphanSchema(sqlite);
+
 // Durable key/value app settings (runtime log capture level/overrides, ...).
 // Single-row-per-key; values are JSON. Read at boot, written by settings APIs.
 sqlite.run(`
@@ -152,49 +171,30 @@ sqlite.run(`
 `);
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_todos_thread ON todos(thread_id, position)");
 
-const CREATE_MESSAGES = `
-  CREATE TABLE messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT,
-    content TEXT NOT NULL,
-    parent_id TEXT,
-    order_seq INTEGER NOT NULL DEFAULT 0,
-    status TEXT,
-    format TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-  )
-`;
+const CREATE_MESSAGES = MESSAGES_REBUILD_SQL;
 
-sqlite.run(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-    content TEXT NOT NULL,
-    parent_id TEXT,
-    order_seq INTEGER NOT NULL DEFAULT 0,
-    status TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-  )
-`);
+sqlite.run(MESSAGES_TABLE_SQL);
 
 // Idempotent migrations for existing databases (add columns introduced for
 // assistant-ui thread history persistence). The content column already exists;
 // it now stores the serialized assistant-ui storage format (JSON) instead of a
 // plain string. Old string-format rows are incompatible, so clear them.
-function addColumnIfNotExists(table: string, column: string, definition: string) {
-  const columns = sqlite.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+export function addColumnIfNotExists(
+  table: string,
+  column: string,
+  definition: string,
+  database: Database = sqlite,
+) {
+  const columns = database.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((c) => c.name === column)) {
-    sqlite.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    database.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
 
-const messagesColumns = sqlite.query("PRAGMA table_info(messages)").all() as Array<{ name: string; notnull: number }>;
+const messagesColumns = sqlite.query("PRAGMA table_info(messages)").all() as Array<{
+  name: string;
+  notnull: number;
+}>;
 const messagesHadOrderSeq = messagesColumns.some((c) => c.name === "order_seq");
 const roleIsNotNull = (messagesColumns.find((c) => c.name === "role")?.notnull ?? 0) === 1;
 
@@ -213,10 +213,10 @@ try {
     | { sql: string }
     | undefined;
   const needsRebuild =
-    !!def?.sql &&
-    !/CHECK\s*\(\s*status\s+IN\s*\(\s*'regular'\s*,\s*'archived'\s*\)/i.test(def.sql);
+    !!def?.sql && !/CHECK\s*\(\s*status\s+IN\s*\(\s*'regular'\s*,\s*'archived'\s*\)/i.test(def.sql);
   if (needsRebuild) {
-    const before = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number }).c;
+    const before = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number })
+      .c;
     sqlite.run("PRAGMA foreign_keys=OFF");
     try {
       sqlite.run("BEGIN");
@@ -253,18 +253,23 @@ try {
       `);
       sqlite.run("DROP TABLE conversations");
       sqlite.run("ALTER TABLE conversations_new RENAME TO conversations");
-      sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)");
+      sqlite.run(
+        "CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)",
+      );
       sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
       sqlite.run("COMMIT");
     } catch (e) {
       try {
         sqlite.run("ROLLBACK");
-      } catch { /* already rolled back */ }
+      } catch {
+        /* already rolled back */
+      }
       throw e;
     } finally {
       sqlite.run("PRAGMA foreign_keys=ON");
     }
-    const after = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number }).c;
+    const after = (sqlite.query("SELECT COUNT(*) AS c FROM conversations").get() as { c: number })
+      .c;
     logger.info("db", "conversations_status_check_rebuilt", {
       message: `conversations=${before}->${after}`,
     });
@@ -280,7 +285,11 @@ addColumnIfNotExists("messages", "order_seq", "INTEGER NOT NULL DEFAULT 0");
 addColumnIfNotExists("messages", "status", "TEXT");
 addColumnIfNotExists("messages", "format", "TEXT");
 addColumnIfNotExists("messages", "updated_at", "INTEGER NOT NULL DEFAULT 0");
-addColumnIfNotExists("conversations", "title_source", "TEXT CHECK(title_source IN ('auto', 'user'))");
+addColumnIfNotExists(
+  "conversations",
+  "title_source",
+  "TEXT CHECK(title_source IN ('auto', 'user'))",
+);
 // Per-conversation AI configuration (conversation default, SQLite source of truth).
 addColumnIfNotExists("conversations", "model_id", "TEXT");
 addColumnIfNotExists("conversations", "reasoning_level", "TEXT");
@@ -294,6 +303,10 @@ addColumnIfNotExists("conversations", "workspace_folder_id", "TEXT");
 // Kept separate from normal chat messages; TBAi owns the conversation, OpenCode
 // owns its session/events. Null until Code mode is first opened.
 addColumnIfNotExists("conversations", "opencode_session_id", "TEXT");
+// Which service owns the bound session's history: `local` or `remote:<origin>`.
+// Null on a bound row is legacy local. Metadata only: no
+// remote-service history or credential is ever copied into TBAi's database.
+addColumnIfNotExists("conversations", "opencode_service_owner", "TEXT");
 // Engine selection (Direct chat vs OpenCode agent mode) and the OpenCode
 // agent/model chosen at creation. Nullable: legacy conversations are Direct and
 // carry no OpenCode selection.
@@ -306,6 +319,66 @@ addColumnIfNotExists("conversations", "opencode_variant", "TEXT");
 // Per-conversation Auto Approval shield (Phase 6D-B). 0 = manual (ask), 1 = auto
 // (accept once). Fail-closed: absent rows read manual.
 addColumnIfNotExists("conversations", "opencode_auto_approve", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfNotExists("conversations", "last_read_at", "INTEGER");
+addColumnIfNotExists("conversations", "last_message_at", "INTEGER");
+
+// OpenCode session import: confirmed directory mirror, import provenance,
+// and canonical service-owner/session uniqueness.
+export function applyOpenCodeSessionImportMigration(database: Database = sqlite): void {
+  const columns = database.query("PRAGMA table_info(conversations)").all() as Array<{
+    name: string;
+  }>;
+  if (!columns.some((c) => c.name === "opencode_directory")) {
+    database.run("ALTER TABLE conversations ADD COLUMN opencode_directory TEXT");
+  }
+  if (!columns.some((c) => c.name === "opencode_imported")) {
+    database.run(
+      "ALTER TABLE conversations ADD COLUMN opencode_imported INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
+  // 1. Run the service-owner simplification migration (maps legacy managed / loopback adopted to 'local', remote to 'remote:<origin>')
+  applyOpenCodeServiceOwnerSimplificationMigration(database);
+
+  // 2. Preflight: collect every duplicate normalized owner/session identity.
+  const opencodeDuplicates = database
+    .query(
+      `SELECT
+         COALESCE(NULLIF(opencode_service_owner, ''), 'local') AS owner_key,
+         opencode_session_id,
+         GROUP_CONCAT(id) AS conversation_ids,
+         COUNT(*) AS duplicate_count
+       FROM conversations
+       WHERE opencode_session_id IS NOT NULL
+       GROUP BY COALESCE(NULLIF(opencode_service_owner, ''), 'local'), opencode_session_id
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as Array<{
+    owner_key: string;
+    opencode_session_id: string;
+    conversation_ids: string;
+    duplicate_count: number;
+  }>;
+
+  if (opencodeDuplicates.length > 0) {
+    const conflictingConversationIds = opencodeDuplicates
+      .map((row) => row.conversation_ids)
+      .filter(Boolean)
+      .join("; ");
+    throw new Error(
+      `Duplicate OpenCode owner/session bindings require manual resolution. Conversation IDs: ${conflictingConversationIds}`,
+    );
+  }
+
+  // 3. Enforce one conversation per canonical owner/session pair.
+  database.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_opencode_owner_session
+    ON conversations(opencode_service_owner, opencode_session_id)
+    WHERE opencode_session_id IS NOT NULL
+  `);
+}
+
+applyOpenCodeSessionImportMigration();
 
 // Durable idempotency for draft materialization (Task 3). The client sends a
 // `clientRequestId` with a draft POST; a server restart between the row commit
@@ -338,9 +411,9 @@ if (roleIsNotNull) {
 // Migrate away from plaintext API keys: drop the legacy api_key column (if present
 // from an earlier schema) and ensure the encrypted columns exist. Existing plaintext
 // keys are intentionally not carried over — they must be re-entered (secure by design).
-const providerColumns = sqlite
-  .query("PRAGMA table_info(provider_configs)")
-  .all() as Array<{ name: string }>;
+const providerColumns = sqlite.query("PRAGMA table_info(provider_configs)").all() as Array<{
+  name: string;
+}>;
 if (providerColumns.some((c) => c.name === "api_key")) {
   sqlite.run("ALTER TABLE provider_configs DROP COLUMN api_key");
 }
@@ -377,27 +450,42 @@ sqlite.run(`
     auto_connect INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
     roots TEXT,
+    disabled_tools TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )
 `);
 
-// Idempotent migration: add the `roots` column if an older DB lacks it.
-try {
-  sqlite.run("ALTER TABLE mcp_servers ADD COLUMN roots TEXT");
-} catch {
-  // Column already exists; ignore.
-}
+// Idempotent migrations for existing databases: add the `roots` and
+// `disabled_tools` columns if an older DB lacks them. `addColumnIfNotExists`
+// checks `PRAGMA table_info` first, so an already-present column is a no-op
+// while a genuine failure (a locked or corrupt database) still surfaces —
+// unlike a bare `try/catch`, which would report every error as success.
+addColumnIfNotExists("mcp_servers", "roots", "TEXT");
+addColumnIfNotExists("mcp_servers", "disabled_tools", "TEXT");
 
 // Create indexes
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)");
 // Composite index for repairSchedulerThreadChains: its correlated
 // (conversation_id, order_seq) subquery sorts without this and degrades to a
 // per-row scan (O(N^2) over scheduler threads).
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_seq ON messages(conversation_id, order_seq)");
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_messages_conv_seq ON messages(conversation_id, order_seq)",
+);
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC)",
+);
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_conversations_title ON conversations(title)");
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_messages_conv_content ON messages(conversation_id, content)");
+// Reverse lookup for the workspace-authorization chain `OpenCode session id ->
+// conversation -> folder -> directory`. The proxy resolves the session id a
+// request names into the one directory that request may address, so this
+// lookup is on the request path, not a reporting query.
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_conversations_opencode_session_id ON conversations(opencode_session_id)",
+);
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_messages_conv_content ON messages(conversation_id, content)",
+);
 
 // Full-text search sidecar (additive; existing DBs keep all rows). FTS5 is
 // bundled with bun:sqlite. Triggers keep the index in sync; backfill runs once.
@@ -571,9 +659,42 @@ try {
   /* column already exists; ignore */
 }
 
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job ON scheduler_runs(job_id, started_at DESC)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job ON scheduler_runs(job_id, started_at DESC)",
+);
 sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_status ON scheduler_runs(status)");
-sqlite.run("CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next ON scheduler_jobs(enabled, next_run_at)");
+sqlite.run(
+  "CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next ON scheduler_jobs(enabled, next_run_at)",
+);
+
+export function applySchedulerEngineMigration(database: Database = sqlite): void {
+  // scheduler_jobs extensions
+  addColumnIfNotExists("scheduler_jobs", "engine", "TEXT NOT NULL DEFAULT 'direct'", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_session_strategy", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_agent", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_model", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_variant", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "opencode_permissions", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "workspace_folder_id", "TEXT", database);
+  addColumnIfNotExists("scheduler_jobs", "deleted_at", "INTEGER", database);
+
+  // scheduler_runs extensions
+  addColumnIfNotExists("scheduler_runs", "engine", "TEXT NOT NULL DEFAULT 'direct'", database);
+  addColumnIfNotExists("scheduler_runs", "opencode_session_id", "TEXT", database);
+  addColumnIfNotExists("scheduler_runs", "opencode_prompt_id", "TEXT", database);
+  addColumnIfNotExists("scheduler_runs", "turn_outcome", "TEXT", database);
+
+  // Indexes
+  database.run("CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_engine ON scheduler_jobs(engine)");
+  database.run(
+    "CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_deleted ON scheduler_jobs(deleted_at) WHERE deleted_at IS NOT NULL",
+  );
+  database.run(
+    "CREATE INDEX IF NOT EXISTS idx_scheduler_runs_prompt ON scheduler_runs(opencode_prompt_id) WHERE opencode_prompt_id IS NOT NULL",
+  );
+}
+
+applySchedulerEngineMigration(sqlite);
 
 // One-time repair: scheduler runs used to persist every message with
 // parent_id NULL, building a forest of disconnected roots the thread view

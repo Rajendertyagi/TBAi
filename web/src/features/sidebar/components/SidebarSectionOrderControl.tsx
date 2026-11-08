@@ -1,34 +1,25 @@
 import { useEffect, useRef } from "react";
-import { ChevronDown, ChevronUp, EyeOff } from "lucide-react";
-import { cn } from "@/lib/utils";
-import {
-  DropdownMenuItem,
-  DropdownMenuShortcut,
-} from "@/components/ui/dropdown-menu";
-import {
-  sectionLabel,
-  sidebarConfig,
-  type SidebarSectionId,
-} from "@/config/sidebar";
+import { ChevronDown, ChevronUp } from "lucide-react";
+import { DropdownMenuItem, DropdownMenuShortcut } from "@/components/ui/dropdown-menu";
+import { sectionLabel, sidebarConfig, type SidebarSectionId } from "@/config/sidebar";
 import { useDesktopLayout } from "@/features/desktop/state/desktopLayout";
 
 /**
  * The "Section order" block of the sidebar's view-options menu: one row per
  * reorderable section in current top-to-bottom order, each with move up/down
  * affordances. Rows keep the menu open (iterative action); keyboard users move
- * with Alt+↑/↓ on the focused row. Hidden sections (Recent off) stay listed
- * and reorderable, dimmed — hiding keeps its slot.
+ * with Alt+↑/↓ on the focused row.
  */
 export function SidebarSectionOrderControl() {
   const copy = sidebarConfig.copy;
   const order = useDesktopLayout((s) => s.sectionOrder);
-  const showRecent = useDesktopLayout((s) => s.showRecent);
   const moveSection = useDesktopLayout((s) => s.moveSection);
   const rowRefs = useRef(new Map<SidebarSectionId, HTMLDivElement | null>());
   // Set just before a keyboard-driven move so focus is restored onto the row
   // after it changes slots (DOM moves don't guarantee focus retention).
   const pendingFocusRef = useRef<SidebarSectionId | null>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `order` is not read in the body on purpose - it is the re-trigger. The effect restores focus to the row that was just moved, and the move is observable only through the resulting order, not through `pendingFocusRef` (which is cleared here).
   useEffect(() => {
     const pending = pendingFocusRef.current;
     if (!pending) return;
@@ -46,7 +37,6 @@ export function SidebarSectionOrderControl() {
       {order.map((id, index) => {
         const first = index === 0;
         const last = index === order.length - 1;
-        const hidden = id === "recent" && !showRecent;
         const name = sectionLabel(id);
         return (
           <DropdownMenuItem
@@ -68,7 +58,7 @@ export function SidebarSectionOrderControl() {
             }}
             aria-label={`${name} — ${index + 1} of ${order.length}`}
             aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-            className={cn("gap-2 py-1.5", hidden && "opacity-50")}
+            className="gap-2 py-1.5"
           >
             <span
               aria-hidden="true"
@@ -79,9 +69,6 @@ export function SidebarSectionOrderControl() {
             <span aria-hidden="true" className="min-w-0 flex-1 truncate">
               {name}
             </span>
-            {hidden && (
-              <EyeOff aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-            )}
             <span className="flex shrink-0 items-center gap-0.5">
               <button
                 type="button"

@@ -9,6 +9,12 @@
 //    the per-launch `TBAI_INSTANCE_ID` and exposes `get_api_endpoint`.
 // 4. Unexpected sidecar exits trigger bounded recovery (max 3 restarts in 30s).
 //    The WebView is never navigated or reloaded during recovery or port change.
+// 5. In DEVELOPMENT the backend is owned by `beforeDevCommand`, not by this
+//    shell: there is no sidecar, and the shell attaches to `build.devUrl`
+//    instead - but only after verifying that the backend answering there is the
+//    one this launch started, via the per-launch identity record
+//    (`<DATA_DIR>/dev-instance-id`, `attach_dev_backend`). Packaged startup is
+//    unchanged.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -24,6 +30,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+
+mod shell_job;
 
 /// Overall budget for one backend startup attempt.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(25);
@@ -52,6 +60,10 @@ struct StartupConfig {
 struct StartupOwned {
     lock: Mutex<Option<std::fs::File>>,
     child: Mutex<Option<CommandChild>>,
+    /// Named kill-on-close job whose only handle is held here. Dropping/closing
+    /// it terminates the sidecar (and, through the sidecar's own job, its
+    /// descendants). Created fresh for every launch attempt.
+    shell_job: Mutex<Option<shell_job::ShellJob>>,
     exited: Mutex<Option<String>>,
     verified: Mutex<bool>,
     verified_endpoint: Mutex<Option<EndpointInfo>>,
@@ -79,6 +91,13 @@ fn resolve_web_dir() -> Option<PathBuf> {
 /// Data dir: prefer a `data` folder next to the executable (portable, writable),
 /// falling back to the current directory.
 fn resolve_data_dir() -> PathBuf {
+    // Honor DATA_DIR when it is set (the backend does the same), so a packaged
+    // app can be pointed at an isolated data directory for testing/verification.
+    if let Ok(dir) = std::env::var("DATA_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             return parent.join("data");
@@ -167,7 +186,11 @@ fn handle_asset_request(request: &tauri::http::Request<Vec<u8>>) -> tauri::http:
     let path_raw = request.uri().path();
     let decoded_path = percent_decode(path_raw);
     let trimmed = decoded_path.trim_start_matches('/');
-    let rel_str = if trimmed.is_empty() { "index.html" } else { trimmed };
+    let rel_str = if trimmed.is_empty() {
+        "index.html"
+    } else {
+        trimmed
+    };
 
     // Baseline security check: reject traversal and illegal characters
     if rel_str.contains("..") || rel_str.contains(':') || rel_str.contains('\0') {
@@ -243,12 +266,76 @@ fn fetch_instance(port: u32) -> Result<String, &'static str> {
         .ok_or("bad_response")
 }
 
+/// Outcome of the graceful-then-forced shutdown handshake. Distinguishing the
+/// two is what lets a caller (and a test) tell a clean exit from a kill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownOutcome {
+    Graceful,
+    Forced,
+}
+
+/// Bounded wait for the sidecar to exit after a graceful shutdown request.
+/// Production value: three seconds. Kept as a named constant so the limit is
+/// auditable and testable rather than buried in a call site.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3000);
+
+/// Bounded wait between polls of the exit record. Named so the cadence is
+/// auditable rather than buried in the loop.
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Wait up to `timeout` for the sidecar to exit gracefully; force-terminate it
+/// when the deadline expires. `exited` is the app's own record of the child's
+/// exit (written by the termination watcher), and `terminate` consumes the
+/// child. Returns which path was taken.
+///
+/// The seam is closure-based because `tauri_plugin_shell`'s `CommandChild`
+/// exposes no `try_wait` and `kill(self)` consumes the child: the wait needs
+/// the exit record the app already keeps, and the kill needs ownership, which
+/// `quit_owned` already holds via `owned.child.lock().take()`.
+///
+/// The exit record is re-checked on every iteration, including the one that
+/// reaches the deadline, so a child that exits concurrently with the timeout
+/// is observed as graceful rather than being killed. `terminate` is `FnOnce`,
+/// so it can be invoked at most once.
+fn wait_or_kill(
+    exited: impl Fn() -> bool,
+    terminate: impl FnOnce(),
+    timeout: Duration,
+) -> ShutdownOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if exited() {
+            return ShutdownOutcome::Graceful;
+        }
+        if Instant::now() >= deadline {
+            terminate();
+            return ShutdownOutcome::Forced;
+        }
+        std::thread::sleep(SHUTDOWN_POLL_INTERVAL);
+    }
+}
+
 /// Full quit: stop the owned sidecar, then end the process.
 fn quit_owned(app: &AppHandle) {
     if let Some(owned) = app.try_state::<StartupOwned>() {
         owned.is_quitting.store(true, Ordering::SeqCst);
-        if let Some(child) = owned.child.lock().expect("child lock").take() {
-            let _ = child.kill();
+        if let Some(mut child) = owned.child.lock().expect("child lock").take() {
+            // Graceful handshake: write a newline-terminated shutdown command
+            // to the sidecar's stdin. The backend reads it and runs
+            // shutdownServer("STDIN_SHUTDOWN"). Wait up to SHUTDOWN_TIMEOUT for
+            // the child to exit on its own; if it does not, fall back to kill().
+            let _ = child.write(b"{\"type\":\"shutdown\"}\n");
+            let outcome = wait_or_kill(
+                || owned.exited.lock().expect("exited lock").is_some(),
+                || {
+                    let _ = child.kill();
+                },
+                SHUTDOWN_TIMEOUT,
+            );
+            eprintln!("[shutdown] sidecar outcome: {outcome:?}");
+        }
+        if let Some(mut job) = owned.shell_job.lock().expect("shell job lock").take() {
+            job.close();
         }
         *owned.exited.lock().expect("exited lock") = Some("user quit".to_string());
     }
@@ -274,6 +361,237 @@ fn is_tray_left_click_up(event: &TrayIconEvent) -> bool {
     )
 }
 
+/// Port the development window is served from, per `build.devUrl`.
+///
+/// `devUrl` is the endpoint the window loads, so it — not `PORT`, not the port
+/// mirror — is the address this shell must attach to in development.
+fn dev_origin_port(app: &AppHandle) -> Option<u32> {
+    let url = app.config().build.dev_url.as_ref()?;
+    Some(u32::from(url.port_or_known_default()?))
+}
+
+/// File name of the per-launch development identity record. Shared with
+/// `scripts/dev-launch-record.ts`, which writes it.
+const DEV_INSTANCE_FILE_NAME: &str = "dev-instance-id";
+
+/// Where the development launcher recorded this launch's backend identity.
+///
+/// `tauri dev` and `beforeDevCommand` are separate processes with their own
+/// working directories, so this path cannot be derived from `cwd`. Three
+/// sources, in order:
+///
+/// 1. `TBAI_DEV_INSTANCE_FILE` - an explicit path, used by tests.
+/// 2. `DATA_DIR` - the same override the backend honours, so an isolated data
+///    directory (including the G2 observation) moves both sides together.
+/// 3. The repository's own `data/` directory: `CARGO_MANIFEST_DIR` is
+///    `<repo>/src-tauri` at compile time, and the backend's default `DATA_DIR` is
+///    `<repo>/data` (`src/config/data-dir.ts`). Independent of `cwd`, which is
+///    the point.
+fn dev_instance_id_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("TBAI_DEV_INSTANCE_FILE") {
+        if !explicit.trim().is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    if let Ok(dir) = std::env::var("DATA_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir).join(DEV_INSTANCE_FILE_NAME);
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("data").join(DEV_INSTANCE_FILE_NAME))
+        .unwrap_or_else(|| PathBuf::from("data").join(DEV_INSTANCE_FILE_NAME))
+}
+
+/// Reads the identity this launch minted, or explains why it cannot be known.
+///
+/// A missing or empty record is NOT a race: the launcher writes it before the
+/// backend starts, so the file is absent only when development was started
+/// without the launcher.
+fn read_dev_instance_id(path: &Path) -> Result<String, String> {
+    let raw = std::fs::read_to_string(path).map_err(|err| {
+        format!(
+            "no development launch record at {} ({err}). Start the window through \
+             `tauri dev` (beforeDevCommand = `bun run dev:shell`), not a bare \
+             `bun run dev`; without a per-launch identity this shell cannot tell \
+             this launch's backend from a stale or foreign one.",
+            path.display()
+        )
+    })?;
+    let id = raw.trim();
+    if id.is_empty() {
+        return Err(format!(
+            "the development launch record {} is empty; this shell cannot verify \
+             which backend belongs to this launch",
+            path.display()
+        ));
+    }
+    Ok(id.to_string())
+}
+
+/// What the development backend answered, and what to do about it.
+#[derive(Debug, PartialEq, Eq)]
+enum DevAttachVerdict {
+    /// The backend this launch started answered: attach to it.
+    Attach,
+    /// Not observable yet (still booting, or mid-restart): poll again.
+    Retry(String),
+    /// Definitely NOT this launch: stop and report, because polling cannot fix it.
+    Reject(String),
+}
+
+/// The identity decision, pure so every outcome is testable without a window.
+///
+/// A wrong id, a 404 instance endpoint and an unusable answer from a *listening*
+/// port are all definite: the backend this launch started cannot bind a port
+/// another process already owns, so waiting out the startup budget would only
+/// delay an accurate error.
+fn classify_dev_instance(
+    expected: &str,
+    observed: Result<String, &'static str>,
+) -> DevAttachVerdict {
+    match observed {
+        Ok(instance_id) if instance_id == expected => DevAttachVerdict::Attach,
+        Ok(instance_id) => DevAttachVerdict::Reject(format!(
+            "the server on the development port is not this launch's backend \
+             (expected instance {expected}, got {instance_id}). A stale backend from an \
+             earlier run, or another checkout's backend, owns the port; stop it and \
+             restart `tauri dev`."
+        )),
+        Err("no_listener") => {
+            DevAttachVerdict::Retry("nothing is listening on the development port yet".to_string())
+        }
+        Err("old_build_or_foreign") => DevAttachVerdict::Reject(
+            "the server on the development port has no instance endpoint: it is an \
+             old build or another application, not this launch's backend"
+                .to_string(),
+        ),
+        Err(other) => DevAttachVerdict::Retry(format!(
+            "the server on the development port answered unusably ({other})"
+        )),
+    }
+}
+
+/// Development: verify the backend that `beforeDevCommand` already started.
+///
+/// `tauri dev` waits for `build.devUrl` before it starts this process, so the
+/// backend `beforeDevCommand` launched already owns the dev port and the data
+/// directory. Spawning the packaged sidecar as well created a SECOND backend
+/// competing for the same port: it logged `startup_failed` (EADDRINUSE) into the
+/// same application log — both processes inherit `TBAI_LOG_FILE` — while the
+/// window kept loading the first backend. The shell then reported a failure its
+/// own window never exhibited, and the G2 observation could not tell which
+/// process the log line belonged to.
+///
+/// Ownership is decided by the Tauri CLI's own switch rather than an env var or
+/// a port probe: `custom-protocol` is enabled only for `tauri build`, so
+/// `tauri::is_dev()` is true for `tauri dev` and false for both release and
+/// `--debug` packaged builds. The named shell job, the sidecar lifecycle, crash
+/// recovery and the shutdown handshake therefore remain packaged-only.
+///
+/// "The port answers" is not enough: a backend left over from an earlier run, or
+/// one belonging to another checkout, answers the same port. So the launcher
+/// (`bun run dev:shell`) mints an identity per launch, records it in
+/// `<DATA_DIR>/dev-instance-id` and hands it to the backend as
+/// `TBAI_INSTANCE_ID`; this function accepts only an exact match and reports a
+/// classified failure otherwise (see `classify_dev_instance`).
+fn attach_dev_backend(app: &AppHandle) {
+    let owned: State<StartupOwned> = app.state();
+
+    let port = match dev_origin_port(app) {
+        Some(port) => port,
+        None => {
+            *owned.status.lock().expect("status lock") = "failed".to_string();
+            let _ = app.emit(
+                "backend-status",
+                serde_json::json!({
+                    "status": "failed",
+                    "reason": "build.devUrl names no port to attach to"
+                }),
+            );
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    *owned.verified.lock().expect("verified lock") = false;
+    *owned.verified_endpoint.lock().expect("endpoint lock") = None;
+    *owned.status.lock().expect("status lock") = "verifying".to_string();
+
+    // The identity this launch minted. Without it there is nothing to verify
+    // against, and attaching to whoever owns the port is exactly the bug this
+    // handshake exists to prevent.
+    let instance_file = dev_instance_id_path();
+    let expected = match read_dev_instance_id(&instance_file) {
+        Ok(instance_id) => instance_id,
+        Err(reason) => {
+            *owned.status.lock().expect("status lock") = "failed".to_string();
+            let _ = app.emit(
+                "backend-status",
+                serde_json::json!({ "status": "failed", "reason": reason }),
+            );
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
+
+    let start = Instant::now();
+    let mut last_retry = "nothing has been observed on the development port yet".to_string();
+    while start.elapsed() < STARTUP_TIMEOUT {
+        if owned.is_quitting.load(Ordering::SeqCst) {
+            owned.is_starting.store(false, Ordering::SeqCst);
+            return;
+        }
+        match classify_dev_instance(&expected, fetch_instance(port)) {
+            DevAttachVerdict::Attach => {
+                *owned.verified.lock().expect("verified lock") = true;
+                *owned.status.lock().expect("status lock") = "ready".to_string();
+                let endpoint = EndpointInfo {
+                    port,
+                    base_url: format!("http://127.0.0.1:{port}"),
+                    instance_id: expected,
+                };
+                *owned.verified_endpoint.lock().expect("endpoint lock") = Some(endpoint.clone());
+                if let Some(tray) = app.tray_by_id("main") {
+                    let _ = tray.set_tooltip(format!("TBAi · port {port}").into());
+                }
+                let _ = app.emit("backend-ready", &endpoint);
+                let _ = app.emit(
+                    "backend-status",
+                    serde_json::json!({ "status": "ready", "endpoint": endpoint }),
+                );
+                owned.is_starting.store(false, Ordering::SeqCst);
+                return;
+            }
+            DevAttachVerdict::Reject(reason) => {
+                *owned.status.lock().expect("status lock") = "failed".to_string();
+                let _ = app.emit(
+                    "backend-status",
+                    serde_json::json!({ "status": "failed", "reason": reason }),
+                );
+                owned.is_starting.store(false, Ordering::SeqCst);
+                return;
+            }
+            DevAttachVerdict::Retry(reason) => last_retry = reason,
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    *owned.status.lock().expect("status lock") = "failed".to_string();
+    let _ = app.emit(
+        "backend-status",
+        serde_json::json!({
+            "status": "failed",
+            "reason": format!(
+                "No backend with this launch's identity ({expected}) answered the development port {port}: {last_retry} (record: {})",
+                instance_file.display()
+            )
+        }),
+    );
+    owned.is_starting.store(false, Ordering::SeqCst);
+}
+
 /// One backend startup attempt: starts Bun sidecar in background, polls until verified.
 fn attempt(app: &AppHandle) {
     let cfg: State<StartupConfig> = app.state();
@@ -287,9 +605,21 @@ fn attempt(app: &AppHandle) {
         return;
     }
 
+    // Development never owns a backend process: `beforeDevCommand` does.
+    if tauri::is_dev() {
+        attach_dev_backend(app);
+        return;
+    }
+
     // Stop previous child if active
     if let Some(child) = owned.child.lock().expect("child lock").take() {
         let _ = child.kill();
+    }
+    // Close the previous job too. `child.kill()` targets the plugin's child
+    // handle; closing the job is the OS-level guarantee for the sidecar and its
+    // descendants, including when `kill()` raced with a restart.
+    if let Some(mut job) = owned.shell_job.lock().expect("shell job lock").take() {
+        job.close();
     }
     *owned.exited.lock().expect("exited lock") = None;
     *owned.last_start.lock().expect("start lock") = Instant::now();
@@ -330,13 +660,46 @@ fn attempt(app: &AppHandle) {
         }
     };
 
+    // G2: create the named kill-on-close job BEFORE spawning the sidecar. The
+    // sidecar opens this job by name, assigns itself, and closes its handle; the
+    // handle kept here is then the sidecar's lifetime. If creation fails we do
+    // not spawn an unprotected backend.
+    let mut shell_job_for_sidecar: Option<shell_job::ShellJob> = None;
+    #[cfg(windows)]
+    {
+        let name = format!(
+            "Local\\TBAiShellJob-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
+        match shell_job::ShellJob::create(name) {
+            Ok(job) => shell_job_for_sidecar = Some(job),
+            Err(err) => {
+                eprintln!("[server] shell job creation failed: {err}");
+                *owned.status.lock().expect("status lock") = "failed".to_string();
+                let _ = app.emit(
+                    "backend-status",
+                    serde_json::json!({
+                        "status": "failed",
+                        "reason": format!("Shell job creation failed: {err}")
+                    }),
+                );
+                owned.is_starting.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+
     let web_dist = resolve_web_dir().unwrap_or_else(|| cfg.data_dir.clone());
-    let (mut rx, child) = match sidecar
+    let mut sidecar_command = sidecar
         .env("TBAI_INSTANCE_ID", &expected)
         .env("WEB_DIST_DIR", web_dist.to_string_lossy().to_string())
         .env("DATA_DIR", cfg.data_dir.to_string_lossy().to_string())
-        .spawn()
-    {
+        .set_process_group(true);
+    if let Some(job) = &shell_job_for_sidecar {
+        sidecar_command = sidecar_command.env("TBAI_SHELL_JOB_NAME", job.name());
+    }
+    let (mut rx, child) = match sidecar_command.spawn() {
         Ok(pair) => pair,
         Err(err) => {
             eprintln!("[server] spawn error: {err}");
@@ -350,6 +713,7 @@ fn attempt(app: &AppHandle) {
         }
     };
     *owned.child.lock().expect("child lock") = Some(child);
+    *owned.shell_job.lock().expect("shell job lock") = shell_job_for_sidecar;
 
     // Diagnostics + termination watcher
     let app_handle = app.clone();
@@ -364,18 +728,25 @@ fn attempt(app: &AppHandle) {
                     }
                 }
                 CommandEvent::Terminated(payload) => {
-                    let note = format!("exited (code {:?}, signal {:?})", payload.code, payload.signal);
+                    let note = format!(
+                        "exited (code {:?}, signal {:?})",
+                        payload.code, payload.signal
+                    );
                     eprintln!("[server] sidecar {note}");
                     if let Some(owned) = app_handle.try_state::<StartupOwned>() {
+                        // Recorded before the quit check: the graceful handshake
+                        // in `quit_owned` polls this record, so a quit that
+                        // skipped it could never be observed as graceful.
+                        *owned.exited.lock().expect("exited lock") = Some(note);
                         if owned.is_quitting.load(Ordering::SeqCst) {
                             break;
                         }
-                        *owned.exited.lock().expect("exited lock") = Some(note);
                         *owned.verified.lock().expect("verified lock") = false;
                         *owned.verified_endpoint.lock().expect("endpoint lock") = None;
 
                         let mut count = owned.crash_count.lock().expect("crash count lock");
-                        let mut window_start = owned.crash_window_start.lock().expect("window lock");
+                        let mut window_start =
+                            owned.crash_window_start.lock().expect("window lock");
                         if window_start.elapsed() > Duration::from_secs(30) {
                             *window_start = Instant::now();
                             *count = 1;
@@ -477,13 +848,23 @@ fn attempt(app: &AppHandle) {
 #[tauri::command]
 fn get_api_endpoint(app: AppHandle) -> Result<EndpointInfo, String> {
     let owned = app.state::<StartupOwned>();
-    if let Some(endpoint) = owned.verified_endpoint.lock().expect("endpoint lock").clone() {
+    if let Some(endpoint) = owned
+        .verified_endpoint
+        .lock()
+        .expect("endpoint lock")
+        .clone()
+    {
         return Ok(endpoint);
     }
     let start = Instant::now();
     while start.elapsed() < STARTUP_TIMEOUT {
         std::thread::sleep(Duration::from_millis(100));
-        if let Some(endpoint) = owned.verified_endpoint.lock().expect("endpoint lock").clone() {
+        if let Some(endpoint) = owned
+            .verified_endpoint
+            .lock()
+            .expect("endpoint lock")
+            .clone()
+        {
             return Ok(endpoint);
         }
         let status = owned.status.lock().expect("status lock").clone();
@@ -552,10 +933,13 @@ fn main() {
         )
         .setup(|app| {
             let data_dir = resolve_data_dir();
-            app.manage(StartupConfig { data_dir: data_dir.clone() });
+            app.manage(StartupConfig {
+                data_dir: data_dir.clone(),
+            });
             app.manage(StartupOwned {
                 lock: Mutex::new(None),
                 child: Mutex::new(None),
+                shell_job: Mutex::new(None),
                 exited: Mutex::new(None),
                 verified: Mutex::new(false),
                 verified_endpoint: Mutex::new(None),
@@ -695,18 +1079,187 @@ mod tests {
     #[test]
     fn percent_decode_handles_basic_and_escaped() {
         assert_eq!(percent_decode("hello%20world"), "hello world");
-        assert_eq!(percent_decode("assets/app%2Bicon.png"), "assets/app+icon.png");
+        assert_eq!(
+            percent_decode("assets/app%2Bicon.png"),
+            "assets/app+icon.png"
+        );
         assert_eq!(percent_decode("/plain/path"), "/plain/path");
     }
 
     #[test]
     fn mime_type_mapping() {
-        assert_eq!(get_mime_type(Path::new("index.html")), "text/html; charset=utf-8");
-        assert_eq!(get_mime_type(Path::new("app.js")), "application/javascript; charset=utf-8");
-        assert_eq!(get_mime_type(Path::new("app.css")), "text/css; charset=utf-8");
+        assert_eq!(
+            get_mime_type(Path::new("index.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            get_mime_type(Path::new("app.js")),
+            "application/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            get_mime_type(Path::new("app.css")),
+            "text/css; charset=utf-8"
+        );
         assert_eq!(get_mime_type(Path::new("logo.svg")), "image/svg+xml");
         assert_eq!(get_mime_type(Path::new("icon.png")), "image/png");
         assert_eq!(get_mime_type(Path::new("font.woff2")), "font/woff2");
         assert_eq!(get_mime_type(Path::new("binary.wasm")), "application/wasm");
+    }
+
+    // --- shutdown seam tests ---
+
+    #[test]
+    fn shutdown_graceful_exits_before_deadline() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let killed = AtomicBool::new(false);
+        let start = Instant::now();
+        let outcome = wait_or_kill(
+            || start.elapsed() >= Duration::from_millis(50),
+            || {
+                killed.store(true, Ordering::SeqCst);
+            },
+            Duration::from_millis(500),
+        );
+        assert_eq!(outcome, ShutdownOutcome::Graceful);
+        assert!(!killed.load(Ordering::SeqCst));
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn shutdown_forced_kills_when_child_refuses() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let killed = AtomicBool::new(false);
+        let start = Instant::now();
+        let outcome = wait_or_kill(
+            || false, // never exits
+            || {
+                killed.store(true, Ordering::SeqCst);
+            },
+            Duration::from_millis(200),
+        );
+        assert_eq!(outcome, ShutdownOutcome::Forced);
+        assert!(killed.load(Ordering::SeqCst));
+        // bounded: must not hang, and must have waited roughly the deadline
+        assert!(start.elapsed() < Duration::from_millis(400));
+        assert!(start.elapsed() >= Duration::from_millis(180));
+    }
+
+    #[test]
+    fn shutdown_concurrent_exit_terminates_at_most_once() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // The exit record flips true right at the deadline boundary. The seam
+        // must re-check the exit state at the deadline (so a concurrent exit is
+        // observed as graceful rather than killed), and `terminate` is `FnOnce`,
+        // so it can be invoked at most once.
+        let killed = AtomicBool::new(false);
+        let exited = AtomicBool::new(false);
+        let start = Instant::now();
+        let outcome = wait_or_kill(
+            || {
+                if start.elapsed() >= Duration::from_millis(195) {
+                    exited.store(true, Ordering::SeqCst);
+                }
+                exited.load(Ordering::SeqCst)
+            },
+            || {
+                assert!(
+                    !killed.swap(true, Ordering::SeqCst),
+                    "terminate invoked more than once"
+                );
+            },
+            Duration::from_millis(200),
+        );
+        match outcome {
+            ShutdownOutcome::Graceful => {
+                assert!(exited.load(Ordering::SeqCst));
+                assert!(!killed.load(Ordering::SeqCst));
+            }
+            ShutdownOutcome::Forced => {
+                assert!(killed.load(Ordering::SeqCst));
+            }
+        }
+    }
+
+    #[test]
+    fn shutdown_production_timeout_is_three_seconds() {
+        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_millis(3000));
+    }
+
+    // --- development identity handshake ---
+    //
+    // Six cases: the exact match, the three definite refusals (foreign/stale id,
+    // no instance endpoint, no launch record), the two transient states, and the
+    // record's own format contract. Together they are the whole reason the shell
+    // can no longer attach to whatever happens to answer the dev port.
+
+    #[test]
+    fn dev_attach_accepts_the_instance_this_launch_minted() {
+        assert_eq!(
+            classify_dev_instance("launch-a", Ok("launch-a".to_string())),
+            DevAttachVerdict::Attach
+        );
+    }
+
+    #[test]
+    fn dev_attach_rejects_a_stale_or_foreign_backend() {
+        match classify_dev_instance("launch-a", Ok("launch-b".to_string())) {
+            DevAttachVerdict::Reject(reason) => {
+                assert!(reason.contains("launch-a"), "{reason}");
+                assert!(reason.contains("launch-b"), "{reason}");
+                assert!(reason.contains("not this launch"), "{reason}");
+            }
+            other => panic!("expected Reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_attach_rejects_a_server_without_an_instance_endpoint() {
+        match classify_dev_instance("launch-a", Err("old_build_or_foreign")) {
+            DevAttachVerdict::Reject(reason) => {
+                assert!(reason.contains("no instance endpoint"), "{reason}");
+            }
+            other => panic!("expected Reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_attach_retries_while_nothing_listens() {
+        assert!(matches!(
+            classify_dev_instance("launch-a", Err("no_listener")),
+            DevAttachVerdict::Retry(_)
+        ));
+    }
+
+    #[test]
+    fn dev_attach_retries_an_unusable_answer() {
+        assert!(matches!(
+            classify_dev_instance("launch-a", Err("bad_response")),
+            DevAttachVerdict::Retry(reason) if reason.contains("bad_response")
+        ));
+    }
+
+    #[test]
+    fn dev_launch_record_is_required_and_trimmed() {
+        let dir = std::env::temp_dir().join(format!("tbai-dev-instance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join(DEV_INSTANCE_FILE_NAME);
+        let path_text = file.display().to_string();
+
+        // No record: refused, and the message names the file and the launcher.
+        let missing = read_dev_instance_id(&file).expect_err("a missing record must be refused");
+        assert!(missing.contains(path_text.as_str()), "{missing}");
+        assert!(missing.contains("bun run dev:shell"), "{missing}");
+
+        // A written record is trimmed: the writer's trailing newline is not part
+        // of the identity.
+        std::fs::write(&file, "launch-a\n").expect("write record");
+        assert_eq!(read_dev_instance_id(&file).expect("record"), "launch-a");
+
+        // A blank record is refused rather than treated as an identity.
+        std::fs::write(&file, "   \n").expect("write blank record");
+        assert!(read_dev_instance_id(&file).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { z } from "zod";
+import { OPENCODE_CONFIG } from "../../config/opencode";
 import { logger } from "../../lib/logger";
-import { classifyError } from "../../lib/errors";
+import type { OpenCodeTransport } from "./http";
 
 /** Joins a directory and a file name using the host's path separator. */
 const joinPath = join;
@@ -120,8 +121,8 @@ export function selectConfigDocument(
   const documents = entries.filter(
     (entry) => entry.type === "document" && typeof entry.path === "string",
   );
-  const withPermissions = documents.find(
-    (entry) => Array.isArray((entry.info as Record<string, unknown> | undefined)?.permissions),
+  const withPermissions = documents.find((entry) =>
+    Array.isArray((entry.info as Record<string, unknown> | undefined)?.permissions),
   );
   const chosen = withPermissions ?? documents[0];
   if (!chosen || typeof chosen.path !== "string") return null;
@@ -130,30 +131,67 @@ export function selectConfigDocument(
 }
 
 /**
- * Reads the live configuration from the managed server and picks the document
- * TBAi will edit.
+ * The installed service one config read is bound to.
  *
- * @param baseUrl - The managed server's base URL.
- * @param headers - Auth headers for the server's HTTP Basic gate.
+ * The transport is REQUIRED, not optional. It owns both the credential and the
+ * origin, so this module cannot construct an authenticated read out of a base
+ * URL plus headers — the shape that previously allowed the managed password to
+ * be paired with whichever origin the caller supplied. There is deliberately no
+ * fallback to `globalThis.fetch`: a config read either goes through the
+ * captured, origin-bound transport or it does not happen.
+ */
+export interface OpenCodeConfigReadTarget {
+  /** Canonical, slash-free origin of the installed service. */
+  readonly baseUrl: string;
+  /** The transport captured with that target; it injects the credential and refuses redirects. */
+  readonly transport: OpenCodeTransport;
+}
+
+/** Cancellation and budget for one config read. */
+export interface OpenCodeConfigReadOptions {
+  /** Caller cancellation — the inbound HTTP request's own signal. */
+  readonly signal?: AbortSignal;
+  /** Overrides {@link OPENCODE_CONFIG.configReadTimeoutMs}; tests only. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Reads the live configuration from the installed service and picks the
+ * document TBAi will edit.
+ *
+ * The request goes through the captured transport, so it carries exactly the
+ * target's credential, is bound to that one origin, and refuses every redirect
+ * before a body is read. The read is bounded by
+ * {@link OPENCODE_CONFIG.configReadTimeoutMs} and by the caller's signal, so an
+ * abandoned request cannot leave an upstream read pending.
+ *
+ * @param target - The installed service's origin and its captured transport.
+ * @param options - Cancellation signal and a test-only timeout override.
  * @returns The discovered document, including its raw text.
+ * @throws {OpenCodeConfigUnreadableError} When the server reports no readable document.
  * @throws {OpenCodeConfigNotFoundError} When the server reports no document.
+ * @throws {OpenCodeRedirectRefusedError} For any 3xx; its `Location` is never read.
  */
 export async function readOpenCodeConfigDocument(
-  baseUrl: string,
-  headers: Record<string, string>,
+  target: OpenCodeConfigReadTarget,
+  options: OpenCodeConfigReadOptions = {},
 ): Promise<OpenCodeConfigDocument> {
-  const response = await fetch(new URL("/api/config", baseUrl), { headers });
+  // The TYPE makes the transport mandatory, and this runtime guard keeps the
+  // same contract for an untyped caller: no request is attempted without one.
+  if (typeof target.transport !== "function") {
+    throw new TypeError("readOpenCodeConfigDocument requires a captured OpenCode transport");
+  }
+  const timeoutMs = options.timeoutMs ?? OPENCODE_CONFIG.configReadTimeoutMs;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const response = await target.transport(new URL("/api/config", target.baseUrl), { signal });
   if (!response.ok) {
-    throw new OpenCodeConfigUnreadableError(
-      `OpenCode config read failed (${response.status})`,
-    );
+    throw new OpenCodeConfigUnreadableError(`OpenCode config read failed (${response.status})`);
   }
   const parsedJson: unknown = await response.json().catch(() => null);
   const entries = configResponseSchema.safeParse(parsedJson);
   if (!entries.success) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode returned an unreadable config response",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode returned an unreadable config response");
   }
   /**
    * A global config the server could not parse is DROPPED from its own listing.
@@ -185,9 +223,7 @@ export async function readOpenCodeConfigDocument(
 
   const selected = selectConfigDocument(entries.data);
   if (!selected) {
-    throw new OpenCodeConfigNotFoundError(
-      "OpenCode reported no configuration document",
-    );
+    throw new OpenCodeConfigNotFoundError("OpenCode reported no configuration document");
   }
 
   const discoveredPaths = discoveredPathsOf(entries.data);
@@ -246,9 +282,7 @@ async function readFileText(path: string): Promise<string | null> {
 }
 
 /** Every path the server reported, in the order it reported them. */
-function discoveredPathsOf(
-  entries: readonly z.infer<typeof configEntrySchema>[],
-): string[] {
+function discoveredPathsOf(entries: readonly z.infer<typeof configEntrySchema>[]): string[] {
   return entries
     .filter((entry) => typeof entry.path === "string")
     .map((entry) => entry.path as string);
@@ -291,8 +325,7 @@ async function findUnreadableGlobalConfig(
   entries: readonly z.infer<typeof configEntrySchema>[],
 ): Promise<{ path: string; raw: string } | null> {
   const configDirectory = entries.find(
-    (entry) =>
-      entry.type === "directory" && typeof entry.path === "string",
+    (entry) => entry.type === "directory" && typeof entry.path === "string",
   )?.path;
   if (typeof configDirectory !== "string") return null;
   for (const name of ["opencode.json", "opencode.jsonc"]) {
@@ -314,9 +347,7 @@ async function findUnreadableGlobalConfig(
  * produces a one-rule diff instead of reflowing the whole document. Key order
  * is insertion order, so a key that was already present keeps its position.
  */
-export function serializeOpenCodeConfig(
-  doc: Readonly<Record<string, unknown>>,
-): string {
+export function serializeOpenCodeConfig(doc: Readonly<Record<string, unknown>>): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
@@ -339,17 +370,12 @@ export function serializeOpenCodeConfig(
  * @throws {OpenCodeConfigUnreadableError} When `raw` is not a JSON object, or
  *   when `value` is not JSON-serializable. Never guesses a replacement.
  */
-export function setOpenCodeConfigValue(
-  raw: string,
-  key: string,
-  value: unknown,
-): string {
+export function setOpenCodeConfigValue(raw: string, key: string, value: unknown): string {
   const trimmed = raw.trim();
   // An absent file parses to an empty document, which is a legitimate base for
   // a first write. Anything present but unparsable is refused outright.
-  const base: Record<string, unknown> = trimmed.length === 0
-    ? {}
-    : parseConfigObjectOrThrow(trimmed);
+  const base: Record<string, unknown> =
+    trimmed.length === 0 ? {} : parseConfigObjectOrThrow(trimmed);
 
   const next: Record<string, unknown> = { ...base };
   if (value === undefined) {
@@ -358,6 +384,13 @@ export function setOpenCodeConfigValue(
     next[key] = structuredClone(value);
   }
   return serializeOpenCodeConfig(next);
+}
+
+/** Whether a value is a permission rule with the given action and resource. */
+function isRuleWithIdentity(rule: unknown, action: string, resource: string): boolean {
+  if (rule === null || typeof rule !== "object" || Array.isArray(rule)) return false;
+  const entry = rule as Record<string, unknown>;
+  return entry.action === action && entry.resource === resource;
 }
 
 /**
@@ -369,8 +402,7 @@ export function setOpenCodeConfigValue(
  * "filter out question, push allow" would silently move a rule past every rule
  * written after it and change what those rules decide. This therefore:
  *
- *   - finds the FIRST rule matching the same (action, resource) pair, which is
- *     the one actually in force, and changes only its `effect`;
+ *   - changes ONLY the one rule that carries the pair (action, resource), and
  *   - leaves every other rule at its original index, with its original
  *     action, resource and effect;
  *   - returns the input array UNCHANGED when the rule to edit is absent, so an
@@ -379,10 +411,24 @@ export function setOpenCodeConfigValue(
  * Matching on the pair (not the action alone) is what keeps a `question` edit
  * from touching an `edit` rule that happens to share a resource pattern.
  *
+ * ## An ambiguous pair is REFUSED, never applied to an arbitrary match
+ *
+ * A configuration can carry the SAME pair twice — a hand-edited file or
+ * another tool can produce one, and the append guard only refuses CREATING
+ * one. The two are not interchangeable: OpenCode resolves the array
+ * last-match-wins, so the LAST of them is the one in force, and editing the
+ * first would change a rule that never decides anything while the page
+ * reported success.
+ *
+ * So an ambiguous pair is refused with a reason. To edit one of them, address
+ * it by POSITION — {@link setOpenCodePermissionEffectAt} — which is exact.
+ *
  * @param current - The document's `permissions` value, of unknown shape.
  * @param match - The action and resource identifying the rule to change.
  * @param effect - The effect to write on that rule.
  * @returns The new array, or `current` itself when nothing matched.
+ * @throws {OpenCodeConfigUnreadableError} When the value is not an array, or
+ *   the pair identifies more than one rule.
  */
 export function setOpenCodePermissionEffect(
   current: unknown,
@@ -390,28 +436,68 @@ export function setOpenCodePermissionEffect(
   effect: "allow" | "ask" | "deny",
 ): unknown {
   if (!Array.isArray(current)) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode permissions are not an array of rules",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
-  const index = current.findIndex(
-    (rule) =>
-      rule !== null &&
-      typeof rule === "object" &&
-      !Array.isArray(rule) &&
-      (rule as Record<string, unknown>).action === match.action &&
-      (rule as Record<string, unknown>).resource === match.resource,
-  );
+  const index = current.findIndex((rule) => isRuleWithIdentity(rule, match.action, match.resource));
   if (index === -1) return current;
 
-  const existing = current[index] as Record<string, unknown>;
-  const next = current.map((rule, at) => {
-    if (at !== index) return rule;
-    // Spreading the original keeps any extra field the rule carries, so an
-    // unknown OpenCode field on this rule survives the edit.
-    return { ...existing, effect };
-  });
-  return next;
+  const duplicates = current.filter((rule) =>
+    isRuleWithIdentity(rule, match.action, match.resource),
+  );
+  if (duplicates.length > 1) {
+    throw new OpenCodeConfigUnreadableError(
+      `There is more than one rule for "${match.action}" on "${match.resource}", so the one to change is ambiguous`,
+    );
+  }
+
+  return setOpenCodePermissionEffectAt(current, index, match, effect);
+}
+
+/**
+ * Changes the effect of the rule at `index`, re-checking its identity.
+ *
+ * This is the precise form: a rule is addressed by the POSITION the caller
+ * read it at AND by the identity it had there. Both are re-checked against
+ * the current document immediately before the change, so a rule that moved or
+ * changed on disk is refused rather than edited by position alone.
+ *
+ * Addressing by position is what makes a configuration with two identical
+ * rules editable at all: each of them is a distinct row, and the row the
+ * caller read is the row that changes.
+ *
+ * Every other rule keeps its index, its action, its resource and its effect,
+ * and the edited rule keeps any extra field it carries.
+ *
+ * @param current - The document's `permissions` value, of unknown shape.
+ * @param index - The position the caller read the rule at.
+ * @param expected - The action and resource the rule had at that position.
+ * @param effect - The effect to write on that rule.
+ * @returns The new array.
+ * @throws {OpenCodeConfigUnreadableError} When the value is not an array, the
+ *   index is out of range, or the rule there is no longer the expected one.
+ */
+export function setOpenCodePermissionEffectAt(
+  current: unknown,
+  index: number,
+  expected: { readonly action: string; readonly resource: string },
+  effect: "allow" | "ask" | "deny",
+): unknown {
+  if (!Array.isArray(current)) {
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
+  }
+  const at = current[index];
+  if (at === null || typeof at !== "object" || Array.isArray(at)) {
+    throw new OpenCodeConfigUnreadableError(
+      "That rule is no longer at the position it was read from",
+    );
+  }
+  const rule = at as Record<string, unknown>;
+  if (rule.action !== expected.action || rule.resource !== expected.resource) {
+    throw new OpenCodeConfigUnreadableError(
+      "That rule changed on disk since it was read; reload and try again",
+    );
+  }
+  return current.map((entry, at2) => (at2 === index ? { ...rule, effect } : entry));
 }
 
 /**
@@ -439,12 +525,14 @@ export function setOpenCodePermissionEffect(
  */
 export function appendOpenCodePermissionRule(
   current: unknown,
-  rule: { readonly action: string; readonly resource: string; readonly effect: "allow" | "ask" | "deny" },
+  rule: {
+    readonly action: string;
+    readonly resource: string;
+    readonly effect: "allow" | "ask" | "deny";
+  },
 ): unknown {
   if (!Array.isArray(current)) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode permissions are not an array of rules",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
   const duplicate = current.some(
     (entry) =>
@@ -483,9 +571,7 @@ export function removeOpenCodePermissionRule(
   expected: { readonly action: string; readonly resource: string; readonly effect: string },
 ): unknown {
   if (!Array.isArray(current)) {
-    throw new OpenCodeConfigUnreadableError(
-      "OpenCode permissions are not an array of rules",
-    );
+    throw new OpenCodeConfigUnreadableError("OpenCode permissions are not an array of rules");
   }
   const at = current[index];
   if (at === null || typeof at !== "object" || Array.isArray(at)) {
@@ -548,15 +634,10 @@ export async function writeOpenCodeConfigDocument(
   // rather than overwritten.
   const trimmed = nextText.trim();
   if (trimmed.length === 0) {
-    throw new OpenCodeConfigUnreadableError(
-      "Refusing to write an empty OpenCode configuration",
-    );
+    throw new OpenCodeConfigUnreadableError("Refusing to write an empty OpenCode configuration");
   }
   const reparsed = parseConfigObjectOrThrow(trimmed);
-  if (
-    current.permissions !== undefined &&
-    !Array.isArray(reparsed.permissions)
-  ) {
+  if (current.permissions !== undefined && !Array.isArray(reparsed.permissions)) {
     throw new OpenCodeConfigUnreadableError(
       "Refusing to write: permissions would no longer be a rule array",
     );

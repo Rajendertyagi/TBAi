@@ -16,7 +16,7 @@ export interface ModelCapabilities {
  * listing or from a human. The resolver's `conservative_default` and `unknown`
  * are never facts about a model, so they are never persisted against one.
  */
-export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured"] as const;
+export const CONTEXT_WINDOW_SOURCES = ["provider_reported", "configured", "model_catalog"] as const;
 export type ContextWindowSource = (typeof CONTEXT_WINDOW_SOURCES)[number];
 
 export interface SourcedNumber {
@@ -40,6 +40,14 @@ export function providerReportedLimit(value: number): SourcedNumber {
  */
 export function configuredLimit(value: number): SourcedNumber {
   return { value, source: "configured" };
+}
+
+/**
+ * Build a `model_catalog` limit. Used by model catalog enrichment — third party
+ * metadata from Models.dev.
+ */
+export function catalogLimit(value: number): SourcedNumber {
+  return { value, source: "model_catalog" };
 }
 
 export interface ModelOption {
@@ -190,7 +198,12 @@ export interface FolderGroup {
 
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpAuthType = "none" | "bearer" | "basic" | "oauth";
-export type McpConnectionStatus = "disconnected" | "connecting" | "connected" | "error" | "auth_failed";
+export type McpConnectionStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "error"
+  | "auth_failed";
 
 /**
  * Machine-readable MCP failure reason (backend-classified). The UI renders a
@@ -292,6 +305,8 @@ export interface McpStatus {
   autoConnect: boolean;
   notes?: string;
   roots?: string[];
+  disabledTools?: string[];
+  location?: "local" | "remote";
   pendingElicitation?: McpPendingElicitation;
 }
 
@@ -341,18 +356,24 @@ export interface McpServerDraft {
   autoConnect?: boolean;
   notes?: string;
   roots?: string[];
+  disabledTools?: string[];
 }
 
 // ---- Built-in scheduler (TBAi cron) ----
 
 export type SchedulerScheduleType = "once" | "cron";
+export type SchedulerEngine = "direct" | "opencode";
+export type OpenCodeSessionStrategy = "fresh" | "persistent" | "existing_conversation";
+export type TurnOutcome = "succeeded" | "failed" | "interrupted" | "outcome_unknown";
+
 export type SchedulerJobStatus =
   | "active"
   | "paused"
   | "completed"
   | "missed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "deleted";
 export type SchedulerRunStatus =
   | "scheduled"
   | "running"
@@ -372,6 +393,7 @@ export interface SchedulerJob {
   cronExpression: string | null;
   execAt: number | null;
   timezone: string;
+  engine: SchedulerEngine;
   providerId: string;
   modelId: string;
   thinkingLevel: "off" | "low" | "medium" | "high" | null;
@@ -384,6 +406,13 @@ export interface SchedulerJob {
   retryDelaySeconds: number;
   timeoutSeconds: number;
   missedGraceSeconds: number;
+  opencodeSessionStrategy?: OpenCodeSessionStrategy | null;
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
+  opencodePermissions?: "autonomous_coding" | "read_only" | null;
+  workspaceFolderId?: string | null;
+  deletedAt?: number | null;
   nextRunAt: number | null;
   lastRunAt: number | null;
   status: SchedulerJobStatus;
@@ -407,10 +436,14 @@ export interface SchedulerRun {
   status: SchedulerRunStatus;
   error: string | null;
   outputExcerpt: string | null;
+  engine?: SchedulerEngine;
   providerId: string;
   modelId: string;
   workspacePath: string;
   conversationId: string | null;
+  opencodeSessionId?: string | null;
+  opencodePromptId?: string | null;
+  turnOutcome?: TurnOutcome | null;
   attempt: number;
   durationMs: number | null;
   createdAt: number;
@@ -425,6 +458,7 @@ export interface SchedulerJobDraft {
   execAtDate: string;
   execAtTime: string;
   timezone: string;
+  engine: SchedulerEngine;
   providerId: string;
   modelId: string;
   thinkingLevel: "off" | "low" | "medium" | "high";
@@ -436,4 +470,10 @@ export interface SchedulerJobDraft {
   retryDelaySeconds: number;
   timeoutSeconds: number;
   missedGraceSeconds: number;
+  opencodeSessionStrategy: OpenCodeSessionStrategy;
+  opencodeAgent: string;
+  opencodeModel: string;
+  opencodeVariant: string;
+  opencodePermissions: "autonomous_coding" | "read_only";
+  workspaceFolderId: string;
 }

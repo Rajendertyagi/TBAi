@@ -14,7 +14,5 @@ export interface LegacyButtonProps extends React.ButtonHTMLAttributes<HTMLButton
 }
 
 export function Button({ variant = "default", size = "md", ...props }: LegacyButtonProps) {
-  return (
-    <CanonicalButton variant={variant} size={size === "md" ? "default" : size} {...props} />
-  );
+  return <CanonicalButton variant={variant} size={size === "md" ? "default" : size} {...props} />;
 }

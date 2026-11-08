@@ -316,10 +316,7 @@ export type ErrorLogFields = Omit<ClassifiedError, "message">;
  * The raw provider/tool message remains available to user-facing sanitizers
  * but never crosses the structured logging boundary.
  */
-export function errorLogFields(
-  err: unknown,
-  opts?: { provider?: string },
-): ErrorLogFields {
+export function errorLogFields(err: unknown, opts?: { provider?: string }): ErrorLogFields {
   const classified = classifyError(err, opts);
   return {
     category: classified.category,
@@ -359,8 +356,7 @@ export function classifyError(err: unknown, opts?: { provider?: string }): Class
   else if (TOOL_SUBJECT_RE.test(text) && TOOL_OUTCOME_RE.test(text)) base = "tool";
   // A 5xx is only a *provider* failure when we know which provider; otherwise
   // it is an unknown server-side fault. Either way it is retryable.
-  else if (status !== undefined && status >= 500)
-    base = opts?.provider ? "provider" : "unknown";
+  else if (status !== undefined && status >= 500) base = opts?.provider ? "provider" : "unknown";
 
   // Retryability comes from the COARSE category — the pre-existing policy.
   // Deriving it here (rather than from the refined label) is what guarantees

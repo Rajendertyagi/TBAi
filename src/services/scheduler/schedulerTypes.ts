@@ -10,6 +10,10 @@ export type OverlapPolicy = "skip_if_running";
 export type ConversationPolicy = "dedicated_thread" | "existing_thread";
 export type ThinkingLevel = "off" | "low" | "medium" | "high";
 
+export type SchedulerEngine = "direct" | "opencode";
+export type OpenCodeSessionStrategy = "fresh" | "persistent" | "existing_conversation";
+export type TurnOutcome = "succeeded" | "failed" | "interrupted" | "outcome_unknown";
+
 export type JobStatus =
   | "active"
   | "paused"
@@ -55,6 +59,14 @@ export interface SchedulerJob {
   status: JobStatus;
   createdAt: number;
   updatedAt: number;
+  engine: SchedulerEngine;
+  opencodeSessionStrategy?: OpenCodeSessionStrategy | null;
+  opencodeAgent?: string | null;
+  opencodeModel?: string | null;
+  opencodeVariant?: string | null;
+  opencodePermissions?: string | null;
+  workspaceFolderId?: string | null;
+  deletedAt?: number | null;
 }
 
 export interface SchedulerRun {
@@ -74,14 +86,13 @@ export interface SchedulerRun {
   attempt: number;
   durationMs: number | null;
   createdAt: number;
+  engine: SchedulerEngine;
+  opencodeSessionId?: string | null;
+  opencodePromptId?: string | null;
+  turnOutcome?: TurnOutcome | null;
 }
 
-export const TERMINAL_JOB_STATUSES: JobStatus[] = [
-  "completed",
-  "missed",
-  "cancelled",
-  "deleted",
-];
+export const TERMINAL_JOB_STATUSES: JobStatus[] = ["completed", "missed", "cancelled", "deleted"];
 
 export function isTerminalJobStatus(status: JobStatus): boolean {
   return (TERMINAL_JOB_STATUSES as string[]).includes(status);

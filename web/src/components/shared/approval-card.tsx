@@ -4,11 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { isPlainEnter, isPlainEscape } from "@/lib/ime";
 import {
@@ -119,15 +115,11 @@ export function ApprovalCard({
     >
       {(title != null || trailing != null) && (
         <div className="mb-1 flex items-baseline justify-between gap-3">
-          {title != null && (
-            <div className="min-w-0 font-medium text-foreground">{title}</div>
-          )}
+          {title != null && <div className="min-w-0 font-medium text-foreground">{title}</div>}
           {trailing}
         </div>
       )}
-      {description != null && (
-        <p className="mb-1 text-muted-foreground">{description}</p>
-      )}
+      {description != null && <p className="mb-1 text-muted-foreground">{description}</p>}
       {children}
     </div>
   );
@@ -373,15 +365,8 @@ export type DecisionTone = "approved" | "denied" | "closed" | "auto";
  * Outcome badge for decided states. Tones map to existing Badge variants;
  * denial uses the soft destructive chip, never a red button.
  */
-export function DecisionBadge({
-  tone,
-  children,
-}: {
-  tone: DecisionTone;
-  children: ReactNode;
-}) {
-  const variant =
-    tone === "denied" ? "destructive" : tone === "approved" ? "secondary" : "outline";
+export function DecisionBadge({ tone, children }: { tone: DecisionTone; children: ReactNode }) {
+  const variant = tone === "denied" ? "destructive" : tone === "approved" ? "secondary" : "outline";
   return <Badge variant={variant}>{children}</Badge>;
 }
 
@@ -422,9 +407,7 @@ export function CollapsedDecisionRow({
             className="flex w-full items-center gap-2 text-left"
           >
             {icon}
-            <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-              {title}
-            </span>
+            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{title}</span>
             {badge}
             <ChevronDown
               className={cn(

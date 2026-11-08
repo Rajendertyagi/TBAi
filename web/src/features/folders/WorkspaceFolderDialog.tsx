@@ -8,9 +8,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { DirectoryBrowser } from "@/components/shared/directory-browser";
+import { DirectoryBrowser } from "@/features/folders/components/DirectoryBrowser";
 import { FolderLinksManager } from "./FolderLinksManager";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import type { Folder } from "@/types";
 
 type View = "root" | "links";
@@ -65,9 +65,7 @@ export function WorkspaceFolderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>
-            {folder ? "Manage folder" : "Add workspace folder"}
-          </DialogTitle>
+          <DialogTitle>{folder ? "Manage folder" : "Add workspace folder"}</DialogTitle>
           <DialogDescription>
             {view === "root"
               ? "Choose the project directory to register. Its path is resolved server-side; conversations attach by folder id, never by raw path."

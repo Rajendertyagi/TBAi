@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { logger, normalizeError } from "../lib/logger";
 import { isPortEnvLocked, persistConfiguredPort } from "./server-port";
 
@@ -22,6 +22,34 @@ export type FetchHandler = (req: Request) => Response | Promise<Response>;
 let fetchHandler: FetchHandler | null = null;
 let activeServer: BunServer | null = null;
 let activePort = 0;
+// The port the live listener replaced, or 0 when it has not replaced one.
+// The CORS policy needs it: a page still on the old port asks the new origin
+// whether it is up, and that request is cross-origin — so the new listener
+// has to trust the page it replaced. See `src/config/cors.ts`.
+let replacedPort = 0;
+// When the live listener replaced the port above, so the trust can be given
+// an end. 0 when it has replaced none.
+let replacedAt = 0;
+
+/**
+ * How long the live listener keeps trusting the origin it replaced.
+ *
+ * The window exists for ONE thing: the browser-mode restart probe. The page
+ * is still on the OLD origin when the new listener comes up, and it polls the
+ * new origin for readiness (`web/src/features/desktop/ServerSection.tsx`,
+ * `READY_TIMEOUT_MS` = 15 s). That poll is cross-origin, so the new listener
+ * has to trust the old page's origin while it happens.
+ *
+ * The window is the probe's budget plus a margin: the browser's deadline
+ * starts a few milliseconds after the restart response arrives, so a window of
+ * exactly the probe's timeout would close just as the probe gives up.
+ *
+ * It is a WINDOW, not a grant. The trust ends when the window ends, whether
+ * or not anything asked for it. Without it the replaced origin stayed trusted
+ * for the life of the process, and any other page on that loopback port could
+ * read the API — including the OpenCode proxy's session and event routes.
+ */
+export const REPLACED_PORT_TRUST_WINDOW_MS = 20_000;
 
 /** Transport backstop (see server.ts): Bun's max is 255; 240 covers stalls. */
 const LISTENER_IDLE_TIMEOUT_S = 240;
@@ -55,12 +83,31 @@ export function getActivePort(): number {
   return activePort;
 }
 
+/**
+ * The port the live listener replaced (0 when it has replaced none).
+ *
+ * Kept for the CORS policy: after a restart the page is still on the old
+ * port for a moment and asks the new origin whether it is up. That request
+ * carries the OLD origin, so the new listener has to trust it.
+ *
+ * The trust is bounded: it lasts `REPLACED_PORT_TRUST_WINDOW_MS` from the
+ * replacement and no longer. A port that has not been trusted for that long
+ * is reported as 0, so the CORS policy never sees it — the replaced origin
+ * does not stay trusted for the life of the process.
+ *
+ * @returns The replaced port while the transition window is open, 0 after it.
+ */
+export function getReplacedPort(): number {
+  if (replacedPort === 0) return 0;
+  if (Date.now() - replacedAt >= REPLACED_PORT_TRUST_WINDOW_MS) return 0;
+  return replacedPort;
+}
+
 // Per-boot instance identity for the Tauri shell's ownership proof. The
 // launcher passes TBAI_INSTANCE_ID (a fresh UUID per boot); a direct
 // `bun run dev` boot mints its own. Process memory only — never persisted,
 // never machine-derived — so a match proves THIS launch's server answered.
-const INSTANCE_ID =
-  process.env.TBAI_INSTANCE_ID?.trim() || crypto.randomUUID();
+const INSTANCE_ID = process.env.TBAI_INSTANCE_ID?.trim() || crypto.randomUUID();
 
 /** This boot's instance ID, served at GET /api/server/instance. */
 export function getInstanceId(): string {
@@ -76,7 +123,12 @@ function bindListener(port: number): BunServer {
   // Bun.serve binds synchronously and throws (EADDRINUSE) when the port is
   // occupied — the caller keeps the old listener untouched in that case.
   // Explicitly binds to 127.0.0.1 so the socket is strictly loopback (never LAN-exposed).
-  return Bun.serve({ hostname: "127.0.0.1", fetch: requireFetch(), port, idleTimeout: LISTENER_IDLE_TIMEOUT_S });
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    fetch: requireFetch(),
+    port,
+    idleTimeout: LISTENER_IDLE_TIMEOUT_S,
+  });
 }
 
 function setActive(server: BunServer, port: number): void {
@@ -91,6 +143,9 @@ function setActive(server: BunServer, port: number): void {
  * Tauri shell all agree on where this instance actually lives.
  */
 export function bindBootPort(port: number): { server: BunServer; port: number } {
+  // A fresh boot replaces nothing.
+  replacedPort = 0;
+  replacedAt = 0;
   try {
     const server = bindListener(port);
     setActive(server, port);
@@ -129,6 +184,7 @@ export async function restartListener(port: number): Promise<{ port: number; res
   if (!activeServer) throw new Error("server_not_running");
   if (port === activePort) return { port: activePort, restarted: false };
   const previous = activeServer;
+  const previousPort = activePort;
   let next: BunServer;
   try {
     next = bindListener(port);
@@ -146,6 +202,12 @@ export async function restartListener(port: number): Promise<{ port: number; res
     throw new Error(`port_persist_failed: ${(err as Error)?.message ?? err}`, { cause: err });
   }
   setActive(next, port);
+  // The page that triggered this restart is still on the old port, and it asks
+  // the new origin whether it is up. That request is cross-origin, so the new
+  // listener has to trust the old page's origin (see `src/config/cors.ts`) —
+  // for the transition window, and no longer.
+  replacedPort = previousPort;
+  replacedAt = Date.now();
   logger.info("server", "restarted", { message: `http://localhost:${port}` });
   setTimeout(() => {
     try {

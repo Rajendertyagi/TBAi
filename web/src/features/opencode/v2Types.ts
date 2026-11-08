@@ -89,9 +89,8 @@ export type V2MessagePartState =
       readonly name: string;
       readonly input: Readonly<Record<string, unknown>>;
       readonly output: unknown;
-       readonly metadata?: Readonly<Record<string, unknown>>;
+      readonly metadata?: Readonly<Record<string, unknown>>;
       readonly status: V2ToolStatus;
-      readonly permissionId: string | null;
       /**
        * Absent when the server never reported a time for this part. The
        * duration badge renders nothing in that case rather than showing a
@@ -133,8 +132,47 @@ export interface V2HistorySnapshot {
   readonly pages: number;
 }
 
+/**
+ * The ids a history commit reconciles against.
+ *
+ * A snapshot is read page by page, so the transcript keeps moving while it is
+ * being read: a message may be created, and an assistant message already in the
+ * snapshot may keep streaming. The two facts are different and are tracked
+ * separately:
+ *
+ * - `held` is the transcript at the instant the read STARTED. A held message the
+ *   snapshot no longer contains was deleted server-side, so it is removed — the
+ *   one deletion this merge is allowed to perform.
+ * - `touched` is the messages a live event CHANGED while the read was in
+ *   flight. Those keep their live version, because the snapshot's copy of them
+ *   was taken before the change.
+ *
+ * A message in neither is taken from the snapshot, which is what makes a
+ * refresh repair a transcript that drifted. A first load passes an empty
+ * `held`, which is exactly a replace.
+ */
+export interface V2HistoryMerge {
+  readonly held: readonly string[];
+  readonly touched: readonly string[];
+}
+
+/**
+ * Whether a pending set reflects the server's current answer.
+ *
+ * `unavailable` means the last read FAILED. The entries already held stay as
+ * they are, because a failed read says nothing about them — it is not a
+ * successful empty list.
+ */
+export type V2AuxiliaryAvailability = "current" | "unavailable";
+
+/** The availability of each pending set, tracked per kind. */
+export interface V2AuxiliaryState {
+  readonly inbox: V2AuxiliaryAvailability;
+  readonly permissions: V2AuxiliaryAvailability;
+  readonly forms: V2AuxiliaryAvailability;
+}
+
 export interface V2EventIdentityState {
-  readonly nextOrdinal: number;
   readonly recentObservedEventIds: readonly string[];
   readonly recentAppliedEventIds: readonly string[];
   readonly durableSequenceByAggregate: Readonly<Record<string, number>>;
@@ -151,7 +189,28 @@ export type V2ConnectionState =
   | { readonly type: "waiting-for-server" }
   | { readonly type: "connected"; readonly serverVersion: string | null }
   | { readonly type: "reconnecting"; readonly attempt: number }
+  | { readonly type: "failed"; readonly attempt: number }
   | { readonly type: "closed" };
+
+/**
+ * The single LIVE retry representation. The historical retry message part is
+ * unchanged and is never read as live state: a durable record proves an attempt
+ * happened, not that a scheduled wait is still counting down.
+ */
+export interface V2RetryInfo {
+  readonly attempt: number;
+  /** Absolute epoch-ms deadline, or null when the server gave no trustworthy value. */
+  readonly next: number | null;
+  readonly error: V2SafeError;
+}
+
+/**
+ * Process-local activity of the session, as the backend reads it.
+ *
+ * `not-running` is not an all-clear: a durable execution claim, a queued inbox
+ * row, or an orphaned server can coexist with it. `unknown` is never idle.
+ */
+export type V2ActivityState = "running" | "not-running" | "unknown";
 
 export type V2ExecutionState =
   | { readonly type: "idle" }
@@ -192,6 +251,17 @@ export type V2ExecutionState =
       readonly userMessageId: string | null;
       readonly inboxId: string | null;
       readonly assistantMessageId: string | null;
+      /**
+       * Whether a cancel is still owed.
+       *
+       * The `cancelling` state IS a pending cancel, so this is what the state
+       * is ABOUT - and it is the only way the reader can tell a cancel that has
+       * been honoured from one that is still waiting for the prompt to be
+       * admitted. It is `true` from the moment the cancel is requested, and it
+       * is cleared when the cancel has been issued against the admitted inbox
+       * id (M7).
+       */
+      readonly cancelRequested: boolean;
     }
   | { readonly type: "reverting"; readonly userMessageId: string | null }
   | {
@@ -214,14 +284,49 @@ export type V2RevertRecoveryState =
   | { readonly type: "blocked"; readonly error: V2SafeError };
 
 export interface V2ThreadState {
+  /**
+   * How many events the hydration buffer LOST.
+   *
+   * Distinct from `diagnosticCount`, which counts events the runtime ignored
+   * for other reasons (out of scope, replay-only, a stale durable sequence).
+   * This one counts a LOSS: events the client held and then dropped, so the
+   * transcript it committed is short by exactly this much.
+   */
+  readonly droppedEventCount: number;
   readonly sessionId: string;
+  /**
+   * The workspace this view is subscribed to.
+   *
+   * `null` when the server did not report a scope. It is the basis of the
+   * event-scope check: an event that names a different directory is not this
+   * view's event and is not applied. The directory is display-and-scope data
+   * the backend resolved; the browser never chooses one.
+   */
+  readonly directory: string | null;
   readonly connection: V2ConnectionState;
   readonly load: V2LoadState;
+  /**
+   * The live retry the engine is currently waiting on, or null.
+   *
+   * Only live events/status establish this. It is not rebuilt from history or
+   * from a replayed durable record, so a reconnect does not fabricate a
+   * countdown that no process is counting.
+   */
+  readonly retry: V2RetryInfo | null;
+  /** Confirmed process-local activity, or `unknown` when it was not established. */
+  readonly activity: V2ActivityState;
+  /**
+   * Ordering marker for activity reads. Incremented by every authoritative
+   * activity/retry/connection/load event; an activity response captured at an
+   * older revision is discarded rather than applied over newer evidence.
+   */
+  readonly activityRevision: number;
   readonly execution: V2ExecutionState;
   readonly compaction: V2CompactionState;
   readonly revertRecovery: V2RevertRecoveryState;
   readonly eventIdentity: V2EventIdentityState;
   readonly session: SessionInfo | null;
+  readonly title?: string | null;
   readonly model: V2ModelSelection | null;
   readonly agent: string | null;
   readonly desiredModel: V2ModelSelection | null;
@@ -232,6 +337,14 @@ export interface V2ThreadState {
   readonly permissions: readonly PermissionRequest[];
   readonly forms: readonly FormInfo[];
   readonly inboxById: Readonly<Record<string, V2InboxRecord>>;
+  /**
+   * Whether each pending set is the server's current answer.
+   *
+   * A failed read is NOT an authoritative empty list: it leaves the last known
+   * entries in place and marks that kind unavailable, so a surface can say the
+   * shown set is stale instead of quietly emptying it.
+   */
+  readonly auxiliary: V2AuxiliaryState;
   readonly usage: V2UsageSnapshot | null;
   /**
    * Tokens of the NEWEST assistant response - the current model-visible context.
@@ -271,15 +384,30 @@ export type V2ThreadAction =
   | {
       readonly type: "v2_event";
       readonly event: V2Event;
-      readonly ordinal: number;
       readonly mode: "observe-only" | "observe-and-apply";
+      /**
+       * True when the event is being replayed from the hydration buffer.
+       * A replayed durable `session.retry.scheduled` updates only the
+       * transcript part: it never establishes a live retry, activity, or a
+       * revision bump. Only live observation may do that.
+       */
+      readonly replayed?: boolean;
     }
   | { readonly type: "connection_changed"; readonly connection: V2ConnectionState }
-  | { readonly type: "load_started" }
-  | { readonly type: "load_reconciling"; readonly reason: "history-convergence-cap" }
-  | { readonly type: "load_reconciled" }
+  /**
+   * `connection` is a fresh connection attempt (retry is invalidated and
+   * activity becomes unknown); `refresh` is ordinary history repair and
+   * preserves both.
+   */
+  | { readonly type: "load_started"; readonly reason: "connection" | "refresh" }
   | { readonly type: "load_completed" }
   | { readonly type: "load_failed"; readonly error: V2SafeError }
+  | {
+      readonly type: "activity_resolved";
+      readonly activity: V2ActivityState;
+      /** The activity revision captured when the read started. */
+      readonly revision: number;
+    }
   | { readonly type: "session_hydrated"; readonly session: SessionInfo }
   | {
       readonly type: "desired_selection_changed";
@@ -291,22 +419,30 @@ export type V2ThreadAction =
       readonly messages: readonly V2MessageState[];
       readonly messageOrder: readonly string[];
       readonly pages: number;
+      /** The ids the snapshot reconciles against. */
+      readonly merge: V2HistoryMerge;
     }
   | {
       readonly type: "inbox_hydrated";
-      readonly records: readonly V2InboxRecord[];
-      readonly requestOrdinal: number;
+      /** The server's answer, or null when the read failed. */
+      readonly records: readonly V2InboxRecord[] | null;
+      /** The inbox ids the client held when the read started. */
+      readonly held: readonly string[];
     }
   | { readonly type: "inbox_recorded"; readonly record: V2InboxRecord }
   | {
       readonly type: "permissions_hydrated";
-      readonly requests: readonly PermissionRequest[];
-      readonly requestOrdinal: number;
+      /** The server's answer, or null when the read failed. */
+      readonly requests: readonly PermissionRequest[] | null;
+      /** The permission ids the client held when the read started. */
+      readonly held: readonly string[];
     }
   | {
       readonly type: "forms_hydrated";
-      readonly forms: readonly FormInfo[];
-      readonly requestOrdinal: number;
+      /** The server's answer, or null when the read failed. */
+      readonly forms: readonly FormInfo[] | null;
+      /** The form ids the client held when the read started. */
+      readonly held: readonly string[];
     }
   | { readonly type: "prompt_submitting"; readonly message: V2MessageState }
   | {
@@ -330,6 +466,18 @@ export type V2ThreadAction =
   | { readonly type: "execution_started" }
   | { readonly type: "execution_streaming"; readonly assistantMessageId: string }
   | { readonly type: "execution_settled" }
+  | {
+      /**
+       * Events were dropped because the hydration buffer overflowed.
+       *
+       * The transcript is INCOMPLETE after this, and the count says by how
+       * much. It is a diagnostic, not a verdict: the attempt's readiness is
+       * failed as well, so the runtime re-reads rather than claiming a
+       * successful reconciliation (M5's outstanding hold).
+       */
+      readonly type: "events_dropped";
+      readonly count: number;
+    }
   | {
       readonly type: "execution_failed";
       readonly userMessageId: string | null;

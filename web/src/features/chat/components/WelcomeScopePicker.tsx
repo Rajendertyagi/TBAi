@@ -4,8 +4,9 @@ import { useAuiState } from "@assistant-ui/react";
 import { Check, ChevronDown, Folder, MessageSquare } from "lucide-react";
 import { welcomeConfig } from "@/config/welcome";
 import { useWelcomeScopeStore } from "@/features/chat/state/welcomeScope";
-import { useFoldersStore } from "@/stores/foldersStore";
+import { useFoldersStore } from "@/features/folders/state/foldersStore";
 import { cn } from "@/lib/utils";
+import { ROUTES } from "@/config/navigation";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -48,15 +49,13 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
 
   useEffect(() => {
     if (!open) setQuery("");
-  }, [open ]);
+  }, [open]);
 
   const visibleFolders = useMemo(() => {
     const base = folders.filter((f) => f.kind !== "chat");
     const q = query.trim().toLowerCase();
     if (!q) return base;
-    return base.filter((f) =>
-      `${f.alias ?? ""} ${f.name} ${f.path}`.toLowerCase().includes(q),
-    );
+    return base.filter((f) => `${f.alias ?? ""} ${f.name} ${f.path}`.toLowerCase().includes(q));
   }, [folders, query]);
 
   const boundCustom = useAuiState((s) => s.threadListItem.custom) as
@@ -73,7 +72,7 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
     const boundName =
       boundMode === "simple"
         ? copy.chatModeLabel
-        : (boundFolder?.alias || boundFolder?.name || copy.folderRemoved);
+        : boundFolder?.alias || boundFolder?.name || copy.folderRemoved;
     return (
       <div className="flex justify-start">
         <Button
@@ -82,12 +81,14 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
           type="button"
           title={`${copy.folderTitle}: ${boundName}`}
           aria-label={`${copy.folderTitle}: ${boundName}`}
-          className={cn(
-            "min-w-0 cursor-default gap-0.5 px-1.5 opacity-60 hover:bg-transparent",
-          )}
+          className={cn("min-w-0 cursor-default gap-0.5 px-1.5 opacity-60 hover:bg-transparent")}
           onClick={(e) => e.preventDefault()}
         >
-          <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+          {boundMode === "simple" ? (
+            <MessageSquare aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+          )}
           <span className="max-w-[8.75rem] truncate">{boundName}</span>
         </Button>
       </div>
@@ -98,7 +99,7 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
   const isChatMode = scope.mode === "simple";
   const currentName = isChatMode
     ? copy.chatModeLabel
-    : (current?.alias || current?.name || copy.scopeLabel);
+    : current?.alias || current?.name || copy.scopeLabel;
 
   return (
     <div className="flex justify-start">
@@ -112,12 +113,20 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
             aria-label={`${copy.folderTitle}: ${currentName}`}
             className={cn("min-w-0 gap-0.5 px-1.5")}
           >
-            <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+            {isChatMode ? (
+              <MessageSquare aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+            ) : (
+              <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+            )}
             <span className="max-w-[8.75rem] truncate">{currentName}</span>
             <ChevronDown aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/60" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="top" className="w-72 overflow-hidden rounded-xl p-0">
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          className="w-72 overflow-hidden rounded-xl p-0"
+        >
           <div className="p-1">
             <Input
               value={query}
@@ -171,15 +180,13 @@ export function WelcomeScopePicker({ editable = true }: { editable?: boolean }) 
                 className={cn(isChatMode && "bg-accent text-accent-foreground")}
               >
                 <MessageSquare aria-hidden="true" className="size-4 shrink-0" />
-                <span className="flex-1 truncate text-sm font-medium">
-                  {copy.chatModeLabel}
-                </span>
+                <span className="flex-1 truncate text-sm font-medium">{copy.chatModeLabel}</span>
                 {isChatMode && <Check aria-hidden="true" className="size-4 shrink-0" />}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
                   setOpen(false);
-                  navigate("/folders");
+                  navigate(ROUTES.FOLDERS);
                 }}
               >
                 <span className="text-xs text-muted-foreground">{copy.manageFolders}</span>

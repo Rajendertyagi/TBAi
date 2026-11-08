@@ -169,10 +169,17 @@ export interface MemoryReport {
  * by Phase 2's decision over the combined estimate, not by this fraction.
  */
 export function memoryBudgetTokens(usableInputTokens: number | undefined): number {
-  if (usableInputTokens === undefined || !Number.isFinite(usableInputTokens) || usableInputTokens <= 0) {
+  if (
+    usableInputTokens === undefined ||
+    !Number.isFinite(usableInputTokens) ||
+    usableInputTokens <= 0
+  ) {
     return 0;
   }
-  return Math.min(Math.floor(usableInputTokens * MEMORY_BUDGET_FRACTION), MEMORY_BUDGET_CEILING_TOKENS);
+  return Math.min(
+    Math.floor(usableInputTokens * MEMORY_BUDGET_FRACTION),
+    MEMORY_BUDGET_CEILING_TOKENS,
+  );
 }
 
 /** Structural validation. A candidate that fails this never reaches ranking. */

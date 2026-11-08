@@ -52,5 +52,5 @@ export function maxSeq<T extends SequencedLogEntry>(entries: T[]): number {
 /** Serialize entries as JSON lines for the Export download. */
 export function serializeLogEntries(entries: Array<Record<string, unknown>>): string {
   if (entries.length === 0) return "";
-  return entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+  return `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
 }

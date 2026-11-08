@@ -7,10 +7,7 @@ import { cn } from "@/lib/utils";
 /**
  * Props for the SyntaxHighlighter component
  */
-export type SyntaxHighlighterProps = Omit<
-  ShikiHighlighterProps,
-  "children" | "theme"
-> & {
+export type SyntaxHighlighterProps = Omit<ShikiHighlighterProps, "children" | "theme"> & {
   theme?: ShikiHighlighterProps["theme"];
   code: string;
   /** Skips tokenization and renders the plain code while `true`. */
@@ -18,7 +15,7 @@ export type SyntaxHighlighterProps = Omit<
 };
 
 const containerClassName =
-  "aui-shiki-base [&_pre]:border-border/50 [&_pre]:bg-muted/30! [&_.line]:px-0! [&_pre]:overflow-x-auto [&_pre]:rounded-t-none [&_pre]:rounded-b-xl [&_pre]:border [&_pre]:border-t-0 [&_pre]:p-3.5 [&_pre]:text-[13px] [&_pre]:leading-relaxed";
+  "aui-shiki-base [&_pre]:border-border/50 [&_pre]:bg-muted/30! [&_.line]:px-0! [&_pre]:overflow-x-auto [&_pre]:rounded-t-none [&_pre]:rounded-b-xl [&_pre]:border [&_pre]:border-t-0 [&_pre]:p-3.5 [&_pre]:leading-relaxed";
 
 const PlainCode: FC<{ code: string }> = ({ code }) => (
   <pre>
@@ -63,11 +60,7 @@ export const SyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
 
   return (
     <div
-      className={cn(
-        containerClassName,
-        streaming && "aui-shiki-streaming",
-        className,
-      )}
+      className={cn(containerClassName, streaming && "aui-shiki-streaming", className)}
       style={style}
     >
       {streaming ? (
@@ -85,4 +78,3 @@ export const SyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
 };
 
 SyntaxHighlighter.displayName = "SyntaxHighlighter";
-

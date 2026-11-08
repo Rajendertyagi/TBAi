@@ -1,6 +1,6 @@
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { schedulerViewConfig } from "@/config/scheduler";
+import { schedulerViewConfig } from "@/features/scheduler/config";
 
 export type JobStatusFilter = "all" | "enabled" | "disabled";
 

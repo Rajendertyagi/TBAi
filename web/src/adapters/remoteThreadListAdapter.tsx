@@ -1,17 +1,10 @@
-import {
-  RuntimeAdapterProvider,
-  useAui,
-  type RemoteThreadListAdapter,
-} from "@assistant-ui/react";
+import { RuntimeAdapterProvider, useAui, type RemoteThreadListAdapter } from "@assistant-ui/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createAssistantStream } from "assistant-stream";
 import { createThreadHistoryAdapter } from "./threadHistoryAdapter";
 import { historyConfig } from "../config/history";
 import { logger } from "../lib/logger";
-import {
-  captureDraftSnapshot,
-  materializeDraft,
-} from "../features/chat/state/materializeDraft";
+import { captureDraftSnapshot, materializeDraft } from "../features/chat/state/materializeDraft";
 import {
   ConversationNotFoundError,
   probeConversation,
@@ -141,7 +134,7 @@ export function setThreadListSortOrder(order: "updated" | "created"): void {
  * involved.
  */
 export function createRemoteThreadListAdapter(
-  options: RemoteThreadListAdapterOptions = {}
+  options: RemoteThreadListAdapterOptions = {},
 ): RemoteThreadListAdapter {
   const pageSize = options.pageSize ?? historyConfig.pageSize;
 
@@ -151,19 +144,13 @@ export function createRemoteThreadListAdapter(
     useEffect(() => {
       auiRef.current = aui;
     });
-    const [history] = useState(() =>
-      createThreadHistoryAdapter(() => auiRef.current)
-    );
+    const [history] = useState(() => createThreadHistoryAdapter(() => auiRef.current));
     return useMemo(() => ({ history }), [history]);
   };
 
   const Provider = ({ children }: { children?: ReactNode }) => {
     const adapters = useAdapters();
-    return (
-      <RuntimeAdapterProvider adapters={adapters}>
-        {children}
-      </RuntimeAdapterProvider>
-    );
+    return <RuntimeAdapterProvider adapters={adapters}>{children}</RuntimeAdapterProvider>;
   };
 
   return {
@@ -171,7 +158,7 @@ export function createRemoteThreadListAdapter(
     unstable_useAdapters: useAdapters,
 
     async list(params) {
-      const offset = params?.after ? (parseInt(params.after, 10) || 0) : 0;
+      const offset = params?.after ? parseInt(params.after, 10) || 0 : 0;
       // Return ALL threads; the runtime splits them into regular / archived by
       // each thread's `status` field. Includes server-side ?search= when set.
       const q = threadListSearchQuery.trim();
@@ -371,7 +358,8 @@ export function threadEngine(meta: {
  * before the runtime's automatic `initialize()` would. The folder ID is the
  * canonical project identity; the path is resolved server-side.
  */
-export async function createConversation(input: {  workspaceMode?: "simple" | "project";
+export async function createConversation(input: {
+  workspaceMode?: "simple" | "project";
   workspaceFolderId?: string | null;
   engine?: "direct" | "opencode";
   opencodeAgent?: string | null;

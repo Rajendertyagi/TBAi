@@ -83,7 +83,9 @@ export function toScalarFields(
     if (value === undefined) continue;
     if (RESERVED_FIELD_KEYS.has(key)) continue;
     const safeKey = key.length > MAX_KEY_LEN ? key.slice(0, MAX_KEY_LEN) : key;
-    if (value === null || typeof value === "boolean") {
+    if (value === null) {
+      out[safeKey] = null;
+    } else if (typeof value === "boolean") {
       out[safeKey] = value;
     } else if (typeof value === "number") {
       if (!Number.isFinite(value)) continue;
@@ -184,9 +186,7 @@ export function enqueueClientEvent(event: ClientLogEvent): void {
  * Send the current batch. Never rejects; on failure the batch is DROPPED (and
  * counted) rather than retried, so a down backend cannot create a retry loop.
  */
-export async function flushClientEvents(
-  opts: { keepalive?: boolean } = {},
-): Promise<void> {
+export async function flushClientEvents(opts: { keepalive?: boolean } = {}): Promise<void> {
   if (inFlight || queue.length === 0) return;
   const doFetch = resolveFetch();
   if (!doFetch) return;

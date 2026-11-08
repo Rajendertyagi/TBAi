@@ -3,10 +3,7 @@
 import { memo, type FC } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
-import {
-  MermaidDiagram as MermaidDiagramBase,
-  MermaidZoom,
-} from "./mermaid-diagram";
+import { MermaidDiagram as MermaidDiagramBase, MermaidZoom } from "./mermaid-diagram";
 
 export type MermaidDiagramProps = SyntaxHighlighterProps & {
   className?: string;
@@ -38,9 +35,7 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
   components: _components,
   language: _language,
 }) => {
-  const isStreaming = useAuiState(
-    (s) => s.optional.part?.status.type === "running",
-  );
+  const isStreaming = useAuiState((s) => s.optional.part?.status.type === "running");
 
   return (
     <MermaidDiagramBase
@@ -51,9 +46,7 @@ const MermaidDiagramImpl: FC<MermaidDiagramProps> = ({
   );
 };
 
-const MermaidDiagram = memo(
-  MermaidDiagramImpl,
-) as unknown as FC<MermaidDiagramProps> & {
+const MermaidDiagram = memo(MermaidDiagramImpl) as unknown as FC<MermaidDiagramProps> & {
   Zoom: typeof MermaidZoom;
 };
 

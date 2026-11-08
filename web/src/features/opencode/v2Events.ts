@@ -1,15 +1,13 @@
-import type {
-  SessionInboxItem,
-  SessionMessageInfo,
-  V2Event,
-} from "@opencode/client";
+import type { SessionInboxItem, SessionMessageInfo, V2Event } from "@opencode/client";
 import {
   OPENCODE_V2_DIAGNOSTIC_COUNT_CAP,
   OPENCODE_V2_RECENT_EVENT_ID_WINDOW,
-} from "@/config/opencode";
+} from "@/features/opencode/config";
 import { resolveCodeOccupancy } from "./codeOccupancy";
 import {
   modelRefToV2Selection,
+  type V2ActivityState,
+  type V2AuxiliaryAvailability,
   type V2EventIdentityState,
   type V2ExecutionState,
   type V2InboxRecord,
@@ -33,6 +31,8 @@ const PUBLIC_EVENT_TYPES = new Set([
   "session.moved",
   "session.renamed",
   "session.metadata.updated",
+  "session.archived",
+  "session.unarchived",
   "session.permissions",
   "session.viewed",
   "session.usage.updated",
@@ -69,6 +69,7 @@ const PUBLIC_EVENT_TYPES = new Set([
   "session.tool.success",
   "session.tool.failed",
   "session.retry.scheduled",
+  "session.status",
   "session.compaction.started",
   "session.compaction.delta",
   "session.compaction.ended",
@@ -81,12 +82,10 @@ const PUBLIC_EVENT_TYPES = new Set([
   "form.created",
   "form.replied",
   "form.cancelled",
-  "session.status.updated",
   "session.idle",
 ]);
 
 const EMPTY_EVENT_IDENTITY: V2EventIdentityState = {
-  nextOrdinal: 0,
   recentObservedEventIds: [],
   recentAppliedEventIds: [],
   durableSequenceByAggregate: {},
@@ -102,24 +101,6 @@ function incrementDiagnostic(state: V2ThreadState): V2ThreadState {
     ...state,
     diagnosticCount: Math.min(state.diagnosticCount + 1, OPENCODE_V2_DIAGNOSTIC_COUNT_CAP),
   };
-}
-
-/**
- * True when a snapshot dated `requestOrdinal` predates the newest applied event.
- *
- * `requestOrdinal` is the event counter sampled BEFORE the fetch, so an event
- * that arrived mid-flight carries a strictly higher ordinal and must win.
- *
- * The `+ 1` is load-bearing. `nextOrdinal` stores `appliedOrdinal + 1`, NOT a
- * count of events, so comparing the raw counter against it would classify
- * every snapshot as stale the instant a single event had ever been applied —
- * including one taken strictly after that event. That silently turns a re-sync
- * into a permanent no-op, and a reconnect-time hydration into a dropped
- * permission snapshot. `nextOrdinal - 1` is the newest ordinal actually
- * applied, which is what "newer than my snapshot" has to be measured against.
- */
-function isStaleSnapshot(requestOrdinal: number, identity: V2EventIdentityState): boolean {
-  return requestOrdinal + 1 < identity.nextOrdinal;
 }
 
 /**
@@ -143,11 +124,143 @@ function sameIdentitySequence(
   return current.every((item, index) => item.id === incoming[index]?.id);
 }
 
+/**
+ * Reconciles one pending set with the server's answer.
+ *
+ * The three pending sets are read over a live stream, so the same race applies
+ * to them as to the transcript: an entry can be created while the read is in
+ * flight, and an entry can leave by being answered. What must NOT happen is a
+ * stale answer overwriting either.
+ *
+ * - An entry the read returned is taken from the snapshot: the server owns its
+ *   content.
+ * - An entry the client held, that the snapshot omits, is gone: answering or
+ *   cancelling it removed it server-side.
+ * - An entry the client did NOT hold is one created during the read, so it is
+ *   kept and appended. `permission.asked` and `form.created` arrive as events,
+ *   and dropping them here would make a prompt disappear mid-flight.
+ *
+ * A failed read never reaches this function: `null` means the list could not be
+ * read, which says nothing about its contents.
+ *
+ * @param current - The entries held before the read.
+ * @param held - The ids of `current` when the read started.
+ * @param incoming - The server's answer.
+ * @returns The reconciled list, or `current` itself when nothing changed.
+ */
+function reconcilePending<T extends { readonly id: string }>(
+  current: readonly T[],
+  held: readonly string[],
+  incoming: readonly T[],
+): readonly T[] {
+  const answeredOrCancelled = new Set(incoming.map((item) => item.id));
+  const heldIds = new Set(held);
+  const createdDuringRead = current.filter(
+    (item) => !answeredOrCancelled.has(item.id) && !heldIds.has(item.id),
+  );
+  const merged = createdDuringRead.length === 0 ? incoming : [...incoming, ...createdDuringRead];
+  return sameIdentitySequence(current, merged) ? current : merged;
+}
+
+/**
+ * The availability a hydration action leaves its kind in.
+ *
+ * @param incoming - The server's answer, or null when the read failed.
+ * @returns `current` for an answer, `unavailable` for a failed read.
+ */
+function availabilityFor(incoming: readonly unknown[] | null): V2AuxiliaryAvailability {
+  return incoming === null ? "unavailable" : "current";
+}
+
 function getEventSessionId(event: V2Event): string | null {
   const data: unknown = event.data;
   if (!data || typeof data !== "object" || !("sessionID" in data)) return null;
   const sessionID = data.sessionID;
   return typeof sessionID === "string" ? sessionID : null;
+}
+
+/**
+ * The directory an event was produced in, when the event says.
+ *
+ * Every V2 event carries an optional `location` (`LocationRef`), and the
+ * contract provides it precisely so a client can verify the scope of what it
+ * receives.
+ */
+function getEventDirectory(event: V2Event): string | null {
+  if (!("location" in event)) return null;
+  const location: unknown = event.location;
+  if (!location || typeof location !== "object") return null;
+  const directory = (location as { readonly directory?: unknown }).directory;
+  return typeof directory === "string" && directory.length > 0 ? directory : null;
+}
+
+/**
+ * A path in a comparable form: trailing separators removed and the separator
+ * unified, so two spellings of one directory compare equal.
+ */
+function normalizeDirectory(directory: string): string {
+  const trimmed = directory.trim().replace(/[\\/]+$/, "");
+  const unified = trimmed.replace(/\\/g, "/");
+  return unified.length > 0 ? unified : directory.trim();
+}
+
+/** Whether a normalized path is a Windows drive path, which is case-insensitive. */
+function isWindowsStylePath(directory: string): boolean {
+  return /^[a-zA-Z]:\//.test(directory);
+}
+
+/**
+ * Whether two paths name the same directory.
+ *
+ * The comparison is about the DIRECTORY, not about the spelling: a trailing
+ * separator and a `\` versus `/` are the same path, and a Windows path is
+ * case-insensitive. Two different directories never compare equal.
+ */
+function sameDirectory(left: string, right: string): boolean {
+  const a = normalizeDirectory(left);
+  const b = normalizeDirectory(right);
+  if (a === b) return true;
+  if (isWindowsStylePath(a) && isWindowsStylePath(b)) return a.toLowerCase() === b.toLowerCase();
+  return false;
+}
+
+/**
+ * Whether an event belongs to the workspace this view is subscribed to.
+ *
+ * This is **defence in depth**, not the scope control itself: the backend
+ * already refuses a request that names another workspace, and the upstream
+ * scopes the event stream. What this adds is that the client does not APPLY
+ * an event that says it came from somewhere else.
+ *
+ * Two directories are accepted as this view's own:
+ *
+ * - the directory the client subscribed to, and
+ * - the directory the SERVER reports for the session, which is the same
+ *   directory in the server's spelling. Accepting it keeps a difference in
+ *   how the two spell one path from silencing the whole stream.
+ *
+ * An event with no `location` is kept: it is location-scoped by definition
+ * (`server.connected` is the case the contract names), and there is nothing to
+ * compare.
+ */
+function isEventInScope(state: V2ThreadState, event: V2Event): boolean {
+  if (event.type === "session.moved") {
+    const eventSessionId = getEventSessionId(event);
+    if (eventSessionId === state.sessionId) return true;
+  }
+
+  const eventDirectory = getEventDirectory(event);
+  if (eventDirectory === null) return true;
+
+  const subscribed = state.directory;
+  if (subscribed !== null && sameDirectory(subscribed, eventDirectory)) return true;
+
+  const sessionDirectory = state.session?.location.directory ?? null;
+  if (sessionDirectory !== null && sameDirectory(sessionDirectory, eventDirectory)) return true;
+
+  // Neither scope is known, so nothing can be compared: the event is kept
+  // rather than every event being dropped.
+  return subscribed === null && sessionDirectory === null;
 }
 
 function getDurableSequence(event: V2Event): { aggregateID: string; seq: number } | null {
@@ -172,10 +285,7 @@ function getMessage(
   );
 }
 
-function withMessage(
-  state: V2ThreadState,
-  message: V2MessageState,
-): V2ThreadState {
+function withMessage(state: V2ThreadState, message: V2MessageState): V2ThreadState {
   const exists = state.messageOrder.includes(message.id);
   return {
     ...state,
@@ -184,16 +294,14 @@ function withMessage(
   };
 }
 
-function replacePart(
-  message: V2MessageState,
-  part: V2MessagePartState,
-): V2MessageState {
+function replacePart(message: V2MessageState, part: V2MessagePartState): V2MessageState {
   const index = message.parts.findIndex((candidate) => candidate.id === part.id);
-  const parts = index < 0
-    ? [...message.parts, part]
-    : message.parts.map((candidate, candidateIndex) =>
-        candidateIndex === index ? part : candidate,
-      );
+  const parts =
+    index < 0
+      ? [...message.parts, part]
+      : message.parts.map((candidate, candidateIndex) =>
+          candidateIndex === index ? part : candidate,
+        );
   return { ...message, parts };
 }
 
@@ -207,16 +315,25 @@ function executionCancelRequested(state: V2ExecutionState): boolean {
     : false;
 }
 
-function currentUserAndInbox(
-  state: V2ThreadState,
-): { userMessageId: string | null; inboxId: string | null } {
-  if (state.execution.type === "submitting" || state.execution.type === "admitted" || state.execution.type === "reconciling") {
+function currentUserAndInbox(state: V2ThreadState): {
+  userMessageId: string | null;
+  inboxId: string | null;
+} {
+  if (
+    state.execution.type === "submitting" ||
+    state.execution.type === "admitted" ||
+    state.execution.type === "reconciling"
+  ) {
     return {
       userMessageId: state.execution.userMessageId,
       inboxId: state.execution.type === "admitted" ? state.execution.inboxId : null,
     };
   }
-  if (state.execution.type === "executing" || state.execution.type === "streaming" || state.execution.type === "cancelling") {
+  if (
+    state.execution.type === "executing" ||
+    state.execution.type === "streaming" ||
+    state.execution.type === "cancelling"
+  ) {
     return {
       userMessageId: state.execution.userMessageId,
       inboxId: state.execution.inboxId,
@@ -225,10 +342,7 @@ function currentUserAndInbox(
   return { userMessageId: null, inboxId: null };
 }
 
-function recordInbox(
-  state: V2ThreadState,
-  record: V2InboxRecord,
-): V2ThreadState {
+function recordInbox(state: V2ThreadState, record: V2InboxRecord): V2ThreadState {
   const next: V2ThreadState = {
     ...state,
     inboxById: { ...state.inboxById, [record.id]: record },
@@ -257,13 +371,14 @@ function inboxRecordFromItem(
   inboxId: string,
   item: SessionInboxItem,
 ): V2InboxRecord {
-  const type = item.type === "compaction"
-    ? "compaction"
-    : item.type === "synthetic"
-      ? "synthetic"
-      : item.type === "move"
-        ? "move"
-        : "user";
+  const type =
+    item.type === "compaction"
+      ? "compaction"
+      : item.type === "synthetic"
+        ? "synthetic"
+        : item.type === "move"
+          ? "move"
+          : "user";
   return { id: inboxId, sessionId, type, delivery: item.delivery };
 }
 
@@ -276,9 +391,7 @@ function inboxRecordFromItem(
  *
  * @returns The safe error, carrying the server's own message and status.
  */
-export function mapEventError(
-  error: { message: string; status?: number },
-): V2SafeError {
+export function mapEventError(error: { message: string; status?: number }): V2SafeError {
   return {
     kind: error.status && error.status >= 500 ? "server" : "unknown",
     message: error.message,
@@ -286,29 +399,44 @@ export function mapEventError(
   };
 }
 
-function applyModelEvent(state: V2ThreadState, event: Extract<V2Event, { type: "session.model.selected" }>): V2ThreadState {
+function applyModelEvent(
+  state: V2ThreadState,
+  event: Extract<V2Event, { type: "session.model.selected" }>,
+): V2ThreadState {
   return { ...state, model: modelRefToV2Selection(event.data.model) };
 }
 
-function applyAgentEvent(state: V2ThreadState, event: Extract<V2Event, { type: "session.agent.selected" }>): V2ThreadState {
+function applyAgentEvent(
+  state: V2ThreadState,
+  event: Extract<V2Event, { type: "session.agent.selected" }>,
+): V2ThreadState {
   return { ...state, agent: event.data.agent };
 }
 
 function applyExecutionStarted(state: V2ThreadState): V2ThreadState {
-  if (state.execution.type === "reverting" || isTerminalExecution(state.execution)) return state;
-  const ids = currentUserAndInbox(state);
+  // Started work is authoritative evidence that any wait is over, whatever the
+  // execution branch does next. Composing it BEFORE the early return is what
+  // keeps a stale retry from outliving the run that superseded it.
+  const observed = withActivity(withRetryCleared(state), "running");
+  if (observed.execution.type === "reverting" || isTerminalExecution(observed.execution)) {
+    return observed;
+  }
+  const ids = currentUserAndInbox(observed);
   return {
-    ...state,
+    ...observed,
     execution: {
       type: "executing",
       userMessageId: ids.userMessageId,
       inboxId: ids.inboxId,
       assistantMessageId: null,
-      cancelRequested: state.execution.type === "cancelling"
-        ? true
-        : state.execution.type === "submitting" || state.execution.type === "admitted" || state.execution.type === "reconciling"
-          ? state.execution.cancelRequested
-          : false,
+      cancelRequested:
+        observed.execution.type === "cancelling"
+          ? true
+          : observed.execution.type === "submitting" ||
+              observed.execution.type === "admitted" ||
+              observed.execution.type === "reconciling"
+            ? observed.execution.cancelRequested
+            : false,
     },
   };
 }
@@ -334,16 +462,17 @@ function assistantToolPart(
 ): V2ToolPartState {
   const message = getMessage(state, assistantMessageId);
   const existing = message.parts.find((part) => part.id === `tool:${assistantMessageId}:${toolId}`);
-  return existing?.kind === "tool" ? existing : {
-    kind: "tool",
-    id: `tool:${assistantMessageId}:${toolId}`,
-    order: message.parts.length,
-    name: "unknown",
-    input: {},
-    output: undefined,
-    status: "running",
-    permissionId: null,
-  };
+  return existing?.kind === "tool"
+    ? existing
+    : {
+        kind: "tool",
+        id: `tool:${assistantMessageId}:${toolId}`,
+        order: message.parts.length,
+        name: "unknown",
+        input: {},
+        output: undefined,
+        status: "running",
+      };
 }
 
 function updateAssistantTool(
@@ -417,12 +546,100 @@ function applyAssistantEvent(
   };
 }
 
-function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
+/**
+ * Applies the server's archive fact to the hydrated session.
+ *
+ * `SessionInfo.time.archived` is where the server reports the archive (a
+ * timestamp, cleared on unarchive), and it is also what a hydration snapshot
+ * carries. Updating THAT field keeps the live view and a reload in agreement;
+ * a separate `archived` flag on the thread state could disagree with the
+ * server's own session after the next `session.get`.
+ *
+ * A no-op before the session is known: an event that arrives first has nothing
+ * to attach to, and the snapshot that follows already includes the archive.
+ */
+function withSessionArchivedAt(state: V2ThreadState, archivedAt: number | null): V2ThreadState {
+  const session = state.session;
+  if (session === null) return state;
+  if (session.time.archived === (archivedAt ?? undefined)) return state;
+  const { archived: _previous, ...time } = session.time;
+  return {
+    ...state,
+    session: {
+      ...session,
+      time: archivedAt === null ? time : { ...time, archived: archivedAt },
+    },
+  };
+}
+
+/**
+ * Applies an authoritative activity result and bumps the ordering marker.
+ *
+ * Every row in the plan's lifecycle table that establishes or invalidates
+ * activity goes through this helper. The revision is what lets a late activity
+ * response be recognised as stale rather than applied over newer evidence.
+ */
+function withActivity(state: V2ThreadState, activity: V2ActivityState): V2ThreadState {
+  return { ...state, activity, activityRevision: state.activityRevision + 1 };
+}
+
+/** Clears the live retry without touching activity or its revision. */
+function withRetryCleared(state: V2ThreadState): V2ThreadState {
+  return state.retry === null ? state : { ...state, retry: null };
+}
+
+/** Accepts only a finite, positive absolute epoch-ms deadline. */
+function trustedDeadline(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Applies a live retry wait.
+ *
+ * The attempt guard is ordering, not display: an older attempt can never
+ * replace a newer one, so a delayed event cannot rewind the banner. A rejected
+ * update changes nothing at all — retry, activity, and revision included —
+ * because it establishes no new evidence.
+ */
+function withRetryScheduled(
+  state: V2ThreadState,
+  attempt: number,
+  next: number | null,
+  error: V2SafeError,
+): V2ThreadState {
+  if (!Number.isInteger(attempt) || attempt <= 0) return state;
+  if (state.retry !== null && attempt < state.retry.attempt) return state;
+  return withActivity({ ...state, retry: { attempt, next, error } }, "unknown");
+}
+
+function applyKnownEvent(state: V2ThreadState, event: V2Event, replayed = false): V2ThreadState {
   switch (event.type) {
+    case "session.moved": {
+      const newDir = event.data.location?.directory;
+      return {
+        ...state,
+        directory: newDir ?? state.directory,
+        session: state.session
+          ? {
+              ...state.session,
+              location: {
+                ...state.session.location,
+                directory: newDir ?? state.session.location.directory,
+              },
+            }
+          : null,
+      };
+    }
     case "session.model.selected":
       return applyModelEvent(state, event);
     case "session.agent.selected":
       return applyAgentEvent(state, event);
+    case "session.archived":
+      return withSessionArchivedAt(state, event.created);
+    case "session.unarchived":
+      return withSessionArchivedAt(state, null);
+    case "session.renamed":
+      return { ...state, title: event.data.title };
     case "session.usage.updated":
       // Spend only. This event reports the SESSION's cumulative ledger, so it is
       // the wrong thing to measure occupancy from AND the wrong thing to clear a
@@ -436,34 +653,86 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         usage: { cost: event.data.cost, tokens: event.data.tokens },
       };
     case "session.inbox.enqueued":
-      return recordInbox(state, inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item));
+      return recordInbox(
+        state,
+        inboxRecordFromItem(event.data.sessionID, event.data.inboxID, event.data.item),
+      );
     case "session.inbox.cancelled": {
+      // The server DELETES the inbox row when it cancels a pending entry
+      // (upstream `SessionInbox.cancel` -> `projectDelivered` deletes the
+      // row). The entry is therefore gone, and the pending list must not keep
+      // showing it.
       const record = state.inboxById[event.data.inboxID];
-      return record ? { ...state, inboxById: { ...state.inboxById, [record.id]: record } } : state;
+      if (!record) return state;
+      const { [event.data.inboxID]: _cancelled, ...inboxById } = state.inboxById;
+      return { ...state, inboxById };
     }
     case "session.execution.started":
       return applyExecutionStarted(state);
     case "session.execution.succeeded":
-    case "session.execution.interrupted":
-    case "session.idle":
-      return isTerminalExecution(state.execution) ? state : { ...state, execution: { type: "idle" } };
-    case "session.execution.failed":
+    case "session.idle": {
+      const observed = withActivity(withRetryCleared(state), "not-running");
+      return isTerminalExecution(state.execution)
+        ? observed
+        : { ...observed, execution: { type: "idle" } };
+    }
+    case "session.execution.interrupted": {
+      // Every reason clears the wait, including `shutdown`: an interruption
+      // does not prove a retry remains scheduled, and it establishes neither
+      // that the session is idle nor that it is still alive. `unknown` is the
+      // only honest activity here; later evidence can settle it either way.
+      const observed = withActivity(withRetryCleared(state), "unknown");
+      return isTerminalExecution(state.execution)
+        ? observed
+        : { ...observed, execution: { type: "idle" } };
+    }
+    case "session.execution.failed": {
+      const observed = withActivity(withRetryCleared(state), "not-running");
       return {
-        ...state,
+        ...observed,
         execution: {
           type: "error",
           userMessageId: currentUserAndInbox(state).userMessageId,
-          assistantMessageId: state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
+          assistantMessageId:
+            state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
           error: mapEventError(event.data.error),
         },
       };
-    case "session.retry.scheduled":
-      return applyAssistantEvent(state, event.data.assistantMessageID, {
+    }
+    case "session.status": {
+      const status = event.data.status;
+      if (status.type === "retry") {
+        return withRetryScheduled(
+          state,
+          status.attempt,
+          trustedDeadline(status.next),
+          mapEventError({ message: status.message }),
+        );
+      }
+      return withActivity(
+        withRetryCleared(state),
+        status.type === "busy" ? "running" : "not-running",
+      );
+    }
+    case "session.retry.scheduled": {
+      // The historical part is written either way: it is transcript content,
+      // not live state. Only a LIVE observation may establish the wait; a
+      // replayed durable record proves an attempt happened, not that a wait is
+      // still counting down.
+      const transcript = applyAssistantEvent(state, event.data.assistantMessageID, {
         kind: "retry",
         id: `retry:${event.data.assistantMessageID}`,
         order: state.messages[event.data.assistantMessageID]?.parts.length ?? 0,
         value: event.data.attempt > 0 ? `retry ${event.data.attempt}` : "retry",
       });
+      if (replayed) return transcript;
+      return withRetryScheduled(
+        transcript,
+        event.data.attempt,
+        trustedDeadline(event.data.at),
+        mapEventError(event.data.error),
+      );
+    }
     case "session.revert.staged":
       return {
         ...state,
@@ -491,17 +760,23 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     case "permission.replied":
       return {
         ...state,
-        permissions: state.permissions.filter((permission) => permission.id !== event.data.requestID),
+        permissions: state.permissions.filter(
+          (permission) => permission.id !== event.data.requestID,
+        ),
         answeredPermissionIds: appendId(state.answeredPermissionIds, event.data.requestID),
       };
     case "session.text.started":
-      return applyAssistantEvent(state, event.data.assistantMessageID, {
-        kind: "text",
-        id: `text:${event.data.assistantMessageID}:${event.data.ordinal}`,
-        order: event.data.ordinal,
-        value: "",
-        status: "streaming",
-      });
+      return applyAssistantEvent(
+        withActivity(withRetryCleared(state), "running"),
+        event.data.assistantMessageID,
+        {
+          kind: "text",
+          id: `text:${event.data.assistantMessageID}:${event.data.ordinal}`,
+          order: event.data.ordinal,
+          value: "",
+          status: "streaming",
+        },
+      );
     case "session.text.delta": {
       const message = getMessage(state, event.data.assistantMessageID);
       const partId = `text:${event.data.assistantMessageID}:${event.data.ordinal}`;
@@ -536,7 +811,10 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     }
     case "session.text.ended": {
       const message = getMessage(state, event.data.assistantMessageID);
-      const part = message.parts.find((candidate) => candidate.id === `text:${event.data.assistantMessageID}:${event.data.ordinal}`);
+      const part = message.parts.find(
+        (candidate) =>
+          candidate.id === `text:${event.data.assistantMessageID}:${event.data.ordinal}`,
+      );
       if (part?.kind !== "text") return state;
       return updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
@@ -546,7 +824,10 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
     }
     case "session.reasoning.ended": {
       const message = getMessage(state, event.data.assistantMessageID);
-      const part = message.parts.find((candidate) => candidate.id === `reasoning:${event.data.assistantMessageID}:${event.data.ordinal}`);
+      const part = message.parts.find(
+        (candidate) =>
+          candidate.id === `reasoning:${event.data.assistantMessageID}:${event.data.ordinal}`,
+      );
       if (part?.kind !== "reasoning") return state;
       return updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
@@ -564,19 +845,18 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
       // "unknown" for the rest of the session after one compaction.
       const occupancyTokens = event.data.tokens ?? state.occupancyTokens;
       if (part?.kind !== "step") {
-        return event.data.tokens
-          ? { ...state, occupancyTokens, occupancyStale: false }
-          : state;
+        return event.data.tokens ? { ...state, occupancyTokens, occupancyStale: false } : state;
       }
       const next = updateAssistantPart(state, event.data.assistantMessageID, {
         ...part,
         status: event.type === "session.step.failed" ? "error" : "finished",
       });
-      const usage = event.type === "session.step.ended"
-        ? { cost: event.data.cost, tokens: event.data.tokens }
-        : event.data.cost !== undefined && event.data.tokens !== undefined
+      const usage =
+        event.type === "session.step.ended"
           ? { cost: event.data.cost, tokens: event.data.tokens }
-          : next.usage;
+          : event.data.cost !== undefined && event.data.tokens !== undefined
+            ? { cost: event.data.cost, tokens: event.data.tokens }
+            : next.usage;
       // A step's usage is measured against the CURRENT prompt, so it clears any
       // compaction invalidation. Without this the meter would stay unknown for
       // the rest of the session after one compaction.
@@ -585,11 +865,29 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
       // the occupancy. The last step of a turn supersedes its earlier steps, and
       // the last turn supersedes earlier turns - which is exactly OpenChamber's
       // "newest assistant response that reported tokens".
+      const endMsg = getMessage(next, event.data.assistantMessageID);
+      const endSource = endMsg.source;
+      const finalSource =
+        endSource?.type === "assistant"
+          ? {
+              ...endSource,
+              tokens: event.data.tokens ?? endSource.tokens,
+              cost: event.data.cost ?? endSource.cost,
+              time: { ...endSource.time, completed: Date.now() },
+            }
+          : endSource;
+      const finalNext =
+        finalSource !== endSource ? withMessage(next, { ...endMsg, source: finalSource }) : next;
+
       return {
-        ...next,
+        ...finalNext,
         usage,
         occupancyTokens,
-        ...(event.data.tokens ? { occupancyStale: false } : measured ? { occupancyStale: false } : {}),
+        ...(event.data.tokens
+          ? { occupancyStale: false }
+          : measured
+            ? { occupancyStale: false }
+            : {}),
       };
     }
     case "session.tool.input.started":
@@ -601,7 +899,6 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         input: {},
         output: undefined,
         status: "running",
-        permissionId: null,
         // The call has begun, so this is the start. `input.started` is the FIRST
         // event OpenCode emits for a tool part, which makes it the only
         // defensible live start marker: `session.tool.called` arrives after the
@@ -666,13 +963,42 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
         event.created,
       );
     }
-    case "session.step.started":
-      return applyAssistantEvent(state, event.data.assistantMessageID, {
-        kind: "step",
-        id: `step:${event.data.assistantMessageID}:${event.id}`,
-        order: state.messages[event.data.assistantMessageID]?.parts.length ?? 0,
-        status: "started",
-      });
+    case "session.step.started": {
+      const existingMessage = getMessage(state, event.data.assistantMessageID);
+      const existingSource = existingMessage.source;
+      const updatedSource =
+        existingSource?.type === "assistant"
+          ? {
+              ...existingSource,
+              agent: event.data.agent,
+              model: event.data.model,
+              time: { ...existingSource.time, created: event.data.started },
+            }
+          : {
+              id: event.data.assistantMessageID,
+              sessionID: event.data.sessionID,
+              type: "assistant" as const,
+              agent: event.data.agent,
+              model: event.data.model,
+              content: [],
+              time: { created: event.data.started },
+            };
+      const messageWithSource: V2MessageState = {
+        ...existingMessage,
+        source: updatedSource,
+      };
+      const stateWithSource = withMessage(state, messageWithSource);
+      return applyAssistantEvent(
+        withActivity(withRetryCleared(stateWithSource), "running"),
+        event.data.assistantMessageID,
+        {
+          kind: "step",
+          id: `step:${event.data.assistantMessageID}:${event.id}`,
+          order: stateWithSource.messages[event.data.assistantMessageID]?.parts.length ?? 0,
+          status: "started",
+        },
+      );
+    }
     default:
       return state;
   }
@@ -681,19 +1007,37 @@ function applyKnownEvent(state: V2ThreadState, event: V2Event): V2ThreadState {
 function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadState {
   switch (action.type) {
     case "v2_event":
-      return reduceV2Event(state, action.event, action.ordinal, action.mode);
-    case "connection_changed":
-      return { ...state, connection: action.connection };
-    case "load_started":
-      return { ...state, load: { type: "loading" } };
-    case "load_reconciling":
-      return { ...state, load: { type: "reconciling" } };
-    case "load_reconciled":
-      return state.load.type === "reconciling" ? { ...state, load: { type: "loading" } } : state;
+      return reduceV2Event(state, action.event, action.mode, action.replayed ?? false);
+    case "connection_changed": {
+      const next = { ...state, connection: action.connection };
+      // `connected` alone proves nothing about the wait: the paired connection
+      // attempt is what invalidates it. Every other target invalidates the
+      // countdown and leaves activity unknown.
+      if (action.connection.type === "connected") return next;
+      return withActivity(withRetryCleared(next), "unknown");
+    }
+    case "load_started": {
+      const next = { ...state, load: { type: "loading" } as const };
+      // A connection attempt owns the invalidation. An ordinary history refresh
+      // is repair, not evidence that the wait ended or the connection changed.
+      return action.reason === "connection"
+        ? withActivity(withRetryCleared(next), "unknown")
+        : next;
+    }
+    case "activity_resolved":
+      // Accept only the snapshot taken at the current revision. A newer
+      // authoritative event has already established newer state.
+      return action.revision === state.activityRevision
+        ? { ...state, activity: action.activity }
+        : state;
     case "load_completed":
       return { ...state, load: { type: "ready" } };
     case "load_failed":
-      return { ...state, load: { type: "error", error: action.error }, execution: { type: "idle" } };
+      return {
+        ...state,
+        load: { type: "error", error: action.error },
+        execution: { type: "idle" },
+      };
     case "session_hydrated":
       // The server's own snapshot is authoritative on reload, including about
       // compactions it has already performed, so nothing is stale here. This is
@@ -702,6 +1046,7 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       return {
         ...state,
         session: action.session,
+        directory: action.session.location?.directory ?? state.directory,
         model: modelRefToV2Selection(action.session.model),
         agent: action.session.agent ?? null,
         usage: { cost: action.session.cost, tokens: action.session.tokens },
@@ -717,62 +1062,93 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
             selectionGeneration: action.generation,
           };
     case "history_loaded": {
-      const messages = Object.fromEntries(
-        action.messages.map((message) => [message.id, message]),
+      const inSnapshot = new Set(action.messages.map((message) => message.id));
+      const snapshotSources = new Map(
+        action.messages.map((message) => [message.id, message.source] as const),
       );
-      const optimistic = state.optimisticMessageIds
-        .filter((messageId) => !(messageId in messages))
+      const held = new Set(action.merge.held);
+      const touched = new Set(action.merge.touched);
+      // What the snapshot cannot speak for: a message created after the read
+      // started, one a live event changed while it was in flight, and — always —
+      // an optimistic prompt the server has not admitted yet. Everything else
+      // the client holds and the snapshot omits was deleted server-side, which
+      // is the only deletion this merge performs.
+      const keptOrder = state.messageOrder.filter((messageId) => {
+        if (inSnapshot.has(messageId)) return false;
+        if (state.optimisticMessageIds.includes(messageId)) return true;
+        return !held.has(messageId) || touched.has(messageId);
+      });
+      const kept = keptOrder
         .map((messageId) => state.messages[messageId])
         .filter((message): message is V2MessageState => message !== undefined);
-      const merged = [...action.messages, ...optimistic];
+      // A message the snapshot carries normally takes the SNAPSHOT's version —
+      // that is what lets a refresh repair a transcript that drifted — except
+      // when a live event changed it while this read was in flight, where the
+      // live copy is strictly newer.
+      const resolved = action.messages.map((message) =>
+        touched.has(message.id) ? (state.messages[message.id] ?? message) : message,
+      );
+      const merged = [...resolved, ...kept];
       // Occupancy is re-derived from the PERSISTED messages, not from the live
       // event stream and not from the session ledger. This is what makes reload
       // and resume correct after a compaction: a session whose last message is a
       // finished compaction comes back `unknown` instead of resurrecting the
       // pre-compaction figure the ledger still remembers.
       const ordered = action.messageOrder
-        .map((messageId) => state.messages[messageId]?.source ?? messages[messageId]?.source)
+        .map((messageId) => state.messages[messageId]?.source ?? snapshotSources.get(messageId))
         .filter((source): source is SessionMessageInfo => source !== undefined && source !== null);
       const occupancy = resolveCodeOccupancy(ordered);
       return {
         ...state,
         messages: Object.fromEntries(merged.map((message) => [message.id, message])),
-        messageOrder: [
-          ...action.messageOrder,
-          ...optimistic.map((message) => message.id).filter((id) => !action.messageOrder.includes(id)),
-        ],
+        messageOrder: [...action.messageOrder, ...keptOrder],
         occupancyTokens: occupancy?.state === "measured" ? occupancy.tokens : state.occupancyTokens,
-        occupancyStale: occupancy?.state === "unknown" ? true : occupancy === null ? state.occupancyStale : false,
+        occupancyStale:
+          occupancy?.state === "unknown" ? true : occupancy === null ? state.occupancyStale : false,
       };
     }
-    case "inbox_hydrated":
-      // Stale-guard: a snapshot taken before an event arrived must not
-      // overwrite what that event already established.
-      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+    case "inbox_hydrated": {
+      const availability = availabilityFor(action.records);
+      const current = Object.values(state.inboxById);
+      const merged =
+        action.records === null ? current : reconcilePending(current, action.held, action.records);
+      const next =
+        merged === current
+          ? state.inboxById
+          : Object.fromEntries(merged.map((record) => [record.id, record]));
+      // A failed read leaves the last known list in place and only moves the
+      // availability, so a surface can say the shown set is stale rather than
+      // showing an empty inbox that is not the server's answer.
+      return next === state.inboxById && state.auxiliary.inbox === availability
         ? state
-        : sameIdentitySequence(Object.values(state.inboxById), action.records)
-          ? state
-          : {
-              ...state,
-              inboxById: Object.fromEntries(action.records.map((record) => [record.id, record])),
-            };
+        : { ...state, inboxById: next, auxiliary: { ...state.auxiliary, inbox: availability } };
+    }
     case "inbox_recorded":
       return recordInbox(state, action.record);
-    case "permissions_hydrated":
-      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+    case "permissions_hydrated": {
+      const availability = availabilityFor(action.requests);
+      const next =
+        action.requests === null
+          ? state.permissions
+          : reconcilePending(state.permissions, action.held, action.requests);
+      return next === state.permissions && state.auxiliary.permissions === availability
         ? state
-        : sameIdentitySequence(state.permissions, action.requests)
-          ? state
-          : { ...state, permissions: [...action.requests] };
-    case "forms_hydrated":
-      // Same stale-guard as `permissions_hydrated`. This case previously had
-      // none, which meant a slow snapshot could silently undo a `form.created`
-      // — the exact regression a periodic re-sync would otherwise introduce.
-      return isStaleSnapshot(action.requestOrdinal, state.eventIdentity)
+        : {
+            ...state,
+            permissions: next,
+            auxiliary: { ...state.auxiliary, permissions: availability },
+          };
+    }
+    case "forms_hydrated": {
+      const availability = availabilityFor(action.forms);
+      const next =
+        action.forms === null
+          ? state.forms
+          : reconcilePending(state.forms, action.held, action.forms);
+      return next === state.forms && state.auxiliary.forms === availability
         ? state
-        : sameIdentitySequence(state.forms, action.forms)
-          ? state
-          : { ...state, forms: [...action.forms] };
+        : { ...state, forms: next, auxiliary: { ...state.auxiliary, forms: availability } };
+    }
     case "prompt_submitting": {
       const alreadySubmitted = state.optimisticMessageIds.includes(action.message.id);
       const next: V2ThreadState = {
@@ -802,9 +1178,10 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
               userMessageId: action.userMessageId,
               inboxId: action.inbox.id,
               delivery: action.inbox.delivery,
-              cancelRequested: next.execution.type === "cancelling"
-                ? true
-                : executionCancelRequested(next.execution),
+              cancelRequested:
+                next.execution.type === "cancelling"
+                  ? true
+                  : executionCancelRequested(next.execution),
             },
           };
     }
@@ -839,12 +1216,18 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
               userMessageId: action.userMessageId,
               inboxId: action.inboxId,
               assistantMessageId: action.assistantMessageId,
+              // A cancel requested before the prompt was admitted is still OWED:
+              // the prompt is queued on the server and nothing has removed it
+              // yet. The flag is what the admission path reads to issue that
+              // cancel once the inbox id exists (M7).
+              cancelRequested: action.phase !== "execution",
             },
           };
     case "execution_started":
       return applyExecutionStarted(state);
     case "execution_streaming": {
-      if (isTerminalExecution(state.execution) || state.execution.type === "reverting") return state;
+      if (isTerminalExecution(state.execution) || state.execution.type === "reverting")
+        return state;
       const ids = currentUserAndInbox(state);
       return {
         ...state,
@@ -858,7 +1241,23 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
       };
     }
     case "execution_settled":
-      return isTerminalExecution(state.execution) ? state : { ...state, execution: { type: "idle" } };
+      return isTerminalExecution(state.execution)
+        ? state
+        : { ...state, execution: { type: "idle" } };
+    case "events_dropped": {
+      // The count is the CUMULATIVE loss, so it is SET rather than added -
+      // otherwise a stream that keeps overflowing would inflate the number
+      // past what was actually lost. The events are NOT recovered: the count is
+      // how the state admits that.
+      //
+      // It is its OWN field, not the diagnostic count: that one counts events
+      // the runtime ignored for other reasons, and a loss must not be
+      // indistinguishable from an ignored event.
+      return {
+        ...state,
+        droppedEventCount: Math.min(Math.max(0, action.count), OPENCODE_V2_DIAGNOSTIC_COUNT_CAP),
+      };
+    }
     case "execution_failed":
       return {
         ...state,
@@ -890,7 +1289,8 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         execution: {
           type: "error",
           userMessageId: action.userMessageId,
-          assistantMessageId: state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
+          assistantMessageId:
+            state.execution.type === "streaming" ? state.execution.assistantMessageId : null,
           error: action.error,
         },
       };
@@ -919,7 +1319,10 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
         answeredPermissionIds: appendId(state.answeredPermissionIds, action.requestId),
       };
     case "permission_retired":
-      return { ...state, permissions: state.permissions.filter((permission) => permission.id !== action.requestId) };
+      return {
+        ...state,
+        permissions: state.permissions.filter((permission) => permission.id !== action.requestId),
+      };
     case "form_retired":
       return { ...state, forms: state.forms.filter((form) => form.id !== action.formId) };
     case "runtime_messages_reconciled": {
@@ -938,14 +1341,15 @@ function reduceAction(state: V2ThreadState, action: V2ThreadAction): V2ThreadSta
 export function reduceV2Event(
   state: V2ThreadState,
   event: V2Event,
-  ordinal: number,
   mode: "observe-only" | "observe-and-apply" = "observe-and-apply",
+  replayed = false,
 ): V2ThreadState {
   if (REPLAY_ONLY_EVENT_TYPES.has(event.type) || !PUBLIC_EVENT_TYPES.has(event.type)) {
     return incrementDiagnostic(state);
   }
   const sessionId = getEventSessionId(event);
   if (sessionId !== null && sessionId !== state.sessionId) return incrementDiagnostic(state);
+  if (!isEventInScope(state, event)) return incrementDiagnostic(state);
   if (state.eventIdentity.recentObservedEventIds.includes(event.id) && mode === "observe-only") {
     return state;
   }
@@ -959,12 +1363,11 @@ export function reduceV2Event(
     ...state,
     eventIdentity: {
       ...state.eventIdentity,
-      nextOrdinal: Math.max(state.eventIdentity.nextOrdinal, ordinal + 1),
       recentObservedEventIds: appendId(state.eventIdentity.recentObservedEventIds, event.id),
     },
   };
   if (mode === "observe-only") return next;
-  next = applyKnownEvent(next, event);
+  next = applyKnownEvent(next, event, replayed);
   const durableSequenceByAggregate = durable
     ? { ...next.eventIdentity.durableSequenceByAggregate, [durable.aggregateID]: durable.seq }
     : next.eventIdentity.durableSequenceByAggregate;
@@ -979,24 +1382,35 @@ export function reduceV2Event(
 }
 
 /** Reduces a typed state action without I/O or React dependencies. */
-export function reduceV2ThreadState(
-  state: V2ThreadState,
-  action: V2ThreadAction,
-): V2ThreadState {
+export function reduceV2ThreadState(state: V2ThreadState, action: V2ThreadAction): V2ThreadState {
   return reduceAction(state, action);
 }
 
-/** Creates the initial state for one scoped OpenCode session. */
-export function createInitialV2ThreadState(sessionId: string): V2ThreadState {
+/**
+ * Creates the initial state for one scoped OpenCode session.
+ *
+ * @param sessionId - The session this view is about.
+ * @param directory - The workspace the event stream is subscribed to, or
+ *   `null` when the server did not report a scope.
+ */
+export function createInitialV2ThreadState(
+  sessionId: string,
+  directory: string | null = null,
+): V2ThreadState {
   return {
     sessionId,
+    directory,
     connection: { type: "waiting-for-server" },
     load: { type: "idle" },
+    retry: null,
+    activity: "unknown",
+    activityRevision: 0,
     execution: { type: "idle" },
     compaction: { type: "idle" },
     revertRecovery: { type: "none" },
     eventIdentity: EMPTY_EVENT_IDENTITY,
     session: null,
+    title: null,
     model: null,
     agent: null,
     desiredModel: null,
@@ -1007,11 +1421,16 @@ export function createInitialV2ThreadState(sessionId: string): V2ThreadState {
     permissions: [],
     forms: [],
     inboxById: {},
+    // Nothing has been read yet, so no pending set is known to be current. A
+    // successful read moves its kind to "current"; a failed one leaves it here
+    // rather than pretending the empty list is the server's answer.
+    auxiliary: { inbox: "unavailable", permissions: "unavailable", forms: "unavailable" },
     usage: null,
     occupancyTokens: null,
     occupancyStale: false,
     optimisticMessageIds: [],
     answeredPermissionIds: [],
     diagnosticCount: 0,
+    droppedEventCount: 0,
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { OPENCODE_V2_AUX_RESYNC_INTERVAL_MS } from "@/config/opencode";
+import { OPENCODE_V2_AUX_RESYNC_INTERVAL_MS } from "@/features/opencode/config";
 import type { V2ThreadController } from "./v2ThreadController";
 
 /**

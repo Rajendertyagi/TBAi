@@ -1,8 +1,6 @@
+import type { AppendMessage, ThreadMessageLike } from "@assistant-ui/react";
 import type {
-  AppendMessage,
-  ThreadMessageLike,
-} from "@assistant-ui/react";
-import type {
+  SessionMessageAssistant,
   SessionMessageUser,
   SessionPromptInput,
 } from "@opencode/client";
@@ -13,6 +11,7 @@ import {
   type V2PermissionView,
 } from "./v2Permissions";
 import type { V2MessagePartState, V2MessageState, V2ThreadState } from "./v2Types";
+import { toTokenUsage } from "./contextTokens";
 
 import { patchFromToolMetadata } from "@/lib/tool-patch";
 import {
@@ -51,7 +50,13 @@ export interface V2PromptPayload {
   readonly skills: NonNullable<SessionPromptInput["skills"]>;
 }
 
-type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
 type JsonObject = Readonly<Record<string, JsonValue>>;
 
 function isJsonValue(value: unknown): value is JsonValue {
@@ -106,10 +111,12 @@ function filesFromAppendMessage(message: AppendMessage): V2PromptPayload["files"
   if (typeof message.content === "string") return [];
   return message.content.flatMap((part) => {
     if (part.type === "file") {
-      return [{
-        uri: fileUri(part.data, part.mimeType),
-        ...(part.filename ? { name: part.filename } : {}),
-      }];
+      return [
+        {
+          uri: fileUri(part.data, part.mimeType),
+          ...(part.filename ? { name: part.filename } : {}),
+        },
+      ];
     }
     if (part.type === "image") {
       if (!part.image.startsWith("data:") && !part.image.startsWith("file:")) {
@@ -154,28 +161,45 @@ export function toV2PromptPayloadFromHistory(message: SessionMessageUser): V2Pro
 
 type AssistantContent = Exclude<ThreadMessageLike["content"], string>[number];
 
+/**
+ * Projects one V2 part, or `null` when the part is not user-facing content.
+ *
+ * Retry and step parts are internal transcript markers: their `value` is
+ * machine wording ("retry 3") and their state is already carried by the typed
+ * message/execution status. Projecting them as empty text parts put an empty
+ * assistant bubble on screen, and projecting the value would print debug copy.
+ */
 function partToAssistantContent(
   part: V2MessagePartState,
   message: V2MessageState,
   permissions: readonly V2PermissionView[],
-): AssistantContent {
-  if (part.kind === "text") return { type: "text", text: part.value, status: { type: part.status === "streaming" ? "running" : "complete" } };
-  if (part.kind === "reasoning") return { type: "reasoning", text: part.value, status: { type: part.status === "streaming" ? "running" : "complete" } };
-  if (part.kind === "step") return { type: "text", text: "", status: { type: "complete" } };
-  if (part.kind === "retry") return { type: "text", text: part.value, status: { type: "complete" } };
+): AssistantContent | null {
+  if (part.kind === "text")
+    return {
+      type: "text",
+      text: part.value,
+      status: { type: part.status === "streaming" ? "running" : "complete" },
+    };
+  if (part.kind === "reasoning")
+    return {
+      type: "reasoning",
+      text: part.value,
+      status: { type: part.status === "streaming" ? "running" : "complete" },
+    };
+  if (part.kind === "step" || part.kind === "retry") return null;
   const sourceContent = message.source?.type === "assistant" ? message.source.content : [];
   const sourceTool = sourceContent.find(
     (content) => content.type === "tool" && `tool:${message.id}:${content.id}` === part.id,
   );
   const toolPartPrefix = `tool:${message.id}:`;
-  const officialToolId = sourceTool?.type === "tool"
-    ? sourceTool.id
-    : part.id.startsWith(toolPartPrefix)
-      ? part.id.slice(toolPartPrefix.length)
-      : undefined;
-  const toolCallId = officialToolId === undefined
-    ? part.id
-    : deriveV2ToolCallId(message.id, officialToolId);
+  const officialToolId =
+    sourceTool?.type === "tool"
+      ? sourceTool.id
+      : part.id.startsWith(toolPartPrefix)
+        ? part.id.slice(toolPartPrefix.length)
+        : undefined;
+  const toolCallId =
+    officialToolId === undefined ? part.id : deriveV2ToolCallId(message.id, officialToolId);
   const permission = permissions.find((candidate) => candidate.toolCallId === toolCallId);
   const timeline = timelineArtifactFor(part);
   return {
@@ -230,24 +254,54 @@ function openCodePartsForMessage(message: V2MessageState): readonly unknown[] {
     if (part.kind !== "tool") return [];
     const prefix = `tool:${message.id}:`;
     const id = part.id.startsWith(prefix) ? part.id.slice(prefix.length) : part.id;
-    const status = part.status === "complete"
-      ? "completed"
-      : part.status === "error"
-        ? "error"
-        : "running";
+    const status =
+      part.status === "complete" ? "completed" : part.status === "error" ? "error" : "running";
     const content = Array.isArray(part.output) ? part.output : [];
-    return [{
-      type: "tool",
-      id,
-      name: part.name,
-      state: {
-        status,
-        input: part.input,
-        ...(content.length > 0 ? { content } : {}),
-        ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+    return [
+      {
+        type: "tool",
+        id,
+        name: part.name,
+        state: {
+          status,
+          input: part.input,
+          ...(content.length > 0 ? { content } : {}),
+          ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+        },
       },
-    }];
+    ];
   });
+}
+
+/**
+ * The footer's turn record, derived from the assistant message OpenCode
+ * already persists.
+ *
+ * Code mode needs no extra persistence for this: `time.created` is written
+ * before the first chunk, `time.completed` when the turn ends, and `tokens`
+ * carries the final usage. Reloading the transcript re-runs this projection
+ * over the same records, so the duration and the token count come back
+ * identical instead of falling back to a clock.
+ */
+function assistantTurnFields(info: SessionMessageAssistant): Record<string, unknown> {
+  const usage = toTokenUsage(info.tokens);
+  const { created, completed } = info.time;
+  return {
+    turnStartedAt: created,
+    ...(completed === undefined
+      ? {}
+      : {
+          turnTiming: {
+            startedAt: created,
+            endedAt: completed,
+            durationMs: Math.max(0, completed - created),
+          },
+        }),
+    ...(usage === undefined ? {} : { usage }),
+    agent: info.agent,
+    providerId: info.model.providerID,
+    modelId: info.model.id,
+  };
 }
 
 function messageToAssistant(
@@ -255,9 +309,11 @@ function messageToAssistant(
   permissions: readonly V2PermissionView[],
 ): ThreadMessageLike | null {
   if (message.role === "record") return null;
+  const source = message.source?.type === "assistant" ? message.source : null;
   const openCodeParts = openCodePartsForMessage(message);
   const content = message.parts.flatMap((part) => {
     const projected = partToAssistantContent(part, message, permissions);
+    if (projected === null) return [];
     return Array.isArray(projected) ? projected : [projected];
   });
   const pendingPatches = pendingPatchMap(permissions);
@@ -266,19 +322,24 @@ function messageToAssistant(
     role: message.role,
     content,
     createdAt: new Date(message.createdAt),
-    ...(message.role === "assistant" && openCodeParts.length > 0
+    ...(message.role === "assistant" && (source !== null || openCodeParts.length > 0)
       ? {
           metadata: {
             custom: {
-              opencode: {
-                parts: openCodeParts,
-                // The change a pending permission is asking to be allowed, keyed
-                // by the tool call it belongs to. The renderer reads it from here
-                // for the same reason it reads `parts` from here: this is TBAi's
-                // own metadata, so nothing has to be bolted onto assistant-ui's
-                // tool-part type, which has no slot for it.
-                ...(Object.keys(pendingPatches).length > 0 ? { pendingPatches } : {}),
-              },
+              ...(source === null ? {} : assistantTurnFields(source)),
+              ...(openCodeParts.length === 0
+                ? {}
+                : {
+                    opencode: {
+                      parts: openCodeParts,
+                      // The change a pending permission is asking to be allowed, keyed
+                      // by the tool call it belongs to. The renderer reads it from here
+                      // for the same reason it reads `parts` from here: this is TBAi's
+                      // own metadata, so nothing has to be bolted onto assistant-ui's
+                      // tool-part type, which has no slot for it.
+                      ...(Object.keys(pendingPatches).length > 0 ? { pendingPatches } : {}),
+                    },
+                  }),
             },
           },
         }
@@ -312,10 +373,32 @@ export function pendingPatchMap(
   return patches;
 }
 
+/** Formats an OpenCode error for display in the assistant message error notice. */
+export function formatOpenCodeErrorNotice(
+  error: { message?: string } | string | null | undefined,
+): string {
+  if (!error) return "An error occurred during OpenCode execution.";
+  const detail = typeof error === "string" ? error : error.message || "An error occurred";
+  const lower = detail.toLowerCase();
+  if (
+    lower.includes("token refresh failed") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid token") ||
+    lower.includes("401")
+  ) {
+    return "Authentication failed for this provider. Please re-authenticate and retry.";
+  }
+  if (lower.includes("aborted") || lower.includes("step interrupted")) {
+    return "The running turn was stopped before OpenCode could send the next message.";
+  }
+  if (lower.includes("sessionretry")) {
+    return `Opencode failed to send a message. Retry attempt info: ${detail}`;
+  }
+  return `Opencode failed to send message with error: ${detail}`;
+}
+
 /** Projects the current state into branchable assistant-ui repository items. */
-export function projectV2RepositoryItems(
-  state: V2ThreadState,
-): readonly V2BranchableMessageItem[] {
+export function projectV2RepositoryItems(state: V2ThreadState): readonly V2BranchableMessageItem[] {
   const permissions: readonly V2PermissionView[] = state.permissions
     .map(projectV2Permission)
     .filter((permission): permission is V2PermissionView => permission !== null);
@@ -329,12 +412,57 @@ export function projectV2RepositoryItems(
     result.push({ message: projected, parentId });
     parentId = message.id;
   }
+
+  // Map OpenCode execution error into the latest assistant message status
+  if (state.execution.type === "error") {
+    const errorNotice = formatOpenCodeErrorNotice(state.execution.error);
+    const targetId = state.execution.assistantMessageId;
+    let lastAssistantIdx = targetId ? result.findIndex((item) => item.message.id === targetId) : -1;
+    if (lastAssistantIdx < 0 && !targetId) {
+      for (let i = result.length - 1; i >= 0; i--) {
+        if (result[i].message.role === "assistant") {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (lastAssistantIdx >= 0) {
+      const existing = result[lastAssistantIdx];
+      result[lastAssistantIdx] = {
+        ...existing,
+        message: {
+          ...existing.message,
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: errorNotice,
+          },
+        },
+      };
+    } else {
+      const errorMsgId = `err:${state.execution.userMessageId ?? Date.now()}`;
+      result.push({
+        message: {
+          id: errorMsgId,
+          role: "assistant",
+          content: [],
+          createdAt: new Date(),
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: errorNotice,
+          },
+        },
+        parentId,
+      });
+    }
+  }
+
   return result;
 }
 
 /** Returns the explicit assistant-ui repository head id. */
-export function repositoryHeadId(
-  items: readonly V2BranchableMessageItem[],
-): string | null {
+export function repositoryHeadId(items: readonly V2BranchableMessageItem[]): string | null {
   return items.at(-1)?.message.id ?? null;
 }

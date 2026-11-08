@@ -3,6 +3,23 @@
 @import "tw-animate-css";
 /* Self-hosted Inter (variable woff2 is lazy — downloaded only when used). */
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/roboto";
+@import "@fontsource-variable/open-sans";
+@import "@fontsource-variable/source-sans-3";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource-variable/outfit";
+@import "@fontsource-variable/figtree";
+/* Lato is a static family: one stylesheet per weight. Importing only the
+   package index gave 400, so the UI advertised 100/300/700/900 and rendered
+   400 for all of them. */
+@import "@fontsource/lato/100.css";
+@import "@fontsource/lato/300.css";
+@import "@fontsource/lato/400.css";
+@import "@fontsource/lato/700.css";
+@import "@fontsource/lato/900.css";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/fira-code";
+@import "@fontsource-variable/source-code-pro";
 
 /* Generated palette blocks, one per selectable theme. Addressed by
    `html[data-tbai-theme]`, which outranks the `:root` / `.dark` blocks below on
@@ -14,16 +31,33 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Interface font = Inter Variable (matches Codeg's --font-sans). Smoothing
-     + legibility flags apply app-wide from the root. */
+  /* Interface font = Inter Variable. Matches UI_FONTS["inter"].stack in
+     features/appearance/typography.ts exactly, so the default appearance is
+     identical whether or not the pre-paint bootstrap runs. Smoothing +
+     legibility flags apply app-wide from the root. */
   --font-sans:
-    "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    "Inter Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  --font-mono:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Fixed generic monospace stack — NEVER written by a setting. Logs, IDs,
+     paths, token counts and tool metadata use this; code surfaces use
+     --code-font-family, terminal output uses --terminal-font-family. */
+  --font-weight-base: 300;
+  --code-font-family:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --code-font-size: 13px;
+  --code-font-weight: 400;
+  --terminal-font-family:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --terminal-font-size: 12px;
+  --terminal-font-weight: 400;
+  --reading-line-height: 1.5;
 
   font-family: var(--font-sans);
-  font-size: 16px;
-  line-height: 1.5em;
-  font-weight: 400;
+  font-size: 93.75%;
+  line-height: 1.5;
+  font-weight: var(--font-weight-base, 300);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -95,16 +129,47 @@
   /* Elevation: soft drop shadows with NO hairline ring, so floating surfaces
      read as borderless. Light mode is white-on-white, so these are
      deliberately stronger than a typical menu shadow to keep the edge legible. */
-  --elevation-floating: 0 1px 2px -1px rgb(0 0 0 / .10),
-    0 6px 14px -4px rgb(0 0 0 / .12),
-    0 18px 32px -10px rgb(0 0 0 / .16);
-  --elevation-overlay: 0 2px 6px -2px rgb(0 0 0 / .10),
-    0 16px 32px -12px rgb(0 0 0 / .18);
+  --elevation-floating:
+    0 1px 2px -1px rgb(0 0 0 / 0.1), 0 6px 14px -4px rgb(0 0 0 / 0.12),
+    0 18px 32px -10px rgb(0 0 0 / 0.16);
+  --elevation-overlay: 0 2px 6px -2px rgb(0 0 0 / 0.1), 0 16px 32px -12px rgb(0 0 0 / 0.18);
+
+  /* The composer's reserved status row, in px: one AgentStatus line (38px
+     border-box) plus the 8px spacing the row carries. Transient status
+     presentations mount and unmount inside this row, so reserving its height is
+     what keeps the transcript, composer and scroll anchor still. The geometry
+     spec asserts the rendered row equals this value; do not restate the number
+     in a component. */
+  --status-reserved-height: 46px;
+
+  /* Sidebar rows: ONE height and ONE radius for every folder and conversation
+     row. The folder connector is drawn from this height, so a row that changed
+     its own height would leave the elbow pointing at empty space. */
+  --sidebar-row-height: 30px;
+  --sidebar-row-radius: 8px;
+
+  /* A conversation row's two states, as tokens: a soft accent under the pointer,
+     the full accent for the OPEN conversation, and a softer one for a
+     list-closing row (Show more). They used to be one value, so the open row
+     became indistinguishable from the row being hovered. */
+  --sidebar-row-hover: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+  --sidebar-row-hover-soft: color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+  --sidebar-row-active: color-mix(in srgb, var(--sidebar-accent) 90%, var(--foreground) 10%);
+
+  /* Centred chat column. Declared here as the pre-mount default: `syncChromeVars`
+     republishes it from `CHAT_WIDTHS.comfortable` on the first effect. The two
+     literals are pinned by tests/unit/web/chat-width.test.ts, so they cannot
+     drift apart. */
+  --chat-column-width: 768px;
 
   color-scheme: light;
 }
 
 .dark {
+  --sidebar-row-hover: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+  --sidebar-row-hover-soft: color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+  --sidebar-row-active: color-mix(in srgb, var(--sidebar-accent) 85%, white 15%);
+
   /* Dark scale adopts codeg`s neutral-dark relationships verbatim (oklch):
      card/muted/accent step down from the background; borders/inputs are
      translucent white so they adapt to any surface. Only --background stays
@@ -160,10 +225,8 @@
   --glass-tint: 52%;
   --glass-saturation: 1.16;
 
-  --elevation-floating: 0 2px 6px -2px rgb(0 0 0 / .55),
-    0 10px 26px -8px rgb(0 0 0 / .60);
-  --elevation-overlay: 0 4px 12px -4px rgb(0 0 0 / .65),
-    0 24px 48px -16px rgb(0 0 0 / .70);
+  --elevation-floating: 0 2px 6px -2px rgb(0 0 0 / 0.55), 0 10px 26px -8px rgb(0 0 0 / 0.6);
+  --elevation-overlay: 0 4px 12px -4px rgb(0 0 0 / 0.65), 0 24px 48px -16px rgb(0 0 0 / 0.7);
 
   color-scheme: dark;
 }
@@ -222,14 +285,116 @@
   --shadow-overlay: var(--elevation-overlay);
 }
 
-/* Two sizes below text-xs. Font-size only (no line-height), so replacing
-   text-[11px]/text-[10px] arbitrary values is zero-visual-difference at 100%
-   zoom while staying rem-based for UI scaling. */
+/* Compact text sizes below native Tailwind text-xs (0.75rem / 12px).
+   Sized in rem so they scale naturally with the root interface size, but never below
+   the 9px legibility floor at smaller root sizes (e.g. 12px root = 9px floor). */
 @utility text-2xs {
-  font-size: 0.6875rem; /* 11px @100% */
+  font-size: max(9px, 0.6875rem);
 }
+
+/* 10px @16px, but never below 9px: max(9px, 0.625rem) enforces a 9px legibility
+   floor at small root sizes (e.g. 12px root = 9px floor), while scaling up
+   proportionally at larger sizes (e.g. 20px root = 12.5px, 24px root = 15px). */
 @utility text-3xs {
-  font-size: 0.625rem; /* 10px @100% */
+  font-size: max(9px, 0.625rem);
+}
+
+/* The sidebar folder tile. Geometry and type metrics are fixed here so the
+   component supplies only the two colours, which are the folder's own data
+   (theme-independent, read back out of storage). */
+@utility folder-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+  background-color: var(--folder-tile-bg);
+  color: var(--folder-tile-fg);
+}
+
+/* A folder's conversation rows: the 18px indent plus the ONE hairline and
+   elbow that ties them to the folder above. Drawn once per block, not per row —
+   a per-row left border doubles the line and draws a second elbow for every
+   conversation. The hairline stops at the LAST row's centre, which is why the
+   geometry is derived from `--sidebar-row-height` instead of a literal. */
+@utility sidebar-folder-children {
+  position: relative;
+  padding-left: 18px;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 0;
+    bottom: var(--sidebar-row-height);
+    border-left: 1px solid var(--sidebar-border);
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    bottom: calc(var(--sidebar-row-height) / 2);
+    width: 11px;
+    height: calc(var(--sidebar-row-height) / 2);
+    border-left: 1px solid var(--sidebar-border);
+    border-bottom: 1px solid var(--sidebar-border);
+    border-bottom-left-radius: 4px;
+  }
+}
+
+/* Separator between folder blocks — never before the first, never after the
+   last. One rule, so the spacing and the hairline cannot drift apart. */
+@utility sidebar-folder-block {
+  & + & {
+    margin-top: 3px;
+    padding-top: 7px;
+    border-top: 1px solid var(--sidebar-border);
+  }
+}
+
+/* A conversation row's two states live in one rule on purpose: `data-active`
+   marks the open conversation at the full accent, everything else lifts to the
+   softer accent under the pointer. Two separate utilities could be ordered (or
+   re-spelled) so that hover and active became identical again — which is the
+   defect this replaces. */
+@utility sidebar-row-surface {
+  position: relative;
+
+  &:not([data-active]):hover {
+    background-color: var(--sidebar-row-hover);
+  }
+
+  &[data-active],
+  &[data-active]:hover {
+    background-color: var(--sidebar-accent);
+  }
+
+  &[data-active]::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 9999px;
+    background-color: var(--primary);
+  }
+}
+
+/* The running indicator: a success dot with a translucent halo, legible on a
+   plain row and on the active row's accent alike. */
+@utility thread-running-dot {
+  border-radius: 9999px;
+  background-color: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 22%, transparent);
 }
 
 /* The see-through surface treatment, as ONE reusable utility.
@@ -249,6 +414,30 @@
 /* The little arrow a popover points with. It must be tinted with the SAME glass
    colour as the panel it belongs to, otherwise a solid chip appears to hang off
    a translucent surface. */
+/* The collapse/expand animation duration shared by the reasoning, tool-group and
+   tool-fallback disclosures.
+
+   Each of the three used to declare its own `ANIMATION_DURATION = 200` AND set
+   `--animation-duration` through an inline `style`. The literal `200` therefore
+   lived in FOUR places - three `ANIMATION_DURATION = 200` constants, one per
+   element, plus this declaration - so retuning it was a four-file edit. (The
+   inline styles never held the literal; they interpolated the constant.)
+
+   One `@utility` so it lands in the utilities layer like `glass-surface` above:
+   it composes with variants, and it can be overridden by an ordinary utility.
+   The three roots carry the class and read it with `duration-(--animation-
+   duration)` / `animation-duration-(--animation-duration)` exactly as before, so
+   the timing contract is unchanged.
+
+   The CSS side of the value is here; the JS side `useScrollLock` needs is
+   `DISCLOSURE_ANIMATION_DURATION_MS` in `components/shared/disclosure-timing.ts`.
+   Two literals by necessity - CSS cannot read a TS constant - but pinned
+   together by tests/unit/web/components/disclosure-timing.test.ts, so they cannot
+   drift apart silently. */
+@utility aui-disclosure-timing {
+  --animation-duration: 200ms;
+}
+
 @utility glass-arrow {
   background-color: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
   fill: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
@@ -267,35 +456,46 @@
 }
 
 /* ---- sonner toasts ----
-   Configured through sonner's OWN custom properties where possible, and against
-   its own attributes where it is not. Every rule in `sonner/dist/styles.css` is
-   wrapped in `:where()`, so it all sits at zero specificity and these win
-   outright.
+   The surface is applied by `components/AppToaster.tsx` through sonner's
+   documented `toastOptions.style`, which lands inline on each toast. Sonner 2
+   removed the `:where()` wrappers that used to leave its stylesheet at zero
+   specificity, and injects it after this file, so the old
+   `[data-sonner-toaster] [data-sonner-toast]` overrides tied at (0,2,0) and lost
+   the tie. Inline styles do not compete with it.
 
-   `--normal-border` is NOT set here: sonner writes that variable INLINE on the
-   toaster element, and an inline declaration beats any stylesheet rule — so
-   setting it from here silently did nothing, leaving a hard grey edge on a
-   borderless glass toast (measured `hsl(0,0%,20%)`, i.e. sonner's default).
-   `border-color` below is not inline and therefore does take effect.
-
-   `--normal-bg` is deliberately left alone — sonner also reads it as the text
-   colour of an inverted action button (styles.css:185), so replacing it would
-   blank that button's label. Only the toast's own background is redirected. */
+   These properties carry the reduced-transparency branch into that inline style,
+   which cannot contain a media query. `--normal-bg` stays untouched: sonner also
+   uses it for the close button. */
 [data-sonner-toaster] {
-  --border-radius: calc(var(--radius) * 1.2);
+  font-family: var(--font-sans);
+  --tbai-toast-surface: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
+  --tbai-toast-backdrop: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
+/* Ensure Sonner toast text roles scale with root rem and inherit the active Interface font */
 [data-sonner-toaster] [data-sonner-toast] {
-  border-color: transparent;
-  background-color: color-mix(in srgb, var(--popover) var(--glass-tint), transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  box-shadow: var(--elevation-floating);
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+[data-sonner-toaster] [data-title] {
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+[data-sonner-toaster] [data-description] {
+  font-family: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+[data-sonner-toaster] [data-button] {
+  font-family: inherit;
+  font-size: 0.75rem;
+  min-height: 1.5rem;
+  height: auto;
 }
 @media (prefers-reduced-transparency: reduce) {
-  [data-sonner-toaster] [data-sonner-toast] {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    background-color: var(--popover);
+  [data-sonner-toaster] {
+    --tbai-toast-surface: var(--popover);
+    --tbai-toast-backdrop: none;
   }
 }
 
@@ -334,10 +534,6 @@
   @apply flex flex-col h-full;
 }
 
-.ai-message-content {
-  @apply text-sm leading-relaxed;
-}
-
 .ai-composer {
   @apply border-t border-border bg-muted/50;
 }
@@ -366,4 +562,89 @@
 
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground;
+}
+
+/* Generic monospace — the fixed default stack. Logs, IDs, paths, token
+   counts and tool metadata use this; it is NEVER written by a setting. */
+code,
+kbd,
+samp,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Code surfaces — the selected code font, size and weight.
+   Selectors are ordered by ascending specificity (biome noDescendingSpecificity). */
+.aui-md-pre,
+[data-slot="code-diff"],
+[data-slot="code-preview"],
+[data-slot="code-payload"],
+.aui-shiki-base pre,
+.aui-code-block pre,
+.aui-md-pre code,
+.aui-code-block code,
+[data-slot="code-preview"] code,
+[data-slot="code-payload"] code,
+.aui-shiki-base pre code {
+  font-family: var(--code-font-family);
+  font-size: var(--code-font-size);
+  font-weight: var(--code-font-weight);
+}
+
+.aui-md-inline-code {
+  font-family: var(--code-font-family);
+  font-size: calc(var(--code-font-size) * 0.95);
+  font-weight: var(--code-font-weight);
+}
+
+/* Terminal output — the selected terminal font, size and weight. The card body
+   carries `terminal-block`; the status lines below it (`exit 1`, a timeout) are
+   part of the same output and must not fall back to the generic monospace. */
+[data-slot="terminal-block"],
+[data-slot="terminal-line"] {
+  font-family: var(--terminal-font-family);
+  font-size: var(--terminal-font-size);
+  font-weight: var(--terminal-font-weight);
+}
+
+/* Badge geometry — Revision 5 outcome:
+   20px at the 16px default interface size, 23px at 24px interface size.
+   line-height: 1 and 1.5px vertical padding satisfy both bounds with zero clipping under overflow-hidden. */
+[data-slot="badge"] {
+  line-height: 1;
+  padding-top: 1.5px;
+  padding-bottom: 1.5px;
+}
+
+/* Reading line height — prose only (markdown paragraphs, list items and the
+   assistant reasoning body). Never controls, headers, code or terminal rows. */
+.aui-md-p,
+.aui-md-li,
+.aui-reasoning-text {
+  line-height: var(--reading-line-height, 1.5);
+}
+
+/* Code word wrap — visual only; copying preserves the source exactly.
+   Diffs are never wrapped (alignment, indentation, line numbers). */
+[data-code-wrap="on"] .aui-md-pre,
+[data-code-wrap="on"] .aui-shiki-base pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Terminal output wrapping — visual only, whitespace-preserving.
+   The vendored TerminalBlock renders rows as plain divs inside a body div
+   (its second child); these structural selectors are pinned by
+   tests/dom/appearance/typography.test.tsx so a vendored-file change fails
+   loudly instead of silently dropping the wrap behaviour. */
+[data-terminal-wrap="off"] [data-slot="terminal-block"] > div:last-child {
+  overflow-x: auto;
+}
+[data-terminal-wrap="on"] [data-slot="terminal-block"] > div:last-child > div {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+[data-terminal-wrap="off"] [data-slot="terminal-block"] > div:last-child > div {
+  white-space: pre;
 }

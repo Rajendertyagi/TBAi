@@ -8,5 +8,9 @@ const emptyConfig = AuiConfig({});
  * create an independent top-level runtime rather than degrading to a child no-op.
  */
 export function OpenCodeIsolationBoundary({ children }: { children: ReactNode }) {
-  return <AuiProvider extends={null} config={emptyConfig}>{children}</AuiProvider>;
+  return (
+    <AuiProvider extends={null} config={emptyConfig}>
+      {children}
+    </AuiProvider>
+  );
 }

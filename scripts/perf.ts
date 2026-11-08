@@ -16,9 +16,9 @@ const SAMPLES = 20;
 
 // Baseline-first: fill in after the first real run. -1 = no threshold yet.
 const THRESHOLDS = {
-  restP95Ms: -1,        // p95 for /api/conversations + /api/providers
-  chatTTFTp95Ms: -1,    // time-to-first-byte for /api/chat
-  successRatePct: 99,   // min acceptable %
+  restP95Ms: -1, // p95 for /api/conversations + /api/providers
+  chatTTFTp95Ms: -1, // time-to-first-byte for /api/chat
+  successRatePct: 99, // min acceptable %
 };
 
 function numArg(name: string, fallback: number): number {
@@ -35,7 +35,7 @@ function percentile(sorted: number[], p: number): number {
 async function measureRest(
   path: string,
   samples: number,
-  concurrency: number
+  concurrency: number,
 ): Promise<{ p50: number; p95: number; ok: number; total: number }> {
   const durations: number[] = [];
   let ok = 0;
@@ -65,7 +65,7 @@ async function measureRest(
 // providerId "perf-probe" may not exist — we measure transport behavior, not the model.
 async function measureChat(
   samples: number,
-  concurrency: number
+  concurrency: number,
 ): Promise<{
   ttftP50: number;
   ttftP95: number;
@@ -98,7 +98,7 @@ async function measureChat(
         if (res.body) {
           const reader = res.body.getReader();
           for (;;) {
-            const { value, done } = await reader.read();
+            const { done } = await reader.read();
             if (done) break;
             if (first === -1) first = performance.now() - t0;
             await new Promise((r) => setTimeout(r, 0));
@@ -168,9 +168,8 @@ async function main() {
   if (THRESHOLDS.chatTTFTp95Ms >= 0 && result.chat) {
     if (result.chat.ttftP95 > THRESHOLDS.chatTTFTp95Ms) failed = true;
   }
-  const successPct = result.chat && result.chat.total > 0
-    ? (result.chat.completed / result.chat.total) * 100
-    : 100;
+  const successPct =
+    result.chat && result.chat.total > 0 ? (result.chat.completed / result.chat.total) * 100 : 100;
   if (successPct < THRESHOLDS.successRatePct) failed = true;
 
   if (failed) {
@@ -181,24 +180,28 @@ async function main() {
   }
 }
 
-function formatText(r: Awaited<ReturnType<typeof main>> extends never ? never : {
-  base: string;
-  rest: Array<{ path: string; p50: number; p95: number; ok: number; total: number }>;
-  chat: {
-    ttftP50: number;
-    ttftP95: number;
-    totalP95: number;
-    completed: number;
-    total: number;
-  } | null;
-}): string {
+function formatText(
+  r: Awaited<ReturnType<typeof main>> extends never
+    ? never
+    : {
+        base: string;
+        rest: Array<{ path: string; p50: number; p95: number; ok: number; total: number }>;
+        chat: {
+          ttftP50: number;
+          ttftP95: number;
+          totalP95: number;
+          completed: number;
+          total: number;
+        } | null;
+      },
+): string {
   const lines: string[] = [];
   lines.push(`TBAi perf — ${r.base} (${new Date().toISOString()})`);
   lines.push("");
   lines.push("REST:");
   for (const x of r.rest) {
     lines.push(
-      `  ${x.path}: p50=${x.p50.toFixed(1)}ms p95=${x.p95.toFixed(1)}ms ${x.ok}/${x.total} ok`
+      `  ${x.path}: p50=${x.p50.toFixed(1)}ms p95=${x.p95.toFixed(1)}ms ${x.ok}/${x.total} ok`,
     );
   }
   lines.push("");
@@ -208,9 +211,8 @@ function formatText(r: Awaited<ReturnType<typeof main>> extends never ? never : 
     lines.push(`  total p95=${r.chat.totalP95.toFixed(1)}ms`);
     lines.push(
       `  completed ${r.chat.completed}/${r.chat.total} (${(
-        (r.chat.completed / r.chat.total) *
-        100
-      ).toFixed(1)}%)`
+        (r.chat.completed / r.chat.total) * 100
+      ).toFixed(1)}%)`,
     );
   } else {
     lines.push("CHAT (SSE /api/chat): no samples");

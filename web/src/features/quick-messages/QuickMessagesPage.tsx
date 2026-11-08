@@ -1,14 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  GripVertical,
-  Loader2,
-  Plus,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { GripVertical, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { quickMessagesConfig } from "@/config/quick-messages";
-import { useQuickMessagesStore } from "@/stores/quickMessagesStore";
+import { quickMessagesConfig } from "@/features/quick-messages/config";
+import { useQuickMessagesStore } from "@/features/quick-messages/state/quickMessagesStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,7 +22,7 @@ import { cn } from "@/lib/utils";
  * Quick Messages settings surface (Codeg pixel parity, fixed split).
  * Fluid shell, one divided card (list + editor joined), grip-drag reorder
  * (HTML5 DnD — no motion dependency), dirty-gated save, delete confirm.
- * Copy + layout tokens come from `config/quick-messages.ts`. Drafts sync on
+ * Copy + layout tokens come from `features/quick-messages/config.ts`. Drafts sync on
  * selection change only — never while dirty — so background reloads can't
  * discard unsent edits.
  */
@@ -64,9 +58,7 @@ export function QuickMessagesPage() {
     const q = search.trim().toLowerCase();
     if (!q) return messages;
     return messages.filter(
-      (m) =>
-        m.title.toLowerCase().includes(q) ||
-        m.content.toLowerCase().includes(q),
+      (m) => m.title.toLowerCase().includes(q) || m.content.toLowerCase().includes(q),
     );
   }, [messages, search]);
 
@@ -81,15 +73,14 @@ export function QuickMessagesPage() {
 
   // Sync drafts when the selection moves; never while dirty (a background
   // reload must not discard unsent edits).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset the draft only when a DIFFERENT message is selected. Depending on `selected` itself would discard whatever the user has typed every time the object is re-created.
   useEffect(() => {
     setDraftTitle(selected?.title ?? "");
     setDraftContent(selected?.content ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
   const isDirty =
-    selected != null &&
-    (draftTitle !== selected.title || draftContent !== selected.content);
+    selected != null && (draftTitle !== selected.title || draftContent !== selected.content);
 
   const anyBusy = busy !== null;
 
@@ -142,9 +133,7 @@ export function QuickMessagesPage() {
         }
       } else {
         toast.error(copy.deleteFailed, {
-          description:
-            result.error ??
-            copy.deleteDescription(target?.title || copy.untitled),
+          description: result.error ?? copy.deleteDescription(target?.title || copy.untitled),
         });
       }
     } finally {
@@ -179,9 +168,7 @@ export function QuickMessagesPage() {
   };
 
   const deleteTargetMessage =
-    deleteTargetId !== null
-      ? (messages.find((m) => m.id === deleteTargetId) ?? null)
-      : null;
+    deleteTargetId !== null ? (messages.find((m) => m.id === deleteTargetId) ?? null) : null;
 
   if (loading && messages.length === 0) {
     return (
@@ -196,7 +183,7 @@ export function QuickMessagesPage() {
     <div className="flex h-full flex-col p-3 md:p-4">
       <div className="flex items-center justify-between gap-3 pb-4">
         <div>
-          <h2 className="text-base font-semibold">{copy.title}</h2>
+          <h1 className="text-base font-semibold">{copy.title}</h1>
           <p className="mt-1 text-xs text-muted-foreground">{copy.description}</p>
         </div>
       </div>
@@ -311,7 +298,7 @@ export function QuickMessagesPage() {
                               )}
                             </div>
                             {m.content && (
-                              <div className="mt-0.5 truncate text-[0.625rem] text-muted-foreground">
+                              <div className="mt-0.5 truncate text-3xs text-muted-foreground">
                                 {m.content}
                               </div>
                             )}
@@ -401,15 +388,11 @@ export function QuickMessagesPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
             <AlertDialogDescription>
-              {copy.deleteDescription(
-                deleteTargetMessage?.title || copy.untitled,
-              )}
+              {copy.deleteDescription(deleteTargetMessage?.title || copy.untitled)}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy === "delete"}>
-              {copy.cancel}
-            </AlertDialogCancel>
+            <AlertDialogCancel disabled={busy === "delete"}>{copy.cancel}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(event) => {
                 event.preventDefault();

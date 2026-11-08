@@ -111,6 +111,7 @@ export function findChipModelInfo<T extends { readonly id: string; readonly prov
 ): T | null {
   if (!modelRef) return null;
   const match =
-    models.find((m) => `${m.providerID}/${m.id}` === modelRef) ?? models.find((m) => m.id === modelRef);
+    models.find((m) => `${m.providerID}/${m.id}` === modelRef) ??
+    models.find((m) => m.id === modelRef);
   return match ?? null;
 }

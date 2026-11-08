@@ -1,11 +1,28 @@
-import type { FormField, FormInfo, FormOption, FormWhen, SessionFormReplyInput } from "@opencode/client";
-import { OPENCODE_V2_FORM_FIELD_LIMIT, OPENCODE_V2_FORM_OPTION_LIMIT } from "@/config/opencode";
+import type {
+  FormField,
+  FormInfo,
+  FormOption,
+  FormWhen,
+  SessionFormReplyInput,
+} from "@opencode/client";
+import {
+  OPENCODE_V2_FORM_FIELD_LIMIT,
+  OPENCODE_V2_FORM_OPTION_LIMIT,
+} from "@/features/opencode/config";
 
 export type V2FormAnswer = SessionFormReplyInput["answer"];
 type FormValue = V2FormAnswer[string];
 
-export interface V2FormOptionView { readonly value: string; readonly label: string; readonly description: string | null }
-export interface V2FormWhenView { readonly key: string; readonly op: "eq" | "neq"; readonly value: string | number | boolean }
+export interface V2FormOptionView {
+  readonly value: string;
+  readonly label: string;
+  readonly description: string | null;
+}
+export interface V2FormWhenView {
+  readonly key: string;
+  readonly op: "eq" | "neq";
+  readonly value: string | number | boolean;
+}
 
 interface V2FormFieldBase {
   readonly key: string;
@@ -16,13 +33,50 @@ interface V2FormFieldBase {
   readonly when: readonly V2FormWhenView[];
 }
 
-export type V2FormFieldView = V2FormFieldBase & (
-  | { readonly type: "string"; readonly default: string | null; readonly options: readonly V2FormOptionView[] | null; readonly custom: boolean; readonly format: "email" | "uri" | "date" | "date-time" | null; readonly minLength: number | null; readonly maxLength: number | null; readonly pattern: string | null }
-  | { readonly type: "number" | "integer"; readonly default: string | number | null; readonly minimum: number | string | null; readonly maximum: number | string | null }
-  | { readonly type: "boolean"; readonly default: boolean | null }
-  | { readonly type: "multiselect"; readonly default: readonly string[] | null; readonly options: readonly V2FormOptionView[] | null; readonly minItems: number | null; readonly maxItems: number | null; readonly custom: boolean }
-  | { readonly type: "external"; readonly url: string; readonly supported: false }
-);
+export type V2FormFieldView = V2FormFieldBase &
+  (
+    | {
+        readonly type: "string";
+        readonly default: string | null;
+        readonly options: readonly V2FormOptionView[] | null;
+        readonly custom: boolean;
+        readonly format: "email" | "uri" | "date" | "date-time" | null;
+        readonly minLength: number | null;
+        readonly maxLength: number | null;
+        readonly pattern: string | null;
+      }
+    | {
+        readonly type: "number" | "integer";
+        readonly default: string | number | null;
+        readonly minimum: number | string | null;
+        readonly maximum: number | string | null;
+      }
+    | { readonly type: "boolean"; readonly default: boolean | null }
+    | {
+        readonly type: "multiselect";
+        readonly default: readonly string[] | null;
+        readonly options: readonly V2FormOptionView[] | null;
+        readonly minItems: number | null;
+        readonly maxItems: number | null;
+        readonly custom: boolean;
+      }
+    | { readonly type: "external"; readonly url: string; readonly supported: false }
+    | {
+        /**
+         * A field type this renderer does not know.
+         *
+         * The upstream's `Form.Field` union is closed, so a field can only
+         * reach this state if the SERVER adds a type and the client accepts it
+         * before this renderer learns it. Projecting it as something else -
+         * which is what the old catch-all did - would render a control that
+         * cannot work and answer with the wrong shape. So the field is
+         * reported as UNSUPPORTED instead, and the form says why.
+         */
+        readonly type: "unsupported";
+        readonly fieldType: string;
+        readonly supported: false;
+      }
+  );
 
 export interface V2FormView {
   readonly id: string;
@@ -33,27 +87,61 @@ export interface V2FormView {
 
 export type V2FormValidationResult =
   | { readonly ok: true; readonly answer: V2FormAnswer }
-  | { readonly ok: false; readonly fieldErrors: Readonly<Record<string, string>>; readonly formError: string | null };
+  | {
+      readonly ok: false;
+      readonly fieldErrors: Readonly<Record<string, string>>;
+      readonly formError: string | null;
+    };
 
-function options(value: readonly FormOption[] | undefined): readonly V2FormOptionView[] | null {
+/**
+ * The options a field offers, and whether the list was truncated.
+ *
+ * The truncation is RETURNED rather than applied silently: a field whose
+ * options exceed the limit is a field the reader cannot answer, because the
+ * answer they need is not in the list they are shown. Reporting it is the
+ * difference between "this form is unanswerable" and "this form silently
+ * offers the wrong answers" (M15).
+ */
+function options(value: readonly FormOption[] | undefined): {
+  readonly options: readonly V2FormOptionView[] | null;
+  readonly truncated: boolean;
+} {
   // `[]` is truthy in JS, so an empty list would otherwise be read as "this
   // field HAS options" and render an empty picker. Verified against the live
   // server: `options: []` without `custom` rejects every value, and with
   // `custom: true` accepts free text — so an empty list is a field with NO
   // options, and `null` is the one representation both readers can test.
-  if (value === undefined || value.length === 0) return null;
-  return value.slice(0, OPENCODE_V2_FORM_OPTION_LIMIT).map((option) => ({ value: option.value, label: option.label, description: option.description ?? null }));
+  if (value === undefined || value.length === 0) return { options: null, truncated: false };
+  return {
+    options: value.slice(0, OPENCODE_V2_FORM_OPTION_LIMIT).map((option) => ({
+      value: option.value,
+      label: option.label,
+      description: option.description ?? null,
+    })),
+    truncated: value.length > OPENCODE_V2_FORM_OPTION_LIMIT,
+  };
 }
 
 function when(value: readonly FormWhen[] | undefined): readonly V2FormWhenView[] {
-  return (value ?? []).map((condition) => ({ key: condition.key, op: condition.op, value: condition.value }));
+  return (value ?? []).map((condition) => ({
+    key: condition.key,
+    op: condition.op,
+    value: condition.value,
+  }));
 }
 
 function base(field: FormField): V2FormFieldBase {
   const required = "required" in field && field.required === true;
   const hidden = "hidden" in field && field.hidden === true;
   const conditions = "when" in field ? when(field.when) : [];
-  return { key: field.key, title: field.title ?? null, description: field.description ?? null, required, hidden, when: conditions };
+  return {
+    key: field.key,
+    title: field.title ?? null,
+    description: field.description ?? null,
+    required,
+    hidden,
+    when: conditions,
+  };
 }
 
 /** Normalizes an official form into the typed fields supported by the V2 renderer. */
@@ -72,17 +160,68 @@ export function projectV2Form(form: FormInfo): V2FormView {
       unsupportedReason = "External form fields are not supported";
       fields.push({ ...common, type: "external", url: field.url, supported: false });
     } else if (field.type === "string") {
-      fields.push({ ...common, type: "string", default: field.default ?? null, options: options(field.options), custom: field.custom ?? false, format: field.format ?? null, minLength: field.minLength ?? null, maxLength: field.maxLength ?? null, pattern: field.pattern ?? null });
+      const list = options(field.options);
+      // A truncated option list is a field the reader cannot answer: the
+      // answer they need is not in the list they are shown (M15).
+      if (list.truncated) unsupportedReason = "This field has too many options to answer";
+      fields.push({
+        ...common,
+        type: "string",
+        default: field.default ?? null,
+        options: list.options,
+        custom: field.custom ?? false,
+        format: field.format ?? null,
+        minLength: field.minLength ?? null,
+        maxLength: field.maxLength ?? null,
+        pattern: field.pattern ?? null,
+      });
     } else if (field.type === "number" || field.type === "integer") {
-      if (field.minimum === "NaN" || field.maximum === "NaN" || field.default === "NaN") unsupportedReason = "NaN form bounds are not supported";
-      fields.push({ ...common, type: field.type, default: field.default ?? null, minimum: field.minimum ?? null, maximum: field.maximum ?? null });
+      if (field.minimum === "NaN" || field.maximum === "NaN" || field.default === "NaN")
+        unsupportedReason = "NaN form bounds are not supported";
+      fields.push({
+        ...common,
+        type: field.type,
+        default: field.default ?? null,
+        minimum: field.minimum ?? null,
+        maximum: field.maximum ?? null,
+      });
     } else if (field.type === "boolean") {
       fields.push({ ...common, type: "boolean", default: field.default ?? null });
+    } else if (field.type === "multiselect") {
+      const list = options(field.options);
+      if (list.truncated) unsupportedReason = "This field has too many options to answer";
+      fields.push({
+        ...common,
+        type: "multiselect",
+        default: field.default ?? null,
+        options: list.options,
+        minItems: field.minItems ?? null,
+        maxItems: field.maxItems ?? null,
+        custom: field.custom ?? false,
+      });
     } else {
-      fields.push({ ...common, type: "multiselect", default: field.default ?? null, options: options(field.options), minItems: field.minItems ?? null, maxItems: field.maxItems ?? null, custom: field.custom ?? false });
+      // A type this renderer does not know. The upstream's union is CLOSED
+      // today - `Form.Field` is exactly the six types handled above - so
+      // TypeScript proves this branch is unreachable for the installed client.
+      //
+      // It is kept anyway, and it is the point of the change: the OLD code had
+      // a catch-all that projected EVERY unknown type as a multiselect, so the
+      // day the server grew a seventh type this renderer would have drawn a
+      // picker that could not work and answered with the wrong shape. The
+      // cast is deliberate: the union is closed, so the branch exists for the
+      // server's NEXT type, not for one the client can deliver today.
+      const fieldType = (field as { readonly type: string }).type;
+      unsupportedReason = `Unsupported form field type: ${fieldType}`;
+      fields.push({
+        ...common,
+        type: "unsupported",
+        fieldType,
+        supported: false,
+      });
     }
   }
-  if (form.fields.length > OPENCODE_V2_FORM_FIELD_LIMIT) unsupportedReason = "This form has too many fields";
+  if (form.fields.length > OPENCODE_V2_FORM_FIELD_LIMIT)
+    unsupportedReason = "This form has too many fields";
   return { id: form.id, title: form.title, fields, unsupportedReason };
 }
 
@@ -135,7 +274,12 @@ export function isV2FormFieldVisible(field: V2FormFieldView, answer: V2FormAnswe
 }
 
 function isMissing(value: FormValue | undefined): boolean {
-  return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
 }
 
 function numericBound(value: number | string | null): number | null {
@@ -144,13 +288,25 @@ function numericBound(value: number | string | null): number | null {
   return typeof value === "number" ? value : null;
 }
 
-function validateField(field: V2FormFieldView, value: FormValue | undefined, errors: Record<string, string>): void {
-  if (field.required && isMissing(value)) { errors[field.key] = "This field is required"; return; }
+function validateField(
+  field: V2FormFieldView,
+  value: FormValue | undefined,
+  errors: Record<string, string>,
+): void {
+  if (field.required && isMissing(value)) {
+    errors[field.key] = "This field is required";
+    return;
+  }
   if (value === undefined) return;
   if (field.type === "string") {
-    if (typeof value !== "string") { errors[field.key] = "Enter text"; return; }
-    if (field.minLength !== null && value.length < field.minLength) errors[field.key] = `Use at least ${field.minLength} characters`;
-    if (field.maxLength !== null && value.length > field.maxLength) errors[field.key] = `Use at most ${field.maxLength} characters`;
+    if (typeof value !== "string") {
+      errors[field.key] = "Enter text";
+      return;
+    }
+    if (field.minLength !== null && value.length < field.minLength)
+      errors[field.key] = `Use at least ${field.minLength} characters`;
+    if (field.maxLength !== null && value.length > field.maxLength)
+      errors[field.key] = `Use at most ${field.maxLength} characters`;
     // `options` and `custom` COEXIST on one field — `Form.MultiselectField`
     // proves it (`options` is REQUIRED there and `custom` still exists), and
     // the server was asked directly: with both, free text is ACCEPTED; with
@@ -159,33 +315,77 @@ function validateField(field: V2FormFieldView, value: FormValue | undefined, err
     // custom input. Reading it the other way round — as `!custom` replacing the
     // options — is what let any string through.
     const options = v2FormFieldOptions(field);
-    if (options !== null && !v2FormFieldAllowsCustom(field) && !options.some((option) => option.value === value)) errors[field.key] = "Choose one of the available options";
-    if (field.format === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) errors[field.key] = "Enter a valid email";
-    if (field.format === "uri") { try { new URL(value); } catch { errors[field.key] = "Enter a valid URI"; } }
-    if (field.pattern) { try { if (!new RegExp(field.pattern).test(value)) errors[field.key] = "Value does not match the required format"; } catch { errors[field.key] = "The form pattern is invalid"; } }
+    if (
+      options !== null &&
+      !v2FormFieldAllowsCustom(field) &&
+      !options.some((option) => option.value === value)
+    )
+      errors[field.key] = "Choose one of the available options";
+    if (field.format === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+      errors[field.key] = "Enter a valid email";
+    if (field.format === "uri") {
+      try {
+        new URL(value);
+      } catch {
+        errors[field.key] = "Enter a valid URI";
+      }
+    }
+    if (field.pattern) {
+      try {
+        if (!new RegExp(field.pattern).test(value))
+          errors[field.key] = "Value does not match the required format";
+      } catch {
+        errors[field.key] = "The form pattern is invalid";
+      }
+    }
   } else if (field.type === "number" || field.type === "integer") {
-    if (typeof value !== "number" || !Number.isFinite(value) || (field.type === "integer" && !Number.isInteger(value))) { errors[field.key] = field.type === "integer" ? "Enter a whole number" : "Enter a finite number"; return; }
-    const minimum = numericBound(field.minimum); const maximum = numericBound(field.maximum);
-    if (minimum !== null && value < minimum) errors[field.key] = `Enter a value of at least ${minimum}`;
-    if (maximum !== null && value > maximum) errors[field.key] = `Enter a value of at most ${maximum}`;
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      (field.type === "integer" && !Number.isInteger(value))
+    ) {
+      errors[field.key] =
+        field.type === "integer" ? "Enter a whole number" : "Enter a finite number";
+      return;
+    }
+    const minimum = numericBound(field.minimum);
+    const maximum = numericBound(field.maximum);
+    if (minimum !== null && value < minimum)
+      errors[field.key] = `Enter a value of at least ${minimum}`;
+    if (maximum !== null && value > maximum)
+      errors[field.key] = `Enter a value of at most ${maximum}`;
   } else if (field.type === "boolean") {
     if (typeof value !== "boolean") errors[field.key] = "Choose true or false";
   } else if (field.type === "multiselect") {
-    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) { errors[field.key] = "Choose valid options"; return; }
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+      errors[field.key] = "Choose valid options";
+      return;
+    }
     // Same coexist rule as the string field: options AND a custom escape hatch,
     // not one instead of the other. `Form.Value` allows a string OR a string
     // array, and a multiselect answer is always the array — the server rejects
     // a scalar here ("Expected string array for form field: e").
     const options = v2FormFieldOptions(field);
-    if (options !== null && !v2FormFieldAllowsCustom(field) && value.some((item) => !options.some((option) => option.value === item))) errors[field.key] = "Choose only available options";
-    if (field.minItems !== null && value.length < field.minItems) errors[field.key] = `Choose at least ${field.minItems} options`;
-    if (field.maxItems !== null && value.length > field.maxItems) errors[field.key] = `Choose at most ${field.maxItems} options`;
+    if (
+      options !== null &&
+      !v2FormFieldAllowsCustom(field) &&
+      value.some((item) => !options.some((option) => option.value === item))
+    )
+      errors[field.key] = "Choose only available options";
+    if (field.minItems !== null && value.length < field.minItems)
+      errors[field.key] = `Choose at least ${field.minItems} options`;
+    if (field.maxItems !== null && value.length > field.maxItems)
+      errors[field.key] = `Choose at most ${field.maxItems} options`;
   }
 }
 
 /** Validates a keyed answer against visible fields and conditional rules. */
-export function validateV2FormAnswer(form: V2FormView, answer: V2FormAnswer): V2FormValidationResult {
-  if (form.unsupportedReason !== null) return { ok: false, fieldErrors: {}, formError: form.unsupportedReason };
+export function validateV2FormAnswer(
+  form: V2FormView,
+  answer: V2FormAnswer,
+): V2FormValidationResult {
+  if (form.unsupportedReason !== null)
+    return { ok: false, fieldErrors: {}, formError: form.unsupportedReason };
   const errors: Record<string, string> = {};
   const visible: { [key: string]: FormValue } = {};
   for (const field of form.fields) {

@@ -26,10 +26,12 @@ export function OpenCodeQuestions() {
   const extras = useOptionalV2RuntimeExtras();
   if (!extras || extras.forms.length === 0) return null;
   const [form] = extras.forms;
-  return <V2FormCard
-    form={form}
-    queuedBehind={extras.forms.length - 1}
-    onSubmit={(answer) => extras.replyToForm(form.id, answer)}
-    onCancel={() => extras.rejectForm(form.id)}
-  />;
+  return (
+    <V2FormCard
+      form={form}
+      queuedBehind={extras.forms.length - 1}
+      onSubmit={(answer) => extras.replyToForm(form.id, answer)}
+      onCancel={() => extras.rejectForm(form.id)}
+    />
+  );
 }

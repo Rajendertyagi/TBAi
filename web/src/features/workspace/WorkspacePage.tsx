@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { FolderCog } from "lucide-react";
 import { SettingRow, SettingsPage, SettingsSection } from "../../components/shared/settings";
 import { apiFetch } from "../../lib/platform";
+import { ROUTES } from "@/config/navigation";
 
 interface Sysinfo {
   platform: string;
@@ -58,7 +59,7 @@ export function WorkspacePage() {
           description="Ask the assistant to list, read, search, edit, or run things — destructive actions always ask for approval first."
           control={
             <Link
-              to="/chat/new"
+              to={ROUTES.CHAT_NEW}
               className="inline-flex items-center justify-center rounded-md border border-input bg-transparent px-3 py-1 text-sm transition-colors hover:bg-muted"
             >
               Open chat
@@ -68,9 +69,7 @@ export function WorkspacePage() {
       </SettingsSection>
       <SettingsSection title="This computer">
         {error && <p className="text-xs text-destructive">{error}</p>}
-        {!sysinfo && !error && (
-          <p className="text-xs text-muted-foreground">Loading…</p>
-        )}
+        {!sysinfo && !error && <p className="text-xs text-muted-foreground">Loading…</p>}
         {sysinfo && (
           <div className="grid grid-cols-2 gap-2 text-xs">
             {(

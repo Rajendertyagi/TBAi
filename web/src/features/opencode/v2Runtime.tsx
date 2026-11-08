@@ -1,10 +1,7 @@
 "use client";
 
 import { useMemo, useSyncExternalStore, type ReactNode } from "react";
-import {
-  AssistantRuntimeProvider,
-  useExternalStoreRuntime,
-} from "@assistant-ui/react";
+import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 import { createV2RuntimeStoreFactory } from "./v2RuntimeStore";
 import type { V2ThreadController } from "./v2ThreadController";
 

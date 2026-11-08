@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Pencil, Plus, Server, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useSettingsStore } from "@/stores";
+import { useSettingsStore } from "@/features/providers/state/providersStore";
 import { apiFetch } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,11 +48,11 @@ export function ProvidersPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load the provider list once on mount; this is the initial fetch, not a subscription.
   useEffect(() => {
     loadProviders()
       .catch(() => toast.error("Could not load providers."))
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const visibleProviders = useMemo(
@@ -98,10 +98,10 @@ export function ProvidersPage() {
     <div className="h-full overflow-y-auto">
       <section className="space-y-3 px-3 pt-3 md:px-4 md:pt-4">
         <div>
-          <h1 className="text-sm font-semibold">Providers</h1>
+          <h1 className="text-base font-semibold">Providers</h1>
           <p className="text-sm text-muted-foreground">
-            Model providers, endpoints, and credentials. API keys are encrypted on the
-            server and never shown here.
+            Model providers, endpoints, and credentials. API keys are encrypted on the server and
+            never shown here.
           </p>
         </div>
       </section>
@@ -157,7 +157,9 @@ export function ProvidersPage() {
                       )}
                     </div>
                     <div className="truncate font-mono text-xs text-muted-foreground">
-                      {provider.models?.length ? `${provider.models.length} model(s)` : provider.model}
+                      {provider.models?.length
+                        ? `${provider.models.length} model(s)`
+                        : provider.model}
                       {provider.endpoint && ` · ${provider.endpoint}`}
                     </div>
                   </div>

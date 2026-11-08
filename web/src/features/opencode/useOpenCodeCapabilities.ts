@@ -64,10 +64,35 @@ export function buildOpenCodeThinkingOptions(
   model: OpenCodeModelOption | null | undefined,
 ): OpenCodeThinkingOption[] {
   if (!model || model.variants.length === 0) return [];
-  return [
-    { id: "", label: "Default" },
-    ...model.variants.map((v) => ({ id: v, label: v })),
-  ];
+  return [{ id: "", label: "Default" }, ...model.variants.map((v) => ({ id: v, label: v }))];
+}
+
+/**
+ * Reads the capabilities payload, turning a non-2xx response into an error.
+ *
+ * A failed fetch must never be read as "this install has no models": the body of
+ * a 5xx proxied response is an `{ error }` object, and parsing it as a catalogue
+ * would populate the picker with an authoritative-looking empty list. The
+ * caller's catch keeps the previous lists, which is the honest outcome.
+ *
+ * @param response - The capabilities response.
+ * @returns The parsed capabilities.
+ * @throws Error carrying the server's message, or `HTTP <status>` when the body
+ *   is not JSON.
+ */
+export async function readOpenCodeCapabilities(response: Response): Promise<OpenCodeCapabilities> {
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const body: unknown = await response.json();
+      if (body && typeof body === "object" && "error" in body && typeof body.error === "string")
+        detail = body.error;
+    } catch {
+      // Not a JSON error envelope; the status is all we have.
+    }
+    throw new Error(detail ?? `HTTP ${response.status}`);
+  }
+  return (await response.json()) as OpenCodeCapabilities;
 }
 
 /**
@@ -87,6 +112,7 @@ export function useOpenCodeCapabilities(enabled = true) {
   // when the backend returns. Failure retains the previous lists.
   const recoveryEpoch = useAvailabilityStore((s) => s.recoveryEpoch);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `recoveryEpoch` is a store counter that is never read in the body - it is the refetch trigger. Availability recovery changes no prop this effect observes, but the capabilities that were fetched against a dead server have to be fetched again once the server is back.
   useEffect(() => {
     if (!enabled) {
       setAgents([]);
@@ -104,7 +130,7 @@ export function useOpenCodeCapabilities(enabled = true) {
     setIsLoading(true);
     setError(null);
     apiFetch("/api/opencode/capabilities", { signal: controller.signal })
-      .then((r) => r.json())
+      .then(readOpenCodeCapabilities)
       .then((data: OpenCodeCapabilities) => {
         if (cancelled) return;
         setAgents(data.agents ?? []);
@@ -112,16 +138,19 @@ export function useOpenCodeCapabilities(enabled = true) {
         // become a model reference that the server rejects on the first turn,
         // which is the exact failure this default exists to prevent.
         setDefaultModel(
-          data.defaultModel
-            && typeof data.defaultModel.providerID === "string" && data.defaultModel.providerID.length > 0
-            && typeof data.defaultModel.modelID === "string" && data.defaultModel.modelID.length > 0
+          data.defaultModel &&
+            typeof data.defaultModel.providerID === "string" &&
+            data.defaultModel.providerID.length > 0 &&
+            typeof data.defaultModel.modelID === "string" &&
+            data.defaultModel.modelID.length > 0
             ? {
-              providerID: data.defaultModel.providerID,
-              modelID: data.defaultModel.modelID,
-              name: typeof data.defaultModel.name === "string" && data.defaultModel.name.length > 0
-                ? data.defaultModel.name
-                : data.defaultModel.modelID,
-            }
+                providerID: data.defaultModel.providerID,
+                modelID: data.defaultModel.modelID,
+                name:
+                  typeof data.defaultModel.name === "string" && data.defaultModel.name.length > 0
+                    ? data.defaultModel.name
+                    : data.defaultModel.modelID,
+              }
             : undefined,
         );
         // Keep the optional variants field total for the picker contract.

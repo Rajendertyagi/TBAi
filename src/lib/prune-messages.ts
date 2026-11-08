@@ -276,7 +276,12 @@ export function pruneStaleMessages(messages: UIMessage[]): PrunedHistory {
       const id = part.toolCallId;
       if (!id) return;
       const list = occurrences.get(id) ?? [];
-      list.push({ messageIndex, partIndex, lifecycle: lifecycleOf(part), hasApproval: part.approval !== undefined });
+      list.push({
+        messageIndex,
+        partIndex,
+        lifecycle: lifecycleOf(part),
+        hasApproval: part.approval !== undefined,
+      });
       occurrences.set(id, list);
     });
   });

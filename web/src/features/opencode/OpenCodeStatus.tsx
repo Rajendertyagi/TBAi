@@ -1,51 +1,186 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { HeartCrack, HeartHandshake, HeartOff, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { OPENCODE_V2_MAX_RECONNECT_ATTEMPTS } from "./config";
+import { pendingSetNotice } from "./auxiliaryNotice";
+import { OPENCODE_UNAVAILABLE_NOTICE, runtimeStatusView } from "./runtimeStatus";
+import { statusView, type StatusPresentation } from "./statusView";
+import { useOpenCodeRuntimeStatus } from "./useOpenCodeRuntimeStatus";
 import { useOptionalV2RuntimeExtras } from "./v2RuntimeExtras";
 
-type HeartState = "error" | "off" | "working" | "idle";
-const HEARTS: Record<HeartState, { Icon: typeof HeartHandshake; className: string; label: string }> = {
-  error: { Icon: HeartCrack, className: "text-destructive", label: "Error" },
-  off: { Icon: HeartOff, className: "text-muted-foreground/60", label: "Disconnected" },
-  working: { Icon: HeartPulse, className: "text-amber-500 animate-pulse", label: "Working" },
-  idle: { Icon: HeartHandshake, className: "text-muted-foreground", label: "Connected" },
+const HEARTS: Record<StatusPresentation, { Icon: typeof HeartHandshake; className: string }> = {
+  error: { Icon: HeartCrack, className: "text-destructive" },
+  off: { Icon: HeartOff, className: "text-muted-foreground/60" },
+  working: { Icon: HeartPulse, className: "text-amber-500 animate-pulse" },
+  idle: { Icon: HeartHandshake, className: "text-muted-foreground" },
 };
 
+const ARCHIVED_NOTICE = "Archived in OpenCode. Hidden from its own session list.";
+
 /** Heart-chip status for the native Code runtime. */
-export function OpenCodeStatus({ compact = false, onReconnect }: { compact?: boolean; onReconnect?: () => void }) {
+export function OpenCodeStatus({
+  compact = false,
+  onReconnect,
+}: {
+  compact?: boolean;
+  onReconnect?: () => void;
+}) {
   const extras = useOptionalV2RuntimeExtras();
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (armed && extras?.state.load.type !== "loading" && extras?.state.load.type !== "reconciling") setArmed(false);
-  }, [armed, extras?.state.load.type]);
-  if (!extras) return null;
-  const { state } = extras;
-  const loadState = state.load.type;
-  const runState = state.execution.type;
-  const reconnecting = armed && (loadState === "loading" || loadState === "reconciling");
-  let heart: HeartState = "idle";
-  if (state.load.type === "error" || state.execution.type === "error" || state.revertRecovery.type === "blocked") heart = "error";
-  else if (state.connection.type !== "connected" || runState === "cancelling") heart = "off";
-  else if (loadState === "loading" || loadState === "reconciling" || runState === "streaming" || runState === "executing") heart = "working";
-  const { Icon, className, label } = HEARTS[heart];
-  const recoveryBlocked = state.revertRecovery.type === "blocked";
-  const errorDetail = state.load.type === "error" ? state.load.error.message : state.execution.type === "error" ? state.execution.error.message : recoveryBlocked ? state.revertRecovery.error.message : null;
-  const retry = () => {
-    if (recoveryBlocked) void extras.reconcileStagedRevert();
-    else { onReconnect?.(); setArmed(true); }
+  // Which service the backend is bound to (§4.2). Read here because the chip is
+  // the Code surface's one always-present status affordance; the read never
+  // starts a service, so opening Code mode cannot spawn anything as a side
+  // effect of rendering it. The connection type is the refresh key: a runtime
+  // that just CONNECTED proves the backend installed a target (the lazily
+  // started managed service), which the mount-time read could not have seen.
+  const runtime = useOpenCodeRuntimeStatus(true, extras?.state.connection.type ?? "absent");
+  const runtimeView = runtime.status ? runtimeStatusView(runtime.status) : null;
+  // The heavier `onReconnect` rebuild is the fallback for the case where there
+  // is no native runtime to ask (no controller). Keep it reachable: render the
+  // chip with a terminal-failed presentation so the reader can trigger it.
+  if (!extras && !onReconnect) return null;
+  const state = extras?.state ?? {
+    connection: { type: "failed", attempt: 0 },
+    load: { type: "error", error: { message: "OpenCode runtime unavailable" } },
+    retry: null,
+    activity: "unknown",
+    activityRevision: 0,
+    execution: { type: "idle" },
+    revertRecovery: { type: "none" },
+    auxiliary: null,
+    session: null,
   };
-  const heartNode = <Popover>
-    <PopoverTrigger asChild><button type="button" aria-label={`OpenCode status: ${label}`} className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Icon aria-hidden="true" className={cn("size-3.5", className)} /></button></PopoverTrigger>
-    <PopoverContent align="start">
-      <div className="flex items-center gap-2"><Icon aria-hidden="true" className={cn("size-3.5", className)} /><span className="text-sm font-medium">{label}</span></div>
-      <dl className="mt-2 space-y-1.5"><div><dt className="text-xs text-muted-foreground">Working directory</dt><dd className="break-all font-mono text-xs">{state.session?.location.directory ?? "–"}</dd></div><div><dt className="text-xs text-muted-foreground">Session id</dt><dd className="break-all font-mono text-xs">{state.session?.id ?? extras.sessionId}</dd></div></dl>
-      {errorDetail && <p role="alert" className="mt-2 text-xs text-destructive">{errorDetail}</p>}
-      <Button type="button" size="sm" variant="outline" className="mt-3" disabled={!recoveryBlocked && (onReconnect == null || state.connection.type === "closed")} onClick={retry}>{reconnecting ? "Reconnecting…" : recoveryBlocked ? "Retry recovery" : "Reconnect"}</Button>
-    </PopoverContent>
-  </Popover>;
+  const recoveryBlocked = state.revertRecovery.type === "blocked";
+  // The RUNTIME's connection state is the fact: it is set by the component
+  // that schedules the retry, and it carries the attempt number. A local
+  // "the reader pressed Reconnect" flag cannot tell an automatic reconnect
+  // from a terminal failure, and the runtime sets `load: error` while it waits
+  // for its next attempt - which is why the old chip showed a red Error for a
+  // reconnect that was about to succeed.
+  const view = statusView({
+    connection: state.connection,
+    load: state.load,
+    // Confirmed process-local activity is a RUN, not an idle connection: a
+    // server that still owns a drain must not render as Connected.
+    running:
+      state.execution.type === "streaming" ||
+      state.execution.type === "executing" ||
+      state.activity === "running",
+    cancelled: state.execution.type === "cancelling",
+    recoveryBlocked,
+    retry: state.retry ? { attempt: state.retry.attempt } : null,
+    maxAttempts: OPENCODE_V2_MAX_RECONNECT_ATTEMPTS,
+  });
+  const { Icon, className } = HEARTS[view.presentation];
+  const errorDetail =
+    state.load.type === "error"
+      ? state.load.error.message
+      : recoveryBlocked
+        ? state.revertRecovery.error.message
+        : null;
+  // The plan's single actionable state (§4.1). It needs BOTH facts: the backend
+  // reports no installed target, AND the runtime has actually failed. Unresolved
+  // alone is the managed service's lazy-start window, and showing "not
+  // available" there would call a service unavailable before anything tried it.
+  const unavailableNotice =
+    runtimeView?.unresolved === true && view.presentation === "error"
+      ? OPENCODE_UNAVAILABLE_NOTICE
+      : null;
+  const retry = () => {
+    // M17: the recovery rejection is CAUGHT. `reconcileStagedRevert` rejects
+    // with a `V2ControllerError` when the recovery fails, and the controller
+    // already dispatches that failure into the store - so the state carries
+    // the error and the chip renders it. Without the catch the same failure
+    // was ALSO an unhandled promise rejection, on every failed "Retry
+    // recovery": two reports of one failure, one of them invisible and
+    // uncatchable by the app.
+    //
+    // The controller itself makes the same call correctly at
+    // `v2ThreadController.ts` (`reconcileStagedRevert().catch(() => undefined)`).
+    if (recoveryBlocked && extras) void extras.reconcileStagedRevert().catch(() => undefined);
+    // The controller's own `retry()` is the manual recovery path: it replaces
+    // the failed attempt and starts a fresh one, even after the automatic
+    // budget is spent. It is the PRIMARY path, because it is the lighter one
+    // - it reuses the client that is already there.
+    //
+    // The `onReconnect` prop is the heavier fallback: it rebuilds the whole
+    // client. It is used when there is no controller to ask.
+    else if (extras) void extras.retry().catch(() => undefined);
+    else if (onReconnect) onReconnect();
+  };
+  // Only once the load is ready: before the first read finishes, "unavailable"
+  // means "not read yet", which is the loading state and not news.
+  const pendingNotice =
+    state.load.type === "ready" && state.auxiliary ? pendingSetNotice(state.auxiliary) : null;
+  // The server reports an archive as a timestamp on the session itself, so this
+  // is the same fact a reload renders - not a local opinion of the event.
+  const archived = state.session?.time.archived !== undefined;
+  const heartNode = (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`OpenCode status: ${view.label}`}
+          className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Icon aria-hidden="true" className={cn("size-3.5", className)} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start">
+        <div className="flex items-center gap-2">
+          <Icon aria-hidden="true" className={cn("size-3.5", className)} />
+          <span className="text-sm font-medium">{view.label}</span>
+        </div>
+        <dl className="mt-2 space-y-1.5">
+          <div>
+            <dt className="text-xs text-muted-foreground">Runtime</dt>
+            <dd className="text-xs">{runtimeView?.label ?? "–"}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Working directory</dt>
+            <dd className="break-all font-mono text-xs">
+              {state.session?.location.directory ?? "–"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Session id</dt>
+            <dd className="break-all font-mono text-xs">
+              {state.session?.id ?? extras?.sessionId ?? "–"}
+            </dd>
+          </div>
+        </dl>
+        {runtimeView?.detail && (
+          <p className="mt-2 text-xs text-muted-foreground">{runtimeView.detail}</p>
+        )}
+        {archived && <p className="mt-2 text-xs text-muted-foreground">{ARCHIVED_NOTICE}</p>}
+        {pendingNotice && <p className="mt-2 text-xs text-muted-foreground">{pendingNotice}</p>}
+        {unavailableNotice ? (
+          <p role="alert" className="mt-2 text-xs text-destructive">
+            {unavailableNotice}
+            {errorDetail ? ` ${errorDetail}` : ""}
+          </p>
+        ) : (
+          errorDetail &&
+          !view.failed && (
+            <p role="alert" className="mt-2 text-xs text-destructive">
+              {errorDetail}
+            </p>
+          )
+        )}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3"
+          disabled={!recoveryBlocked && state.connection.type === "closed"}
+          onClick={retry}
+        >
+          {recoveryBlocked ? "Retry recovery" : "Reconnect"}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
   return compact ? heartNode : <div className="flex items-center px-3 py-1">{heartNode}</div>;
 }

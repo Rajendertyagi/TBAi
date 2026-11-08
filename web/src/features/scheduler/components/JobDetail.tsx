@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { schedulerViewConfig } from "@/config/scheduler";
+import { schedulerViewConfig } from "@/features/scheduler/config";
 import {
   formatDuration,
   formatRelative,
@@ -51,9 +51,7 @@ function StatItem({
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-1.5 text-muted-foreground [&>svg]:size-3.5">
         {icon}
-        <span className="text-xs font-medium uppercase tracking-wide">
-          {label}
-        </span>
+        <span className="text-xs font-medium uppercase tracking-wide">{label}</span>
       </div>
       <div className="min-w-0 truncate text-sm">{children}</div>
     </div>
@@ -119,17 +117,22 @@ export function JobDetail({
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       {/* Header: name + status + actions */}
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="min-w-0 flex-1 truncate text-base font-semibold">
-          {job.name}
-        </h2>
+        <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{job.name}</h2>
         <JobStatusChip status={job.status} />
+        {job.engine === "opencode" ? (
+          <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary border border-primary/20">
+            OpenCode Agent
+          </span>
+        ) : (
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground border border-border">
+            Direct Chat
+          </span>
+        )}
         {!job.enabled && (
           <span className="text-xs text-muted-foreground">({copy.disabledSuffix})</span>
         )}
       </div>
-      {job.description && (
-        <p className="-mt-2 text-sm text-muted-foreground">{job.description}</p>
-      )}
+      {job.description && <p className="-mt-2 text-sm text-muted-foreground">{job.description}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={onRunNow} disabled={running}>
           <Play aria-hidden="true" className="size-3.5" />
@@ -191,6 +194,22 @@ export function JobDetail({
             <span>{conversationLabel ?? copy.factsDedicatedThread}</span>
           )}
         </StatItem>
+        {job.engine === "opencode" && (
+          <>
+            <StatItem icon={<Bot aria-hidden="true" />} label="Strategy">
+              <span className="capitalize">
+                {job.opencodeSessionStrategy
+                  ? job.opencodeSessionStrategy.replace(/_/g, " ")
+                  : "Fresh"}
+              </span>
+            </StatItem>
+            <StatItem icon={<Bot aria-hidden="true" />} label="Permissions">
+              <span>
+                {job.opencodePermissions === "read_only" ? "Read-Only" : "Autonomous Coding"}
+              </span>
+            </StatItem>
+          </>
+        )}
       </section>
 
       {/* Run history timeline */}
@@ -210,7 +229,7 @@ export function JobDetail({
           </Button>
         </div>
         {loadingRuns && runs.length === 0 ? (
-          <div className="space-y-2" aria-label="Loading runs">
+          <div className="space-y-2" role="status" aria-label="Loading runs">
             {[0, 1].map((i) => (
               <div key={i} className="h-10 rounded-md bg-muted animate-pulse" />
             ))}
@@ -242,11 +261,7 @@ export function JobDetail({
                       )}
                       title={manual ? copy.runManual : copy.runScheduled}
                     >
-                      {manual ? (
-                        <Play className="size-3" />
-                      ) : (
-                        <Clock className="size-3" />
-                      )}
+                      {manual ? <Play className="size-3" /> : <Clock className="size-3" />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate tabular-nums">
@@ -257,7 +272,26 @@ export function JobDetail({
                         {run.error ? ` · ${run.error}` : ""}
                       </span>
                     </span>
-                    <RunStatusChip status={run.status} />
+                    <div className="flex items-center gap-1.5">
+                      {run.turnOutcome && (
+                        <span
+                          className={cn(
+                            "rounded px-1.5 py-0.5 text-3xs font-mono font-medium border",
+                            run.turnOutcome === "succeeded" &&
+                              "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
+                            run.turnOutcome === "failed" &&
+                              "bg-destructive/10 text-destructive border-destructive/20",
+                            run.turnOutcome === "interrupted" &&
+                              "bg-amber-500/10 text-amber-600 border-amber-500/20",
+                            run.turnOutcome === "outcome_unknown" &&
+                              "bg-muted text-muted-foreground border-border",
+                          )}
+                        >
+                          {run.turnOutcome}
+                        </span>
+                      )}
+                      <RunStatusChip status={run.status} />
+                    </div>
                   </button>
                   {selected && (
                     <div className="ml-4 space-y-1 border-l border-border py-2 pl-4 text-xs">
@@ -269,6 +303,18 @@ export function JobDetail({
                         <span className="text-muted-foreground">occurrence: </span>
                         {run.occurrenceId}
                       </div>
+                      {run.opencodeSessionId && (
+                        <div>
+                          <span className="text-muted-foreground">opencode session: </span>
+                          <span className="break-all font-mono">{run.opencodeSessionId}</span>
+                        </div>
+                      )}
+                      {run.opencodePromptId && (
+                        <div>
+                          <span className="text-muted-foreground">opencode prompt: </span>
+                          <span className="break-all font-mono">{run.opencodePromptId}</span>
+                        </div>
+                      )}
                       {run.error && (
                         <div>
                           <span className="text-muted-foreground">{copy.runError}: </span>
@@ -303,11 +349,7 @@ export function JobDetail({
                           </button>
                         )}
                         {run.status === "running" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => onCancelRun(run.id)}
-                          >
+                          <Button size="sm" variant="ghost" onClick={() => onCancelRun(run.id)}>
                             {copy.cancelRun}
                           </Button>
                         )}
@@ -325,15 +367,11 @@ export function JobDetail({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{copy.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {copy.deleteDescription(job.name)}
-            </AlertDialogDescription>
+            <AlertDialogDescription>{copy.deleteDescription(job.name)}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{copy.cancel}</AlertDialogCancel>
-            <AlertDialogAction onClick={onDelete}>
-              {copy.delete}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={onDelete}>{copy.delete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

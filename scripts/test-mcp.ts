@@ -26,9 +26,18 @@ async function main() {
   const statuses = mcpManager.getStatuses();
   const status = statuses.find((s) => s.id === cfg.id)!;
   console.log("[test] status:", status.status);
-  console.log("[test] tools:", status.tools.map((t) => t.name));
-  console.log("[test] resources:", status.resources.map((r) => r.uri));
-  console.log("[test] prompts:", status.prompts.map((p) => p.name));
+  console.log(
+    "[test] tools:",
+    status.tools.map((t) => t.name),
+  );
+  console.log(
+    "[test] resources:",
+    status.resources.map((r) => r.uri),
+  );
+  console.log(
+    "[test] prompts:",
+    status.prompts.map((p) => p.name),
+  );
   console.log("[test] capabilities:", JSON.stringify(status.serverCapabilities));
 
   if (status.status !== "connected") {

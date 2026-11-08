@@ -5,6 +5,7 @@ import { threadEngine } from "../../../adapters/remoteThreadListAdapter";
 import { ConversationNotFoundError } from "./conversationExistence";
 import { evictIfGone } from "./tabReconciliation";
 import { logger } from "../../../lib/logger";
+import { ROUTES } from "../../../config/routes";
 import {
   NEW_DRAFT_TAB_ID,
   activeTab,
@@ -35,10 +36,7 @@ import { useWelcomeEngineStore } from "./welcomeEngine";
  * @param ref - thread/conversation id from the route, or undefined/draft.
  * @param kind - which surface owns the tab.
  */
-export function useConversationTab(
-  ref: string | undefined,
-  kind: "chat" | "agent",
-): void {
+export function useConversationTab(ref: string | undefined, kind: "chat" | "agent"): void {
   const navigate = useNavigate();
   const location = useLocation();
   // Read at COMPLETION time, not dispatch time: an async validation result
@@ -137,15 +135,14 @@ export function useConversationTab(
         // took over — otherwise this late 404 would overwrite newer state
         // (e.g. delete-while-open racing TabUrlSync to the neighbor tab).
         const survivor = activeTab(useChatTabsStore.getState());
-        const survivorIsDraft =
-          !survivor || survivor.ref === NEW_DRAFT_TAB_ID;
+        const survivorIsDraft = !survivor || survivor.ref === NEW_DRAFT_TAB_ID;
         if (routeStillReferencesRef(pathnameRef.current, ref) && survivorIsDraft) {
           logger.info("app", "navigation.redirect", {
             ref,
             to: "/chat/new",
             reason: "conversation-not-found",
           });
-          navigate("/chat/new", { replace: true });
+          navigate(ROUTES.CHAT_NEW, { replace: true });
         } else {
           logger.info("app", "navigation.rejected", {
             ref,

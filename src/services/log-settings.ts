@@ -36,9 +36,9 @@ export function isLogFileEnvLocked(): boolean {
 /** Persisted capture settings, or null when never saved (or corrupt). */
 export function getPersistedLogSettings(): PersistedLogSettings | null {
   try {
-    const row = db
-      .query("SELECT value FROM app_settings WHERE key = ?")
-      .get(KEY) as { value: string } | undefined;
+    const row = db.query("SELECT value FROM app_settings WHERE key = ?").get(KEY) as
+      | { value: string }
+      | undefined;
     if (!row) return null;
     const parsed = logSettingsSchema.safeParse(JSON.parse(row.value));
     if (!parsed.success) return null;

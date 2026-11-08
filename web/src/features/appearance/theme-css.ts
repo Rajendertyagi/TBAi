@@ -22,7 +22,15 @@
  */
 
 import type { ThemeDefinition, ThemePalette, ThemeVariant } from "./theme-data";
-import { compositeOver, contrastRatio, formatColor, mix, parseColor, readableForeground, withAlpha } from "./theme-color";
+import {
+  compositeOver,
+  contrastRatio,
+  formatColor,
+  mix,
+  parseColor,
+  readableForeground,
+  withAlpha,
+} from "./theme-color";
 
 /** Contrast between two CSS colours, or `null` if either cannot be parsed. */
 function contrast(a: string, b: string): number | null {
@@ -110,12 +118,7 @@ function separation(fill: string, behind: string): number | null {
  * Returns the input unchanged when either colour is unparseable, so a value we
  * cannot measure is never silently replaced with one we invented.
  */
-function ensureSeparation(
-  fill: string,
-  behind: string,
-  toward: string,
-  min: number,
-): string {
+function ensureSeparation(fill: string, behind: string, toward: string, min: number): string {
   const current = separation(fill, behind);
   if (current === null || current >= min) return fill;
 
@@ -154,10 +157,7 @@ function ensureSeparationFrom(
   toward: string,
   min: number,
 ): string {
-  return behinds.reduce(
-    (current, behind) => ensureSeparation(current, behind, toward, min),
-    fill,
-  );
+  return behinds.reduce((current, behind) => ensureSeparation(current, behind, toward, min), fill);
 }
 
 /**
@@ -286,9 +286,27 @@ export function resolveThemeVars(
   // values measured 1.68:1 (Carbonfox light) and 2.10:1 (Aura light) as text.
   const warning = ensureSeparationFrom(warningRaw, [elevated, background], foreground, 4.5);
   const success = ensureSeparationFrom(successRaw, [elevated, background], foreground, 4.5);
-  const errorForeground = deriveForeground(status.errorForeground, foreground, [error], foreground, 3);
-  const warningForeground = deriveForeground(status.warningForeground, foreground, [warning], foreground, 3);
-  const successForeground = deriveForeground(status.successForeground, foreground, [success], foreground, 3);
+  const errorForeground = deriveForeground(
+    status.errorForeground,
+    foreground,
+    [error],
+    foreground,
+    3,
+  );
+  const warningForeground = deriveForeground(
+    status.warningForeground,
+    foreground,
+    [warning],
+    foreground,
+    3,
+  );
+  const successForeground = deriveForeground(
+    status.successForeground,
+    foreground,
+    [success],
+    foreground,
+    3,
+  );
 
   // --- link ----------------------------------------------------------------
   // A dedicated link colour rather than `--primary`. `--primary` is a fill meant
@@ -346,7 +364,13 @@ export function resolveThemeVars(
     "--sidebar-primary": primaryBase,
     "--sidebar-primary-foreground": primaryForeground,
     "--sidebar-accent": accentSource,
-    "--sidebar-accent-foreground": deriveForeground(undefined, foreground, [accentSource], foreground, 4.5),
+    "--sidebar-accent-foreground": deriveForeground(
+      undefined,
+      foreground,
+      [accentSource],
+      foreground,
+      4.5,
+    ),
     "--sidebar-border": border,
     "--sidebar-ring": focusRing,
     "--statusbar": ensureSeparation(muted, background, foreground, 1.1),
@@ -394,7 +418,10 @@ export function themeCss(theme: ThemeDefinition, variant: ThemeVariant): string 
 }
 
 /** Cheap swatch triple for the picker. Read from the same resolver, never separately. */
-export function themeSwatch(theme: ThemeDefinition, variant: ThemeVariant): {
+export function themeSwatch(
+  theme: ThemeDefinition,
+  variant: ThemeVariant,
+): {
   background: string;
   surface: string;
   primary: string;

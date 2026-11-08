@@ -8,7 +8,7 @@
  */
 import { db } from "../../db";
 import type { Database } from "bun:sqlite";
-import { extendRequestContext, logger, newRequestId } from "../../lib/logger";
+import { extendRequestContext, logger, newRequestId, normalizeError } from "../../lib/logger";
 import type { SchedulerJob } from "./schedulerTypes";
 import { isTerminalJobStatus } from "./schedulerTypes";
 import { schedulerStore } from "./schedulerStore";
@@ -20,6 +20,7 @@ import {
   parseCron,
 } from "./cron";
 import { executeJobRun, ensureJobConversation } from "./schedulerExecution";
+import { generateId } from "../../lib/utils";
 
 // Minimal shape of the Bun.cron handle (no @types/bun cron typings in 1.4.2).
 interface CronHandle {
@@ -52,6 +53,12 @@ const pendingRuns = new Set<Promise<unknown>>();
 
 /** Set once shutdown begins: fire paths refuse new work. */
 let shuttingDown = false;
+
+/** False until essential boot recovery completes; scheduler routes 503 until then. */
+let schedulerReady = false;
+
+/** Overdue one-time jobs whose execution was deferred past the listener bind. */
+let deferredOverdue: SchedulerJob[] = [];
 
 /** Test seam: invoked after controllerForRun, before ensureJobConversation. */
 let setupDelayHook: (() => Promise<void>) | null = null;
@@ -178,7 +185,10 @@ export async function fireJob(
   // below remains for manual "Run now" (runJobNow) where two rapid clicks can
   // bypass Bun's guarantee. (Run start is logged once by executeJobRun with
   // the runId — no duplicate started line here.)
-  const run = schedulerStore.claimRun(job, occurrenceId, requestId, database);
+  const opencodePromptId = job.engine === "opencode" ? `msg_${generateId()}` : null;
+  const run = schedulerStore.claimRun(job, occurrenceId, requestId, database, {
+    opencodePromptId,
+  });
   if (!run) {
     logger.info("scheduler", "scheduler.run", {
       outcome: "skipped",
@@ -196,31 +206,81 @@ export async function fireJob(
   // Resolve the conversation used for this execution and persist it on the run.
   // This captures the exact conversation at claim time, so later job edits
   // do not alter historical run records.
-  let resolvedConversationId: string | undefined;
+  let resolvedConversationId: string;
   try {
     const conv = await ensureJobConversation(job);
     resolvedConversationId = conv.conversationId;
     schedulerStore.updateRun(run.id, { conversationId: conv.conversationId }, database);
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Conversation setup failed";
     logger.warn("scheduler", "scheduler.run", {
       outcome: "failed",
       requestId,
       jobId,
       occurrenceId,
       runId: run.id,
-      message: err instanceof Error ? err.message : "Conversation setup failed",
+      message,
     });
+    schedulerStore.updateRun(
+      run.id,
+      {
+        status: "failed",
+        turnOutcome: job.engine === "opencode" ? "failed" : null,
+        error: `Conversation setup failed: ${message}`,
+        completedAt: Date.now(),
+        durationMs: 0,
+      },
+      database,
+    );
+    releaseRun(run.id);
+    if (job.scheduleType === "once" && !occurrenceId.startsWith("manual-")) {
+      schedulerStore.update(
+        job.id,
+        {
+          status: "failed",
+          enabled: false,
+          nextRunAt: null,
+        },
+        database,
+      );
+      clearTimer(job.id);
+    }
+    return;
   }
 
-  let result;
+  // Typed from the callback passed below, not from `extendRequestContext`: that
+  // helper is generic over its return, so `ReturnType` of it collapses to
+  // `unknown` and every `result.ok` read would fail.
+  let result: Awaited<ReturnType<typeof executeJobRun>>;
   try {
     // Scheduler funnel context: everything nested in the run (tool calls,
     // storage ops, model calls) inherits job/provider/model identity — no
     // manual id-passing below this line.
     result = await extendRequestContext(
       { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
-      () => executeJobRun(job, run, resolvedConversationId ?? "", signal),
+      () => executeJobRun(job, run, resolvedConversationId, signal),
     );
+  } catch (err) {
+    const errorMsg = normalizeError(err).message;
+    logger.error("scheduler", "scheduler.run_unhandled_failure", {
+      requestId,
+      jobId,
+      occurrenceId,
+      runId: run.id,
+      error: errorMsg,
+    });
+    schedulerStore.updateRun(
+      run.id,
+      {
+        status: "failed",
+        turnOutcome: job.engine === "opencode" ? "outcome_unknown" : null,
+        error: `Unhandled execution failure: ${errorMsg}`,
+        completedAt: Date.now(),
+        durationMs: 0,
+      },
+      database,
+    );
+    result = { ok: false, text: "", error: errorMsg, retryable: false };
   } finally {
     releaseRun(run.id);
   }
@@ -245,11 +305,7 @@ export async function fireJob(
   // Recurring jobs: refresh next_run_at bookkeeping after each fire.
   if (job.scheduleType === "cron" && job.cronExpression) {
     try {
-      const next = computeNextRun(
-        job.cronExpression,
-        job.timezone,
-        Date.now(),
-      );
+      const next = computeNextRun(job.cronExpression, job.timezone, Date.now());
       schedulerStore.update(job.id, { nextRunAt: next });
     } catch {
       /* keep the previous next_run_at; the cron timer still fires */
@@ -312,10 +368,7 @@ function scheduleOnce(job: SchedulerJob): void {
  * within the grace window → run once now; otherwise record missed/expired
  * and never execute late.
  */
-export async function handleOverdueOnce(
-  job: SchedulerJob,
-  database: Database = db,
-): Promise<void> {
+export async function handleOverdueOnce(job: SchedulerJob, database: Database = db): Promise<void> {
   const now = Date.now();
   const overdueSec = Math.floor((now - (job.execAt ?? now)) / 1000);
   const requestId = newRequestId();
@@ -374,9 +427,40 @@ export function scheduleJob(job: SchedulerJob): void {
   }
 }
 
+/** Cancels queued prompts from OpenCode session inbox for a job. */
+export async function cancelQueuedPromptsForJob(jobId: string): Promise<void> {
+  const job = schedulerStore.get(jobId);
+  if (job?.engine !== "opencode") return;
+  const running = schedulerStore.listRuns(jobId, 10, 0);
+  for (const run of running.runs) {
+    if (
+      run.status === "running" &&
+      run.opencodePromptId &&
+      run.opencodeSessionId &&
+      run.conversationId
+    ) {
+      try {
+        const { cancelOpenCodePrompt } = await import("../opencode/scheduledExecution");
+        await cancelOpenCodePrompt({
+          sessionId: run.opencodeSessionId,
+          promptId: run.opencodePromptId,
+          conversationId: run.conversationId,
+        });
+      } catch (err: any) {
+        logger.debug("scheduler", "scheduler.cancel_inbox_error", {
+          jobId,
+          runId: run.id,
+          error: err?.message,
+        });
+      }
+    }
+  }
+}
+
 /** Drop a job's timer (disable/delete path). */
 export function unscheduleJob(jobId: string): void {
   clearTimer(jobId);
+  void cancelQueuedPromptsForJob(jobId);
 }
 
 /** Manual "Run now": a fresh explicit occurrence, never colliding with schedule. */
@@ -386,10 +470,7 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
   if (!job) return { error: "Job not found" };
   const occurrenceId = manualOccurrenceId();
   const requestId = newRequestId();
-  if (
-    job.overlapPolicy === "skip_if_running" &&
-    schedulerStore.hasRunningRun(job.id)
-  ) {
+  if (job.overlapPolicy === "skip_if_running" && schedulerStore.hasRunningRun(job.id)) {
     schedulerStore.recordTerminalRun(
       job,
       `${occurrenceId}-skip`,
@@ -399,7 +480,10 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
     );
     return { error: "Previous execution still running; manual run skipped" };
   }
-  const run = schedulerStore.claimRun(job, occurrenceId, requestId);
+  const opencodePromptId = job.engine === "opencode" ? `msg_${generateId()}` : null;
+  const run = schedulerStore.claimRun(job, occurrenceId, requestId, db, {
+    opencodePromptId,
+  });
   if (!run) return { error: "Occurrence already claimed" };
   // Register the controller right after the claim so shutdown can cancel the
   // run even while its conversation is still being resolved.
@@ -419,11 +503,39 @@ export async function runJobNow(jobId: string): Promise<{ runId: string } | { er
     trackRun(
       extendRequestContext(
         { jobId: job.id, providerId: job.providerId, modelId: job.modelId },
-        () => executeJobRun(job, run, conv.conversationId, signal),
+        async () => {
+          try {
+            await executeJobRun(job, run, conv.conversationId, signal);
+          } catch (err) {
+            const errorMsg = normalizeError(err).message;
+            schedulerStore.updateRun(
+              run.id,
+              {
+                status: "failed",
+                turnOutcome: job.engine === "opencode" ? "outcome_unknown" : null,
+                error: `Unhandled execution failure: ${errorMsg}`,
+                completedAt: Date.now(),
+              },
+              db,
+            );
+          }
+        },
       ).finally(() => releaseRun(run.id)),
     );
     return { runId: run.id };
   } catch (err) {
+    const errorMsg = normalizeError(err).message;
+    schedulerStore.updateRun(
+      run.id,
+      {
+        status: "failed",
+        turnOutcome: job.engine === "opencode" ? "failed" : null,
+        error: `Conversation setup failed: ${errorMsg}`,
+        completedAt: Date.now(),
+        durationMs: 0,
+      },
+      db,
+    );
     releaseRun(run.id);
     throw err;
   }
@@ -440,6 +552,23 @@ export interface RecoveryReport {
 
 /** Startup recovery: reconcile interrupted runs, rebuild timers, apply missed policy. */
 export async function recover(database: Database = db): Promise<RecoveryReport> {
+  const report = await recoverEssential(database);
+  const overdue = await recoverOverdue(database);
+  report.ranFromGrace += overdue.ranFromGrace;
+  report.missed += overdue.missed;
+  return report;
+}
+
+/**
+ * Essential boot recovery: reconcile interrupted runs, prune, and rebuild all
+ * timers. Fast (database reads + timer registration, no provider calls), so it
+ * runs before the HTTP listener serves scheduler-dependent routes.
+ *
+ * Overdue one-time jobs within their grace window are NOT executed here —
+ * their execution is deferred to recoverOverdue(), which runs after the
+ * listener binds so a slow provider call cannot delay readiness.
+ */
+export async function recoverEssential(database: Database = db): Promise<RecoveryReport> {
   logger.info("scheduler", "scheduler.maintenance", { phase: "started" });
   const report: RecoveryReport = {
     interrupted: 0,
@@ -470,13 +599,12 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
       } else {
         if (job.execAt == null) continue;
         if (job.execAt <= Date.now()) {
-          const overdueSec = Math.floor(
-            (Date.now() - job.execAt) / 1000,
-          );
-          await handleOverdueOnce(job, database);
+          const overdueSec = Math.floor((Date.now() - job.execAt) / 1000);
           if (overdueSec <= Math.max(0, job.missedGraceSeconds)) {
-            report.ranFromGrace += 1;
+            // Within grace: execution is deferred past the listener bind.
+            deferredOverdue.push(job);
           } else {
+            await handleOverdueOnce(job, database);
             report.missed += 1;
           }
         } else {
@@ -485,6 +613,7 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
         }
       }
     } catch (err) {
+      clearTimer(job.id);
       logger.warn("scheduler", "scheduler.maintenance", {
         phase: "job_failed",
         jobId: job.id,
@@ -504,14 +633,73 @@ export async function recover(database: Database = db): Promise<RecoveryReport> 
   return report;
 }
 
+/**
+ * Deferred overdue execution: run the overdue one-time jobs that
+ * recoverEssential set aside. Runs after the HTTP listener binds, so slow
+ * provider calls delay neither the bind nor the Tauri handshake.
+ */
+export async function recoverOverdue(
+  database: Database = db,
+): Promise<{ ranFromGrace: number; missed: number }> {
+  const jobs = deferredOverdue;
+  deferredOverdue = [];
+  let ranFromGrace = 0;
+  let missed = 0;
+  for (const job of jobs) {
+    try {
+      const overdueSec = Math.floor((Date.now() - (job.execAt ?? Date.now())) / 1000);
+      await handleOverdueOnce(job, database);
+      if (overdueSec <= Math.max(0, job.missedGraceSeconds)) {
+        ranFromGrace += 1;
+      } else {
+        missed += 1;
+      }
+    } catch (err) {
+      logger.warn("scheduler", "scheduler.maintenance", {
+        phase: "job_failed",
+        jobId: job.id,
+        message: err instanceof Error ? err.message : "Recovery failed for job",
+      });
+      schedulerStore.update(
+        job.id,
+        { enabled: false, status: "failed", nextRunAt: null },
+        database,
+      );
+    }
+  }
+  return { ranFromGrace, missed };
+}
+
 /** Boot the scheduler: recover + rebuild all timers. Call once at startup. */
 export async function initScheduler(): Promise<RecoveryReport> {
   return recover(db);
 }
 
+/** Whether essential scheduler recovery has completed (readiness gate). */
+export function isSchedulerReady(): boolean {
+  return schedulerReady;
+}
+
+/**
+ * Mark essential scheduler recovery complete. Called once at startup after
+ * timer rebuild, before overdue execution. Tests reuse it to drive the gate.
+ */
+export function setSchedulerReady(ready: boolean): void {
+  schedulerReady = ready;
+}
+
 /** For tests: how many active timer handles are cached. */
 export function activeTimerCount(): number {
   return timers.size;
+}
+
+/**
+ * Whether any tracked scheduler execution is still unsettled. Used by the
+ * shutdown spine to re-check, just before database closure, that no
+ * write-capable work remains after a fired deadline.
+ */
+export function hasPendingRuns(): boolean {
+  return pendingRuns.size > 0;
 }
 
 /** For tests/shutdown: clear all cached timers without touching the DB. */
@@ -547,17 +735,34 @@ export function setSetupDelayHook(hook: (() => Promise<void>) | null): void {
  */
 export async function abortAllRuns(
   timeoutMs = 10_000,
-): Promise<{ aborted: number; settled: number; timedOut: number }> {
+): Promise<{ aborted: number; settled: number; timedOut: number; deadlineHit: boolean }> {
   shuttingDown = true;
   const snapshot = [...pendingRuns];
   const controllers = [...runControllers.values()];
   for (const controller of controllers) controller.abort();
-  const bound = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
-  await Promise.race([Promise.allSettled(snapshot), bound]);
+  let deadlineHit = false;
+  let boundTimer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    boundTimer = setTimeout(() => {
+      deadlineHit = true;
+      resolve();
+    }, timeoutMs);
+  });
+  // Deliberately referenced while the race is pending: at shutdown this bound is
+  // the handle that keeps the process alive until slow work settles or the bound
+  // expires, so classification and database closure cannot be skipped by an
+  // empty event loop. It is cleared the moment the race resolves, so a clean
+  // shutdown exits immediately instead of lingering for the full bound.
+  try {
+    await Promise.race([Promise.allSettled(snapshot), bound]);
+  } finally {
+    if (boundTimer !== undefined) clearTimeout(boundTimer);
+  }
   const stillPending = snapshot.filter((p) => pendingRuns.has(p)).length;
   return {
     aborted: controllers.length,
     settled: snapshot.length - stillPending,
     timedOut: stillPending,
+    deadlineHit,
   };
 }

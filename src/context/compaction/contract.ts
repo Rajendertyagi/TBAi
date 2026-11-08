@@ -69,7 +69,12 @@ export function compactionEnabled(env: NodeJS.ProcessEnv = process.env): boolean
   const raw = env[COMPACTION_ENV];
   if (raw === undefined) return true;
   const normalized = raw.trim().toLowerCase();
-  return !(normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off");
+  return !(
+    normalized === "0" ||
+    normalized === "false" ||
+    normalized === "no" ||
+    normalized === "off"
+  );
 }
 
 /**
@@ -495,10 +500,7 @@ export function supersededSpanEnd(messages: readonly UIMessage[]): number {
  *
  * @returns The index, or -1 when there is no earlier assistant message.
  */
-export function previousSafeCutIndex(
-  messages: readonly UIMessage[],
-  before: number,
-): number {
+export function previousSafeCutIndex(messages: readonly UIMessage[], before: number): number {
   for (let i = Math.min(before - 1, messages.length - 1); i >= 0; i -= 1) {
     const message = messages[i];
     if (!message) continue;
@@ -606,7 +608,7 @@ export function planCompaction(input: {
     return { kind: "none", reason: "no_conversation" };
   }
 
-const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
+  const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
 
   // An explicit request (the Direct `/compact` command) compacts on demand even
   // when the conversation sits well under the trigger. It is NOT a bypass of the
@@ -747,7 +749,11 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
   // than one call, because the covered prefix is summarised already and reaches
   // the summariser as the previous summary. Its capacity was enforced above
   // against `priorSummaryTokens + growth`, which is the quantity actually read.
-  if (!chainable && input.summarizerInputTokens !== undefined && spanTokens > input.summarizerInputTokens) {
+  if (
+    !chainable &&
+    input.summarizerInputTokens !== undefined &&
+    spanTokens > input.summarizerInputTokens
+  ) {
     return { kind: "none", reason: "span_exceeds_summarizer_capacity" };
   }
 
@@ -805,7 +811,9 @@ const triggerAt = Math.floor(usableInputTokens * policy.triggerFraction);
   // call to learn nothing. The residual is measured with the summary at its
   // MAXIMUM permitted size, so the answer is pessimistic and never optimistic.
   const residual =
-    input.fixedOverheadTokens + (input.measuredTotalTokens - input.fixedOverheadTokens - spanTokens) + policy.maxSummaryTokens;
+    input.fixedOverheadTokens +
+    (input.measuredTotalTokens - input.fixedOverheadTokens - spanTokens) +
+    policy.maxSummaryTokens;
   if (residual >= usableInputTokens) {
     return { kind: "none", reason: "would_still_exceed_budget" };
   }
@@ -1070,7 +1078,11 @@ function spanRange(values: readonly number[], start: number, end: number): numbe
  * Ids and roles only — never content — so the value is safe to log and compare
  * across processes without handling prompt text.
  */
-export function spanFingerprint(messages: readonly UIMessage[], start: number, end: number): string {
+export function spanFingerprint(
+  messages: readonly UIMessage[],
+  start: number,
+  end: number,
+): string {
   const parts: string[] = [];
   for (let i = start; i <= end; i += 1) {
     const m = messages[i];
