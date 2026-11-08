@@ -1,6 +1,11 @@
 import { describe, it, expect, afterAll } from "bun:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { InMemoryTransport, McpServer, Server } from "@modelcontextprotocol/server";
+import {
+  InMemoryTransport,
+  McpServer,
+  Server,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { mcpManager } from "@/services/mcp/manager.ts";
 import { logger } from "@/lib/logger.ts";
@@ -578,6 +583,141 @@ async function expectReconnectsBounded(
 }
 
 describe("MCP lifecycle (Phase 4)", () => {
+  it("disconnectAll wins over a pending HTTP connect; late settlement cannot resurrect it", async () => {
+    const cutoff = logger.lastSeq;
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    let releaseResponse!: () => void;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        if (new URL(request.url).pathname !== "/mcp") {
+          return new Response("not found", { status: 404 });
+        }
+        const payload = (await request
+          .clone()
+          .json()
+          .catch(() => undefined)) as { method?: string } | undefined;
+        const isInitialize = payload?.method === "initialize";
+
+        // Stateless Streamable HTTP (SDK 2.3.1): a transport cannot be reused
+        // across requests, and the response body streams asynchronously, so the
+        // per-request server/transport must stay alive until the body drains.
+        // This mirrors serveStatelessMcpRequest but gates the initialize reply.
+        const protocolServer = new McpServer({
+          name: "p4-race-pending-http",
+          version: "1.0.0",
+        });
+        const serverTransport = new WebStandardStreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        await protocolServer.connect(serverTransport);
+
+        const teardown = () => {
+          serverTransport.close().catch(() => {});
+          protocolServer.close().catch(() => {});
+        };
+        request.signal?.addEventListener("abort", teardown, { once: true });
+
+        const response = await serverTransport.handleRequest(request);
+        if (isInitialize) {
+          markRequestStarted();
+          // The official SDK prepares a valid initialize response, but the
+          // response is withheld until disconnectAll has been initiated.
+          await responseGate;
+        }
+
+        const contentType = response.headers.get("content-type") ?? "";
+        if (response.body === null || !contentType.includes("text/event-stream")) {
+          teardown();
+          return response;
+        }
+
+        const reader = response.body.getReader();
+        let tornDown = false;
+        const completeExchange = () => {
+          if (!tornDown) {
+            tornDown = true;
+            teardown();
+          }
+        };
+        const monitoredBody = new ReadableStream({
+          pull: async (controller) => {
+            try {
+              const { done, value } = await reader.read();
+              if (done) {
+                completeExchange();
+                controller.close();
+                return;
+              }
+              if (value !== undefined) controller.enqueue(value);
+            } catch (error) {
+              completeExchange();
+              controller.error(error);
+            }
+          },
+          cancel: (reason) => {
+            completeExchange();
+            return reader.cancel(reason).catch(() => {});
+          },
+        });
+        return new Response(monitoredBody, {
+          status: response.status,
+          headers: response.headers,
+        });
+      },
+    });
+    const created = mcpManager.createConfig({
+      name: "p4-race-pending-http",
+      transport: "http",
+      url: `http://127.0.0.1:${server.port}/mcp`,
+      enabled: true,
+      autoConnect: false,
+    });
+    createdIds.push(created.id);
+
+    const connectAttempt = mcpManager.connect(created.id);
+    try {
+      const didStart = await Promise.race([
+        requestStarted.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+      ]);
+      expect(didStart, "HTTP initialize request should be pending before disconnect").toBe(true);
+      expect(statusOf(created.id)).toBe("connecting");
+
+      // Calling disconnectAll synchronously invalidates the in-flight attempt
+      // before any transport-close await. Release the request immediately after
+      // starting shutdown, so either a late rejection or late resolution is
+      // exercised without depending on scheduler timing.
+      const disconnecting = mcpManager.disconnectAll();
+      releaseResponse();
+      await disconnecting;
+      await connectAttempt;
+
+      await new Promise((r) => setTimeout(r, RECONNECT_DELAY_MS + 1000));
+      expect(statusOf(created.id)).toBe("disconnected");
+      const reconnects = logger
+        .getRecentEntries(cutoff)
+        .filter(
+          (e) =>
+            e.event === "mcp.operation" &&
+            e.op === "reconnect" &&
+            e.mcpServer === "p4-race-pending-http",
+        );
+      expect(reconnects).toHaveLength(0);
+    } finally {
+      releaseResponse();
+      await Promise.allSettled([connectAttempt, mcpManager.disconnect(created.id)]);
+      server.stop(true);
+    }
+  }, 20000);
+
   it("close/reconnect race: disconnectAll wins, no resurrection timer (connecting → error)", async () => {
     const cutoff = logger.lastSeq;
     const good = await createStdioFixture("p4-race-good");

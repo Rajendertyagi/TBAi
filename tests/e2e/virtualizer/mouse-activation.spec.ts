@@ -53,13 +53,22 @@ test.describe("real pointer interaction", () => {
     await waitForStableScrollHeight(page);
     await page.waitForTimeout(1500);
 
-    const rowKey = await mountRow(page, REASONING_TRIGGER);
+    let rowKey = await mountRow(page, REASONING_TRIGGER);
 
     // Setup only: collapse the panel by the programmatic path so the CLICK under
-    // test is the single interaction being measured.
+    // test is the single interaction being measured. Virtualization may unmount the
+    // row after a size change, so re-mount before reading/toggling when needed.
     let collapsed = false;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const height = rowByKey(await readGeometry(page), rowKey)?.height ?? -1;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      let geometry = await readGeometry(page);
+      let row = rowByKey(geometry, rowKey);
+      if (!row) {
+        rowKey = await mountRow(page, REASONING_TRIGGER);
+        await page.waitForTimeout(400);
+        geometry = await readGeometry(page);
+        row = rowByKey(geometry, rowKey);
+      }
+      const height = row?.height ?? -1;
       if (Math.abs(height - COLLAPSED_PX) <= TOLERANCE_PX) {
         collapsed = true;
         break;

@@ -68,17 +68,29 @@ async function seedAssistantTurn(
 }
 
 /**
- * Expand the collapsed tool group.
+ * Ensure the tool body is visible.
  *
- * A seeded tool call loads as a collapsed "1 tool call" summary, so the body is
- * not in the DOM until the group is opened. A live run auto-opens it; a reloaded
- * history does not, so the spec opens it rather than assuming.
+ * A seeded tool call may load collapsed behind a "1 tool call" / "N tool calls"
+ * summary, or may already be expanded depending on the current tool-group UI.
+ * Open the group only when the body is not already present.
  */
 async function expandToolGroup(page: import("@playwright/test").Page): Promise<void> {
-  const trigger = page.getByRole("button", { name: /tool call/i }).first();
-  await expect(trigger).toBeVisible({ timeout: 30000 });
-  await trigger.click();
-  await expect(page.locator(".aui-tool-body").first()).toBeAttached({ timeout: 30000 });
+  const body = page.locator(".aui-tool-body").first();
+  const trigger = page.getByRole("button", { name: /tool calls?/i }).first();
+  await expect
+    .poll(
+      async () => {
+        if ((await body.count()) > 0) return "body";
+        if (await trigger.isVisible().catch(() => false)) return "trigger";
+        return "none";
+      },
+      { timeout: 30000 },
+    )
+    .not.toBe("none");
+  if ((await body.count()) === 0) {
+    await trigger.click();
+  }
+  await expect(body).toBeAttached({ timeout: 30000 });
 }
 
 test("an oversized tool result is shortened, and says so", async ({ page, request }) => {

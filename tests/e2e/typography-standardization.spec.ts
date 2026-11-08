@@ -879,9 +879,7 @@ test.describe("Typography settings previews", () => {
     await page.getByRole("button", { name: "Relaxed (1.65)" }).click();
 
     await expect
-      .poll(() =>
-        interfacePreview.evaluate((element) => getComputedStyle(element).lineHeight),
-      )
+      .poll(() => interfacePreview.evaluate((element) => getComputedStyle(element).lineHeight))
       .toBe(interfaceLineHeightBefore);
     await expect
       .poll(() => readingPreview.evaluate((element) => getComputedStyle(element).lineHeight))
@@ -890,9 +888,11 @@ test.describe("Typography settings previews", () => {
       .poll(() =>
         page.evaluate(
           () =>
-            (JSON.parse(localStorage.getItem("tbai-typography") || "{}") as {
-              readingLineHeight?: number;
-            }).readingLineHeight,
+            (
+              JSON.parse(localStorage.getItem("tbai-typography") || "{}") as {
+                readingLineHeight?: number;
+              }
+            ).readingLineHeight,
         ),
       )
       .toBe(1.65);

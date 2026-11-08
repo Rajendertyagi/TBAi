@@ -154,7 +154,12 @@ test("(b) New Project dialog shows Direct/Code switch and routes engine-correct"
     await page.goto(`${BASE}#/`);
     await waitShell(page);
 
-    const addMenu = page.getByRole("button", { name: "Add to section" });
+    // Both the Folders and Chats section headers render an "Add to section"
+    // button; scope to the Folders section (aria-controls identifies it).
+    const addMenu = page
+      .locator('button[aria-controls="sidebar-section-folders"]')
+      .locator("..")
+      .getByRole("button", { name: "Add to section" });
     await expect(addMenu).toBeVisible({ timeout: 10000 });
     await addMenu.click();
 

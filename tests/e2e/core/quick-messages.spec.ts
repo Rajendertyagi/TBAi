@@ -35,7 +35,7 @@ test("quick messages page manages snippets end to end", async ({ page }) => {
   // Idempotent: clear leftovers from aborted runs before starting.
   await cleanup(page.request);
   await page.goto("/#/quick-messages");
-  await expect(page.getByRole("heading", { name: "Quick Messages", level: 2 })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Quick Messages", level: 1 })).toBeVisible({
     timeout: 15000,
   });
 

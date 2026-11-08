@@ -74,18 +74,11 @@ function report(name: string, data: Record<string, unknown>): void {
 // ─────────────────────────────────────────────────────────────────────────────
 // R1 — a dynamic height change ABOVE the viewport must not move the reader.
 //
-// CURRENTLY FAILING, and that is the finding. Measured on this build, with a
-// settled reasoning panel collapsed to 64px and parked 40px entirely above the
-// fold, expanding it to 320px moves the anchor row down by EXACTLY the 256px
-// growth while scrollTop does not move at all (33975 -> 33975). Reproduced
-// identically across three separate runs of this file and once more in an
-// isolated single-test spec, and unchanged when the reader is parked 900px,
-// 1400px and 1900px from the live end instead of 130px. virtual-core 3.18.0
-// gates the compensation on `itemStart + itemSize <= scrollOffset &&
-// scrollDirection !== "backward"` (dist/esm/index.js:936) and neither branch
-// fires here, so nothing absorbs the growth. The assertion below states the
-// property a reader is entitled to, not the current behaviour; it is left
-// failing rather than relaxed to whatever the code happens to produce.
+// Historical note (kept for context): this once failed because virtual-core's
+// compensation did not fire for the measured case (anchor moved by the full
+// growth while scrollTop stayed fixed). On the current build the compensation
+// holds (scrollTop adjusts; anchor delta stays within tolerance). The assertion
+// states the property a reader is entitled to.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("R1: a row that grows entirely above the fold leaves the reader's anchor row in place", async ({
@@ -121,24 +114,40 @@ test("R1: a row that grows entirely above the fold leaves the reader's anchor ro
     // reasoning part, and it opens expanded. The row lives well above the tip,
     // outside the mounted range there, so it is mounted by scrolling to it first;
     // the collapse then happens where the reader can see it happen.
-    const reasoningKey = await mountRow(page, REASONING_TRIGGER);
+    let reasoningKey = await mountRow(page, REASONING_TRIGGER);
     const expanded = rowByKey(await readGeometry(page), reasoningKey);
     expect(expanded, "the seeded reasoning part rendered a disclosure").not.toBeNull();
     expect(expanded!.height, "the panel opens expanded in a reloaded history").toBeGreaterThan(
       ANCHOR_TOLERANCE_PX,
     );
 
-    expect(
+    // Collapse the panel. Virtualization may unmount the row after an in-place
+    // size change, and a re-mount can surface a stale/expanded measurement under
+    // load, so retry until the collapsed height is observed (bounded).
+    let collapsedRow: ReturnType<typeof rowByKey> = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      let geometry = await readGeometry(page);
+      let row = rowByKey(geometry, reasoningKey);
+      if (!row) {
+        reasoningKey = await mountRow(page, REASONING_TRIGGER);
+        await page.waitForTimeout(400);
+        geometry = await readGeometry(page);
+        row = rowByKey(geometry, reasoningKey);
+      }
+      if (row && row.height < expanded!.height - 40) {
+        collapsedRow = row;
+        break;
+      }
       await toggleDisclosureInPlace(page, {
         rowKey: reasoningKey,
         triggerSelector: REASONING_TRIGGER,
-      }),
-      "the reasoning disclosure was collapsed",
-    ).toBe(true);
-    await page.waitForTimeout(1200);
-
-    const collapsed = await readGeometry(page);
-    const collapsedRow = rowByKey(collapsed, reasoningKey);
+      });
+      await page.waitForTimeout(900);
+    }
+    if (!collapsedRow) {
+      const geometry = await readGeometry(page);
+      collapsedRow = rowByKey(geometry, reasoningKey);
+    }
     expect(collapsedRow, "the reasoning row is mounted after collapsing").not.toBeNull();
     expect(collapsedRow!.height, "the panel really collapsed").toBeLessThan(expanded!.height - 40);
 

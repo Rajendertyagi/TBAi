@@ -40,25 +40,32 @@ async function seedConversation(request: APIRequestContext): Promise<string> {
   });
   const { id } = (await created.json()) as { id: string };
 
-  for (let batch = 0; batch < SEEDED_MESSAGES; batch += 10) {
-    await Promise.all(
-      Array.from({ length: Math.min(10, SEEDED_MESSAGES - batch) }, (_, offset) => {
-        const index = batch + offset;
-        const role = index % 2 === 0 ? "user" : "assistant";
-        return request.post(`/api/conversations/${id}/messages`, {
-          data: {
-            message: storedMessage(
-              `seed-${index}`,
-              index === 0 ? null : `seed-${index - 1}`,
-              `seeded-body-${index}`,
-              role,
-            ),
-          },
-        });
-      }),
-    );
+  try {
+    // This fixture is a single parent-linked chain. The storage layer allocates
+    // order_seq from MAX(order_seq) + 1 on each insert, while history chooses
+    // the selected tip by that persisted ordering. Parallel POSTs can therefore
+    // commit in a different order from their parent links and make a middle
+    // message look like the tip. Serialize the writes so the fixture models a
+    // real append-only conversation deterministically.
+    for (let index = 0; index < SEEDED_MESSAGES; index += 1) {
+      const role = index % 2 === 0 ? "user" : "assistant";
+      const response = await request.post(`/api/conversations/${id}/messages`, {
+        data: {
+          message: storedMessage(
+            `seed-${index}`,
+            index === 0 ? null : `seed-${index - 1}`,
+            `seeded-body-${index}`,
+            role,
+          ),
+        },
+      });
+      expect(response.ok(), `seeding message ${index} should succeed`).toBe(true);
+    }
+    return id;
+  } catch (error) {
+    await request.delete(`/api/conversations/${id}`).catch(() => undefined);
+    throw error;
   }
-  return id;
 }
 
 const sse = (chunk: unknown) => `data: ${JSON.stringify(chunk)}\n\n`;
@@ -209,36 +216,26 @@ test.describe("P2 bounded Direct history in the mounted app", () => {
       // The buffer was never truncated, so the tip is still in it — it is simply
       // not MOUNTED while the viewport is parked at the top. Returning to the
       // live edge (which also re-arms auto-follow) proves it is still there.
-      //
-      // The pointer has to be put back over the transcript first. `restore` is a
-      // toolbar control ABOVE the scroller, so clicking it leaves the cursor
-      // there, and `mouse.wheel` dispatches at the cursor — over the toolbar,
-      // outside the scroll container — where it scrolls nothing at all. The
-      // failure snapshot for this step showed the transcript still parked on
-      // `seeded-body-0`, which is the signature of a wheel that never reached
-      // it: the row was never missing from the buffer, only never scrolled to.
-      //
-      // This is the same gesture the upward scroll above already performs, so it
-      // is the test's own precedent rather than a new accommodation.
-      const restoreBox = await scroller.boundingBox();
-      if (!restoreBox) throw new Error("the virtualized transcript lost its box");
-      await page.mouse.move(
-        restoreBox.x + restoreBox.width / 2,
-        restoreBox.y + restoreBox.height / 2,
-      );
-      // Condition-based, like the upward scroll: the transcript is far taller
-      // than one wheel delta, so keep scrolling until it is genuinely at the
-      // live edge rather than assuming a single large delta lands there.
+      // Click moved the pointer onto the restore control, which has now been
+      // removed; put the wheel over the transcript scroller itself. A single
+      // large wheel delta is not guaranteed to reach the end of a long virtual
+      // list, so keep issuing real wheel gestures until its scroll geometry
+      // confirms that the live edge has actually been reached.
+      const liveBox = await scroller.boundingBox();
+      if (!liveBox) throw new Error("the virtualized transcript has no box");
+      await page.mouse.move(liveBox.x + liveBox.width / 2, liveBox.y + liveBox.height / 2);
       await expect
         .poll(
           async () => {
             await page.mouse.wheel(0, 20000);
             await page.waitForTimeout(120);
-            return scroller.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1);
+            return scroller.evaluate((el) =>
+              Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop),
+            );
           },
           { timeout: 20000 },
         )
-        .toBe(true);
+        .toBeLessThanOrEqual(1);
       await expect(page.getByText("seeded-body-149")).toBeVisible({ timeout: 15000 });
 
       await composer.fill("sent from the restored active tip");

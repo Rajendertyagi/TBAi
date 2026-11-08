@@ -37,6 +37,13 @@ const WEB_DIST = path.join(REPO_ROOT, "dist", "web");
 /** The real build. `web`'s own script is the single definition of it. */
 const BUILD_LABEL = "cd web && bun run build";
 
+/** Optional target paths for isolated tests. Production calls use repository defaults. */
+export interface BuildWebAndStampOptions {
+  readonly webRoot?: string;
+  readonly webDist?: string;
+  readonly buildLabel?: string;
+}
+
 /**
  * Build the web bundle and stamp it on success.
  *
@@ -48,15 +55,21 @@ const BUILD_LABEL = "cd web && bun run build";
  * @param build - Runs the actual build. Throwing or returning a non-zero code
  * both count as failure.
  * @param onLog - Progress output; defaults to stderr.
+ * @param options - Optional test-only target paths. Defaults to the repository's
+ *   real web source and build-output directories.
  * @returns True when the build succeeded AND the stamp was written.
  */
 export function buildWebAndStamp(
   build: () => number | undefined,
   onLog: (message: string) => void = (m) => process.stderr.write(`[build:web] ${m}\n`),
+  options: BuildWebAndStampOptions = {},
 ): boolean {
+  const webRoot = options.webRoot ?? WEB_ROOT;
+  const webDist = options.webDist ?? WEB_DIST;
+  const buildLabel = options.buildLabel ?? BUILD_LABEL;
   // Before, not after: see the module docblock. This is what makes a failed
   // build safe rather than merely noisy.
-  const hadStamp = clearBuildStamp(WEB_DIST);
+  const hadStamp = clearBuildStamp(webDist);
   if (hadStamp) onLog("cleared the previous build stamp before rebuilding");
 
   let code: number | undefined;
@@ -77,8 +90,8 @@ export function buildWebAndStamp(
   // Hashed AFTER the build, not before: a build can legitimately rewrite a
   // tracked-looking input (a generated file, an updated tsconfig), and the stamp
   // must describe the source that actually produced THIS artifact.
-  const sourceHash = hashWebSource(WEB_ROOT);
-  writeBuildStamp(WEB_DIST, sourceHash, BUILD_LABEL);
+  const sourceHash = hashWebSource(webRoot);
+  writeBuildStamp(webDist, sourceHash, buildLabel);
   onLog(`built and stamped dist/web (source ${sourceHash.slice(0, 12)}…)`);
   return true;
 }

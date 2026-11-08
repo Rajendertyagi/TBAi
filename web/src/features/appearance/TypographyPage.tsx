@@ -665,10 +665,7 @@ export function TypographyPage() {
             <div className="text-[10.5px] uppercase font-mono tracking-wider text-muted-foreground mb-2">
               Reading Preview
             </div>
-            <p
-              data-slot="reading-typography-preview"
-              className="aui-md-p text-sm text-foreground"
-            >
+            <p data-slot="reading-typography-preview" className="aui-md-p text-sm text-foreground">
               This paragraph demonstrates the selected reading line spacing used in chat
               transcripts, markdown content, and assistant reasoning.
             </p>
