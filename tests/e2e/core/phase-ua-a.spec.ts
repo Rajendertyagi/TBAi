@@ -30,12 +30,21 @@ async function createFolder(page: Page): Promise<{ id: string; name: string; dir
   const path = await import("node:path");
   const dir = path.join(os.tmpdir(), "tbai-e2e-phase-ua-a", name);
   fs.mkdirSync(dir, { recursive: true });
-  const res = await page.request.post("/api/folders", {
-    data: { path: dir, name },
-  });
-  expect(res.ok(), `createFolder ${name} → ${res.status()}`).toBe(true);
-  const folder = (await res.json()) as { id: string; name: string };
-  return { id: folder.id, name: folder.name ?? name, dir };
+  try {
+    const res = await page.request.post("/api/folders", {
+      data: { path: dir, name },
+    });
+    expect(res.ok(), `createFolder ${name} → ${res.status()}`).toBe(true);
+    const folder = (await res.json()) as { id: string; name: string };
+    return { id: folder.id, name: folder.name ?? name, dir };
+  } catch (error) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup: preserve the original registration error.
+    }
+    throw error;
+  }
 }
 
 async function deleteFolder(page: Page, folder: { id: string; dir: string }): Promise<void> {
