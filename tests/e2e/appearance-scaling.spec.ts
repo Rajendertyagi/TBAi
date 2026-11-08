@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
  * Typography & root rem scaling — rendered-behaviour coverage.
  *
  * In V7, Interface Size directly drives root rem scaling:
- * <html> font-size is set to `${interfaceFontSize}px` (14px–24px).
+ * <html> font-size is set to `${interfaceFontSize}px` (12px–24px).
  *
  * The independence contract is asserted against COMPUTED styles of real
  * elements (the appearance page renders a live code preview and a live

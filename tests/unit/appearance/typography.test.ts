@@ -285,7 +285,7 @@ describe("Typography config, storage & scoped resets (v3)", () => {
         .interfaceFontSize,
     ).toBe(18);
 
-    // Clamping to 12GÇô24px
+    // Clamping to the supported 12â€“24px interface range.
     // 14 * 0.75 = 10.5 -> 11 -> clamped to 12
     expect(
       readStoredTypography({ version: 2, interfaceFontSize: 14, appScale: 0.75 }).interfaceFontSize,
